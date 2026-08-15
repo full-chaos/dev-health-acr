@@ -103,8 +103,10 @@ type ResolveDeps struct {
 	// Traverse implements observation-to-entity traversal for a matched
 	// document/episode node -- see TraverseObservationToSubject, which a
 	// backend's own Traverse implementation should call with its own
-	// GetNodeEdges/GetNode-equivalent I/O bound in.
-	Traverse func(ctx context.Context, term string, observation CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal)
+	// GetNodeEdges/GetNode-equivalent I/O bound in, forwarding allowExactMatch
+	// unchanged (codex round-2 P1) -- see NodeCandidate's doc comment for what
+	// it gates and why.
+	Traverse func(ctx context.Context, term string, observation CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, ObservationTraversal)
 	// IsInternal reports whether subject is one of the backend's own
 	// bookkeeping nodes (see NodeCandidate's isInternal parameter).
 	IsInternal func(contextfabric.SubjectRef) bool
@@ -171,7 +173,12 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if !ok {
 			continue
 		}
-		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal)
+		// allowExactMatch=true: subject.Label here is the caller's own
+		// explicit hint label, legitimately eligible to exact-match --
+		// unlike CHAOS-3838's question-provenance marker below, this is
+		// genuine caller-supplied identity, and this whole branch already
+		// forces Confidence/MatchExact explicitly regardless.
+		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true)
 		if !ok {
 			continue
 		}
@@ -235,7 +242,11 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if degraded {
 			retrievalDegraded = true
 		}
-		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked)
+		// allowExactMatch=true: term here is genuine caller-derived search
+		// input (an interpreted subject term, or a requested-scope hint
+		// label -- see SubjectTerms), legitimately eligible to exact-match
+		// a subject's own label.
+		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true)
 	}
 	// CHAOS-3838 (spec L11): the question-level pass runs AT MOST ONCE,
 	// AFTER every per-term pass above, never interleaved with it. Ordering
@@ -268,7 +279,16 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// here made a >512-char question produce an INVALID resolution
 			// (a 500 downstream). questionProvenanceMarker is the bounded,
 			// contract-safe substitute -- see its own doc comment.
-			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked)
+			//
+			// allowExactMatch=false (codex round-2 P1): questionProvenanceMarker
+			// is a SYNTHETIC provenance literal, not caller-typed text -- a
+			// subject that happened to be labeled the same literal string
+			// must never win an exact-match promotion (confidence 1.0,
+			// MatchExact) from it. Every question-path candidate's
+			// confidence and mechanism come ONLY from the vector similarity
+			// band (node.Relevance/node.Mechanism), by construction --
+			// see NodeCandidate's doc comment.
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false)
 			// codex round-1 P1, second half: a candidate already at the
 			// 32-entry MatchedTerms cap from real per-term finds would
 			// overflow to 33 once the marker above unioned in. The marker
@@ -309,10 +329,14 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 // Returns the count of ObservationTraversalErrored outcomes this call
 // produced, for the caller to fold into ResolveSubjects' own running total
 // (TraversalDegraded's single aggregate report covers both passes).
-func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool) int {
+// allowExactMatch is threaded straight through to every NodeCandidate/
+// Traverse call this function makes (codex round-2 P1) -- see
+// NodeCandidate's doc comment for what it gates. Both this function's
+// callers in ResolveSubjects document why they pass the value they do.
+func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool) int {
 	traversalErrored := 0
 	for _, node := range results {
-		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal)
+		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, allowExactMatch)
 		if !ok {
 			continue
 		}
@@ -337,7 +361,7 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 		// candidate (never a replacement -- a caller may genuinely mean the
 		// document or episode).
 		if IsObservationSubjectKind(candidate.Subject.Kind) {
-			traversed, outcome := deps.Traverse(ctx, term, node)
+			traversed, outcome := deps.Traverse(ctx, term, node, allowExactMatch)
 			switch outcome {
 			case ObservationParentFound:
 				observationBlocked[key] = true

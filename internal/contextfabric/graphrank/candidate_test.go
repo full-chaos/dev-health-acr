@@ -42,10 +42,10 @@ func TestNodeCandidateFiltersUnauthorizedNodesBeforeCandidates(t *testing.T) {
 	authorized := candidateNode(contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", 1, []string{"full-chaos/dev-health-acr"})
 	foreign := candidateNode(contextfabric.SubjectProject, "project_foreign", "Ask Dev Foreign", 0.99, []string{"other/private"})
 
-	if _, ok := NodeCandidate(principal, scope, "Ask Dev", foreign, noInternalSubjects); ok {
+	if _, ok := NodeCandidate(principal, scope, "Ask Dev", foreign, noInternalSubjects, true); ok {
 		t.Fatal("NodeCandidate() admitted a node outside the principal's repository scope")
 	}
-	candidate, ok := NodeCandidate(principal, scope, "Ask Dev", authorized, noInternalSubjects)
+	candidate, ok := NodeCandidate(principal, scope, "Ask Dev", authorized, noInternalSubjects, true)
 	if !ok || candidate.Subject.CanonicalID != "project_ask_dev" {
 		t.Fatalf("NodeCandidate() for the authorized node = %#v, ok=%v", candidate, ok)
 	}
@@ -64,13 +64,13 @@ func TestNodeCandidateExcludesInternalBookkeepingSubjects(t *testing.T) {
 	isReserved := func(subject contextfabric.SubjectRef) bool {
 		return subject.CanonicalID == "organization-root"
 	}
-	if _, ok := NodeCandidate(principal, scope, "organization", root, isReserved); ok {
+	if _, ok := NodeCandidate(principal, scope, "organization", root, isReserved, true); ok {
 		t.Fatal("NodeCandidate() admitted a node the isInternal predicate flagged as reserved bookkeeping")
 	}
 	// Control: the same node is admitted when isInternal never flags it,
 	// proving the exclusion above is really isInternal's doing and not some
 	// other property of the fixture (e.g. its kind or authorization scope).
-	if _, ok := NodeCandidate(principal, scope, "organization", root, noInternalSubjects); !ok {
+	if _, ok := NodeCandidate(principal, scope, "organization", root, noInternalSubjects, true); !ok {
 		t.Fatal("NodeCandidate() control case: same node must be admitted when isInternal never flags it")
 	}
 }
@@ -94,7 +94,7 @@ func TestNodeCandidateAcceptsHybridMatchWhenTermDoesNotEqualLabel(t *testing.T) 
 	// neither node.Name nor subject.Label, so the exact-match fast path
 	// cannot fire -- this exercises the hybrid-confidence path exclusively.
 	node := candidateNode(contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", 0.9, "*")
-	candidate, ok := NodeCandidate(principal, scope, "Dev Agent", node, noInternalSubjects)
+	candidate, ok := NodeCandidate(principal, scope, "Dev Agent", node, noInternalSubjects, true)
 	if !ok || candidate.Subject.CanonicalID != "project_ask_dev" {
 		t.Fatalf("NodeCandidate() for a hybrid (non-exact) match = %#v, ok=%v", candidate, ok)
 	}
@@ -103,5 +103,51 @@ func TestNodeCandidateAcceptsHybridMatchWhenTermDoesNotEqualLabel(t *testing.T) 
 	}
 	if candidate.MatchReasons[0] != "Hybrid graph search matched the subject label or indexed context." {
 		t.Fatalf("NodeCandidate() match reason = %q, want the hybrid (non-exact) reason", candidate.MatchReasons[0])
+	}
+}
+
+// TestNodeCandidate_AllowExactMatchFalseNeverPromotesEvenOnLiteralEquality is
+// the codex round-2 P1 regression proof: a subject legitimately labeled the
+// EXACT SAME literal string as term must still NOT get the exact-match
+// promotion (confidence 1.0, MatchExact) when allowExactMatch is false --
+// this is the structural guarantee CHAOS-3838's question-provenance marker
+// depends on (a real subject could, in principle, be labeled
+// "[full question]"; that must never let a question-level vector-only find
+// masquerade as an exact caller-typed match). Confidence and mechanism must
+// come from node.Relevance/node.Mechanism alone. MUTATION CHECK: passing
+// true instead of false here reproduces confidence==1 / MatchExact present,
+// which TestNodeCandidateAcceptsHybridMatchWhenTermDoesNotEqualLabel's
+// sibling exact-match tests already prove is the true-path behavior.
+func TestNodeCandidate_AllowExactMatchFalseNeverPromotesEvenOnLiteralEquality(t *testing.T) {
+	t.Parallel()
+	principal := storage.Principal{OrgID: "org_1"}
+	scope := contextfabric.RequestedScope{}
+	const marker = "[full question]"
+	node := candidateNode(contextfabric.SubjectProject, "project_literal", marker, 0.9, "*")
+	node.Mechanism = contextfabric.MatchVector
+
+	candidate, ok := NodeCandidate(principal, scope, marker, node, noInternalSubjects, false)
+	if !ok {
+		t.Fatal("NodeCandidate() rejected a legitimately authorized, valid node")
+	}
+	if candidate.Confidence == 1 {
+		t.Fatalf("NodeCandidate(allowExactMatch=false) confidence = 1, want it derived ONLY from node.Relevance/node.Score despite term literally equaling the node's own label/name")
+	}
+	if candidate.Confidence != ResultConfidence(node.Relevance, node.Score) {
+		t.Fatalf("NodeCandidate(allowExactMatch=false) confidence = %v, want the raw ResultConfidence %v", candidate.Confidence, ResultConfidence(node.Relevance, node.Score))
+	}
+	if HasMechanism(candidate.MatchMechanisms, contextfabric.MatchExact) {
+		t.Fatalf("NodeCandidate(allowExactMatch=false) mechanisms = %v, want MatchExact absent despite literal term/label equality", candidate.MatchMechanisms)
+	}
+	if !HasMechanism(candidate.MatchMechanisms, contextfabric.MatchVector) || DistinctMechanismCount(candidate.MatchMechanisms) != 1 {
+		t.Fatalf("NodeCandidate(allowExactMatch=false) mechanisms = %v, want ONLY the adapter-declared mechanism (MatchVector)", candidate.MatchMechanisms)
+	}
+
+	// Control: the SAME literal-equal fixture WITH allowExactMatch=true
+	// exact-matches normally -- proving the guard above is allowExactMatch's
+	// doing, not some other property of this fixture (e.g. label length).
+	control, ok := NodeCandidate(principal, scope, marker, node, noInternalSubjects, true)
+	if !ok || control.Confidence != 1 || !HasMechanism(control.MatchMechanisms, contextfabric.MatchExact) {
+		t.Fatalf("control (allowExactMatch=true) = %#v, ok=%v, want confidence=1 and MatchExact present for a genuine literal match", control, ok)
 	}
 }

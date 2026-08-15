@@ -42,7 +42,7 @@ func TestTraverseObservationToSubjectFindsCanonicalParent(t *testing.T) {
 	}
 	getVerifiedNode := func(context.Context, string) (CandidateNode, bool) { return subject, true }
 
-	candidate, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, getEdges, getVerifiedNode)
+	candidate, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, true, getEdges, getVerifiedNode)
 	if outcome != ObservationParentFound {
 		t.Fatalf("TraverseObservationToSubject() outcome = %v, want ObservationParentFound", outcome)
 	}
@@ -76,7 +76,7 @@ func TestTraverseObservationToSubjectIgnoresUnrelatedRelationEdges(t *testing.T)
 	}
 	getVerifiedNode := func(context.Context, string) (CandidateNode, bool) { return unrelated, true }
 
-	_, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, getEdges, getVerifiedNode)
+	_, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, true, getEdges, getVerifiedNode)
 	if outcome != ObservationNoParent {
 		t.Fatalf("TraverseObservationToSubject() outcome = %v, want ObservationNoParent: a MENTIONS edge must never be followed as attribution", outcome)
 	}
@@ -107,7 +107,7 @@ func TestTraverseObservationToSubjectRequiresEdgeAuthorization(t *testing.T) {
 	}
 	getVerifiedNode := func(context.Context, string) (CandidateNode, bool) { return subject, true }
 
-	_, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, getEdges, getVerifiedNode)
+	_, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, true, getEdges, getVerifiedNode)
 	if outcome == ObservationParentFound {
 		t.Fatal("TraverseObservationToSubject() found a parent through an unauthorized attribution edge")
 	}
@@ -139,7 +139,7 @@ func TestTraverseObservationToSubjectErrorPreventsConfirmedNoParent(t *testing.T
 			return nil, errors.New("transient backend failure")
 		}
 		getVerifiedNode := func(context.Context, string) (CandidateNode, bool) { return CandidateNode{}, false }
-		_, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, getEdges, getVerifiedNode)
+		_, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, true, getEdges, getVerifiedNode)
 		if outcome != ObservationTraversalErrored {
 			t.Fatalf("outcome = %v, want ObservationTraversalErrored", outcome)
 		}
@@ -154,7 +154,7 @@ func TestTraverseObservationToSubjectErrorPreventsConfirmedNoParent(t *testing.T
 			}}, nil
 		}
 		getVerifiedNode := func(context.Context, string) (CandidateNode, bool) { return CandidateNode{}, false }
-		_, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, getEdges, getVerifiedNode)
+		_, outcome := TraverseObservationToSubject(context.Background(), principal, scope, "readiness review", document, noInternalSubjects, true, getEdges, getVerifiedNode)
 		if outcome != ObservationTraversalErrored {
 			t.Fatalf("outcome = %v, want ObservationTraversalErrored", outcome)
 		}

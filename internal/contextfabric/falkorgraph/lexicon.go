@@ -1,7 +1,6 @@
 package falkorgraph
 
 import (
-	"regexp"
 	"strings"
 )
 
@@ -84,33 +83,77 @@ var domainLexiconGroups = [][]string{
 	{"org", "organization"},
 }
 
-// lexiconGroup pairs a domainLexiconGroups entry with one precompiled,
-// case-insensitive, whole-phrase matcher per member phrase.
+// lexiconGroup pairs a domainLexiconGroups entry with its lowercased
+// phrases, precomputed once so expandWithLexicon never re-lowercases a
+// fixed literal on the hot read path.
 type lexiconGroup struct {
-	phrases  []string
-	matchers []*regexp.Regexp
+	phrases      []string
+	lowerPhrases []string
 }
 
 // compiledLexicon is built once at package init, not per call -- expansion
 // runs on the hot read path (once per resolved term, plus once per
-// resolution for the question), and every regexp here is fixed, code-owned
-// literal text with no caller input in it.
+// resolution for the question).
 var compiledLexicon = compileLexicon(domainLexiconGroups)
 
 func compileLexicon(groups [][]string) []lexiconGroup {
 	compiled := make([]lexiconGroup, 0, len(groups))
 	for _, group := range groups {
-		lg := lexiconGroup{phrases: group, matchers: make([]*regexp.Regexp, len(group))}
+		lg := lexiconGroup{phrases: group, lowerPhrases: make([]string, len(group))}
 		for i, phrase := range group {
-			// \b...\b anchors the match to whole-word/whole-phrase
-			// boundaries so "pr" does not match inside "principal", and a
-			// multi-word phrase like "pull request" only matches that exact
-			// run of words, not a stem or a superset.
-			lg.matchers[i] = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(phrase) + `\b`)
+			lg.lowerPhrases[i] = strings.ToLower(phrase)
 		}
 		compiled = append(compiled, lg)
 	}
 	return compiled
+}
+
+// hasWholeWordPhrase reports whether lowerPhrase occurs in lowerText as a
+// genuine whole-word/whole-phrase run: the rune immediately before the
+// match (if any) and the rune immediately after it (if any) are NOT
+// unicode letters or digits, per isFulltextWordRune -- the SAME predicate
+// queries.go's fulltext tokenizer and matched-term-coverage math use, so a
+// boundary decision here can never disagree with what that path already
+// treats as "inside a word". Both arguments must already be lowercased by
+// the caller (this function does no case folding of its own).
+//
+// This replaces a naive `\b<phrase>\b` regexp (codex round-2 P2): Go's
+// regexp \b is an ASCII-only word-boundary test (RE2's \w is exactly
+// [0-9A-Za-z_]), so it reads the transition from an ASCII letter to ANY
+// non-ASCII letter as a boundary -- backwards for a genuine Unicode word.
+// `\bpr\b` matched "pr" at the start of "prévision" (a boundary between
+// ASCII 'r' and non-ASCII 'é' that isn't a real word boundary at all),
+// silently expanding a French/Spanish/etc. word into unrelated English
+// synonyms. isFulltextWordRune's unicode.IsLetter/IsDigit test treats 'é'
+// as a word rune like any other letter, so no boundary exists there and
+// this function correctly does not match.
+func hasWholeWordPhrase(lowerText, lowerPhrase string) bool {
+	if lowerPhrase == "" {
+		return false
+	}
+	text := []rune(lowerText)
+	phrase := []rune(lowerPhrase)
+	n, m := len(text), len(phrase)
+	for start := 0; start+m <= n; start++ {
+		if start > 0 && isFulltextWordRune(text[start-1]) {
+			continue
+		}
+		end := start + m
+		if end < n && isFulltextWordRune(text[end]) {
+			continue
+		}
+		match := true
+		for i := 0; i < m; i++ {
+			if text[start+i] != phrase[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 // expandWithLexicon returns text widened with any domain-lexicon synonym
@@ -132,21 +175,22 @@ func expandWithLexicon(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
 	}
+	lowerText := strings.ToLower(text)
 	seen := make(map[string]struct{})
 	var additions []string
 	for _, group := range compiledLexicon {
 		matched := false
-		for i, matcher := range group.matchers {
-			if matcher.MatchString(text) {
+		for _, lowerPhrase := range group.lowerPhrases {
+			if hasWholeWordPhrase(lowerText, lowerPhrase) {
 				matched = true
-				seen[strings.ToLower(group.phrases[i])] = struct{}{}
+				seen[lowerPhrase] = struct{}{}
 			}
 		}
 		if !matched {
 			continue
 		}
-		for _, phrase := range group.phrases {
-			key := strings.ToLower(phrase)
+		for i, phrase := range group.phrases {
+			key := group.lowerPhrases[i]
 			if _, already := seen[key]; already {
 				continue
 			}

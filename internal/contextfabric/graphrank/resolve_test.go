@@ -34,7 +34,7 @@ type fakeGraphBackend struct {
 	// at all", truncated means "there were more results than the budget could
 	// show". Defaults to false.
 	searchDegraded    bool
-	traverse          func(ctx context.Context, term string, observation CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal)
+	traverse          func(ctx context.Context, term string, observation CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, ObservationTraversal)
 	isInternal        func(contextfabric.SubjectRef) bool
 	traversalDegraded []int
 
@@ -57,7 +57,7 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 	}
 	traverse := f.traverse
 	if traverse == nil {
-		traverse = func(context.Context, string, CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
+		traverse = func(context.Context, string, CandidateNode, bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, ObservationNoParent
 		}
 	}
@@ -314,7 +314,7 @@ func TestResolveSubjectsReportsTraversalDegradationThroughTelemetry(t *testing.T
 	document := observationNode("node-document-erroring", "document_error", "Ask Dev readiness review", 0.9)
 	backend := &fakeGraphBackend{
 		searchResults: map[string][]CandidateNode{"readiness review": {document}},
-		traverse: func(context.Context, string, CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
+		traverse: func(context.Context, string, CandidateNode, bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, ObservationTraversalErrored
 		},
 	}
@@ -339,7 +339,7 @@ func TestResolveSubjectsExactHintPropagatesBackendError(t *testing.T) {
 			return CandidateNode{}, false, errors.New("transient backend failure")
 		},
 		Search: func(context.Context, string, int) ([]CandidateNode, bool, bool, error) { return nil, false, false, nil },
-		Traverse: func(context.Context, string, CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
+		Traverse: func(context.Context, string, CandidateNode, bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, ObservationNoParent
 		},
 		IsInternal: noInternalSubjects,
@@ -684,5 +684,77 @@ func TestQuestionProvenanceMarkerRespectsContractBounds(t *testing.T) {
 	overCap.MatchedTerms = terms[:matchedTermsCap+1]
 	if err := overCap.Validate(); err == nil {
 		t.Fatalf("a candidate with matchedTermsCap+1=%d MatchedTerms entries passed Validate() -- matchedTermsCap is now UNDER the real contract bound, capMatchedTermsAfterQuestionMerge is dropping the marker too aggressively", matchedTermsCap+1)
+	}
+}
+
+// --- codex round-2 P1: a subject literally labeled the marker must not exact-match via the question path ---
+
+// TestResolveSubjects_QuestionPathNeverExactMatchesEvenOnLiteralLabelEquality
+// is the codex round-2 P1 end-to-end regression proof: a subject
+// legitimately labeled the exact literal string questionProvenanceMarker
+// ("[full question]") is found ONLY via the question-level vector pass.
+// Before the fix, mergeSearchResults' NodeCandidate call compared THAT
+// label against the marker it was itself passed as term, "matched" by
+// definition, and promoted to confidence=1.0 + MatchExact -- a vector-only
+// find auto-committing on the strength of an internal provenance string,
+// violating AC-3778-3 (a vector hit alone must never commit). The fix must
+// make this candidate MatchVector-only, banded confidence, never committed
+// alone. MUTATION CHECK: reverting mergeSearchResults' question-pass call
+// site to allowExactMatch=true reproduces confidence==1/MatchExact/an
+// illegitimate auto-commit.
+func TestResolveSubjects_QuestionPathNeverExactMatchesEvenOnLiteralLabelEquality(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_literal", Label: questionProvenanceMarker}
+	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.65, "*")
+	node.Mechanism = contextfabric.MatchVector
+	request := testRequest()
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchQuestionResults: map[string][]CandidateNode{
+			request.Question: {node},
+		},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want NO auto-commit -- a vector-only find must never commit alone (AC-3778-3), regardless of this subject's label literally equaling the internal provenance marker", resolution.Committed)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want 1", resolution.Candidates)
+	}
+	candidate := resolution.Candidates[0]
+	if candidate.Confidence == 1 {
+		t.Fatal("candidate.Confidence = 1, want it derived from the vector similarity band -- a subject's label matching the internal provenance marker must never grant an exact match")
+	}
+	if HasMechanism(candidate.MatchMechanisms, contextfabric.MatchExact) {
+		t.Fatalf("candidate.MatchMechanisms = %v, want MatchExact absent", candidate.MatchMechanisms)
+	}
+	if !HasMechanism(candidate.MatchMechanisms, contextfabric.MatchVector) || DistinctMechanismCount(candidate.MatchMechanisms) != 1 {
+		t.Fatalf("candidate.MatchMechanisms = %v, want ONLY MatchVector (by construction on the question path)", candidate.MatchMechanisms)
+	}
+}
+
+// TestResolveSubjects_TermPathStillExactMatchesLiteralEquality is the
+// control proving the fix is scoped to the question path only: a subject
+// found by a genuine, caller-derived TERM (interpretation's own
+// SubjectTerms) that happens to equal its own label exactly must still
+// auto-commit via the normal exact-match fast path -- allowExactMatch=false
+// must never leak into per-term resolution.
+func TestResolveSubjects_TermPathStillExactMatchesLiteralEquality(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_exact", Label: "Ask Dev"}
+	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.2, "*")
+	backend := &fakeGraphBackend{
+		searchResults: map[string][]CandidateNode{"Ask Dev": {node}},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0] != subject {
+		t.Fatalf("resolution.Committed = %#v, want the term-path exact match auto-committed normally", resolution.Committed)
 	}
 }

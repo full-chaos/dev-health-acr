@@ -105,3 +105,74 @@ func hasWholeWord(text, word string) bool {
 	}
 	return false
 }
+
+// --- codex round-2 P2: Unicode-aware phrase boundaries, not ASCII \b ---
+
+// TestExpandWithLexicon_UnicodeWordsDoNotFalselyExpand is the regression
+// proof: Go's regexp \b is ASCII-only (RE2's \w is exactly [0-9A-Za-z_]),
+// so a naive `\bpr\b` reads the transition from ASCII 'r' to a non-ASCII
+// letter as a word boundary -- "prévision" (French) and "orgánico"
+// (Spanish) must NOT expand, even though they contain "pr"/"org" as a
+// byte-level prefix, because "é"/"á" are genuine word runes
+// (isFulltextWordRune's unicode.IsLetter test) with no boundary before
+// them. MUTATION CHECK: reverting hasWholeWordPhrase to a `\b`-based regexp
+// makes both of these expand.
+func TestExpandWithLexicon_UnicodeWordsDoNotFalselyExpand(t *testing.T) {
+	cases := []string{
+		"la prévision du projet",         // French "forecast" -- starts with "pr"
+		"desarrollo orgánico del equipo", // Spanish "organic" -- starts with "org"
+	}
+	for _, text := range cases {
+		if got := expandWithLexicon(text); got != text {
+			t.Fatalf("expandWithLexicon(%q) = %q, want unchanged -- a Unicode word must not be split at a non-ASCII rune", text, got)
+		}
+	}
+}
+
+// TestExpandWithLexicon_AsciiWordsStillExpand is
+// UnicodeWordsDoNotFalselyExpand's positive companion: genuine short-hand
+// usage in ordinary (ASCII) text must keep expanding exactly as before --
+// the Unicode-aware boundary check must not become a blanket "never expand
+// near non-ASCII" over-correction, since it never sees non-ASCII input in
+// these cases at all.
+func TestExpandWithLexicon_AsciiWordsStillExpand(t *testing.T) {
+	cases := map[string]string{
+		"pr 42":                "pull request",
+		"the org's repos":      "organization",
+		"who owns this ticket": "issue",
+	}
+	for text, wantSynonym := range cases {
+		got := expandWithLexicon(text)
+		if got == text {
+			t.Fatalf("expandWithLexicon(%q) did not expand, want it to widen with %q", text, wantSynonym)
+		}
+		if !strings.Contains(strings.ToLower(got), wantSynonym) {
+			t.Fatalf("expandWithLexicon(%q) = %q, want it to contain %q", text, got, wantSynonym)
+		}
+	}
+}
+
+// TestHasWholeWordPhrase_BoundaryIsRuneAware unit-tests the boundary
+// primitive directly, independent of the lexicon table: a phrase match
+// immediately followed or preceded by any unicode letter/digit (ASCII or
+// not) is not a whole-word match; immediately followed/preceded by
+// punctuation, whitespace, or nothing (start/end of string) is.
+func TestHasWholeWordPhrase_BoundaryIsRuneAware(t *testing.T) {
+	cases := []struct {
+		text, phrase string
+		want         bool
+	}{
+		{"prévision", "pr", false},  // non-ASCII letter immediately after -- not a boundary
+		{"pr é vision", "pr", true}, // space after "pr" -- genuine boundary
+		{"the pr.", "pr", true},     // punctuation after -- genuine boundary
+		{"orgánico", "org", false},  // non-ASCII letter immediately after
+		{"the org", "org", true},    // end of string after -- genuine boundary
+		{"reorg", "org", false},     // ASCII letter immediately before -- not a boundary
+		{"pr", "pr", true},          // exact, whole string
+	}
+	for _, tc := range cases {
+		if got := hasWholeWordPhrase(strings.ToLower(tc.text), strings.ToLower(tc.phrase)); got != tc.want {
+			t.Errorf("hasWholeWordPhrase(%q, %q) = %v, want %v", tc.text, tc.phrase, got, tc.want)
+		}
+	}
+}

@@ -15,7 +15,22 @@ import (
 // anchor/marker nodes forced onto Zep's addressing scheme -- a backend that
 // has no such nodes, e.g. falkorgraph, passes a predicate that always
 // returns false).
-func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedScope, term string, node CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (contextfabric.SubjectCandidate, bool) {
+//
+// allowExactMatch gates whether term is even ELIGIBLE to trigger the
+// exact-label-match promotion below (codex round-2 P1). It exists because
+// term is not always caller-typed search input: CHAOS-3838's question-level
+// pass calls this with a synthetic, bounded PROVENANCE marker (see
+// resolve.go's questionProvenanceMarker) standing in for the raw question,
+// purely so MatchedTerms has something legible to display -- that marker
+// must never be allowed to WIN an exact-match comparison against a real
+// subject's label just because some subject happens to be named the same
+// literal string as the marker. A caller passing false gets confidence and
+// mechanism derived ONLY from node.Relevance/node.Score/node.Mechanism,
+// never from any string comparison against term, regardless of what term
+// happens to equal. Every pre-existing caller (the exact-hint path, the
+// per-term hybrid-search path, and traversal reached from either) passes
+// true, preserving byte-identical behavior for genuine caller-typed terms.
+func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedScope, term string, node CandidateNode, isInternal func(contextfabric.SubjectRef) bool, allowExactMatch bool) (contextfabric.SubjectCandidate, bool) {
 	if !AuthorizedAttributes(principal, scope, node.Attributes) {
 		return contextfabric.SubjectCandidate{}, false
 	}
@@ -24,7 +39,7 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 		return contextfabric.SubjectCandidate{}, false
 	}
 	confidence := ResultConfidence(node.Relevance, node.Score)
-	matched := strings.EqualFold(strings.TrimSpace(term), node.Name) || strings.EqualFold(strings.TrimSpace(term), subject.Label)
+	matched := allowExactMatch && (strings.EqualFold(strings.TrimSpace(term), node.Name) || strings.EqualFold(strings.TrimSpace(term), subject.Label))
 	if matched {
 		confidence = 1
 	}
