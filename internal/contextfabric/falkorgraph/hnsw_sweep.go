@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -114,14 +115,76 @@ type SweepResult struct {
 	// equals the seed count RunHNSWSweep was called with.
 }
 
-// referenceOverfetch is how many extra rows beyond k the reference build's
-// query asks for, so a tie GROUP spanning the k-th boundary is captured
-// whole rather than arbitrarily split (Luna round-1 finding 3;
-// TieExpandedTop, hnsw_recall.go). 2x is a deliberately generous, cheap
-// margin -- the query itself is sub-few-ms at this corpus's scale (live-
-// measured, docs/design/context-fabric-hnsw-sweep.md), so doubling it costs
-// nothing material.
+// referenceOverfetch is the STARTING multiplier for the reference build's
+// tie-completion fetch (referenceTopKTieComplete) -- the first, cheapest
+// guess at how far past k a tie group might extend, doubled from there only
+// if the window's own edge is still tied (Luna round-2 finding 3: a FIXED
+// 2x window is not enough on its own -- with more than 2*k duplicates, real
+// on this 78%-near-duplicate corpus, ids beyond the window scored as misses
+// even though they were equally valid neighbors).
 const referenceOverfetch = 2
+
+// maxReferenceTieMultiplier bounds how many times referenceTopKTieComplete
+// will double its fetch window chasing a tie group before giving up (Luna
+// round-2 finding 3's required hard bound). 64x (1,280 rows at k=20) is far
+// past any plausible tie group even on this corpus's worst known case (the
+// 27,902-row ci_pipeline_run block, spec §1) while staying bounded; a tie
+// group that survives 64 doublings is treated as a genuine measurement
+// failure for that seed, never silently truncated.
+const maxReferenceTieMultiplier = 64
+
+// errReferenceTieUnbounded classifies referenceTopKTieComplete hitting
+// maxReferenceTieMultiplier while the k-th boundary score is STILL tied with
+// the last fetched row -- the tie group could not be proven complete.
+var errReferenceTieUnbounded = errors.New("context fabric hnsw sweep: reference tie group did not resolve within the bounded overfetch window")
+
+// referenceTopKTieComplete fetches a reference build's top-K for seed,
+// growing the raw fetch window (doubling from referenceOverfetch) until the
+// k-th boundary score is DEFINITIVELY not tied with the window's last row --
+// i.e. the tie group spanning the boundary is proven complete, however large
+// it turns out to be -- or maxReferenceTieMultiplier is reached, in which
+// case it returns errReferenceTieUnbounded rather than silently comparing
+// candidates against a truncated, possibly-incomplete tie class (Luna
+// round-2 finding 3).
+//
+// Only the REFERENCE build needs this: a candidate build's own top-k is
+// compared AS RETURNED (RecallAtKTieTolerant is asymmetric on purpose, see
+// hnsw_recall.go) -- tie-completeness only matters for the side being used
+// as "what counts as correct."
+func (a *Adapter) referenceTopKTieComplete(ctx context.Context, key, seed string, k int) ([]ScoredID, time.Duration, error) {
+	var totalLatency time.Duration
+	multiplier := referenceOverfetch
+	for {
+		top, latency, err := a.vectorSweepSeedTopK(ctx, key, seed, k*multiplier)
+		totalLatency += latency
+		if err != nil {
+			return nil, totalLatency, err
+		}
+		if k > len(top) {
+			// Either fewer rows exist for this key than k (nothing to fetch
+			// further) or the server returned short for another reason --
+			// either way, there is no larger window to chase a tie into.
+			return top, totalLatency, nil
+		}
+		if len(top) < k*multiplier {
+			// The server returned FEWER rows than asked for -- this key's
+			// entire corpus was exhausted, so no tie group can extend past
+			// what was just fetched.
+			return top, totalLatency, nil
+		}
+		boundary := top[k-1].Score
+		if top[len(top)-1].Score > boundary {
+			// The window's own last row is already strictly worse than the
+			// boundary -- the tie group ends inside this window, proven.
+			return top, totalLatency, nil
+		}
+		if multiplier >= maxReferenceTieMultiplier {
+			return nil, totalLatency, fmt.Errorf("%w: seed %q's tie group at k=%d did not resolve within %dx overfetch (%d rows)",
+				errReferenceTieUnbounded, seed, k, multiplier, k*multiplier)
+		}
+		multiplier *= 2
+	}
+}
 
 // RunHNSWSweep recreates the vector index at each of points (deduplicated,
 // reference point always included even if the caller omitted it), runs every
@@ -136,8 +199,8 @@ const referenceOverfetch = 2
 // as ensureVectorIndex does before ANY vector-index write.
 //
 // The FIRST build recreates the index at the reference point and captures
-// every seed's SCORED top-K (overfetched, see referenceOverfetch) as the
-// comparison baseline; every subsequent build is measured against that
+// every seed's SCORED top-K (tie-complete, see referenceTopKTieComplete) as
+// the comparison baseline; every subsequent build is measured against that
 // baseline via RecallAtKTieTolerant, not the strict RecallAtK, so a swap
 // between two equally-close (tied-score) neighbors at the boundary is never
 // misread as a miss. Recreation order after the reference follows points'
@@ -182,34 +245,47 @@ func (a *Adapter) RunHNSWSweep(
 		buildTime := a.now().Sub(buildStart)
 
 		isReference := point == reference
-		fetchK := k
-		if isReference {
-			fetchK = k * referenceOverfetch
-		}
 
 		latencies := make([]time.Duration, 0, len(seedCanonicalIDs))
 		var recallSum float64
 		contributing := 0
 		skipped := 0
 		for _, seed := range seedCanonicalIDs {
-			top, latency, err := a.vectorSweepSeedTopK(ctx, key, seed, fetchK)
-			if err != nil {
-				skipped++
-				continue
-			}
-			latencies = append(latencies, latency)
 			if isReference {
+				// referenceTopKTieComplete grows its fetch until the k-th
+				// boundary's tie group is PROVEN complete (Luna round-2
+				// finding 3) rather than a fixed 2x window. Its own
+				// unresolved-tie failure (errReferenceTieUnbounded) is
+				// routed through the SAME skipped-seed accounting as any
+				// other query error -- fail-closed, same principle as round-
+				// 1 finding 1: an unresolved tie is not a clean answer this
+				// seed can contribute, so it must not silently score as
+				// either a hit or a miss, and if it dominates the seed set
+				// the existing zero-coverage check (below) already surfaces
+				// that loudly rather than needing a second error path.
+				top, latency, err := a.referenceTopKTieComplete(ctx, key, seed, k)
+				if err != nil {
+					skipped++
+					continue
+				}
+				latencies = append(latencies, latency)
 				referenceTop[seed] = top
 				recallSum += 1 // a setting is perfectly recalled against itself, by definition.
 				contributing++
 				continue
 			}
+			top, latency, err := a.vectorSweepSeedTopK(ctx, key, seed, k)
+			if err != nil {
+				skipped++
+				continue
+			}
+			latencies = append(latencies, latency)
 			base, ok := referenceTop[seed]
 			if !ok {
-				// The reference query for this exact seed also failed --
-				// counted as skipped here too, there is nothing to compare
-				// against, and this must not silently read as a match OR a
-				// miss.
+				// The reference query (or its tie-completion) for this exact
+				// seed also failed -- counted as skipped here too, there is
+				// nothing to compare against, and this must not silently
+				// read as a match OR a miss.
 				skipped++
 				continue
 			}
@@ -284,54 +360,52 @@ func latencyPercentiles(samples []time.Duration) (p50, p95 time.Duration) {
 	return rank(0.50), rank(0.95)
 }
 
-// protectedSweepGraphKeys is a hardcoded, EXACT-match denylist of graph keys
-// RunHNSWSweep's destructive drop/recreate cycle must never target, no matter
-// what an operator's environment variables claim (Luna round-1 finding 2).
+// isSweepTargetSafe reports whether targetKey may be targeted by
+// RunHNSWSweep's destructive drop/recreate cycle, and if not, why.
 //
-// The earlier gate (isSweepTargetSafe's only check before this) was a
-// substring heuristic -- "does the key contain \"copy\"" -- and Luna showed
-// it precisely: a PRODUCTION key can itself contain "copy" (an org named
-// with it, or a key that started life as a copy and was later promoted), so
-// the heuristic would ACCEPT the one key it exists to reject. A substring
-// match can never be a proof; an exact-equality denylist against a KNOWN key
-// can. This entry is the live organization graph this lane was explicitly
-// told is precious and must never be mutated (team-lead's live-graph-safety
-// directive, CHAOS-3832 task brief) -- kept as one place so any future org
-// this tooling might run near can be added here rather than trusted to an
-// operator's env var alone.
-var protectedSweepGraphKeys = []string{
-	"acr-cf-fa7030e2106de7411bfbf8ebce74c620",
-}
-
-// isSweepTargetSafe reports whether key may be targeted by RunHNSWSweep's
-// destructive drop/recreate cycle, and if not, why.
+// FAIL-CLOSED, no list to maintain (Luna round-2 finding 1 -- round-1's fix
+// was a hardcoded, EXACT-match denylist of ONE known key, which Luna showed
+// still fails OPEN: a changed graph prefix, a different organization, or
+// simply an org this lane's author did not happen to hardcode all sail
+// straight through a denylist that only ever covered one literal string.
+// A list of known-bad keys can never be a proof of safety for a key NOT on
+// it; only a comparison against what the key SHOULD be can.
 //
-// TWO INDEPENDENT conditions, both required:
-//  1. key must not EXACTLY match any entry in protectedSweepGraphKeys or
-//     additionalProtected -- this is what makes the destructive path
-//     provably unreachable for a KNOWN production key, not merely unlikely.
-//  2. key must still carry the operator's declared "this is scratch" marker
-//     (the "copy" substring) -- kept as a SECOND, independent condition
-//     rather than the sole gate. It does not replace condition 1 (Luna's
-//     point exactly), but it still catches a plain typo/copy-paste of some
-//     OTHER unrelated key that never made it onto the denylist.
-func isSweepTargetSafe(key string, additionalProtected []string) (bool, string) {
-	for _, protected := range protectedSweepGraphKeys {
-		if key == protected {
-			return false, fmt.Sprintf("key %q exactly matches a hardcoded protected production graph key", key)
-		}
+// The fix: derive the org's actual production graph key at runtime, via
+// graphKey -- the EXACT SAME derivation identity.go uses for every real
+// projection write and query, never a copy of the logic that could drift
+// from it -- and refuse outright if targetKey equals that derived value.
+// There is nothing to keep in sync, because there is nothing hardcoded.
+//
+// TWO conditions, BOTH required, in this order:
+//  1. targetKey must EXACTLY equal expectedCopyKey -- an operator-declared
+//     value, independently typed, that must match the key this run is
+//     ACTUALLY about to hit. This is a "state your intent twice" check, not
+//     a naming heuristic: it catches a copy-paste/env-var mismatch between
+//     what the operator meant to target and what ACR_TEST_HNSW_SWEEP_GRAPH_KEY
+//     actually holds, with no assumption at all about what a safe name looks
+//     like. The substring ("contains copy") heuristic from round 1 is
+//     REMOVED entirely -- once a derivation-based comparison exists it adds
+//     nothing and Luna named it as dead weight.
+//  2. targetKey must NOT equal graphKey(graphPrefix, orgID) -- the derived
+//     production key for the org this run declares it is sweeping.
+//
+// UNDERIVABLE = REFUSE. An empty graphPrefix, orgID, or expectedCopyKey
+// means condition 2 (or 1) cannot be evaluated at all, and an unevaluable
+// safety check is refused, never silently skipped or treated as passing.
+func isSweepTargetSafe(targetKey, expectedCopyKey, graphPrefix, orgID string) (bool, string) {
+	if strings.TrimSpace(graphPrefix) == "" || strings.TrimSpace(orgID) == "" {
+		return false, "graph prefix or organization id is empty -- cannot derive the production graph key to compare against, refusing rather than allowing an unevaluable check to pass"
 	}
-	for _, protected := range additionalProtected {
-		protected = strings.TrimSpace(protected)
-		if protected == "" {
-			continue
-		}
-		if key == protected {
-			return false, fmt.Sprintf("key %q exactly matches an operator-declared protected graph key", key)
-		}
+	if strings.TrimSpace(expectedCopyKey) == "" {
+		return false, "no expected copy key was declared -- refusing rather than trusting the target key alone"
 	}
-	if !strings.Contains(strings.ToLower(key), "copy") {
-		return false, fmt.Sprintf("key %q does not contain \"copy\" -- refusing to assume it is a scratch copy", key)
+	if targetKey != expectedCopyKey {
+		return false, fmt.Sprintf("target key %q does not exactly match the independently declared expected copy key %q", targetKey, expectedCopyKey)
+	}
+	production := graphKey(graphPrefix, orgID)
+	if targetKey == production {
+		return false, fmt.Sprintf("target key %q IS the derived production graph key for organization %q -- refusing", targetKey, orgID)
 	}
 	return true, ""
 }

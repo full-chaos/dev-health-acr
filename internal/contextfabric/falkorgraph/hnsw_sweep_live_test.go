@@ -17,23 +17,30 @@ import (
 //
 //	ACR_TEST_HNSW_SWEEP_ADDR=host:port \
 //	ACR_TEST_HNSW_SWEEP_GRAPH_KEY=<graph key> \
+//	ACR_TEST_HNSW_SWEEP_EXPECTED_COPY_KEY=<same graph key, typed independently> \
+//	ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX=<the org's production graph prefix, e.g. acr-cf> \
+//	ACR_TEST_HNSW_SWEEP_ORG_ID=<the org id this run is sweeping> \
 //	ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1 \
 //	  go test ./internal/contextfabric/falkorgraph -run TestLiveHNSWSweep -v
 //
 // SAFETY (hard requirement, not a convention): this test refuses to run
-// unless BOTH ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1 is set AND isSweepTargetSafe
-// (hnsw_sweep.go) accepts the graph key -- an EXACT-match denylist against a
-// hardcoded, known-precious production key, PLUS the "copy" substring as a
-// second, independent condition, never the sole gate (Luna round-1 finding
-// 2: a substring check ALONE would accept a production key that itself
-// happens to contain "copy"). recreateVectorIndexWithOptions drops and
-// rebuilds the target's vector index repeatedly -- correctness-preserving
-// (§7 D3) with a restore-on-failure fallback, but never something to run
-// against a graph an operator did not deliberately stand up as a scratch
-// copy (e.g. via `GRAPH.COPY <live-org-key> <dst>` in redis-cli, per this
-// lane's operating instructions). Neither env var name is a production
-// ACR_CONTEXT_FABRIC_* name, so no ambient production configuration can ever
-// satisfy this test by accident.
+// unless ALL of the following hold:
+//  1. ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1 is set.
+//  2. isSweepTargetSafe (hnsw_sweep.go) accepts the graph key -- FAIL-CLOSED
+//     against the org's ACTUAL production graph key, DERIVED at runtime via
+//     the same graphKey() identity.go uses for every real read/write, never
+//     a hardcoded list (Luna round-2 finding 1: a hardcoded denylist of one
+//     known key still fails open for a different prefix or a different
+//     org -- a derivation-based comparison cannot).
+//
+// recreateVectorIndexWithOptions drops and rebuilds the target's vector
+// index repeatedly -- correctness-preserving (§7 D3) with a restore-on-
+// failure fallback covering both a create error and a poll failure -- but
+// never something to run against a graph an operator did not deliberately
+// stand up as a scratch copy (e.g. via `GRAPH.COPY <live-org-key> <dst>` in
+// redis-cli, per this lane's operating instructions). None of these env var
+// names is a production ACR_CONTEXT_FABRIC_* name, so no ambient production
+// configuration can ever satisfy this test by accident.
 //
 // The dimension and seed canonical IDs are also supplied at run time --
 // ACR_TEST_HNSW_SWEEP_DIMENSION and a comma-separated
@@ -53,19 +60,25 @@ func TestLiveHNSWSweep(t *testing.T) {
 		t.Fatal("ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1 is required: this test repeatedly drops and rebuilds " +
 			"the target's vector index and must never run against a live organization graph")
 	}
-	// isSweepTargetSafe (hnsw_sweep.go) is an EXACT-match denylist, not a
-	// substring heuristic (Luna round-1 finding 2: a substring check like
-	// "contains copy" would ACCEPT a production key that itself happens to
-	// contain "copy"). ACR_TEST_HNSW_SWEEP_ADDITIONAL_PROTECTED_KEYS lets an
-	// operator extend the hardcoded denylist for a graph this specific run
-	// needs protected beyond the one this lane already knows about.
-	var additionalProtected []string
-	for _, k := range strings.Split(os.Getenv("ACR_TEST_HNSW_SWEEP_ADDITIONAL_PROTECTED_KEYS"), ",") {
-		if k = strings.TrimSpace(k); k != "" {
-			additionalProtected = append(additionalProtected, k)
-		}
+	// isSweepTargetSafe (hnsw_sweep.go) derives the org's production graph
+	// key at runtime and refuses if the target equals it -- FAIL-CLOSED, no
+	// list to maintain (Luna round-2 finding 1). ACR_TEST_HNSW_SWEEP_ORG_ID
+	// and ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX are both REQUIRED (skip, not a
+	// silently-passed check, if either is missing) because an underivable
+	// comparison must never be treated as a passed one.
+	expectedCopyKey := os.Getenv("ACR_TEST_HNSW_SWEEP_EXPECTED_COPY_KEY")
+	if expectedCopyKey == "" {
+		t.Skip("ACR_TEST_HNSW_SWEEP_EXPECTED_COPY_KEY is not set (must independently restate ACR_TEST_HNSW_SWEEP_GRAPH_KEY)")
 	}
-	if safe, reason := isSweepTargetSafe(key, additionalProtected); !safe {
+	graphPrefix := os.Getenv("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX")
+	if graphPrefix == "" {
+		t.Skip("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX is not set (needed to derive and refuse the org's production graph key)")
+	}
+	orgID := os.Getenv("ACR_TEST_HNSW_SWEEP_ORG_ID")
+	if orgID == "" {
+		t.Skip("ACR_TEST_HNSW_SWEEP_ORG_ID is not set (needed to derive and refuse the org's production graph key)")
+	}
+	if safe, reason := isSweepTargetSafe(key, expectedCopyKey, graphPrefix, orgID); !safe {
 		t.Fatalf("refusing to run RunHNSWSweep's destructive drop/recreate cycle: %s", reason)
 	}
 	dimensionRaw := os.Getenv("ACR_TEST_HNSW_SWEEP_DIMENSION")

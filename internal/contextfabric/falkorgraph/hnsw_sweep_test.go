@@ -8,51 +8,88 @@ import (
 	"time"
 )
 
-// Luna round-1 finding 2: the safety gate must be an EXACT-match denylist,
-// not a substring heuristic -- a production key can itself contain "copy".
-func TestIsSweepTargetSafeRejectsTheHardcodedProtectedKeyEvenThoughItContainsNoCopySubstring(t *testing.T) {
-	protected := protectedSweepGraphKeys[0]
-	safe, reason := isSweepTargetSafe(protected, nil)
+// Luna round-2 finding 1: the safety gate must FAIL CLOSED against a
+// DERIVED production key, not a hardcoded list -- any key this org's
+// graphKey derivation produces must be rejected, whether or not anyone
+// remembered to hardcode it.
+func TestIsSweepTargetSafeRejectsTheDerivedProductionKeyForTheDeclaredOrg(t *testing.T) {
+	prefix, orgID := "acr-cf", "70d529e0-3c06-4597-8480-794fd02328b6"
+	production := graphKey(prefix, orgID)
+	safe, reason := isSweepTargetSafe(production, production, prefix, orgID)
 	if safe {
-		t.Fatalf("the hardcoded protected key must never be accepted, got safe=true reason=%q", reason)
+		t.Fatalf("the derived production key must never be accepted even when it matches the declared expected copy key, got safe=true reason=%q", reason)
 	}
 	if reason == "" {
 		t.Fatal("expected a non-empty rejection reason")
 	}
 }
 
-// The exact scenario Luna described: a "production" key that HAPPENS to
-// contain "copy" in its name must still be rejected once it is denylisted,
-// proving the denylist -- not the substring check -- is what protects it.
-func TestIsSweepTargetSafeRejectsAProtectedKeyThatAlsoContainsCopySubstring(t *testing.T) {
-	trickyProdKey := "acr-cf-org-copy-promoted-to-prod"
-	safe, _ := isSweepTargetSafe(trickyProdKey, []string{trickyProdKey})
+// A DIFFERENT graph prefix or organization -- the exact gap Luna named --
+// still derives to a key isSweepTargetSafe must reject if the target
+// happens to land on it, WITHOUT any hardcoded entry naming it.
+func TestIsSweepTargetSafeRejectsTheDerivedKeyForAnyOrgNoHardcodingNeeded(t *testing.T) {
+	prefix, orgID := "acr-cf", "some-entirely-different-org-id"
+	production := graphKey(prefix, orgID)
+	safe, _ := isSweepTargetSafe(production, production, prefix, orgID)
 	if safe {
-		t.Fatal("a key on the denylist must be rejected even though it contains \"copy\" -- the substring check alone would have wrongly accepted it")
+		t.Fatal("a derived production key must be rejected regardless of which org it derives from -- no list to maintain means no org is ever missed")
 	}
 }
 
-func TestIsSweepTargetSafeRejectsAKeyWithNoCopyMarkerEvenIfNotDenylisted(t *testing.T) {
-	safe, reason := isSweepTargetSafe("acr-cf-some-other-org-graph", nil)
+// Condition 1: the target key must exactly equal the operator's
+// independently declared expected copy key -- a mismatch (e.g. an env var
+// typo) is refused even though the target itself might otherwise be safe.
+func TestIsSweepTargetSafeRejectsATargetThatDoesNotMatchTheDeclaredExpectedCopyKey(t *testing.T) {
+	safe, reason := isSweepTargetSafe("acr-cf-actual-copy-key", "acr-cf-a-different-declared-key", "acr-cf", "some-org")
 	if safe {
-		t.Fatal("a key with no scratch-copy marker and not on any denylist must still be rejected")
+		t.Fatal("a target/expected mismatch must be rejected")
 	}
 	if reason == "" {
 		t.Fatal("expected a non-empty rejection reason")
 	}
 }
 
-func TestIsSweepTargetSafeAcceptsAGenuineScratchCopy(t *testing.T) {
-	safe, reason := isSweepTargetSafe("acr-cf-3832-sweep-copy-run2", nil)
+func TestIsSweepTargetSafeAcceptsAGenuineScratchCopyDistinctFromTheDerivedProductionKey(t *testing.T) {
+	copyKey := "acr-cf-3832-sweep-copy-run2"
+	safe, reason := isSweepTargetSafe(copyKey, copyKey, "acr-cf", "70d529e0-3c06-4597-8480-794fd02328b6")
 	if !safe {
-		t.Fatalf("a key with the copy marker, not on any denylist, must be accepted, got reason=%q", reason)
+		t.Fatalf("a target matching the declared expected key, distinct from the derived production key, must be accepted, got reason=%q", reason)
 	}
 }
 
-func TestIsSweepTargetSafeHonorsOperatorSuppliedAdditionalProtectedKeys(t *testing.T) {
-	safe, reason := isSweepTargetSafe("acr-cf-another-org-copy", []string{"acr-cf-another-org-copy"})
-	if safe {
-		t.Fatalf("an operator-declared additional protected key must be rejected, got safe=true reason=%q", reason)
+// UNDERIVABLE = REFUSE: an empty prefix, org id, or expected key must not be
+// silently treated as "check passes" -- an unevaluable safety check refuses.
+func TestIsSweepTargetSafeRefusesWhenItCannotDeriveTheProductionKey(t *testing.T) {
+	cases := []struct {
+		name, target, expected, prefix, orgID string
+	}{
+		{"empty prefix", "acr-cf-copy", "acr-cf-copy", "", "some-org"},
+		{"empty org id", "acr-cf-copy", "acr-cf-copy", "acr-cf", ""},
+		{"empty expected key", "acr-cf-copy", "", "acr-cf", "some-org"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			safe, reason := isSweepTargetSafe(c.target, c.expected, c.prefix, c.orgID)
+			if safe {
+				t.Fatalf("an underivable safety check must refuse, not pass, got safe=true reason=%q", reason)
+			}
+			if reason == "" {
+				t.Fatal("expected a non-empty rejection reason")
+			}
+		})
+	}
+}
+
+// The round-1 substring heuristic ("contains copy") is GONE: a target that
+// matches its declared expected key and is not the derived production key
+// must be accepted even though its name carries no "copy" marker at all --
+// proving the derivation-based comparison, not a naming convention, is what
+// the gate actually rests on now.
+func TestIsSweepTargetSafeAcceptsAMatchingKeyWithNoCopySubstringAtAll(t *testing.T) {
+	key := "acr-cf-scratch-3832-run"
+	safe, reason := isSweepTargetSafe(key, key, "acr-cf", "70d529e0-3c06-4597-8480-794fd02328b6")
+	if !safe {
+		t.Fatalf("a key with no \"copy\" substring must still be accepted once the substring heuristic is removed, got reason=%q", reason)
 	}
 }
 
@@ -376,5 +413,102 @@ func TestRunHNSWSweepTieToleranceAtTheBoundaryDoesNotCountAsAMiss(t *testing.T) 
 	// "correct" at the boundary and score this 1.0.
 	if results[1].RecallAtK != 1.0 {
 		t.Fatalf("tie-tolerant RecallAtK = %v, want 1.0 -- a boundary tie swap must not read as a miss", results[1].RecallAtK)
+	}
+}
+
+// Luna round-2 finding 3: a tie group larger than the initial 2x overfetch
+// window must be chased further, not silently truncated. Here the tie group
+// spans 6 entries at k=2 -- the initial 4-row window is STILL tied at its own
+// edge, so the fetch must escalate to 8 rows, where the group finally ends.
+func TestRunHNSWSweepReferenceTieCompletionEscalatesPastTheInitialWindow(t *testing.T) {
+	reference := SweepBuildPoint{EfRuntime: 200}
+	fullRanked := []row{
+		{"id": "n1", "score": 0.1}, {"id": "n2", "score": 0.2}, {"id": "n3", "score": 0.2},
+		{"id": "n4", "score": 0.2}, {"id": "n5", "score": 0.2}, {"id": "n6", "score": 0.2},
+		{"id": "n7", "score": 0.5}, {"id": "n8", "score": 0.6},
+	}
+	var requestedKs []int
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+				reqK := extractFetchK(t, cypher)
+				requestedKs = append(requestedKs, reqK)
+				if reqK > len(fullRanked) {
+					reqK = len(fullRanked)
+				}
+				return fullRanked[:reqK], nil
+			}
+			return nil, nil
+		},
+		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			return []indexStatus{{
+				Label: labelSubject, Status: "OPERATIONAL",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(4)}},
+			}}, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	// No other points -- this test is only about the reference build's own
+	// tie-completion fetch escalating past referenceOverfetch.
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+		[]string{"seed-a"}, 2, reference, nil, nil)
+	if err != nil {
+		t.Fatalf("RunHNSWSweep: %v", err)
+	}
+	if len(results) != 1 || results[0].Queries != 1 {
+		t.Fatalf("expected the reference build to succeed with 1 contributing seed, got %#v", results)
+	}
+	if len(requestedKs) < 2 || requestedKs[0] != 4 || requestedKs[1] != 8 {
+		t.Fatalf("expected the fetch to escalate from k*2=4 to k*4=8 when the window's own edge was still tied, got requested Ks %v", requestedKs)
+	}
+}
+
+// Luna round-2 finding 3's hard bound: a tie group that NEVER resolves
+// (every fetched row, at every escalation, remains tied at the boundary)
+// must fail closed for that seed once maxReferenceTieMultiplier is reached
+// -- never silently compared against a truncated tie class. Being the only
+// seed, this also exercises round-1 finding 1's zero-coverage fail-closed
+// check end to end.
+func TestRunHNSWSweepReferenceTieCompletionFailsClosedWhenUnbounded(t *testing.T) {
+	reference := SweepBuildPoint{EfRuntime: 200}
+	var lastRequestedK int
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+				reqK := extractFetchK(t, cypher)
+				lastRequestedK = reqK
+				// A pathologically huge, perfectly-tied cluster: every row
+				// at every fetch size comes back at the SAME score, so the
+				// window's edge never resolves as strictly worse than the
+				// boundary, however large the request grows.
+				rows := make([]row, reqK)
+				for i := range rows {
+					rows[i] = row{"id": "tied", "score": 0.2}
+				}
+				return rows, nil
+			}
+			return nil, nil
+		},
+		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			return []indexStatus{{
+				Label: labelSubject, Status: "OPERATIONAL",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(4)}},
+			}}, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+		[]string{"seed-a"}, 2, reference, nil, nil)
+	if err == nil {
+		t.Fatal("an unresolved reference tie group must fail closed (via the zero-coverage check), not report a silent measurement")
+	}
+	if len(results) != 1 || results[0].Queries != 0 || results[0].SkippedSeeds != 1 {
+		t.Fatalf("results = %#v, want the reference point's diagnostic result with the tied seed skipped", results)
+	}
+	wantMaxK := 2 * maxReferenceTieMultiplier
+	if lastRequestedK != wantMaxK {
+		t.Fatalf("last requested k = %d, want the bounded ceiling %d (k=2 * maxReferenceTieMultiplier)", lastRequestedK, wantMaxK)
 	}
 }
