@@ -1194,6 +1194,23 @@ func TestHardNegativeCaseCount_ExhaustiveDecisionTable(t *testing.T) {
 		{"truncated/nonempty/saturated/no-total", saturated, true, nil, 0, 0, false},
 		{"truncated/nonempty/saturated/total-matching-tau", saturated, true, intPtr(50), tau, 50, true},
 		{"truncated/nonempty/saturated/total-mismatched-tau", saturated, true, intPtr(50), 0.9, 0, false},
+
+		// codex round-8 P2: an IMPOSSIBLE total -- present AND tau-matching,
+		// which would otherwise be trusted -- must still refuse. A negative
+		// total is nonsensical on its face; a total below `local` (the count
+		// of serialized entries this function independently verified clear
+		// tau -- 0 for the empty-list row, 2 for `saturated`) is equally
+		// impossible, since the full-harvest total can never be smaller than
+		// a count taken from a PREFIX of it (dedupeHardNegatives sorts
+		// descending before capping). Both refuse exactly like "no matching
+		// total at all" (count=0, sufficient=false), never sizing K off a
+		// number that cannot be correct.
+		{"truncated/empty/total-negative-matching-tau", nil, true, intPtr(-5), tau, 0, false},
+		{"truncated/nonempty/saturated/total-negative-matching-tau", saturated, true, intPtr(-1), tau, 0, false},
+		{"truncated/nonempty/saturated/total-below-local-matching-tau", saturated, true, intPtr(1), tau, 0, false},
+		// Boundary: total == local exactly (2, matching `saturated`'s two
+		// entries) is PLAUSIBLE, not impossible -- must still be trusted.
+		{"truncated/nonempty/saturated/total-equals-local-matching-tau", saturated, true, intPtr(2), tau, 2, true},
 	}
 
 	seen := make(map[string]bool, len(cases))

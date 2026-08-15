@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -549,6 +550,22 @@ func embedMaxRunes(embedder contextfabric.Embedder) int {
 // FalkorDB's own hard "Vector dimension mismatch" error on a wrong-width query
 // (verified live) is a second, independent fail-closed layer underneath this
 // one.
+//
+// codex round-8 P2: RetrievalPolicy.EfRuntime (a.efRuntime) is applied ONLY
+// in the vectorIndexAbsent branch below, at CREATE time -- never here for an
+// index that already exists. That is not an oversight this function should
+// close on its own: the CHAOS-3835 t3 composition rebuild is a MANDATORY,
+// runbook'd, already-merged operational step that drops and recreates every
+// organization's vector index as a side effect, and CHAOS-3834/CHAOS-3835
+// deploy together sharing that ONE rebuild -- an org that runs it picks up
+// BOTH the new composition text AND the calibrated efRuntime in the same
+// operation. See docs/operations.md's CHAOS-3835 rebuild section (extended
+// by this round) for the operator-facing statement that an un-rebuilt org
+// keeps server-default ANN behavior while still stamping RetrievalPolicyVersion
+// rp2. This function deliberately does NOT compare-and-recreate on its own:
+// disproportionate machinery given the mandatory rebuild already in the
+// deploy path -- see the vectorIndexKnown branch below for the DETECTION
+// (not correction) this round adds instead.
 func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 	if a.embedder == nil {
 		return nil
@@ -601,6 +618,25 @@ func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 		// stall that exception exists to avoid. Usability is decided fresh at
 		// each read and each write by vectorIndexUsable.
 		_ = existing
+		// codex round-8 P2: a best-effort DETECTION-only check (see this
+		// function's doc comment for why no compare-and-recreate). FalkorDB's
+		// db.indexes() introspection ALREADY exposes the built efRuntime --
+		// verified live (indexStatus.HNSWOptions(), conn.go, the same read
+		// recreateVectorIndexWithOptions uses to capture "whatever was there
+		// before" a possible restore) -- so a policy/actual mismatch on an
+		// operational index is at least loud in the logs at bootstrap time,
+		// once per key (this whole branch runs only inside bootstrapSchema's
+		// bootstrapDone-guarded, once-per-process-per-key path), rather than
+		// silently invisible until someone thinks to check. a.efRuntime==0
+		// means no calibrated policy at all for this identity -- nothing to
+		// compare against, so skip. A read failure here is diagnostic-only
+		// and must not fail bootstrap over it.
+		if a.efRuntime != 0 {
+			if current, ok, hnswErr := a.currentVectorIndexHNSWOptions(ctx, key); hnswErr == nil && ok && current.EfRuntime != a.efRuntime {
+				slog.Default().Warn("context_fabric: existing vector index efRuntime does not match the calibrated retrieval policy -- run the CHAOS-3832/CHAOS-3835 index rebuild to apply it",
+					"key", key, "policy_ef_runtime", a.efRuntime, "index_ef_runtime", current.EfRuntime)
+			}
+		}
 		return nil
 	}
 }

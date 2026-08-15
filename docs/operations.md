@@ -278,6 +278,50 @@ data: those rows keep their ordinary lexical `search_text` and stay fully
 reachable by exact and fulltext retrieval; only the (previously noisy)
 vector is withheld.
 
+**This SAME CHAOS-3835 rebuild is also REQUIRED for CHAOS-3834's
+calibrated `efRuntime=200` to take effect.** HNSW `efRuntime` is read
+ONLY from the vector index's `CREATE OPTIONS` clause (verified live
+against the pinned FalkorDB module — there is no per-query knob at all):
+`ensureVectorIndex` applies a calibrated `RetrievalPolicy.EfRuntime` only
+when it CREATES a brand-new index, never against one that already exists.
+An organization whose index was built before CHAOS-3834's calibrated
+table entry shipped **keeps server-default ANN behavior (`efRuntime=10`)
+even after `RetrievalPolicyVersion` bumps to `rp2` and every stored
+answer for that identity has been invalidated** — the version bump and
+the `t2`→`t3` composition change reach that organization immediately, but
+the ANN search breadth does not. CHAOS-3834 and CHAOS-3835 deploy
+together and share this ONE rebuild vehicle (CHAOS-3833's `t1`→`t2`
+rebuild above carries the same efRuntime pickup too; this is not specific
+to the `t2`→`t3` step) — no separate `acr-projector rebuild --org`
+invocation is needed for efRuntime alone. `falkorgraph`'s bootstrap also
+reports a best-effort telemetry signal (`GraphTelemetry.RecordVectorIndexEfRuntimeMismatch`,
+once per organization graph, at the next bootstrap after this deploy)
+when an existing OPERATIONAL index's actual `efRuntime` (read back via
+FalkorDB's `db.indexes()` introspection, which already exposes it)
+disagrees with the calibrated policy — a diagnostic signal through
+whatever sink `Config.Telemetry` is configured with, not a substitute for
+running the rebuild.
+
+**The calibrated retrieval-policy table entry auto-applies with no
+opt-in flag.** `retrievalPolicyTable`'s shipped
+`openai/text-embedding-3-large#t2:r2000:b0:pnone#d3072` entry (tau=0.30,
+K unchanged, efRuntime=200) applies automatically the moment a
+deployment's provider, model, composition tag, and dimension match it
+exactly — the exact-identity pinning IS the safety mechanism: any other
+deployment shape falls back to the conservative, env-configured default
+by construction (see `retrievalPolicyTable`'s doc comment), and an
+explicit `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` still wins over the
+table's tau per-knob. The entry's constants are chris-ratified for the
+CHAOS-3834 T4 measurement program; the no-match/false-friend controls
+its precision actually depends on (hybrid ranking + corroboration) are
+the sequencing gate recorded on CHAOS-3834, tracked operationally rather
+than encoded as a second flag. **This key is `t2`-scoped and therefore
+un-matched once a deployment's live composition tag moves to `t3`** —
+see the `t3` calibration-inheritance decision recorded on CHAOS-3834
+(the entry this deployment's own CHAOS-3835 rebuild above needs to
+match against) for the follow-up entry that restores the match under
+`t3`.
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`

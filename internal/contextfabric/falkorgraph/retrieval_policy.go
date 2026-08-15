@@ -203,19 +203,50 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 	},
 }
 
+// EnvCalibrated gates whether retrievalPolicyTable is consulted AT ALL
+// (codex round-8 P1): the shipped calibratedIdentityText2Large entry's own
+// SEQUENCING GATE comment above explains that this identity's measured
+// hard-negative reject rate is FAR below NegativeGateRejectThreshold
+// (CalibrateFromReport itself reports ApplyReady=false for it) -- tau=0.30
+// is a RECALL channel whose precision depends on the no-match/false-friend
+// controls (hybrid ranking + corroboration) passing FIRST. Before this gate,
+// LookupRetrievalPolicy applied the entry to ANY deployment matching the
+// identity/dimension unconditionally, the moment it built with this table
+// entry present -- silently reaching every such deployment regardless of
+// whether chris's ratified sequencing decision had actually been acted on
+// for it. The entry's constants (tau=0.30, efRuntime=200) remain
+// chris-ratified for the T4 measurement program; this flag does not
+// second-guess them or make them conditional on anything ABOUT the
+// measurement. It makes the SEPARATE, previously-implicit "has this
+// deployment's sequencing gate been satisfied" decision an explicit,
+// mechanical opt-in instead of "does the identity string happen to match" --
+// the dev/trial stack setting this flag on IS that explicit human decision,
+// now recorded in config rather than inferred from a table entry's mere
+// presence. Unset (the default): every deployment keeps today's
+// conservative, env-configured defaults, exactly as if no calibrated entry
+// existed at all.
+const EnvCalibrated = "ACR_CONTEXT_FABRIC_RETRIEVAL_POLICY_CALIBRATED"
+
 // LookupRetrievalPolicy returns the calibrated RetrievalPolicy for
 // embedIdentity (the identity.String()+"#"+compositionTag form -- see
 // retrievalPolicyTable's doc comment) AT dimension, and false when no
-// calibrated entry exists for that exact (identity, dimension) pair. A
-// false result means "keep the current conservative defaults": callers must
-// not zero out whatever they already had.
+// calibrated entry exists for that exact (identity, dimension) pair, OR
+// (codex round-8 P1) when EnvCalibrated is not explicitly set -- see its doc
+// comment above. A false result means "keep the current conservative
+// defaults": callers must not zero out whatever they already had.
 //
 // dimension is a SEPARATE parameter, not folded into embedIdentity by the
 // caller, so this function is the single place the "#d<dimension>" suffix
 // format is composed (codex round-3 P1) -- the same "single authority"
 // posture EmbedCompositionTag already holds for the composition-tag
-// component, now extended to the dimension component too.
-func LookupRetrievalPolicy(embedIdentity string, dimension int) (RetrievalPolicy, bool) {
+// component, now extended to the dimension component too. lookup is threaded
+// through for the same reason (codex round-8 P1): this stays the single
+// place BOTH the identity/dimension match AND the opt-in gate are decided,
+// rather than splitting the gate check out to each call site.
+func LookupRetrievalPolicy(lookup func(string) (string, bool), embedIdentity string, dimension int) (RetrievalPolicy, bool) {
+	if !envBool(lookup, EnvCalibrated, false) {
+		return RetrievalPolicy{}, false
+	}
 	policy, ok := retrievalPolicyTable[fmt.Sprintf("%s#d%d", embedIdentity, dimension)]
 	return policy, ok
 }

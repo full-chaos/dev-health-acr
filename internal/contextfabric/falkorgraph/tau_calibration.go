@@ -610,15 +610,25 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 //	          |           |            | Resolved via total (see below).
 //
 // The two UNSAFE rows share ONE resolution (round-3 P2's cross-tau guard):
-// aboveTauCount is trusted ONLY when present AND measured at EXACTLY this
-// run's recommended tau (reportTau == tau) -- a total measured at a
+// aboveTauCount is trusted ONLY when present, measured at EXACTLY this run's
+// recommended tau (reportTau == tau), AND (codex round-8 P2) PLAUSIBLE --
+// neither negative nor smaller than local, the count of serialized entries
+// this function just verified independently clear tau. A total measured at a
 // DIFFERENT tau (typically the report's original, higher default floor)
 // cannot see negatives sitting between the two floors, so trusting it
-// unconditionally would silently under-size K again. Present-and-matching
-// -> count=total, sufficient=true ("truncated + total -> size from the
-// total"). Otherwise -> count=0, sufficient=false ("truncated without a
-// [matching] total -> refuse"), and CalibrateFromReport's caller sees
-// KApplyReady=false.
+// unconditionally would silently under-size K again; a negative or
+// sub-`local` total is not a measurement-integrity nuance at all, it is
+// IMPOSSIBLE on its face -- aboveTauCount is documented (CalibrationCase's
+// doc comment) as the total count above tau across the FULL harvest, of
+// which the serialized, capped `similarities` this function counted `local`
+// entries out of is a PREFIX (dedupeHardNegatives sorts descending before
+// capping); the full-harvest total can never be smaller than a count taken
+// from a prefix of it, and never negative at all. Present-matching-AND-
+// plausible -> count=total, sufficient=true ("truncated + total -> size
+// from the total"). Every other combination -> count=0, sufficient=false
+// ("truncated without a [matching, plausible] total -> refuse"), and
+// CalibrateFromReport's caller sees KApplyReady=false -- a malformed report
+// must never silently size K off a number that cannot be correct.
 func hardNegativeCaseCount(similarities []float64, tau float64, truncated bool, aboveTauCount *int, reportTau float64) (count int, sufficient bool) {
 	local := 0
 	for _, s := range similarities {
@@ -641,7 +651,15 @@ func hardNegativeCaseCount(similarities []float64, tau float64, truncated bool, 
 		return local, true
 	}
 	if aboveTauCount != nil && reportTau == tau {
-		return *aboveTauCount, true
+		total := *aboveTauCount
+		// codex round-8 P2: validate the total is PLAUSIBLE before trusting
+		// it -- see the function doc comment's "present-matching-AND-
+		// plausible" resolution. Falls through to the shared refusal below
+		// on either impossible shape, exactly like "no matching total at
+		// all".
+		if total >= 0 && total >= local {
+			return total, true
+		}
 	}
 	return 0, false
 }
