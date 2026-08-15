@@ -47,19 +47,19 @@ GitHub action commit SHA):
 | --- | --- |
 | Dockerfile frontend | `docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d` |
 | Go builder | `golang:1.26.6-alpine3.23@sha256:5978cc992ad5ef96a7469713c8af849c1433824761ce3be2c56381403cd8d9a3` |
-| API runtime | `gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35` |
-| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:0690687448b0beca8c84f52a26ddc3b088623f617def56348194fde48f8573cd` |
+| API runtime | `gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a` |
+| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:1b4f1c9410cbe711951dfa4b1dcbdf1ff1b0888e88a97e0feb36907eaa90ffaf` |
 | QEMU binfmt | `docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
 | Scanner | `aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c` |
 | SBOM generator | `anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb` |
-| Migration smoke database | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
-| Compose E2E PostgreSQL helper | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
-| Compose E2E ClickHouse helper | `clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5` |
+| Migration smoke database | `postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44` |
+| Compose E2E PostgreSQL helper | `postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44` |
+| Compose E2E ClickHouse helper | `clickhouse/clickhouse-server:latest@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3` |
 | Compose E2E PgBouncer helper | `edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd` |
 | Compose E2E Valkey helper | `valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328` |
-| Compose E2E Mailpit helper | `axllent/mailpit:latest@sha256:b868afa176bfd6cce2323ea316cd99ccad77915e51e595748f6d786700ecf109` |
+| Compose E2E Mailpit helper | `axllent/mailpit:latest@sha256:d5ecbb067db3705fa953d79e1b7f81ef84038df67aba6c52825d8c02a1ea748a` |
 | Compose E2E TLS proxy | `nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10` |
 | Context Fabric graph backend (ADR 0009, profile-gated) | `falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3` (FalkorDB 4.20.2, module ver 42002, Redis 8.6.3) |
 
