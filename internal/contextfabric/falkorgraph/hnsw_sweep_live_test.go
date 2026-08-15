@@ -21,14 +21,19 @@ import (
 //	  go test ./internal/contextfabric/falkorgraph -run TestLiveHNSWSweep -v
 //
 // SAFETY (hard requirement, not a convention): this test refuses to run
-// unless BOTH ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1 is set AND the graph key
-// contains "copy" (case-insensitive). recreateVectorIndexWithOptions drops
-// and rebuilds the target's vector index repeatedly -- correctness-preserving
-// (§7 D3), but never something to run against a graph an operator did not
-// deliberately stand up as a scratch copy (e.g. via `GRAPH.COPY <live-org-key>
-// <dst>` in redis-cli, per this lane's operating instructions). Neither
-// env var name is a production ACR_CONTEXT_FABRIC_* name, so no ambient
-// production configuration can ever satisfy this test by accident.
+// unless BOTH ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1 is set AND isSweepTargetSafe
+// (hnsw_sweep.go) accepts the graph key -- an EXACT-match denylist against a
+// hardcoded, known-precious production key, PLUS the "copy" substring as a
+// second, independent condition, never the sole gate (Luna round-1 finding
+// 2: a substring check ALONE would accept a production key that itself
+// happens to contain "copy"). recreateVectorIndexWithOptions drops and
+// rebuilds the target's vector index repeatedly -- correctness-preserving
+// (§7 D3) with a restore-on-failure fallback, but never something to run
+// against a graph an operator did not deliberately stand up as a scratch
+// copy (e.g. via `GRAPH.COPY <live-org-key> <dst>` in redis-cli, per this
+// lane's operating instructions). Neither env var name is a production
+// ACR_CONTEXT_FABRIC_* name, so no ambient production configuration can ever
+// satisfy this test by accident.
 //
 // The dimension and seed canonical IDs are also supplied at run time --
 // ACR_TEST_HNSW_SWEEP_DIMENSION and a comma-separated
@@ -48,9 +53,20 @@ func TestLiveHNSWSweep(t *testing.T) {
 		t.Fatal("ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1 is required: this test repeatedly drops and rebuilds " +
 			"the target's vector index and must never run against a live organization graph")
 	}
-	if !strings.Contains(strings.ToLower(key), "copy") {
-		t.Fatalf("ACR_TEST_HNSW_SWEEP_GRAPH_KEY = %q does not look like a GRAPH.COPY destination "+
-			"(expected \"copy\" in the name) -- refusing to run against what may be the live organization graph", key)
+	// isSweepTargetSafe (hnsw_sweep.go) is an EXACT-match denylist, not a
+	// substring heuristic (Luna round-1 finding 2: a substring check like
+	// "contains copy" would ACCEPT a production key that itself happens to
+	// contain "copy"). ACR_TEST_HNSW_SWEEP_ADDITIONAL_PROTECTED_KEYS lets an
+	// operator extend the hardcoded denylist for a graph this specific run
+	// needs protected beyond the one this lane already knows about.
+	var additionalProtected []string
+	for _, k := range strings.Split(os.Getenv("ACR_TEST_HNSW_SWEEP_ADDITIONAL_PROTECTED_KEYS"), ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			additionalProtected = append(additionalProtected, k)
+		}
+	}
+	if safe, reason := isSweepTargetSafe(key, additionalProtected); !safe {
+		t.Fatalf("refusing to run RunHNSWSweep's destructive drop/recreate cycle: %s", reason)
 	}
 	dimensionRaw := os.Getenv("ACR_TEST_HNSW_SWEEP_DIMENSION")
 	if dimensionRaw == "" {
@@ -108,10 +124,21 @@ func TestLiveHNSWSweep(t *testing.T) {
 	// takes minutes, and losing every earlier point's result to one later
 	// point's rebuild timeout is a real failure mode this run already hit
 	// once (docs/design/context-fabric-hnsw-sweep.md), not a hypothetical.
+	//
+	// Luna round-1 finding 1: this test must ITSELF reject partial coverage,
+	// not merely display SkippedSeeds and move on -- a point that silently
+	// dropped seeds reports a recall number computed over fewer queries than
+	// the run claims, which is not the measurement this test exists to
+	// produce. t.Errorf (not Fatalf) so every point still gets logged even
+	// if an earlier one had partial coverage.
 	logResult := func(r SweepResult) {
-		t.Logf("%-40s recall@20=%.3f  buildTime=%v  p50=%v  p95=%v  queries=%d",
+		t.Logf("%-40s recall@20=%.3f  buildTime=%v  p50=%v  p95=%v  queries=%d  skipped=%d",
 			r.Point, r.RecallAtK, r.IndexBuildTime.Round(time.Millisecond),
-			r.P50Latency, r.P95Latency, r.Queries)
+			r.P50Latency, r.P95Latency, r.Queries, r.SkippedSeeds)
+		if r.SkippedSeeds > 0 {
+			t.Errorf("%s: %d of %d seeds were skipped -- this run does not have full coverage, its recall number is partial",
+				r.Point, r.SkippedSeeds, r.Queries+r.SkippedSeeds)
+		}
 	}
 	results, err := adapter.RunHNSWSweep(ctx, key, dimension, seeds, 20, reference, points, logResult)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -42,14 +43,20 @@ import (
 // across every swept setting and cancels out of the comparison. It would NOT
 // be fine as a proxy for T1's text-relevance recall, which is a different
 // metric this file does not compute.
-func (a *Adapter) vectorSweepSeedTopK(ctx context.Context, key, seedCanonicalID string, k int) ([]string, time.Duration, error) {
+//
+// Returns the SCORE alongside each id (not just the id) -- Luna round-1
+// finding 3: comparing bare id lists cannot tell a genuine miss from two
+// settings that both correctly found an EQUALLY-close neighbor but happened
+// to return different members of a tied group at the k-th boundary. See
+// ScoredID / TieExpandedTop / RecallAtKTieTolerant (hnsw_recall.go).
+func (a *Adapter) vectorSweepSeedTopK(ctx context.Context, key, seedCanonicalID string, k int) ([]ScoredID, time.Duration, error) {
 	if k <= 0 {
 		return nil, 0, fmt.Errorf("vectorSweepSeedTopK: k must be positive, got %d", k)
 	}
 	cypher := fmt.Sprintf(
 		"MATCH (seed:%s {%s:$seed}) WITH seed.%s AS v "+
 			"CALL db.idx.vector.queryNodes('%s', '%s', %d, v) YIELD node, score "+
-			"RETURN node.%s AS id ORDER BY score ASC",
+			"RETURN node.%s AS id, score ORDER BY score ASC",
 		labelSubject, propCanonicalID, propEmbedding,
 		labelSubject, propEmbedding, k,
 		propCanonicalID,
@@ -60,13 +67,16 @@ func (a *Adapter) vectorSweepSeedTopK(ctx context.Context, key, seedCanonicalID 
 	if err != nil {
 		return nil, elapsed, safeDependencyError("vector sweep seed query", err)
 	}
-	ids := make([]string, 0, len(rows))
+	scored := make([]ScoredID, 0, len(rows))
 	for _, r := range rows {
-		if id := rowString(r, "id"); id != "" {
-			ids = append(ids, id)
+		id := rowString(r, "id")
+		score, ok := r.get("score").(float64)
+		if id == "" || !ok {
+			continue
 		}
+		scored = append(scored, ScoredID{ID: id, Score: score})
 	}
-	return ids, elapsed, nil
+	return scored, elapsed, nil
 }
 
 // SweepBuildPoint is one HNSW index build configuration -- the parameters
@@ -96,8 +106,22 @@ type SweepResult struct {
 	RecallAtK      float64 // relative to the reference build point's top-K, see RunHNSWSweep.
 	P50Latency     time.Duration
 	P95Latency     time.Duration
-	Queries        int
+	Queries        int // seeds that contributed a successful query at THIS point.
+	SkippedSeeds   int // seeds whose query errored at this point -- Luna round-1 finding 1: a
+	// non-zero value here means the measurement is PARTIAL, and the caller
+	// must be able to see that rather than infer a clean 0.853 that is
+	// actually "0.853 over 40 of 58 seeds." Queries + SkippedSeeds always
+	// equals the seed count RunHNSWSweep was called with.
 }
+
+// referenceOverfetch is how many extra rows beyond k the reference build's
+// query asks for, so a tie GROUP spanning the k-th boundary is captured
+// whole rather than arbitrarily split (Luna round-1 finding 3;
+// TieExpandedTop, hnsw_recall.go). 2x is a deliberately generous, cheap
+// margin -- the query itself is sub-few-ms at this corpus's scale (live-
+// measured, docs/design/context-fabric-hnsw-sweep.md), so doubling it costs
+// nothing material.
+const referenceOverfetch = 2
 
 // RunHNSWSweep recreates the vector index at each of points (deduplicated,
 // reference point always included even if the caller omitted it), runs every
@@ -112,13 +136,26 @@ type SweepResult struct {
 // as ensureVectorIndex does before ANY vector-index write.
 //
 // The FIRST build recreates the index at the reference point and captures
-// every seed's top-K as the comparison baseline; every subsequent build is
-// measured against that baseline; recreation order after that follows points'
-// given order. Recall is undefined (reported 0) for a seed whose query
-// errored at either the reference build or the point under test -- a query
-// failure must never read as "perfect disagreement" or "perfect agreement",
-// so it is excluded from that seed's contribution and the Queries count
-// reflects how many seeds actually contributed.
+// every seed's SCORED top-K (overfetched, see referenceOverfetch) as the
+// comparison baseline; every subsequent build is measured against that
+// baseline via RecallAtKTieTolerant, not the strict RecallAtK, so a swap
+// between two equally-close (tied-score) neighbors at the boundary is never
+// misread as a miss. Recreation order after the reference follows points'
+// given order.
+//
+// A seed whose query errors at a point is EXCLUDED from that point's
+// Queries/recall contribution and counted in SkippedSeeds instead -- a query
+// failure must never read as "perfect disagreement" or "perfect agreement".
+//
+// FAIL-CLOSED ON ZERO COVERAGE (Luna round-1 finding 1): if EVERY seed's
+// query errors at a point (Queries==0), that point's diagnostic result is
+// still appended and delivered to onResult (so the caller can see WHAT
+// failed), but RunHNSWSweep then returns a non-nil error -- a green sweep
+// over zero real queries (e.g. every query erroring because dimension is
+// wrong) is a false-fine measurement-fails-toward-fine failure, not a valid
+// 0.0 recall. This mirrors the mid-sweep-failure contract below: results
+// already computed are never discarded, but the caller cannot mistake a
+// zero-coverage point for a real one.
 //
 // onResult, when non-nil, is called synchronously right after each point's
 // result is computed -- BEFORE the whole sweep finishes. A multi-point live
@@ -135,7 +172,7 @@ func (a *Adapter) RunHNSWSweep(
 ) ([]SweepResult, error) {
 	ordered := dedupeSweepPoints(reference, points)
 
-	referenceTop := make(map[string][]string, len(seedCanonicalIDs))
+	referenceTop := make(map[string][]ScoredID, len(seedCanonicalIDs))
 	results := make([]SweepResult, 0, len(ordered))
 	for _, point := range ordered {
 		buildStart := a.now()
@@ -144,13 +181,20 @@ func (a *Adapter) RunHNSWSweep(
 		}
 		buildTime := a.now().Sub(buildStart)
 
+		isReference := point == reference
+		fetchK := k
+		if isReference {
+			fetchK = k * referenceOverfetch
+		}
+
 		latencies := make([]time.Duration, 0, len(seedCanonicalIDs))
 		var recallSum float64
 		contributing := 0
-		isReference := point == reference
+		skipped := 0
 		for _, seed := range seedCanonicalIDs {
-			top, latency, err := a.vectorSweepSeedTopK(ctx, key, seed, k)
+			top, latency, err := a.vectorSweepSeedTopK(ctx, key, seed, fetchK)
 			if err != nil {
+				skipped++
 				continue
 			}
 			latencies = append(latencies, latency)
@@ -162,9 +206,18 @@ func (a *Adapter) RunHNSWSweep(
 			}
 			base, ok := referenceTop[seed]
 			if !ok {
+				// The reference query for this exact seed also failed --
+				// counted as skipped here too, there is nothing to compare
+				// against, and this must not silently read as a match OR a
+				// miss.
+				skipped++
 				continue
 			}
-			recallSum += RecallAtK(base, top, k)
+			candidateIDs := make([]string, len(top))
+			for i, s := range top {
+				candidateIDs[i] = s.ID
+			}
+			recallSum += RecallAtKTieTolerant(base, candidateIDs, k)
 			contributing++
 		}
 
@@ -175,11 +228,16 @@ func (a *Adapter) RunHNSWSweep(
 		}
 		result := SweepResult{
 			Point: point, IndexBuildTime: buildTime, RecallAtK: recall,
-			P50Latency: p50, P95Latency: p95, Queries: contributing,
+			P50Latency: p50, P95Latency: p95, Queries: contributing, SkippedSeeds: skipped,
 		}
 		results = append(results, result)
 		if onResult != nil {
 			onResult(result)
+		}
+		if contributing == 0 {
+			return results, fmt.Errorf(
+				"point %s: 0 of %d seed queries succeeded -- a zero-coverage sweep is not a valid measurement",
+				point, len(seedCanonicalIDs))
 		}
 	}
 	return results, nil
@@ -224,4 +282,56 @@ func latencyPercentiles(samples []time.Duration) (p50, p95 time.Duration) {
 		return sorted[idx]
 	}
 	return rank(0.50), rank(0.95)
+}
+
+// protectedSweepGraphKeys is a hardcoded, EXACT-match denylist of graph keys
+// RunHNSWSweep's destructive drop/recreate cycle must never target, no matter
+// what an operator's environment variables claim (Luna round-1 finding 2).
+//
+// The earlier gate (isSweepTargetSafe's only check before this) was a
+// substring heuristic -- "does the key contain \"copy\"" -- and Luna showed
+// it precisely: a PRODUCTION key can itself contain "copy" (an org named
+// with it, or a key that started life as a copy and was later promoted), so
+// the heuristic would ACCEPT the one key it exists to reject. A substring
+// match can never be a proof; an exact-equality denylist against a KNOWN key
+// can. This entry is the live organization graph this lane was explicitly
+// told is precious and must never be mutated (team-lead's live-graph-safety
+// directive, CHAOS-3832 task brief) -- kept as one place so any future org
+// this tooling might run near can be added here rather than trusted to an
+// operator's env var alone.
+var protectedSweepGraphKeys = []string{
+	"acr-cf-fa7030e2106de7411bfbf8ebce74c620",
+}
+
+// isSweepTargetSafe reports whether key may be targeted by RunHNSWSweep's
+// destructive drop/recreate cycle, and if not, why.
+//
+// TWO INDEPENDENT conditions, both required:
+//  1. key must not EXACTLY match any entry in protectedSweepGraphKeys or
+//     additionalProtected -- this is what makes the destructive path
+//     provably unreachable for a KNOWN production key, not merely unlikely.
+//  2. key must still carry the operator's declared "this is scratch" marker
+//     (the "copy" substring) -- kept as a SECOND, independent condition
+//     rather than the sole gate. It does not replace condition 1 (Luna's
+//     point exactly), but it still catches a plain typo/copy-paste of some
+//     OTHER unrelated key that never made it onto the denylist.
+func isSweepTargetSafe(key string, additionalProtected []string) (bool, string) {
+	for _, protected := range protectedSweepGraphKeys {
+		if key == protected {
+			return false, fmt.Sprintf("key %q exactly matches a hardcoded protected production graph key", key)
+		}
+	}
+	for _, protected := range additionalProtected {
+		protected = strings.TrimSpace(protected)
+		if protected == "" {
+			continue
+		}
+		if key == protected {
+			return false, fmt.Sprintf("key %q exactly matches an operator-declared protected graph key", key)
+		}
+	}
+	if !strings.Contains(strings.ToLower(key), "copy") {
+		return false, fmt.Sprintf("key %q does not contain \"copy\" -- refusing to assume it is a scratch copy", key)
+	}
+	return true, ""
 }

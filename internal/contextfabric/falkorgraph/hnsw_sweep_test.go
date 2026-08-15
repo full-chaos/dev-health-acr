@@ -8,6 +8,54 @@ import (
 	"time"
 )
 
+// Luna round-1 finding 2: the safety gate must be an EXACT-match denylist,
+// not a substring heuristic -- a production key can itself contain "copy".
+func TestIsSweepTargetSafeRejectsTheHardcodedProtectedKeyEvenThoughItContainsNoCopySubstring(t *testing.T) {
+	protected := protectedSweepGraphKeys[0]
+	safe, reason := isSweepTargetSafe(protected, nil)
+	if safe {
+		t.Fatalf("the hardcoded protected key must never be accepted, got safe=true reason=%q", reason)
+	}
+	if reason == "" {
+		t.Fatal("expected a non-empty rejection reason")
+	}
+}
+
+// The exact scenario Luna described: a "production" key that HAPPENS to
+// contain "copy" in its name must still be rejected once it is denylisted,
+// proving the denylist -- not the substring check -- is what protects it.
+func TestIsSweepTargetSafeRejectsAProtectedKeyThatAlsoContainsCopySubstring(t *testing.T) {
+	trickyProdKey := "acr-cf-org-copy-promoted-to-prod"
+	safe, _ := isSweepTargetSafe(trickyProdKey, []string{trickyProdKey})
+	if safe {
+		t.Fatal("a key on the denylist must be rejected even though it contains \"copy\" -- the substring check alone would have wrongly accepted it")
+	}
+}
+
+func TestIsSweepTargetSafeRejectsAKeyWithNoCopyMarkerEvenIfNotDenylisted(t *testing.T) {
+	safe, reason := isSweepTargetSafe("acr-cf-some-other-org-graph", nil)
+	if safe {
+		t.Fatal("a key with no scratch-copy marker and not on any denylist must still be rejected")
+	}
+	if reason == "" {
+		t.Fatal("expected a non-empty rejection reason")
+	}
+}
+
+func TestIsSweepTargetSafeAcceptsAGenuineScratchCopy(t *testing.T) {
+	safe, reason := isSweepTargetSafe("acr-cf-3832-sweep-copy-run2", nil)
+	if !safe {
+		t.Fatalf("a key with the copy marker, not on any denylist, must be accepted, got reason=%q", reason)
+	}
+}
+
+func TestIsSweepTargetSafeHonorsOperatorSuppliedAdditionalProtectedKeys(t *testing.T) {
+	safe, reason := isSweepTargetSafe("acr-cf-another-org-copy", []string{"acr-cf-another-org-copy"})
+	if safe {
+		t.Fatalf("an operator-declared additional protected key must be rejected, got safe=true reason=%q", reason)
+	}
+}
+
 func TestDedupeSweepPointsPutsReferenceFirstAndDropsDuplicates(t *testing.T) {
 	reference := SweepBuildPoint{M: 16, EfConstruction: 200, EfRuntime: 10}
 	points := []SweepBuildPoint{
@@ -82,17 +130,18 @@ func TestRunHNSWSweepReferencePointReportsPerfectRecall(t *testing.T) {
 			case strings.Contains(cypher, "db.idx.vector.queryNodes"):
 				seed, _ := params["seed"].(string)
 				if currentBuild == reference {
-					// The reference build always finds the true 2 neighbors.
+					// The reference build always finds the true 2 neighbors,
+					// at DISTINCT (non-tied) scores.
 					if seed == "seed-a" {
-						return []row{{"id": "n1"}, {"id": "n2"}}, nil
+						return []row{{"id": "n1", "score": 0.1}, {"id": "n2", "score": 0.2}}, nil
 					}
-					return []row{{"id": "n3"}, {"id": "n4"}}, nil
+					return []row{{"id": "n3", "score": 0.1}, {"id": "n4", "score": 0.2}}, nil
 				}
 				// The degraded build misses one true neighbor per seed.
 				if seed == "seed-a" {
-					return []row{{"id": "n1"}, {"id": "nX"}}, nil
+					return []row{{"id": "n1", "score": 0.1}, {"id": "nX", "score": 0.3}}, nil
 				}
-				return []row{{"id": "nY"}, {"id": "n4"}}, nil
+				return []row{{"id": "nY", "score": 0.1}, {"id": "n4", "score": 0.2}}, nil
 			}
 			return nil, nil
 		},
@@ -151,7 +200,7 @@ func TestRunHNSWSweepDeliversResultsIncrementallyAndPreservesThemOnAMidSweepFail
 				buildingBad = strings.Contains(cypher, "efRuntime:10")
 			}
 			if strings.Contains(cypher, "db.idx.vector.queryNodes") {
-				return []row{{"id": "n1"}}, nil
+				return []row{{"id": "n1", "score": 0.1}}, nil
 			}
 			return nil, nil
 		},
@@ -201,7 +250,7 @@ func TestRunHNSWSweepExcludesFailedQueriesRatherThanScoringThem(t *testing.T) {
 				if seed == "bad-seed" {
 					return nil, errors.New("ERR simulated query failure")
 				}
-				return []row{{"id": "n1"}}, nil
+				return []row{{"id": "n1", "score": 0.1}}, nil
 			}
 			return nil, nil
 		},
@@ -224,5 +273,108 @@ func TestRunHNSWSweepExcludesFailedQueriesRatherThanScoringThem(t *testing.T) {
 	}
 	if results[0].Queries != 1 {
 		t.Fatalf("Queries = %d, want 1 (the failed seed excluded, not counted)", results[0].Queries)
+	}
+	if results[0].SkippedSeeds != 1 {
+		t.Fatalf("SkippedSeeds = %d, want 1 -- partial coverage must be VISIBLE, not silently absorbed into a clean-looking recall number", results[0].SkippedSeeds)
+	}
+}
+
+// Luna round-1 finding 1: a point where EVERY seed's query fails (e.g. a
+// misconfigured dimension) must not report a green 0.0 recall -- that is
+// indistinguishable from "measured, genuinely zero recall" unless the caller
+// is forced to see the failure. RunHNSWSweep must both deliver the
+// diagnostic result (Queries=0, SkippedSeeds=N) via onResult/results AND
+// return a non-nil error.
+func TestRunHNSWSweepFailsClosedOnZeroQueryCoverage(t *testing.T) {
+	reference := SweepBuildPoint{EfRuntime: 200}
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+				return nil, errors.New("ERR simulated total query failure (e.g. wrong dimension)")
+			}
+			return nil, nil
+		},
+		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			return []indexStatus{{
+				Label: labelSubject, Status: "OPERATIONAL",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(4)}},
+			}}, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	var delivered []SweepResult
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+		[]string{"seed-a", "seed-b"}, 2, reference, nil,
+		func(r SweepResult) { delivered = append(delivered, r) })
+
+	if err == nil {
+		t.Fatal("a zero-query-coverage point must return a non-nil error, never a silent green pass")
+	}
+	if len(results) != 1 || results[0].Queries != 0 || results[0].SkippedSeeds != 2 {
+		t.Fatalf("results = %#v, want exactly 1 diagnostic result with Queries=0 SkippedSeeds=2", results)
+	}
+	if len(delivered) != 1 || delivered[0].Queries != 0 {
+		t.Fatalf("onResult must still receive the zero-coverage diagnostic result, got %#v", delivered)
+	}
+}
+
+// Luna round-1 finding 3: two build points that both correctly rank a
+// TIED-score group at the k-th boundary, but happen to include different
+// members of that tie in their literal top-k rows, must not be scored as a
+// recall miss -- they found equally-close neighbors, not different ones.
+func TestRunHNSWSweepTieToleranceAtTheBoundaryDoesNotCountAsAMiss(t *testing.T) {
+	reference := SweepBuildPoint{EfRuntime: 200}
+	tiedPoint := SweepBuildPoint{EfRuntime: 10}
+
+	var currentBuild SweepBuildPoint
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			switch {
+			case strings.HasPrefix(cypher, "CREATE VECTOR INDEX"):
+				if strings.Contains(cypher, "efRuntime:200") {
+					currentBuild = reference
+				} else {
+					currentBuild = tiedPoint
+				}
+			case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+				if currentBuild == reference {
+					// k=2, overfetch=2x -> asked for 4; return 4 rows where
+					// positions 2 and 3 (0-indexed) are EXACTLY TIED at 0.2 --
+					// a genuine boundary tie group at k=2.
+					return []row{
+						{"id": "n1", "score": 0.1}, {"id": "n2", "score": 0.2},
+						{"id": "n3", "score": 0.2}, {"id": "n4", "score": 0.4},
+					}, nil
+				}
+				// The "tied" point's own top-2 picks the OTHER member of the
+				// tie group than the reference's literal first two rows.
+				return []row{{"id": "n1", "score": 0.1}, {"id": "n3", "score": 0.2}}, nil
+			}
+			return nil, nil
+		},
+		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			return []indexStatus{{
+				Label: labelSubject, Status: "OPERATIONAL",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(4)}},
+			}}, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+		[]string{"seed-a"}, 2, reference, []SweepBuildPoint{tiedPoint}, nil)
+	if err != nil {
+		t.Fatalf("RunHNSWSweep: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	// n3 is tied with n2 at 0.2 (the k=2 boundary score). A strict top-k
+	// comparison would see {n1,n2} vs {n1,n3} and score 0.5 (only n1
+	// matches); tie-tolerant recall must see both n2 and n3 as equally
+	// "correct" at the boundary and score this 1.0.
+	if results[1].RecallAtK != 1.0 {
+		t.Fatalf("tie-tolerant RecallAtK = %v, want 1.0 -- a boundary tie swap must not read as a miss", results[1].RecallAtK)
 	}
 }

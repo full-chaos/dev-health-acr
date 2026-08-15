@@ -131,6 +131,81 @@ func TestBruteForceTopKEmptyInputsReportNil(t *testing.T) {
 	}
 }
 
+func TestTieExpandedTopIncludesEveryEntryTiedAtTheBoundary(t *testing.T) {
+	ranked := []ScoredID{
+		{ID: "a", Score: 0.1}, {ID: "b", Score: 0.2}, {ID: "c", Score: 0.2}, {ID: "d", Score: 0.4},
+	}
+	got := TieExpandedTop(ranked, 2)
+	want := map[string]bool{"a": true, "b": true, "c": true}
+	if len(got) != len(want) {
+		t.Fatalf("TieExpandedTop() = %v, want %v", got, want)
+	}
+	for id := range want {
+		if !got[id] {
+			t.Fatalf("TieExpandedTop() = %v, missing %q", got, id)
+		}
+	}
+	if got["d"] {
+		t.Fatal("TieExpandedTop() must not include an entry strictly past the boundary score")
+	}
+}
+
+func TestTieExpandedTopNoTieIsExactlyK(t *testing.T) {
+	ranked := []ScoredID{{ID: "a", Score: 0.1}, {ID: "b", Score: 0.2}, {ID: "c", Score: 0.3}}
+	got := TieExpandedTop(ranked, 2)
+	if len(got) != 2 || !got["a"] || !got["b"] {
+		t.Fatalf("TieExpandedTop() with no boundary tie = %v, want {a,b}", got)
+	}
+}
+
+func TestTieExpandedTopEmptyOrZeroKIsEmpty(t *testing.T) {
+	if got := TieExpandedTop(nil, 5); len(got) != 0 {
+		t.Fatalf("TieExpandedTop(nil) = %v, want empty", got)
+	}
+	if got := TieExpandedTop([]ScoredID{{ID: "a", Score: 0.1}}, 0); len(got) != 0 {
+		t.Fatalf("TieExpandedTop(k=0) = %v, want empty", got)
+	}
+}
+
+func TestTieExpandedTopClampsKToRankedLength(t *testing.T) {
+	ranked := []ScoredID{{ID: "a", Score: 0.1}, {ID: "b", Score: 0.2}}
+	got := TieExpandedTop(ranked, 10)
+	if len(got) != 2 {
+		t.Fatalf("TieExpandedTop(k=10) over 2 entries = %v, want both included", got)
+	}
+}
+
+func TestRecallAtKTieTolerantBoundarySwapIsNotAMiss(t *testing.T) {
+	reference := []ScoredID{
+		{ID: "a", Score: 0.1}, {ID: "b", Score: 0.2}, {ID: "c", Score: 0.2}, {ID: "d", Score: 0.4},
+	}
+	// The candidate's own top-2 picked "c" instead of "b" -- both tied at
+	// the same score in the reference, so this must read as a perfect match.
+	candidate := []string{"a", "c"}
+	if got := RecallAtKTieTolerant(reference, candidate, 2); got != 1.0 {
+		t.Fatalf("RecallAtKTieTolerant() = %v, want 1.0", got)
+	}
+}
+
+func TestRecallAtKTieTolerantGenuineMissStillCounts(t *testing.T) {
+	reference := []ScoredID{
+		{ID: "a", Score: 0.1}, {ID: "b", Score: 0.2}, {ID: "c", Score: 0.5}, {ID: "d", Score: 0.6},
+	}
+	candidate := []string{"a", "z"} // "z" is nowhere near the tie-expanded set.
+	if got := RecallAtKTieTolerant(reference, candidate, 2); got != 0.5 {
+		t.Fatalf("RecallAtKTieTolerant() = %v, want 0.5 -- a genuine miss must still count as one", got)
+	}
+}
+
+func TestRecallAtKTieTolerantEmptyOrZeroKIsZero(t *testing.T) {
+	if got := RecallAtKTieTolerant(nil, []string{"a"}, 2); got != 0 {
+		t.Fatalf("RecallAtKTieTolerant(empty reference) = %v, want 0", got)
+	}
+	if got := RecallAtKTieTolerant([]ScoredID{{ID: "a", Score: 0.1}}, []string{"a"}, 0); got != 0 {
+		t.Fatalf("RecallAtKTieTolerant(k=0) = %v, want 0", got)
+	}
+}
+
 func TestBruteForceTopKClampsKToCorpusSize(t *testing.T) {
 	corpus := map[string][]float32{"a": {1, 0}, "b": {0, 1}}
 	got := BruteForceTopK([]float32{1, 0}, corpus, 10)
