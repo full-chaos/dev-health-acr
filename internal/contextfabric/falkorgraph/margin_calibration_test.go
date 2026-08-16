@@ -1,6 +1,8 @@
 package falkorgraph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
@@ -927,6 +929,68 @@ func TestCalibrateMarginFromReport_AllAbsentIsAValidShape(t *testing.T) {
 	}
 }
 
+// --- codex r8 O4: the production similarity invariant 0<=top2<=top1<=1 -----
+
+// TestCalibrateMarginFromReport_ReversedRankingWithMatchingNegativeMarginIsAnError
+// is O4's core pinning test: top1/top2 SWAPPED (top1 similarity LOWER than
+// top2's) with a stored VectorMargin that matches the (negative)
+// recomputed value -- H2's own consistency check alone would have passed
+// this, because top1-top2 really does equal the stored margin; only the
+// NEW range/ordering invariant catches it.
+func TestCalibrateMarginFromReport_ReversedRankingWithMatchingNegativeMarginIsAnError(t *testing.T) {
+	c := eligibleCase("project", "p1", "project", "p1", 0.30)
+	// Swap: top1 now has the LOWER similarity, top2 the higher one --
+	// margin recomputed as top1-top2 is NEGATIVE and matches what's stored,
+	// so the pre-O4 check alone would have accepted this.
+	c.VectorTop1, c.VectorTop2 = c.VectorTop2, c.VectorTop1
+	negatedMargin := -*c.VectorMargin
+	c.VectorMargin = &negatedMargin
+	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_Top1SimilarityAboveOneIsAnError proves the
+// upper-bound half of the invariant: embedprovider.CosineFromDistance is
+// unconditionally clamped to [0,1], so any stored similarity above 1 could
+// only be corruption or a producer bug, never a genuine measurement.
+func TestCalibrateMarginFromReport_Top1SimilarityAboveOneIsAnError(t *testing.T) {
+	c := eligibleCase("project", "p1", "project", "p1", 0.30)
+	c.VectorTop1.Similarity = 1.5
+	margin := c.VectorTop1.Similarity - c.VectorTop2.Similarity
+	c.VectorMargin = &margin
+	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_Top2SimilarityBelowZeroIsAnError proves the
+// lower-bound half.
+func TestCalibrateMarginFromReport_Top2SimilarityBelowZeroIsAnError(t *testing.T) {
+	c := eligibleCase("project", "p1", "project", "p1", 0.30)
+	c.VectorTop2.Similarity = -0.1
+	margin := c.VectorTop1.Similarity - c.VectorTop2.Similarity
+	c.VectorMargin = &margin
+	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_ValidOrderedSimilaritiesStillProceed is the
+// positive control: 0<=top2<=top1<=1 (eligibleCase's own construction,
+// already exercised by every other passing test in this file) must not be
+// refused -- pinned explicitly, mirroring this file's other invariant
+// positive-control tests.
+func TestCalibrateMarginFromReport_ValidOrderedSimilaritiesStillProceed(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.30))
+	if _, err := CalibrateMarginFromReport(report, marginTestOpts); err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v, want no error for a validly-ordered, in-range similarity pair", err)
+	}
+}
+
 // --- runMarginCalibrationRunner (margin_calibration_live_test.go) ----------
 
 // TestMarginCalibrationRunner_GateFailingReportFailsWithoutWritingAnArtifact
@@ -951,7 +1015,7 @@ func TestMarginCalibrationRunner_GateFailingReportFailsWithoutWritingAnArtifact(
 				}
 			}
 		}()
-		runMarginCalibrationRunner(fake, report, marginTestOpts, "", outputPath)
+		runMarginCalibrationRunner(fake, report, marginTestOpts, "", nil, outputPath)
 	}()
 	if !fake.failed {
 		t.Fatal("expected Fatalf for a not-apply-ready (SafetyMeasured=false) report")
@@ -973,7 +1037,7 @@ func TestMarginCalibrationRunner_ApplyReadyReportStillWritesTheArtifact(t *testi
 	)
 	fake := &fakeRunnerT{}
 	outputPath := t.TempDir() + "/margin.json"
-	runMarginCalibrationRunner(fake, report, marginTestOpts, "", outputPath)
+	runMarginCalibrationRunner(fake, report, marginTestOpts, "", nil, outputPath)
 	if fake.failed {
 		t.Fatalf("runMarginCalibrationRunner called Fatalf, want it to complete normally for an apply-ready report: logs=%v", fake.logs)
 	}
@@ -1001,7 +1065,7 @@ func TestMarginCalibrationRunner_ApplyReadyReportWritesTheThreshold(t *testing.T
 	fake := &fakeRunnerT{}
 	outputPath := t.TempDir() + "/margin.json"
 	fakeReportPath := t.TempDir() + "/report.json" // codex r3 H3: need not exist on disk -- only its VALUE is stamped into the artifact
-	runMarginCalibrationRunner(fake, report, marginTestOpts, fakeReportPath, outputPath)
+	runMarginCalibrationRunner(fake, report, marginTestOpts, fakeReportPath, nil, outputPath)
 	if fake.failed {
 		t.Fatalf("runMarginCalibrationRunner unexpectedly called Fatalf: logs=%v", fake.logs)
 	}
@@ -1032,6 +1096,84 @@ func TestMarginCalibrationRunner_ApplyReadyReportWritesTheThreshold(t *testing.T
 	}
 }
 
+// TestMarginCalibrationRunner_SourceReportSHA256HashesTheActualFileBytes is
+// codex r8 O3's core pinning test: the written artifact's SourceReportSHA256
+// must equal an INDEPENDENTLY computed sha256 of the EXACT bytes on disk at
+// reportPath -- not a hash of a re-marshalled CalibrationReport, which
+// (being a deliberately REDUCED struct, per that type's own doc comment)
+// silently drops every field a REAL oracle report carries that
+// CalibrationReport does not declare (total, hits, text_loss, and so on --
+// oracle_live_test.go's full oracleReport shape).
+//
+// The on-disk fixture below is built as a SUPERSET of CalibrationReport
+// (embeds it, adds three fields CalibrationReport has no field for at all)
+// -- exactly the real "extra fields json.Unmarshal silently drops" shape a
+// genuine oracle report has. If this test built the on-disk bytes by
+// marshalling the SAME reduced report value the runner receives (as an
+// earlier draft of this test did), the two byte sequences would be
+// IDENTICAL by construction and the test would pass whether or not the fix
+// actually hashes the right bytes -- vacuous in exactly the way this fix
+// exists to close. This shape makes the two byte sequences genuinely
+// DIFFER, so only the FIXED code path (hashing reportBytes directly) can
+// pass.
+func TestMarginCalibrationRunner_SourceReportSHA256HashesTheActualFileBytes(t *testing.T) {
+	report := marginReport(
+		eligibleCase("project", "wrong", "project", "correct", 0.10),
+		eligibleCase("project", "p2", "project", "p2", 0.40),
+	)
+	type onDiskReport struct {
+		CalibrationReport
+		// Fields a REAL oracle report carries (oracle_live_test.go's
+		// oracleReport) that CalibrationReport has NO field for at all --
+		// json.Unmarshal into CalibrationReport silently drops these,
+		// which is exactly what makes re-marshalling report diverge from
+		// these actual on-disk bytes.
+		Total    int `json:"total"`
+		Hits     int `json:"hits"`
+		TextLoss int `json:"text_loss"`
+	}
+	encoded, err := json.Marshal(onDiskReport{CalibrationReport: report, Total: 50, Hits: 12, TextLoss: 3})
+	if err != nil {
+		t.Fatalf("marshal report fixture: %v", err)
+	}
+	reportPath := t.TempDir() + "/report.json"
+	if err := os.WriteFile(reportPath, encoded, 0o600); err != nil {
+		t.Fatalf("write report fixture: %v", err)
+	}
+	// Read it back exactly like TestCalibrateVectorMarginFromReportFile
+	// does -- the SAME bytes runMarginCalibrationRunner is handed below.
+	onDiskBytes, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report fixture: %v", err)
+	}
+	// Sanity: a re-marshal of the REDUCED report value (what the OLD, buggy
+	// code hashed) must NOT already equal the real on-disk bytes -- if it
+	// did, this fixture would be as vacuous as the rejected draft above.
+	if reducedEncoded, err := json.Marshal(report); err == nil && string(reducedEncoded) == string(onDiskBytes) {
+		t.Fatal("test fixture bug: re-marshalling the reduced report produced the SAME bytes as the on-disk fixture -- this test would not distinguish the fix from the defect it exists to catch")
+	}
+	wantSum := sha256.Sum256(onDiskBytes)
+	wantHex := hex.EncodeToString(wantSum[:])
+
+	fake := &fakeRunnerT{}
+	outputPath := t.TempDir() + "/margin.json"
+	runMarginCalibrationRunner(fake, report, marginTestOpts, reportPath, onDiskBytes, outputPath)
+	if fake.failed {
+		t.Fatalf("runMarginCalibrationRunner unexpectedly called Fatalf: logs=%v", fake.logs)
+	}
+	written, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read written artifact: %v", err)
+	}
+	var decoded MarginCalibrationArtifact
+	if err := json.Unmarshal(written, &decoded); err != nil {
+		t.Fatalf("decode written artifact: %v", err)
+	}
+	if decoded.SourceReportSHA256 != wantHex {
+		t.Fatalf("decoded.SourceReportSHA256 = %q, want %q (sha256 of the actual on-disk report bytes, independently computed)", decoded.SourceReportSHA256, wantHex)
+	}
+}
+
 // TestMarginCalibrationRunner_InvalidReportStillFails proves the runner DOES
 // still fail loudly for a genuine hard error (identity mismatch / no
 // eligible samples) -- the "never Fatalf on ApplyReady=false" divergence is
@@ -1047,7 +1189,7 @@ func TestMarginCalibrationRunner_InvalidReportStillFails(t *testing.T) {
 				}
 			}
 		}()
-		runMarginCalibrationRunner(fake, marginReport(), marginTestOpts, "", "")
+		runMarginCalibrationRunner(fake, marginReport(), marginTestOpts, "", nil, "")
 	}()
 	if !fake.failed {
 		t.Fatal("expected Fatalf for a report with zero eligible cases (ErrNoMarginSamples)")

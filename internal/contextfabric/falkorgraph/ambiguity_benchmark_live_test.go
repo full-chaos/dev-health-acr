@@ -244,7 +244,22 @@ func TestAmbiguityBenchmarkMeasuresTheHybridLift(t *testing.T) {
 	if orgID == "" {
 		t.Skip("ACR_TEST_AMBIGUITY_ORG is not set")
 	}
-	principal := storage.Principal{OrgID: orgID}
+	// codex r8 O1 (CRITICAL, accepted -- production reachability): an
+	// empty-scope principal is UNREACHABLE for any real authenticated
+	// credential (auth.NormalizeRepositoryScopes / web_assertion_binding.go's
+	// validWebRepositories both require at least one repository scope); a
+	// real org-wide credential is issued with RepositoryScopes=["*"], never
+	// []. This benchmark's whole purpose is proving AC-3778-2's lift is
+	// real -- it must measure through the SAME credential shape production
+	// actually issues, not an impossible one the M1 guard (graphrank's
+	// unscopedVisibility) would never see in the field. projection.go's
+	// authorizationValue stamps every live subject node's
+	// authorization_repositories with either "*" (unrestricted source) or a
+	// specific list -- either way ScopeMatch resolves a "*"-scoped
+	// principal's own value against it unconditionally, so this is a
+	// byte-for-byte equivalent authorization outcome to the prior empty-scope
+	// principal, with the difference isolated to unscopedVisibility alone.
+	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
 	ctx := context.Background()
 
 	graphConfig, err := ConfigFromEnv(benchmarkLookup)
@@ -292,6 +307,29 @@ func TestAmbiguityBenchmarkMeasuresTheHybridLift(t *testing.T) {
 
 	lift := (hybrid.correctRate() - baseline.correctRate()) * 100
 	t.Logf("AC-3778-2 lift: %+.1f percentage points (bar: +25.0)", lift)
+
+	// codex r8 O2 (accepted, gate strength): the pre-existing acceptance
+	// criteria below (AC-3778-3/AC-3778-4) PASS TRIVIALLY if the rescue is
+	// silently deleted -- a hybrid run byte-identical to the lexical-only
+	// baseline has 0 wrong commits and 0 control violations (nothing
+	// changed to CAUSE either), sailing through both safety gates while
+	// having measured nothing about AC-3778-2 at all. Fail LOUD here
+	// instead, BEFORE those softer (t.Errorf) checks: hybrid correct must
+	// STRICTLY EXCEED this SAME run's own lexical baseline. On this corpus,
+	// the base gates (CHAOS-3810's exact-label override, the ordinary
+	// 0.72/0.88 confidence gates) are PINNED at +0.0pp lift by direct
+	// measurement -- every re-gate this ticket has ever run shows baseline
+	// and hybrid diverge ONLY via the CHAOS-3829 carve-out firing -- so ANY
+	// positive lift on this specific corpus is rescue-attributed, not
+	// incidental. REVISIT if the base gates ever gain their own lift on a
+	// FUTURE corpus (unrelated to this ticket): at that point a raw lift
+	// delta would no longer prove the rescue specifically fired, and this
+	// check would need rescue-specific commit provenance (e.g. a per-commit
+	// "which gate fired" marker) instead.
+	if hybrid.correctCommits <= baseline.correctCommits {
+		t.Fatalf("AC-3778-2 REACHABILITY FAILED: hybrid correct=%d did not exceed the lexical-only baseline's own correct=%d on this SAME run -- the CHAOS-3829 commit-path carve-out this benchmark exists to measure never fired (or was silently deleted/regressed); a trivially-passing AC-3778-3/AC-3778-4 on an unchanged result would not be evidence of anything",
+			hybrid.correctCommits, baseline.correctCommits)
+	}
 
 	// AC-3778-4 first: it is the highest-severity failure in the issue, so it
 	// is reported even when the lift bar also fails.

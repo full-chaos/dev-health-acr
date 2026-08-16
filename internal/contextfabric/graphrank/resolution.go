@@ -366,6 +366,19 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		// downstream of this function reads vectorArmSimilarity directly
 		// (see ResolveSubjects' own doc comment on the map's scope), so
 		// closing the ONE consumer closes the entire path.
+		//
+		// codex r8 O1 (CRITICAL, accepted -- caller computes
+		// unscopedVisibility via scopesUnrestricted, resolve.go): the
+		// ORIGINAL "unscoped" test (an EMPTY RepositoryScopes list) was
+		// UNREACHABLE for any real authenticated credential -- every
+		// production credential is issued with at least one scope, and an
+		// org-wide one is issued as the wildcard ["*"], never []. The
+		// caller now also treats a wildcard-scoped principal as
+		// unrestricted (ScopeMatch's own definition: "*" matches
+		// unconditionally, before the node's own attribute is even
+		// consulted), so the rescue is REACHABLE by the credential shape
+		// production actually issues, closing what would otherwise have
+		// been a permanently-dead code path.
 		if ambiguous && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
 			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK &&
 			unscopedVisibility {

@@ -341,6 +341,16 @@ type CalibrationArtifact struct {
 // artifact uses (see CalibrationArtifact's doc comment) from a
 // CalibrateFromReport call's own inputs and result -- reportPath is the
 // SOURCE report's path on disk (empty when the report was built in memory).
+//
+// RESIDUAL (codex r8 O3 was scoped to MarginCalibrationArtifact only, not
+// re-litigated here): this function's own SourceReportSHA256 has the SAME
+// lossy-re-serialization defect NewMarginCalibrationArtifact's own doc
+// comment describes (hashes json.Marshal(report), a reduced mirror of the
+// real file, never the file's own bytes) -- CHAOS-3834's tau-calibration
+// tool predates this ticket and is out of CHAOS-3829's changeset scope; a
+// future round against THIS tool specifically should apply the identical
+// fix (thread the caller's raw report bytes through, as
+// NewMarginCalibrationArtifact now does).
 func NewCalibrationArtifact(result CalibrationResult, report CalibrationReport, opts CalibrationOptions, reportPath string) CalibrationArtifact {
 	artifact := CalibrationArtifact{
 		CalibrationResult:   result,
@@ -775,6 +785,30 @@ func checkMarginConsistency(cases []CalibrationCase, label string) error {
 		if math.IsNaN(s1) || math.IsInf(s1, 0) || math.IsNaN(s2) || math.IsInf(s2, 0) {
 			return fmt.Errorf("%w: %s[%d] has a non-finite vector-arm similarity (top1=%v top2=%v)", ErrMarginReportInternallyInconsistent, label, i, s1, s2)
 		}
+		// codex r8 O4 (accepted): the PRODUCTION invariant
+		// 0 <= top2.Similarity <= top1.Similarity <= 1 -- embedprovider.
+		// CosineFromDistance (the SAME conversion both production's
+		// vectorSearchNodesWithOverFetch and the oracle harness's
+		// trueCosineSimilarity ultimately rely on) is UNCONDITIONALLY
+		// clamped to [0,1], and "top1"/"top2" are BY DEFINITION the
+		// higher/lower of the two entries this measurement ranked (the
+		// harness's own merge keeps the MAX similarity per subject, then
+		// sorts descending before naming top1/top2) -- so top1 < top2 or
+		// either value outside [0,1] is not a valid measurement under any
+		// circumstance, corrupted or hand-edited data notwithstanding.
+		// Without this check, a REVERSED ranking (top1/top2 swapped, e.g.
+		// by a producer bug) still recomputes an internally "consistent"
+		// but NEGATIVE margin that passes the check below unnoticed -- and
+		// a negative value entering wrongMargins could itself produce a
+		// NEGATIVE ThresholdM, which the RUNTIME gate
+		// (vectorMarginCommitThreshold > 0, ResolveFromMergedCandidates)
+		// would then silently read as "uncalibrated" and disable the
+		// carve-out -- a calibration bug masquerading as an inert,
+		// unremarkable zero rather than surfacing as the hard failure it
+		// actually is. Fail loud HERE instead, at calibration time.
+		if s1 < 0 || s1 > 1 || s2 < 0 || s2 > 1 || s1 < s2 {
+			return fmt.Errorf("%w: %s[%d] violates the production similarity invariant 0<=top2<=top1<=1 (top1=%v top2=%v)", ErrMarginReportInternallyInconsistent, label, i, s1, s2)
+		}
 		if recomputed := s1 - s2; recomputed != *c.VectorMargin {
 			return fmt.Errorf("%w: %s[%d] stored vector_margin=%v, but top1.similarity(%v)-top2.similarity(%v)=%v", ErrMarginReportInternallyInconsistent, label, i, *c.VectorMargin, s1, s2, recomputed)
 		}
@@ -936,11 +970,10 @@ type MarginCalibrationArtifact struct {
 	// SourceReportPath is the source report's own path on disk (empty when
 	// the report was built in memory rather than read from a file -- e.g.
 	// every synthetic-fixture test in this package). SourceReportSHA256 is
-	// the SHA-256 of the source report's own JSON encoding, ALWAYS present
-	// when the report itself is non-empty -- mirrors
-	// CalibrationArtifact.SourceReportPath/SourceReportSHA256 exactly, same
-	// rationale (a path can go stale; the hash identifies the EXACT
-	// measurement data regardless).
+	// the SHA-256 of the source report's own ON-DISK BYTES -- see
+	// NewMarginCalibrationArtifact's own doc comment (codex r8 O3) for why
+	// this must be the ACTUAL file content, not a re-marshalling of the
+	// (reduced) CalibrationReport struct.
 	SourceReportPath   string `json:"source_report_path,omitempty"`
 	SourceReportSHA256 string `json:"source_report_sha256,omitempty"`
 }
@@ -950,7 +983,26 @@ type MarginCalibrationArtifact struct {
 // CalibrateMarginFromReport call's own inputs and result -- reportPath is
 // the SOURCE report's path on disk (empty when the report was built in
 // memory rather than read from a file).
-func NewMarginCalibrationArtifact(result MarginCalibrationResult, report CalibrationReport, opts MarginCalibrationOptions, reportPath string) MarginCalibrationArtifact {
+//
+// reportBytes is CHAOS-3829 codex r8 O3's (accepted) fix: the RAW bytes the
+// caller actually read from reportPath, hashed DIRECTLY when present. The
+// ORIGINAL implementation hashed json.Marshal(report) instead -- report is
+// CalibrationReport, a DELIBERATELY REDUCED mirror of the real oracle report
+// JSON (CalibrationReport's own doc comment: "only the fields the
+// calibration math reads"), so that re-marshalling drops every field the
+// harness actually wrote but this package's struct doesn't declare, and
+// reorders/reformats what survives -- the resulting hash identified a
+// LOSSY RE-SERIALIZATION, never the actual file on disk, defeating the
+// entire point of a content hash (a caller re-reading the artifact days
+// later cannot verify it against the source file's own sha256sum, because
+// the two were never computed from the same bytes). reportBytes==nil falls
+// back to the original marshal-based hash -- this is the SYNTHETIC-FIXTURE
+// path (every non-live test in this package builds a CalibrationReport
+// directly in memory, with no real file to hash the bytes of at all; H3's
+// own reportPath="fake, need not exist on disk" tests rely on this
+// fallback staying non-empty), not a regression of the fix -- the fix only
+// changes behavior when real bytes exist to prefer.
+func NewMarginCalibrationArtifact(result MarginCalibrationResult, report CalibrationReport, opts MarginCalibrationOptions, reportPath string, reportBytes []byte) MarginCalibrationArtifact {
 	artifact := MarginCalibrationArtifact{
 		MarginCalibrationResult: result,
 		TargetEmbedIdentity:     opts.TargetEmbedIdentity,
@@ -959,7 +1011,10 @@ func NewMarginCalibrationArtifact(result MarginCalibrationResult, report Calibra
 		TargetTopK:              opts.TargetTopK,
 		SourceReportPath:        reportPath,
 	}
-	if encoded, err := json.Marshal(report); err == nil {
+	if len(reportBytes) > 0 {
+		sum := sha256.Sum256(reportBytes)
+		artifact.SourceReportSHA256 = hex.EncodeToString(sum[:])
+	} else if encoded, err := json.Marshal(report); err == nil {
 		sum := sha256.Sum256(encoded)
 		artifact.SourceReportSHA256 = hex.EncodeToString(sum[:])
 	}

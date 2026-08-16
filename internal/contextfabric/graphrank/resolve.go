@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -461,13 +462,62 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// ResolveFromMergedCandidates' own doc comment (codex r7 M1) for the
 	// full scope-existence-oracle hazard this closes and the trilemma of
 	// rejected alternative fixes.
-	unscopedVisibility := len(principal.RepositoryScopes) == 0 &&
+	//
+	// codex r8 O1 (CRITICAL, accepted -- PRODUCTION REACHABILITY): the
+	// ORIGINAL check above (len(principal.RepositoryScopes) == 0) was
+	// UNREACHABLE for every real authenticated credential --
+	// auth.NormalizeRepositoryScopes and web_assertion_binding.go's
+	// validWebRepositories both REQUIRE at least one repository scope
+	// (ErrInvalidCredential / rejection otherwise); a real org-wide
+	// credential is issued with RepositoryScopes=["*"], never []. The
+	// rescue's own re-gate benchmark only ever exercised a harness-shaped
+	// EMPTY-scope principal, which no production credential can present --
+	// the +6.0pp lift measured through r8 had NEVER been reachable in
+	// production. scopesUnrestricted below fixes this: the wildcard "*"
+	// means UNRESTRICTED per ScopeMatch's own definition (scope.go: "*"
+	// matches any authorization_repositories value unconditionally,
+	// checked first, before consulting the node's own attribute at all) --
+	// so a wildcard-scoped principal can see every node in the
+	// organization regardless of its authorization_repositories value,
+	// which is EXACTLY the same visibility an empty-scope principal would
+	// have had. Wildcard visibility == org-wide visibility == the
+	// calibrated population the oracle measured; the M1 existence-oracle
+	// hazard only exists when something is ACTUALLY hidden from the
+	// caller, which is never true for either shape. An owner-scoped
+	// partial wildcard ("acme/*") does NOT qualify -- ScopeMatch resolves
+	// that against a SPECIFIC owner, so nodes under a DIFFERENT owner are
+	// still hidden, and the oracle hazard still applies; only the GLOBAL
+	// "*" is unconditional.
+	unscopedVisibility := scopesUnrestricted(principal.RepositoryScopes) &&
 		len(request.RequestedScope.RepositorySlugs) == 0 &&
 		len(request.RequestedScope.ProjectIDs) == 0 &&
 		len(request.RequestedScope.TeamIDs) == 0
 	resolution := ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility)
 	resolution.RetrievalDegraded = retrievalDegraded
 	return resolution, nil
+}
+
+// scopesUnrestricted is CHAOS-3829 codex r8 O1's (accepted, CRITICAL
+// production-reachability fix) authority for "does this repository-scope
+// list actually hide anything" -- true for an empty list (no scope on
+// record at all; kept for defense in depth even though no authenticated
+// production credential can present it, per auth.NormalizeRepositoryScopes/
+// web_assertion_binding.go's validWebRepositories, both of which REQUIRE at
+// least one scope) OR a list containing the GLOBAL wildcard "*" anywhere in
+// it -- mirrors ScopeMatch's own definition exactly (scope.go: value=="*"
+// returns true unconditionally, checked BEFORE consulting the node's own
+// authorization attribute at all), so a "*"-scoped principal is
+// authorization-equivalent to an unscoped one: every node in the
+// organization is visible regardless of its own authorization_repositories
+// value. An owner-scoped partial wildcard ("acme/*") does NOT qualify --
+// ScopeMatch resolves that against one SPECIFIC owner, so a node under a
+// DIFFERENT owner stays hidden, and unscopedVisibility's own
+// existence-oracle hazard still applies to it.
+func scopesUnrestricted(scopes []string) bool {
+	if len(scopes) == 0 {
+		return true
+	}
+	return slices.Contains(scopes, "*")
 }
 
 // mergeSearchResults is the ONE per-node ingestion path shared by

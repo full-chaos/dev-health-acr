@@ -290,21 +290,32 @@ func TestResolveSubjects_CommitPathCarveOutFiresThroughTheRealAdapterWiring(t *t
 	// gate), present purely so a SECOND vector-arm candidate exists for the
 	// carve-out's own >=2-candidates precondition and so the ordinary
 	// top-of-two gate has two commit-eligible candidates to fail on.
+	//
+	// codex r8 O1: both nodes carry an authorization_repositories attribute
+	// admitting "acme/repo-x" -- required now that the principal below uses
+	// the REAL production wildcard shape (["*"], non-empty), which routes
+	// through AuthorizedAttributes' scope loop instead of skipping it (an
+	// empty scope list, this test's PRE-O1 principal, bypassed that loop
+	// entirely) -- a node with NO authorization attribute at all is denied
+	// unconditionally regardless of scope value (scopeContainsAttr's own
+	// "key absent -> deny" convention), so this attribute is required for
+	// the candidates to form at all, independent of the M1 guard this test
+	// is proving reachable.
 	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		switch {
 		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
 			return []row{
 				// distance 0.05 -> similarity 0.95 (decisive top-1).
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service"}}, "score": 0.05},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.05},
 				// distance 0.30 -> similarity 0.70: above tau (0.55), so it
 				// survives the floor and gives the carve-out (and the
 				// ordinary top-of-two gate) a SECOND commit-eligible
 				// candidate to consider, well below authsvc's similarity.
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service"}}, "score": 0.30},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.30},
 			}, nil
 		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
 			return []row{
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth"}}, "score": 1.0},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 1.0},
 			}, nil
 		default:
 			return nil, nil
@@ -322,7 +333,7 @@ func TestResolveSubjects_CommitPathCarveOutFiresThroughTheRealAdapterWiring(t *t
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -383,6 +394,101 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledForScopedPrincipal(t *te
 	}
 }
 
+// TestResolveSubjects_CommitPathCarveOutFiresForWildcardScopedPrincipal is
+// codex r8 O1's core pinning test (CRITICAL, production reachability): a
+// principal scoped to the GLOBAL wildcard ["*"] -- the REAL shape a
+// production org-wide credential is issued with (auth.NormalizeRepositoryScopes
+// requires at least one scope; a real org-wide grant is ["*"], never an
+// empty list, which no authenticated credential can ever present) -- must
+// still reach the rescue. Proves scopesUnrestricted's wildcard recognition,
+// not merely the now-dead empty-list case every PRIOR "unscoped" test in
+// this file relied on (all switched to this same ["*"] shape by this
+// commit).
+func TestResolveSubjects_CommitPathCarveOutFiresForWildcardScopedPrincipal(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.05},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.30},
+			}, nil
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 1.0},
+			}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	adapter.vectorMarginCommitThreshold = 0.10
+	adapter.calibratedTopK = 20
+
+	request := contextfabric.InvestigationRequest{
+		Question: "who owns auth",
+		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
+	}
+	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}
+	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects: %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "authsvc" {
+		t.Fatalf("resolution.Committed = %v, want exactly [authsvc] -- a global-wildcard-scoped principal is authorization-equivalent to unscoped and must reach the rescue", resolution.Committed)
+	}
+}
+
+// TestResolveSubjects_CommitPathCarveOutStaysDisabledForOwnerWildcardPrincipal
+// proves the boundary O1's ruling drew explicitly: an OWNER-scoped partial
+// wildcard ("acme/*") does NOT qualify as unrestricted -- ScopeMatch
+// resolves that against one SPECIFIC owner (scope.go), so a node under a
+// DIFFERENT owner stays hidden from this principal, and the M1
+// existence-oracle hazard still applies. Both fixture nodes here are
+// authorized under "acme/repo-x" (owner "acme"), which "acme/*" DOES admit
+// -- isolating the refusal to the M1 guard specifically, exactly like the
+// non-wildcard scoped-principal test above.
+func TestResolveSubjects_CommitPathCarveOutStaysDisabledForOwnerWildcardPrincipal(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.05},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.30},
+			}, nil
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 1.0},
+			}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	adapter.vectorMarginCommitThreshold = 0.10
+	adapter.calibratedTopK = 20
+
+	request := contextfabric.InvestigationRequest{
+		Question: "who owns auth",
+		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
+	}
+	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/*"}}
+	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects: %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- an owner-scoped partial wildcard must never reach the rescue, even though it authorizes every candidate involved", resolution.Committed)
+	}
+}
+
 // TestResolveSubjects_CommitPathCarveOutStaysDisabledForRequestNarrowedScope
 // is M1's second pinning test: the principal itself is UNSCOPED, but the
 // REQUEST narrows visibility (RequestedScope.ProjectIDs) -- the other half
@@ -421,7 +527,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledForRequestNarrowedScope(
 		},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -460,7 +566,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrows
 			case 1:
 				// term "auth": distance 0.05 -> similarity 0.95 (decisive top-1).
 				return []row{
-					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service"}}, "score": 0.05},
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.05},
 				}, nil
 			case 2:
 				// term "identity": distance 0.30 -> similarity 0.70, above
@@ -468,7 +574,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrows
 				// Search call's own (independently returnCap=1-sliced)
 				// result.
 				return []row{
-					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service"}}, "score": 0.30},
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.30},
 				}, nil
 			default:
 				// A 3rd+ call is CHAOS-3838's question-level SearchQuestion
@@ -488,7 +594,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrows
 				// ever be TOP under vectorArmCorroborated's own narrowed
 				// pairing (F4).
 				return []row{
-					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth"}}, "score": 1.0},
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 1.0},
 				}, nil
 			}
 			// term "identity": no lexical hit -- identitysvc stays
@@ -520,7 +626,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrows
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth", "identity"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -550,11 +656,11 @@ func TestResolveSubjects_CommitPathCarveOutFiresWithTwoTermsAtCapTwo(t *testing.
 			switch vectorCalls {
 			case 1:
 				return []row{
-					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service"}}, "score": 0.05},
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.05},
 				}, nil
 			case 2:
 				return []row{
-					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service"}}, "score": 0.30},
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.30},
 				}, nil
 			default:
 				// A 3rd+ call is CHAOS-3838's question-level SearchQuestion
@@ -566,7 +672,7 @@ func TestResolveSubjects_CommitPathCarveOutFiresWithTwoTermsAtCapTwo(t *testing.
 			lexicalCalls++
 			if lexicalCalls == 1 {
 				return []row{
-					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth"}}, "score": 1.0},
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 1.0},
 				}, nil
 			}
 			return nil, nil
@@ -594,7 +700,7 @@ func TestResolveSubjects_CommitPathCarveOutFiresWithTwoTermsAtCapTwo(t *testing.
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth", "identity"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -613,12 +719,12 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWithoutCalibration(t *te
 		switch {
 		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
 			return []row{
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service"}}, "score": 0.05},
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service"}}, "score": 0.30},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.05},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.30},
 			}, nil
 		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
 			return []row{
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth"}}, "score": 1.0},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 1.0},
 			}, nil
 		default:
 			return nil, nil
@@ -635,7 +741,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWithoutCalibration(t *te
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}

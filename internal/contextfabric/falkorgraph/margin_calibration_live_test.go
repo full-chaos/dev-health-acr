@@ -51,7 +51,16 @@ import (
 // NewMarginCalibrationArtifact can stamp the written artifact with full
 // provenance (target tau/topK, source report path + content hash),
 // mirroring CalibrationArtifact's identical shape and rationale.
-func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts MarginCalibrationOptions, reportPath, outputPath string) {
+//
+// reportBytes is codex r8 O3's (accepted) fix: the RAW bytes the caller
+// actually read from reportPath (nil when report was built in memory, e.g.
+// every non-live test) -- passed straight through to
+// NewMarginCalibrationArtifact so the written artifact's
+// SourceReportSHA256 hashes the SAME bytes a caller could independently
+// verify with `sha256sum reportPath`, not a lossy re-marshalling of the
+// (reduced) CalibrationReport struct -- see NewMarginCalibrationArtifact's
+// own doc comment for the full defect this closes.
+func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts MarginCalibrationOptions, reportPath string, reportBytes []byte, outputPath string) {
 	t.Helper()
 
 	result, err := CalibrateMarginFromReport(report, opts)
@@ -95,7 +104,7 @@ func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts Margin
 	}
 
 	if outputPath != "" {
-		artifact := NewMarginCalibrationArtifact(result, report, opts, reportPath)
+		artifact := NewMarginCalibrationArtifact(result, report, opts, reportPath, reportBytes)
 		encoded, err := json.MarshalIndent(artifact, "", "  ")
 		if err != nil {
 			t.Fatalf("encode margin calibration artifact: %v", err)
@@ -168,5 +177,5 @@ func TestCalibrateVectorMarginFromReportFile(t *testing.T) {
 		TargetDimension:     targetDimension,
 		TargetTau:           targetTau,
 		TargetTopK:          targetTopK,
-	}, reportPath, os.Getenv("ACR_TEST_MARGIN_CALIBRATION_OUTPUT"))
+	}, reportPath, encoded, os.Getenv("ACR_TEST_MARGIN_CALIBRATION_OUTPUT"))
 }
