@@ -17,10 +17,11 @@ import (
 var marginTestOpts = MarginCalibrationOptions{TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
 
 // eligibleCase builds one CalibrationCase already inside CalibrateMarginFromReport's
-// eligible population (vectorSearchComplete, corroborated top-1, measurable
-// margin) -- top1Kind/top1ID is the vector arm's top-1 pick, expectKind/
-// expectID is the case's OWN expected subject (equal for a CORRECT case,
-// different for a WRONG one), margin is VectorMargin.
+// eligible population (corroborated top-1, measurable margin --
+// vectorSearchComplete is NOT part of eligibility as of Phase 2(c)) --
+// top1Kind/top1ID is the vector arm's top-1 pick, expectKind/expectID is the
+// case's OWN expected subject (equal for a CORRECT case, different for a
+// WRONG one), margin is VectorMargin.
 func eligibleCase(top1Kind, top1ID, expectKind, expectID string, margin float64) CalibrationCase {
 	top2Similarity := 0.5 // arbitrary; only top1's identity/margin matter to the math
 	return CalibrationCase{
@@ -35,6 +36,25 @@ func eligibleCase(top1Kind, top1ID, expectKind, expectID string, margin float64)
 
 func marginReport(cases ...CalibrationCase) CalibrationReport {
 	return CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases}
+}
+
+// eligibleControlCase builds one no-match CONTROL CalibrationCase (Phase
+// 2(c)) already inside the eligible population -- ExpectKind/ExpectID are
+// deliberately left empty (a control has no correct subject), and
+// corroborated defaults true unless the caller flips it via the returned
+// value.
+func eligibleControlCase(top1Kind, top1ID string, margin float64) CalibrationCase {
+	top2Similarity := 0.5
+	return CalibrationCase{
+		VectorSearchTruncated: boolPtr(false),
+		VectorTop1:            &CalibrationVectorArmSubject{Kind: top1Kind, CanonicalID: top1ID, Similarity: top2Similarity + margin, Corroborated: true},
+		VectorTop2:            &CalibrationVectorArmSubject{Kind: "project", CanonicalID: "control-top2", Similarity: top2Similarity},
+		VectorMargin:          floatPtr(margin),
+	}
+}
+
+func marginReportWithControls(cases []CalibrationCase, controls []CalibrationCase) CalibrationReport {
+	return CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases, ControlCases: controls}
 }
 
 func TestCalibrateMarginFromReport_MismatchedEmbedIdentityIsAnError(t *testing.T) {
@@ -62,13 +82,13 @@ func TestCalibrateMarginFromReport_AbsentTargetIsAnError(t *testing.T) {
 }
 
 // TestCalibrateMarginFromReport_NoEligibleCasesIsAnError proves a report
-// whose cases NEVER reach the eligible population (e.g. every case's vector
-// arm was truncated) refuses with ErrNoMarginSamples rather than silently
+// whose cases NEVER reach the eligible population (e.g. every case's top-1
+// was uncorroborated) refuses with ErrNoMarginSamples rather than silently
 // returning a zero-value result.
 func TestCalibrateMarginFromReport_NoEligibleCasesIsAnError(t *testing.T) {
-	truncatedCase := eligibleCase("project", "p1", "project", "p1", 0.3)
-	truncatedCase.VectorSearchTruncated = boolPtr(true) // no longer eligible
-	report := marginReport(truncatedCase)
+	uncorroborated := eligibleCase("project", "p1", "project", "p1", 0.3)
+	uncorroborated.VectorTop1.Corroborated = false // no longer eligible
+	report := marginReport(uncorroborated)
 	_, err := CalibrateMarginFromReport(report, marginTestOpts)
 	if !errors.Is(err, ErrNoMarginSamples) {
 		t.Fatalf("err = %v, want ErrNoMarginSamples", err)
@@ -82,23 +102,36 @@ func TestCalibrateMarginFromReport_EmptyReportIsAnError(t *testing.T) {
 	}
 }
 
-// --- Eligibility predicate: exhaustive per-dimension exclusion tests -------
+// --- Eligibility predicate: Phase 2(c) revision -----------------------------
+//
+// vectorSearchComplete is NO LONGER part of the eligibility predicate (see
+// CalibrateMarginFromReport's doc comment for the geometric justification:
+// truncation only ever cuts the TAIL of a distance-ordered ANN result, never
+// reorders or drops top-1/top-2). These tests pin that a truncated -- or
+// unmeasured-truncation -- vector arm is now INCLUDED, the exact inverse of
+// the pre-Phase-2(c) behavior.
 
-func TestCalibrateMarginFromReport_ExcludesNilVectorSearchTruncated(t *testing.T) {
+func TestCalibrateMarginFromReport_IncludesNilVectorSearchTruncated(t *testing.T) {
 	c := eligibleCase("project", "p1", "project", "p1", 0.3)
 	c.VectorSearchTruncated = nil
-	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
-	if !errors.Is(err, ErrNoMarginSamples) {
-		t.Fatalf("nil VectorSearchTruncated must be excluded (assume truncated), got err=%v", err)
+	result, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.CorrectSampleSize != 1 {
+		t.Fatalf("CorrectSampleSize = %d, want 1 -- a nil VectorSearchTruncated must no longer exclude a case", result.CorrectSampleSize)
 	}
 }
 
-func TestCalibrateMarginFromReport_ExcludesTruncatedVectorArm(t *testing.T) {
+func TestCalibrateMarginFromReport_IncludesTruncatedVectorArm(t *testing.T) {
 	c := eligibleCase("project", "p1", "project", "p1", 0.3)
 	c.VectorSearchTruncated = boolPtr(true)
-	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
-	if !errors.Is(err, ErrNoMarginSamples) {
-		t.Fatalf("a truncated vector arm must be excluded, got err=%v", err)
+	result, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.CorrectSampleSize != 1 {
+		t.Fatalf("CorrectSampleSize = %d, want 1 -- a truncated vector arm must no longer exclude a case", result.CorrectSampleSize)
 	}
 }
 
@@ -252,6 +285,126 @@ func TestCalibrateMarginFromReport_SmallWrongSampleCaveatAppearsInNote(t *testin
 	}
 	if !strings.Contains(result.Note, "CAVEAT") {
 		t.Fatalf("Note = %q, want a small-sample CAVEAT (only 1 wrong-top1 sample)", result.Note)
+	}
+}
+
+// --- Phase 2(c): no-match CONTROL population --------------------------------
+
+// TestCalibrateMarginFromReport_CorroboratedControlIsWrongByDefinition is
+// the core Phase 2(c) pinning test: a corroborated control top-1 feeds
+// WrongSampleSize (and WrongSampleSizeFromControls) WITHOUT any ExpectKind/
+// ExpectID comparison -- a control has no correct subject to compare
+// against at all.
+func TestCalibrateMarginFromReport_CorroboratedControlIsWrongByDefinition(t *testing.T) {
+	report := marginReportWithControls(nil, []CalibrationCase{eligibleControlCase("project", "ghost", 0.20)})
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if !result.SafetyMeasured || result.WrongSampleSize != 1 {
+		t.Fatalf("SafetyMeasured=%v WrongSampleSize=%d, want true/1", result.SafetyMeasured, result.WrongSampleSize)
+	}
+	if result.WrongSampleSizeFromControls != 1 {
+		t.Fatalf("WrongSampleSizeFromControls = %d, want 1", result.WrongSampleSizeFromControls)
+	}
+	if result.ThresholdM == nil || *result.ThresholdM <= 0.20 {
+		t.Fatalf("ThresholdM = %v, want strictly greater than 0.20", result.ThresholdM)
+	}
+}
+
+// TestCalibrateMarginFromReport_UncorroboratedControlIsExcluded proves a
+// control is subject to the SAME corroboration precondition as a scored
+// case -- an uncorroborated control top-1 never reaches the carve-out in
+// production either, so it must not feed WrongSampleSize.
+func TestCalibrateMarginFromReport_UncorroboratedControlIsExcluded(t *testing.T) {
+	control := eligibleControlCase("project", "ghost", 0.20)
+	control.VectorTop1.Corroborated = false
+	report := marginReportWithControls([]CalibrationCase{eligibleCase("project", "p1", "project", "p1", 0.10)}, []CalibrationCase{control})
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.WrongSampleSize != 0 || result.ControlsCorroborated != 0 {
+		t.Fatalf("WrongSampleSize=%d ControlsCorroborated=%d, want both 0", result.WrongSampleSize, result.ControlsCorroborated)
+	}
+	if result.ControlsWithVectorArmData != 1 {
+		t.Fatalf("ControlsWithVectorArmData = %d, want 1 (data was measured, just not corroborated)", result.ControlsWithVectorArmData)
+	}
+}
+
+// TestCalibrateMarginFromReport_ZeroControlsCorroboratedIsRecordedNotSilent
+// pins team-lead's explicit instruction: when zero controls are
+// corroborated, that must be a MEASURED, reported fact (a present zero on
+// ControlsCorroborated, alongside a nonzero ControlsInReport), not an
+// absent/undetectable state.
+func TestCalibrateMarginFromReport_ZeroControlsCorroboratedIsRecordedNotSilent(t *testing.T) {
+	uncorroboratedControl := eligibleControlCase("project", "ghost", 0.20)
+	uncorroboratedControl.VectorTop1.Corroborated = false
+	report := marginReportWithControls(
+		[]CalibrationCase{eligibleCase("project", "wrong", "project", "correct", 0.05)},
+		[]CalibrationCase{uncorroboratedControl, uncorroboratedControl},
+	)
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.ControlsInReport != 2 {
+		t.Fatalf("ControlsInReport = %d, want 2", result.ControlsInReport)
+	}
+	if result.ControlsCorroborated != 0 {
+		t.Fatalf("ControlsCorroborated = %d, want 0", result.ControlsCorroborated)
+	}
+}
+
+// TestCalibrateMarginFromReport_ControlCorroboratedWithoutMarginIsNotCountedAsWrong
+// proves a corroborated control with only ONE distinct vector-arm subject
+// (no VectorTop2 -- no competitor to measure a margin against) is tallied in
+// ControlsCorroboratedWithoutMargin, NOT folded into WrongSampleSize (there
+// is no margin value to test against M at all).
+func TestCalibrateMarginFromReport_ControlCorroboratedWithoutMarginIsNotCountedAsWrong(t *testing.T) {
+	control := eligibleControlCase("project", "ghost", 0.20)
+	control.VectorTop2 = nil
+	control.VectorMargin = nil
+	report := marginReportWithControls([]CalibrationCase{eligibleCase("project", "p1", "project", "p1", 0.10)}, []CalibrationCase{control})
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.WrongSampleSize != 0 {
+		t.Fatalf("WrongSampleSize = %d, want 0 -- no margin exists to test against M", result.WrongSampleSize)
+	}
+	if result.ControlsCorroborated != 1 || result.ControlsCorroboratedWithoutMargin != 1 {
+		t.Fatalf("ControlsCorroborated=%d ControlsCorroboratedWithoutMargin=%d, want 1/1", result.ControlsCorroborated, result.ControlsCorroboratedWithoutMargin)
+	}
+}
+
+// TestCalibrateMarginFromReport_ScoredWrongAndControlWrongUnion proves the
+// UNION rule end to end: a scored wrong-top1 case AND a corroborated control
+// both contribute to WrongSampleSize, and M rejects the max of BOTH.
+func TestCalibrateMarginFromReport_ScoredWrongAndControlWrongUnion(t *testing.T) {
+	report := marginReportWithControls(
+		[]CalibrationCase{
+			eligibleCase("project", "wrong-scored", "project", "correct", 0.10),
+			eligibleCase("project", "p2", "project", "p2", 0.40), // correct
+		},
+		[]CalibrationCase{eligibleControlCase("project", "ghost", 0.25)}, // highest wrong margin
+	)
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.WrongSampleSize != 2 || result.WrongSampleSizeFromControls != 1 {
+		t.Fatalf("WrongSampleSize=%d WrongSampleSizeFromControls=%d, want 2/1", result.WrongSampleSize, result.WrongSampleSizeFromControls)
+	}
+	if result.WrongMarginMax == nil || *result.WrongMarginMax != 0.25 {
+		t.Fatalf("WrongMarginMax = %v, want 0.25 (the control's margin, the larger of the two wrong margins)", result.WrongMarginMax)
+	}
+	if result.ThresholdM == nil || *result.ThresholdM <= 0.25 {
+		t.Fatalf("ThresholdM = %v, want strictly greater than 0.25", result.ThresholdM)
+	}
+	// The correct case (margin 0.40) clears M; nothing else is correct.
+	if result.CorrectSampleSize != 1 || result.AchievedReach != 1 {
+		t.Fatalf("CorrectSampleSize=%d AchievedReach=%v, want 1/1", result.CorrectSampleSize, result.AchievedReach)
 	}
 }
 

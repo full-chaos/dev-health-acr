@@ -33,7 +33,10 @@ func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts Margin
 	}
 
 	t.Logf("CHAOS-3829 Phase 2 margin calibration (target identity=%s dim=%d):", opts.TargetEmbedIdentity, opts.TargetDimension)
-	t.Logf("  eligible population: correct-top1=%d wrong-top1=%d", result.CorrectSampleSize, result.WrongSampleSize)
+	t.Logf("  eligible population: correct-top1=%d wrong-top1=%d (of which %d from a corroborated control)",
+		result.CorrectSampleSize, result.WrongSampleSize, result.WrongSampleSizeFromControls)
+	t.Logf("  controls: in_report=%d with_vector_arm_data=%d corroborated=%d corroborated_without_margin=%d",
+		result.ControlsInReport, result.ControlsWithVectorArmData, result.ControlsCorroborated, result.ControlsCorroboratedWithoutMargin)
 	if result.ThresholdM != nil {
 		t.Logf("  ThresholdM(M)=%s  WrongMarginMax=%s  AchievedReach=%.4f",
 			strconv.FormatFloat(*result.ThresholdM, 'g', -1, 64),

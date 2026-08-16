@@ -122,6 +122,11 @@ type CalibrationReport struct {
 	EmbedIdentity  string            `json:"embed_identity"`
 	EmbedDimension int               `json:"embed_dimension"`
 	Cases          []CalibrationCase `json:"cases"`
+	// ControlCases mirrors oracle_live_test.go's oracleReport.ControlCases
+	// (CHAOS-3829 Phase 2(c)): one CalibrationCase per no-match control,
+	// read only by CalibrateMarginFromReport -- tau-calibration math above
+	// never reads it.
+	ControlCases []CalibrationCase `json:"control_cases,omitempty"`
 }
 
 // CalibrationOptions parameterizes CalibrateFromReport.
@@ -607,20 +612,41 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 // number that reads as validated when nothing was actually checked) for a
 // DIFFERENT question: not "what similarity floor gates retrieval", but "what
 // margin between the vector arm's top-1 and top-2 candidate is decisive
-// enough to auto-commit top-1, once vectorSearchComplete and corroboration
-// already hold" -- CHAOS-3829's ratified commit-path carve-out in
-// graphrank.ResolveFromMergedCandidates.
+// enough to auto-commit top-1, once corroboration holds" -- CHAOS-3829's
+// ratified commit-path carve-out in graphrank.ResolveFromMergedCandidates.
+//
+// PHASE 2(c) REVISION (team-lead dispatch, 2026-08-16, re-reading lane-3829's
+// own Phase 1+2 report): the eligibility predicate below no longer requires
+// vectorSearchComplete. Rationale, verified against vector.go:390-392:
+// db.idx.vector.queryNodes returns rows `ORDER BY score ASC` (ascending
+// DISTANCE, i.e. descending similarity), and vectorSearchNodesWithOverFetch's
+// truncation is derived from whether MORE than returnCap survivors cleared
+// tau (vector.go's own doc comment) -- truncation therefore only ever cuts
+// the TAIL of an already-similarity-ordered list, never reorders or drops
+// the HEAD. The top-1/top-2 identities and similarities (and hence their
+// margin) a truncated call returns are EXACTLY what an untruncated call
+// would also have returned, provably, not merely usually -- so
+// vectorSearchComplete is unnecessary for a top-1/top-2 margin gate
+// specifically, unlike graphrank's existing top-of-two RELEVANCE-score gate
+// (0.88/0.12), which genuinely can be second-guessed by a dropped competitor
+// because a relevance score is not distance-ordered the way this is. This is
+// a MEASUREMENT-TOOL-ONLY change -- no resolution.go/resolve.go code exists
+// yet, and chris's ratification of the underlying production geometry
+// (whether the eventual carve-out itself drops the vectorSearchComplete
+// conjunct) is still pending; this function's own eligibility choice is
+// provisional on that same ratification, and this doc comment is the record
+// of why it was already made HERE, in the tool, ahead of it.
 // ---------------------------------------------------------------------
 
 // ErrNoMarginSamples reports that the report carries no ELIGIBLE margin
-// sample at all: no case reached the vectorSearchComplete + corroborated-top-1
+// sample at all: no case (scored or control) reached the corroborated-top-1
 // + measurable-margin state CHAOS-3829's ratified commit-path carve-out
 // operates in (see CalibrateMarginFromReport's doc comment for the exact
 // eligibility predicate). There is nothing here to calibrate M from, not even
 // an unsafe recommendation -- distinct from ApplyReady=false, which means
 // SOME eligible cases exist but none of them were wrong-top1 (see that
 // field's doc comment).
-var ErrNoMarginSamples = errors.New("calibration report has no eligible vector-margin samples (vectorSearchComplete + corroborated top-1 + >=2 distinct vector-arm subjects)")
+var ErrNoMarginSamples = errors.New("calibration report has no eligible vector-margin samples (corroborated top-1 + >=2 distinct vector-arm subjects)")
 
 // MarginCalibrationOptions parameterizes CalibrateMarginFromReport. Mirrors
 // CalibrationOptions' identity-pinning fields exactly (same exact-measurement
@@ -641,11 +667,12 @@ type MarginCalibrationOptions struct {
 type MarginCalibrationResult struct {
 	// ThresholdM is the recommended VectorMarginCommitThreshold: the
 	// smallest value such that EVERY wrong-top1 margin this report measured
-	// (among the eligible, vectorSearchComplete + corroborated-top1
-	// population) falls STRICTLY below it. A POINTER: nil when SafetyMeasured
-	// is false -- see that field's doc comment for why an M computed from an
-	// empty wrong-sample would be a vacuous-truth hazard, not a validated
-	// recommendation.
+	// (among the eligible, corroborated-top1 population -- see the function
+	// doc comment's Phase 2(c) revision for why vectorSearchComplete is not
+	// part of this predicate) falls STRICTLY below it. A POINTER: nil when
+	// SafetyMeasured is false -- see that field's doc comment for why an M
+	// computed from an empty wrong-sample would be a vacuous-truth hazard,
+	// not a validated recommendation.
 	ThresholdM *float64
 	// WrongMarginMax is the largest wrong-top1 margin observed -- the exact
 	// value ThresholdM was derived from (one float64 ULP above it, via
@@ -680,9 +707,34 @@ type MarginCalibrationResult struct {
 
 	// CorrectSampleSize/WrongSampleSize are the eligible population's split
 	// by top-1 correctness (VectorTop1 matches the case's expected subject,
-	// or not).
+	// or not). WrongSampleSize includes both wrong-top1 SCORED cases and
+	// corroborated-with-margin CONTROL cases (a control top-1 is always
+	// wrong -- see the function doc comment's Phase 2(c) UNION rule).
 	CorrectSampleSize int
 	WrongSampleSize   int
+	// WrongSampleSizeFromControls is the CONTROL-sourced subset of
+	// WrongSampleSize -- how many of the wrong-top1 margins came from a
+	// corroborated no-match control rather than a wrong-top1 scored case.
+	// Reported separately so a caller can see how much of the safety bound
+	// rests on which population.
+	WrongSampleSizeFromControls int
+
+	// ControlsInReport/ControlsWithVectorArmData/ControlsCorroborated are
+	// Phase 2(c)'s explicit "record as a measured fact, not silently"
+	// counters (team-lead dispatch): the TOTAL control cases in the report,
+	// how many of those reached term-level vector-arm evaluation at all
+	// (VectorTop1 != nil), and how many of THOSE were corroborated --
+	// always populated, even when zero, so a reader never has to infer
+	// "zero controls were corroborated" from an absent field.
+	// ControlsCorroboratedWithoutMargin is the (expected small/zero) subset
+	// of ControlsCorroborated whose vector arm proposed only ONE distinct
+	// subject -- corroborated, but with no second candidate to measure a
+	// margin against, so it cannot feed WrongSampleSize (see the function
+	// doc comment).
+	ControlsInReport                  int
+	ControlsWithVectorArmData         int
+	ControlsCorroborated              int
+	ControlsCorroboratedWithoutMargin int
 
 	// AchievedReach is the fraction of CORRECT-top1 eligible cases whose
 	// VectorMargin clears ThresholdM -- how many of the cases where this
@@ -693,46 +745,59 @@ type MarginCalibrationResult struct {
 }
 
 // CalibrateMarginFromReport computes a recommended VectorMarginCommitThreshold
-// (M) from one EXTENDED oracle report (CHAOS-3829 Phase 1's
-// VectorSearchTruncated/VectorTop1/VectorTop2/VectorMargin fields) -- the
-// calibration input for the ratified commit-path carve-out in
-// graphrank.ResolveFromMergedCandidates: vectorSearchComplete + corroborated
-// top-1 + margin(top1,top2) >= M.
+// (M) from one EXTENDED oracle report (CHAOS-3829 Phase 1/2(c)'s
+// VectorTop1/VectorTop2/VectorMargin fields on both report.Cases (scored) and
+// report.ControlCases) -- the calibration input for the ratified commit-path
+// carve-out in graphrank.ResolveFromMergedCandidates: corroborated top-1 +
+// margin(top1,top2) >= M.
 //
-// ELIGIBLE POPULATION: only cases where (1) the vector arm was untruncated
-// (VectorSearchTruncated != nil && !*VectorSearchTruncated -- the EXACT
-// vectorSearchComplete precondition the carve-out itself checks), (2) the
-// vector arm's top-1 subject was corroborated by a second mechanism (the
-// EXACT corroboration precondition the carve-out also checks), and (3) a
-// margin was measurable (VectorTop1 AND VectorTop2 both present, i.e. at
-// least two distinct vector-arm subjects were proposed). A case outside this
-// population never reaches the carve-out in production either, so its margin
-// says nothing about how M should be set -- including a case whose vector
-// arm found only ONE distinct subject (VectorMargin nil): there is no
-// competitor to measure a gap against, which is a different situation from a
-// measured, arbitrarily small gap, and folding it in as "infinite margin" or
-// "zero margin" would both be fabricating a number this report never
-// measured.
+// ELIGIBLE POPULATION (Phase 2(c) revision -- see the section doc comment
+// above for why vectorSearchComplete is no longer part of this predicate):
 //
-// CORRECT vs WRONG: within the eligible population, a case is CORRECT when
-// VectorTop1 names the case's own expected subject (ExpectKind/ExpectID),
-// WRONG otherwise. This is a property of the RANKING (is the vector arm's
-// own top choice right), not of retrievability (a case can be "hit" -- the
-// correct answer is SOMEWHERE in the oracle's top-K -- while VectorTop1 is a
-// different, wrong subject with a higher raw similarity).
+//   - SCORED cases (report.Cases): eligible when the vector arm's top-1
+//     subject was corroborated by a second mechanism (the EXACT
+//     corroboration precondition the carve-out also checks) AND a margin
+//     was measurable (VectorTop1 AND VectorTop2 both present, i.e. at least
+//     two distinct vector-arm subjects were proposed). CORRECT when
+//     VectorTop1 names the case's own expected subject (ExpectKind/
+//     ExpectID), WRONG otherwise. This is a property of the RANKING (is the
+//     vector arm's own top choice right), not of retrievability (a case can
+//     be "hit" -- the correct answer is SOMEWHERE in the oracle's top-K --
+//     while VectorTop1 is a different, wrong subject with a higher raw
+//     similarity).
+//   - CONTROL cases (report.ControlCases): eligible under the SAME
+//     corroborated + measurable-margin predicate, and ALWAYS WRONG when
+//     eligible -- a no-match control has no correct subject at all, so a
+//     corroborated top-1 is wrong by definition (team-lead dispatch,
+//     2026-08-16: "(corroborated AND top1 != expect_id) over scored cases
+//     UNION (corroborated) over controls"). ControlsInReport/
+//     ControlsWithVectorArmData/ControlsCorroborated/
+//     ControlsCorroboratedWithoutMargin are recorded UNCONDITIONALLY (never
+//     silently) so a report where zero controls were even corroborated
+//     shows that as a measured zero, not an absent field.
+//
+// A case/control outside this population never reaches the carve-out in
+// production either, so its margin says nothing about how M should be set --
+// including one whose vector arm found only ONE distinct subject
+// (VectorMargin nil): there is no competitor to measure a gap against, which
+// is a different situation from a measured, arbitrarily small gap, and
+// folding it in as "infinite margin" or "zero margin" would both be
+// fabricating a number this report never measured.
 //
 // M: the smallest value such that EVERY WRONG-top1 margin in the eligible
-// population falls STRICTLY below it -- one float64 ULP above the largest
-// observed wrong margin (math.Nextafter(max, +Inf); recallGateThreshold uses
-// the same boundary-inclusion idiom for tau, in the opposite direction --
-// there the boundary sample must clear the gate, here it must NOT). This is
-// a ZERO-TOLERANCE construction, not a percentile: CHAOS-3829's ratified
+// population (scored-wrong UNION control-corroborated) falls STRICTLY below
+// it -- one float64 ULP above the largest observed wrong margin
+// (math.Nextafter(max, +Inf); recallGateThreshold uses the same
+// boundary-inclusion idiom for tau, in the opposite direction -- there the
+// boundary sample must clear the gate, here it must NOT). This is a
+// ZERO-TOLERANCE construction, not a percentile: CHAOS-3829's ratified
 // sequencing gate requires 0 wrong commits before merge (the AC-3778-4
 // re-gate), so M is picked to reject every wrong-top1 case this report ever
 // measured, not merely most of them. A small WrongSampleSize means this
-// empirical bound is correspondingly less trustworthy -- WrongSampleSize is
-// reported precisely so a caller can judge that, rather than this function
-// silently padding the estimate with an invented safety margin.
+// empirical bound is correspondingly less trustworthy -- WrongSampleSize
+// (and its WrongSampleSizeFromControls breakdown) is reported precisely so a
+// caller can judge that, rather than this function silently padding the
+// estimate with an invented safety margin.
 //
 // FAIL CLOSED (ApplyReady=false, ThresholdM nil) when no wrong-top1 case was
 // measured in the eligible population at all: see ApplyReady's doc comment.
@@ -750,9 +815,6 @@ func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationO
 
 	var correctMargins, wrongMargins []float64
 	for _, c := range report.Cases {
-		if c.VectorSearchTruncated == nil || *c.VectorSearchTruncated {
-			continue
-		}
 		if c.VectorTop1 == nil || c.VectorTop2 == nil || c.VectorMargin == nil {
 			continue
 		}
@@ -766,21 +828,51 @@ func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationO
 		}
 	}
 
+	// Phase 2(c): the control-sourced half of the wrong-top1 UNION -- a
+	// corroborated control top-1 is wrong BY DEFINITION (no correct subject
+	// exists for it to match). Every counter here is recorded
+	// unconditionally, per team-lead's explicit "record as a measured fact,
+	// not silently" instruction.
+	controlsInReport := len(report.ControlCases)
+	controlsWithVectorArmData, controlsCorroborated, controlsCorroboratedWithoutMargin := 0, 0, 0
+	wrongFromControls := 0
+	for _, c := range report.ControlCases {
+		if c.VectorTop1 == nil {
+			continue
+		}
+		controlsWithVectorArmData++
+		if !c.VectorTop1.Corroborated {
+			continue
+		}
+		controlsCorroborated++
+		if c.VectorTop2 == nil || c.VectorMargin == nil {
+			controlsCorroboratedWithoutMargin++
+			continue
+		}
+		wrongMargins = append(wrongMargins, *c.VectorMargin)
+		wrongFromControls++
+	}
+
 	if len(correctMargins)+len(wrongMargins) == 0 {
 		return MarginCalibrationResult{}, ErrNoMarginSamples
 	}
 
 	result := MarginCalibrationResult{
-		SafetyMeasured:    len(wrongMargins) > 0,
-		ReachMeasured:     len(correctMargins) > 0,
-		CorrectSampleSize: len(correctMargins),
-		WrongSampleSize:   len(wrongMargins),
+		SafetyMeasured:                    len(wrongMargins) > 0,
+		ReachMeasured:                     len(correctMargins) > 0,
+		CorrectSampleSize:                 len(correctMargins),
+		WrongSampleSize:                   len(wrongMargins),
+		WrongSampleSizeFromControls:       wrongFromControls,
+		ControlsInReport:                  controlsInReport,
+		ControlsWithVectorArmData:         controlsWithVectorArmData,
+		ControlsCorroborated:              controlsCorroborated,
+		ControlsCorroboratedWithoutMargin: controlsCorroboratedWithoutMargin,
 	}
 
 	if !result.SafetyMeasured {
 		result.Note = fmt.Sprintf(
-			"M UNMEASURED: no wrong-top1 case was found in the eligible population (%d correct-top1 case(s), 0 wrong-top1) -- ThresholdM cannot be validated against a single wrong commit without vacuously trusting an empty sample. Re-run the oracle harness against a larger/different corpus slice, or size M by hand from a larger offline sample.",
-			result.CorrectSampleSize,
+			"M UNMEASURED: no wrong-top1 case was found in the eligible population (%d correct-top1 case(s), 0 wrong-top1; %d/%d controls corroborated) -- ThresholdM cannot be validated against a single wrong commit without vacuously trusting an empty sample. Re-run the oracle harness against a larger/different corpus slice, or size M by hand from a larger offline sample.",
+			result.CorrectSampleSize, controlsCorroborated, controlsInReport,
 		)
 		return result, nil
 	}
@@ -810,21 +902,22 @@ func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationO
 	if len(wrongMargins) < 3 {
 		smallSampleCaveat = fmt.Sprintf(" CAVEAT: only %d wrong-top1 sample(s) -- this bound may not generalize past this report's small sample; re-run against a broader corpus before treating M as final.", len(wrongMargins))
 	}
+	controlBreakdown := fmt.Sprintf(" (%d of %d wrong-top1 sample(s) from a corroborated control.)", wrongFromControls, len(wrongMargins))
 	switch {
 	case !result.ReachMeasured:
 		result.Note = fmt.Sprintf(
-			"M=%.6f rejects all %d measured wrong-top1 case(s); no correct-top1 case was measured in the eligible population, so AchievedReach is unmeasured (reported as 0).%s",
-			threshold, len(wrongMargins), smallSampleCaveat,
+			"M=%.6f rejects all %d measured wrong-top1 case(s); no correct-top1 case was measured in the eligible population, so AchievedReach is unmeasured (reported as 0).%s%s",
+			threshold, len(wrongMargins), controlBreakdown, smallSampleCaveat,
 		)
 	case clearing == 0:
 		result.Note = fmt.Sprintf(
-			"M=%.6f rejects all %d measured wrong-top1 case(s), but 0 of %d correct-top1 case(s) clear it -- this carve-out would have zero reach at the recommended M on this sample.%s",
-			threshold, len(wrongMargins), len(correctMargins), smallSampleCaveat,
+			"M=%.6f rejects all %d measured wrong-top1 case(s), but 0 of %d correct-top1 case(s) clear it -- this carve-out would have zero reach at the recommended M on this sample.%s%s",
+			threshold, len(wrongMargins), len(correctMargins), controlBreakdown, smallSampleCaveat,
 		)
 	default:
 		result.Note = fmt.Sprintf(
-			"M=%.6f rejects all %d measured wrong-top1 case(s); %d of %d correct-top1 case(s) (%.1f%%) clear it.%s",
-			threshold, len(wrongMargins), clearing, len(correctMargins), result.AchievedReach*100, smallSampleCaveat,
+			"M=%.6f rejects all %d measured wrong-top1 case(s); %d of %d correct-top1 case(s) (%.1f%%) clear it.%s%s",
+			threshold, len(wrongMargins), clearing, len(correctMargins), result.AchievedReach*100, controlBreakdown, smallSampleCaveat,
 		)
 	}
 	return result, nil
