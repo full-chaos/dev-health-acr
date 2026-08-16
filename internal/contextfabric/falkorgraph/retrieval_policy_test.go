@@ -17,10 +17,14 @@ import (
 // effective KEY changed (t2 -> t3), which is a real policy-outcome change
 // for any t3-tagged deployment (miss -> hit) even though the tau/efRuntime
 // VALUES themselves are unchanged -- see composition.go's
-// RetrievalPolicyVersion doc comment for the rp2 -> rp3 rationale.
-func TestRetrievalPolicyVersionBumpedByCHAOS3834(t *testing.T) {
-	if RetrievalPolicyVersion != "rp3" {
-		t.Fatalf("RetrievalPolicyVersion = %q, want rp3 (CHAOS-3834's calibrated entry moved from a t2 key to a t3 key at CHAOS-3835 integration, which per spec §6 T4's rule must bump the constant)", RetrievalPolicyVersion)
+// RetrievalPolicyVersion doc comment for the rp2 -> rp3 rationale. Bumped
+// again to "rp4" by CHAOS-3838 (spec L11/L13, §6 T8): read-side query
+// expansion changes what a repeated, byte-identical question retrieves,
+// without moving any node/vector stamp -- see composition.go's rp3 -> rp4
+// rationale.
+func TestRetrievalPolicyVersionBumpedByCHAOS3838(t *testing.T) {
+	if RetrievalPolicyVersion != "rp4" {
+		t.Fatalf("RetrievalPolicyVersion = %q, want rp4 (CHAOS-3838's read-side query expansion changes retrieval outcomes for the identical question text, which per spec §4 R3's rule must bump the constant)", RetrievalPolicyVersion)
 	}
 }
 

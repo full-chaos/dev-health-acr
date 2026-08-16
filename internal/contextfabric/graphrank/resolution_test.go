@@ -47,7 +47,7 @@ func TestResolveSubjectsRetainsSharedParentAheadOfHigherScoringObservationsUnder
 	doc2 := observationNode("node-doc-2", "document_2", "Ask Dev Postmortem Two", 0.92)
 	backend := &fakeGraphBackend{
 		searchResults: map[string][]CandidateNode{"Postmortem": {doc1, doc2}},
-		traverse: func(ctx context.Context, term string, observation CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
+		traverse: func(ctx context.Context, term string, observation CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			// Both documents traverse to the same shared parent.
 			return parentCandidate, ObservationParentFound
 		},

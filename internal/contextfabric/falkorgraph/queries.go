@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -211,67 +212,37 @@ func fulltextMatchedTermCount(text string, matchTerms []string) int {
 }
 
 // fulltextSearchNodes runs a lexical full-text search over Subject nodes'
-// search_text property, returning matches as CandidateNode with a real
-// relevance score (verified live: RediSearch scores vary meaningfully, not
-// a boolean match). Space in query is AND by RediSearch default (verified:
+// search_text property, bounded strictly at `limit`, with NO CHAOS-3838
+// lexicon expansion (codex round-6 P2, fix A): this is the PLAIN,
+// pre-CHAOS-3838 contract, and DiscoverContext (reader.go) is its ONLY
+// production caller. DiscoverContext calls edgesOfNode PER RETURNED NODE
+// immediately after this returns, so this function's own result size is a
+// direct multiplier on DiscoverContext's sequential graph-query cost --
+// letting it silently grow beyond `limit` for a lexicon-matching question
+// (e.g. one containing "pull request") would make that cost
+// question-content-dependent in a way DiscoverContext's own caller never
+// asked for or bounded against. See fulltextSearchNodesForResolution for
+// the union/lexicon-expansion-aware counterpart, used ONLY by
+// hybridSearchNodes' subject-RESOLUTION search (vector.go) -- the ONE path
+// this ticket's "expansion only ever adds, graphrank's downstream
+// authorization + final truncation is the one real cut" contract belongs
+// to. Every OTHER production caller of a fulltextSearchNodes-family
+// function must stay on THIS plain one; there are exactly two callers
+// total (reader.go's DiscoverContext, vector.go's hybridSearchNodes) and
+// this doc comment is the audit trail for that claim.
+//
+// Space in query is AND by RediSearch default (verified:
 // docs/design/context-fabric-falkordb-adapter.md §6.1) -- a multi-word
 // question passed as-is would almost always match nothing, so terms are
 // joined with "|" (OR) instead. Field names in a full-text query must never
 // come from caller text (an unrecognized @field: silently returns empty,
-// no error) -- this function never emits one.
-//
-// Codex P2b/P2d: orgID is a mandatory predicate on every read (ADR 0009:95
-// claims this as defense-in-depth even though the graph key already scopes
-// the whole database to one organization -- a second, cheap check that
-// costs nothing and catches a graphKey derivation bug or a stray
-// cross-tenant write before it can ever surface). limit is always this
-// adapter's own bounded int (clamped to a.config.MaxResults below), never
-// caller text, so inlining it as a literal into the query string is safe
-// -- see safeParams' doc for why untrusted values never take this path.
-//
-// D11 / AC-3778-0: the raw score RediSearch returns is unbounded above and
-// not directly usable as a confidence (see
-// fulltextRelevanceFromMatchedTerms' doc comment). Every candidate's
-// confidence is instead computed from exact matched-term coverage against
-// that SAME candidate's own search_text property, already present in this
-// query's own result row (see fulltextMatchedTermCount) -- no additional
-// queries. That coverage is written into each CandidateNode's Relevance,
-// never left in Score for graphrank.ResultConfidence to interpret raw.
-// Score is still populated alongside Relevance, for diagnostics/telemetry
-// only: any caller computing confidence uses ResultConfidence, which
-// always prefers a set Relevance.
-//
-// Codex R2-1 (truncation trap, round 2): the result LIMIT is still applied
-// server-side, in the Cypher itself -- bounding actual query cost, not just
-// the slice the caller sees -- but ONE MORE row than the caller's own
-// budget (queryLimit = limit+1) is requested, purely to detect whether the
-// corpus had more matches than the budget can show. If it did (more than
-// `limit` rows come back), the extra row is discarded immediately -- it
-// never becomes a candidate -- but every SURVIVING row from that call is
-// capped at fulltextRelevanceFloor, structurally below
-// graphrank.ResolveFromMergedCandidates' >= 0.72 lone-candidate gate.
-// fulltextRelevanceFromMatchedTerms is a pure, per-candidate function BY
-// DESIGN (Codex P1/P3) -- it cannot see a candidate the LIMIT dropped
-// before it ever ran, so "was this batch truncated" has to be answered one
-// level up, here, where the LIMIT is actually applied. This is the same
-// "fail toward ambiguous under genuine uncertainty" principle
-// TraverseObservationToSubject already applies to an errored traversal
-// (never toward "confirmed no parent") -- a truncated result set can never
-// tell auto-commit machinery "this candidate is genuinely unopposed",
-// because it might not be.
-//
-// The returned truncated bool is this function's own half of that contract
-// (ResolveDeps.Search's second return value): it does NOT itself decide
-// anything here (the per-row floor-capping above already handles the
-// simple case) -- it exists because a floor-capped candidate's cap can
-// still be erased downstream, either by graphrank.NodeCandidate's exact
-// label/name match override (which sets Confidence to 1.0 regardless of
-// Relevance) or by ResolveSubjects' own candidatesBySubject merge (an
-// untruncated call's full-strength entry for the SAME subject can replace
-// a truncated call's floor-capped one). Codex round-3 review of this fix
-// concluded truncation has to be tracked as a property of the whole
-// resolution, in graphrank.ResolveFromMergedCandidates, not patched away
-// per-candidate here -- see that function's searchTruncated parameter.
+// no error) -- this function never emits one. Codex P2b/P2d: orgID is a
+// mandatory predicate on every read, enforced by runFulltextQuery, the ONE
+// shared query-building/row-conversion authority this function and
+// fulltextSearchNodesForResolution both delegate to -- see that function's
+// own doc comment for the truncation-sentinel (Codex R2-1) and
+// matched-term-coverage confidence (D11 / AC-3778-0) rationale this
+// function inherits unchanged.
 func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text string, limit int, temporal temporalFilter) ([]graphrank.CandidateNode, bool, error) {
 	terms := tokenizeForFulltext(text)
 	if len(terms) == 0 {
@@ -280,28 +251,206 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	if limit <= 0 || limit > a.config.MaxResults {
 		limit = a.config.MaxResults
 	}
-	// matchTerms drives matched-term coverage/termCount -- fulltextWords'
-	// more aggressive splitter applied directly to the ORIGINAL question
-	// text (Codex R2-2), independently of terms (which stays
-	// RediSearch-query-syntax-safe, for the Cypher query string below).
 	matchTerms := fulltextWords(text)
 	termCount := len(matchTerms)
 	query := strings.Join(terms, "|")
+	return a.runFulltextQuery(ctx, key, orgID, query, limit, temporal, matchTerms, termCount, "")
+}
+
+// fulltextSearchNodesForResolution is fulltextSearchNodes' CHAOS-3838 (spec
+// L13) union/lexicon-expansion-aware counterpart -- codex round-6 P2, fix
+// A: subject RESOLUTION's "over-return, let graphrank's downstream
+// authorization + final truncation do the one real cut" contract is a
+// SUBJECT-RESOLUTION-SPECIFIC feature, not a property of fulltextSearchNodes
+// in general. vector.go's hybridSearchNodes (subject resolution, one call
+// per interpreted term) is its ONLY caller; DiscoverContext stays on the
+// plain fulltextSearchNodes above. See that function's own doc comment for
+// why the split matters (DiscoverContext's per-node edgesOfNode cost).
+//
+// matchTerms/termCount anchor to the ORIGINAL text (CHAOS-3838 spec L13):
+// confidence is a promise about how much of THIS query's own terms a
+// candidate covers; widening the denominator with synonym words the caller
+// never typed would dilute -- never improve -- the coverage ratio of every
+// candidate that matches only the original term. Expansion is allowed to
+// find MORE candidates; it must never change how confidently an
+// already-findable one scores.
+func (a *Adapter) fulltextSearchNodesForResolution(ctx context.Context, key, orgID, text string, limit int, temporal temporalFilter) ([]graphrank.CandidateNode, bool, error) {
+	terms := tokenizeForFulltext(text)
+	if len(terms) == 0 {
+		return nil, false, nil
+	}
+	if limit <= 0 || limit > a.config.MaxResults {
+		limit = a.config.MaxResults
+	}
+	matchTerms := fulltextWords(text)
+	termCount := len(matchTerms)
+
+	// The BASE query, byte-identical to fulltextSearchNodes' own shape:
+	// exactly `terms`, exactly `limit`, its own truncation sentinel, no
+	// kind filter.
+	baseQuery := strings.Join(terms, "|")
+	baseCandidates, baseTruncated, err := a.runFulltextQuery(ctx, key, orgID, baseQuery, limit, temporal, matchTerms, termCount, "")
+	if err != nil {
+		return nil, false, err
+	}
+
+	additions := lexiconAdditions(text)
+	if len(additions) == 0 {
+		// The overwhelmingly common case: no lexicon phrase matched, so
+		// this call never runs a second query at all -- same one round
+		// trip as before this ticket.
+		return baseCandidates, baseTruncated, nil
+	}
+
+	// codex round-3 P2 (fix C) + round-4 P1 (fix A layer 1, kind-scoped
+	// batches): a widened single query is NOT a union under a server-side
+	// LIMIT -- synonym-heavy rows can out-rank and displace an
+	// already-correct base hit past the limit+1 cutoff, so expansion could
+	// REMOVE a previously-resolvable subject instead of only adding
+	// candidates. Fix: base is never touched again -- every expansion BATCH
+	// (the kind-agnostic additions, plus one per distinct targetKind --
+	// lexiconExpansionBatches, in a FIXED deterministic order) runs as its
+	// own SEPARATE query, deduplicated by subject UUID against everything
+	// already collected.
+	//
+	// codex round-4 P2 (fix B): an earlier version of this union additionally
+	// capped each batch's CONTRIBUTION to "however much of `limit` base
+	// hadn't already used" -- computed from base's RAW candidate count,
+	// BEFORE authorization. falkorgraph has no principal/scope here at all
+	// (authorization is graphrank.NodeCandidate's job, one layer up, per
+	// candidate); a base batch whose top rows are mostly UNAUTHORIZED for
+	// THIS caller (a repo/project/team-scoped principal) would still count
+	// as "using" that capacity here, silently discarding authorized
+	// expansion rows that would otherwise have survived -- an emptied
+	// resolution despite genuinely visible matches. This mirrors the SAME
+	// class of mistake DiscoverContext's hopWalk/AdmitEdges doc comments
+	// already name and reject ("collection is bounded by a generous
+	// superset... NEVER by the final per-request admission budget... the
+	// ONE and ONLY truncation happens after ranking"): the fix is to stop
+	// trying to split a tight budget across sources HERE, before
+	// authorization can even run, and instead let every source contribute
+	// its own full, honestly-bounded (limit+1-sentinelled) set -- graphrank's
+	// NodeCandidate filters unauthorized rows per candidate, and
+	// ResolveFromMergedCandidates' own `max` truncation (request.Options.MaxSubjectCandidates)
+	// is the ONE final cut, downstream, after both authorization AND
+	// cross-source/cross-term ranking. This is strictly SAFER than the
+	// capped version, never less correct: it can only ever surface a
+	// genuine, authorized candidate the capped version would have dropped.
+	// This over-return-then-cut-downstream contract is EXACTLY why this
+	// logic lives in a separate function from fulltextSearchNodes -- codex
+	// round-6 P2 fix A: DiscoverContext must never inherit it.
+	//
+	// codex round-5 P2 (fix), round-6 P2 fix B closes it fully: a batch's
+	// OWN top-ranked rows can overlap heavily with candidates ALREADY
+	// collected -- not just base, but any PRIOR batch's newly-added rows
+	// too (a "pull request"-matching question can trigger more than one
+	// lexicon group) -- and that batch's own limit+1 internal truncation
+	// would discard genuinely NEW rows ranked just past the overlap BEFORE
+	// this loop ever got a chance to dedup them out of the way. The
+	// invariant this fetchBudget enforces: at the START of EACH batch's own
+	// query, its fetch window must cover `limit` NOT-YET-SEEN rows if that
+	// many exist, regardless of what already filled `seen` -- overlap with
+	// anything already collected can never exceed len(seen) at that exact
+	// moment (there is nothing else it could be overlap WITH), so
+	// `limit + len(seen)` (before that batch's own +1 sentinel row)
+	// guarantees it. seen grows incrementally as each batch's genuinely-new
+	// rows are added below, so len(seen) is always THIS batch's own correct,
+	// up-to-date budget input, not a value computed once up front.
+	seen := make(map[string]bool, len(baseCandidates))
+	for _, c := range baseCandidates {
+		seen[c.UUID] = true
+	}
+	result := baseCandidates
+	truncated := baseTruncated
+	for _, batch := range lexiconExpansionBatches(additions) {
+		fetchBudget := limit + len(seen)
+		query := lexiconExpansionQuery(batch.additions)
+		batchCandidates, batchTruncated, err := a.runFulltextQuery(ctx, key, orgID, query, fetchBudget, temporal, matchTerms, termCount, batch.kind)
+		if err != nil {
+			return nil, false, err
+		}
+		// batchTruncated is this batch's OWN (widened) limit+1 server-side
+		// sentinel -- unaffected by authorization, which this layer has no
+		// visibility into at all (same as the pre-CHAOS-3838 base query
+		// always was).
+		truncated = truncated || batchTruncated
+		added := 0
+		for _, c := range batchCandidates {
+			if seen[c.UUID] {
+				continue
+			}
+			if added >= limit {
+				// More than `limit` genuinely NEW (not-yet-seen) candidates
+				// existed in this batch's widened window -- this batch's
+				// own natural per-source budget was exceeded, a real
+				// competitor may have gone unshown.
+				truncated = true
+				continue
+			}
+			seen[c.UUID] = true
+			result = append(result, c)
+			added++
+		}
+	}
+	return result, truncated, nil
+}
+
+// runFulltextQuery issues ONE RediSearch fulltext query and converts its
+// rows into scored CandidateNode, applying the SAME limit+1 truncation
+// sentinel and matched-term-coverage confidence math fulltextSearchNodes
+// has always used (Codex R2-1 / D11 / AC-3778-0 -- see that function's own
+// doc comment for the full rationale). Extracted so fulltextSearchNodes'
+// base query and every lexicon-expansion batch (codex round-3 P2 / round-4
+// P1, fix C / fix A) run through the exact same row-to-candidate
+// conversion and can never independently drift on it -- the calls differ
+// ONLY in which RediSearch query string, which optional kind filter, and
+// which rows they see, never in how a row becomes a candidate.
+//
+// matchTerms/termCount are always the CALLER's original text's own words
+// (fulltextSearchNodes' matchTerms), passed straight through regardless of
+// which query string this particular call runs -- confidence stays a
+// promise about the original text on every call, base or expansion alike.
+//
+// kindFilter, when non-empty, restricts matches to nodes of exactly that
+// subject kind (codex round-4 P1, fix A layer 1) -- the mechanism a
+// kind-scoped lexicon group (domainLexiconGroups' targetKind) uses to stay
+// out of OTHER kinds' search_text entirely, closing the field-label
+// collision class rather than merely demoting its score.
+func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string, limit int, temporal temporalFilter, matchTerms []string, termCount int, kindFilter contextfabric.SubjectKind) ([]graphrank.CandidateNode, bool, error) {
+	kindPredicate := ""
+	params := temporal.bind(map[string]interface{}{"query": query, "org": orgID})
+	if kindFilter != "" {
+		kindPredicate = fmt.Sprintf(" AND node.%s = $kind", propKind)
+		params["kind"] = string(kindFilter)
+	}
 	// Codex R2-1: request one more row than the caller's budget so a
 	// truncated result set can be told apart from a genuinely complete one
-	// (see this function's doc comment).
+	// (see fulltextSearchNodes' doc comment).
+	//
+	// codex round-4 P2 (fix C): ORDER BY score alone lets FalkorDB break a
+	// tie AT the LIMIT boundary arbitrarily -- verified live that two
+	// otherwise-identical rows with equal scores are not guaranteed a
+	// stable relative order across repeated calls, so a resolution sitting
+	// exactly at the cutoff could return a DIFFERENT candidate/truncation
+	// set for the SAME request. Two deterministic tie-break keys (subject
+	// kind, then canonical id -- both always present, both already part of
+	// every returned node) make the ORDER total, so a repeated identical
+	// call always returns the identical result -- required for CHAOS-3782
+	// answer reuse and for any measurement harness that expects
+	// reproducible numbers. Applies to base and every expansion batch
+	// alike, since they all share this one query-building authority.
 	cypher := fmt.Sprintf(
 		"CALL db.idx.fulltext.queryNodes('%s', $query) YIELD node, score "+
-			"WHERE node.%s = $org%s "+
-			"RETURN node, score ORDER BY score DESC LIMIT %d",
-		labelSubject, propOrgID, temporal.predicate("node"), limit+1,
+			"WHERE node.%s = $org%s%s "+
+			"RETURN node, score ORDER BY score DESC, node.%s ASC, node.%s ASC LIMIT %d",
+		labelSubject, propOrgID, kindPredicate, temporal.predicate("node"), propKind, propCanonicalID, limit+1,
 	)
-	rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"query": query, "org": orgID}), true)
+	rows, err := a.api.query(ctx, key, cypher, params, true)
 	if err != nil {
 		return nil, false, safeDependencyError("search context graph", err)
 	}
 	// truncated reports whether the corpus actually had MORE than `limit`
-	// matches -- never whether it merely equaled it.
+	// matches for THIS query -- never whether it merely equaled it.
 	truncated := len(rows) > limit
 	if truncated {
 		rows = rows[:limit]
@@ -325,6 +474,86 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 		candidates = append(candidates, candidate)
 	}
 	return candidates, truncated, nil
+}
+
+// lexiconExpansionBatch is one lexicon-expansion search: either the
+// kind-agnostic additions (kind == "") or one distinct targetKind's own
+// additions (codex round-4 P1, fix A layer 1).
+type lexiconExpansionBatch struct {
+	kind      contextfabric.SubjectKind
+	additions []lexiconAddition
+}
+
+// lexiconExpansionBatches partitions additions into a FIXED, deterministic
+// sequence of batches: the kind-agnostic batch first (if any present), then
+// one batch per distinct targetKind present, sorted by kind name -- so two
+// calls over the same additions always produce the same batch order, which
+// fulltextSearchNodes' union step depends on for reproducible results
+// (codex round-4 P2's determinism concern applies to this ordering too,
+// not only to a single query's own ORDER BY).
+func lexiconExpansionBatches(additions []lexiconAddition) []lexiconExpansionBatch {
+	var global []lexiconAddition
+	byKind := make(map[contextfabric.SubjectKind][]lexiconAddition)
+	var kinds []string
+	for _, addition := range additions {
+		if addition.targetKind == "" {
+			global = append(global, addition)
+			continue
+		}
+		if _, exists := byKind[addition.targetKind]; !exists {
+			kinds = append(kinds, string(addition.targetKind))
+		}
+		byKind[addition.targetKind] = append(byKind[addition.targetKind], addition)
+	}
+	sort.Strings(kinds)
+	batches := make([]lexiconExpansionBatch, 0, 1+len(kinds))
+	if len(global) > 0 {
+		batches = append(batches, lexiconExpansionBatch{additions: global})
+	}
+	for _, kind := range kinds {
+		k := contextfabric.SubjectKind(kind)
+		batches = append(batches, lexiconExpansionBatch{kind: k, additions: byKind[k]})
+	}
+	return batches
+}
+
+// lexiconExpansionQuery builds the RediSearch query string for ONE
+// lexicon-expansion batch's synonym additions (never re-including the
+// caller's own terms -- fulltextSearchNodes' base query already covers
+// those).
+//
+// codex round-3 P1 (fix B): a multi-word synonym ("pull request") must
+// never be OR-tokenized into independent single-word disjuncts -- doing so
+// let a candidate containing ONLY "request" (nothing about pull requests at
+// all) read as a lexical hit for the "PR" group, purely because "request"
+// happened to be one of the OR-joined words. A single-word synonym has no
+// such hazard (the word itself IS the whole concept), so it stays an
+// ordinary OR term via tokenizeForFulltext, identically to how a caller's
+// own term is treated. A multi-word synonym instead becomes a RediSearch
+// EXACT PHRASE clause (double-quoted), which requires the words to appear
+// adjacently and in order -- injection-safe by construction, not merely by
+// escaping: every element of additions is a domainLexiconGroups literal
+// (compileLexicon's init-time validation panics if one ever contains a
+// literal `"`), never caller-supplied text, so there is no untrusted value
+// on this path for a quote to smuggle anything through.
+func lexiconExpansionQuery(additions []lexiconAddition) string {
+	parts := make([]string, 0, len(additions))
+	for _, addition := range additions {
+		if len(strings.Fields(addition.phrase)) <= 1 {
+			parts = append(parts, tokenizeForFulltext(addition.phrase)...)
+			continue
+		}
+		parts = append(parts, lexiconPhraseClause(addition.phrase))
+	}
+	return strings.Join(parts, "|")
+}
+
+// lexiconPhraseClause renders a multi-word lexicon phrase as a RediSearch
+// exact-phrase clause. See lexiconExpansionQuery's doc comment for the
+// injection-safety argument -- phrase MUST be a domainLexiconGroups
+// literal, never caller text.
+func lexiconPhraseClause(phrase string) string {
+	return `"` + phrase + `"`
 }
 
 // tokenizeForFulltext splits free text into RediSearch-safe search terms.

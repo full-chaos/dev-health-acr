@@ -104,6 +104,46 @@ const (
 	capJoinedTags        = 440
 )
 
+// Field-label literals, spelled as named constants exactly once (codex
+// round-4 P1, fix A layer 2): every template below composes a structured
+// field with one of these EXACT label strings via labeledField, and this
+// is the ONE place they are spelled. lexicon.go's init-time collision guard
+// (validateNoLexiconLabelCollisions) reads searchTextFieldLabelWords below
+// as its single authority for "what word does a fulltext match on this
+// text actually mean STRUCTURALLY" -- it never hand-maintains a second
+// list that could silently drift from what these templates actually emit.
+const (
+	fieldLabelType     = "type: "
+	fieldLabelLabels   = "labels: "
+	fieldLabelProject  = "project: "
+	fieldLabelTeam     = "team: "
+	fieldLabelRepo     = "repo: "
+	fieldLabelBranch   = "branch: "
+	fieldLabelSeverity = "severity: "
+	fieldLabelStatus   = "status: "
+	fieldLabelProjects = "projects: "
+	fieldLabelProvider = "provider: "
+	fieldLabelState    = "state: "
+	fieldLabelTags     = "tags: "
+)
+
+// searchTextFieldLabelWords is the bare-word form of every field-label
+// constant above (no trailing ": "), derived once here rather than
+// hand-typed a second time anywhere else in the package.
+var searchTextFieldLabelWords = fieldLabelWords(
+	fieldLabelType, fieldLabelLabels, fieldLabelProject, fieldLabelTeam,
+	fieldLabelRepo, fieldLabelBranch, fieldLabelSeverity, fieldLabelStatus,
+	fieldLabelProjects, fieldLabelProvider, fieldLabelState, fieldLabelTags,
+)
+
+func fieldLabelWords(labels ...string) []string {
+	words := make([]string, len(labels))
+	for i, label := range labels {
+		words[i] = strings.TrimSuffix(strings.TrimSpace(label), ":")
+	}
+	return words
+}
+
 // subjectSearchText composes one entity's search text. Kinds without a
 // declared template (organization, decision, and metric among them) keep
 // the pre-CHAOS-3833 composition (entitySearchText: Label + Aliases +
@@ -186,11 +226,11 @@ func workItemSearchText(entity contextfabric.EntityProjection) string {
 			retrievalHandles(entity),
 			capRunes(entity.Subject.Label, capWorkItemTitle)),
 		joinFields(" ",
-			labeledField("type: ", capRunes(propText(entity, "type"), capWorkItemType)),
-			labeledField("labels: ", capRunes(propText(entity, "labels"), capJoinedLabels))),
+			labeledField(fieldLabelType, capRunes(propText(entity, "type"), capWorkItemType)),
+			labeledField(fieldLabelLabels, capRunes(propText(entity, "labels"), capJoinedLabels))),
 		joinFields(" ",
-			labeledField("project: ", capRunes(propText(entity, "project_name"), capProjectName)),
-			labeledField("team: ", capRunes(propText(entity, "native_team_key"), capTeamKey))),
+			labeledField(fieldLabelProject, capRunes(propText(entity, "project_name"), capProjectName)),
+			labeledField(fieldLabelTeam, capRunes(propText(entity, "native_team_key"), capTeamKey))),
 	)
 }
 
@@ -222,8 +262,8 @@ func pullRequestSearchText(entity contextfabric.EntityProjection, includeBodies 
 	return composeLines(
 		head,
 		joinFields(" ",
-			labeledField("repo: ", capRunes(propText(entity, "repo"), capRepoSlug)),
-			labeledField("branch: ", capRunes(propText(entity, "branch"), capBranch))),
+			labeledField(fieldLabelRepo, capRunes(propText(entity, "repo"), capRepoSlug)),
+			labeledField(fieldLabelBranch, capRunes(propText(entity, "branch"), capBranch))),
 		retrievalHandles(entity),
 		body,
 	)
@@ -245,7 +285,7 @@ func deploymentSearchText(entity contextfabric.EntityProjection) string {
 	}
 	return composeLines(
 		joinFields(" ", head, capRunes(propText(entity, "release_ref"), capReleaseRef)),
-		labeledField("repo: ", capRunes(propText(entity, "repo"), capRepoSlug)),
+		labeledField(fieldLabelRepo, capRunes(propText(entity, "repo"), capRepoSlug)),
 		retrievalHandles(entity),
 	)
 }
@@ -289,8 +329,8 @@ func ciRunSearchText(entity contextfabric.EntityProjection) string {
 		joinFields(" ",
 			"CI run",
 			ciRunPipelineNameField(entity),
-			labeledField("branch: ", ciRunBranchField(entity)),
-			labeledField("repo: ", capRunes(propText(entity, "repo"), capRepoSlug))),
+			labeledField(fieldLabelBranch, ciRunBranchField(entity)),
+			labeledField(fieldLabelRepo, capRunes(propText(entity, "repo"), capRepoSlug))),
 		retrievalHandles(entity),
 	)
 }
@@ -309,7 +349,7 @@ func pullRequestReviewSearchText(entity contextfabric.EntityProjection) string {
 	}
 	return composeLines(
 		head,
-		labeledField("repo: ", capRunes(propText(entity, "repo"), capRepoSlug)),
+		labeledField(fieldLabelRepo, capRunes(propText(entity, "repo"), capRepoSlug)),
 		retrievalHandles(entity),
 	)
 }
@@ -330,8 +370,8 @@ func incidentSearchText(entity contextfabric.EntityProjection, includeBodies boo
 	return composeLines(
 		capRunes(entity.Subject.Label, capIncidentTitle),
 		joinFields(" ",
-			labeledField("severity: ", capRunes(propText(entity, "severity"), capEnum)),
-			labeledField("status: ", capRunes(propText(entity, "status"), capEnum))),
+			labeledField(fieldLabelSeverity, capRunes(propText(entity, "severity"), capEnum)),
+			labeledField(fieldLabelStatus, capRunes(propText(entity, "status"), capEnum))),
 		retrievalHandles(entity),
 		description,
 	)
@@ -348,7 +388,7 @@ func teamSearchText(entity contextfabric.EntityProjection) string {
 		capRunes(entity.Subject.Label, capTeamName),
 		retrievalHandles(entity),
 		capRunes(propText(entity, "description"), capTeamDescription),
-		labeledField("projects: ", capRunes(propText(entity, "project_keys"), capJoinedProjectKeys)),
+		labeledField(fieldLabelProjects, capRunes(propText(entity, "project_keys"), capJoinedProjectKeys)),
 	)
 }
 
@@ -369,8 +409,8 @@ func projectSearchText(entity contextfabric.EntityProjection) string {
 		capRunes(entity.Subject.Label, capProjectTitle),
 		retrievalHandles(entity),
 		joinFields(" ",
-			labeledField("provider: ", capRunes(strings.Join(graphrank.UniqueSorted(providers), " "), capProviderNames)),
-			labeledField("state: ", capRunes(propText(entity, "state"), capEnum))),
+			labeledField(fieldLabelProvider, capRunes(strings.Join(graphrank.UniqueSorted(providers), " "), capProviderNames)),
+			labeledField(fieldLabelState, capRunes(propText(entity, "state"), capEnum))),
 	)
 }
 
@@ -382,7 +422,7 @@ func repositorySearchText(entity contextfabric.EntityProjection) string {
 	return composeLines(
 		capRunes(entity.Subject.Label, capRepoSlug),
 		retrievalHandles(entity),
-		labeledField("tags: ", capRunes(propText(entity, "tags"), capJoinedTags)),
+		labeledField(fieldLabelTags, capRunes(propText(entity, "tags"), capJoinedTags)),
 	)
 }
 

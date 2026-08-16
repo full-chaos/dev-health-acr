@@ -41,7 +41,19 @@ import (
 // genuinely changes from this changeset (miss -> hit), which is exactly
 // the "vectors remain valid, only stored answers need invalidating"
 // scenario this constant exists to signal.
-const RetrievalPolicyVersion = "rp3"
+//
+// CHAOS-3838 (spec L11/L13, §6 T8) bumped this rp3 -> rp4: read-side query
+// expansion (union vector search over the question in addition to each
+// term; domain-lexicon widening of the fulltext OR-query and, per
+// applyLexiconToVectorArm, the embedded query text) changes WHAT a repeated,
+// byte-identical question retrieves, exactly the "tau/K/HNSW reinterpret
+// existing vectors" scenario this constant exists for -- no vector or node
+// stamp moves (this is query-time only, nothing about what gets embedded
+// and stored at projection time changes), but a stored answer computed
+// under weaker retrieval (fewer/no lexical proposals on a paraphrase-heavy
+// question) must not silently shadow a newly-achievable, better-corroborated
+// commit for the identical question text.
+const RetrievalPolicyVersion = "rp4"
 
 // EmbedRetrievalIdentityNone is the persisted embed-retrieval-identity value
 // for a deployment with NO embedder configured. A literal, never the empty

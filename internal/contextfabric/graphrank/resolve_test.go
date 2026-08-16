@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -33,9 +34,20 @@ type fakeGraphBackend struct {
 	// at all", truncated means "there were more results than the budget could
 	// show". Defaults to false.
 	searchDegraded    bool
-	traverse          func(ctx context.Context, term string, observation CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal)
+	traverse          func(ctx context.Context, term string, observation CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, ObservationTraversal)
 	isInternal        func(contextfabric.SubjectRef) bool
 	traversalDegraded []int
+
+	// CHAOS-3838 (spec L11) SearchQuestion fixture. enableSearchQuestion
+	// defaults to false, so every pre-existing test in this file -- which
+	// never sets it -- gets ResolveDeps.SearchQuestion == nil, exactly the
+	// pre-ticket wiring, and is completely unaffected by this addition.
+	enableSearchQuestion    bool
+	searchQuestionResults   map[string][]CandidateNode
+	searchQuestionCalls     []string
+	searchQuestionErr       error
+	searchQuestionTruncated bool
+	searchQuestionDegraded  bool
 }
 
 func (f *fakeGraphBackend) deps() ResolveDeps {
@@ -45,11 +57,11 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 	}
 	traverse := f.traverse
 	if traverse == nil {
-		traverse = func(context.Context, string, CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
+		traverse = func(context.Context, string, CandidateNode, bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, ObservationNoParent
 		}
 	}
-	return ResolveDeps{
+	deps := ResolveDeps{
 		ExactHint: func(ctx context.Context, subject contextfabric.SubjectRef) (CandidateNode, bool, error) {
 			node, ok := f.exactHints[SubjectKey(subject)]
 			return node, ok, nil
@@ -67,6 +79,16 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 			f.traversalDegraded = append(f.traversalDegraded, count)
 		},
 	}
+	if f.enableSearchQuestion {
+		deps.SearchQuestion = func(ctx context.Context, question string, limit int) ([]CandidateNode, bool, bool, error) {
+			f.searchQuestionCalls = append(f.searchQuestionCalls, question)
+			if f.searchQuestionErr != nil {
+				return nil, false, false, f.searchQuestionErr
+			}
+			return f.searchQuestionResults[question], f.searchQuestionTruncated, f.searchQuestionDegraded, nil
+		}
+	}
+	return deps
 }
 
 func testRequest() contextfabric.InvestigationRequest {
@@ -292,7 +314,7 @@ func TestResolveSubjectsReportsTraversalDegradationThroughTelemetry(t *testing.T
 	document := observationNode("node-document-erroring", "document_error", "Ask Dev readiness review", 0.9)
 	backend := &fakeGraphBackend{
 		searchResults: map[string][]CandidateNode{"readiness review": {document}},
-		traverse: func(context.Context, string, CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
+		traverse: func(context.Context, string, CandidateNode, bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, ObservationTraversalErrored
 		},
 	}
@@ -317,7 +339,7 @@ func TestResolveSubjectsExactHintPropagatesBackendError(t *testing.T) {
 			return CandidateNode{}, false, errors.New("transient backend failure")
 		},
 		Search: func(context.Context, string, int) ([]CandidateNode, bool, bool, error) { return nil, false, false, nil },
-		Traverse: func(context.Context, string, CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
+		Traverse: func(context.Context, string, CandidateNode, bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, ObservationNoParent
 		},
 		IsInternal: noInternalSubjects,
@@ -326,5 +348,413 @@ func TestResolveSubjectsExactHintPropagatesBackendError(t *testing.T) {
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "workbench"}}
 	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps); err == nil {
 		t.Fatal("ResolveSubjects() error = nil, want the ExactHint backend failure propagated")
+	}
+}
+
+// --- CHAOS-3838 (spec L11 -- ResolveDeps.SearchQuestion) ---
+
+// TestResolveSubjects_SearchQuestionNilIsSkippedSilently pins the backward
+// compatibility contract: a backend that leaves SearchQuestion nil (every
+// pre-CHAOS-3838 backend, and every OTHER test in this file) must never be
+// called into and must never affect the resolution -- ResolveDeps.SearchQuestion's
+// own doc comment says nil means "found nothing", never an error.
+func TestResolveSubjects_SearchQuestionNilIsSkippedSilently(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}}
+	request := testRequest() // carries a non-empty Question
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("ask dev"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 0 || len(resolution.Committed) != 0 {
+		t.Fatalf("resolution = %#v, want empty -- nil SearchQuestion must contribute nothing", resolution)
+	}
+}
+
+// TestResolveSubjects_SearchQuestionRunsExactlyOncePerResolution is the
+// CHAOS-3838 budget proof: SearchQuestion must be called AT MOST ONCE per
+// ResolveSubjects call, regardless of how many subject terms it resolves --
+// "one extra provider call per resolution", never one per term.
+func TestResolveSubjects_SearchQuestionRunsExactlyOncePerResolution(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        map[string][]CandidateNode{},
+	}
+	request := testRequest()
+	interpreted := testInterpreted("alpha", "beta", "gamma")
+	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted, backend.deps()); err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(backend.searchCalls) != 3 {
+		t.Fatalf("searchCalls = %#v, want one Search() call per of the 3 terms", backend.searchCalls)
+	}
+	if len(backend.searchQuestionCalls) != 1 {
+		t.Fatalf("searchQuestionCalls = %#v, want exactly 1 regardless of term count", backend.searchQuestionCalls)
+	}
+	if backend.searchQuestionCalls[0] != request.Question {
+		t.Fatalf("searchQuestionCalls[0] = %q, want the raw request.Question %q", backend.searchQuestionCalls[0], request.Question)
+	}
+}
+
+// TestResolveSubjects_SearchQuestionSkippedForBlankQuestion proves a
+// question that trims to empty never reaches the backend -- there is
+// nothing meaningful to embed, so no provider call should be spent.
+func TestResolveSubjects_SearchQuestionSkippedForBlankQuestion(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{enableSearchQuestion: true}
+	request := testRequest()
+	request.Question = "   "
+	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps()); err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(backend.searchQuestionCalls) != 0 {
+		t.Fatalf("searchQuestionCalls = %#v, want none for a blank question", backend.searchQuestionCalls)
+	}
+}
+
+// TestResolveSubjects_SearchQuestionFindsASubjectNoTermAlone proves the
+// union actually widens the candidate set: a subject only the question-level
+// pass proposes (no per-term Search call finds it) must still surface in the
+// resolution, through the identical NodeCandidate/MergeCandidates path a
+// term-level find would use.
+func TestResolveSubjects_SearchQuestionFindsASubjectNoTermAlone(t *testing.T) {
+	t.Parallel()
+	onlyViaQuestion := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_paraphrase", Label: "Paraphrase Target"}
+	request := testRequest()
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchQuestionResults: map[string][]CandidateNode{
+			request.Question: {candidateNode(onlyViaQuestion.Kind, onlyViaQuestion.CanonicalID, onlyViaQuestion.Label, 0.65, "*")},
+		},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 1 || resolution.Candidates[0].Subject != onlyViaQuestion {
+		t.Fatalf("resolution.Candidates = %#v, want the question-only subject present", resolution.Candidates)
+	}
+}
+
+// TestResolveSubjects_SearchQuestionDegradedFoldsIntoResolution proves the
+// question-level pass's own degraded signal is folded into
+// resolution.RetrievalDegraded exactly like a per-term Search call's would
+// be, even when every per-term call is clean.
+func TestResolveSubjects_SearchQuestionDegradedFoldsIntoResolution(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{
+		enableSearchQuestion:   true,
+		searchResults:          map[string][]CandidateNode{"alpha": {}},
+		searchQuestionDegraded: true,
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if !resolution.RetrievalDegraded {
+		t.Fatal("resolution.RetrievalDegraded = false, want true -- the question-level pass alone reported a missing mechanism")
+	}
+}
+
+// TestResolveSubjects_SearchQuestionTruncationBlocksAutoCommit proves the
+// question-level pass's own truncated signal is resolution-wide authority
+// exactly like a per-term Search call's would be (ResolveFromMergedCandidates'
+// searchTruncated parameter): a single, otherwise-auto-committing candidate
+// found ONLY via the question-level pass must fall to ambiguous when that
+// pass itself reports truncation, because a genuinely competing candidate
+// may have been cut off before ResolveSubjects ever saw it.
+func TestResolveSubjects_SearchQuestionTruncationBlocksAutoCommit(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_only_question", Label: "Only Question"}
+	request := testRequest()
+	// Confidence 0.9, non-exact (term text "alpha" != the node's own label)
+	// -- clears the >= 0.72 lone-candidate gate on relevance alone, so this
+	// commits unless truncation intervenes.
+	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.9, "*")
+	node.Mechanism = contextfabric.MatchVector
+	backend := &fakeGraphBackend{
+		enableSearchQuestion:    true,
+		searchResults:           map[string][]CandidateNode{"alpha": {}},
+		searchQuestionResults:   map[string][]CandidateNode{request.Question: {node}},
+		searchQuestionTruncated: true,
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want no auto-commit -- the question-level pass reported truncation, so a competing candidate may have been cut off", resolution.Committed)
+	}
+	if resolution.ClarificationPrompt == "" {
+		t.Fatal("resolution.ClarificationPrompt = \"\", want a clarification fallback for the truncated, otherwise-strong single candidate")
+	}
+}
+
+// TestResolveSubjects_SearchQuestionPropagatesBackendError proves a genuine
+// SearchQuestion failure (as opposed to "found nothing") surfaces as an
+// error, exactly like a per-term Search failure does -- resolve.go must not
+// swallow it.
+func TestResolveSubjects_SearchQuestionPropagatesBackendError(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchQuestionErr:    errors.New("transient embed failure"),
+	}
+	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps()); err == nil {
+		t.Fatal("ResolveSubjects() error = nil, want the SearchQuestion backend failure propagated")
+	}
+}
+
+// TestResolveSubjects_SearchQuestionRunsAfterTermLoopForTieBreakDeterminism
+// pins the ordering CHAOS-3838's implementation deliberately chose: the
+// question-level pass merges AFTER every per-term pass, so a per-term find
+// wins an exact-confidence tie against a question-level find of the SAME
+// subject (MergeCandidates' documented "first processed wins a tie" rule).
+// A term-level-only resolution therefore stays byte-identical to before
+// this ticket, and the question pass can only ever ADD subjects or lose a
+// tie -- never silently steal a term-level candidate's winning MatchReasons.
+func TestResolveSubjects_SearchQuestionRunsAfterTermLoopForTieBreakDeterminism(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_tied", Label: "Tied Project"}
+	request := testRequest()
+	termNode := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.5, "*")
+	termNode.Mechanism = contextfabric.MatchLexical
+	questionNode := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.5, "*")
+	questionNode.Mechanism = contextfabric.MatchLexical
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        map[string][]CandidateNode{"alpha": {termNode}},
+		searchQuestionResults: map[string][]CandidateNode{
+			request.Question: {questionNode},
+		},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want the two same-subject finds merged into one", resolution.Candidates)
+	}
+	// The exact-match bump (candidate.Subject.Label == term) fires for
+	// BOTH the term "alpha" is not equal to "Tied Project", so neither side
+	// gets bumped to 1 here -- MatchedTerms is the tie-break-visible field:
+	// a term-loop-first merge keeps the term-level MatchedTerms ("alpha")
+	// as the winner's own before union, proving processing order.
+	if !containsString(resolution.Candidates[0].MatchedTerms, "alpha") {
+		t.Fatalf("resolution.Candidates[0].MatchedTerms = %v, want \"alpha\" present from the term-level pass", resolution.Candidates[0].MatchedTerms)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// --- codex round-1 P1 (fix A): bounded question provenance ---
+
+// TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid is
+// the codex round-1 P1 regression proof: before the fix, mergeSearchResults
+// was called with the raw QUESTION as its term/provenance argument, which
+// NodeCandidate records verbatim into SubjectCandidate.MatchedTerms --
+// contractsv1's Validate() rejects any entry over 512 characters, so a
+// realistic (513-8000 char) free-text question made the question-level pass
+// produce an INVALID resolution. MUTATION CHECK: reverting
+// mergeSearchResults' call site (resolve.go) to pass `question` instead of
+// `questionProvenanceMarker` makes this fail -- Validate() returns an error
+// and/or a MatchedTerms entry exceeds 512 chars.
+func TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_big", Label: "Big Question Target"}
+	// TrimSpace matters here: ResolveSubjects trims request.Question before
+	// calling deps.SearchQuestion, and the fixture's map key must match
+	// exactly what that call receives.
+	oversized := strings.TrimSpace(strings.Repeat("why did this incident happen and what changed before it started ", 150)) // well over 512, into the thousands
+	if len(oversized) <= 512 {
+		t.Fatalf("test fixture bug: oversized question is only %d chars, want > 512", len(oversized))
+	}
+	request := testRequest()
+	request.Question = oversized
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchQuestionResults: map[string][]CandidateNode{
+			oversized: {candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.65, "*")},
+		},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want 1", resolution.Candidates)
+	}
+	candidate := resolution.Candidates[0]
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("candidate.Validate() = %v, want a contract-valid candidate despite a %d-char question", err, len(oversized))
+	}
+	for _, term := range candidate.MatchedTerms {
+		if len(term) > 512 {
+			t.Fatalf("MatchedTerms entry %q is %d chars, want <= 512 (contractsv1's matchedTermLength bound)", term, len(term))
+		}
+	}
+	if !containsString(candidate.MatchedTerms, questionProvenanceMarker) {
+		t.Fatalf("MatchedTerms = %v, want the bounded provenance marker %q present", candidate.MatchedTerms, questionProvenanceMarker)
+	}
+}
+
+// TestResolveSubjects_SearchQuestionDropsMarkerRatherThanRealTermsAtCap is
+// the codex round-1 P1 fix's second half: a candidate already carrying
+// matchedTermsCap (32) real, user-meaningful extracted terms must not
+// overflow to 33 once questionProvenanceMarker unions in via the
+// question-level pass -- the marker is dropped, every real term survives,
+// and the result stays contract-valid.
+func TestResolveSubjects_SearchQuestionDropsMarkerRatherThanRealTermsAtCap(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_full", Label: "Full Terms Target"}
+	terms := make([]string, matchedTermsCap)
+	searchResults := make(map[string][]CandidateNode, matchedTermsCap)
+	for i := range terms {
+		terms[i] = fmt.Sprintf("term%02d", i)
+		searchResults[terms[i]] = []CandidateNode{candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.6, "*")}
+	}
+	request := testRequest()
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        searchResults,
+		searchQuestionResults: map[string][]CandidateNode{
+			request.Question: {candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.65, "*")},
+		},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(terms...), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want 1", resolution.Candidates)
+	}
+	candidate := resolution.Candidates[0]
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("candidate.Validate() = %v, want valid at exactly the %d-term cap", err, matchedTermsCap)
+	}
+	if len(candidate.MatchedTerms) != matchedTermsCap {
+		t.Fatalf("len(MatchedTerms) = %d, want exactly %d (marker dropped, every real term kept)", len(candidate.MatchedTerms), matchedTermsCap)
+	}
+	for _, term := range terms {
+		if !containsString(candidate.MatchedTerms, term) {
+			t.Fatalf("MatchedTerms = %v, missing real term %q -- the synthetic marker must be dropped before any real, user-typed term", candidate.MatchedTerms, term)
+		}
+	}
+	if containsString(candidate.MatchedTerms, questionProvenanceMarker) {
+		t.Fatalf("MatchedTerms = %v, want the question marker dropped once the real-term cap is already full", candidate.MatchedTerms)
+	}
+}
+
+// TestQuestionProvenanceMarkerRespectsContractBounds cross-checks
+// questionProvenanceMarker and matchedTermsCap against the REAL exported
+// contractsv1 validator (via contextfabric.SubjectCandidate.Validate(), the
+// type alias for it) rather than a duplicated numeric literal, so a future
+// tightening of the unexported contract bounds trips this test rather than
+// silently reintroducing the P1 the two constants exist to prevent.
+func TestQuestionProvenanceMarkerRespectsContractBounds(t *testing.T) {
+	t.Parallel()
+	if len(questionProvenanceMarker) > 512 {
+		t.Fatalf("questionProvenanceMarker is %d chars, want well under the contract's per-entry bound", len(questionProvenanceMarker))
+	}
+	terms := make([]string, matchedTermsCap+1)
+	for i := range terms {
+		terms[i] = fmt.Sprintf("term%03d", i)
+	}
+	base := contextfabric.SubjectCandidate{
+		ReceiptID: "receipt_12345678", Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "P1"},
+		State: contextfabric.ResolutionProposed, MatchReasons: []string{"test"}, Confidence: 0.5,
+	}
+	atCap := base
+	atCap.MatchedTerms = terms[:matchedTermsCap]
+	if err := atCap.Validate(); err != nil {
+		t.Fatalf("a candidate at exactly matchedTermsCap=%d MatchedTerms entries failed Validate(): %v -- matchedTermsCap no longer matches the real contract bound", matchedTermsCap, err)
+	}
+	overCap := base
+	overCap.MatchedTerms = terms[:matchedTermsCap+1]
+	if err := overCap.Validate(); err == nil {
+		t.Fatalf("a candidate with matchedTermsCap+1=%d MatchedTerms entries passed Validate() -- matchedTermsCap is now UNDER the real contract bound, capMatchedTermsAfterQuestionMerge is dropping the marker too aggressively", matchedTermsCap+1)
+	}
+}
+
+// --- codex round-2 P1: a subject literally labeled the marker must not exact-match via the question path ---
+
+// TestResolveSubjects_QuestionPathNeverExactMatchesEvenOnLiteralLabelEquality
+// is the codex round-2 P1 end-to-end regression proof: a subject
+// legitimately labeled the exact literal string questionProvenanceMarker
+// ("[full question]") is found ONLY via the question-level vector pass.
+// Before the fix, mergeSearchResults' NodeCandidate call compared THAT
+// label against the marker it was itself passed as term, "matched" by
+// definition, and promoted to confidence=1.0 + MatchExact -- a vector-only
+// find auto-committing on the strength of an internal provenance string,
+// violating AC-3778-3 (a vector hit alone must never commit). The fix must
+// make this candidate MatchVector-only, banded confidence, never committed
+// alone. MUTATION CHECK: reverting mergeSearchResults' question-pass call
+// site to allowExactMatch=true reproduces confidence==1/MatchExact/an
+// illegitimate auto-commit.
+func TestResolveSubjects_QuestionPathNeverExactMatchesEvenOnLiteralLabelEquality(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_literal", Label: questionProvenanceMarker}
+	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.65, "*")
+	node.Mechanism = contextfabric.MatchVector
+	request := testRequest()
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchQuestionResults: map[string][]CandidateNode{
+			request.Question: {node},
+		},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want NO auto-commit -- a vector-only find must never commit alone (AC-3778-3), regardless of this subject's label literally equaling the internal provenance marker", resolution.Committed)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want 1", resolution.Candidates)
+	}
+	candidate := resolution.Candidates[0]
+	if candidate.Confidence == 1 {
+		t.Fatal("candidate.Confidence = 1, want it derived from the vector similarity band -- a subject's label matching the internal provenance marker must never grant an exact match")
+	}
+	if HasMechanism(candidate.MatchMechanisms, contextfabric.MatchExact) {
+		t.Fatalf("candidate.MatchMechanisms = %v, want MatchExact absent", candidate.MatchMechanisms)
+	}
+	if !HasMechanism(candidate.MatchMechanisms, contextfabric.MatchVector) || DistinctMechanismCount(candidate.MatchMechanisms) != 1 {
+		t.Fatalf("candidate.MatchMechanisms = %v, want ONLY MatchVector (by construction on the question path)", candidate.MatchMechanisms)
+	}
+}
+
+// TestResolveSubjects_TermPathStillExactMatchesLiteralEquality is the
+// control proving the fix is scoped to the question path only: a subject
+// found by a genuine, caller-derived TERM (interpretation's own
+// SubjectTerms) that happens to equal its own label exactly must still
+// auto-commit via the normal exact-match fast path -- allowExactMatch=false
+// must never leak into per-term resolution.
+func TestResolveSubjects_TermPathStillExactMatchesLiteralEquality(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_exact", Label: "Ask Dev"}
+	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.2, "*")
+	backend := &fakeGraphBackend{
+		searchResults: map[string][]CandidateNode{"Ask Dev": {node}},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0] != subject {
+		t.Fatalf("resolution.Committed = %#v, want the term-path exact match auto-committed normally", resolution.Committed)
 	}
 }

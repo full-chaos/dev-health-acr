@@ -53,6 +53,16 @@ const (
 // absence.
 //
 // Ported from zepgraph.traverseObservationToSubject.
+//
+// allowExactMatch passes straight through to the traversed parent's own
+// NodeCandidate call (codex round-2 P1) -- see that function's doc comment.
+// A traversed parent is one hop removed from whatever matched the
+// observation that started the walk, and (pre-existing behavior, unchanged
+// here) its confidence is further discounted by 0.85 below regardless; this
+// parameter exists so a caller that disabled exact-match promotion for the
+// observation itself (CHAOS-3838's question-level pass) cannot have it
+// silently re-enabled one hop later, for the same reason: term may be a
+// synthetic provenance marker, not caller-typed text.
 func TraverseObservationToSubject(
 	ctx context.Context,
 	principal storage.Principal,
@@ -60,6 +70,7 @@ func TraverseObservationToSubject(
 	term string,
 	observation CandidateNode,
 	isInternal func(contextfabric.SubjectRef) bool,
+	allowExactMatch bool,
 	getEdges func(context.Context, string) ([]CandidateEdge, error),
 	getVerifiedNode func(context.Context, string) (CandidateNode, bool),
 ) (contextfabric.SubjectCandidate, ObservationTraversal) {
@@ -99,7 +110,7 @@ func TraverseObservationToSubject(
 			uncertain = true
 			continue
 		}
-		candidate, ok := NodeCandidate(principal, scope, term, source, isInternal)
+		candidate, ok := NodeCandidate(principal, scope, term, source, isInternal, allowExactMatch)
 		if !ok || IsObservationSubjectKind(candidate.Subject.Kind) {
 			continue
 		}

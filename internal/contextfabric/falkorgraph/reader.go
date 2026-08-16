@@ -53,8 +53,15 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit, fence, temporal)
 		},
-		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
-			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject,
+		// CHAOS-3838 (spec L11): the SAME fence and temporal filter this
+		// resolution's per-term Search calls already share, so the
+		// question-level pass costs no additional fence probe and obeys the
+		// identical historical-axis skip.
+		SearchQuestion: func(ctx context.Context, question string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
+			return a.questionVectorSearchNodes(ctx, key, principal.OrgID, question, limit, fence, temporal)
+		},
+		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
+			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject, allowExactMatch,
 				func(ctx context.Context, uuid string) ([]graphrank.CandidateEdge, error) {
 					return a.edgesOfNode(ctx, key, principal.OrgID, uuid, temporal)
 				},

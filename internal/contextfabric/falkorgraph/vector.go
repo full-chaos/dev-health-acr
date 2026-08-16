@@ -546,7 +546,11 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	if !hasLexicalContent(term) {
 		return nil, false, false, nil
 	}
-	lexical, truncated, err := a.fulltextSearchNodes(ctx, key, orgID, term, limit, temporal)
+	// codex round-6 P2 (fix A): subject resolution is the ONE path the
+	// CHAOS-3838 union/lexicon-expansion contract belongs to -- see
+	// fulltextSearchNodesForResolution's own doc comment for why
+	// DiscoverContext must never share it.
+	lexical, truncated, err := a.fulltextSearchNodesForResolution(ctx, key, orgID, term, limit, temporal)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -609,7 +613,13 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	// CHAOS-3836 seam: the query-side task prefix wraps the term's
 	// TRANSMISSION to the model only -- the lexical arm above already
 	// searched the unprefixed term, and nothing prefixed is ever stored.
-	vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(term)})
+	//
+	// CHAOS-3838 (spec L13, dual-arm): vectorQueryText widens term with the
+	// domain lexicon before prefixing, same closed vocabulary the lexical
+	// arm's query widened with above -- byte-identical to term when nothing
+	// in it matches, so this is a no-op (including for the embedcache key)
+	// for every term the lexicon has no opinion about.
+	vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(vectorQueryText(term))})
 	if embedErr != nil || len(vectors) != 1 {
 		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, true, nil
@@ -626,6 +636,126 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 		return lexical, truncated, true, nil
 	}
 	return append(lexical, vectorCandidates...), truncated || vectorTruncated, false, nil
+}
+
+// questionVectorSearchNodes is the ResolveDeps.SearchQuestion implementation
+// (CHAOS-3838 / spec L11): ONE additional vector-only search per resolution,
+// embedding the full interpreted QUESTION text rather than an extracted
+// subject term. reader.go's ResolveSubjects wires this to run exactly once
+// per ResolveSubjects call -- see graphrank.ResolveSubjects' SearchQuestion
+// handling -- unioning its candidates into the SAME candidatesBySubject
+// merge every per-term hybridSearchNodes call already feeds.
+//
+// Vector-only, deliberately: L11 is a recall lever for the mechanism that
+// already runs per term (MatchVector), not a second lexical pass. Adding a
+// lexical arm over raw question text here would duplicate DiscoverContext's
+// own full-text-over-question step (cohort discovery, a different purpose)
+// for no additional corroboration value: MergeMechanisms dedups by ENUM
+// MEMBER, so a term-embed find and a question-embed find of the same
+// subject merge into ONE MatchVector entry, never two (mechanism.go's
+// DistinctMechanismCount doc comment) -- corroboration still requires a
+// genuinely distinct mechanism. L13's lexical-arm expansion is what
+// supplies that second mechanism; this function's whole job is finding MORE
+// subjects for it to potentially corroborate.
+//
+// Mirrors hybridSearchNodes' three fail-open guards, in the same order, so
+// the two paths can never silently disagree about when vector retrieval is
+// available: no embedder configured (nothing expected, degraded=false), a
+// historical time axis (vector has no validity window, degraded=true), and
+// an unreadable AC-3778-7 fence (degraded=true). The fence and temporal
+// filter are the SAME instances hybridSearchNodes' calls already share for
+// this resolution -- one fence probe per resolution, not one per call.
+func (a *Adapter) questionVectorSearchNodes(ctx context.Context, key, orgID, question string, limit int, fence *resolutionFence, temporal temporalFilter) ([]graphrank.CandidateNode, bool, bool, error) {
+	// codex round-1 P2 (fix B): the guard must evaluate the EXACT bounded
+	// bytes that will reach the embedder, not the unbounded question --
+	// same class as CHAOS-3835's round-3 capped-bytes fix. A question that
+	// carries real word content only past the embed truncation point (e.g.
+	// several thousand punctuation runes, then "auth") previously passed
+	// this guard on the FULL text and then had Embed silently truncate to
+	// pure punctuation, embedding meaningless bytes into an arbitrary
+	// nearest-neighbor query. bound() is the single authority for both what
+	// gets guarded and what gets embedded below -- neither re-derives
+	// embedprovider's own MaxTextRunes/prefix-budget math.
+	bound := a.boundedQueryText(question)
+	if !hasLexicalContent(bound.substance) {
+		// Same reasoning as hybridSearchNodes' identical guard: meaningless
+		// input must not manufacture arbitrary nearest-neighbor candidates,
+		// and this is a property of the question, not a fault, so
+		// degraded stays false.
+		return nil, false, false, nil
+	}
+	if a.embedder == nil {
+		return nil, false, false, nil
+	}
+	if temporal.active {
+		a.recordVectorSuppressed(ctx, orgID)
+		return nil, false, true, nil
+	}
+	if !fence.readable(ctx, a, key, orgID) {
+		a.recordVectorDegraded(ctx, orgID)
+		return nil, false, true, nil
+	}
+	vectors, embedErr := a.embedder.Embed(ctx, []string{bound.transmitted})
+	if embedErr != nil || len(vectors) != 1 {
+		a.recordVectorDegraded(ctx, orgID)
+		return nil, false, true, nil
+	}
+	candidates, truncated, err := a.vectorSearchNodesWithOverFetch(ctx, key, orgID, vectors[0], a.similarityFloor, limit, a.overFetchMultiplier)
+	if err != nil {
+		a.recordVectorDegraded(ctx, orgID)
+		return nil, false, true, nil
+	}
+	return candidates, truncated, false, nil
+}
+
+// boundedQueryResult carries the two texts questionVectorSearchNodes' guard
+// and embed call need, computed together so they can never drift: transmitted
+// is exactly what Embed receives; substance is transmitted with any
+// configured query task-prefix stripped back off, so a caller-typed
+// question's own bounded content -- never the fixed, code-owned prefix,
+// which always carries real words and would otherwise mask a meaningless
+// substance from hasLexicalContent -- is what the guard evaluates.
+type boundedQueryResult struct {
+	transmitted string
+	substance   string
+}
+
+// boundedQueryText computes the bounded query text for text (CHAOS-3838
+// question-level path, codex round-1 P2 fix B, corrected round-3 P1 fix A):
+// lexicon-widened (spec L13's vectorQueryText), prefixed via
+// a.queryPrefixed (embedprovider.ApplyQueryPrefix when a prefix family is
+// configured, else the identity function), then UNCONDITIONALLY bounded to
+// a.embedBudgetRunes() via embedprovider.TruncateRunes -- the SAME two
+// primitives Embed's own internal truncation is built from, never
+// re-derived. One path, no branch on prefix presence (see the inline
+// comment below for why a branch there was the round-1 fix's own bug).
+func (a *Adapter) boundedQueryText(text string) boundedQueryResult {
+	widened := vectorQueryText(text)
+	prefixed := a.queryPrefixed(widened)
+	// codex round-3 P1 (fix A): ONE path, unconditional -- no branch on
+	// whether a.applyQueryPrefix is nil. The round-1 fix branched on that,
+	// reasoning "a configured prefix already budgets itself via
+	// ApplyQueryPrefix's own contract" -- true only when the prefix STRING
+	// is non-empty. embedprovider.applyPrefixWithBudget's very first line is
+	// `if prefix == "" { return text }`, a complete bypass of ALL budgeting
+	// -- and a.applyQueryPrefix is a non-nil bound method (embedder.ApplyQueryPrefix)
+	// for EVERY configured embedder regardless of prefix family, including
+	// PrefixFamilyNone (the DEPLOYED production default for
+	// openai/text-embedding-3-large, embedprovider.PrefixFamilyNone == "").
+	// So the "prefix WAS applied" branch was, in the live default
+	// configuration, silently trusting an untruncated string -- exactly the
+	// original P2 hole, reopened by the branch meant to close it. Bounding
+	// here UNCONDITIONALLY, after the fact, cannot diverge from a REAL
+	// prefix's own internal budgeting (already <= a.embedBudgetRunes(),
+	// this TruncateRunes is then a no-op) and is the ONLY thing that
+	// actually bounds an EMPTY-prefix or no-prefix result.
+	bounded := embedprovider.TruncateRunes(prefixed, a.embedBudgetRunes())
+	// prefixOnly is derived the SAME way (queryPrefixed then the SAME
+	// unconditional bound), so it can never disagree with what bounded
+	// actually carries as its prefix, whatever a.applyQueryPrefix does or
+	// does not do with an empty substance.
+	prefixOnly := embedprovider.TruncateRunes(a.queryPrefixed(""), a.embedBudgetRunes())
+	return boundedQueryResult{transmitted: bounded, substance: strings.TrimPrefix(bounded, prefixOnly)}
 }
 
 // recordVectorDegraded reports a vector-retrieval degradation to telemetry.
