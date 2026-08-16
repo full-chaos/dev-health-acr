@@ -36,24 +36,26 @@ func resolveOneWithVectorMarginDegraded(searchTruncated, retrievalDegraded bool,
 }
 
 // resolveOneWithVectorMarginFull is resolveOneWithVectorMarginEnvelope with
-// effectiveSearchLimit defaulted to max itself and calibratedTopK defaulted
-// to 20 (codex r5 K1/K2) -- every PRE-EXISTING test built on this helper
+// effectiveSearchLimit defaulted to max itself, calibratedTopK defaulted to
+// 20 (codex r5 K1/K2), and unscopedVisibility defaulted to true (codex r7
+// M1 -- every PRE-EXISTING test in this file implicitly exercises an
+// unscoped resolution) -- every PRE-EXISTING test built on this helper
 // keeps its original meaning unchanged: every one of them uses max<=10<=20,
 // so the new two-sided envelope is always satisfied whenever the old
-// max>=2 test alone was.
+// max>=2 test alone was, and none of them narrows scope.
 func resolveOneWithVectorMarginFull(max int, searchTruncated, retrievalDegraded bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
-	return resolveOneWithVectorMarginEnvelope(max, max, 20, searchTruncated, retrievalDegraded, vectorArmSimilarity, threshold, candidates...)
+	return resolveOneWithVectorMarginEnvelope(max, max, 20, searchTruncated, retrievalDegraded, true, vectorArmSimilarity, threshold, candidates...)
 }
 
 // resolveOneWithVectorMarginAndEnvelope is resolveOneWithVectorMargin
-// (searchTruncated=false, retrievalDegraded=false -- neither is what codex
-// r5 K1/K2's own tests are exercising) with an explicit
-// effectiveSearchLimit/calibratedTopK, independent of max -- CHAOS-3829
-// codex r5 K1/K2's own tests need to vary these directly (a cap narrower
-// than the request, or a search depth past the calibrated TopK), which
-// resolveOneWithVectorMarginAndMax cannot express since it feeds one number
-// into both max and effectiveSearchLimit. max is kept at whichever is
-// larger of 10 or effectiveSearchLimit -- max must always be >=
+// (searchTruncated=false, retrievalDegraded=false, unscopedVisibility=true
+// -- none of which is what codex r5 K1/K2's own tests are exercising) with
+// an explicit effectiveSearchLimit/calibratedTopK, independent of max --
+// CHAOS-3829 codex r5 K1/K2's own tests need to vary these directly (a cap
+// narrower than the request, or a search depth past the calibrated TopK),
+// which resolveOneWithVectorMarginAndMax cannot express since it feeds one
+// number into both max and effectiveSearchLimit. max is kept at whichever
+// is larger of 10 or effectiveSearchLimit -- max must always be >=
 // effectiveSearchLimit in production (effectiveSearchLimit is max clamped
 // DOWN by a cap, never up), and these tests are not exercising max's own
 // (unrelated) truncation behavior.
@@ -62,18 +64,27 @@ func resolveOneWithVectorMarginAndEnvelope(effectiveSearchLimit, calibratedTopK 
 	if effectiveSearchLimit > max {
 		max = effectiveSearchLimit
 	}
-	return resolveOneWithVectorMarginEnvelope(max, effectiveSearchLimit, calibratedTopK, false, false, vectorArmSimilarity, threshold, candidates...)
+	return resolveOneWithVectorMarginEnvelope(max, effectiveSearchLimit, calibratedTopK, false, false, true, vectorArmSimilarity, threshold, candidates...)
+}
+
+// resolveOneWithVectorMarginAndScope is resolveOneWithVectorMargin (max=10,
+// searchTruncated=false, retrievalDegraded=false, calibratedTopK=20 -- none
+// of which is what codex r7 M1's own tests are exercising) with an
+// explicit unscopedVisibility, so those tests can vary it independently of
+// everything else.
+func resolveOneWithVectorMarginAndScope(unscopedVisibility bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
+	return resolveOneWithVectorMarginEnvelope(10, 10, 20, false, false, unscopedVisibility, vectorArmSimilarity, threshold, candidates...)
 }
 
 // resolveOneWithVectorMarginEnvelope is the single authority every helper
 // above funnels through, so they cannot independently drift on how a
 // ResolveFromMergedCandidates call is built.
-func resolveOneWithVectorMarginEnvelope(max, effectiveSearchLimit, calibratedTopK int, searchTruncated, retrievalDegraded bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
+func resolveOneWithVectorMarginEnvelope(max, effectiveSearchLimit, calibratedTopK int, searchTruncated, retrievalDegraded, unscopedVisibility bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
 	bySubject := make(map[string]contextfabric.SubjectCandidate, len(candidates))
 	for _, candidate := range candidates {
 		bySubject[SubjectKey(candidate.Subject)] = candidate
 	}
-	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, max, true, searchTruncated, vectorArmSimilarity, threshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK)
+	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, max, true, searchTruncated, vectorArmSimilarity, threshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility)
 }
 
 // TestChaos3829_CarveOutRescuesTheExactTwoCorroboratedCandidatesScenario is
@@ -610,5 +621,47 @@ func TestChaos3829_K1_UncalibratedTopKNeverFires(t *testing.T) {
 	resolution := resolveOneWithVectorMarginAndEnvelope(10, 0, similarities, 0.10, auth, authz)
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %v, want none -- calibratedTopK=0 (uncalibrated) must never commit", resolution.Committed)
+	}
+}
+
+// --- codex r7 M1: unscopedVisibility (scope-existence-oracle guard) --------
+
+// TestChaos3829_M1_ScopedVisibilityNeverFires is M1's core pinning test: an
+// otherwise-perfect rescue scenario (decisive margin, corroborated top-1,
+// every other envelope condition satisfied) stays ambiguous when
+// unscopedVisibility=false -- the resolution-level analogue of
+// principal.RepositoryScopes being non-empty or RequestedScope narrowing
+// visibility, either of which makes ResolveSubjects compute
+// unscopedVisibility=false (see resolve.go). Rescue-off must be constant
+// here, not merely narrower, so a scoped caller can never observe whether a
+// hidden competitor exists.
+func TestChaos3829_M1_ScopedVisibilityNeverFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginAndScope(false, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- a scoped resolution must never reach the rescue", resolution.Committed)
+	}
+}
+
+// TestChaos3829_M1_UnscopedVisibilityStillFires is the positive control: the
+// exact same fixture, unscopedVisibility=true, must still fire (proving the
+// refusal above is specifically about the new guard, not some other
+// difference between the two tests) -- mirrors J2's own
+// degraded/not-degraded pairing shape.
+func TestChaos3829_M1_UnscopedVisibilityStillFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginAndScope(true, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
+		t.Fatalf("resolution.Committed = %v, want exactly [auth] when NOT scoped", resolution.Committed)
 	}
 }

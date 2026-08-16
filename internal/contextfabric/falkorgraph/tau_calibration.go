@@ -147,6 +147,19 @@ type CalibrationReport struct {
 	// be allowed to pass as "these are all the controls there were" to a
 	// safety-critical negative-gate computation.
 	Controls int `json:"controls"`
+	// Scored mirrors oracle_live_test.go's oracleReport.Scored (CHAOS-3829
+	// codex r7 M3, accepted): the harness's own DECLARED count of SCORED
+	// cases it produced, incremented in the SAME loop iteration that
+	// appends to Cases (oracle_live_test.go), so under an honest, complete
+	// write the two are always equal by construction -- EXACT symmetry
+	// with Controls/ControlCases above (codex r6 L2). Read only by
+	// CalibrateMarginFromReport, which hard-fails when they diverge, for
+	// the identical truncated-report reason L2 already documents. NOT read
+	// by CalibrateFromReport (the tau-calibration math above) -- that
+	// function predates this field and is out of scope for this check,
+	// exactly as L2 left CalibrateFromReport's own reading of ControlCases
+	// (it has none) untouched.
+	Scored int `json:"scored"`
 }
 
 // CalibrationOptions parameterizes CalibrateFromReport.
@@ -692,6 +705,11 @@ var ErrMarginReportInternallyInconsistent = errors.New("calibration report case'
 // cases happened to survive truncation.
 var ErrMarginReportControlsCountMismatch = errors.New("calibration report's declared controls count does not match len(control_cases) -- the report may be truncated")
 
+// ErrMarginReportScoredCountMismatch is ErrMarginReportControlsCountMismatch's
+// EXACT symmetric counterpart for the SCORED population (codex r7 M3,
+// accepted) -- see CalibrationReport.Scored's doc comment.
+var ErrMarginReportScoredCountMismatch = errors.New("calibration report's declared scored count does not match len(cases) -- the report may be truncated")
+
 // checkMarginConsistency validates every CalibrationCase in cases against
 // the closed set of valid (VectorTop1, VectorTop2, VectorMargin) shapes
 // (codex r3 H2, extended by codex r4 J3, closed by codex r6 L3 -- see the
@@ -1058,6 +1076,13 @@ func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationO
 	// calibrating M from a partial population.
 	if report.Controls != len(report.ControlCases) {
 		return MarginCalibrationResult{}, fmt.Errorf("%w: report declares %d control cases but control_cases carries %d", ErrMarginReportControlsCountMismatch, report.Controls, len(report.ControlCases))
+	}
+	// codex r7 M3 (accepted): EXACT symmetric check for the SCORED
+	// population -- see CalibrationReport.Scored's doc comment and
+	// ErrMarginReportControlsCountMismatch's identical rationale above,
+	// applied here to report.Cases instead of report.ControlCases.
+	if report.Scored != len(report.Cases) {
+		return MarginCalibrationResult{}, fmt.Errorf("%w: report declares %d scored cases but cases carries %d", ErrMarginReportScoredCountMismatch, report.Scored, len(report.Cases))
 	}
 	// codex r3 H2 (accepted): report.Cases[i].VectorMargin is REDUNDANT with
 	// VectorTop1/VectorTop2's own Similarity values -- the oracle harness

@@ -46,8 +46,10 @@ import (
 // original codex r1 F1 max>=2 test with a tighter, TWO-SIDED envelope on the
 // REAL per-call returned-row bound -- see the rescue block's own comment for
 // the full argument and why both P1s land as one unified condition rather
-// than two independent ones.
-func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int) contextfabric.SubjectResolution {
+// than two independent ones. unscopedVisibility (codex r7 M1, accepted,
+// SECURITY class) is a further, independent conjunct -- see the rescue
+// block's own comment for the scope-existence-oracle hazard it closes.
+func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -305,8 +307,68 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		// override) are entirely untouched by this -- they already had
 		// their own, independent relationship to degradation before
 		// CHAOS-3829 and this ticket does not change it.
+		//
+		// codex r7 M1 (accepted, SECURITY class -- AGENTS.md scope
+		// invariant): a scoped principal (principal.RepositoryScopes) or a
+		// scope-narrowed request (RequestedScope.RepositorySlugs/ProjectIDs/
+		// TeamIDs) can make this rescue an EXISTENCE ORACLE for a subject
+		// the caller is not authorized to see. F0's side-map is deliberately
+		// PRE-AUTHORIZATION (mergeSearchResults records vectorArmSimilarity
+		// BEFORE NodeCandidate's own accept/reject decision) -- that is
+		// correct for measuring the margin honestly, but it means a subject
+		// outside the caller's scope can still act as COMPETITOR here: a
+		// hidden close hit lowers the visible winner's margin, and margin <
+		// threshold flips the resolution from committed to ambiguous
+		// (clarification) -- OBSERVABLE, scope-dependent behavior that
+		// leaks "something you cannot see is close by", exactly the kind of
+		// inference AGENTS.md's scope invariant forbids.
+		//
+		// THREE candidate fixes were considered and rejected, each trading
+		// this hazard for a different one -- stated here so none of the
+		// three re-cycles as "obviously simpler":
+		//   - COUNT the out-of-scope competitor's margin impact but strip
+		//     its IDENTITY from any caller-visible output: still an
+		//     existence oracle -- ambiguous-vs-committed is itself the leak,
+		//     independent of what identifying detail accompanies it.
+		//   - FILTER the side-map to only scope-authorized hits before
+		//     vectorMarginCommit ever runs: this is F0's own inflation
+		//     hazard AGAIN, just re-derived per request instead of globally
+		//     -- a margin computed against a narrower, filtered population
+		//     is inflated exactly on the cases where a genuinely close (but
+		//     filtered) competitor exists, the SAME failure F0 already
+		//     fixed for the unscoped case.
+		//   - QUERY-FILTER the underlying Search calls themselves to the
+		//     caller's scope (so the side-map is honestly narrower because
+		//     the SEARCH was narrower, not because of a later filter step):
+		//     this changes the geometry M was calibrated against -- the
+		//     oracle harness measured ORG-WIDE, unscoped retrieval; a
+		//     scoped principal's WITHIN-SCOPE similarity distribution is an
+		//     uncalibrated population M was never validated against, and
+		//     could be tighter or looser in either direction.
+		//
+		// RESOLUTION: unscopedVisibility makes the rescue a CONSTANT-OFF for
+		// every scoped principal/request, not merely narrower. Rescue-off
+		// has NO observable dependence on hidden subjects at all -- a
+		// scoped caller sees "ambiguous" (or whatever the EXISTING gates
+		// above already decided) regardless of what does or does not exist
+		// outside their scope, so there is nothing left to infer. The
+		// unscoped population this leaves eligible is EXACTLY the
+		// org-wide, no-scope geometry CalibrateMarginFromReport's oracle
+		// measured (the harness runs with no principal/request scope
+		// narrowing at all) -- so this is not a narrower-but-still-uncalibrated
+		// carve-out, it is the SAME calibrated population with the
+		// uncalibrated (scoped) one now excluded entirely.
+		//
+		// NO REMAINING LEAK PATH: F0's side-map itself is UNCHANGED (still
+		// pre-authorization, still built the same way) -- it is only ever
+		// CONSUMED by this rescue, and the rescue is now constant-off
+		// whenever that consumption could be scope-observable. Nothing
+		// downstream of this function reads vectorArmSimilarity directly
+		// (see ResolveSubjects' own doc comment on the map's scope), so
+		// closing the ONE consumer closes the entire path.
 		if ambiguous && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
-			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK {
+			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK &&
+			unscopedVisibility {
 			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted

@@ -331,6 +331,105 @@ func TestResolveSubjects_CommitPathCarveOutFiresThroughTheRealAdapterWiring(t *t
 	}
 }
 
+// TestResolveSubjects_CommitPathCarveOutStaysDisabledForScopedPrincipal is
+// codex r7 M1's end-to-end pinning test: the SAME fixture as the wiring
+// proof above, both nodes now carrying an authorization_repositories
+// attribute that ADMITS the scoped principal below (so both candidates
+// still form normally -- this test isolates the RESCUE guard, not ordinary
+// authorization filtering) -- but principal.RepositoryScopes is non-empty.
+// The resolution must stay ambiguous: a scoped principal must never be able
+// to observe, via commit-vs-clarification, whether a hidden closer
+// competitor exists outside their scope (the scope-existence-oracle
+// hazard M1's doc comment describes).
+func TestResolveSubjects_CommitPathCarveOutStaysDisabledForScopedPrincipal(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.05},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 0.30},
+			}, nil
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth", propAuthzRepos: []string{"acme/repo-x"}}}, "score": 1.0},
+			}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	adapter.vectorMarginCommitThreshold = 0.10
+	adapter.calibratedTopK = 20
+
+	request := contextfabric.InvestigationRequest{
+		Question: "who owns auth",
+		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
+	}
+	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
+	// principal.RepositoryScopes is non-empty (but AUTHORIZES both nodes
+	// above, via their matching authorization_repositories attribute) --
+	// candidates form exactly as in the unscoped test, so any refusal here
+	// is specifically the M1 guard, not authorization filtering.
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/repo-x"}}
+	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects: %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- a scoped principal must never reach the rescue, even when authorized for every candidate involved", resolution.Committed)
+	}
+}
+
+// TestResolveSubjects_CommitPathCarveOutStaysDisabledForRequestNarrowedScope
+// is M1's second pinning test: the principal itself is UNSCOPED, but the
+// REQUEST narrows visibility (RequestedScope.ProjectIDs) -- the other half
+// of unscopedVisibility's four independent checks (authorize.go's
+// AuthorizedAttributes reads all four the same way). Both nodes carry an
+// authorization_projects attribute admitting the requested project, so
+// candidates form normally; the resolution must still stay ambiguous.
+func TestResolveSubjects_CommitPathCarveOutStaysDisabledForRequestNarrowedScope(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propAuthzProjects: []string{"proj-1"}}}, "score": 0.05},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service", propAuthzProjects: []string{"proj-1"}}}, "score": 0.30},
+			}, nil
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth", propAuthzProjects: []string{"proj-1"}}}, "score": 1.0},
+			}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	adapter.vectorMarginCommitThreshold = 0.10
+	adapter.calibratedTopK = 20
+
+	request := contextfabric.InvestigationRequest{
+		Question: "who owns auth",
+		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
+		RequestedScope: contextfabric.RequestedScope{
+			ProjectIDs: []string{"proj-1"}, // narrows visibility; principal itself is unscoped
+		},
+	}
+	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects: %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- a request-narrowed scope must never reach the rescue, even when authorized for every candidate involved", resolution.Committed)
+	}
+}
+
 // TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrowsBelowTwo
 // is codex r5 K2's end-to-end pinning test, REBUILT per codex r6 L4 (accepted):
 // the original single-term version was VACUOUS -- vectorSearchNodesWithOverFetch's

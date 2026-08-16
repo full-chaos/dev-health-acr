@@ -57,6 +57,11 @@ func marginReport(cases ...CalibrationCase) CalibrationReport {
 	return CalibrationReport{
 		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
 		Tau: testMarginTau, TopK: testMarginTopK, Cases: cases,
+		// codex r7 M3: Scored must equal len(cases) -- exact symmetry with
+		// marginReportWithControls' own Controls fix (codex r6 L2), so
+		// every fixture built through this helper stays a VALID
+		// (non-truncated) report by construction.
+		Scored: len(cases),
 	}
 }
 
@@ -81,10 +86,12 @@ func marginReportWithControls(cases []CalibrationCase, controls []CalibrationCas
 	return CalibrationReport{
 		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
 		Tau: testMarginTau, TopK: testMarginTopK, Cases: cases, ControlCases: controls,
-		// codex r6 L2: Controls must equal len(controls) -- mirrors the
-		// harness's own honest-write invariant (both incremented together,
+		// codex r6 L2 / r7 M3: Controls/Scored must equal
+		// len(controls)/len(cases) -- mirrors the harness's own
+		// honest-write invariant (both incremented together,
 		// oracle_live_test.go), so every fixture built through this helper
 		// stays a VALID (non-truncated) report by construction.
+		Scored:   len(cases),
 		Controls: len(controls),
 	}
 }
@@ -810,6 +817,44 @@ func TestCalibrateMarginFromReport_ZeroControlsDeclaredAndZeroPresentProceeds(t 
 	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.30))
 	if _, err := CalibrateMarginFromReport(report, marginTestOpts); err != nil {
 		t.Fatalf("CalibrateMarginFromReport: %v, want no error for a report with no controls at all", err)
+	}
+}
+
+// --- codex r7 M3: report.Scored must mirror len(Cases) -- exact L2 symmetry
+
+// TestCalibrateMarginFromReport_ScoredCountMismatchIsAnError is M3's core
+// pinning test, the EXACT symmetric counterpart of
+// TestCalibrateMarginFromReport_ControlsCountMismatchIsAnError.
+func TestCalibrateMarginFromReport_ScoredCountMismatchIsAnError(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.30))
+	report.Scored = 5 // the harness declared 5, but only 1 survived
+	_, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if !errors.Is(err, ErrMarginReportScoredCountMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportScoredCountMismatch", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_ScoredCountMismatchWhenTruncatedToZeroIsAnError
+// proves the check catches a report truncated all the way to ZERO surviving
+// scored cases too.
+func TestCalibrateMarginFromReport_ScoredCountMismatchWhenTruncatedToZeroIsAnError(t *testing.T) {
+	report := marginReportWithControls(nil, []CalibrationCase{eligibleControlCase("project", "ghost", 0.20)})
+	report.Scored = 3 // declared 3, Cases is empty
+	_, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if !errors.Is(err, ErrMarginReportScoredCountMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportScoredCountMismatch", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_ScoredCountMatchProceeds is the positive
+// control -- marginReport's own construction (Scored==len(cases)) must not
+// be refused, already exercised implicitly by every other test in this file
+// passing; pinned explicitly, mirroring
+// TestCalibrateMarginFromReport_ControlsCountMatchProceeds.
+func TestCalibrateMarginFromReport_ScoredCountMatchProceeds(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.30))
+	if _, err := CalibrateMarginFromReport(report, marginTestOpts); err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v, want no error when Scored matches len(Cases)", err)
 	}
 }
 
