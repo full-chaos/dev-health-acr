@@ -60,7 +60,31 @@ const (
 	// cap on one fact_requirements[] item's parameters map, a bound this
 	// prompt never stated (a model could write 33 parameters on a single
 	// entry and lose the whole interpretation for it). v5 states it.
-	defaultInterpretationPromptVersion = "context-fabric-interpretation.v6"
+	//
+	// v6 (not otherwise documented above) is the current text prior to v7.
+	//
+	// v7 (CHAOS-3856 + CHAOS-3854's prompt-side half, CHAOS-3742 five-arm
+	// generative trial): two behavioral changes to what the model is told,
+	// not just a stated bound, so both are folded into one prompt version
+	// rather than left implicit in an unchanged string. See prompts.go's
+	// doc comment on interpretationSystemPrompt for the full measured
+	// rationale.
+	//
+	//   - subject_terms/comparison_terms now demand a VERBATIM substring of
+	//     the question text FIRST, with paraphrase/alias terms allowed only
+	//     as a secondary addition -- replacing v1's "may be exact names,
+	//     aliases, acronyms, previous names, or provider identifiers", which
+	//     a real model read as license to paraphrase and which starved the
+	//     lexical retrieval arm of an exact-substring anchor on ~85-90% of
+	//     the trial corpus.
+	//   - fact_requirements[].parameters now states plainly that no fact
+	//     capability in this deployment accepts any parameter key --
+	//     measured true for all 19 production capabilities
+	//     (devhealthfacts.newCapability never sets AllowedParameters) --
+	//     rather than leaving the model to infer a vocabulary from the
+	//     length/count bounds alone and invent keys the registry always
+	//     rejects.
+	defaultInterpretationPromptVersion = "context-fabric-interpretation.v7"
 	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
