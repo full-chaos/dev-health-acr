@@ -6,11 +6,41 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os/exec"
 	"time"
 )
 
 const codeGraphWaitDelay = 100 * time.Millisecond
+
+// classifyCodeGraphSpawnError turns a cmd.StdoutPipe()/cmd.Start() failure
+// into the right sentinel instead of collapsing every failure into
+// errCodeGraphExecutableAbsent (CHAOS-3861). Three buckets:
+//
+//   - fs.ErrNotExist / fs.ErrPermission: the executable genuinely isn't
+//     there, or isn't usable as configured (wrong path, deleted, chmod'd
+//     away). A persistent configuration problem -- errCodeGraphExecutableAbsent,
+//     unchanged from before this fix.
+//   - a transient host-resource errno (EAGAIN/EMFILE/ENOMEM on the
+//     platforms that have them): the executable is fine, but the OS could
+//     not fork a new process for it RIGHT NOW. Worth a bounded retry, so
+//     it gets its own sentinel, errCodeGraphSpawnUnavailable, and -- unlike
+//     the other two buckets -- the raw OS error is preserved in the chain
+//     (wrapped, never swallowed) so a caller or log line can see exactly
+//     what the host reported.
+//   - anything else: propagated wrapped rather than forced into either
+//     bucket. Unclassified, but truthful -- better than a confident wrong
+//     answer.
+func classifyCodeGraphSpawnError(err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission):
+		return errors.Join(errCodeGraphExecutableAbsent, ErrCodeGraphUnavailable)
+	case isTransientCodeGraphSpawnErrno(err):
+		return errors.Join(errCodeGraphSpawnUnavailable, ErrCodeGraphUnavailable, err)
+	default:
+		return errors.Join(ErrCodeGraphUnavailable, err)
+	}
+}
 
 func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGraphRunCommand, arguments []string, input []byte) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, path, arguments...)
@@ -25,14 +55,14 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, errors.Join(errCodeGraphExecutableAbsent, ErrCodeGraphUnavailable)
+		return nil, classifyCodeGraphSpawnError(err)
 	}
 	cmd.Stderr = &boundedBuffer{limit: maxCodeGraphStderrBytes}
 	if err := cmd.Start(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, errors.Join(errCodeGraphExecutableAbsent, ErrCodeGraphUnavailable)
+		return nil, classifyCodeGraphSpawnError(err)
 	}
 	processGroup := captureKeyringProcessGroup(cmd)
 	output, readErr := decodeCodeGraphJSON(stdout)

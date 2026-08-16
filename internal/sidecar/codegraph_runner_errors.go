@@ -8,8 +8,16 @@ import (
 type LocalIndexErrorCode string
 
 const (
-	LocalIndexErrorDisabled              LocalIndexErrorCode = "local_index_disabled"
-	LocalIndexErrorExecutableAbsent      LocalIndexErrorCode = "local_index_executable_absent"
+	LocalIndexErrorDisabled         LocalIndexErrorCode = "local_index_disabled"
+	LocalIndexErrorExecutableAbsent LocalIndexErrorCode = "local_index_executable_absent"
+	// LocalIndexErrorSpawnUnavailable is CHAOS-3861's split off
+	// LocalIndexErrorExecutableAbsent: the executable IS present and
+	// usable, but the OS could not fork a new process for it right now
+	// (EAGAIN/EMFILE/ENOMEM -- host resource pressure). Distinct from
+	// "absent" because it is transient and, in principle, retryable,
+	// where "absent" is a persistent configuration problem. See
+	// classifyCodeGraphSpawnError.
+	LocalIndexErrorSpawnUnavailable      LocalIndexErrorCode = "local_index_spawn_unavailable"
 	LocalIndexErrorMissing               LocalIndexErrorCode = "local_index_missing"
 	LocalIndexErrorIncompatibleVersion   LocalIndexErrorCode = "local_index_incompatible_version"
 	LocalIndexErrorStale                 LocalIndexErrorCode = "local_index_stale"
@@ -27,6 +35,10 @@ const (
 
 var (
 	errCodeGraphExecutableAbsent = errors.New("codegraph executable absent")
+	// errCodeGraphSpawnUnavailable is CHAOS-3861: the codegraph
+	// executable exists and is usable, but the host could not fork a
+	// new process for it right now. See classifyCodeGraphSpawnError.
+	errCodeGraphSpawnUnavailable = errors.New("codegraph could not be started: host process resources are exhausted")
 	errLocalIndexConfigInvalid   = errors.New("local index configuration invalid")
 	errLocalIndexDisabled        = errors.New("local index disabled")
 	errCodeGraphMissing          = errors.New("codegraph index missing")
@@ -68,6 +80,8 @@ func localIndexErrorCodeFor(err error) LocalIndexErrorCode {
 		return LocalIndexErrorDisabled
 	case errors.Is(err, errCodeGraphExecutableAbsent):
 		return LocalIndexErrorExecutableAbsent
+	case errors.Is(err, errCodeGraphSpawnUnavailable):
+		return LocalIndexErrorSpawnUnavailable
 	case errors.Is(err, errCodeGraphMissing):
 		return LocalIndexErrorMissing
 	case errors.Is(err, errCodeGraphMismatch):
