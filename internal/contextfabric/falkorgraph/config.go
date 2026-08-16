@@ -401,6 +401,29 @@ func envInt(lookup func(string) (string, bool), key string, fallback int) (int, 
 	return parsed, nil
 }
 
+// explicitEnvFloat reports (parsed, true) only when key is set to a
+// non-blank, valid float; otherwise (0, false) -- for every other
+// envFloat-family helper in this codebase, "unset/blank/unparseable" all
+// collapse into "use the fallback", but CHAOS-3857's per-knob commit-gate
+// overrides (EmbedderFromEnv, vector.go) need to tell "explicitly
+// overridden" apart from "not set" for EACH of three independent knobs, the
+// same "explicit override wins over the calibrated default" precedent
+// EnvSimilarityFloor already established (a blank or unparseable value is
+// deliberately NOT treated as an override -- it falls through to the
+// calibrated default exactly like an absent var does, never to a zero
+// threshold).
+func explicitEnvFloat(lookup func(string) (string, bool), key string) (float64, bool) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
 func envUint(lookup func(string) (string, bool), key string, fallback uint) (uint, error) {
 	value, ok := lookup(key)
 	if !ok || strings.TrimSpace(value) == "" {

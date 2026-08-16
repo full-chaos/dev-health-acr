@@ -7,12 +7,66 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
-// ResolveFromMergedCandidates implements the class fix for Codex round-3
-// findings "2" and "3": both were the same defect -- truncation ran BEFORE
-// the semantic decision phases (parent-aware eligibility, commit priority),
-// so whichever candidates truncation happened to keep could silently
-// exclude the one the decision phase would have picked. This function runs
-// in explicit phases with truncation LAST:
+// CommitGatePolicy names the three confidence/margin thresholds
+// ResolveFromMergedCandidatesWithGate's commit decision applies BEFORE the
+// CHAOS-3829 margin-rescue carve-out ever runs (vectorMarginCommitThreshold
+// is a separate parameter, not part of this policy -- it already has its
+// own calibrated-per-identity threading via ResolveDeps/RetrievalPolicy).
+//
+// CHAOS-3857 (gate-threshold sweep): this type exists so a measurement
+// harness can override these three constants without touching this file's
+// decision logic, mirroring the EXACT seam VectorMarginCommitThreshold/
+// CalibratedTopK already use for the SAME reason (see ResolveDeps' own doc
+// comments). It is a MEASUREMENT/SWEEP surface, not a recommended
+// deployment knob -- chris picks the eventual ratified operating point
+// from the sweep's measured commit-rate-vs-wrong-commit curve, not this
+// type's defaults. The zero value is NOT valid production configuration on
+// its own; see DefaultCommitGatePolicy for the calibrated values every
+// production call site uses.
+type CommitGatePolicy struct {
+	// LoneFloor is the minimum Confidence a SINGLE eligible candidate must
+	// clear to auto-commit alone. Calibrated production value: 0.72.
+	LoneFloor float64
+	// TopFloor is the minimum Confidence the TOP of two-or-more eligible
+	// candidates must clear before a gap-based commit is even considered.
+	// Calibrated production value: 0.88.
+	TopFloor float64
+	// TopGap is the minimum Confidence gap the top candidate must hold over
+	// the second-ranked eligible candidate for the top-of-two commit to
+	// fire. Calibrated production value: 0.12.
+	TopGap float64
+}
+
+// DefaultCommitGatePolicy returns the CURRENT, calibrated production
+// commit-gate thresholds (chris-ratified, measured against the CHAOS-3742
+// five-arm generative trial and the corpus history before it).
+// ResolveFromMergedCandidates and every existing production/test call site
+// use exactly this policy; only CHAOS-3857's sweep tooling (and
+// falkorgraph's env-driven override, when an operator explicitly sets one)
+// calls ResolveFromMergedCandidatesWithGate with anything else.
+func DefaultCommitGatePolicy() CommitGatePolicy {
+	return CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.88, TopGap: 0.12}
+}
+
+// ResolveFromMergedCandidates is ResolveFromMergedCandidatesWithGate
+// (below) called with DefaultCommitGatePolicy() -- the calibrated
+// production thresholds. Every existing caller (production's one call
+// site in resolve.go historically, and every graphrank test) keeps
+// calling this exact function, unchanged, and gets byte-identical
+// behavior: this wrapper is the ENTIRE diff CHAOS-3857's parameterization
+// makes to this function's default behavior. See
+// ResolveFromMergedCandidatesWithGate's doc comment for the full
+// algorithm description.
+func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool) contextfabric.SubjectResolution {
+	return ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, DefaultCommitGatePolicy())
+}
+
+// ResolveFromMergedCandidatesWithGate implements the class fix for Codex
+// round-3 findings "2" and "3": both were the same defect -- truncation ran
+// BEFORE the semantic decision phases (parent-aware eligibility, commit
+// priority), so whichever candidates truncation happened to keep could
+// silently exclude the one the decision phase would have picked. This
+// function runs in explicit phases with truncation LAST:
 //
 //  1. gather -- candidatesBySubject is already fully assembled by the
 //     caller (hints, receipts, hybrid search, and traversal all merged).
@@ -49,7 +103,7 @@ import (
 // than two independent ones. unscopedVisibility (codex r7 M1, accepted,
 // SECURITY class) is a further, independent conjunct -- see the rescue
 // block's own comment for the scope-existence-oracle hazard it closes.
-func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool) contextfabric.SubjectResolution {
+func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -174,13 +228,13 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 			// value, which is exactly why this has to be an independent,
 			// resolution-wide signal instead.
 			ambiguous = true
-		case len(commitIndex) == 1 && candidates[commitIndex[0]].Confidence >= 0.72:
+		case len(commitIndex) == 1 && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
 			committedIndex[commitIndex[0]] = true
 			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
 		case len(commitIndex) >= 2:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
-			if gap := top.Confidence - second.Confidence; top.Confidence >= 0.88 && gap >= 0.12 {
+			if gap := top.Confidence - second.Confidence; top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
 				committedIndex[commitIndex[0]] = true
 				candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}

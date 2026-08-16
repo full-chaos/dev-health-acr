@@ -972,7 +972,49 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 			// invalidates the other identically. There is no scenario
 			// where M installs but CalibratedTopK does not, or vice versa.
 			options.CalibratedTopK = policy.CalibratedTopK
+			// CHAOS-3857: an explicit EnvVectorMarginCommitThreshold
+			// REPLACES which threshold installs, but only once the guard
+			// above already decided installing one is sound -- it never
+			// forces M on when the tau-equality guard says off (see that
+			// const's own doc comment, retrieval_policy.go, for why: a
+			// sweep cell must measure M's effect on the SAME
+			// corroboration-eligible population the shipped M was
+			// calibrated against, never a population the guard would
+			// otherwise reject).
+			if explicitMargin, ok := explicitEnvFloat(lookup, EnvVectorMarginCommitThreshold); ok {
+				options.VectorMarginCommitThreshold = explicitMargin
+			}
 		}
+	}
+	// CHAOS-3857: the three commit-gate thresholds are graphrank's own
+	// concept (CommitGatePolicy), independent of embedder identity and
+	// calibration -- unlike VectorMarginCommitThreshold/CalibratedTopK
+	// above, they apply regardless of whether this deployment's identity
+	// has a calibrated RetrievalPolicy entry at all, and each is
+	// overridden INDEPENDENTLY: an operator sweeping just LoneFloor gets
+	// TopFloor/TopGap at their calibrated defaults, never at zero. See
+	// CommitGatePolicy's own doc comment (graphrank/resolution.go) and
+	// ResolveDeps.CommitGatePolicy's (graphrank/resolve.go) for why a
+	// zero-valued policy must never reach that struct unless genuinely
+	// nothing here was overridden -- options.CommitGatePolicy is left at
+	// its own zero value below when none of the three vars is set, so
+	// attachEmbedder/reader.go's downstream fallback-to-default still
+	// applies exactly as if this block did not run.
+	loneFloor, hasLoneFloor := explicitEnvFloat(lookup, EnvCommitLoneFloor)
+	topFloor, hasTopFloor := explicitEnvFloat(lookup, EnvCommitTopFloor)
+	topGap, hasTopGap := explicitEnvFloat(lookup, EnvCommitTopGap)
+	if hasLoneFloor || hasTopFloor || hasTopGap {
+		gate := graphrank.DefaultCommitGatePolicy()
+		if hasLoneFloor {
+			gate.LoneFloor = loneFloor
+		}
+		if hasTopFloor {
+			gate.TopFloor = topFloor
+		}
+		if hasTopGap {
+			gate.TopGap = topGap
+		}
+		options.CommitGatePolicy = gate
 	}
 	return options, nil
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
 // Adapter implements contextfabric.ProjectionBackend and
@@ -67,6 +68,15 @@ type Adapter struct {
 	// carve-out already treats as "disabled" (see retrieval_policy.go's
 	// RetrievalPolicy.CalibratedTopK doc comment).
 	calibratedTopK int
+	// commitGatePolicy is CHAOS-3857's sweep/measurement override for
+	// graphrank.ResolveFromMergedCandidatesWithGate's three commit-gate
+	// thresholds. The ZERO VALUE means "not overridden" -- reader.go's
+	// ResolveDeps construction leaves it at zero for an unconfigured
+	// deployment, and graphrank.Engine.ResolveSubjects (resolve.go) is the
+	// ONE place a zero CommitGatePolicy gets replaced with
+	// graphrank.DefaultCommitGatePolicy() -- never here, and never
+	// silently treated as a valid (auto-commit-everything) policy.
+	commitGatePolicy graphrank.CommitGatePolicy
 
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
@@ -129,6 +139,23 @@ type EmbedderOptions struct {
 	// effective floor equals the calibrated tau). Zero means "not
 	// calibrated": graphrank's commit-path carve-out stays disabled.
 	CalibratedTopK int
+	// CommitGatePolicy is CHAOS-3857's sweep/measurement override,
+	// resolved by EmbedderFromEnv from three explicit env vars (see that
+	// function's doc comment) using the SAME per-knob "explicit override
+	// wins" precedent EnvSimilarityFloor already established. The zero
+	// value means "no override": graphrank.Engine.ResolveSubjects falls
+	// back to graphrank.DefaultCommitGatePolicy(), never to a
+	// zero-threshold policy -- see ResolveDeps.CommitGatePolicy's doc
+	// comment. Threaded through this vector-retrieval-configuration seam
+	// (rather than a separate, non-embedder-gated one) deliberately
+	// mirrors VectorMarginCommitThreshold/CalibratedTopK's own scoping:
+	// this is a MEASUREMENT surface for the SAME sweep, on the SAME seam,
+	// not a claim that the commit gates are vector-retrieval-specific
+	// (they are not -- they also govern lexical-only commits). A
+	// deployment with no embedder configured gets no override either way
+	// today; broadening the seam is future work if a non-vector sweep
+	// ever needs it.
+	CommitGatePolicy graphrank.CommitGatePolicy
 }
 
 func New(config Config) (*Adapter, error) {
@@ -170,6 +197,7 @@ func (a *Adapter) attachEmbedder(options EmbedderOptions) {
 	a.efRuntime = options.EfRuntime
 	a.vectorMarginCommitThreshold = options.VectorMarginCommitThreshold
 	a.calibratedTopK = options.CalibratedTopK
+	a.commitGatePolicy = options.CommitGatePolicy
 }
 
 // documentPrefixed applies the captured document-side task prefix, or returns
