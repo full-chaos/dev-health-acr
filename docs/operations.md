@@ -784,9 +784,9 @@ it counted only `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_
   `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`/`_MAX_ATTEMPTS` as the primary — see
   `modelprovider.runtimeConfig`) only after every primary attempt has
   failed, and wait for it in-line before returning. With a fallback
-  configured — the standing recommendation above — this roughly DOUBLES
-  the worst case per operation, not zero: primary attempts, then fallback
-  attempts.
+  configured (opt-in; not the default since CHAOS-3855 — see below) this
+  roughly DOUBLES the worst case per operation, not zero: primary
+  attempts, then fallback attempts.
 - **`ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` adds real wall-clock
   time beyond `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`, not inside it.** The
   OpenAI SDK's own retry loop
@@ -814,10 +814,11 @@ worst_case    = per_operation × 2   # interpret, then synthesize, sequentially
 ```
 
 With the documented defaults (`45s` timeout, `2` attempts, `2` transport
-retries) and the standing fallback recommendation: `per_attempt` = 45 + 2×8
-= 61s, `per_leg` = 2×61 = 122s, `per_operation` = 122×2 = 244s, `worst_case`
-= 244×2 = **~490s**. Without a fallback configured, halve `per_operation`
-to **~245s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
+retries): `per_attempt` = 45 + 2×8 = 61s, `per_leg` = 2×61 = 122s. As of
+CHAOS-3855 the default deployment has no fallback configured, so
+`per_operation` = 122, `worst_case` = 122×2 = **~245s**. If an operator
+opts a fallback back in, `per_operation` doubles to 244 and `worst_case`
+doubles to **~490s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
 deployment's actual configuration, plus headroom, and treat the 8s
 per-transport-retry term as a floor, not a ceiling, if the configured
 provider is known to return long `Retry-After` values. The timeout is
@@ -833,6 +834,19 @@ per corpus run (82K vs. 193K); `gpt-5-nano` was the weakest interpreter and
 the dominant source of fact-parameter rejections. The CHAOS-3770 measurements
 and the "fallback is required" conclusion immediately below predate that
 trial and are kept for historical context, not as the current recommendation.
+
+**Migrating off the pre-CHAOS-3855 recommendation.** A deployment still
+carrying the old recommendation sets only
+`ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` and leaves
+`ACR_CONTEXT_FABRIC_MODEL` unset. Before CHAOS-3855 that resolved to
+`gpt-5-nano` primary / `gpt-5.6-luna` fallback; after CHAOS-3855,
+`ACR_CONTEXT_FABRIC_MODEL` defaults to `gpt-5.6-luna` too, so the same
+environment now names an identical primary and fallback. `Config.validate`
+fails loud on that (by design — a silent dedupe would hide a
+misconfiguration), so the deployment fails to start with a `must name a
+different model` error until the operator **unsets
+`ACR_CONTEXT_FABRIC_MODEL_FALLBACK`** (the new default primary needs no
+fallback) or points it at a genuinely different model.
 
 **Model choice matters, and `gpt-5-nano` alone is not enough.** Measured
 live against `gpt-5-nano` (the CHAOS-3770 acceptance probes, both skipped

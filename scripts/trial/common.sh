@@ -25,10 +25,26 @@ fi
 # --git-common-dir resolves to the SAME .git for every linked worktree of
 # this repo, so its grandparent is dev-health regardless of which worktree
 # sourced this script.
-common_git_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --git-common-dir 2>/dev/null)"
+#
+# sol review F1: --git-common-dir alone is not enough. From a PLAIN
+# (non-worktree) checkout with cwd anywhere other than the repo root, git
+# prints a path RELATIVE TO THE CALLER'S CWD (e.g. "../../.git" from
+# scripts/trial) -- resolving that against a *different* cwd than the one
+# that produced it (the caller's, not the script directory's) lands on the
+# wrong root or fails outright. Prefer --path-format=absolute (git >=
+# 2.31, always prints an absolute path regardless of cwd shape); if an
+# older git rejects that flag, fall back to resolving the (possibly
+# relative) output inside the SAME subshell/cwd that produced it, which is
+# correct in either case because the relative path and the cd that follows
+# it now share one cwd context; if git itself is unavailable, fall back to
+# the pre-CHAOS-3855 path-relative derivation.
+common_git_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 if [[ -n "$common_git_dir" ]]; then
   dev_health_root="$(cd "$common_git_dir/../.." && pwd -P)"
 else
+  dev_health_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd "$(git rev-parse --git-common-dir 2>/dev/null)/../.." 2>/dev/null && pwd -P)"
+fi
+if [[ -z "$dev_health_root" ]]; then
   dev_health_root="$(cd "$repo_root/.." && pwd -P)"
 fi
 

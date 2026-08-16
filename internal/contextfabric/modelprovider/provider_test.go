@@ -275,9 +275,11 @@ func TestNew_neverForwardsProviderResponseContentInTheClassifiedError(t *testing
 
 func TestNew_fallsBackToTheStrongerModelWhenThePrimaryFails(t *testing.T) {
 	// Given a provider that fails the first model and answers the second --
-	// a primary/stronger-fallback shape (CHAOS-3855: the default primary is
-	// gpt-5.9-fallback-test with no fallback, but the fallback mechanism itself
-	// still works when an operator opts in).
+	// a primary/stronger-fallback shape. cfg's primary is DefaultModel
+	// (CHAOS-3855: gpt-5.6-luna, unset by default with no fallback in
+	// production); "gpt-5.9-fallback-test" below is just an arbitrary
+	// distinct model id proving the fallback MECHANISM still works end to
+	// end when an operator opts into it explicitly.
 	var mu sync.Mutex
 	seen := []string{}
 	provider := recordingProvider(t, func(writer http.ResponseWriter, request *http.Request) {

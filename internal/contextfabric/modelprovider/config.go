@@ -165,7 +165,16 @@ func (c Config) validate() error {
 			return err
 		}
 		if c.FallbackModel == c.Model {
-			return fmt.Errorf("%s must name a different model than %s", EnvFallbackModel, EnvModel)
+			// sol review F2: name both env vars AND their resolved values --
+			// "must name a different model" alone doesn't explain WHY they
+			// collide when neither was set to the same literal string by
+			// hand. The most likely real-world trigger post-CHAOS-3855 is
+			// exactly that: a deployment still carrying the pre-CHAOS-3855
+			// recommendation (MODEL unset, FALLBACK=gpt-5.6-luna) now has
+			// MODEL default to gpt-5.6-luna too, so both resolve to the
+			// same model though only one was ever set explicitly.
+			return fmt.Errorf("%s (%q) must name a different model than %s (%q) -- if you are migrating off the pre-CHAOS-3855 gpt-5-nano+gpt-5.6-luna-fallback recommendation, unset %s (gpt-5.6-luna is now the default primary with no fallback)",
+				EnvFallbackModel, c.FallbackModel, EnvModel, c.Model, EnvFallbackModel)
 		}
 	}
 	if err := c.validateBaseURL(); err != nil {
