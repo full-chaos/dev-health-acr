@@ -891,7 +891,7 @@ type snapshotCapturingResultStore struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions) error {
+func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities) error {
 	s.saveCalled = true
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
@@ -1080,7 +1080,7 @@ type keyRecordingResultStore struct {
 	savedKey string
 }
 
-func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity, _ ReusePromptVersions) error {
+func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities) error {
 	s.saved = result
 	s.savedKey = timeAxisKey
 	return nil
@@ -1257,20 +1257,22 @@ func TestF1_UnclampedRequestsKeyIdenticallyAcrossArrivals(t *testing.T) {
 	}
 }
 
-// retrievalRecordingResultStore records the CHAOS-3833 retrieval identity
-// AND the CHAOS-3862 prompt versions Save was given, so a test can assert
-// lookup and save carry the same deployment-current pair for either
-// dimension.
+// retrievalRecordingResultStore records the CHAOS-3833 retrieval identity,
+// the CHAOS-3862 round-1 prompt versions, and the CHAOS-3862 round-2
+// version authorities Save was given, so a test can assert lookup and save
+// carry the same deployment-current pair for any of these dimensions.
 type retrievalRecordingResultStore struct {
-	saveCalled         bool
-	savedRetrieval     ReuseRetrievalIdentity
-	savedPromptVersion ReusePromptVersions
+	saveCalled            bool
+	savedRetrieval        ReuseRetrievalIdentity
+	savedPromptVersion    ReusePromptVersions
+	savedVersionAuthority ReuseVersionAuthorities
 }
 
-func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity, promptVersions ReusePromptVersions) error {
+func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity, promptVersions ReusePromptVersions, versionAuthorities ReuseVersionAuthorities) error {
 	s.saveCalled = true
 	s.savedRetrieval = retrieval
 	s.savedPromptVersion = promptVersions
+	s.savedVersionAuthority = versionAuthorities
 	return nil
 }
 

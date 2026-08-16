@@ -191,13 +191,18 @@ type InvestigationResultStore interface {
 	// a caller who forgets it must fail to compile, and an implementation
 	// must never substitute a value it derived some other way.
 	//
-	// The final ReusePromptVersions is the CHAOS-3862 twin of the same
-	// idea, one dimension over: the deployment-CURRENT interpretation and
-	// synthesis prompt versions, persisted so a reuse lookup can bind to
-	// the prompt an already-stored answer was actually produced under,
-	// not just the model that produced it. Same explicit-parameter
-	// discipline, same reason.
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions) error
+	// ReusePromptVersions is the CHAOS-3862 twin of the same idea, one
+	// dimension over: the deployment-CURRENT interpretation and synthesis
+	// prompt versions, persisted so a reuse lookup can bind to the prompt
+	// an already-stored answer was actually produced under, not just the
+	// model that produced it. Same explicit-parameter discipline, same
+	// reason.
+	//
+	// The final ReuseVersionAuthorities is the CHAOS-3862 round-2
+	// class-close: three MORE deployment-current version authorities
+	// (query shape, canonical fact registry, model-output schema) --
+	// same explicit-parameter discipline, same reason, same migration.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities) error
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
 }
 
@@ -341,6 +346,40 @@ type SourceWatermarkSnapshot map[string]string
 // atomically with a deploy, no rebuild required, so it closes the same
 // deploy->cutover gap for a prompt bump that 0014 closed for an embed-text
 // change.
+//
+// QueryVersion, CanonicalServiceVersion, and ModelOutputSchemaVersion are
+// the CHAOS-3862 round-2 tenth through twelfth dimensions -- sol review's
+// class-close on "version authority missing from ReuseKey," a defect
+// class that had by then hit this codebase three times independently
+// (CHAOS-3833/3834's embed retrieval identity, this ticket's own round-1
+// prompt versions, and this round). See reuse_key_completeness_test.go
+// for the durable, reflection-based close: it enumerates every
+// version-shaped field VersionSet and ModelExecutionReceipt carry and
+// requires each to be either a ReuseKey member or an explicit,
+// reasoned exclusion, so a FUTURE version authority cannot be added to
+// either struct without a red test naming it.
+//
+// QueryVersion is devhealthfacts.QueryVersion -- which ClickHouse SQL/
+// column shape produced the canonical facts a stored answer was built
+// from (already stamped into every fresh result's
+// Versions.QueryVersion, hosted/open.go's contextFabricSynthesizerOptions
+// -- it was simply never a reuse discriminator).
+//
+// CanonicalServiceVersion is contextfabric.CanonicalFactRegistryVersion --
+// which canonical-fact-registry contract version composed the facts.
+//
+// ModelOutputSchemaVersion is genkitruntime.DefaultSchemaVersion -- the
+// genkit model-output JSON Schema version. ONE dimension, not two: the
+// SAME value governs both the interpretation and synthesis output
+// shapes (genkitruntime.Config carries a single SchemaVersion field, not
+// a per-operation pair) -- see VersionSet.InterpretationVersion's
+// classification in reuse_key_completeness_test.go for why that
+// confusingly-named field is what this dimension actually binds.
+//
+// All three follow the identical NULL/fail-closed persistence and
+// conjunctive-equality-predicate rules the prompt-version pair above
+// does (migration 0015, extended in this round rather than a new
+// migration -- same mechanism, same rows).
 type ReuseKey struct {
 	QuestionHash                string
 	ContractVersion             string
@@ -351,6 +390,9 @@ type ReuseKey struct {
 	RetrievalPolicyVersion      string
 	InterpretationPromptVersion string
 	SynthesisPromptVersion      string
+	QueryVersion                string
+	CanonicalServiceVersion     string
+	ModelOutputSchemaVersion    string
 }
 
 // ReuseRetrievalIdentity carries the deployment-CURRENT values of the two
@@ -387,6 +429,26 @@ type ReuseRetrievalIdentity struct {
 type ReusePromptVersions struct {
 	InterpretationPromptVersion string
 	SynthesisPromptVersion      string
+}
+
+// ReuseVersionAuthorities carries the deployment-CURRENT values of three
+// MORE version authorities (CHAOS-3862 round 2, sol review's class-close --
+// see ReuseKey's doc comment for what each one binds and why). Computed
+// once at composition time from the SAME constants the corresponding
+// production code paths already use (devhealthfacts.QueryVersion,
+// contextfabric.CanonicalFactRegistryVersion,
+// genkitruntime.DefaultSchemaVersion), so they cannot drift from what a
+// fresh result would actually stamp. Engine uses the SAME value on both
+// sides -- inside the ReuseKey a lookup builds AND as Save's explicit
+// parameter -- mirroring ReuseRetrievalIdentity/ReusePromptVersions
+// exactly. Any field left empty means "this deployment does not
+// participate in that dimension of reuse": Save persists SQL NULL and
+// FindReusable reports an ordinary miss on it -- fail-closed, never a
+// lookup that silently ignores the dimension.
+type ReuseVersionAuthorities struct {
+	QueryVersion             string
+	CanonicalServiceVersion  string
+	ModelOutputSchemaVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

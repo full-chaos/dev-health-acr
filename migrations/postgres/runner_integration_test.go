@@ -203,6 +203,75 @@ VALUES ($1, $2, '{}'::jsonb, now())`, resultID, multiResultOrg)
 	require.Zero(t, untouchedRows, "an organization with no investigation result must not gain an invalidations row")
 }
 
+// TestRunner_upgradeTo15AddsPromptAndVersionAuthorityReuseKeyColumns is
+// CHAOS-3862's sol round-2 F5: a real 0014->0015 upgrade, mirroring
+// TestRunner_upgradesInOrder_whenDatabaseMatchesReleasedMain's
+// released-main-fixture pattern (a runner built from a FIXED file subset,
+// simulating a database already at a prior released schema, upgraded by
+// the full embedded set) rather than always starting from an empty
+// database as every other Up() test in this file does. Asserts the
+// migration's complete, positive effect: all five new columns exist, all
+// five length CHECK constraints exist by their (deliberately abbreviated,
+// see 0015's own header comment on the 63-byte identifier limit) names,
+// the new v4 index exists, AND -- the replace-don't-stack half of 0015's
+// contract that a purely additive check would miss entirely -- the old v3
+// index is actually gone, not left stacked beside the new one.
+func TestRunner_upgradeTo15AddsPromptAndVersionAuthorityReuseKeyColumns(t *testing.T) {
+	// Given a database at the released main schema through migration 0014
+	// (everything CHAOS-3862 builds on top of)...
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	preReuseKeyVersionAuthorityFiles := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_acr_core.sql",
+		"0002_episode_repository_scoped_idempotency.sql",
+		"0003_credential_rotation_marker.sql",
+		"0004_device_authorization.sql",
+		"0005_device_authorization_hints.sql",
+		"0006_context_fabric_projection_checkpoints.sql",
+		"0007_context_fabric_projection_rebuild_markers.sql",
+		"0008_agent_episodes_updated_at.sql",
+		"0009_context_fabric_investigation_results.sql",
+		"0010_context_fabric_org_model_config.sql",
+		"0011_context_fabric_answer_reuse.sql",
+		"0012_context_fabric_reuse_fallback_identity_cutover.sql",
+		"0013_context_fabric_time_axis_reuse_key.sql",
+		"0014_context_fabric_embed_retrieval_reuse_key.sql",
+	} {
+		preReuseKeyVersionAuthorityFiles[name] = &fstest.MapFile{Data: mustReadFile(t, name)}
+	}
+	released, err := NewRunner(preReuseKeyVersionAuthorityFiles)
+	require.NoError(t, err)
+	require.NoError(t, released.Up(ctx, db))
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v3")
+
+	// When upgrading to the full (post-CHAOS-3862) migration set.
+	latest, err := Embedded()
+	require.NoError(t, err)
+
+	// Then
+	require.NoError(t, latest.Up(ctx, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
+
+	for _, column := range []string{
+		"interpretation_prompt_version", "synthesis_prompt_version",
+		"query_version", "canonical_service_version", "model_output_schema_version",
+	} {
+		requireContextFabricInvestigationResultsColumn(t, ctx, db, column)
+	}
+	for _, constraint := range []string{
+		"ck_acr_cf_investigation_results_interp_prompt_version_length",
+		"ck_acr_cf_investigation_results_synth_prompt_version_length",
+		"ck_acr_cf_investigation_results_query_version_length",
+		"ck_acr_cf_investigation_results_canon_svc_version_length",
+		"ck_acr_cf_investigation_results_model_output_schema_ver_length",
+	} {
+		requireConstraintExists(t, ctx, db, constraint)
+	}
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v4")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v3")
+}
+
 func TestRunner_serializesConcurrentUp_calls(t *testing.T) {
 	// Given
 	ctx := context.Background()
@@ -408,6 +477,54 @@ func requireDeviceAuthorizationHintColumns(t *testing.T, ctx context.Context, db
 		)`, column).Scan(&exists))
 		require.True(t, exists, "missing device authorization hint column %s", column)
 	}
+}
+
+// requireContextFabricInvestigationResultsColumn is the generic column-
+// existence check CHAOS-3862's upgrade test uses for all five new reuse-key
+// columns, rather than five near-duplicate single-purpose functions.
+func requireContextFabricInvestigationResultsColumn(t *testing.T, ctx context.Context, db *sql.DB, column string) {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'acr' AND table_name = 'context_fabric_investigation_results' AND column_name = $1
+	)`, column).Scan(&exists))
+	require.True(t, exists, "missing context_fabric_investigation_results column %s", column)
+}
+
+// requireConstraintExists/requireIndexExists/requireIndexAbsent back
+// CHAOS-3862's 0014->0015 upgrade proof: the migration's positive effect
+// (new columns, new constraints, the new index) AND its negative effect
+// (the OLD index actually dropped, not left stacked beside the new one --
+// the half of a replace-don't-stack migration a purely additive check
+// would never catch).
+func requireConstraintExists(t *testing.T, ctx context.Context, db *sql.DB, name string) {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_constraint c
+		JOIN pg_namespace n ON n.oid = c.connamespace
+		WHERE n.nspname = 'acr' AND c.conname = $1
+	)`, name).Scan(&exists))
+	require.True(t, exists, "missing constraint %s", name)
+}
+
+func requireIndexExists(t *testing.T, ctx context.Context, db *sql.DB, name string) {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_indexes WHERE schemaname = 'acr' AND indexname = $1
+	)`, name).Scan(&exists))
+	require.True(t, exists, "missing index %s", name)
+}
+
+func requireIndexAbsent(t *testing.T, ctx context.Context, db *sql.DB, name string) {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_indexes WHERE schemaname = 'acr' AND indexname = $1
+	)`, name).Scan(&exists))
+	require.False(t, exists, "index %s should have been dropped by the replacing migration", name)
 }
 
 func mustReadFile(t *testing.T, name string) []byte {

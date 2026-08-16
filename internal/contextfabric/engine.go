@@ -61,6 +61,14 @@ type EngineOptions struct {
 	// of reuse participation (rows persist NULL and lookups miss on it),
 	// the same fail-closed convention as every other field here.
 	ReusePromptVersions ReusePromptVersions
+	// ReuseVersionAuthorities (CHAOS-3862 round 2) is three MORE
+	// deployment-current version authorities -- composition must wire it
+	// from the SAME constants the corresponding fresh-result composition
+	// path uses (devhealthfacts.QueryVersion,
+	// contextfabric.CanonicalFactRegistryVersion,
+	// genkitruntime.DefaultSchemaVersion), same reasoning and same
+	// fail-closed convention as ReusePromptVersions immediately above.
+	ReuseVersionAuthorities ReuseVersionAuthorities
 }
 
 type EngineDependencies struct {
@@ -160,6 +168,7 @@ type Engine struct {
 	reuseModelIdentities       []string
 	reuseRetrievalIdentity     ReuseRetrievalIdentity
 	reusePromptVersions        ReusePromptVersions
+	reuseVersionAuthorities    ReuseVersionAuthorities
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -185,9 +194,10 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		reuseRetrievalIdentity: options.ReuseRetrievalIdentity,
-		reusePromptVersions:    options.ReusePromptVersions,
-		serviceVersion:         options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRetrievalIdentity:  options.ReuseRetrievalIdentity,
+		reusePromptVersions:     options.ReusePromptVersions,
+		reuseVersionAuthorities: options.ReuseVersionAuthorities,
+		serviceVersion:          options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
 
@@ -498,7 +508,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// interpreted one: the lookup runs before Interpret and can only
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
-		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity, e.reusePromptVersions); err != nil {
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}

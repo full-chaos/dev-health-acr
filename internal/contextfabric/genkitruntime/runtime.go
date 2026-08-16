@@ -190,8 +190,19 @@ const (
 	// Exported for the same CHAOS-3862 reason as
 	// DefaultInterpretationPromptVersion above.
 	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v9"
-	defaultSchemaVersion          = "context-fabric-model-output.v1"
-	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
+	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
+	// -- ONE value shared by both the interpret and synthesize calls
+	// (Config carries a single SchemaVersion field, not a per-operation
+	// pair), stamped into every receipt and, via
+	// model_runtime.go's Synthesize() composer, into
+	// InvestigationResult.Versions.InterpretationVersion.
+	//
+	// Exported (CHAOS-3862 sol round 2 P2 class-close): answer reuse must
+	// bind a lookup to the SAME deployment-current value this defaulting
+	// uses, before either model call ever runs -- see
+	// contextfabric.ReuseKey.ModelOutputSchemaVersion's doc comment.
+	DefaultSchemaVersion    = "context-fabric-model-output.v1"
+	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 )
 
 type Config struct {
@@ -314,7 +325,7 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 		config.SynthesisPromptVersion = DefaultSynthesisPromptVersion
 	}
 	if strings.TrimSpace(config.SchemaVersion) == "" {
-		config.SchemaVersion = defaultSchemaVersion
+		config.SchemaVersion = DefaultSchemaVersion
 	}
 	if strings.TrimSpace(config.EvaluatorVersion) == "" {
 		config.EvaluatorVersion = defaultEvaluatorVersion

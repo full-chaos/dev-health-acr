@@ -164,6 +164,83 @@ func TestBuildContextFabricInvestigator_wiresBothReuseSnapshottersWhenReuseIsEna
 	}
 }
 
+// TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority is
+// CHAOS-3862 sol round-2 finding F4: every prior test in this file that
+// touches reuse composition builds the engine and asserts a DEPENDENCY
+// (a snapshotter, an invalidator) is non-nil. None of them ever asserted
+// the OPTIONS-level version-authority strings/slices Engine actually
+// received -- so zeroing EngineOptions.ReusePromptVersions (or any of the
+// other reuse-key options fields) in open.go would leave every engine/store
+// unit test green (they hand-build EngineOptions themselves) while
+// production silently crated the corresponding dimension of reuse to a
+// permanent "always NULL, never matches" no-op. This test closes that gap
+// by building the REAL composition (buildContextFabricInvestigator, the
+// same seam every other test in this file exercises) and reflecting on the
+// resulting *contextfabric.Engine's own unexported reuse-key fields --
+// mirroring TestBuildContextFabricInvestigator_wiresBothReuseSnapshottersWhenReuseIsEnabled's
+// FieldByName technique immediately above, extended from IsNil() to
+// String()/Len() since these are string and []string fields, not
+// interfaces. Value.String() and Value.Len() are safe to call on a field
+// reached through an unexported parent field (unlike Interface()), so no
+// new production surface is needed purely for this test.
+func TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority(t *testing.T) {
+	configureGraph(t)
+	// A configured model provider (mirroring
+	// TestBuildContextFabricInvestigator_composesFalkorGraphWithAModelRuntime)
+	// is required for reuseModelIdentities to be non-empty: with NO model
+	// provider configured, an empty chain is the CORRECT behavior (see
+	// TestBuildContextFabricInvestigator_composesFalkorGraphWithoutAModelRuntime),
+	// not a wiring bug -- so this test's "everything should be wired"
+	// claim only holds for the fully-configured deployment shape.
+	t.Setenv(modelprovider.EnvAPIKey, "sk-test")
+	request, postgres, clickhouse := investigatorBuildRequest(t)
+	request.config.AnswerReuseMaxAge = time.Hour
+
+	investigator, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	if err != nil {
+		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
+	}
+	engine, ok := investigator.(*contextfabric.Engine)
+	if !ok {
+		t.Fatalf("investigator is a %T, want *contextfabric.Engine", investigator)
+	}
+	engineValue := reflect.ValueOf(engine).Elem()
+
+	if v := engineValue.FieldByName("reuseProjectionVersion").String(); v == "" {
+		t.Error("reuseProjectionVersion is empty; the projection-version dimension of reuse silently never matches")
+	}
+	if n := engineValue.FieldByName("reuseModelIdentities").Len(); n == 0 {
+		t.Error("reuseModelIdentities is empty; the model-identity dimension of reuse silently never matches")
+	}
+
+	retrieval := engineValue.FieldByName("reuseRetrievalIdentity")
+	if v := retrieval.FieldByName("EmbedRetrievalIdentity").String(); v == "" {
+		t.Error("reuseRetrievalIdentity.EmbedRetrievalIdentity is empty (CHAOS-3833)")
+	}
+	if v := retrieval.FieldByName("RetrievalPolicyVersion").String(); v == "" {
+		t.Error("reuseRetrievalIdentity.RetrievalPolicyVersion is empty (CHAOS-3833)")
+	}
+
+	prompts := engineValue.FieldByName("reusePromptVersions")
+	if v := prompts.FieldByName("InterpretationPromptVersion").String(); v == "" {
+		t.Error("reusePromptVersions.InterpretationPromptVersion is empty (CHAOS-3862): open.go's wiring silently disabled this dimension of reuse")
+	}
+	if v := prompts.FieldByName("SynthesisPromptVersion").String(); v == "" {
+		t.Error("reusePromptVersions.SynthesisPromptVersion is empty (CHAOS-3862): open.go's wiring silently disabled this dimension of reuse")
+	}
+
+	authorities := engineValue.FieldByName("reuseVersionAuthorities")
+	if v := authorities.FieldByName("QueryVersion").String(); v == "" {
+		t.Error("reuseVersionAuthorities.QueryVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
+	}
+	if v := authorities.FieldByName("CanonicalServiceVersion").String(); v == "" {
+		t.Error("reuseVersionAuthorities.CanonicalServiceVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
+	}
+	if v := authorities.FieldByName("ModelOutputSchemaVersion").String(); v == "" {
+		t.Error("reuseVersionAuthorities.ModelOutputSchemaVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
+	}
+}
+
 // TestBuildContextFabricInvestigator_reuseInvalidatorIsNilWhenReuseIsDisabled
 // is the CHAOS-3786 counterpart: with answer reuse OFF (the default --
 // ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE unset), there is no reuse-capable

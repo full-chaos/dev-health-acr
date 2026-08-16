@@ -229,7 +229,7 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 	require.NoError(t, err)
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, currentAxisKey, testReuseRetrievalIdentity, testReusePromptVersions))
+	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, currentAxisKey, testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities))
 
 	// A byte-identical follow-up request -- same text, same current axis --
 	// must find it. Before F6 this was a permanent miss.
@@ -247,6 +247,10 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 		// CHAOS-3862: same conjunctive-equality mirror, one dimension over.
 		InterpretationPromptVersion: testReusePromptVersions.InterpretationPromptVersion,
 		SynthesisPromptVersion:      testReusePromptVersions.SynthesisPromptVersion,
+		// CHAOS-3862 round 2: same mirror, three MORE dimensions.
+		QueryVersion:             testReuseVersionAuthorities.QueryVersion,
+		CanonicalServiceVersion:  testReuseVersionAuthorities.CanonicalServiceVersion,
+		ModelOutputSchemaVersion: testReuseVersionAuthorities.ModelOutputSchemaVersion,
 	}
 	reused, found, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)

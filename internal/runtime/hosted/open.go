@@ -424,6 +424,20 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			InterpretationPromptVersion: genkitruntime.DefaultInterpretationPromptVersion,
 			SynthesisPromptVersion:      genkitruntime.DefaultSynthesisPromptVersion,
 		},
+		// CHAOS-3862 round 2 (sol review class-close): three MORE
+		// deployment-current version authorities, read from the SAME
+		// constants contextFabricSynthesizerOptions above already stamps
+		// on every fresh result's Versions.QueryVersion/
+		// CanonicalServiceVersion (devhealthfacts.QueryVersion,
+		// contextfabric.CanonicalFactRegistryVersion), plus the same
+		// genkitruntime schema-version default the prompt-version pair
+		// above already reads from. Wired unconditionally for the same
+		// reason as ReusePromptVersions immediately above.
+		ReuseVersionAuthorities: contextfabric.ReuseVersionAuthorities{
+			QueryVersion:             devhealthfacts.QueryVersion,
+			CanonicalServiceVersion:  contextfabric.CanonicalFactRegistryVersion,
+			ModelOutputSchemaVersion: genkitruntime.DefaultSchemaVersion,
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
