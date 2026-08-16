@@ -96,14 +96,34 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	arm := os.Getenv("ACR_TEST_TRIAL_ARM")
 
 	corpus := loadTrialCorpus(t, corpusPath)
-	limit := len(corpus)
-	if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			t.Fatalf("ACR_TEST_TRIAL_LIMIT must be a positive integer, got %q", raw)
+	// indices is the ordered set of corpus positions this run processes.
+	// ACR_TEST_TRIAL_INDICES (comma-separated, e.g. "27,28,29") selects an
+	// EXACT subset -- for targeted reclassification reruns, so a rerun does
+	// not have to pay for the other 40+ already-known cases. Otherwise
+	// ACR_TEST_TRIAL_LIMIT (a prefix count) or the full corpus applies, as
+	// before.
+	var indices []int
+	if raw := os.Getenv("ACR_TEST_TRIAL_INDICES"); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || n < 0 || n >= len(corpus) {
+				t.Fatalf("ACR_TEST_TRIAL_INDICES: invalid index %q (corpus has %d cases)", part, len(corpus))
+			}
+			indices = append(indices, n)
 		}
-		if n < limit {
-			limit = n
+	} else {
+		limit := len(corpus)
+		if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n <= 0 {
+				t.Fatalf("ACR_TEST_TRIAL_LIMIT must be a positive integer, got %q", raw)
+			}
+			if n < limit {
+				limit = n
+			}
+		}
+		for i := 0; i < limit; i++ {
+			indices = append(indices, i)
 		}
 	}
 
@@ -156,14 +176,25 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 
 	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
 
+	// targeted (ACR_TEST_TRIAL_INDICES set) means a small, explicit-index
+	// reclassification rerun, not a normal sequential arm pass -- the
+	// systematic-failure/sanity-anchor controls below are calibrated
+	// against a full run starting at position 0 and would misfire on a
+	// 3-6 case targeted subset, so they are skipped in that mode.
+	targeted := os.Getenv("ACR_TEST_TRIAL_INDICES") != ""
+
 	report := trialReport{Arm: arm, CorpusTotal: len(corpus), CasesRun: 0}
 	firstTen := make([]caseOutcome, 0, 10)
-	for i := 0; i < limit; i++ {
+	for pos, i := range indices {
 		testCase := corpus[i]
 		outcome := runTrialCase(ctx, t, investigator, principal, i, testCase)
 		report.Cases = append(report.Cases, outcome)
 		report.CasesRun++
 		tallyOutcome(&report, outcome)
+
+		if targeted {
+			continue
+		}
 
 		// Sanity-anchor control (team-lead ruling): ANY control commitment
 		// is a red flag reported immediately, not batched to the end --
@@ -175,10 +206,10 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 			break
 		}
 
-		if i < 10 {
+		if pos < 10 {
 			firstTen = append(firstTen, outcome)
 		}
-		if i == 9 {
+		if pos == 9 {
 			if class, count, correct := earlyAbortSignature(firstTen); count >= 6 && correct <= 1 {
 				report.EarlyAbort = true
 				report.EarlyAbortSignature = fmt.Sprintf("%s x%d/10 (correct=%d)", class, count, correct)
@@ -191,7 +222,7 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		// enough cases to be meaningful (very high or persistently zero
 		// commit rate) means STOP and report a suspected harness-wiring
 		// issue before finishing the arm.
-		if i == 14 {
+		if pos == 14 {
 			rate := float64(report.CommittedTotal) / float64(report.CasesRun)
 			if rate > 0.30 {
 				report.SuspectedWiringIssue = fmt.Sprintf("commit rate %.0f%% after %d cases is far above the benchmark's ~8%% -- suspected over-commit", rate*100, report.CasesRun)
