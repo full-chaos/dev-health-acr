@@ -317,6 +317,8 @@ func contextFabricRejectionClass(err error) string {
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, context.Canceled):
+		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "deadline_exceeded"
 	case errors.Is(err, contextfabric.ErrInvalidTimeBound):
@@ -331,6 +333,17 @@ func contextFabricRejectionClass(err error) string {
 		return "synthesis_rejected"
 	case errors.Is(err, contextfabric.ErrModelOutput):
 		return "model_output_invalid"
+	// CHAOS-3742 fable-review finding: these two were omitted from the
+	// original chain, so both fell into "unclassified" -- exactly the
+	// PRE-CHAOS-3810 symptom internal/api/context_fabric_routes.go's own
+	// comment describes ("every real-corpus investigation landed in the
+	// fallthrough below"). Added in the SAME order routes.go checks them
+	// (both ACR-side invariant breaches, checked last, right before its own
+	// unclassified fallthrough).
+	case errors.Is(err, contextfabric.ErrNoInvestigationSubjects):
+		return "no_investigation_subjects"
+	case errors.Is(err, contextfabric.ErrInvalidResult):
+		return "invalid_result"
 	default:
 		return "unclassified"
 	}
@@ -346,9 +359,17 @@ type caseOutcome struct {
 	// synthesis_rejected / model_call_failed (stage-ambiguous provider/
 	// transport failure) / invalid_result_downstream / no_match /
 	// clarification_required / committed_no_synthesis / usable_answer.
-	Stage                  string  `json:"stage"`
-	Status                 string  `json:"status,omitempty"`
-	ErrorClass             string  `json:"error_class,omitempty"`
+	Stage      string `json:"stage"`
+	Status     string `json:"status,omitempty"`
+	ErrorClass string `json:"error_class,omitempty"`
+	// ErrorText is the raw classified Go error string (ACR's own sentinel/
+	// wrapper text, never raw model output -- production sanitizes provider
+	// error bodies before they ever reach this layer). Captured so an
+	// "unclassified" case can be diagnosed after the fact without a rerun,
+	// unlike arms 1-3's original runs (fable-review finding: the classifier
+	// omitted two real sentinels, and there was no raw text to recover
+	// which cases hit them).
+	ErrorText              string  `json:"error_text,omitempty"`
 	CommittedCount         int     `json:"committed_count"`
 	CandidateCount         int     `json:"candidate_count,omitempty"`
 	TopCandidateConfidence float64 `json:"top_candidate_confidence,omitempty"`
@@ -386,6 +407,7 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 
 	if err != nil {
 		outcome.ErrorClass = contextFabricRejectionClass(err)
+		outcome.ErrorText = truncateErrorText(err.Error())
 		outcome.Outcome = "error:" + outcome.ErrorClass
 		outcome.Stage = errorStage(outcome.ErrorClass)
 		return outcome
@@ -467,6 +489,19 @@ func successStage(status contractsv1.ContextFabricInvestigationStatus, committed
 		}
 		return "clarification_required"
 	}
+}
+
+// truncateErrorText bounds a captured error string. ACR's own error text
+// here is always internal sentinel/wrapper prose (provider error bodies are
+// sanitized before they ever reach this layer -- modelprovider.
+// SanitizeProviderErrorBody), never raw model or corpus content, but a
+// bound is kept anyway as defense in depth.
+func truncateErrorText(text string) string {
+	const max = 500
+	if len(text) <= max {
+		return text
+	}
+	return text[:max] + "...(truncated)"
 }
 
 func committedMatchesTrial(committed []contractsv1.ContextFabricSubjectRef, tc trialCase) bool {
