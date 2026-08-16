@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -302,26 +304,64 @@ type gitSourceIdentity struct {
 
 func requireGitSourceIdentity(t *testing.T) gitSourceIdentity {
 	t.Helper()
-	headOut, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	topOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		t.Fatalf("determine source commit (required for report provenance -- refusing to run rather than report with an unknown source identity): %v", err)
+		t.Fatalf("determine repo root (required for report provenance -- refusing to run rather than report with an unknown source identity): %v", err)
 	}
-	commit := strings.TrimSpace(string(headOut))
-	statusOut, err := exec.Command("git", "status", "--porcelain").Output()
-	if err != nil {
-		t.Fatalf("determine worktree dirty state (required for report provenance): %v", err)
+	repoRoot := strings.TrimSpace(string(topOut))
+	git := func(args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoRoot
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %s (required for report provenance): %v", strings.Join(args, " "), err)
+		}
+		return out
 	}
+	commit := strings.TrimSpace(string(git("rev-parse", "HEAD")))
+	statusOut := git("status", "--porcelain")
 	identity := gitSourceIdentity{commit: commit}
 	if strings.TrimSpace(string(statusOut)) != "" {
 		identity.dirty = true
-		diffOut, err := exec.Command("git", "diff", "HEAD").Output()
-		if err != nil {
-			t.Fatalf("hash worktree diff for a dirty tree (required for report provenance): %v", err)
+		diffOut := git("diff", "HEAD")
+		digest := sha256.New()
+		digest.Write(diffOut)
+		// sol review R1 residual: `git diff HEAD` only covers TRACKED
+		// changes -- a brand-new untracked file makes the tree dirty (the
+		// status check above already sees it) but was invisible to the
+		// digest. Fold every untracked path's content in too, sorted for
+		// determinism, so the digest actually reflects everything that
+		// makes this tree not equal to SourceCommit's. `git status
+		// --porcelain` paths are REPO-ROOT-relative regardless of the
+		// process's own cwd (verified live), so they are joined against
+		// repoRoot here, not read as-is.
+		for _, path := range untrackedPaths(t, statusOut) {
+			content, err := os.ReadFile(filepath.Join(repoRoot, path))
+			if err != nil {
+				t.Fatalf("hash untracked file %s for provenance digest: %v", path, err)
+			}
+			digest.Write([]byte("\x00" + path + "\x00"))
+			sum := sha256.Sum256(content)
+			digest.Write(sum[:])
 		}
-		sum := sha256.Sum256(diffOut)
-		identity.diffDigest = hex.EncodeToString(sum[:])
+		identity.diffDigest = hex.EncodeToString(digest.Sum(nil))
 	}
 	return identity
+}
+
+// untrackedPaths extracts the "??"-prefixed (untracked) file paths from
+// `git status --porcelain` output, sorted for deterministic digest input.
+func untrackedPaths(t *testing.T, porcelain []byte) []string {
+	t.Helper()
+	var paths []string
+	for _, line := range strings.Split(string(porcelain), "\n") {
+		if strings.HasPrefix(line, "?? ") {
+			paths = append(paths, strings.TrimPrefix(line, "?? "))
+		}
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func requireEnv(t *testing.T, key string) string {

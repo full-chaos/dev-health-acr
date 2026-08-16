@@ -14,7 +14,10 @@ trial_wire_common_env
 export ACR_TEST_TRIAL_OUT="$ACR_TRIAL_RESULTS_DIR/gen-trial-${ARM}.json"
 export ACR_TEST_TRIAL_ARM="$ARM"
 
-exdir="$dev_health_root/acr-wt-trial/.trial-exchange-$(date -u +%Y%m%dT%H%M%SZ)"
+# sol review R2 residual: derive from repo_root (git rev-parse
+# --show-toplevel, see common.sh), never a hard-coded checkout name --
+# this worktree could be cloned/checked out under any directory name.
+exdir="$repo_root/.trial-exchange-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$exdir/requests" "$exdir/responses"
 export ACR_TEST_TRIAL_EXCHANGE_DIR="$exdir"
 export ACR_TEST_TRIAL_EXCHANGE_TIMEOUT="${ACR_TRIAL_EXCHANGE_TIMEOUT:-10m}"

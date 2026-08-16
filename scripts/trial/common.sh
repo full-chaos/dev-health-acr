@@ -8,7 +8,14 @@
 # baked into a script file (sol review F12).
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+# git-aware repo root (sol review R2 residual): correct regardless of the
+# checkout's directory NAME, unlike a hard-coded "acr-wt-trial" path
+# component would be. Falls back to the path-relative derivation only if
+# git itself is unavailable.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-toplevel 2>/dev/null)"
+if [[ -z "$repo_root" ]]; then
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+fi
 dev_health_root="$(cd "$repo_root/.." && pwd -P)"
 
 # The withheld corpus and the trial-results output dir live in the parent
