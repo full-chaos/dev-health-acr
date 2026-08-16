@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedcache"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
@@ -407,6 +408,35 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ReuseRetrievalIdentity: contextfabric.ReuseRetrievalIdentity{
 			EmbedRetrievalIdentity: embedRetrievalIdentity,
 			RetrievalPolicyVersion: falkorgraph.RetrievalPolicyVersion,
+		},
+		// CHAOS-3862: the deployment-current interpretation/synthesis
+		// prompt versions, read from the SAME genkitruntime defaulting
+		// newContextFabricModelRuntime's underlying genkitruntime.New call
+		// uses whenever Config leaves either field unset (which every
+		// production caller does today -- see modelprovider.runtimeConfig)
+		// -- so a prompt bump can never drift from what this value reports.
+		// Wired unconditionally, the same way ReuseProjectionVersion and
+		// ReuseModelIdentities above are: independent of whether
+		// Options.ModelRuntimeOverride is set for a diagnostic trial run,
+		// mirroring how those two dimensions are already deployment-static
+		// rather than override-aware.
+		ReusePromptVersions: contextfabric.ReusePromptVersions{
+			InterpretationPromptVersion: genkitruntime.DefaultInterpretationPromptVersion,
+			SynthesisPromptVersion:      genkitruntime.DefaultSynthesisPromptVersion,
+		},
+		// CHAOS-3862 round 2 (sol review class-close): three MORE
+		// deployment-current version authorities, read from the SAME
+		// constants contextFabricSynthesizerOptions above already stamps
+		// on every fresh result's Versions.QueryVersion/
+		// CanonicalServiceVersion (devhealthfacts.QueryVersion,
+		// contextfabric.CanonicalFactRegistryVersion), plus the same
+		// genkitruntime schema-version default the prompt-version pair
+		// above already reads from. Wired unconditionally for the same
+		// reason as ReusePromptVersions immediately above.
+		ReuseVersionAuthorities: contextfabric.ReuseVersionAuthorities{
+			QueryVersion:             devhealthfacts.QueryVersion,
+			CanonicalServiceVersion:  contextfabric.CanonicalFactRegistryVersion,
+			ModelOutputSchemaVersion: genkitruntime.DefaultSchemaVersion,
 		},
 	})
 	if err != nil {

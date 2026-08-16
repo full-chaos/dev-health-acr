@@ -1045,9 +1045,9 @@ func TestNewWithGeneratorDefaultsVersionsFromModel(t *testing.T) {
 	if runtime.config.ModelVersion != "test/model" {
 		t.Fatalf("ModelVersion default = %q, want model name", runtime.config.ModelVersion)
 	}
-	if runtime.config.InterpretationPromptVersion != defaultInterpretationPromptVersion ||
-		runtime.config.SynthesisPromptVersion != defaultSynthesisPromptVersion ||
-		runtime.config.SchemaVersion != defaultSchemaVersion ||
+	if runtime.config.InterpretationPromptVersion != DefaultInterpretationPromptVersion ||
+		runtime.config.SynthesisPromptVersion != DefaultSynthesisPromptVersion ||
+		runtime.config.SchemaVersion != DefaultSchemaVersion ||
 		runtime.config.EvaluatorVersion != defaultEvaluatorVersion {
 		t.Fatalf("config defaults = %#v", runtime.config)
 	}

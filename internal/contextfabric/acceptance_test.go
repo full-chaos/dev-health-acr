@@ -40,7 +40,7 @@ func newMapResultStore() *mapResultStore {
 	return &mapResultStore{byOrg: map[string]map[string]InvestigationResult{}}
 }
 
-func (s *mapResultStore) Save(_ context.Context, principal storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity) error {
+func (s *mapResultStore) Save(_ context.Context, principal storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.byOrg[principal.OrgID] == nil {
@@ -499,7 +499,7 @@ func TestAcceptanceUnauthorizedSubjectDegradesSilentlyWithoutLeaking(t *testing.
 	priorPrincipal := storage.Principal{OrgID: "org_other_tenant"}
 	priorResult := bootstrapDraftToResult(project)
 	priorResult.ResultID = "result_prior_unauth1"
-	if err := results.Save(context.Background(), priorPrincipal, priorResult, nil, nil, TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent}), ReuseRetrievalIdentity{}); err != nil {
+	if err := results.Save(context.Background(), priorPrincipal, priorResult, nil, nil, TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent}), ReuseRetrievalIdentity{}, ReusePromptVersions{}, ReuseVersionAuthorities{}); err != nil {
 		t.Fatalf("seed Save() error = %v", err)
 	}
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), results)

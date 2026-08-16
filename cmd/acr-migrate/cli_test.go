@@ -76,13 +76,13 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 
 	// Then
 	require.NoError(t, firstErr)
-	// CHAOS-3786 added migration 0012, CHAOS-3781 added 0013, and
-	// CHAOS-3833 added 0014, so the embedded set is now 14 files. A
-	// future migration must bump this literal too -- see
+	// CHAOS-3786 added migration 0012, CHAOS-3781 added 0013, CHAOS-3833
+	// added 0014, and CHAOS-3862 added 0015, so the embedded set is now 15
+	// files. A future migration must bump this literal too -- see
 	// expectedMigrationVersions in
 	// migrations/postgres/runner_integration_test.go for the same
 	// convention, held in one place there.
-	require.Equal(t, "applied 14 migrations\n", first.String())
+	require.Equal(t, "applied 15 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

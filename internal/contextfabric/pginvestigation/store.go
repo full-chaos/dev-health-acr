@@ -109,7 +109,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity, promptVersions contextfabric.ReusePromptVersions, versionAuthorities contextfabric.ReuseVersionAuthorities) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -145,6 +145,32 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 			retrievalPolicyVersion = sql.NullString{String: retrieval.RetrievalPolicyVersion, Valid: true}
 		}
 	}
+	// CHAOS-3862: same "question_hash resolved non-NULL AND composition
+	// supplied the value" gate as the retrieval pair immediately above --
+	// an empty prompt version maps to SQL NULL, so FindReusable's
+	// conjunctive equality predicate can never match it.
+	var interpretationPromptVersion, synthesisPromptVersion sql.NullString
+	if questionHash.Valid {
+		if promptVersions.InterpretationPromptVersion != "" {
+			interpretationPromptVersion = sql.NullString{String: promptVersions.InterpretationPromptVersion, Valid: true}
+		}
+		if promptVersions.SynthesisPromptVersion != "" {
+			synthesisPromptVersion = sql.NullString{String: promptVersions.SynthesisPromptVersion, Valid: true}
+		}
+	}
+	// CHAOS-3862 round 2: same gate, three MORE version authorities.
+	var queryVersion, canonicalServiceVersion, modelOutputSchemaVersion sql.NullString
+	if questionHash.Valid {
+		if versionAuthorities.QueryVersion != "" {
+			queryVersion = sql.NullString{String: versionAuthorities.QueryVersion, Valid: true}
+		}
+		if versionAuthorities.CanonicalServiceVersion != "" {
+			canonicalServiceVersion = sql.NullString{String: versionAuthorities.CanonicalServiceVersion, Valid: true}
+		}
+		if versionAuthorities.ModelOutputSchemaVersion != "" {
+			modelOutputSchemaVersion = sql.NullString{String: versionAuthorities.ModelOutputSchemaVersion, Valid: true}
+		}
+	}
 	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
 	// EFFECTIVE request context, matching exactly what FindReusable will
 	// key with. It is NOT re-derived from result.Interpretation here -- an
@@ -166,12 +192,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 
 	insertResult, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 ON CONFLICT (result_id) DO NOTHING`,
 		resultID, orgID, payload, result.GeneratedAt,
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
-		embedRetrievalIdentity, retrievalPolicyVersion)
+		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
+		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -461,6 +488,30 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	if strings.TrimSpace(key.EmbedRetrievalIdentity) == "" || strings.TrimSpace(key.RetrievalPolicyVersion) == "" {
 		return contextfabric.InvestigationResult{}, false, nil
 	}
+	// CHAOS-3862: same fail-closed convention, one dimension over -- a
+	// composition that never supplied the current prompt versions must
+	// miss, not run a lookup that ignores them.
+	if strings.TrimSpace(key.InterpretationPromptVersion) == "" || strings.TrimSpace(key.SynthesisPromptVersion) == "" {
+		return contextfabric.InvestigationResult{}, false, nil
+	}
+	// CHAOS-3862 round 2: same fail-closed convention, three MORE
+	// dimensions.
+	if strings.TrimSpace(key.QueryVersion) == "" || strings.TrimSpace(key.CanonicalServiceVersion) == "" || strings.TrimSpace(key.ModelOutputSchemaVersion) == "" {
+		return contextfabric.InvestigationResult{}, false, nil
+	}
+	// sol round-2 F4 (noted, not solved -- no telemetry vocabulary change):
+	// every "ordinary miss" this guard block produces -- a genuinely
+	// unconfigured dimension due to a composition bug, same as a normal
+	// cache miss -- is indistinguishable once it reaches Engine.tryReuse:
+	// FindReusable returns (false, nil) either way, and Engine folds
+	// every such case into the single AnswerReuseMissNoCandidate outcome
+	// (answer_reuse.go). AnswerReuseOutcome (engine.go) has no finer
+	// vocabulary for "a required reuse dimension was silently never
+	// wired" versus "no matching row exists" today. Giving this its own
+	// distinguishable reason would need a new outcome value (and every
+	// EngineTelemetry implementation to handle it) -- real plumbing this
+	// package cannot add unilaterally, so it is flagged here rather than
+	// invented.
 
 	// Codex round-1 F6: the staleness window uses created_at (DB
 	// clock_timestamp(), migration 0009) against DB now() -- NEVER
@@ -501,6 +552,19 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// this query can never reuse a pre-change answer (per-replica
 	// fail-closed; the fleet-wide guarantee additionally needs the
 	// two-phase rollout gate documented in docs/operations.md).
+	//
+	// CHAOS-3862: interpretation_prompt_version and synthesis_prompt_version
+	// are two MORE conjunctive equality predicates, migration 0015, same
+	// NULL-never-matches fail-closed shape as the pair immediately above --
+	// a pre-0015 row holds NULL in both and can never satisfy either
+	// predicate, so a prompt bump is a clean cutover for reuse the moment
+	// this binary deploys, without waiting for the staleness window to
+	// expire.
+	//
+	// CHAOS-3862 round 2: query_version, canonical_service_version, and
+	// model_output_schema_version are three MORE conjunctive predicates,
+	// same migration (extended, not a new one), same NULL-never-matches
+	// shape.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -512,6 +576,11 @@ WHERE org_id = $1
   AND time_axis_key = $7
   AND embed_retrieval_identity = $8
   AND retrieval_policy_version = $9
+  AND interpretation_prompt_version = $10
+  AND synthesis_prompt_version = $11
+  AND query_version = $12
+  AND canonical_service_version = $13
+  AND model_output_schema_version = $14
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -527,7 +596,8 @@ WHERE org_id = $1
 ORDER BY created_at DESC, result_id DESC
 LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
-		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion)
+		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
+		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion)
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):

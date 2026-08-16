@@ -58,7 +58,7 @@ func TestHistoricalAnswerReachesBothRealSurfacesLabelled(t *testing.T) {
 	store := memoryinvestigation.NewStore()
 	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result,
 		contextfabric.SourceWatermarkSnapshot{}, nil,
-		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: result.Temporal.Effective.AsOf}), contextfabric.ReuseRetrievalIdentity{}); err != nil {
+		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: result.Temporal.Effective.AsOf}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}); err != nil {
 		t.Fatalf("seed historical result: %v", err)
 	}
 	investigator := investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
