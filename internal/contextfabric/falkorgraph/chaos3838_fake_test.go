@@ -648,12 +648,18 @@ func TestFulltextSearchNodes_SingleWordSynonymsStillOR(t *testing.T) {
 // TestFulltextSearchNodes_ExpansionNeverDisplacesABaseHit is the regression
 // proof: a base hit ("target") must survive regardless of how many
 // synonym-matched rows the expansion query returns, or how a combined
-// single-query LIMIT would have ranked them. limit=1 here to make the
-// starvation scenario concrete: base finds exactly 1 (its own full
-// budget), so expansion has ZERO remaining capacity -- proving base's
-// candidate is never at risk, and that the overall call still reports
-// truncated=true (competing expansion-only candidates genuinely existed
-// and could not be shown), never silently drops that signal.
+// single-query LIMIT would have ranked them -- base and expansion run as
+// SEPARATE queries (codex round-3 P2), so a base hit can never be evicted
+// by an expansion-surfaced row's RediSearch score, full stop.
+//
+// limit=1 here: base finds exactly 1 (its own full budget). Per codex
+// round-4 P2 (fix B), the expansion batch is NOT starved by base's raw
+// count -- it runs its OWN full limit=1 budget too, contributing its own
+// top match (here, deterministically synonymRow1 per the shared
+// score DESC, subject_kind ASC, canonical_id ASC tie-break) alongside
+// target. See TestFulltextSearchNodes_LimitSizedUnauthorizedBaseDoesNotStarveExpansion
+// for the direct proof of WHY that matters (authorization runs downstream,
+// in graphrank, where falkorgraph cannot see it).
 func TestFulltextSearchNodes_ExpansionNeverDisplacesABaseHit(t *testing.T) {
 	target := fulltextRow("pull_request", "pr_target", "Fix login bug", "Fix login bug pull request", nil)
 	synonymRow1 := fulltextRow("pull_request", "pr_syn1", "Unrelated one", "Unrelated one pull request", nil)
@@ -680,10 +686,122 @@ func TestFulltextSearchNodes_ExpansionNeverDisplacesABaseHit(t *testing.T) {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
 	targetUUID := subjectUUID("pull_request", "pr_target")
-	if len(candidates) != 1 || candidates[0].UUID != targetUUID {
-		t.Fatalf("candidates = %#v, want ONLY the base hit \"target\" -- it must never be displaced by expansion rows", candidates)
+	var sawTarget bool
+	for _, c := range candidates {
+		if c.UUID == targetUUID {
+			sawTarget = true
+		}
+	}
+	if !sawTarget {
+		t.Fatalf("candidates = %#v, want the base hit \"target\" present -- it must never be displaced by expansion rows", candidates)
 	}
 	if !truncated {
-		t.Fatal("truncated = false, want true -- three genuinely competing expansion-only candidates existed and could not fit the remaining budget")
+		t.Fatal("truncated = false, want true -- the expansion batch's own limit=1 fetch cut off two genuinely competing synonym rows")
+	}
+}
+
+// TestFulltextSearchNodes_LimitSizedUnauthorizedBaseDoesNotStarveExpansion
+// is the codex round-4 P2 (fix B) regression proof: falkorgraph has no
+// principal/scope at all in this call chain -- authorization is
+// graphrank.NodeCandidate's job, one layer up, per candidate -- so a base
+// batch that happens to return a FULL limit-sized set (as it would for a
+// repo/project/team-scoped caller whose top RediSearch-ranked rows are
+// mostly invisible to them) must NOT be treated as "using up" shared
+// capacity here: this function cannot know which of those rows will
+// survive authorization, so it must hand EVERY source's own honestly
+// bounded set upward and let graphrank's downstream authorization + final
+// truncation sort it out. This test proves the MECHANISM (expansion is
+// never capped by base's raw count) directly, since a live authorization
+// decision belongs to graphrank/candidate_test.go, not here. MUTATION
+// CHECK: reintroducing a `remaining := limit - len(baseCandidates)` cap
+// on the expansion loop makes this fail (the synonym row disappears).
+func TestFulltextSearchNodes_LimitSizedUnauthorizedBaseDoesNotStarveExpansion(t *testing.T) {
+	// A full limit=2 base set (both rows would, in production, belong to a
+	// repository the calling principal cannot see -- irrelevant to this
+	// function, which has no way to know that).
+	baseRow1 := fulltextRow("pull_request", "pr_invisible1", "Invisible one", "PR invisible one", nil)
+	baseRow2 := fulltextRow("pull_request", "pr_invisible2", "Invisible two", "PR invisible two", nil)
+	authorizedSynonym := fulltextRow("pull_request", "pr_visible", "Visible fix", "Visible fix pull request", nil)
+
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		q, _ := params["query"].(string)
+		switch q {
+		case "PR":
+			return []row{baseRow1, baseRow2}, nil
+		case `"pull request"`:
+			return []row{authorizedSynonym}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 2, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	visibleUUID := subjectUUID("pull_request", "pr_visible")
+	for _, c := range candidates {
+		if c.UUID == visibleUUID {
+			return
+		}
+	}
+	t.Fatalf("candidates = %#v, want the authorized synonym row present despite base already returning a full limit-sized set -- authorization happens downstream in graphrank, this layer must never pre-emptively starve it", candidates)
+}
+
+// --- codex round-4 P2 (fix C): deterministic tie-break at the LIMIT cutoff ---
+
+// TestRunFulltextQuery_OrderByHasADeterministicTieBreak is the regression
+// proof: ORDER BY score alone lets FalkorDB break a tie at the LIMIT
+// boundary arbitrarily, so a request sitting exactly at a tied cutoff could
+// return a DIFFERENT candidate/truncation set across otherwise-identical
+// calls -- breaking the determinism CHAOS-3782 answer reuse and any
+// measurement harness depend on. This asserts the Cypher text itself
+// carries a TOTAL order (score, then subject kind, then canonical id) --
+// both base and every lexicon-expansion batch share this ONE query-building
+// authority (runFulltextQuery), so the fix applies to all of them at once.
+// MUTATION CHECK: reverting to a bare `ORDER BY score DESC` makes this
+// fail.
+func TestRunFulltextQuery_OrderByHasADeterministicTieBreak(t *testing.T) {
+	var capturedCypher string
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		capturedCypher = cypher
+		return nil, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	if _, _, err := adapter.runFulltextQuery(context.Background(), "test-key", "org-1", "auth", 10, temporalFilter{}, nil, 0, ""); err != nil {
+		t.Fatalf("runFulltextQuery() error = %v", err)
+	}
+	const want = "ORDER BY score DESC, node.subject_kind ASC, node.canonical_id ASC"
+	if !strings.Contains(capturedCypher, want) {
+		t.Fatalf("cypher = %q, want it to contain the deterministic tie-break %q", capturedCypher, want)
+	}
+}
+
+// TestFulltextSearchNodes_TieBreakAppliesToTheKindFilteredBranchToo pins the
+// SAME tie-break for a kind-scoped expansion batch's own query -- proving
+// the single runFulltextQuery authority covers the kind-predicate branch
+// (codex round-4 P1's own new code path) exactly like the unfiltered one,
+// not a second, independently-written query string.
+func TestFulltextSearchNodes_TieBreakAppliesToTheKindFilteredBranchToo(t *testing.T) {
+	var capturedCyphers []string
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		capturedCyphers = append(capturedCyphers, cypher)
+		return nil, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	if _, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "repository", 10, temporalFilter{}); err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	if len(capturedCyphers) != 2 {
+		t.Fatalf("captured %d queries, want 2 (base + the kind-scoped \"repo\" expansion batch)", len(capturedCyphers))
+	}
+	const want = "ORDER BY score DESC, node.subject_kind ASC, node.canonical_id ASC"
+	for i, cypher := range capturedCyphers {
+		if !strings.Contains(cypher, want) {
+			t.Fatalf("query[%d] = %q, want it to contain the deterministic tie-break %q", i, cypher, want)
+		}
+	}
+	if !strings.Contains(capturedCyphers[1], "node.subject_kind = $kind") {
+		t.Fatalf("query[1] = %q, want the kind-scope predicate present", capturedCyphers[1])
 	}
 }

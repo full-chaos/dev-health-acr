@@ -1,8 +1,11 @@
 package falkorgraph
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // TestExpandWithLexicon_NoMatchIsByteIdentical is the single-most
@@ -174,5 +177,111 @@ func TestHasWholeWordPhrase_BoundaryIsRuneAware(t *testing.T) {
 		if got := hasWholeWordPhrase(strings.ToLower(tc.text), strings.ToLower(tc.phrase)); got != tc.want {
 			t.Errorf("hasWholeWordPhrase(%q, %q) = %v, want %v", tc.text, tc.phrase, got, tc.want)
 		}
+	}
+}
+
+// --- codex round-4 P1 (fix A): kind-scoping + the field-label collision class guard ---
+
+// TestCompileLexicon_PanicsOnUnscopedLabelCollision is the LAYER 2 class
+// guard's own proof, against a TEST-ONLY lexicon instance (never the
+// shipped domainLexiconGroups): an unscoped phrase equal to a real
+// search-text field-label word ("team", fieldLabelTeam) must panic at
+// compile/init time, before it could ever reach a live query and produce
+// wrong-kind lexical hits.
+func TestCompileLexicon_PanicsOnUnscopedLabelCollision(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("compileLexicon() did not panic on an unscoped phrase colliding with a field-label word")
+		}
+	}()
+	compileLexicon([]domainLexiconGroup{{phrases: []string{"team"}}})
+}
+
+// TestCompileLexicon_KindScopedCollisionDoesNotPanic is the companion
+// control: the SAME colliding word, kind-scoped, must NOT panic -- scoping
+// is a valid, checked way to close the collision (queries.go restricts the
+// expansion query to that one subject kind), not merely a suppression of
+// the guard.
+func TestCompileLexicon_KindScopedCollisionDoesNotPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("compileLexicon() panicked on a KIND-SCOPED colliding phrase: %v", r)
+		}
+	}()
+	compileLexicon([]domainLexiconGroup{{phrases: []string{"team"}, targetKind: contextfabric.SubjectTeam}})
+}
+
+// TestCompileLexicon_ShippedLexiconHasNoUnscopedLabelCollisions proves the
+// REAL, shipped domainLexiconGroups passes its own guard -- package init
+// already proves this (a panic there would fail every test in the
+// package), but this pins it as an explicit, individually-runnable
+// assertion rather than relying on that side effect alone.
+func TestCompileLexicon_ShippedLexiconHasNoUnscopedLabelCollisions(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("the shipped domainLexiconGroups panicked: %v", r)
+		}
+	}()
+	compileLexicon(domainLexiconGroups)
+}
+
+// TestFulltextSearchNodes_RepositoryTermDoesNotSurfaceOtherKindsViaTheRepoLabel
+// is the round-4 P1 end-to-end regression proof: term "repository" widens
+// via the kind-scoped {"repo","repository"} group. The fake distinguishes
+// the query production actually sends: "repo" WITH a subject_kind=repository
+// filter is the FIX's shape (only genuine repository-kind rows can match);
+// "repo" with NO kind filter is the BUG's shape a real RediSearch server
+// would ALSO match against any pull_request/deployment/ci_pipeline_run/
+// pull_request_review row, since every one of those templates composes the
+// structural "repo: <slug>" field label into its own search_text
+// regardless of subject matter. If kind-scoping is ever lost, the fake's
+// unscoped branch fires and the false-positive PR row appears --
+// this IS the mutation check, built into the fixture.
+func TestFulltextSearchNodes_RepositoryTermDoesNotSurfaceOtherKindsViaTheRepoLabel(t *testing.T) {
+	repoRow := fulltextRow("repository", "repo_1", "full-chaos/dev-health-acr", "full-chaos/dev-health-acr", nil)
+	prWithRepoLabelRow := fulltextRow("pull_request", "pr_1", "Fix login bug", "Fix login bug repo: full-chaos/dev-health-acr", nil)
+
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		q, _ := params["query"].(string)
+		kind, hasKind := params["kind"]
+		switch {
+		case q == "repository":
+			// Base query: nothing in this fixture is literally named "repository".
+			return nil, nil
+		case q == "repo" && hasKind && kind == "repository":
+			// The FIX's shape: kind-scoped. A real RediSearch server,
+			// restricted to subject_kind='repository', can never see the
+			// PR's row at all.
+			return []row{repoRow}, nil
+		case q == "repo" && !hasKind:
+			// The BUG's shape: an unscoped "repo" query. A real RediSearch
+			// server would match BOTH rows here -- the repository's own
+			// slug text and the PR's structural "repo: " label.
+			return []row{repoRow, prWithRepoLabelRow}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "repository", 10, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	repoUUID := subjectUUID("repository", "repo_1")
+	prUUID := subjectUUID("pull_request", "pr_1")
+	var sawRepo, sawPR bool
+	for _, c := range candidates {
+		if c.UUID == repoUUID {
+			sawRepo = true
+		}
+		if c.UUID == prUUID {
+			sawPR = true
+		}
+	}
+	if sawPR {
+		t.Fatalf("candidates = %#v, want the pull_request row ABSENT -- the \"repo\" expansion must be scoped to the repository kind, not match every kind's own \"repo: \" field label", candidates)
+	}
+	if !sawRepo {
+		t.Fatalf("candidates = %#v, want the genuine repository subject present -- kind-scoped expansion must still find actual repositories", candidates)
 	}
 }

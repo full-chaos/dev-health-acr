@@ -3,6 +3,8 @@ package falkorgraph
 import (
 	"fmt"
 	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // This file is the CHAOS-3838 (embed-text spec v2 §5 L13, §6 T8) query-side
@@ -45,51 +47,88 @@ import (
 // against the same text always produce the same expansion string -- required
 // for the query text to be a stable cache key (embedcache) and for the
 // RediSearch query string to be reproducible across identical requests.
-var domainLexiconGroups = [][]string{
+//
+// targetKind (codex round-4 P1, fix A layer 1) scopes a group's additions
+// to searches for EXACTLY that subject kind, when the group's alias is
+// itself effectively the kind's own name/shorthand -- because such an
+// alias is liable to collide with unrelated STRUCTURAL field-label text
+// (search_text.go's fieldLabel* constants) that OTHER kinds' templates
+// also carry as boilerplate, independent of subject-matter. "repo" is the
+// concrete case: it equals fieldLabelRepo's bare word, which
+// pull_request/deployment/ci_pipeline_run/pull_request_review ALL compose
+// into their own search_text regardless of whether the subject has
+// anything to do with a repository -- an unscoped "repo" would therefore
+// surface wrong-kind lexical hits from every one of those kinds. Scoping
+// to contextfabric.SubjectRepository restricts the expansion query to
+// `subject_kind = 'repository'` (queries.go), which the repository kind's
+// own template never labels "repo:" (repositorySearchText places the slug
+// unlabeled), so the collision cannot reach it. Empty targetKind means
+// kind-agnostic (applies everywhere, unchanged from before this round) --
+// validateNoLexiconLabelCollisions (below) enforces that an unscoped group
+// can never collide with a field-label word, so this is a checked
+// invariant, not a convention.
+var domainLexiconGroups = []domainLexiconGroup{
 	// "PR #<number> <title>" is the pull_request template's own literal,
 	// fixed lead-in (spec §2) -- "PR" is in every indexed pull_request's
 	// search_text verbatim; "pull request" is contractsv1.ContextFabricSubjectPullRequest
-	// ("pull_request") space-rendered.
-	{"pr", "pull request"},
+	// ("pull_request") space-rendered. Neither word collides with a
+	// field-label (validateNoLexiconLabelCollisions confirms this at
+	// init), so this group stays kind-agnostic.
+	{phrases: []string{"pr", "pull request"}},
 	// work_item_id carries a PROVIDER PREFIX the codebase explicitly
 	// derives an alias from (composition.go's ticket-key rule): "linear:"
 	// (Linear's own product vocabulary is "issue", 100% of live ids today)
 	// and "jira:" (Jira's own product vocabulary is "ticket", a supported-
 	// but-not-yet-observed prefix per the same rule). "work item" is
 	// contractsv1.ContextFabricSubjectWorkItem ("work_item") space-rendered.
-	{"ticket", "issue", "work item"},
+	// None of the three collides with a field-label word.
+	{phrases: []string{"ticket", "issue", "work item"}},
 	// contractsv1.ContextFabricSubjectRepository is literally "repository";
 	// every kind's own template names its repository field "repo:"
-	// (search_text.go's repo_slug field label, spec §2).
-	{"repo", "repository"},
+	// (search_text.go's fieldLabelRepo, spec §2) -- "repo" bare IS that
+	// label's word, hence the kind scope (see the var doc comment above).
+	{phrases: []string{"repo", "repository"}, targetKind: contextfabric.SubjectRepository},
 	// "CI run <pipeline_name> ..." is the ci_pipeline_run template's own
 	// literal, fixed lead-in (spec §2) -- "CI run" is in every indexed
 	// ci_pipeline_run's search_text verbatim; "pipeline" is half the kind
 	// name (contractsv1.ContextFabricSubjectCIRun == "ci_pipeline_run") and
-	// literally the ClickHouse column name (pipeline_name, spec §1).
-	{"ci run", "pipeline", "pipeline run"},
+	// literally the ClickHouse column name (pipeline_name, spec §1). No
+	// member collides with a field-label word.
+	{phrases: []string{"ci run", "pipeline", "pipeline run"}},
 	// "<environment> deployment <release_ref>" is the deployment template's
 	// own literal, fixed text (spec §2) -- "deployment" is in every indexed
 	// deployment's search_text verbatim; "release" is one of the SAME
 	// kind's own stored `environment` field's four live values
-	// (spec §1: "publishing/github-pages/release/ci").
-	{"deploy", "deployment", "release"},
+	// (spec §1: "publishing/github-pages/release/ci"), and release_ref is
+	// composed UNLABELED (deploymentSearchText), so "release" does not
+	// collide with a field-label word either.
+	{phrases: []string{"deploy", "deployment", "release"}},
 	// "<state> review of PR #<number>: <title>" is the pull_request_review
 	// template's own literal, fixed text (spec §2) -- "review" is in every
-	// indexed pull_request_review's search_text verbatim.
-	{"review", "code review"},
+	// indexed pull_request_review's search_text verbatim. No field-label
+	// collision.
+	{phrases: []string{"review", "code review"}},
 	// contractsv1.ContextFabricSubjectOrganization is literally
 	// "organization"; "org" is the codebase's own universal abbreviation
-	// for it (storage.Principal.OrgID, every propOrgID-keyed query).
-	{"org", "organization"},
+	// for it (storage.Principal.OrgID, every propOrgID-keyed query). No
+	// field-label collision.
+	{phrases: []string{"org", "organization"}},
 }
 
-// lexiconGroup pairs a domainLexiconGroups entry with its lowercased
-// phrases, precomputed once so expandWithLexicon never re-lowercases a
-// fixed literal on the hot read path.
+// domainLexiconGroup is one entry of domainLexiconGroups -- see that var's
+// doc comment for targetKind's meaning.
+type domainLexiconGroup struct {
+	phrases    []string
+	targetKind contextfabric.SubjectKind
+}
+
+// lexiconGroup pairs a domainLexiconGroup with its lowercased phrases,
+// precomputed once so expandWithLexicon never re-lowercases a fixed
+// literal on the hot read path.
 type lexiconGroup struct {
 	phrases      []string
 	lowerPhrases []string
+	targetKind   contextfabric.SubjectKind
 }
 
 // compiledLexicon is built once at package init, not per call -- expansion
@@ -97,11 +136,11 @@ type lexiconGroup struct {
 // resolution for the question).
 var compiledLexicon = compileLexicon(domainLexiconGroups)
 
-func compileLexicon(groups [][]string) []lexiconGroup {
+func compileLexicon(groups []domainLexiconGroup) []lexiconGroup {
 	compiled := make([]lexiconGroup, 0, len(groups))
 	for _, group := range groups {
-		lg := lexiconGroup{phrases: group, lowerPhrases: make([]string, len(group))}
-		for i, phrase := range group {
+		lg := lexiconGroup{phrases: group.phrases, lowerPhrases: make([]string, len(group.phrases)), targetKind: group.targetKind}
+		for i, phrase := range group.phrases {
 			// codex round-3 P1 (fix B): a multi-word phrase becomes a
 			// double-quoted RediSearch exact-phrase clause
 			// (queries.go's lexiconPhraseClause), injection-safe only
@@ -119,7 +158,48 @@ func compileLexicon(groups [][]string) []lexiconGroup {
 		}
 		compiled = append(compiled, lg)
 	}
+	validateNoLexiconLabelCollisions(compiled)
 	return compiled
+}
+
+// validateNoLexiconLabelCollisions panics if any KIND-AGNOSTIC
+// (targetKind == "") lexicon phrase equals, whole-word case-insensitively,
+// one of search_text.go's own field-label words (codex round-4 P1, fix A
+// layer 2 -- the CLASS guard, not just the repo/repository instance layer
+// 1 already scopes). An unscoped phrase equal to a field-label word would
+// make lexicon expansion match ANY kind's search_text purely because that
+// kind's template happens to compose a structured field with that label --
+// not because the subject has anything to do with the synonym's concept --
+// producing wrong-kind lexical candidates that can corroborate a
+// wrong-kind vector hit into a wrong commit. This protects every FUTURE
+// lexicon edit, not only the one collision already found and fixed by
+// scoping: a phrase that starts colliding must be kind-scoped (targetKind)
+// or renamed, and this check makes that a build-time failure instead of a
+// measurement-time rediscovery.
+//
+// A KIND-SCOPED phrase is exempt: its expansion query is restricted to
+// `subject_kind = <targetKind>` (queries.go), and none of the kinds this
+// package templates labels its OWN kind's structural fields with its OWN
+// kind's alias (verified case-by-case in domainLexiconGroups' own doc
+// comments), so the collision cannot reach it.
+//
+// searchTextFieldLabelWords (search_text.go) is the single authority for
+// what a label word is -- never a second, hand-maintained list here.
+func validateNoLexiconLabelCollisions(groups []lexiconGroup) {
+	labels := make(map[string]struct{}, len(searchTextFieldLabelWords))
+	for _, word := range searchTextFieldLabelWords {
+		labels[strings.ToLower(word)] = struct{}{}
+	}
+	for _, group := range groups {
+		if group.targetKind != "" {
+			continue
+		}
+		for i, lowerPhrase := range group.lowerPhrases {
+			if _, collides := labels[lowerPhrase]; collides {
+				panic(fmt.Sprintf("falkorgraph: domain lexicon phrase %q collides with a search-text field-label word and has no targetKind scope -- either scope this group to the ONE subject kind the phrase is genuinely about, or rename the phrase", group.phrases[i]))
+			}
+		}
+	}
 }
 
 // hasWholeWordPhrase reports whether lowerPhrase occurs in lowerText as a
@@ -170,20 +250,28 @@ func hasWholeWordPhrase(lowerText, lowerPhrase string) bool {
 	return false
 }
 
+// lexiconAddition is one matched synonym phrase plus the subject kind (if
+// any) a search built from it must be scoped to -- see domainLexiconGroups'
+// targetKind doc comment.
+type lexiconAddition struct {
+	phrase     string
+	targetKind contextfabric.SubjectKind
+}
+
 // lexiconAdditions returns the domain-lexicon synonym phrases matched
 // WITHIN text, in fixed (domainLexiconGroups declaration) order -- the ONE
 // primitive both expandWithLexicon (text-concatenation, for the vector arm)
-// and queries.go's lexiconExpansionQuery (phrase-aware OR-query
-// construction, for the lexical arm, codex round-3 P1/P2) build from, so
-// the two arms can never independently decide "what matched" differently.
-// Empty input, or no match, returns nil.
-func lexiconAdditions(text string) []string {
+// and queries.go's lexiconExpansionQuery (phrase-aware, kind-scoped
+// OR-query construction, for the lexical arm, codex round-3 P1/P2 and
+// round-4 P1) build from, so the two arms can never independently decide
+// "what matched" differently. Empty input, or no match, returns nil.
+func lexiconAdditions(text string) []lexiconAddition {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	lowerText := strings.ToLower(text)
 	seen := make(map[string]struct{})
-	var additions []string
+	var additions []lexiconAddition
 	for _, group := range compiledLexicon {
 		matched := false
 		for _, lowerPhrase := range group.lowerPhrases {
@@ -201,7 +289,7 @@ func lexiconAdditions(text string) []string {
 				continue
 			}
 			seen[key] = struct{}{}
-			additions = append(additions, phrase)
+			additions = append(additions, lexiconAddition{phrase: phrase, targetKind: group.targetKind})
 		}
 	}
 	return additions
@@ -211,10 +299,20 @@ func lexiconAdditions(text string) []string {
 // phrases matched WITHIN it (lexiconAdditions), for building a wider
 // RETRIEVAL QUERY only -- specifically, the VECTOR arm's embedded text
 // (vector.go's vectorQueryText). The lexical arm does NOT use this
-// function; queries.go's lexiconExpansionQuery builds its own phrase-aware
-// query from the same lexiconAdditions instead, because embedding text has
-// no adjacency/phrase concept for expandWithLexicon's plain concatenation
-// to violate, while a RediSearch OR-query does (codex round-3 P1).
+// function; queries.go's lexiconExpansionQuery builds its own phrase-aware,
+// kind-scoped query from the same lexiconAdditions instead.
+//
+// Deliberately kind-AGNOSTIC even for a kind-scoped addition: vector
+// similarity search has no per-kind index/filter concept in this codebase
+// today (spec §5 L5(b), a deferred, unmeasured lever), so there is no
+// equivalent scoping mechanism to apply here, and the field-label
+// collision layer 1/2 close is a LEXICAL (exact-term-match) failure mode
+// that has no direct analogue for continuous embedding similarity -- a
+// vector for text containing "repo: <slug>" does not read as highly
+// similar to a query embedding of "repository" merely because both share
+// the substring "repo" the way a RediSearch OR-term match would. This
+// function is also reached only when applyLexiconToVectorArm is on, which
+// is NOT the shipped default (see that const's doc comment).
 //
 // Byte-identical to text when no lexicon phrase is found -- the common case
 // for most terms/questions -- so a caller that does not match anything pays
@@ -231,7 +329,11 @@ func expandWithLexicon(text string) string {
 	if len(additions) == 0 {
 		return text
 	}
-	return text + " " + strings.Join(additions, " ")
+	phrases := make([]string, len(additions))
+	for i, addition := range additions {
+		phrases[i] = addition.phrase
+	}
+	return text + " " + strings.Join(phrases, " ")
 }
 
 // applyLexiconToVectorArm controls whether the domain lexicon also widens

@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -298,9 +299,10 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	termCount := len(matchTerms)
 
 	// The BASE query, byte-identical to this function's pre-CHAOS-3838
-	// shape: exactly `terms`, exactly `limit`, its own truncation sentinel.
+	// shape: exactly `terms`, exactly `limit`, its own truncation sentinel,
+	// no kind filter.
 	baseQuery := strings.Join(terms, "|")
-	baseCandidates, baseTruncated, err := a.runFulltextQuery(ctx, key, orgID, baseQuery, limit, temporal, matchTerms, termCount)
+	baseCandidates, baseTruncated, err := a.runFulltextQuery(ctx, key, orgID, baseQuery, limit, temporal, matchTerms, termCount, "")
 	if err != nil {
 		return nil, false, err
 	}
@@ -313,51 +315,66 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 		return baseCandidates, baseTruncated, nil
 	}
 
-	// codex round-3 P2 (fix C): a widened single query is NOT a union under
-	// a server-side LIMIT -- synonym-heavy rows can out-rank and displace
-	// an already-correct base hit past the limit+1 cutoff, so expansion
-	// could REMOVE a previously-resolvable subject instead of only adding
-	// candidates (the promise this whole lexicon design depends on). Fix:
-	// the expansion query runs SEPARATELY, over its OWN terms only (never
-	// re-including `terms` -- the base query already covers those), and its
-	// rows are unioned in AFTER base's own `limit` slots are already
-	// claimed, filling ONLY the capacity base did not use. A base hit is
-	// therefore never at risk of eviction by an expansion-surfaced row,
-	// regardless of relative RediSearch score.
+	// codex round-3 P2 (fix C) + round-4 P1 (fix A layer 1, kind-scoped
+	// batches): a widened single query is NOT a union under a server-side
+	// LIMIT -- synonym-heavy rows can out-rank and displace an
+	// already-correct base hit past the limit+1 cutoff, so expansion could
+	// REMOVE a previously-resolvable subject instead of only adding
+	// candidates. Fix: base is never touched again -- every expansion BATCH
+	// (the kind-agnostic additions, plus one per distinct targetKind --
+	// lexiconExpansionBatches, in a FIXED deterministic order) runs as its
+	// own SEPARATE query, over its OWN full `limit` budget, deduplicated by
+	// subject UUID against everything already collected.
+	//
+	// codex round-4 P2 (fix B): an earlier version of this union additionally
+	// capped each batch's CONTRIBUTION to "however much of `limit` base
+	// hadn't already used" -- computed from base's RAW candidate count,
+	// BEFORE authorization. falkorgraph has no principal/scope here at all
+	// (authorization is graphrank.NodeCandidate's job, one layer up, per
+	// candidate); a base batch whose top rows are mostly UNAUTHORIZED for
+	// THIS caller (a repo/project/team-scoped principal) would still count
+	// as "using" that capacity here, silently discarding authorized
+	// expansion rows that would otherwise have survived -- an emptied
+	// resolution despite genuinely visible matches. This mirrors the SAME
+	// class of mistake DiscoverContext's hopWalk/AdmitEdges doc comments
+	// already name and reject ("collection is bounded by a generous
+	// superset... NEVER by the final per-request admission budget... the
+	// ONE and ONLY truncation happens after ranking"): the fix is to stop
+	// trying to split a tight budget across sources HERE, before
+	// authorization can even run, and instead let every source contribute
+	// its own full, honestly-bounded (limit+1-sentinelled) set -- graphrank's
+	// NodeCandidate filters unauthorized rows per candidate, and
+	// ResolveFromMergedCandidates' own `max` truncation (request.Options.MaxSubjectCandidates)
+	// is the ONE final cut, downstream, after both authorization AND
+	// cross-source/cross-term ranking. This is strictly SAFER than the
+	// capped version, never less correct: it can only ever surface a
+	// genuine, authorized candidate the capped version would have dropped.
 	seen := make(map[string]bool, len(baseCandidates))
 	for _, c := range baseCandidates {
 		seen[c.UUID] = true
 	}
-	remaining := limit - len(baseCandidates)
-	if remaining < 0 {
-		remaining = 0
-	}
-	expansionQuery := lexiconExpansionQuery(additions)
-	expansionCandidates, expansionTruncated, err := a.runFulltextQuery(ctx, key, orgID, expansionQuery, limit, temporal, matchTerms, termCount)
-	if err != nil {
-		return nil, false, err
-	}
-	// overflow tracks capacity this UNION step itself could not fit --
-	// distinct from expansionTruncated (the expansion query's OWN
-	// limit+1 server-side sentinel). Either one means a genuinely
-	// competing candidate may have gone unshown, so either sets the
-	// overall truncated signal.
-	overflow := false
 	result := baseCandidates
-	added := 0
-	for _, c := range expansionCandidates {
-		if seen[c.UUID] {
-			continue
+	truncated := baseTruncated
+	for _, batch := range lexiconExpansionBatches(additions) {
+		query := lexiconExpansionQuery(batch.additions)
+		batchCandidates, batchTruncated, err := a.runFulltextQuery(ctx, key, orgID, query, limit, temporal, matchTerms, termCount, batch.kind)
+		if err != nil {
+			return nil, false, err
 		}
-		if added >= remaining {
-			overflow = true
-			continue
+		// truncated stays the OR of every batch's OWN limit+1 server-side
+		// sentinel -- unaffected by authorization, which this layer has no
+		// visibility into at all (same as the pre-CHAOS-3838 base query
+		// always was).
+		truncated = truncated || batchTruncated
+		for _, c := range batchCandidates {
+			if seen[c.UUID] {
+				continue
+			}
+			seen[c.UUID] = true
+			result = append(result, c)
 		}
-		seen[c.UUID] = true
-		result = append(result, c)
-		added++
 	}
-	return result, baseTruncated || expansionTruncated || overflow, nil
+	return result, truncated, nil
 }
 
 // runFulltextQuery issues ONE RediSearch fulltext query and converts its
@@ -365,27 +382,52 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 // sentinel and matched-term-coverage confidence math fulltextSearchNodes
 // has always used (Codex R2-1 / D11 / AC-3778-0 -- see that function's own
 // doc comment for the full rationale). Extracted so fulltextSearchNodes'
-// base query and its lexicon-expansion query (codex round-3 P2, fix C) run
-// through the exact same row-to-candidate conversion and can never
-// independently drift on it -- the two queries differ ONLY in which
-// RediSearch query string and which rows they see, never in how a row
-// becomes a candidate.
+// base query and every lexicon-expansion batch (codex round-3 P2 / round-4
+// P1, fix C / fix A) run through the exact same row-to-candidate
+// conversion and can never independently drift on it -- the calls differ
+// ONLY in which RediSearch query string, which optional kind filter, and
+// which rows they see, never in how a row becomes a candidate.
 //
 // matchTerms/termCount are always the CALLER's original text's own words
 // (fulltextSearchNodes' matchTerms), passed straight through regardless of
 // which query string this particular call runs -- confidence stays a
 // promise about the original text on every call, base or expansion alike.
-func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string, limit int, temporal temporalFilter, matchTerms []string, termCount int) ([]graphrank.CandidateNode, bool, error) {
+//
+// kindFilter, when non-empty, restricts matches to nodes of exactly that
+// subject kind (codex round-4 P1, fix A layer 1) -- the mechanism a
+// kind-scoped lexicon group (domainLexiconGroups' targetKind) uses to stay
+// out of OTHER kinds' search_text entirely, closing the field-label
+// collision class rather than merely demoting its score.
+func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string, limit int, temporal temporalFilter, matchTerms []string, termCount int, kindFilter contextfabric.SubjectKind) ([]graphrank.CandidateNode, bool, error) {
+	kindPredicate := ""
+	params := temporal.bind(map[string]interface{}{"query": query, "org": orgID})
+	if kindFilter != "" {
+		kindPredicate = fmt.Sprintf(" AND node.%s = $kind", propKind)
+		params["kind"] = string(kindFilter)
+	}
 	// Codex R2-1: request one more row than the caller's budget so a
 	// truncated result set can be told apart from a genuinely complete one
 	// (see fulltextSearchNodes' doc comment).
+	//
+	// codex round-4 P2 (fix C): ORDER BY score alone lets FalkorDB break a
+	// tie AT the LIMIT boundary arbitrarily -- verified live that two
+	// otherwise-identical rows with equal scores are not guaranteed a
+	// stable relative order across repeated calls, so a resolution sitting
+	// exactly at the cutoff could return a DIFFERENT candidate/truncation
+	// set for the SAME request. Two deterministic tie-break keys (subject
+	// kind, then canonical id -- both always present, both already part of
+	// every returned node) make the ORDER total, so a repeated identical
+	// call always returns the identical result -- required for CHAOS-3782
+	// answer reuse and for any measurement harness that expects
+	// reproducible numbers. Applies to base and every expansion batch
+	// alike, since they all share this one query-building authority.
 	cypher := fmt.Sprintf(
 		"CALL db.idx.fulltext.queryNodes('%s', $query) YIELD node, score "+
-			"WHERE node.%s = $org%s "+
-			"RETURN node, score ORDER BY score DESC LIMIT %d",
-		labelSubject, propOrgID, temporal.predicate("node"), limit+1,
+			"WHERE node.%s = $org%s%s "+
+			"RETURN node, score ORDER BY score DESC, node.%s ASC, node.%s ASC LIMIT %d",
+		labelSubject, propOrgID, kindPredicate, temporal.predicate("node"), propKind, propCanonicalID, limit+1,
 	)
-	rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"query": query, "org": orgID}), true)
+	rows, err := a.api.query(ctx, key, cypher, params, true)
 	if err != nil {
 		return nil, false, safeDependencyError("search context graph", err)
 	}
@@ -416,9 +458,51 @@ func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string
 	return candidates, truncated, nil
 }
 
-// lexiconExpansionQuery builds the RediSearch query string for the
-// domain-lexicon synonym ADDITIONS only (never re-including the caller's
-// own terms -- fulltextSearchNodes' base query already covers those).
+// lexiconExpansionBatch is one lexicon-expansion search: either the
+// kind-agnostic additions (kind == "") or one distinct targetKind's own
+// additions (codex round-4 P1, fix A layer 1).
+type lexiconExpansionBatch struct {
+	kind      contextfabric.SubjectKind
+	additions []lexiconAddition
+}
+
+// lexiconExpansionBatches partitions additions into a FIXED, deterministic
+// sequence of batches: the kind-agnostic batch first (if any present), then
+// one batch per distinct targetKind present, sorted by kind name -- so two
+// calls over the same additions always produce the same batch order, which
+// fulltextSearchNodes' union step depends on for reproducible results
+// (codex round-4 P2's determinism concern applies to this ordering too,
+// not only to a single query's own ORDER BY).
+func lexiconExpansionBatches(additions []lexiconAddition) []lexiconExpansionBatch {
+	var global []lexiconAddition
+	byKind := make(map[contextfabric.SubjectKind][]lexiconAddition)
+	var kinds []string
+	for _, addition := range additions {
+		if addition.targetKind == "" {
+			global = append(global, addition)
+			continue
+		}
+		if _, exists := byKind[addition.targetKind]; !exists {
+			kinds = append(kinds, string(addition.targetKind))
+		}
+		byKind[addition.targetKind] = append(byKind[addition.targetKind], addition)
+	}
+	sort.Strings(kinds)
+	batches := make([]lexiconExpansionBatch, 0, 1+len(kinds))
+	if len(global) > 0 {
+		batches = append(batches, lexiconExpansionBatch{additions: global})
+	}
+	for _, kind := range kinds {
+		k := contextfabric.SubjectKind(kind)
+		batches = append(batches, lexiconExpansionBatch{kind: k, additions: byKind[k]})
+	}
+	return batches
+}
+
+// lexiconExpansionQuery builds the RediSearch query string for ONE
+// lexicon-expansion batch's synonym additions (never re-including the
+// caller's own terms -- fulltextSearchNodes' base query already covers
+// those).
 //
 // codex round-3 P1 (fix B): a multi-word synonym ("pull request") must
 // never be OR-tokenized into independent single-word disjuncts -- doing so
@@ -434,14 +518,14 @@ func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string
 // (compileLexicon's init-time validation panics if one ever contains a
 // literal `"`), never caller-supplied text, so there is no untrusted value
 // on this path for a quote to smuggle anything through.
-func lexiconExpansionQuery(additions []string) string {
+func lexiconExpansionQuery(additions []lexiconAddition) string {
 	parts := make([]string, 0, len(additions))
 	for _, addition := range additions {
-		if len(strings.Fields(addition)) <= 1 {
-			parts = append(parts, tokenizeForFulltext(addition)...)
+		if len(strings.Fields(addition.phrase)) <= 1 {
+			parts = append(parts, tokenizeForFulltext(addition.phrase)...)
 			continue
 		}
-		parts = append(parts, lexiconPhraseClause(addition))
+		parts = append(parts, lexiconPhraseClause(addition.phrase))
 	}
 	return strings.Join(parts, "|")
 }
