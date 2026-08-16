@@ -964,6 +964,14 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 		// change follows from this.
 		if options.SimilarityFloor == policy.SimilarityFloor {
 			options.VectorMarginCommitThreshold = policy.VectorMarginCommitThreshold
+			// codex r5 K1 (accepted): CalibratedTopK is gated in the SAME
+			// conditional as VectorMarginCommitThreshold, deliberately --
+			// both describe the SAME oracle measurement (M and the depth
+			// corroboration was scored at), so whatever invalidates one
+			// (an effective floor diverged from the calibrated tau)
+			// invalidates the other identically. There is no scenario
+			// where M installs but CalibratedTopK does not, or vice versa.
+			options.CalibratedTopK = policy.CalibratedTopK
 		}
 	}
 	return options, nil

@@ -61,6 +61,12 @@ type Adapter struct {
 	// already treats as "disabled" (see retrieval_policy.go's
 	// RetrievalPolicy.VectorMarginCommitThreshold doc comment).
 	vectorMarginCommitThreshold float64
+	// calibratedTopK is CHAOS-3829 codex r5 K1's (accepted) companion to
+	// vectorMarginCommitThreshold, captured the same way: zero means "no
+	// calibrated policy for this identity", which graphrank's commit-path
+	// carve-out already treats as "disabled" (see retrieval_policy.go's
+	// RetrievalPolicy.CalibratedTopK doc comment).
+	calibratedTopK int
 
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
@@ -117,6 +123,12 @@ type EmbedderOptions struct {
 	// calibrated": graphrank's commit-path carve-out stays disabled,
 	// byte-identical to pre-CHAOS-3829 behavior.
 	VectorMarginCommitThreshold float64
+	// CalibratedTopK is CHAOS-3829 codex r5 K1's (accepted) companion to
+	// VectorMarginCommitThreshold, resolved the SAME way and gated
+	// together with it (EmbedderFromEnv installs both only when the
+	// effective floor equals the calibrated tau). Zero means "not
+	// calibrated": graphrank's commit-path carve-out stays disabled.
+	CalibratedTopK int
 }
 
 func New(config Config) (*Adapter, error) {
@@ -157,6 +169,7 @@ func (a *Adapter) attachEmbedder(options EmbedderOptions) {
 	a.overFetchMultiplier = options.OverFetchMultiplier
 	a.efRuntime = options.EfRuntime
 	a.vectorMarginCommitThreshold = options.VectorMarginCommitThreshold
+	a.calibratedTopK = options.CalibratedTopK
 }
 
 // documentPrefixed applies the captured document-side task prefix, or returns

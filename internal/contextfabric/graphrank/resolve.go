@@ -140,6 +140,30 @@ type ResolveDeps struct {
 	// pre-CHAOS-3829 behavior. A backend with no calibrated identity (or no
 	// vector retrieval at all) leaves this at its zero value.
 	VectorMarginCommitThreshold float64
+	// CalibratedTopK is CHAOS-3829 codex r5 K1's (accepted) companion to
+	// VectorMarginCommitThreshold: the lexical/vector search depth
+	// CalibrateMarginFromReport's oracle measured corroboration AT (pinned
+	// 20 for the shipped identity, RetrievalPolicy.CalibratedTopK). Zero
+	// means "uncalibrated", the same convention every other calibrated field
+	// on this struct uses, and -- together with MaxResultsCap below --
+	// disables the carve-out just as surely as
+	// VectorMarginCommitThreshold==0 does; see
+	// ResolveFromMergedCandidates' effectiveSearchLimit/calibratedTopK
+	// envelope for why both bounds are required.
+	CalibratedTopK int
+	// MaxResultsCap is the backend's own configured per-call result-row cap
+	// (falkorgraph: a.config.MaxResults, ACR_CONTEXT_FABRIC_FALKOR_MAX_RESULTS)
+	// -- CHAOS-3829 codex r5 K2's (accepted) fix input. ResolveSubjects uses
+	// it to compute the REAL, cap-clamped per-call returned-row bound
+	// (effectiveSearchLimit) that ResolveFromMergedCandidates' commit-path
+	// carve-out gates on, rather than trusting the caller's nominal
+	// request.Options.MaxSubjectCandidates alone -- see
+	// ResolveFromMergedCandidates' own doc comment (codex r5 K2) for the
+	// hazard a mismatched cap otherwise opens. Zero (or <=0) means "no known
+	// cap": effectiveSearchLimit then falls back to the request-side value
+	// unclamped, which a backend with no such cap (or one that never
+	// truncates below the request) can safely leave as the zero value.
+	MaxResultsCap int
 }
 
 // ResolveSubjects resolves the committed/candidate subjects for an
@@ -335,7 +359,21 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)
 	}
-	resolution := ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded)
+	// effectiveSearchLimit is CHAOS-3829 codex r5 K2's (accepted) fix: the
+	// REAL per-call returned-row bound every Search()/SearchQuestion() call
+	// this resolution just made was actually clamped to, mirroring
+	// falkorgraph's own "if limit<=0 || limit>cap { limit=cap }" idiom
+	// (fulltextSearchNodesForResolution, vectorSearchNodesWithOverFetch) --
+	// deps.MaxResultsCap<=0 means "no known cap" and leaves the nominal
+	// request value untouched, matching a backend with no such cap. See
+	// ResolveFromMergedCandidates' own doc comment (codex r5 K1/K2) for why
+	// this, together with deps.CalibratedTopK, replaces the narrower
+	// max>=2 test the carve-out used before this round.
+	effectiveSearchLimit := request.Options.MaxSubjectCandidates
+	if deps.MaxResultsCap > 0 && (effectiveSearchLimit <= 0 || effectiveSearchLimit > deps.MaxResultsCap) {
+		effectiveSearchLimit = deps.MaxResultsCap
+	}
+	resolution := ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK)
 	resolution.RetrievalDegraded = retrievalDegraded
 	return resolution, nil
 }

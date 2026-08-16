@@ -156,6 +156,20 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// -- both settled; a third raise is premise-cycling, not new
 		// information.
 		VectorMarginCommitThreshold: a.vectorMarginCommitThreshold,
+		// codex r5 K1+K2 (both accepted -- NOT a third raise of the
+		// settled G1/J1 K premise above, despite both mentioning "K":
+		// G1/J1 asked whether the vector-arm MARGIN itself stays sound
+		// across different runtime K values, and proved it does, for
+		// any K>=2, via two independent mechanism arguments. K1/K2
+		// attack entirely different preconditions -- K1 is about
+		// CORROBORATION width (was the winning subject's lexical-arm
+		// finding within the depth the oracle actually scored?), K2 is
+		// about the LOWER bound itself being measured off the wrong
+		// (nominal, uncapped) number. Settling G1/J1 said nothing about
+		// either, and fixing K1/K2 does not reopen G1/J1 -- they are
+		// four independent findings that happen to share a letter.
+		CalibratedTopK: a.calibratedTopK,
+		MaxResultsCap:  a.config.MaxResults,
 	}
 	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)
 }

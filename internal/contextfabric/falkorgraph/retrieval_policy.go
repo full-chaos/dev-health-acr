@@ -76,6 +76,21 @@ type RetrievalPolicy struct {
 	// never invented -- see calibratedIdentityText3Large's doc comment for
 	// this identity's specific measurement basis.
 	VectorMarginCommitThreshold float64
+	// CalibratedTopK is CHAOS-3829 codex r5 K1's (accepted) companion to
+	// VectorMarginCommitThreshold: the lexical/vector search depth
+	// CalibrateMarginFromReport's oracle measured corroboration AT
+	// (MarginCalibrationOptions.TargetTopK, tau_calibration.go's F7 pin --
+	// the SAME value the source calibration report's own Cases/ControlCases
+	// were harvested under). Zero means "not calibrated for this identity",
+	// the SAME convention every other field on this struct uses --
+	// graphrank's commit-path carve-out (ResolveFromMergedCandidates'
+	// effectiveSearchLimit/calibratedTopK envelope) then never fires, byte-
+	// identical to pre-CHAOS-3829 behavior. A deployment whose effective
+	// per-call search depth exceeds this value can corroborate a subject at
+	// a lexical rank the calibration measurement never saw -- see
+	// ResolveFromMergedCandidates' own doc comment (codex r5 K1) for the
+	// full hazard this closes.
+	CalibratedTopK int
 }
 
 // calibratedIdentityText3Large is the CHAOS-3834 measured entry's key.
@@ -340,6 +355,18 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 		// (that would re-open the 3834 ruling) -- the existing detector is
 		// the one this constant now also relies on.
 		VectorMarginCommitThreshold: 0.03378617763519299,
+		// 20: CHAOS-3829 codex r5 K1's (accepted) pin -- the SAME TopK the
+		// M above was calibrated under (MarginCalibrationOptions.TargetTopK
+		// passed to CalibrateMarginFromReport for oracle-report-v5-r1fixes.json,
+		// already documented in M's own comment above: "topK=20 -- the
+		// deployed policy above, pinned via
+		// MarginCalibrationOptions.TargetTau/TargetTopK"). Not a new
+		// measurement -- this ticket's calibration run always ran at 20;
+		// K1 found that the RUNTIME gate never enforced it, letting a
+		// deployment with a wider effective per-call search depth
+		// corroborate a wrong top-1 at a lexical rank the oracle never
+		// scored. See RetrievalPolicy.CalibratedTopK's own doc comment.
+		CalibratedTopK: 20,
 	},
 }
 

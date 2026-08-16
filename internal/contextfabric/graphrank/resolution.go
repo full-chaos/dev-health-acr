@@ -41,8 +41,13 @@ import (
 // vectorMarginCommit's own doc comment for the full precondition set and
 // the soundness argument for why it may fire even when searchTruncated is
 // true. retrievalDegraded (codex r4 J2, accepted) additionally gates the
-// rescue -- see the rescue block's own comment for why.
-func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool) contextfabric.SubjectResolution {
+// rescue -- see the rescue block's own comment for why. effectiveSearchLimit
+// and calibratedTopK (codex r5 K1+K2, both accepted) together replace the
+// original codex r1 F1 max>=2 test with a tighter, TWO-SIDED envelope on the
+// REAL per-call returned-row bound -- see the rescue block's own comment for
+// the full argument and why both P1s land as one unified condition rather
+// than two independent ones.
+func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -194,22 +199,71 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		// top-1/top-2 similarity margin) and why it may fire even when
 		// searchTruncated is the reason ambiguous is true.
 		//
-		// codex r1 F1 (accepted, narrowed): max>=2 is REQUIRED. At
-		// max>=2, the merged cross-call top-2 argument is conservative --
-		// any candidate this resolution never even SAW (beyond every
-		// individual Search call's own returned set, as opposed to F0's
-		// "returned but NodeCandidate-rejected" case, which
-		// vectorArmSimilarity already covers) has similarity <= that
-		// call's own Kth-ranked (least-similar) returned row, which is in
-		// turn <= the merged, cross-call vectorArmSimilarity's own second
-		// entry -- so a truly UNSEEN candidate can never be closer than
-		// the competitor this function already found. At max==1, a Search
-		// call returns AT MOST one row per term, so there is no such
-		// bound at all: an unseen second-place candidate could have any
-		// similarity whatsoever, and the "competitor" this function finds
-		// (if any, from a DIFFERENT term's own single result) carries no
-		// guarantee of being the TRUE nearest one. Fail closed rather than
-		// trust a margin with no completeness bound behind it.
+		// codex r1 F1 (accepted, narrowed; SUPERSEDED in shape, not in
+		// substance, by codex r5 K1+K2 below): the LOWER half of the
+		// envelope. At an effective per-call returned-row bound >=2, the
+		// merged cross-call top-2 argument is conservative -- any candidate
+		// this resolution never even SAW (beyond every individual Search
+		// call's own returned set, as opposed to F0's "returned but
+		// NodeCandidate-rejected" case, which vectorArmSimilarity already
+		// covers) has similarity <= that call's own Kth-ranked
+		// (least-similar) returned row, which is in turn <= the merged,
+		// cross-call vectorArmSimilarity's own second entry -- so a truly
+		// UNSEEN candidate can never be closer than the competitor this
+		// function already found. At a bound of 1, a Search call returns AT
+		// MOST one row per term, so there is no such bound at all: an unseen
+		// second-place candidate could have any similarity whatsoever, and
+		// the "competitor" this function finds (if any, from a DIFFERENT
+		// term's own single result) carries no guarantee of being the TRUE
+		// nearest one. Fail closed rather than trust a margin with no
+		// completeness bound behind it.
+		//
+		// codex r5 K2 (accepted, P1): F1's ORIGINAL test read max, i.e.
+		// request.Options.MaxSubjectCandidates -- the NOMINAL limit a caller
+		// asked for, not the row count a Search call can actually return.
+		// falkorgraph's own per-call cap (ACR_CONTEXT_FABRIC_FALKOR_MAX_RESULTS,
+		// a.config.MaxResults) independently clamps every fulltext/vector
+		// call to min(requested limit, that cap) BELOW resolve.go -- a
+		// deployment with cap=1 and a request max>=2 passed F1's own test
+		// (max>=2) while every Search call this resolution actually made
+		// returned at most ONE row, silently breaking the "true #2 is
+		// returned at any bound>=2" proof F1's own comment above relies on.
+		// effectiveSearchLimit is resolve.go's ResolveSubjects computing that
+		// SAME clamp itself (mirroring fulltextSearchNodesForResolution/
+		// vectorSearchNodesWithOverFetch's own "if limit<=0 || limit>cap {
+		// limit=cap}" idiom) and handing the REAL bound in here, so this
+		// function never has to trust the nominal request value again.
+		//
+		// codex r5 K1 (accepted, P1): the UPPER half of the envelope, a
+		// DIFFERENT hazard from F1/K2's lower half -- this one is about
+		// CORROBORATION width, not the vector-arm margin's own completeness.
+		// CalibrateMarginFromReport's oracle measured corroboration (whether
+		// a subject's vector-arm top-1 was ALSO found by the lexical arm,
+		// vectorArmCorroborated below) at fulltextSearchNodesForResolution's
+		// own report-pinned TopK (MarginCalibrationOptions.TargetTopK=20,
+		// tau_calibration.go's F7 pin) -- a subject sitting at lexical rank
+		// 21-50 was OUTSIDE that measurement and excluded from the eligible
+		// (wrong-top1 or correct-top1) population M was computed from. At
+		// runtime, hybridSearchNodes passes the SAME limit to its lexical
+		// call as its vector call (vector.go), so a deployment whose
+		// effective per-call bound exceeds 20 can corroborate a wrong top-1
+		// at that wider rank that calibration never saw -- an UNMEASURED
+		// population, the identical class of hazard F7/H2/H3 already guard
+		// on the calibration side, now closed on the RUNTIME side too.
+		// calibratedTopK carries RetrievalPolicy.CalibratedTopK (pinned 20
+		// for this identity, retrieval_policy.go) through the SAME
+		// EmbedderFromEnv/attachEmbedder/ResolveDeps seam M itself already
+		// uses, gated together with M (both zero/disabled for any identity
+		// without a calibrated entry, or whenever the floor-override guard
+		// -- G3/H1(a) -- disables M).
+		//
+		// UNIFIED (codex r5's own instruction): K1 and K2 are ONE envelope
+		// condition, not two independent ones -- effectiveSearchLimit must
+		// sit in [2, calibratedTopK] inclusive. This also SUBSUMES F1's
+		// original max>=2 test structurally: effectiveSearchLimit is always
+		// <= max (it can only ever be the SAME value or a narrower clamp of
+		// it), so effectiveSearchLimit>=2 already implies max>=2 -- there is
+		// nothing left for a separate max>=2 check to add.
 		//
 		// codex r2 G2 (accepted, ratified-invariant violation): a
 		// duplicate exact-label collision (len(exactIndex) >= 2) must NOT
@@ -251,7 +305,8 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		// override) are entirely untouched by this -- they already had
 		// their own, independent relationship to degradation before
 		// CHAOS-3829 and this ticket does not change it.
-		if ambiguous && vectorMarginCommitThreshold > 0 && max >= 2 && len(exactIndex) < 2 && !retrievalDegraded {
+		if ambiguous && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
+			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK {
 			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted

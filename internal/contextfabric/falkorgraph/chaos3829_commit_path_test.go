@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
@@ -126,6 +127,11 @@ func TestEmbedderFromEnv_CalibratedIdentityAppliesVectorMarginCommitThreshold(t 
 	if options.VectorMarginCommitThreshold <= 0 {
 		t.Fatalf("VectorMarginCommitThreshold = %v, want the calibrated positive M for the pinned identity", options.VectorMarginCommitThreshold)
 	}
+	// codex r5 K1 (accepted): CalibratedTopK is gated in lockstep with M
+	// (same conditional in EmbedderFromEnv) -- it must install here too.
+	if options.CalibratedTopK != 20 {
+		t.Fatalf("CalibratedTopK = %v, want the calibrated TopK (20) for the pinned identity", options.CalibratedTopK)
+	}
 }
 
 // TestEmbedderFromEnv_ExplicitSimilarityFloorOverrideDisablesM is CHAOS-3829
@@ -146,6 +152,10 @@ func TestEmbedderFromEnv_ExplicitSimilarityFloorOverrideDisablesM(t *testing.T) 
 	}
 	if options.VectorMarginCommitThreshold != 0 {
 		t.Fatalf("VectorMarginCommitThreshold = %v, want 0 -- M was calibrated at tau=0.30, not the overridden 0.10, and must not install against an unmeasured floor", options.VectorMarginCommitThreshold)
+	}
+	// codex r5 K1: CalibratedTopK shares M's own gate and must drop with it.
+	if options.CalibratedTopK != 0 {
+		t.Fatalf("CalibratedTopK = %v, want 0 -- gated alongside M, which is disabled here", options.CalibratedTopK)
 	}
 }
 
@@ -169,6 +179,9 @@ func TestEmbedderFromEnv_ExplicitFloorEqualToCalibratedTauKeepsM(t *testing.T) {
 	if options.VectorMarginCommitThreshold <= 0 {
 		t.Fatalf("VectorMarginCommitThreshold = %v, want the calibrated positive M -- the explicit override equals the calibrated tau, so the effective floor is unchanged", options.VectorMarginCommitThreshold)
 	}
+	if options.CalibratedTopK != 20 {
+		t.Fatalf("CalibratedTopK = %v, want 20 -- gated alongside M, which is enabled here", options.CalibratedTopK)
+	}
 }
 
 // TestEmbedderFromEnv_ExplicitFloorDifferentFromCalibratedTauDropsM is the
@@ -187,6 +200,9 @@ func TestEmbedderFromEnv_ExplicitFloorDifferentFromCalibratedTauDropsM(t *testin
 	}
 	if options.VectorMarginCommitThreshold != 0 {
 		t.Fatalf("VectorMarginCommitThreshold = %v, want 0 -- 0.45 != the calibrated tau 0.30", options.VectorMarginCommitThreshold)
+	}
+	if options.CalibratedTopK != 0 {
+		t.Fatalf("CalibratedTopK = %v, want 0 -- gated alongside M, which is disabled here", options.CalibratedTopK)
 	}
 }
 
@@ -227,9 +243,13 @@ func TestAttachEmbedder_CapturesVectorMarginCommitThreshold(t *testing.T) {
 	adapter.attachEmbedder(EmbedderOptions{
 		Embedder: &stubEmbedder{vector: []float32{1, 0, 0}}, SimilarityFloor: 0.5,
 		VectorMarginCommitThreshold: 0.042,
+		CalibratedTopK:              15,
 	})
 	if adapter.vectorMarginCommitThreshold != 0.042 {
 		t.Fatalf("adapter.vectorMarginCommitThreshold = %v, want 0.042", adapter.vectorMarginCommitThreshold)
+	}
+	if adapter.calibratedTopK != 15 {
+		t.Fatalf("adapter.calibratedTopK = %v, want 15", adapter.calibratedTopK)
 	}
 }
 
@@ -242,6 +262,9 @@ func TestAttachEmbedder_ZeroVectorMarginCommitThresholdLeavesCarveOutDisabled(t 
 	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: []float32{1, 0, 0}}, SimilarityFloor: 0.5})
 	if adapter.vectorMarginCommitThreshold != 0 {
 		t.Fatalf("adapter.vectorMarginCommitThreshold = %v, want 0 (uncalibrated default)", adapter.vectorMarginCommitThreshold)
+	}
+	if adapter.calibratedTopK != 0 {
+		t.Fatalf("adapter.calibratedTopK = %v, want 0 (uncalibrated default)", adapter.calibratedTopK)
 	}
 }
 
@@ -292,6 +315,7 @@ func TestResolveSubjects_CommitPathCarveOutFiresThroughTheRealAdapterWiring(t *t
 	}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
 	adapter.vectorMarginCommitThreshold = 0.10 // calibrated M
+	adapter.calibratedTopK = 20                // codex r5 K1 -- required alongside M (newFakeAdapter's MaxResults=25, request max=10, both within [2,20])
 
 	request := contextfabric.InvestigationRequest{
 		Question: "who owns auth",
@@ -304,6 +328,61 @@ func TestResolveSubjects_CommitPathCarveOutFiresThroughTheRealAdapterWiring(t *t
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "authsvc" {
 		t.Fatalf("resolution.Committed = %v, want exactly [authsvc] (the decisively higher-vector-similarity, corroborated subject)", resolution.Committed)
+	}
+}
+
+// TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrowsBelowTwo
+// is codex r5 K2's end-to-end pinning test: the SAME fixture and calibrated
+// M/CalibratedTopK as the wiring proof above, but this adapter's config.MaxResults
+// is 1 -- the real production seam (a.config.MaxResults -> ResolveDeps.MaxResultsCap
+// -> ResolveSubjects' effectiveSearchLimit) must narrow the effective per-call
+// bound to 1 even though request.Options.MaxSubjectCandidates (10) alone would
+// have cleared the OLD, pre-K2 max>=2 test. Proves the fix reaches all the way
+// from config through reader.go's real wiring, not merely the graphrank-level
+// algorithm (see graphrank's TestChaos3829_K2_EffectiveSearchLimitBelowTwoNeverFires
+// for that unit-level pinning).
+func TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrowsBelowTwo(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service"}}, "score": 0.05},
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service"}}, "score": 0.30},
+			}, nil
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			return []row{
+				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth"}}, "score": 1.0},
+			}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter, err := newWithAPI(Config{
+		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second, MaxAttempts: 1,
+		MaxResults: 1, // codex r5 K2's own scenario: cap=1 with a request max of 10
+		PoolSize:   1, AllowInsecure: true,
+	}, fake)
+	if err != nil {
+		t.Fatalf("newWithAPI() error = %v", err)
+	}
+	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: []float32{1, 0, 0, 0}}, SimilarityFloor: 0.55})
+	adapter.vectorMarginCommitThreshold = 0.10 // calibrated M
+	adapter.calibratedTopK = 20                // calibrated TopK -- both otherwise satisfied
+
+	request := contextfabric.InvestigationRequest{
+		Question: "who owns auth",
+		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
+	}
+	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects: %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- a config MaxResults cap of 1 must narrow the effective search limit below the carve-out's floor of 2, even though request.Options.MaxSubjectCandidates (10) alone would not", resolution.Committed)
 	}
 }
 

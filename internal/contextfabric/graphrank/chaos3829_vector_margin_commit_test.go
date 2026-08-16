@@ -7,12 +7,16 @@ import (
 )
 
 // resolveOneWithVectorMargin is resolveOne (corroboration_test.go) extended
-// with CHAOS-3829's two new ResolveFromMergedCandidates parameters, for
-// tests that exercise the commit-path carve-out directly. searchTruncated
-// is exposed too (the carve-out's whole REACH property depends on firing
-// even when it is true -- see vectorMarginCommit's own doc comment).
-// retrievalDegraded defaults to false (not degraded) -- codex r4 J2's own
-// tests use resolveOneWithVectorMarginDegraded instead.
+// with CHAOS-3829's ResolveFromMergedCandidates parameters, for tests that
+// exercise the commit-path carve-out directly. searchTruncated is exposed
+// too (the carve-out's whole REACH property depends on firing even when it
+// is true -- see vectorMarginCommit's own doc comment). retrievalDegraded
+// defaults to false (not degraded) -- codex r4 J2's own tests use
+// resolveOneWithVectorMarginDegraded instead. effectiveSearchLimit defaults
+// to max itself (no separate cap narrowing) and calibratedTopK defaults to
+// 20 (the shipped identity's own pinned value, retrieval_policy.go) -- codex
+// r5 K1/K2's own tests use resolveOneWithVectorMarginAndEnvelope instead to
+// vary either independently of max.
 func resolveOneWithVectorMargin(searchTruncated bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
 	return resolveOneWithVectorMarginAndMax(10, searchTruncated, vectorArmSimilarity, threshold, candidates...)
 }
@@ -31,15 +35,45 @@ func resolveOneWithVectorMarginDegraded(searchTruncated, retrievalDegraded bool,
 	return resolveOneWithVectorMarginFull(10, searchTruncated, retrievalDegraded, vectorArmSimilarity, threshold, candidates...)
 }
 
-// resolveOneWithVectorMarginFull is the single authority every helper above
-// funnels through, so they cannot independently drift on how a
-// ResolveFromMergedCandidates call is built.
+// resolveOneWithVectorMarginFull is resolveOneWithVectorMarginEnvelope with
+// effectiveSearchLimit defaulted to max itself and calibratedTopK defaulted
+// to 20 (codex r5 K1/K2) -- every PRE-EXISTING test built on this helper
+// keeps its original meaning unchanged: every one of them uses max<=10<=20,
+// so the new two-sided envelope is always satisfied whenever the old
+// max>=2 test alone was.
 func resolveOneWithVectorMarginFull(max int, searchTruncated, retrievalDegraded bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
+	return resolveOneWithVectorMarginEnvelope(max, max, 20, searchTruncated, retrievalDegraded, vectorArmSimilarity, threshold, candidates...)
+}
+
+// resolveOneWithVectorMarginAndEnvelope is resolveOneWithVectorMargin
+// (searchTruncated=false, retrievalDegraded=false -- neither is what codex
+// r5 K1/K2's own tests are exercising) with an explicit
+// effectiveSearchLimit/calibratedTopK, independent of max -- CHAOS-3829
+// codex r5 K1/K2's own tests need to vary these directly (a cap narrower
+// than the request, or a search depth past the calibrated TopK), which
+// resolveOneWithVectorMarginAndMax cannot express since it feeds one number
+// into both max and effectiveSearchLimit. max is kept at whichever is
+// larger of 10 or effectiveSearchLimit -- max must always be >=
+// effectiveSearchLimit in production (effectiveSearchLimit is max clamped
+// DOWN by a cap, never up), and these tests are not exercising max's own
+// (unrelated) truncation behavior.
+func resolveOneWithVectorMarginAndEnvelope(effectiveSearchLimit, calibratedTopK int, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
+	max := 10
+	if effectiveSearchLimit > max {
+		max = effectiveSearchLimit
+	}
+	return resolveOneWithVectorMarginEnvelope(max, effectiveSearchLimit, calibratedTopK, false, false, vectorArmSimilarity, threshold, candidates...)
+}
+
+// resolveOneWithVectorMarginEnvelope is the single authority every helper
+// above funnels through, so they cannot independently drift on how a
+// ResolveFromMergedCandidates call is built.
+func resolveOneWithVectorMarginEnvelope(max, effectiveSearchLimit, calibratedTopK int, searchTruncated, retrievalDegraded bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
 	bySubject := make(map[string]contextfabric.SubjectCandidate, len(candidates))
 	for _, candidate := range candidates {
 		bySubject[SubjectKey(candidate.Subject)] = candidate
 	}
-	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, max, true, searchTruncated, vectorArmSimilarity, threshold, retrievalDegraded)
+	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, max, true, searchTruncated, vectorArmSimilarity, threshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK)
 }
 
 // TestChaos3829_CarveOutRescuesTheExactTwoCorroboratedCandidatesScenario is
@@ -501,5 +535,80 @@ func TestChaos3829_J2_NotDegradedStillFires(t *testing.T) {
 	resolution := resolveOneWithVectorMarginDegraded(false, false, similarities, 0.10, auth, authz)
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
 		t.Fatalf("resolution.Committed = %v, want exactly [auth] when NOT degraded", resolution.Committed)
+	}
+}
+
+// --- codex r5 K1+K2: the unified [2, calibratedTopK] envelope --------------
+
+// TestChaos3829_K2_EffectiveSearchLimitBelowTwoNeverFires is K2's core
+// pinning test: a backend cap of 1 with a nominal request max of 2 -- the
+// OLD (pre-K2) max>=2 test would have passed on the nominal value alone,
+// but every Search call this resolution actually made was clamped to AT
+// MOST one row, the identical hazard F1 already refuses at max==1. The
+// rescue must stay ambiguous.
+func TestChaos3829_K2_EffectiveSearchLimitBelowTwoNeverFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	// effectiveSearchLimit=1 (the cap=1/request=2 scenario), calibratedTopK=20.
+	resolution := resolveOneWithVectorMarginAndEnvelope(1, 20, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- a cap-clamped effective limit of 1 has no completeness bound for the carve-out", resolution.Committed)
+	}
+}
+
+// TestChaos3829_K1_EffectiveSearchLimitAboveCalibratedTopKNeverFires is K1's
+// core pinning test: an effective per-call limit of 21 exceeds the
+// calibrated population's own measured depth (20) -- corroboration at that
+// wider lexical rank was never scored, so the resolution must stay
+// ambiguous even though the margin itself is decisive and the lower bound
+// (>=2) is easily cleared.
+func TestChaos3829_K1_EffectiveSearchLimitAboveCalibratedTopKNeverFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginAndEnvelope(21, 20, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- an effective search limit (21) past the calibrated TopK (20) must never commit", resolution.Committed)
+	}
+}
+
+// TestChaos3829_K1K2_EffectiveSearchLimitAtCalibratedTopKBoundaryFires is the
+// boundary positive control: effectiveSearchLimit==calibratedTopK==20 (not
+// merely <20) is sufficient -- the envelope is inclusive on both ends.
+func TestChaos3829_K1K2_EffectiveSearchLimitAtCalibratedTopKBoundaryFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginAndEnvelope(20, 20, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
+		t.Fatalf("resolution.Committed = %v, want exactly [auth] at effectiveSearchLimit==calibratedTopK==20", resolution.Committed)
+	}
+}
+
+// TestChaos3829_K1_UncalibratedTopKNeverFires is the fail-closed control for
+// calibratedTopK itself: zero ("uncalibrated for this identity", the same
+// convention every other calibrated field in this ticket uses) must refuse
+// even when effectiveSearchLimit sits comfortably in what would otherwise be
+// range.
+func TestChaos3829_K1_UncalibratedTopKNeverFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginAndEnvelope(10, 0, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- calibratedTopK=0 (uncalibrated) must never commit", resolution.Committed)
 	}
 }
