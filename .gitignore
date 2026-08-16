@@ -13,3 +13,10 @@
 /.omo/
 **/.playwright**
 **/.ruff_cache/
+
+# CHAOS-3742 trial scratch (never commit): .trial-exchange/ request files
+# carry withheld corpus question text verbatim (the file-exchange arm 4
+# transport writes the real prompt into the request file for the
+# out-of-process responder); .probe-tmp/ is throwaway runner scripts/logs.
+.trial-exchange/
+.probe-tmp/
