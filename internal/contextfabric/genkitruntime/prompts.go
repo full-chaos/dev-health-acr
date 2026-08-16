@@ -65,15 +65,18 @@ import (
 //     declares an EMPTY AllowedParameters list, so any key the model
 //     invents ("term", "item_name", "definition_source", "subject_term",
 //     "description" were the ones the trial actually observed) always
-//     fails, unclassified, as a fact_read 500. The complete, current
-//     "allowed parameter vocabulary per capability" the ticket asks this
-//     prompt to state is therefore the empty set for every capability; the
-//     correct prompt-side fix is to say exactly that, so the model stops
-//     inventing keys instead of being handed a fabricated non-empty
-//     vocabulary. The provider-side contract fix (a real per-capability
-//     allowlist, or providers tolerating unknown parameters, or the error
-//     taxonomy gap in the route's classifier) is the separate, out-of-scope
-//     half of CHAOS-3854.
+//     fails the fact read. CHAOS-3854's provider half
+//     (internal/contextfabric/fact_registry.go) now classifies that
+//     rejection as ErrInterpretationRejected -- 422 interpretation_rejected,
+//     retryable -- instead of the opaque, unclassified fact_read 500 the
+//     trial originally measured, but a classified rejection still fails
+//     the read: this prompt sentence's job is unchanged by that fix, which
+//     is why both halves of CHAOS-3854 ship together. The complete,
+//     current "allowed parameter vocabulary per capability" the ticket
+//     asks this prompt to state is therefore the empty set for every
+//     capability; the correct prompt-side fix is to say exactly that, so
+//     the model stops inventing keys instead of being handed a fabricated
+//     non-empty vocabulary.
 var interpretationSystemPrompt = fmt.Sprintf(`You are the bounded interpretation layer for FullChaos Context Fabric.
 Interpret any authorized natural-language engineering question. Questions are open-ended and are not matched to a finite allowlist.
 Return only the requested structured output. Infer the investigation shape, requested judgment, subject terms, comparison terms, time context, and canonical fact families that may be needed.
