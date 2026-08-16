@@ -291,7 +291,31 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 					"sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; printf x > \"$2\"; sleep "+reapSleepArgument()+"' sh "+shellQuote(grandchildPIDPath)+" "+shellQuote(grandchildReadyFIFOPath)+" &\n"+
 					"read _ < "+shellQuote(grandchildReadyFIFOPath)+"\n"+
 					outputStatement+"\n"+
-					"sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; sleep "+reapSleepArgument()+"' sh "+shellQuote(lateForkPIDPath)+" &")
+					// CHAOS-3861 CI flake (team lead's diagnosis, confirmed by
+					// reproduction): unlike shellPIDPath/grandchildPIDPath --
+					// both fully written well before anything reads them
+					// (grandchildPIDPath by the FIFO handshake; shellPIDPath by
+					// simply being the script's first statement, executed long
+					// before Status() can return) -- lateForkPIDPath has NO
+					// synchronization with the assertion that reads it by
+					// design (that absence of synchronization is the whole
+					// point of a late fork). A plain `> "$1"` redirect
+					// TRUNCATE-CREATES the file before printf writes anything
+					// into it, so a reader can observe it as existing-but-empty
+					// in that window. Locally this window is normally
+					// microseconds and invisible; artificially widening it
+					// (temporarily, to `> "$1"; sleep 2; printf ... >> "$1"`)
+					// reproduced the exact CI failure in 0.29s on the first
+					// serial iteration: strconv.Atoi: parsing "": invalid
+					// syntax, from a 0-byte pid file assertCodeGraphLateForkReapedIfSpawned's
+					// os.Stat had already found to "exist". Fixed the same way
+					// this repo's own file-exchange transport avoids the
+					// identical class of bug (internal/diagnostics/writer.go):
+					// write to a temp path, then atomically rename into place,
+					// so a reader NEVER observes a partially-written file at
+					// the final path -- it is either absent (vacuous, tolerated)
+					// or complete.
+					"sh -c 'printf \"%s\\n\" \"$$\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"; sleep "+reapSleepArgument()+"' sh "+shellQuote(lateForkPIDPath)+" &")
 				runner.Config.Timeout = reapRunnerTimeout
 
 				_, elapsed, err := statusWithBoundedSpawnRetry(t, runner, context.Background(), directory)
