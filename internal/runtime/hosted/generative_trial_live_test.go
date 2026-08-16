@@ -107,7 +107,13 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		}
 	}
 
-	wireProductionEnv(t)
+	// ACR_TEST_TRIAL_EXCHANGE_DIR (arm 4, diagnostic): swaps ONLY the
+	// generative transport for a file-exchange ModelRuntime an
+	// out-of-process responder answers -- see file_exchange_runtime_test.go.
+	// Everything else (graph, facts, receipts, engine, validation) is the
+	// identical pipeline the other arms use.
+	exchangeDir := os.Getenv("ACR_TEST_TRIAL_EXCHANGE_DIR")
+	wireProductionEnv(t, exchangeDir != "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -117,7 +123,24 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	rt, err := hosted.Open(ctx, cfg, hosted.Options{ServiceVersion: "chaos-3742-generative-trial", Logger: logger, Now: time.Now})
+	options := hosted.Options{ServiceVersion: "chaos-3742-generative-trial", Logger: logger, Now: time.Now}
+	if exchangeDir != "" {
+		timeout := 10 * time.Minute
+		if raw := os.Getenv("ACR_TEST_TRIAL_EXCHANGE_TIMEOUT"); raw != "" {
+			parsed, perr := time.ParseDuration(raw)
+			if perr != nil {
+				t.Fatalf("ACR_TEST_TRIAL_EXCHANGE_TIMEOUT: %v", perr)
+			}
+			timeout = parsed
+		}
+		exchangeRuntime, ferr := newFileExchangeRuntime(exchangeDir, arm, timeout)
+		if ferr != nil {
+			t.Fatalf("create file-exchange runtime: %v", ferr)
+		}
+		options.ModelRuntimeOverride = exchangeRuntime
+		t.Logf("arm %q uses the FILE-EXCHANGE diagnostic transport at %s (timeout %s/call) -- latency and token cost are NOT comparable to a real provider", arm, exchangeDir, timeout)
+	}
+	rt, err := hosted.Open(ctx, cfg, options)
 	if err != nil {
 		t.Fatalf("open hosted runtime: %v", err)
 	}
@@ -229,7 +252,13 @@ func loadTrialCorpus(t *testing.T, path string) []trialCase {
 // (evidence key, device verification URL) is unused by this harness's
 // investigation path but must satisfy config.Validate(); throwaway values
 // are generated here rather than reused from any real deployment secret.
-func wireProductionEnv(t *testing.T) {
+//
+// modelOverridden is true for arm 4 (file-exchange): the env-driven model
+// config (ACR_CONTEXT_FABRIC_MODEL/_FALLBACK/_API_KEY) is never read in
+// that case -- hosted.Options.ModelRuntimeOverride takes priority in
+// buildContextFabricInvestigator -- so those ACR_TEST_TRIAL_MODEL* inputs
+// are not required.
+func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	t.Helper()
 	set := func(key, value string) {
 		if value != "" {
@@ -247,12 +276,14 @@ func wireProductionEnv(t *testing.T) {
 	set("ACR_CONTEXT_FABRIC_FALKOR_TLS", "false")
 	set("ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE", "true")
 
-	set("ACR_CONTEXT_FABRIC_MODEL_PROVIDER", "openai")
-	set("ACR_CONTEXT_FABRIC_MODEL", requireEnv(t, "ACR_TEST_TRIAL_MODEL"))
-	// Fallback is genuinely OPTIONAL (that is how "nano alone" / "luna
-	// alone" are expressed): only mapped when the caller sets it.
-	set("ACR_CONTEXT_FABRIC_MODEL_FALLBACK", os.Getenv("ACR_TEST_TRIAL_MODEL_FALLBACK"))
-	set("ACR_CONTEXT_FABRIC_MODEL_API_KEY", requireEnv(t, "ACR_TEST_TRIAL_MODEL_API_KEY"))
+	if !modelOverridden {
+		set("ACR_CONTEXT_FABRIC_MODEL_PROVIDER", "openai")
+		set("ACR_CONTEXT_FABRIC_MODEL", requireEnv(t, "ACR_TEST_TRIAL_MODEL"))
+		// Fallback is genuinely OPTIONAL (that is how "nano alone" / "luna
+		// alone" are expressed): only mapped when the caller sets it.
+		set("ACR_CONTEXT_FABRIC_MODEL_FALLBACK", os.Getenv("ACR_TEST_TRIAL_MODEL_FALLBACK"))
+		set("ACR_CONTEXT_FABRIC_MODEL_API_KEY", requireEnv(t, "ACR_TEST_TRIAL_MODEL_API_KEY"))
+	}
 
 	// Embedder identity MUST match the deployed
 	// openai/text-embedding-3-large#t3:r2000:b0:pnone graph (proven-recipe

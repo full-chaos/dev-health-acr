@@ -320,10 +320,17 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		reuseEpochSnapshotter = investigationStore
 	}
 	// nil when no model provider is configured; see the function doc
-	// comment and newContextFabricModelRuntime.
-	deploymentDefaultRuntime, err := newContextFabricModelRuntime(ctx, os.LookupEnv)
-	if err != nil {
-		return nil, nil, nil, nil, err
+	// comment and newContextFabricModelRuntime. CHAOS-3742: an explicit
+	// ModelRuntimeOverride takes priority over the env-driven deployment
+	// runtime -- see Options.ModelRuntimeOverride's doc comment. Every
+	// real caller leaves this nil, so behavior is unchanged unless a
+	// caller opts in.
+	deploymentDefaultRuntime := request.options.ModelRuntimeOverride
+	if deploymentDefaultRuntime == nil {
+		deploymentDefaultRuntime, err = newContextFabricModelRuntime(ctx, os.LookupEnv)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
 	}
 	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv)
 	if err != nil {

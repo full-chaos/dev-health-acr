@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -20,6 +21,16 @@ type Options struct {
 	ServiceVersion string
 	Logger         *slog.Logger
 	Now            func() time.Time
+	// ModelRuntimeOverride, when set, REPLACES the env-driven deployment
+	// model runtime buildContextFabricInvestigator would otherwise build
+	// from ACR_CONTEXT_FABRIC_MODEL* -- everything else in composition
+	// (graph, canonical facts, receipt sink, reuse wiring) is unaffected.
+	// nil (the zero value) for every real caller, including
+	// cmd/acr-api/main.go -- this exists solely for CHAOS-3742's
+	// file-exchange diagnostic arm (a test-only ModelRuntime that swaps
+	// the generative stage while measuring the identical pipeline), never
+	// referenced by any production composition path.
+	ModelRuntimeOverride contextfabric.ModelRuntime
 }
 
 type Runtime struct {
