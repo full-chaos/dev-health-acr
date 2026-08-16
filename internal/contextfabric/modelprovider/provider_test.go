@@ -275,7 +275,9 @@ func TestNew_neverForwardsProviderResponseContentInTheClassifiedError(t *testing
 
 func TestNew_fallsBackToTheStrongerModelWhenThePrimaryFails(t *testing.T) {
 	// Given a provider that fails the first model and answers the second --
-	// the gpt-5-nano primary / stronger fallback shape from CHAOS-3770.
+	// a primary/stronger-fallback shape (CHAOS-3855: the default primary is
+	// gpt-5.9-fallback-test with no fallback, but the fallback mechanism itself
+	// still works when an operator opts in).
 	var mu sync.Mutex
 	seen := []string{}
 	provider := recordingProvider(t, func(writer http.ResponseWriter, request *http.Request) {
@@ -294,7 +296,7 @@ func TestNew_fallsBackToTheStrongerModelWhenThePrimaryFails(t *testing.T) {
 		chatCompletion(t, validInterpretationJSON)(writer, request)
 	})
 	cfg := testConfig(provider)
-	cfg.FallbackModel = "gpt-5.6-luna"
+	cfg.FallbackModel = "gpt-5.9-fallback-test"
 
 	// When
 	runtime, err := New(context.Background(), cfg)
@@ -330,7 +332,7 @@ func TestNew_fallsBackToTheStrongerModelWhenThePrimaryFails(t *testing.T) {
 	if len(seen) != 2 {
 		t.Fatalf("provider calls = %d, want the primary then the fallback", len(seen))
 	}
-	if !strings.Contains(seen[1], "gpt-5.6-luna") {
+	if !strings.Contains(seen[1], "gpt-5.9-fallback-test") {
 		t.Fatalf("second call did not target the fallback model: %s", seen[1])
 	}
 }

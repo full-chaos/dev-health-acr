@@ -381,8 +381,8 @@ new build.
 | `ACR_CONTEXT_FABRIC_MODEL_API_KEY` / `_FILE` | *(unset)* | Bearer credential, `KEY`/`KEY_FILE` convention (`config.SecretValue`). Required unless a base URL is set. |
 | `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible API root. Set this for BYO. |
 | `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Plugin namespace, recorded verbatim as `ModelExecutionReceipt.Provider`. Give a BYO endpoint its own stable name so replay can tell receipts apart. |
-| `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5-nano` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. |
-| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call), but **effectively required in practice — set it to `gpt-5.6-luna` alongside the `gpt-5-nano` default.** See the measurements below. |
+| `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5.6-luna` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. Default changed from `gpt-5-nano` to `gpt-5.6-luna` in CHAOS-3855 — see the measurements below. |
+| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call). As of CHAOS-3855, no fallback is recommended for the default `gpt-5.6-luna` primary — see the measurements below. |
 | `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` | `45s` | Bounds one generation attempt (1s–2m). |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` | `2` | Attempts `genkitruntime` makes per operation (1–3). |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | `2` | The OpenAI SDK's own retry loop *within* one attempt (0–5). Set `0` to make `genkitruntime` the single retry owner — the right choice for a local BYO server. |
@@ -825,6 +825,15 @@ global to the API, not per-route, so raising it also loosens the bound on
 every other route; a per-route timeout is the cleaner fix and is not
 implemented yet.
 
+**CHAOS-3855 update: the production default is now `gpt-5.6-luna` alone, no
+fallback.** The CHAOS-3742 five-arm generative trial measured `gpt-5.6-luna`
+alone as equal-or-better than the `gpt-5-nano` + `gpt-5.6-luna` fallback chain
+described below (1/30 strict vs. 0/30 strict) at roughly 2.4x fewer tokens
+per corpus run (82K vs. 193K); `gpt-5-nano` was the weakest interpreter and
+the dominant source of fact-parameter rejections. The CHAOS-3770 measurements
+and the "fallback is required" conclusion immediately below predate that
+trial and are kept for historical context, not as the current recommendation.
+
 **Model choice matters, and `gpt-5-nano` alone is not enough.** Measured
 live against `gpt-5-nano` (the CHAOS-3770 acceptance probes, both skipped
 unless `ACR_TEST_MODEL_API_KEY` is set —
@@ -894,11 +903,12 @@ mini's true rate on current prompts is **unmeasured and expected to be
 materially better than 4 of 12**. The nano and fallback rows were also
 measured on v3.
 
-So the standing recommendation is unchanged for now — `gpt-5-nano` with the
-`gpt-5.6-luna` fallback is the only combination measured to answer reliably —
-but `gpt-5-mini` is the open question worth settling before treating that as
-final, because a primary that answers on its own would remove the second
-billable call the fallback costs. Re-run
+The standing recommendation above (`gpt-5-nano` with the `gpt-5.6-luna`
+fallback) is superseded as of CHAOS-3855: the CHAOS-3742 five-arm trial found
+`gpt-5.6-luna` alone, with no fallback, an equal-or-better and materially
+cheaper production configuration — see the callout above. `gpt-5-mini`
+remains an open question worth settling against `gpt-5.6-luna` alone rather
+than against the retired nano/fallback pairing. Re-run
 `go test ./internal/api -run LiveEndpoint` with `ACR_TEST_MODEL=gpt-5-mini`
 on the current prompts to settle it.
 

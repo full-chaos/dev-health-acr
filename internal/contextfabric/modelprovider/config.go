@@ -6,7 +6,7 @@
 // BYO LLM is the supported long-term shape (CHAOS-3770), so the
 // configuration surface names a *provider*, not a vendor: a provider kind,
 // an optional base URL, a model id, and a credential. The default values
-// select OpenAI's hosted endpoint with gpt-5-nano, but nothing in this
+// select OpenAI's hosted endpoint with gpt-5.6-luna, but nothing in this
 // package's control flow is OpenAI-specific -- pointing
 // ACR_CONTEXT_FABRIC_MODEL_BASE_URL at any OpenAI-compatible server (a
 // customer's gateway, vLLM, Ollama, llama.cpp) and naming its model id is
@@ -33,12 +33,15 @@ import (
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 )
 
-// Default provider selection. These encode the CHAOS-3770 decision (start
-// on OpenAI + gpt-5-nano) as *defaults only*; every one of them is
+// Default provider selection. These encode the CHAOS-3855 decision (the
+// CHAOS-3742 five-arm generative trial: gpt-5.6-luna alone equals-or-beats
+// the earlier gpt-5-nano + gpt-5.6-luna fallback chain at ~2.4x fewer
+// tokens per corpus run, and nano was the dominant source of
+// fact-parameter rejections) as *defaults only*; every one of them is
 // overridable by environment, and no other code path checks for them.
 const (
 	DefaultProvider = "openai"
-	DefaultModel    = "gpt-5-nano"
+	DefaultModel    = "gpt-5.6-luna"
 	// DefaultBaseURL is applied explicitly, never left to the OpenAI SDK's
 	// own default, because openai.NewClient reads OPENAI_BASE_URL and
 	// OPENAI_API_KEY from the ambient process environment. Passing both

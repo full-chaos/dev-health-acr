@@ -336,7 +336,7 @@ func TestActionRunDebugLoggingNeverCarriesProviderResponseBody(t *testing.T) {
 	// (the difference between this test and the earlier refutation is
 	// exactly that the MODEL ACTION ITSELF fails here, not a later parse
 	// step).
-	if !strings.Contains(captured, "Action.Run") || !strings.Contains(captured, "name=openai/gpt-5-nano") {
+	if !strings.Contains(captured, "Action.Run") || !strings.Contains(captured, "name=openai/"+DefaultModel) {
 		t.Fatalf("sanity check failed: the model action's Action.Run debug log never fired; got: %s", captured)
 	}
 	if strings.Contains(captured, secret) {

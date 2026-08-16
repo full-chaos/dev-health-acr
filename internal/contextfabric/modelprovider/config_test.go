@@ -90,8 +90,8 @@ func TestConfigFromEnv_appliesProviderShapedDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Then the CHAOS-3770 decision (OpenAI + gpt-5-nano) is the default,
-	// and nothing else is inferred.
+	// Then the CHAOS-3855 decision (OpenAI + gpt-5.6-luna, no fallback) is
+	// the default, and nothing else is inferred.
 	if cfg.Provider != DefaultProvider || cfg.Model != DefaultModel {
 		t.Fatalf("provider/model = %q/%q, want %q/%q", cfg.Provider, cfg.Model, DefaultProvider, DefaultModel)
 	}

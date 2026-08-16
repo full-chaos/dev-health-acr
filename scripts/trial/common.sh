@@ -16,7 +16,21 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-topleve
 if [[ -z "$repo_root" ]]; then
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 fi
-dev_health_root="$(cd "$repo_root/.." && pwd -P)"
+# dev_health_root resolves via the git COMMON dir, not repo_root/.. --
+# repo_root (--show-toplevel) is the CURRENT worktree's own root, which for
+# a lane checked out under dev-health/worktrees/acr/<branch> sits two
+# levels deeper than a plain dev-health/acr checkout; repo_root/.. would
+# then land inside dev-health/worktrees/acr instead of dev-health, and
+# ops/.env and .remember/ (both outside this repo) would never be found.
+# --git-common-dir resolves to the SAME .git for every linked worktree of
+# this repo, so its grandparent is dev-health regardless of which worktree
+# sourced this script.
+common_git_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --git-common-dir 2>/dev/null)"
+if [[ -n "$common_git_dir" ]]; then
+  dev_health_root="$(cd "$common_git_dir/../.." && pwd -P)"
+else
+  dev_health_root="$(cd "$repo_root/.." && pwd -P)"
+fi
 
 # The withheld corpus and the trial-results output dir live in the parent
 # dev-health checkout's .remember/ (outside this repo, never committed
