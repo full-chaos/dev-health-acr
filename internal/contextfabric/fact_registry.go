@@ -250,7 +250,39 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		}
 		for key := range requirement.Parameters {
 			if !containsString(capability.AllowedParameters, key) {
-				return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: parameter %q is not allowed", requirement.Kind, key)
+				// CHAOS-3854: this is a business-rule rejection of the
+				// model's OWN interpretation output -- the same shape as an
+				// invalid fact_requirements[].kind, which
+				// InterpretedQuestion.Validate already rejects with
+				// ErrInterpretationRejected -- just discovered one layer
+				// later, here, because the allowed-parameter vocabulary is
+				// declared by the capability (provider wiring), not by a
+				// contracts/v1 static bound InterpretedQuestion.Validate
+				// can check. Wrapping the SAME sentinel here (rather than a
+				// new one) reuses the entire existing taxonomy end to end
+				// with no other code change: internal/api/
+				// context_fabric_routes.go's errors.Is(err,
+				// ErrInterpretationRejected) branch already classifies this
+				// as 422 "interpretation_rejected" (retryable -- a fresh
+				// interpretation call, especially the CHAOS-3856 prompt fix
+				// that tells the model no capability accepts any
+				// parameter, is likely to succeed), and
+				// internal/sidecar/api_errors.go's reverse code->sentinel
+				// table already maps that same wire code back to
+				// sidecar.ErrInterpretationRejected for MCP callers -- both
+				// for free. Previously this reached neither: the plain
+				// fmt.Errorf carried no sentinel, so it fell through every
+				// errors.Is check in routes.go to the unclassified 500
+				// fallthrough.
+				//
+				// No *ModelBoundViolation is attached: per ModelBoundViolation's
+				// own doc comment, that type exists ONLY for a violation
+				// attributable to a single named contracts/v1
+				// ContextFabricModelFacingBounds registry entry (a length/
+				// count cap); "parameter is not allowed" is exactly the
+				// "invalid enum"-shaped business-rule case that comment
+				// says carries ErrInterpretationRejected alone.
+				return CanonicalFactBundle{}, fmt.Errorf("%w: fact capability %s: parameter %q is not allowed", ErrInterpretationRejected, requirement.Kind, key)
 			}
 		}
 	}
@@ -361,7 +393,14 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 	}
 	for key := range requirement.Parameters {
 		if !containsString(capability.AllowedParameters, key) {
-			return FactQuery{}, fmt.Errorf("parameter %q is not allowed", key)
+			// CHAOS-3854: same classification and same reasoning as
+			// ReadFacts' pre-pass check above (which currently makes this
+			// branch unreachable in the ordinary path, for the same reason
+			// the subject-kind check above already is -- see this
+			// function's doc comment); kept as the same defense-in-depth
+			// invariant, wrapping the SAME sentinel so it stays correct if
+			// the pre-pass is ever narrowed or bypassed.
+			return FactQuery{}, fmt.Errorf("%w: parameter %q is not allowed", ErrInterpretationRejected, key)
 		}
 	}
 	parameters := make(map[string]string, len(requirement.Parameters))

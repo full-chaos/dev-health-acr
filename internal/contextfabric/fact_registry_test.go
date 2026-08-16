@@ -129,6 +129,27 @@ func TestFactCapabilityRegistryReportsUnconfiguredCapability(t *testing.T) {
 	}
 }
 
+// TestFactCapabilityRegistryRejectsParametersOutsideServerOwnedCapability
+// covers ReadFacts' pre-pass rejection site (CHAOS-3783/CHAOS-3854).
+//
+// CHAOS-3854: a disallowed fact_requirements[].parameters key is the
+// model's OWN interpretation output being rejected by ACR's OWN fact
+// capability registry -- the same business-rule-rejection SHAPE as an
+// invalid fact_requirements[].kind, which InterpretedQuestion.Validate
+// already classifies as ErrInterpretationRejected (contracts/v1's
+// validFactKind check). Before this fix, ReadFacts returned a bare,
+// sentinel-less fmt.Errorf here: it matched none of
+// internal/api/context_fabric_routes.go's errors.Is branches and fell
+// through to the "unclassified" 500 -- exactly the trial's measured
+// production symptom (fact_read: parameter "term"/"item_name"/etc. is not
+// allowed, surfacing as an opaque internal_error). errors.Is is the
+// load-bearing assertion below; the message substring check is secondary.
+//
+// This test is RED against the pre-fix registry: reverting
+// fact_registry.go's ErrInterpretationRejected wrap (keeping this test)
+// fails it on the errors.Is check while leaving the substring check green
+// -- proving the fix is the classification, not the rejection itself
+// (which already existed and this test already covered before CHAOS-3854).
 func TestFactCapabilityRegistryRejectsParametersOutsideServerOwnedCapability(t *testing.T) {
 	t.Parallel()
 
@@ -142,8 +163,45 @@ func TestFactCapabilityRegistryRejectsParametersOutsideServerOwnedCapability(t *
 	}
 	request := canonicalFactRequest(project, FactMetrics)
 	request.Requirements[0].Parameters = map[string]string{"sql": "select *"}
-	if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request); err == nil || !strings.Contains(err.Error(), "not allowed") {
+	_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if !errors.Is(err, ErrInterpretationRejected) {
+		t.Fatalf("ReadFacts() error = %v, want it to wrap ErrInterpretationRejected so internal/api/context_fabric_routes.go classifies it as interpretation_rejected (422) instead of falling through to unclassified (500)", err)
+	}
+}
+
+// TestBuildFactQueryRejectsDisallowedParameterAsInterpretationRejected
+// covers buildFactQuery's OWN parameter-allowlist check (CHAOS-3854) --
+// the second of the two rejection sites, distinct from ReadFacts' pre-pass
+// above. buildFactQuery is called directly (bypassing ReadFacts) because,
+// per this function's own doc comment, the pre-pass now makes this branch
+// unreachable in the ordinary ReadFacts path for every REGISTERED
+// capability (the same way the subject-kind check just above it already
+// is) -- it survives as the defense-in-depth invariant for a planned read
+// that reaches buildFactQuery with a parameter the pre-pass did not (or,
+// after some future change, no longer does) catch. It must classify
+// identically to the pre-pass site: wrapping the same ErrInterpretationRejected
+// sentinel, not a bespoke or absent one.
+func TestBuildFactQueryRejectsDisallowedParameterAsInterpretationRejected(t *testing.T) {
+	t.Parallel()
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	capability := FactCapability{
+		Kind: FactMetrics, Name: "ops-metrics", Version: "metrics-v1",
+		SupportedSubjectKinds: []SubjectKind{SubjectProject}, AllowedParameters: []string{"window_days"},
+	}
+	requirement := FactRequirement{Kind: FactMetrics, Parameters: map[string]string{"sql": "select *"}}
+	request := canonicalFactRequest(project, FactMetrics)
+	allowed := investigationScopeSubjectSet(request)
+
+	_, err := buildFactQuery(request, requirement, capability, allowed, []SubjectRef{project})
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("buildFactQuery() error = %v", err)
+	}
+	if !errors.Is(err, ErrInterpretationRejected) {
+		t.Fatalf("buildFactQuery() error = %v, want it to wrap ErrInterpretationRejected", err)
 	}
 }
 
@@ -229,7 +287,6 @@ func canonicalFactRequest(project SubjectRef, kinds ...FactKind) CanonicalFactRe
 
 var _ FactProvider = (*factProviderStub)(nil)
 var _ CanonicalFactReader = (*FactCapabilityRegistry)(nil)
-var _ = errors.Is
 
 // TestFactCapabilityRegistryCapsTotalFactsAcrossProviders is the
 // registry-level half of the H7 fix (Codex adversarial review,
