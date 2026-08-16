@@ -449,6 +449,16 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 		}
 		candidate.Relevance = graphrank.Normalized(relevance)
 		candidate.Mechanism = contextfabric.MatchVector
+		// CHAOS-3829: VectorSimilarity is the RAW similarity, set
+		// UNCONDITIONALLY -- unlike Relevance above, never clamped when
+		// truncated is true. See CandidateNode.VectorSimilarity's own doc
+		// comment for why the commit-path carve-out needs this specific,
+		// unclamped value and why that is sound even under truncation. A
+		// fresh local each iteration (not a loop-scoped reused pointer),
+		// since this becomes a stored, individually-addressed *float64 per
+		// candidate.
+		similarity := s.similarity
+		candidate.VectorSimilarity = &similarity
 		candidates = append(candidates, candidate)
 	}
 	return candidates, truncated, nil
@@ -901,6 +911,10 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 		}
 		options.OverFetchMultiplier = policy.OverFetchMultiplier
 		options.EfRuntime = policy.EfRuntime
+		// CHAOS-3829: like OverFetchMultiplier/EfRuntime above, no operator
+		// env knob exists for this -- the calibrated table is the sole
+		// source, unconditionally.
+		options.VectorMarginCommitThreshold = policy.VectorMarginCommitThreshold
 	}
 	return options, nil
 }

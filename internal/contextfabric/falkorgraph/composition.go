@@ -53,7 +53,19 @@ import (
 // under weaker retrieval (fewer/no lexical proposals on a paraphrase-heavy
 // question) must not silently shadow a newly-achievable, better-corroborated
 // commit for the identical question text.
-const RetrievalPolicyVersion = "rp4"
+//
+// CHAOS-3829 (chris-ratified 2026-08-16) bumped this rp4 -> rp5: the
+// calibrated identity's RetrievalPolicy entry (calibratedIdentityText3Large,
+// retrieval_policy.go) gained VectorMarginCommitThreshold, activating
+// graphrank.ResolveFromMergedCandidates' commit-path carve-out for the
+// first time. A question that PREVIOUSLY resolved ambiguous (no commit,
+// possibly a clarification prompt) can now COMMIT for the identical text --
+// the exact "a stored answer computed under the old policy no longer
+// matches what the current policy would produce" scenario this constant
+// exists to signal, same class as the rp3 -> rp4 bump immediately above. No
+// vector or node stamp moves; this is a read-side commit-decision change
+// only.
+const RetrievalPolicyVersion = "rp5"
 
 // EmbedRetrievalIdentityNone is the persisted embed-retrieval-identity value
 // for a deployment with NO embedder configured. A literal, never the empty

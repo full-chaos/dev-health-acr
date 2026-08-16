@@ -80,6 +80,12 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 				a.config.Telemetry.RecordObservationTraversalDegraded(ctx, orgID, count)
 			}
 		},
+		// CHAOS-3829: the calibrated commit-path margin threshold captured
+		// at attachEmbedder time (retrieval_policy.go). Zero (no calibrated
+		// policy for this identity, or no embedder at all) disables the
+		// carve-out entirely -- see ResolveDeps.VectorMarginCommitThreshold's
+		// own doc comment.
+		VectorMarginCommitThreshold: a.vectorMarginCommitThreshold,
 	}
 	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)
 }

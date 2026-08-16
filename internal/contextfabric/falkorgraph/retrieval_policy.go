@@ -65,6 +65,17 @@ type RetrievalPolicy struct {
 	// vector index should be BUILT with. See the type doc comment above --
 	// this is an index-build-time value, not a per-query one.
 	EfRuntime int
+	// VectorMarginCommitThreshold is CHAOS-3829's M: the vector-arm top-1/
+	// top-2 raw-similarity margin graphrank.ResolveFromMergedCandidates'
+	// commit-path carve-out (vectorMarginCommit) requires before it will
+	// auto-commit a corroborated-but-otherwise-ambiguous top-1. Zero means
+	// "not calibrated for this identity" -- the SAME convention
+	// OverFetchMultiplier/EfRuntime already use -- and disables the
+	// carve-out entirely: byte-identical to pre-CHAOS-3829 behavior. Sized
+	// by falkorgraph's CalibrateMarginFromReport (tau_calibration.go),
+	// never invented -- see calibratedIdentityText3Large's doc comment for
+	// this identity's specific measurement basis.
+	VectorMarginCommitThreshold float64
 }
 
 // calibratedIdentityText3Large is the CHAOS-3834 measured entry's key.
@@ -246,6 +257,53 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 		// recreate tooling against organizations already on this
 		// identity.
 		EfRuntime: 200,
+		// 0.03378582293796651: CHAOS-3829's calibrated commit-path margin
+		// threshold M, computed by CalibrateMarginFromReport
+		// (tau_calibration.go) from oracle-report-v4-margin.json (t3 graph,
+		// 29,813 embedded subjects, this exact identity/dimension/tau=0.30/
+		// topK=20 -- the deployed policy above). One float64 ULP above the
+		// single largest wrong-top1 margin observed in the eligible
+		// population (corroborated top-1 + measurable margin, over 30
+		// scored cases UNION 20 no-match controls): 4 wrong-top1 samples (2
+		// scored -- floor_loss margin 0.0244, ann_loss margin 0.0338 -- and
+		// 2 from a corroborated control, margins 0.0030/0.0078), 5
+		// correct-top1 samples (margins 0.0816-0.3223). AchievedReach =
+		// 5/5 (100%): every correct-top1 case's margin clears M with real
+		// headroom (the weakest, 0.0816, is ~2.4x the largest wrong margin).
+		// 0 wrong commits in-sample by construction, including both
+		// corroborated controls -- the highest-severity failure mode a
+		// no-match question could produce.
+		//
+		// *** RATIFIED (CHAOS-3829, chris, 2026-08-16) ***. Sample size
+		// caveat, reported alongside the ratification and recorded here
+		// rather than hidden by a clean-looking number: only 9 of 50
+		// corpus cases (30 scored + 20 controls) fell into the eligible
+		// population this M was computed from. The separation is real
+		// (2.4x) but from few points -- re-measure and re-pin if a larger
+		// corpus run produces a materially different bound, per this
+		// table's own drift-and-recalibrate discipline (see
+		// calibratedIdentityText3Large's doc comment).
+		//
+		// Eligibility deliberately does NOT require vectorSearchComplete
+		// (an earlier draft of this measurement did, and returned
+		// ErrNoMarginSamples -- zero cases satisfied vectorSearchComplete
+		// AND corroborated-top1 simultaneously in this same corpus, since
+		// the vector arm truncates on ~93% of scored cases at this K):
+		// db.idx.vector.queryNodes returns rows ORDER BY score ASC
+		// (vector.go), so truncation can only ever drop candidates BEYOND
+		// the returned set -- it cannot reorder or misrepresent the gap
+		// between two candidates that WERE returned. See
+		// CandidateNode.VectorSimilarity's doc comment (graphrank/types.go)
+		// for the full soundness argument and why this reads a RAW
+		// similarity, never the truncation-clamped Confidence/Relevance a
+		// margin computed from THAT would read as zero on almost every real
+		// call. K-widening (OverFetchMultiplier) as an alternative path to
+		// vectorSearchComplete was evaluated and abandoned: near-duplicate
+		// density at tau=0.30 ranges into the tens of thousands per query
+		// (this corpus: p90 near-duplicate count 22,700 of ~29,813
+		// subjects), requiring multipliers of 100-1300x -- nowhere near
+		// latency-sane.
+		VectorMarginCommitThreshold: 0.03378582293796651,
 	},
 }
 
