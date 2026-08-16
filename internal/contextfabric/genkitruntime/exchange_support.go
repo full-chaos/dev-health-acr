@@ -3,7 +3,7 @@ package genkitruntime
 import (
 	"encoding/json"
 
-	"github.com/invopop/jsonschema"
+	"github.com/firebase/genkit/go/core"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
@@ -68,21 +68,16 @@ func ParseInterpretationOutput(raw []byte, defaultTime contextfabric.TimeContext
 // as a JSON Schema document -- the same contract a non-genkit responder
 // must be told to follow.
 //
-// FIDELITY NOTE (fable-review finding, documented rather than fixed): this
-// uses invopop/jsonschema's default $ref/$defs-nested output. Genkit's own
-// OpenAI structured-output binding (ai.WithCustomConstrainedOutput, see
-// runtime.go's sdkGenerator) flattens the schema before handing it to the
-// provider -- OpenAI's strict json_schema mode does not accept $ref
-// indirection the way this raw reflection does. A responder that itself
-// enforces the schema strictly (rather than a capable LLM reading it as
-// documentation, which is what this trial's fable-5 responder did
-// successfully) would need the SAME flattening genkit applies, which this
-// function does not perform. Acceptable for this trial's purpose (a smart
-// out-of-process agent responder); would need genkit's flattening mapper
-// reused (not reimplemented) before this schema could drive a strict
-// non-LLM validator.
+// Uses core.InferSchemaMap -- the SAME function genkit's own
+// ai.WithOutputType (called by GenerateData, which sdkGenerator.Interpret
+// uses) derives the constrained-output schema from. It flattens $ref/$defs
+// (DoNotReference: true) exactly as production's OpenAI structured-output
+// binding requires, rather than the invopop/jsonschema default nested-$ref
+// form (sol review F9, upgraded from a documented gap to a fix once
+// core.InferSchemaMap -- genkit's own public flattening mapper -- was
+// confirmed reusable without reimplementing it).
 func InterpretationOutputSchema() ([]byte, error) {
-	return json.MarshalIndent(jsonschema.Reflect(&interpretationOutput{}), "", "  ")
+	return json.MarshalIndent(core.InferSchemaMap(interpretationOutput{}), "", "  ")
 }
 
 // BuildSynthesisPrompt renders the exact bounded-JSON user payload
@@ -110,7 +105,8 @@ func ParseSynthesisOutput(raw []byte) (contextfabric.SynthesisDraft, error) {
 
 // SynthesisOutputSchema reflects the exact Go type genkit's constrained
 // structured output binds SynthesizeAnswer's model call to, as a JSON
-// Schema document.
+// Schema document -- see InterpretationOutputSchema's doc comment for why
+// core.InferSchemaMap, not raw jsonschema.Reflect.
 func SynthesisOutputSchema() ([]byte, error) {
-	return json.MarshalIndent(jsonschema.Reflect(&synthesisOutput{}), "", "  ")
+	return json.MarshalIndent(core.InferSchemaMap(synthesisOutput{}), "", "  ")
 }

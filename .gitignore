@@ -14,9 +14,12 @@
 **/.playwright**
 **/.ruff_cache/
 
-# CHAOS-3742 trial scratch (never commit): .trial-exchange/ request files
-# carry withheld corpus question text verbatim (the file-exchange arm 4
+# CHAOS-3742 trial scratch (never commit): .trial-exchange*/ request files
+# carry withheld corpus question text verbatim (the file-exchange arm 4/5
 # transport writes the real prompt into the request file for the
-# out-of-process responder); .probe-tmp/ is throwaway runner scripts/logs.
-.trial-exchange/
+# out-of-process responder). The trailing `*` matters (sol review F10):
+# S3's fresh-session-dir fix creates timestamped dirs like
+# .trial-exchange-20260816T125957Z/, which a bare `.trial-exchange/`
+# pattern does NOT match. .probe-tmp/ is throwaway runner scripts/logs.
+.trial-exchange*/
 .probe-tmp/

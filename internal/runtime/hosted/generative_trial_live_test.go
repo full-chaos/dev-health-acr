@@ -3,12 +3,15 @@ package hosted_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -94,8 +97,10 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	orgID := requireEnv(t, "ACR_TEST_TRIAL_ORG")
 	outPath := requireEnv(t, "ACR_TEST_TRIAL_OUT")
 	arm := os.Getenv("ACR_TEST_TRIAL_ARM")
+	runStartedAt := time.Now().UTC().Format(time.RFC3339)
 
 	corpus := loadTrialCorpus(t, corpusPath)
+	corpusHash := corpusSHA256(t, corpusPath)
 	// indices is the ordered set of corpus positions this run processes.
 	// ACR_TEST_TRIAL_INDICES (comma-separated, e.g. "27,28,29") selects an
 	// EXACT subset -- for targeted reclassification reruns, so a rerun does
@@ -154,6 +159,7 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	// -- set generously below rather than trusting the two bounds to agree
 	// by coincidence.
 	caseTimeout := 240 * time.Second
+	var exchangeRuntime *fileExchangeRuntime
 	if exchangeDir != "" {
 		timeout := 10 * time.Minute
 		if raw := os.Getenv("ACR_TEST_TRIAL_EXCHANGE_TIMEOUT"); raw != "" {
@@ -163,13 +169,14 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 			}
 			timeout = parsed
 		}
-		exchangeRuntime, ferr := newFileExchangeRuntime(exchangeDir, arm, timeout)
+		var ferr error
+		exchangeRuntime, ferr = newFileExchangeRuntime(exchangeDir, arm, timeout)
 		if ferr != nil {
 			t.Fatalf("create file-exchange runtime: %v", ferr)
 		}
 		options.ModelRuntimeOverride = exchangeRuntime
 		caseTimeout = 2*timeout + 30*time.Second
-		t.Logf("arm %q uses the FILE-EXCHANGE diagnostic transport at %s (timeout %s/call, case budget %s) -- latency and token cost are NOT comparable to a real provider", arm, exchangeDir, timeout, caseTimeout)
+		t.Logf("arm %q uses the FILE-EXCHANGE diagnostic transport at %s (timeout %s/call, case budget %s, session %s) -- latency and token cost are NOT comparable to a real provider", arm, exchangeDir, timeout, caseTimeout, exchangeRuntime.nonce)
 	}
 	rt, err := hosted.Open(ctx, cfg, options)
 	if err != nil {
@@ -205,7 +212,19 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	earlyAbortCheckpoint := min(9, len(indices)-1)
 	overCommitCheckpoint := min(14, len(indices)-1)
 
-	report := trialReport{Arm: arm, CorpusTotal: len(corpus), CasesRun: 0}
+	provenance := trialProvenance{
+		CorpusSHA256: corpusHash, Transport: "real_api", RunStartedAt: runStartedAt,
+		SourceCommit: gitHeadSHA(t),
+		Model:        os.Getenv("ACR_TEST_TRIAL_MODEL"), ModelFallback: os.Getenv("ACR_TEST_TRIAL_MODEL_FALLBACK"),
+	}
+	if exchangeRuntime != nil {
+		provenance.Transport = "file_exchange"
+		provenance.ExchangeModelName = arm
+		provenance.ExchangeSessionID = exchangeRuntime.nonce
+		provenance.Model, provenance.ModelFallback = "", ""
+	}
+
+	report := trialReport{Provenance: provenance, Arm: arm, CorpusTotal: len(corpus), CasesRun: 0}
 	firstTen := make([]caseOutcome, 0, 10)
 	for pos, i := range indices {
 		testCase := corpus[i]
@@ -263,6 +282,32 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	}
 	t.Logf("arm=%s cases_run=%d/%d correct=%d wrong_commit=%d control_violations=%d no_commit=%d unusable=%d early_abort=%v control_violation_abort=%v suspected_wiring_issue=%q stages=%v -> %s",
 		report.Arm, report.CasesRun, report.CorpusTotal, report.Correct, report.WrongCommit, report.ControlViolations, report.NoCommit, report.Unusable, report.EarlyAbort, report.ControlViolationAbort, report.SuspectedWiringIssue, report.StageDistribution, outPath)
+}
+
+// corpusSHA256 hashes the RAW corpus file bytes (sol review F2 provenance
+// binding) -- never its parsed content, so the hash also catches a
+// whitespace/formatting-only difference between two nominally-identical
+// corpus files.
+func corpusSHA256(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("hash trial corpus: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// gitHeadSHA reports the worktree's current commit, or "" if it cannot be
+// determined (never fatal -- provenance is best-effort, not a gate).
+func gitHeadSHA(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Logf("gitHeadSHA: %v (provenance.source_commit will be empty)", err)
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func requireEnv(t *testing.T, key string) string {
@@ -328,7 +373,15 @@ var acrEnvIsolationAllowlist = map[string]bool{
 	"ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED": true, "ACR_CONTEXT_FABRIC_FALKOR_ADDR": true,
 	"ACR_CONTEXT_FABRIC_FALKOR_TLS": true, "ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE": true,
 	"ACR_CONTEXT_FABRIC_MODEL_PROVIDER": true, "ACR_CONTEXT_FABRIC_MODEL": true,
-	"ACR_CONTEXT_FABRIC_MODEL_FALLBACK": true, "ACR_CONTEXT_FABRIC_MODEL_API_KEY": true,
+	// ACR_CONTEXT_FABRIC_MODEL_FALLBACK is DELIBERATELY absent from this
+	// allowlist (sol review F1): it is the one var this function sets
+	// CONDITIONALLY (only when ACR_TEST_TRIAL_MODEL_FALLBACK is
+	// non-empty -- that is how "nano alone"/"luna alone" express NO
+	// fallback). Keeping it allowlisted meant clearAmbientACREnv skipped
+	// it even on runs that never call set() for it, so an ambiently-set
+	// value would leak straight through untouched -- the empty case must
+	// mean unset, not "whatever inherited value happened to be present".
+	"ACR_CONTEXT_FABRIC_MODEL_API_KEY":  true,
 	"ACR_CONTEXT_FABRIC_EMBED_BASE_URL": true, "ACR_CONTEXT_FABRIC_EMBED_PROVIDER": true,
 	"ACR_CONTEXT_FABRIC_EMBED_MODEL": true, "ACR_CONTEXT_FABRIC_EMBED_DIMENSION": true,
 	"ACR_CONTEXT_FABRIC_EMBED_API_KEY": true, "ACR_CONTEXT_FABRIC_EMBED_TIMEOUT": true,
@@ -537,7 +590,7 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 		outcome.ErrorClass = contextFabricRejectionClass(err)
 		outcome.ErrorText = truncateErrorText(err.Error())
 		outcome.Outcome = "error:" + outcome.ErrorClass
-		outcome.Stage = errorStage(outcome.ErrorClass)
+		outcome.Stage = errorStage(err)
 		return outcome
 	}
 	if verr := result.Validate(); verr != nil {
@@ -582,22 +635,21 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 	return outcome
 }
 
-// errorStage maps an error-path failure class to the stage bucket
-// team-lead asked for. interpretation_rejected/synthesis_rejected are
-// stage-exact by construction; the remaining classes (model_output_invalid,
-// dependency_unavailable, rate_limited, deadline_exceeded, invalid_time_bound,
-// unclassified) can occur at either the interpret or synthesize call and
-// contextfabric's sentinels do not carry which -- bucketed together rather
-// than guessed.
-func errorStage(class string) string {
-	switch class {
-	case "interpretation_rejected":
-		return "interpret_rejected"
-	case "synthesis_rejected":
-		return "synthesis_rejected"
-	default:
-		return "model_call_failed"
+// errorStage reads the engine's OWN stage tag (contextfabric.FailureStage,
+// StageError) instead of guessing from the error-class string (sol review
+// F4: the prior version bucketed everything that was not
+// interpretation_rejected/synthesis_rejected into "model_call_failed",
+// which is exactly wrong for e.g. a StageFactRead validation failure or a
+// StageGraph outage -- neither is a model-call failure at all. This is the
+// SAME mechanism internal/api/context_fabric_routes.go's own logging uses
+// (CHAOS-3811), reused rather than paralleled with a second, driftable
+// classification.
+func errorStage(err error) string {
+	stage, ok := contextfabric.FailureStage(err)
+	if !ok {
+		return "unknown"
 	}
+	return string(stage)
 }
 
 func successStage(status contractsv1.ContextFabricInvestigationStatus, committedCount int) string {
@@ -644,26 +696,49 @@ func truncateErrorText(text string) string {
 	return text[:max] + "...(truncated)"
 }
 
+// committedMatchesTrial reuses the AC-3778-1 oracle's exact correctness
+// rule (ambiguity_benchmark_live_test.go's committedMatches): EXACTLY one
+// committed subject, matching kind and ID. Committing the right subject
+// PLUS an extra one is not a correct commit for a corpus case that names
+// exactly one (sol review F3 -- the original version accepted a match
+// anywhere in a multi-commit list, which is a looser bar than the
+// benchmark's own authority).
 func committedMatchesTrial(committed []contractsv1.ContextFabricSubjectRef, tc trialCase) bool {
-	for _, ref := range committed {
-		if string(ref.Kind) == tc.ExpectKind && ref.CanonicalID == tc.ExpectID {
-			return true
-		}
+	if len(committed) != 1 {
+		return false
 	}
-	return false
+	return string(committed[0].Kind) == tc.ExpectKind && committed[0].CanonicalID == tc.ExpectID
+}
+
+// trialProvenance binds a report to exactly what produced it (sol review
+// F2, the CalibrationArtifact discipline): a corpus content hash, the
+// model configuration, which transport ran it, the source commit, and
+// (for the file-exchange transport) the session identity -- so a report
+// can be checked against these facts rather than trusted by filename
+// alone, and a mislabeled arm is mechanically detectable.
+type trialProvenance struct {
+	CorpusSHA256      string `json:"corpus_sha256"`
+	Model             string `json:"model,omitempty"`
+	ModelFallback     string `json:"model_fallback,omitempty"`
+	Transport         string `json:"transport"` // "real_api" | "file_exchange"
+	ExchangeModelName string `json:"exchange_model_name,omitempty"`
+	ExchangeSessionID string `json:"exchange_session_id,omitempty"`
+	SourceCommit      string `json:"source_commit,omitempty"`
+	RunStartedAt      string `json:"run_started_at"`
 }
 
 type trialReport struct {
-	Arm               string         `json:"arm"`
-	CorpusTotal       int            `json:"corpus_total"`
-	CasesRun          int            `json:"cases_run"`
-	Correct           int            `json:"correct"`
-	WrongCommit       int            `json:"wrong_commit"`
-	ControlViolations int            `json:"control_violations"`
-	NoCommit          int            `json:"no_commit"`
-	Unusable          int            `json:"unusable"`
-	CommittedTotal    int            `json:"committed_total"`
-	FailureClasses    map[string]int `json:"failure_classes,omitempty"`
+	Provenance        trialProvenance `json:"provenance"`
+	Arm               string          `json:"arm"`
+	CorpusTotal       int             `json:"corpus_total"`
+	CasesRun          int             `json:"cases_run"`
+	Correct           int             `json:"correct"`
+	WrongCommit       int             `json:"wrong_commit"`
+	ControlViolations int             `json:"control_violations"`
+	NoCommit          int             `json:"no_commit"`
+	Unusable          int             `json:"unusable"`
+	CommittedTotal    int             `json:"committed_total"`
+	FailureClasses    map[string]int  `json:"failure_classes,omitempty"`
 	// StageDistribution is the stage-resolved outcome distribution
 	// team-lead asked for -- most cases are expected to end in
 	// clarification_required for every arm (the benchmark commits only
