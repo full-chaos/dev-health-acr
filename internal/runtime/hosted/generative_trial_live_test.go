@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,16 +315,18 @@ type caseOutcome struct {
 	// synthesis_rejected / model_call_failed (stage-ambiguous provider/
 	// transport failure) / invalid_result_downstream / no_match /
 	// clarification_required / committed_no_synthesis / usable_answer.
-	Stage              string `json:"stage"`
-	Status             string `json:"status,omitempty"`
-	ErrorClass         string `json:"error_class,omitempty"`
-	CommittedCount     int    `json:"committed_count"`
-	CommittedKindMatch bool   `json:"committed_kind_match,omitempty"`
-	LatencyMS          int64  `json:"latency_ms"`
-	AnswerLength       int    `json:"answer_length,omitempty"`
-	ClaimedFacts       int    `json:"claimed_facts,omitempty"`
-	Drivers            int    `json:"drivers,omitempty"`
-	RetrievalDegraded  bool   `json:"retrieval_degraded,omitempty"`
+	Stage                  string  `json:"stage"`
+	Status                 string  `json:"status,omitempty"`
+	ErrorClass             string  `json:"error_class,omitempty"`
+	CommittedCount         int     `json:"committed_count"`
+	CandidateCount         int     `json:"candidate_count,omitempty"`
+	TopCandidateConfidence float64 `json:"top_candidate_confidence,omitempty"`
+	CommittedKindMatch     bool    `json:"committed_kind_match,omitempty"`
+	LatencyMS              int64   `json:"latency_ms"`
+	AnswerLength           int     `json:"answer_length,omitempty"`
+	ClaimedFacts           int     `json:"claimed_facts,omitempty"`
+	Drivers                int     `json:"drivers,omitempty"`
+	RetrievalDegraded      bool    `json:"retrieval_degraded,omitempty"`
 }
 
 func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase) caseOutcome {
@@ -365,6 +368,12 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 
 	outcome.Status = string(result.Status)
 	outcome.CommittedCount = len(result.SubjectResolution.Committed)
+	outcome.CandidateCount = len(result.SubjectResolution.Candidates)
+	for _, cand := range result.SubjectResolution.Candidates {
+		if cand.Confidence > outcome.TopCandidateConfidence {
+			outcome.TopCandidateConfidence = cand.Confidence
+		}
+	}
 	outcome.RetrievalDegraded = result.SubjectResolution.RetrievalDegraded
 	outcome.AnswerLength = len(result.DeterministicAnswer)
 	outcome.ClaimedFacts = len(result.ClaimedFacts)
@@ -492,14 +501,35 @@ func tallyOutcome(report *trialReport, outcome caseOutcome) {
 	}
 }
 
-// earlyAbortSignature reports the most frequent non-"correct" outcome class
-// among the first ten cases and how many correct answers appeared, for the
-// systematic-failure early-abort control.
+// earlyAbortSignature reports the most frequent TECHNICAL-failure class
+// (an "error:" outcome -- interpretation/synthesis rejected, provider/
+// transport failure, invalid downstream result) among the first ten cases,
+// and how many correct answers appeared, for the systematic-failure
+// early-abort control.
+//
+// Deliberately EXCLUDES clean no_commit/wrong_commit resolution outcomes
+// (clarification_required, no_match) from the dominant-class count: those
+// are a legitimate, expected engine behavior at this corpus's own known
+// resolution rate (~4/50 commits per the AC-3778-2 benchmark; team-lead's
+// ruling anticipated most cases ending in clarification for every arm), not
+// a "systematic failure signature" the way a repeated technical error class
+// is. The first diagnostic run against this corpus proved the distinction
+// matters: 10/10 clean clarification_required, MaxSubjectCandidates-capped
+// candidate sets at 0.5-0.755 confidence (below the auto-commit floor) on
+// BOTH nano and luna alike -- explainable, model-independent retrieval
+// behavior on a plausibly generic/ambiguous corpus segment, not a harness
+// bug or a model malfunction. An earlier version of this function treated
+// that as a dominant failure class and aborted the arm after 10 questions,
+// which would have thrown away the other 80% of the corpus's signal on a
+// false premise.
 func earlyAbortSignature(firstTen []caseOutcome) (class string, count int, correct int) {
 	counts := map[string]int{}
 	for _, o := range firstTen {
 		if o.Outcome == "correct" {
 			correct++
+			continue
+		}
+		if !strings.HasPrefix(o.Outcome, "error:") {
 			continue
 		}
 		key := o.ErrorClass
