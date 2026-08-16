@@ -544,6 +544,124 @@ func TestMergeLexicalArmSubjectsRecordsIdentityOnly(t *testing.T) {
 	}
 }
 
+func TestFilterActiveTerms(t *testing.T) {
+	got := filterActiveTerms([]string{"auth service", "???", "", "PR 52", "..."})
+	want := []string{"auth service", "PR 52"}
+	if len(got) != len(want) {
+		t.Fatalf("filterActiveTerms = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("filterActiveTerms = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestFilterActiveTermsAllGatedReturnsNil(t *testing.T) {
+	if got := filterActiveTerms([]string{"???", "..."}); got != nil {
+		t.Fatalf("filterActiveTerms = %v, want nil", got)
+	}
+}
+
+// TestMeasureOneTermVectorArm_MergesANNAndLexicalResults is CHAOS-3829
+// Phase 2(c)'s pinning test for the extracted per-term step: it must issue
+// the vector-index query AND the fulltext query, and merge BOTH results into
+// the caller's maps (mergeVectorArmSimilarity/mergeLexicalArmSubjects) --
+// while still returning the raw annCandidates so a caller (the SCORED case
+// loop) can reuse them without a second ANN query.
+func TestMeasureOneTermVectorArm_MergesANNAndLexicalResults(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return []row{{
+				"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Auth"}},
+				"score": 0.10, // distance -- a small distance is a HIGH similarity
+			}}, nil
+		}
+		// Fulltext branch: corroborates the SAME subject.
+		return []row{{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Auth"}}, "score": 1.0}}, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0}}, 0.05)
+	corpus := []oracleVector{{Kind: "project", CanonicalID: "p1", Vector: []float64{1, 0, 0}}}
+
+	bySubject := map[string]vectorArmSubject{}
+	lexicalSubjects := map[string]bool{}
+	annCandidates, truncated := measureOneTermVectorArm(context.Background(), t, adapter, "key", "org-1", "auth", []float64{1, 0, 0}, []float32{1, 0, 0}, corpus, 0.05, 10, bySubject, lexicalSubjects)
+
+	if truncated {
+		t.Fatal("truncated = true, want false")
+	}
+	if len(annCandidates) != 1 {
+		t.Fatalf("annCandidates = %#v, want 1 entry (returned for the caller to reuse)", annCandidates)
+	}
+	entry, ok := bySubject[subjectMapKey("project", "p1")]
+	if !ok {
+		t.Fatal("bySubject missing p1 -- mergeVectorArmSimilarity was not applied")
+	}
+	if entry.Similarity <= 0 {
+		t.Fatalf("bySubject[p1].Similarity = %v, want a positive similarity (identical vectors)", entry.Similarity)
+	}
+	if !lexicalSubjects[subjectMapKey("project", "p1")] {
+		t.Fatal("lexicalSubjects missing p1 -- mergeLexicalArmSubjects was not applied")
+	}
+}
+
+// TestMeasureControlCase_NoActiveTermsReturnsAnEmptyResultWithoutAnyLiveCall
+// proves a control whose every term is gated never reaches the embedder or
+// the graph -- mirrors the SCORED path's own oracleCauseGated short-circuit.
+func TestMeasureControlCase_NoActiveTermsReturnsAnEmptyResultWithoutAnyLiveCall(t *testing.T) {
+	embedder := &stubEmbedder{vector: []float32{1, 0, 0}}
+	adapter := vectorAdapter(t, &fakeConn{}, embedder, 0.05)
+	testCase := ambiguityCase{Question: "???", SubjectTerms: []string{"???", "..."}}
+	result := measureControlCase(context.Background(), t, adapter, "key", "org-1", testCase, nil, 0.05, 10, false, false)
+	if result.Cause != oracleCauseControl {
+		t.Fatalf("Cause = %q, want %q", result.Cause, oracleCauseControl)
+	}
+	if result.VectorSearchTruncated != nil || result.VectorTop1 != nil || result.VectorTop2 != nil || result.VectorMargin != nil {
+		t.Fatalf("result = %+v, want every Vector* field nil (no active terms)", result)
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("embedder.calls = %d, want 0 -- a fully-gated control must never reach the embedder", embedder.calls)
+	}
+}
+
+// TestMeasureControlCase_CorroboratedTopIsRecorded is CHAOS-3829 Phase 2(c)'s
+// core pinning test: a no-match control whose vector arm AND lexical arm
+// both propose the SAME subject records that subject as VectorTop1 with
+// Corroborated=true -- BY DEFINITION wrong, since testCase.ExpectID=="" (a
+// control has no correct subject at all). See measureControlCase's doc
+// comment.
+func TestMeasureControlCase_CorroboratedTopIsRecorded(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return []row{{
+				"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "ghost", propLabel: "Ghost Project"}},
+				"score": 0.10,
+			}}, nil
+		}
+		return []row{{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "ghost", propLabel: "Ghost Project"}}, "score": 1.0}}, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0}}, 0.05)
+	corpus := []oracleVector{{Kind: "project", CanonicalID: "ghost", Vector: []float64{1, 0, 0}}}
+	testCase := ambiguityCase{Question: "does the ghost project exist", SubjectTerms: []string{"ghost project"}}
+
+	result := measureControlCase(context.Background(), t, adapter, "key", "org-1", testCase, corpus, 0.05, 10, false, false)
+
+	if result.VectorSearchTruncated == nil || *result.VectorSearchTruncated {
+		t.Fatalf("VectorSearchTruncated = %v, want a present false", result.VectorSearchTruncated)
+	}
+	if result.VectorTop1 == nil || !result.VectorTop1.Corroborated {
+		t.Fatalf("VectorTop1 = %+v, want a corroborated ghost entry", result.VectorTop1)
+	}
+	if result.VectorTop1.CanonicalID != "ghost" {
+		t.Fatalf("VectorTop1.CanonicalID = %q, want %q", result.VectorTop1.CanonicalID, "ghost")
+	}
+	// Only one distinct subject was proposed -- no second candidate to
+	// measure a margin against.
+	if result.VectorTop2 != nil || result.VectorMargin != nil {
+		t.Fatalf("VectorTop2/VectorMargin = %v/%v, want both nil (only one distinct subject)", result.VectorTop2, result.VectorMargin)
+	}
+}
+
 func TestFetchEmbedderFenceCorpusRequiresAnEmbedder(t *testing.T) {
 	adapter := newFakeAdapter(t, &fakeConn{})
 	_, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org")
