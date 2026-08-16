@@ -9,7 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 )
 
-// TestRetrievalPolicyVersionBumpedByCHAOS3834 pins the CHAOS-3834 version
+// TestRetrievalPolicyVersionBumpedByCHAOS3829 pins the CHAOS-3834 version
 // bump literally: this is a fail-pre proof by construction -- run against
 // the pre-CHAOS-3834 tree (RetrievalPolicyVersion = "rp1"), this test
 // fails outright. Bumped again to "rp3" by codex round-9 P1's t3
@@ -21,10 +21,14 @@ import (
 // again to "rp4" by CHAOS-3838 (spec L11/L13, §6 T8): read-side query
 // expansion changes what a repeated, byte-identical question retrieves,
 // without moving any node/vector stamp -- see composition.go's rp3 -> rp4
-// rationale.
-func TestRetrievalPolicyVersionBumpedByCHAOS3838(t *testing.T) {
-	if RetrievalPolicyVersion != "rp4" {
-		t.Fatalf("RetrievalPolicyVersion = %q, want rp4 (CHAOS-3838's read-side query expansion changes retrieval outcomes for the identical question text, which per spec §4 R3's rule must bump the constant)", RetrievalPolicyVersion)
+// rationale. Bumped again to "rp5" by CHAOS-3829 (chris-ratified
+// 2026-08-16): the calibrated identity gained VectorMarginCommitThreshold,
+// activating graphrank's commit-path carve-out for the first time -- a
+// question that previously resolved ambiguous can now commit for the
+// identical text, see composition.go's rp4 -> rp5 rationale.
+func TestRetrievalPolicyVersionBumpedByCHAOS3829(t *testing.T) {
+	if RetrievalPolicyVersion != "rp5" {
+		t.Fatalf("RetrievalPolicyVersion = %q, want rp5 (CHAOS-3829's commit-path carve-out changes the commit decision for the identical question text, which per spec §4 R3's rule must bump the constant)", RetrievalPolicyVersion)
 	}
 }
 

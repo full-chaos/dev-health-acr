@@ -65,6 +65,32 @@ type RetrievalPolicy struct {
 	// vector index should be BUILT with. See the type doc comment above --
 	// this is an index-build-time value, not a per-query one.
 	EfRuntime int
+	// VectorMarginCommitThreshold is CHAOS-3829's M: the vector-arm top-1/
+	// top-2 raw-similarity margin graphrank.ResolveFromMergedCandidates'
+	// commit-path carve-out (vectorMarginCommit) requires before it will
+	// auto-commit a corroborated-but-otherwise-ambiguous top-1. Zero means
+	// "not calibrated for this identity" -- the SAME convention
+	// OverFetchMultiplier/EfRuntime already use -- and disables the
+	// carve-out entirely: byte-identical to pre-CHAOS-3829 behavior. Sized
+	// by falkorgraph's CalibrateMarginFromReport (tau_calibration.go),
+	// never invented -- see calibratedIdentityText3Large's doc comment for
+	// this identity's specific measurement basis.
+	VectorMarginCommitThreshold float64
+	// CalibratedTopK is CHAOS-3829 codex r5 K1's (accepted) companion to
+	// VectorMarginCommitThreshold: the lexical/vector search depth
+	// CalibrateMarginFromReport's oracle measured corroboration AT
+	// (MarginCalibrationOptions.TargetTopK, tau_calibration.go's F7 pin --
+	// the SAME value the source calibration report's own Cases/ControlCases
+	// were harvested under). Zero means "not calibrated for this identity",
+	// the SAME convention every other field on this struct uses --
+	// graphrank's commit-path carve-out (ResolveFromMergedCandidates'
+	// effectiveSearchLimit/calibratedTopK envelope) then never fires, byte-
+	// identical to pre-CHAOS-3829 behavior. A deployment whose effective
+	// per-call search depth exceeds this value can corroborate a subject at
+	// a lexical rank the calibration measurement never saw -- see
+	// ResolveFromMergedCandidates' own doc comment (codex r5 K1) for the
+	// full hazard this closes.
+	CalibratedTopK int
 }
 
 // calibratedIdentityText3Large is the CHAOS-3834 measured entry's key.
@@ -246,6 +272,101 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 		// recreate tooling against organizations already on this
 		// identity.
 		EfRuntime: 200,
+		// 0.03378617763519299: CHAOS-3829's calibrated commit-path margin
+		// threshold M, computed by CalibrateMarginFromReport
+		// (tau_calibration.go) from oracle-report-v5-r1fixes.json (t3 graph,
+		// 29,813 embedded subjects, this exact identity/dimension/tau=0.30/
+		// topK=20 -- the deployed policy above, pinned via
+		// MarginCalibrationOptions.TargetTau/TargetTopK). One float64 ULP
+		// above the single largest wrong-top1 margin observed in the
+		// ELIGIBLE population (corroborated top-1 UNDER THE NARROWED
+		// Vector+Lexical pairing + measurable margin, over 30 scored cases
+		// UNION 20 no-match controls): 4 wrong-top1 samples (2 scored --
+		// floor_loss margin 0.0338, ann_loss margin 0.0245 -- and 2 from a
+		// corroborated control, margins 0.0030/0.0078), 5 correct-top1
+		// samples (margins 0.0816-0.3223). AchievedReach = 5/5 (100%): every
+		// correct-top1 case's margin clears M with real headroom (the
+		// weakest, 0.0816, is ~2.4x the largest wrong margin). 0 wrong
+		// commits in-sample by construction, including both corroborated
+		// controls -- the highest-severity failure mode a no-match question
+		// could produce.
+		//
+		// *** RATIFIED (CHAOS-3829, chris, 2026-08-16) ***. Superseded a
+		// FIRST calibration run (oracle-report-v4-margin.json, M=0.03378582293796651)
+		// after codex round-1 review found the harness measured a DIFFERENT
+		// arithmetic than the runtime gate would use (see below) -- the
+		// recalibrated M above is materially unchanged (~3.5e-7 apart),
+		// confirming the fixes did not hide a real drift, but recalibration
+		// after ANY harness/gate-arithmetic fix is the correctness
+		// discipline itself, not an optional follow-up.
+		//
+		// Sample size caveat, reported alongside the ratification and
+		// recorded here rather than hidden by a clean-looking number: only
+		// 9 of 50 corpus cases (30 scored + 20 controls) fell into the
+		// eligible population this M was computed from. The separation is
+		// real (2.4x) but from few points -- re-measure and re-pin if a
+		// larger corpus run produces a materially different bound, per this
+		// table's own drift-and-recalibrate discipline (see
+		// calibratedIdentityText3Large's doc comment).
+		//
+		// Eligibility deliberately does NOT require vectorSearchComplete
+		// (an earlier draft of this measurement did, and returned
+		// ErrNoMarginSamples -- zero cases satisfied vectorSearchComplete
+		// AND corroborated-top1 simultaneously in this same corpus, since
+		// the vector arm truncates on ~93% of scored cases at this K):
+		// db.idx.vector.queryNodes returns rows ORDER BY score ASC
+		// (vector.go), so truncation can only ever drop candidates BEYOND
+		// the returned set -- it cannot reorder or misrepresent the gap
+		// between two candidates that WERE returned. See
+		// CandidateNode.VectorSimilarity's doc comment (graphrank/types.go)
+		// for the full soundness argument and why this reads a RAW
+		// similarity, never the truncation-clamped Confidence/Relevance a
+		// margin computed from THAT would read as zero on almost every real
+		// call. K-widening (OverFetchMultiplier) as an alternative path to
+		// vectorSearchComplete was evaluated and abandoned: near-duplicate
+		// density at tau=0.30 ranges into the tens of thousands per query
+		// (this corpus: p90 near-duplicate count 22,700 of ~29,813
+		// subjects), requiring multipliers of 100-1300x -- nowhere near
+		// latency-sane. K-widening is DEAD for this ticket -- do not
+		// revisit it here.
+		//
+		// CALIBRATION-VS-GATE ARITHMETIC (codex r1 F6): the wrong/correct
+		// margins above were measured from each candidate's OWN
+		// production-computed VectorSimilarity (vector.go), not an
+		// independently recomputed cosine -- required so this M's
+		// zero-tolerance construction means the same thing at calibration
+		// time and at runtime-gate time (graphrank's vectorMarginCommit
+		// reads the identical field). The lexical-arm mechanism
+		// (contextfabric.MatchLexical) this identity's corroboration
+		// requirement narrows to (codex r1 F4, vectorArmCorroborated,
+		// graphrank/resolution.go) is likewise the EXACT value
+		// hybridSearchNodes stamps, not a hand-picked one -- see
+		// TestHybridSearchNodes_StampsMatchLexicalOnFulltextResults.
+		//
+		// INDEX-EFRUNTIME VALIDITY (codex r1 F5, residual, no behavior
+		// change): this M's validity is coupled to the SAME invariant
+		// EfRuntime above already depends on -- CHAOS-3834's ratified
+		// rollout makes the t3 identity's vector index get recreated at the
+		// policy's EfRuntime (mandatory rebuild on identity change), with
+		// recordVectorIndexEfRuntimeMismatch's Warn as the operational
+		// detector for a drifted index. A stale-efRuntime index changes
+		// which candidates the ANN call surfaces at all, which this M was
+		// never separately re-measured against; no new gate is added here
+		// (that would re-open the 3834 ruling) -- the existing detector is
+		// the one this constant now also relies on.
+		VectorMarginCommitThreshold: 0.03378617763519299,
+		// 20: CHAOS-3829 codex r5 K1's (accepted) pin -- the SAME TopK the
+		// M above was calibrated under (MarginCalibrationOptions.TargetTopK
+		// passed to CalibrateMarginFromReport for oracle-report-v5-r1fixes.json,
+		// already documented in M's own comment above: "topK=20 -- the
+		// deployed policy above, pinned via
+		// MarginCalibrationOptions.TargetTau/TargetTopK"). Not a new
+		// measurement -- this ticket's calibration run always ran at 20;
+		// K1 found that the RUNTIME gate never enforced it, letting a
+		// deployment with a wider effective per-call search depth
+		// corroborate a wrong top-1 at a lexical rank the oracle never
+		// scored. See RetrievalPolicy.CalibratedTopK's own doc comment.
+		CalibratedTopK: 20,
 	},
 }
 

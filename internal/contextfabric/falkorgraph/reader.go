@@ -80,6 +80,96 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 				a.config.Telemetry.RecordObservationTraversalDegraded(ctx, orgID, count)
 			}
 		},
+		// CHAOS-3829: the calibrated commit-path margin threshold captured
+		// at attachEmbedder time (retrieval_policy.go). Zero (no calibrated
+		// policy for this identity, or no embedder at all) disables the
+		// carve-out entirely -- see ResolveDeps.VectorMarginCommitThreshold's
+		// own doc comment.
+		//
+		// codex r2 G1 (REFUTED, proof recorded here so this premise cannot
+		// re-cycle): claimed the carve-out is unsafe at a runtime
+		// MaxSubjectCandidates (limit K, request.Options.MaxSubjectCandidates
+		// in graphrank.ResolveSubjects) different from the report's
+		// calibrated TopK=20. False for any K>=2 -- the production margin
+		// is K-INVARIANT and EXACT, not merely approximately safe:
+		//
+		// Let s(x) = max over this resolution's terms of sim(term, x) (the
+		// vectorArmSimilarity side map's own definition, mergeSearchResults
+		// -- keeps the HIGHEST observed value across terms). top1 and the
+		// TRUE #2 competitor rank by s. Let t* be the ONE term whose own
+		// Search call attains s(true#2) for the true #2 (i.e. true#2's
+		// best-across-terms similarity is realized in call t*). ANY
+		// subject x that would outrank true#2 within call t* has
+		// sim(t*, x) > sim(t*, true#2) = s(true#2) (by t*'s own
+		// maximality) >= ... i.e. s(x) >= sim(t*,x) > s(true#2), so x's
+		// own cross-term maximum EXCEEDS true#2's -- meaning x is top1,
+		// not a rival to true#2's #2 standing. So AT MOST ONE subject
+		// (top1 itself) can outrank true#2 within call t* -- true#2 is at
+		// WORST rank 2 in that one call, and a k-NN call returns its own
+		// top-K by construction, so true#2 IS RETURNED at any K>=2 in call
+		// t*. F0's pre-NodeCandidate-rejection recording (mergeSearchResults)
+		// then captures it into the side map regardless of downstream
+		// eligibility, and by definition of "true #2" nothing else in the
+		// side map can exceed s(true#2) -- so vectorMarginCommit's
+		// COMPETITOR equals s(true#2) EXACTLY, at every K>=2, independent
+		// of K's specific value. Corroboration at a smaller runtime lexical
+		// limit is a SUBSET of what a larger limit would find (fewer
+		// lexical proposals can only fail to corroborate a top-1 that a
+		// wider search would have corroborated) -- so a narrower K can only
+		// ever LOSE commits (fail closed further), never fabricate one.
+		// K<2 is already refused independently (codex r1 F1, above this
+		// call site in resolution.go).
+		//
+		// DISTINCT FROM MarginCalibrationOptions.TargetTopK (codex r1 F7):
+		// that pin is REPORT-PROVENANCE discipline for the MEASUREMENT
+		// chain -- it says the calibration report's own S+/S- harvest was
+		// gathered at a stated K, so a caller cannot silently apply M
+		// against a report measured under a DIFFERENT harvest depth. It is
+		// not, and was never, a claim that the RUNTIME gate requires
+		// matching K -- this proof is what establishes that the runtime
+		// gate does not, for any K>=2.
+		//
+		// codex r4 J1 (REFUTED, SECOND raise of the K premise -- a NEW
+		// mechanism angle, checked and refuted the same way): where G1
+		// argued K-invariance for an IDEALIZED exact k-NN, J1 asked whether
+		// the DEPLOYED index's own ANN APPROXIMATION reopens the question --
+		// it does not. retrieval_policy.go's calibratedIdentityText3Large
+		// pins EfRuntime=200 for this identity, and the pinned HNSW module
+		// (CHAOS-3832, verified live) explores with ef = max(efRuntime, K)
+		// -- so for every K the API allows (1-50), efRuntime=200 already
+		// dominates: ef stays fixed at 200 regardless of K, meaning the
+		// EXPLORED candidate set HNSW considers is IDENTICAL across every
+		// allowed K. K changes only how much of that one fixed exploration
+		// is RETURNED (the top-K prefix of it) -- never what was explored.
+		// G1's argument above ("true#2 is at worst rank 2 in call t*, so it
+		// is returned at any K>=2") therefore applies UNCHANGED over this
+		// SAME fixed explored set: rank-2-of-explored is in every returned
+		// prefix K>=2, independent of K. The index's own recall imperfection
+		// (CHAOS-3832's measured 0.979 at efRuntime=200) is a property of ef
+		// alone, not of K -- and it is not a NEW hazard M was calibrated
+		// blind to: the oracle's own wrong-top1 population (calibratedIdentityText3Large's
+		// doc comment) already includes an ann_loss case, meaning M was
+		// measured against the ACTUAL deployed ANN's imperfect recall, not
+		// an idealized exact k-NN that never misses. This premise has now
+		// been raised and refuted TWICE under two different mechanism
+		// framings (r2 G1: exact-KNN/runtime-K; r4 J1: ANN-approximation/ef)
+		// -- both settled; a third raise is premise-cycling, not new
+		// information.
+		VectorMarginCommitThreshold: a.vectorMarginCommitThreshold,
+		// codex r5 K1+K2 (both accepted -- NOT a third raise of the
+		// settled G1/J1 K premise above, despite both mentioning "K":
+		// G1/J1 asked whether the vector-arm MARGIN itself stays sound
+		// across different runtime K values, and proved it does, for
+		// any K>=2, via two independent mechanism arguments. K1/K2
+		// attack entirely different preconditions -- K1 is about
+		// CORROBORATION width (was the winning subject's lexical-arm
+		// finding within the depth the oracle actually scored?), K2 is
+		// about the LOWER bound itself being measured off the wrong
+		// (nominal, uncapped) number. Settling G1/J1 said nothing about
+		// either, and fixing K1/K2 does not reopen G1/J1 -- they are
+		// four independent findings that happen to share a letter.
+		CalibratedTopK: a.calibratedTopK,
+		MaxResultsCap:  a.config.MaxResults,
 	}
 	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)
 }

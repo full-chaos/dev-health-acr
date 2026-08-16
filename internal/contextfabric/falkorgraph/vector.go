@@ -449,6 +449,16 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 		}
 		candidate.Relevance = graphrank.Normalized(relevance)
 		candidate.Mechanism = contextfabric.MatchVector
+		// CHAOS-3829: VectorSimilarity is the RAW similarity, set
+		// UNCONDITIONALLY -- unlike Relevance above, never clamped when
+		// truncated is true. See CandidateNode.VectorSimilarity's own doc
+		// comment for why the commit-path carve-out needs this specific,
+		// unclamped value and why that is sound even under truncation. A
+		// fresh local each iteration (not a loop-scoped reused pointer),
+		// since this becomes a stored, individually-addressed *float64 per
+		// candidate.
+		similarity := s.similarity
+		candidate.VectorSimilarity = &similarity
 		candidates = append(candidates, candidate)
 	}
 	return candidates, truncated, nil
@@ -894,13 +904,75 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 		// env-configurable source anywhere in embedprovider -- there is no
 		// operator value to preserve for either, so the calibrated table
 		// stays the sole source for both, unconditionally.
-		if explicitFloor, ok := lookup(embedprovider.EnvSimilarityFloor); !(ok && strings.TrimSpace(explicitFloor) != "") {
+		explicitFloor, hasExplicitFloor := lookup(embedprovider.EnvSimilarityFloor)
+		explicitFloorSet := hasExplicitFloor && strings.TrimSpace(explicitFloor) != ""
+		if !explicitFloorSet {
 			if floorApplicable(policy.SimilarityFloor) {
 				options.SimilarityFloor = policy.SimilarityFloor
 			}
 		}
 		options.OverFetchMultiplier = policy.OverFetchMultiplier
 		options.EfRuntime = policy.EfRuntime
+		// CHAOS-3829 codex r2 G3 (accepted) / r3 H1(a) (accepted, VALUE-based
+		// revision): M was calibrated at the POLICY's tau (0.30 for this
+		// identity) -- CalibrateMarginFromReport's F7 pinning already refuses
+		// to compute M from a report measured at a different tau, the SAME
+		// discipline this guard extends to the RUNTIME side: M must only
+		// install when the EFFECTIVE floor this deployment will actually run
+		// under EQUALS that SAME calibrated tau.
+		//
+		// r3 H1(a): the ORIGINAL G3 fix gated this on mere PRESENCE of an
+		// explicit override (explicitFloorSet), which wrongly disabled M
+		// even when the operator's override happened to equal the
+		// calibrated tau exactly (e.g. ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR=0.30
+		// explicitly set to the SAME value the policy already carries) --
+		// the effective floor was unchanged, so M was still measuring the
+		// right population, and disabling it was an unnecessary loss of
+		// reach. Fixed to a VALUE compare instead: options.SimilarityFloor
+		// at this point already holds the FULLY RESOLVED effective floor
+		// (either the embedder's own parsed value if explicitFloorSet, or
+		// policy.SimilarityFloor just assigned above if not) -- comparing
+		// it directly against policy.SimilarityFloor answers "is the
+		// deployment's actual floor the calibrated one" precisely, with no
+		// separate re-parse needed: embedder.SimilarityFloor() (this
+		// options.SimilarityFloor's initial value) was already produced by
+		// embedprovider.ConfigFromEnv's OWN envFloat parsing, the exact
+		// authority H1(a) asked this to reuse, and Config.Validate() already
+		// rejects anything unparseable or out of (0,1) before EmbedderFromEnv
+		// ever reaches this point -- so "unparseable/other values" fail
+		// closed here as a direct CONSEQUENCE of the equality check (any
+		// value other than exactly the calibrated tau, parseable or not,
+		// leaves M at its zero/disabled default), not a separate branch.
+		//
+		// r3 H1(b) (premise REJECTED, documented so it cannot re-cycle): a
+		// prior review round asked whether M's activation must also bump
+		// RetrievalPolicyVersion / join the answer-reuse discriminator when
+		// an override happens to leave M enabled. It does not, for the same
+		// reason composition.go's RetrievalPolicyVersion doc comment already
+		// gives: that constant is scoped to DEFAULTS ("bumped when tau/K/
+		// HNSW defaults change"), not to every possible per-request
+		// environment permutation -- and CHAOS-3834's own ratified operator/
+		// harness escape hatch (codex round-1 P1, honored unconditionally
+		// above) ALREADY lets an explicit floor override change tau
+		// semantics on main without a reuse-key bump; M's conditional
+		// activation under that SAME override is the identical, already-
+		// accepted class of variation, not a new one. With H1(a)'s fix in
+		// place, M only ever DISABLES when the effective tau itself has
+		// already diverged from the rp5-declared policy -- there is no
+		// scenario where M is active AND the deployment's retrieval
+		// semantics silently differ from what rp5 declares. No reuse-key
+		// change follows from this.
+		if options.SimilarityFloor == policy.SimilarityFloor {
+			options.VectorMarginCommitThreshold = policy.VectorMarginCommitThreshold
+			// codex r5 K1 (accepted): CalibratedTopK is gated in the SAME
+			// conditional as VectorMarginCommitThreshold, deliberately --
+			// both describe the SAME oracle measurement (M and the depth
+			// corroboration was scored at), so whatever invalidates one
+			// (an effective floor diverged from the calibrated tau)
+			// invalidates the other identically. There is no scenario
+			// where M installs but CalibratedTopK does not, or vice versa.
+			options.CalibratedTopK = policy.CalibratedTopK
+		}
 	}
 	return options, nil
 }

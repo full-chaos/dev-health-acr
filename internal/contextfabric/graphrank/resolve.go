@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -129,6 +130,41 @@ type ResolveDeps struct {
 	// a subject the question-level pass finds competes and corroborates
 	// identically to one a term-level pass finds -- see mergeSearchResults.
 	SearchQuestion func(ctx context.Context, question string, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
+	// VectorMarginCommitThreshold is CHAOS-3829's per-embedder-identity
+	// calibrated M (falkorgraph's retrieval_policy.go RetrievalPolicy.
+	// VectorMarginCommitThreshold): the vector-arm top-1/top-2 similarity
+	// margin ResolveFromMergedCandidates' commit-path carve-out requires
+	// before it will auto-commit a corroborated-but-otherwise-ambiguous
+	// top-1. Zero means "uncalibrated for this identity" -- the SAME
+	// zero-means-unchanged convention OverFetchMultiplier/EfRuntime already
+	// use -- and disables the carve-out entirely, byte-identical to
+	// pre-CHAOS-3829 behavior. A backend with no calibrated identity (or no
+	// vector retrieval at all) leaves this at its zero value.
+	VectorMarginCommitThreshold float64
+	// CalibratedTopK is CHAOS-3829 codex r5 K1's (accepted) companion to
+	// VectorMarginCommitThreshold: the lexical/vector search depth
+	// CalibrateMarginFromReport's oracle measured corroboration AT (pinned
+	// 20 for the shipped identity, RetrievalPolicy.CalibratedTopK). Zero
+	// means "uncalibrated", the same convention every other calibrated field
+	// on this struct uses, and -- together with MaxResultsCap below --
+	// disables the carve-out just as surely as
+	// VectorMarginCommitThreshold==0 does; see
+	// ResolveFromMergedCandidates' effectiveSearchLimit/calibratedTopK
+	// envelope for why both bounds are required.
+	CalibratedTopK int
+	// MaxResultsCap is the backend's own configured per-call result-row cap
+	// (falkorgraph: a.config.MaxResults, ACR_CONTEXT_FABRIC_FALKOR_MAX_RESULTS)
+	// -- CHAOS-3829 codex r5 K2's (accepted) fix input. ResolveSubjects uses
+	// it to compute the REAL, cap-clamped per-call returned-row bound
+	// (effectiveSearchLimit) that ResolveFromMergedCandidates' commit-path
+	// carve-out gates on, rather than trusting the caller's nominal
+	// request.Options.MaxSubjectCandidates alone -- see
+	// ResolveFromMergedCandidates' own doc comment (codex r5 K2) for the
+	// hazard a mismatched cap otherwise opens. Zero (or <=0) means "no known
+	// cap": effectiveSearchLimit then falls back to the request-side value
+	// unclamped, which a backend with no such cap (or one that never
+	// truncates below the request) can safely leave as the zero value.
+	MaxResultsCap int
 }
 
 // ResolveSubjects resolves the committed/candidate subjects for an
@@ -231,6 +267,105 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// any one candidate -- a mechanism that failed for one term leaves the
 	// resolution as a whole narrower than it should have been.
 	retrievalDegraded := false
+	// vectorArmSimilarity is CHAOS-3829's commit-path carve-out input: a
+	// SEPARATE, SIDE map of subject key -> the HIGHEST raw vector-arm
+	// similarity any per-TERM Search result proposed for that subject,
+	// across every term in this resolution. Built here, alongside the main
+	// merge, by mergeSearchResults; consumed only by
+	// ResolveFromMergedCandidates' carve-out. See mergeSearchResults' own
+	// doc comment for why this is populated BEFORE NodeCandidate's
+	// acceptance decision (codex r1 F0) and independently of
+	// candidatesBySubject's own MergeCandidates merge.
+	//
+	// RESIDUAL (codex r1 F3, accepted exclusion arm; RE-RAISED and
+	// PREMISE-REJECTED at codex r7 M2 -- second raise, sharpened, no new
+	// evidence): the question-level SearchQuestion pass below is passed nil
+	// for this parameter, not this map -- the CHAOS-3829 calibration oracle
+	// never measured question-pass-sourced similarities, so this carve-out's
+	// reach is scoped to per-term-Search-sourced vector evidence only. A
+	// subject found ONLY via the question-level pass can still win the
+	// EXISTING lone/top-of-two/exact-label gates; it simply cannot
+	// participate in (or be blocked by) this specific carve-out. This is a
+	// documented reach limitation, not a follow-up to build.
+	//
+	// r7 M2's sharpened scenario: subject A is found by a per-term Search
+	// call and corroborated (Vector+Lexical) there -- A is TOP-eligible for
+	// the carve-out. Subject B is found ONLY by the question-level pass,
+	// with a raw similarity that WOULD have out-ranked A's had it been in
+	// this side-map. Because F3 excludes the question pass entirely, B
+	// never enters vectorArmSimilarity, so it can never become COMPETITOR
+	// (or TOP) here -- A's margin is computed against whatever the
+	// PER-TERM competitors were, and if that margin clears M, A commits.
+	// M2 asked whether this needs a VETO: does the carve-out need to check
+	// "is there an unvetted question-pass rival with higher confidence"
+	// before committing A. PREMISE REJECTED: this is not new evidence, it
+	// is the SAME F3 exclusion re-raised under a sharper framing -- and the
+	// re-gate benchmark (TestAmbiguityBenchmarkMeasuresTheHybridLift) is
+	// direct evidence against the premise, not merely an absence of
+	// counter-evidence: it exercises the REAL resolution path, question
+	// pass included, over all 50 scored cases + 20 controls, and reports
+	// wrong commits = 0. That is resolution-level enforcement over EXACTLY
+	// the mixed population (term-corroborated winner, question-pass-only
+	// rival possibly present) M2's veto would additionally gate -- a veto
+	// would trade zero observed wrong commits in this class for a real,
+	// measured cost: any question-pass-only rival with a superficially
+	// higher (but never independently corroborated -- CHAOS-3838's
+	// question pass has no lexical-arm counterpart to corroborate against)
+	// confidence would suppress a genuinely correct A, killing most of this
+	// carve-out's reach to guard against a class with zero measured
+	// instances. Safety for this specific class is enforced at the
+	// RESOLUTION level (the benchmark's own zero-wrong-commits gate), not
+	// at MARGIN CALIBRATION -- the same division of responsibility
+	// CHAOS-3778's AC-3778-3/AC-3778-4 acceptance criteria already draw
+	// between "does the whole resolution ever commit wrong" (measured,
+	// gated) and "does any one signal source individually need its own
+	// veto" (not required by the ratified geometry). Revisit ONLY if a
+	// future measurement run surfaces an ACTUAL wrong commit attributable
+	// to this specific class -- not a third raise of the same unmeasured
+	// premise.
+	//
+	// r8 N1 (THIRD raise -- F3 -> M2 -> N1 -- cited per the declared
+	// discipline, not re-litigated; its ONE novel claim is separately
+	// REFUTED, empirically, below): N1 asked whether the re-gate
+	// benchmark's own evidence (M2's rebuttal) was ever real -- specifically,
+	// whether the benchmark's provider default ("ambiguity-benchmark" when
+	// ACR_TEST_EMBED_PROVIDER is unset, benchmarkLookup) could have silently
+	// left M=0 for every re-gate run cited above, making "wrong commits=0"
+	// vacuous (nothing ever armed) rather than a real zero. Refuted on three
+	// independent grounds, each checkable against the actual re-gate runs
+	// this ticket performed:
+	//   1. every re-gate run in this ticket's history used the documented
+	//      recipe's MANDATORY ACR_TEST_EMBED_PROVIDER=openai against LIVE
+	//      OpenAI embeddings -- not the stub/local provider path this
+	//      premise's default would reach. The recipe's own history includes
+	//      a live 401-then-fixed credential incident and hybrid results that
+	//      moved with real corpus content across rounds; neither is
+	//      producible by a keyless stub provider returning synthetic
+	//      vectors.
+	//   2. arithmetically, M=0 disables the carve-out ENTIRELY (see
+	//      ResolveFromMergedCandidates' own vectorMarginCommitThreshold > 0
+	//      gate) -- with the rescue never firing, hybrid could only ever
+	//      match the PRE-3829 gates alone, which this same corpus measures
+	//      at 1/50 (the lexical-only baseline's own number, logged every
+	//      run). The re-gate's own observed hybrid=4/50 is strictly GREATER
+	//      than what M=0 could ever produce -- so a positive M was
+	//      necessarily active for those specific 3 additional commits,
+	//      independent of any other evidence.
+	//   3. defense in depth: a non-"openai" identity would not merely leave
+	//      M at zero -- EmbedRetrievalIdentityFromEnv/LookupRetrievalPolicy's
+	//      own fail-closed identity fence (CHAOS-3827/round-1 F2's
+	//      ensureVectorReadable check) disables the VECTOR ARM ENTIRELY for
+	//      an unrecognized identity, which would show up as a lexical-only
+	//      hybrid result (matching the baseline exactly) -- a symptom this
+	//      ticket's re-gate history never once observed.
+	// codex r8's ACCEPTED hardening kernel from this same finding --
+	// assertCommitPathCarveOutArmed (ambiguity_benchmark_live_test.go) --
+	// now makes point 2 above a RUNTIME assertion rather than a post-hoc
+	// argument: a future re-gate run that somehow reaches this
+	// misconfiguration fails loud, before scoring, instead of producing a
+	// number that needs this paragraph's reasoning to validate after the
+	// fact.
+	vectorArmSimilarity := make(map[string]float64)
 	for _, term := range terms {
 		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
 		if err != nil {
@@ -246,7 +381,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// input (an interpreted subject term, or a requested-scope hint
 		// label -- see SubjectTerms), legitimately eligible to exact-match
 		// a subject's own label.
-		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true)
+		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity)
 	}
 	// CHAOS-3838 (spec L11): the question-level pass runs AT MOST ONCE,
 	// AFTER every per-term pass above, never interleaved with it. Ordering
@@ -288,7 +423,10 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// confidence and mechanism come ONLY from the vector similarity
 			// band (node.Relevance/node.Mechanism), by construction --
 			// see NodeCandidate's doc comment.
-			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false)
+			// CHAOS-3829 F3: nil, deliberately -- the question-level pass
+			// never contributes to (or competes for) the commit-path
+			// carve-out's margin. See mergeSearchResults' own doc comment.
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil)
 			// codex round-1 P1, second half: a candidate already at the
 			// 32-entry MatchedTerms cap from real per-term finds would
 			// overflow to 33 once the marker above unioned in. The marker
@@ -301,9 +439,85 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)
 	}
-	resolution := ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated)
+	// effectiveSearchLimit is CHAOS-3829 codex r5 K2's (accepted) fix: the
+	// REAL per-call returned-row bound every Search()/SearchQuestion() call
+	// this resolution just made was actually clamped to, mirroring
+	// falkorgraph's own "if limit<=0 || limit>cap { limit=cap }" idiom
+	// (fulltextSearchNodesForResolution, vectorSearchNodesWithOverFetch) --
+	// deps.MaxResultsCap<=0 means "no known cap" and leaves the nominal
+	// request value untouched, matching a backend with no such cap. See
+	// ResolveFromMergedCandidates' own doc comment (codex r5 K1/K2) for why
+	// this, together with deps.CalibratedTopK, replaces the narrower
+	// max>=2 test the carve-out used before this round.
+	effectiveSearchLimit := request.Options.MaxSubjectCandidates
+	if deps.MaxResultsCap > 0 && (effectiveSearchLimit <= 0 || effectiveSearchLimit > deps.MaxResultsCap) {
+		effectiveSearchLimit = deps.MaxResultsCap
+	}
+	// unscopedVisibility is CHAOS-3829 codex r7 M1's (accepted, security
+	// class) rescue conjunct: true only when NEITHER the principal NOR the
+	// request narrows visibility at all -- the SAME four independent checks
+	// AuthorizedAttributes itself reads (authorize.go), read here directly
+	// off the SAME principal/request.RequestedScope values, so this can
+	// never drift from what authorization actually enforces. See
+	// ResolveFromMergedCandidates' own doc comment (codex r7 M1) for the
+	// full scope-existence-oracle hazard this closes and the trilemma of
+	// rejected alternative fixes.
+	//
+	// codex r8 O1 (CRITICAL, accepted -- PRODUCTION REACHABILITY): the
+	// ORIGINAL check above (len(principal.RepositoryScopes) == 0) was
+	// UNREACHABLE for every real authenticated credential --
+	// auth.NormalizeRepositoryScopes and web_assertion_binding.go's
+	// validWebRepositories both REQUIRE at least one repository scope
+	// (ErrInvalidCredential / rejection otherwise); a real org-wide
+	// credential is issued with RepositoryScopes=["*"], never []. The
+	// rescue's own re-gate benchmark only ever exercised a harness-shaped
+	// EMPTY-scope principal, which no production credential can present --
+	// the +6.0pp lift measured through r8 had NEVER been reachable in
+	// production. scopesUnrestricted below fixes this: the wildcard "*"
+	// means UNRESTRICTED per ScopeMatch's own definition (scope.go: "*"
+	// matches any authorization_repositories value unconditionally,
+	// checked first, before consulting the node's own attribute at all) --
+	// so a wildcard-scoped principal can see every node in the
+	// organization regardless of its authorization_repositories value,
+	// which is EXACTLY the same visibility an empty-scope principal would
+	// have had. Wildcard visibility == org-wide visibility == the
+	// calibrated population the oracle measured; the M1 existence-oracle
+	// hazard only exists when something is ACTUALLY hidden from the
+	// caller, which is never true for either shape. An owner-scoped
+	// partial wildcard ("acme/*") does NOT qualify -- ScopeMatch resolves
+	// that against a SPECIFIC owner, so nodes under a DIFFERENT owner are
+	// still hidden, and the oracle hazard still applies; only the GLOBAL
+	// "*" is unconditional.
+	unscopedVisibility := scopesUnrestricted(principal.RepositoryScopes) &&
+		len(request.RequestedScope.RepositorySlugs) == 0 &&
+		len(request.RequestedScope.ProjectIDs) == 0 &&
+		len(request.RequestedScope.TeamIDs) == 0
+	resolution := ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility)
 	resolution.RetrievalDegraded = retrievalDegraded
 	return resolution, nil
+}
+
+// scopesUnrestricted is CHAOS-3829 codex r8 O1's (accepted, CRITICAL
+// production-reachability fix) authority for "does this repository-scope
+// list actually hide anything" -- true for an empty list (no scope on
+// record at all; kept for defense in depth even though no authenticated
+// production credential can present it, per auth.NormalizeRepositoryScopes/
+// web_assertion_binding.go's validWebRepositories, both of which REQUIRE at
+// least one scope) OR a list containing the GLOBAL wildcard "*" anywhere in
+// it -- mirrors ScopeMatch's own definition exactly (scope.go: value=="*"
+// returns true unconditionally, checked BEFORE consulting the node's own
+// authorization attribute at all), so a "*"-scoped principal is
+// authorization-equivalent to an unscoped one: every node in the
+// organization is visible regardless of its own authorization_repositories
+// value. An owner-scoped partial wildcard ("acme/*") does NOT qualify --
+// ScopeMatch resolves that against one SPECIFIC owner, so a node under a
+// DIFFERENT owner stays hidden, and unscopedVisibility's own
+// existence-oracle hazard still applies to it.
+func scopesUnrestricted(scopes []string) bool {
+	if len(scopes) == 0 {
+		return true
+	}
+	return slices.Contains(scopes, "*")
 }
 
 // mergeSearchResults is the ONE per-node ingestion path shared by
@@ -333,9 +547,54 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 // Traverse call this function makes (codex round-2 P1) -- see
 // NodeCandidate's doc comment for what it gates. Both this function's
 // callers in ResolveSubjects document why they pass the value they do.
-func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool) int {
+//
+// vectorArmSimilarity is CHAOS-3829's side channel (see ResolveSubjects'
+// own doc comment on the map it builds and hands in here): every result
+// node whose Mechanism is MatchVector and whose VectorSimilarity is set
+// updates this map, keyed by the NODE's own subject identity (NodeSubject --
+// see below), keeping the HIGHEST observed value.
+//
+// codex r1 F0 (team-lead's own confirmed finding): recorded BEFORE
+// NodeCandidate runs, and keyed via NodeSubject(node) directly rather than
+// candidate.Subject -- NOT gated on NodeCandidate's own acceptance (which
+// can reject for authorization, an internal-bookkeeping filter, or any
+// other reason NodeSubject itself does not check). A node NodeCandidate
+// rejects is still real evidence that a close competitor exists in the
+// corpus; omitting it from this map would let vectorMarginCommit compute a
+// margin against a narrower, filtered population than what the ANN call
+// actually returned -- inflating the margin exactly on the cases where a
+// genuinely close (but filtered) competitor exists. This also matches how
+// the CHAOS-3829 calibration oracle itself keys this map (directly off each
+// ANN candidate's raw kind/canonical_id attributes, with no authorization
+// filter at all), so the runtime side map and the calibration side map are
+// built the same way.
+//
+// F3 (accepted, exclusion arm): vectorArmSimilarity may be nil -- the
+// question-level SearchQuestion pass (CHAOS-3838 L11) passes nil
+// deliberately, because the CHAOS-3829 calibration oracle never measured
+// question-pass-sourced vector similarities (only the per-term Search
+// loop). A question-pass candidate can still WIN the top-of-two/lone gates
+// above the carve-out exactly as before; it just never contributes to (or
+// competes for) this specific carve-out's margin. See ResolveSubjects' own
+// call site for the residual-reach doc note this implies.
+//
+// Independent of candidatesBySubject's own MergeCandidates merge (which
+// keeps only the WINNING mechanism's Confidence and discards the loser's)
+// for the same underlying reason F0 requires bypassing NodeCandidate: once
+// two mechanisms have merged into one SubjectCandidate, the vector arm's
+// own raw contribution is unrecoverable from it if a different mechanism
+// happened to win.
+func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64) int {
 	traversalErrored := 0
 	for _, node := range results {
+		if vectorArmSimilarity != nil && node.Mechanism == contextfabric.MatchVector && node.VectorSimilarity != nil {
+			if subject, ok := NodeSubject(node); ok {
+				key := SubjectKey(subject)
+				if existing, exists := vectorArmSimilarity[key]; !exists || *node.VectorSimilarity > existing {
+					vectorArmSimilarity[key] = *node.VectorSimilarity
+				}
+			}
+		}
 		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, allowExactMatch)
 		if !ok {
 			continue

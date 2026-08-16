@@ -71,6 +71,41 @@ type CalibrationCase struct {
 	HardNegatives             []CalibrationHardNegative `json:"hard_negatives,omitempty"`
 	HardNegativeAboveTauCount *int                      `json:"hard_negative_above_tau_count,omitempty"`
 	HardNegativesTruncated    *bool                     `json:"hard_negatives_truncated,omitempty"`
+
+	// ExpectKind/ExpectID mirror oracleCaseResult's fields of the same name
+	// (CHAOS-3829 Phase 2): CalibrateMarginFromReport needs the case's
+	// EXPECTED subject to tell a correct VectorTop1 from a wrong one -- the
+	// tau-calibration math above never needed this because it works purely
+	// off similarity DISTRIBUTIONS, not per-case identity comparisons.
+	ExpectKind string `json:"expect_kind,omitempty"`
+	ExpectID   string `json:"expect_id,omitempty"`
+	// VectorSearchTruncated, VectorTop1, VectorTop2, and VectorMargin mirror
+	// oracle_live_test.go's oracleCaseResult fields of the same name (CHAOS-3829
+	// Phase 1) -- see CalibrateMarginFromReport's doc comment for how they are
+	// consumed.
+	VectorSearchTruncated *bool                        `json:"vector_search_truncated,omitempty"`
+	VectorTop1            *CalibrationVectorArmSubject `json:"vector_top1,omitempty"`
+	VectorTop2            *CalibrationVectorArmSubject `json:"vector_top2,omitempty"`
+	VectorMargin          *float64                     `json:"vector_margin,omitempty"`
+	// UsedTermFallback mirrors oracle_live_test.go's oracleCaseResult field
+	// of the same name (CHAOS-3829 codex r6 L1, accepted): true when this
+	// case had no authored subject_terms and therefore ran through the
+	// pre-CHAOS-3831 whole-question fallback. CalibrateMarginFromReport
+	// excludes any case with this set from the eligible population -- see
+	// the function doc comment's L1 section for why a fallback case's
+	// margin measures geometry the carve-out can never see in production.
+	UsedTermFallback bool `json:"used_term_fallback"`
+}
+
+// CalibrationVectorArmSubject mirrors oracle_live_test.go's vectorArmSubject
+// (CHAOS-3829 Phase 1) -- see that type's doc comment for what Similarity
+// (raw true-cosine, never production's transformed/floor-clamped Relevance)
+// and Corroborated (did the lexical arm also propose this subject) mean.
+type CalibrationVectorArmSubject struct {
+	Kind         string  `json:"kind"`
+	CanonicalID  string  `json:"canonical_id"`
+	Similarity   float64 `json:"similarity"`
+	Corroborated bool    `json:"corroborated"`
 }
 
 // CalibrationReport mirrors oracle_live_test.go's oracleReport -- only the
@@ -95,6 +130,36 @@ type CalibrationReport struct {
 	EmbedIdentity  string            `json:"embed_identity"`
 	EmbedDimension int               `json:"embed_dimension"`
 	Cases          []CalibrationCase `json:"cases"`
+	// ControlCases mirrors oracle_live_test.go's oracleReport.ControlCases
+	// (CHAOS-3829 Phase 2(c)): one CalibrationCase per no-match control,
+	// read only by CalibrateMarginFromReport -- tau-calibration math above
+	// never reads it.
+	ControlCases []CalibrationCase `json:"control_cases,omitempty"`
+	// Controls mirrors oracle_live_test.go's oracleReport.Controls (CHAOS-3829
+	// codex r6 L2, accepted): the harness's own DECLARED count of control
+	// cases it produced, incremented in the SAME loop iteration that appends
+	// to ControlCases (oracle_live_test.go), so under an honest, complete
+	// write the two are always equal by construction. Read only by
+	// CalibrateMarginFromReport, which hard-fails when they diverge -- see
+	// that function's doc comment for why a truncated report (a partial
+	// write, a size-limited fetch, a corrupted file) silently shrinking
+	// len(ControlCases) below what the harness actually measured must never
+	// be allowed to pass as "these are all the controls there were" to a
+	// safety-critical negative-gate computation.
+	Controls int `json:"controls"`
+	// Scored mirrors oracle_live_test.go's oracleReport.Scored (CHAOS-3829
+	// codex r7 M3, accepted): the harness's own DECLARED count of SCORED
+	// cases it produced, incremented in the SAME loop iteration that
+	// appends to Cases (oracle_live_test.go), so under an honest, complete
+	// write the two are always equal by construction -- EXACT symmetry
+	// with Controls/ControlCases above (codex r6 L2). Read only by
+	// CalibrateMarginFromReport, which hard-fails when they diverge, for
+	// the identical truncated-report reason L2 already documents. NOT read
+	// by CalibrateFromReport (the tau-calibration math above) -- that
+	// function predates this field and is out of scope for this check,
+	// exactly as L2 left CalibrateFromReport's own reading of ControlCases
+	// (it has none) untouched.
+	Scored int `json:"scored"`
 }
 
 // CalibrationOptions parameterizes CalibrateFromReport.
@@ -276,6 +341,16 @@ type CalibrationArtifact struct {
 // artifact uses (see CalibrationArtifact's doc comment) from a
 // CalibrateFromReport call's own inputs and result -- reportPath is the
 // SOURCE report's path on disk (empty when the report was built in memory).
+//
+// RESIDUAL (codex r8 O3 was scoped to MarginCalibrationArtifact only, not
+// re-litigated here): this function's own SourceReportSHA256 has the SAME
+// lossy-re-serialization defect NewMarginCalibrationArtifact's own doc
+// comment describes (hashes json.Marshal(report), a reduced mirror of the
+// real file, never the file's own bytes) -- CHAOS-3834's tau-calibration
+// tool predates this ticket and is out of CHAOS-3829's changeset scope; a
+// future round against THIS tool specifically should apply the identical
+// fix (thread the caller's raw report bytes through, as
+// NewMarginCalibrationArtifact now does).
 func NewCalibrationArtifact(result CalibrationResult, report CalibrationReport, opts CalibrationOptions, reportPath string) CalibrationArtifact {
 	artifact := CalibrationArtifact{
 		CalibrationResult:   result,
@@ -569,6 +644,673 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 		HardNegativeRejectRate: rejectRate,
 		NearDuplicateP90:       p90,
 	}, nil
+}
+
+// ---------------------------------------------------------------------
+// CHAOS-3829 Phase 2: VectorMarginCommitThreshold (M) calibration.
+//
+// A sibling to CalibrateFromReport above, reusing its fail-closed idioms
+// (identity/dimension pinning via ErrEmbeddingIdentityMismatch, an
+// insufficient-data refusal that leaves the recommendation nil rather than a
+// number that reads as validated when nothing was actually checked) for a
+// DIFFERENT question: not "what similarity floor gates retrieval", but "what
+// margin between the vector arm's top-1 and top-2 candidate is decisive
+// enough to auto-commit top-1, once corroboration holds" -- CHAOS-3829's
+// ratified commit-path carve-out in graphrank.ResolveFromMergedCandidates.
+//
+// PHASE 2(c) REVISION (team-lead dispatch, 2026-08-16, re-reading lane-3829's
+// own Phase 1+2 report): the eligibility predicate below no longer requires
+// vectorSearchComplete. Rationale, verified against vector.go:390-392:
+// db.idx.vector.queryNodes returns rows `ORDER BY score ASC` (ascending
+// DISTANCE, i.e. descending similarity), and vectorSearchNodesWithOverFetch's
+// truncation is derived from whether MORE than returnCap survivors cleared
+// tau (vector.go's own doc comment) -- truncation therefore only ever cuts
+// the TAIL of an already-similarity-ordered list, never reorders or drops
+// the HEAD. The top-1/top-2 identities and similarities (and hence their
+// margin) a truncated call returns are EXACTLY what an untruncated call
+// would also have returned, provably, not merely usually -- so
+// vectorSearchComplete is unnecessary for a top-1/top-2 margin gate
+// specifically, unlike graphrank's existing top-of-two RELEVANCE-score gate
+// (0.88/0.12), which genuinely can be second-guessed by a dropped competitor
+// because a relevance score is not distance-ordered the way this is. This is
+// a MEASUREMENT-TOOL-ONLY change -- no resolution.go/resolve.go code exists
+// yet, and chris's ratification of the underlying production geometry
+// (whether the eventual carve-out itself drops the vectorSearchComplete
+// conjunct) is still pending; this function's own eligibility choice is
+// provisional on that same ratification, and this doc comment is the record
+// of why it was already made HERE, in the tool, ahead of it.
+// ---------------------------------------------------------------------
+
+// ErrNoMarginSamples reports that the report carries no ELIGIBLE margin
+// sample at all: no case (scored or control) reached the corroborated-top-1
+// + measurable-margin state CHAOS-3829's ratified commit-path carve-out
+// operates in (see CalibrateMarginFromReport's doc comment for the exact
+// eligibility predicate). There is nothing here to calibrate M from, not even
+// an unsafe recommendation -- distinct from ApplyReady=false, which means
+// SOME eligible cases exist but none of them were wrong-top1 (see that
+// field's doc comment).
+var ErrNoMarginSamples = errors.New("calibration report has no eligible vector-margin samples (corroborated top-1 + >=2 distinct vector-arm subjects)")
+
+// ErrMarginReportConfigMismatch reports that report.Tau/report.TopK is
+// absent, non-positive, or does not exactly match
+// MarginCalibrationOptions.TargetTau/TargetTopK (codex r1 F7) -- see those
+// fields' doc comment for why a mismatch here invalidates M the same way an
+// embed-identity/dimension mismatch does.
+var ErrMarginReportConfigMismatch = errors.New("calibration report's tau/topK is missing or does not match the target tau/topK")
+
+// ErrMarginReportInternallyInconsistent reports that a CalibrationCase's
+// stored VectorMargin does not equal VectorTop1.Similarity -
+// VectorTop2.Similarity (codex r3 H2), or that either similarity is
+// non-finite -- see checkMarginConsistency's doc comment. Wraps the
+// specific case's population/index/details via fmt.Errorf's %w for a
+// caller that wants to log or inspect the failure programmatically.
+var ErrMarginReportInternallyInconsistent = errors.New("calibration report case's stored vector_margin does not match its own top-1/top-2 similarities")
+
+// ErrMarginReportControlsCountMismatch reports that report.Controls (the
+// harness's own declared control-case count) does not equal
+// len(report.ControlCases) (codex r6 L2, accepted) -- see
+// CalibrationReport.Controls' doc comment and CalibrateMarginFromReport's
+// own doc comment for why a truncated report must hard-fail here rather
+// than silently calibrating the negative gate from however many control
+// cases happened to survive truncation.
+var ErrMarginReportControlsCountMismatch = errors.New("calibration report's declared controls count does not match len(control_cases) -- the report may be truncated")
+
+// ErrMarginReportScoredCountMismatch is ErrMarginReportControlsCountMismatch's
+// EXACT symmetric counterpart for the SCORED population (codex r7 M3,
+// accepted) -- see CalibrationReport.Scored's doc comment.
+var ErrMarginReportScoredCountMismatch = errors.New("calibration report's declared scored count does not match len(cases) -- the report may be truncated")
+
+// checkMarginConsistency validates every CalibrationCase in cases against
+// the closed set of valid (VectorTop1, VectorTop2, VectorMargin) shapes
+// (codex r3 H2, extended by codex r4 J3, closed by codex r6 L3 -- see the
+// switch inside for the full three-shape enumeration). For the one shape
+// that carries a genuine measurement (VectorTop1+VectorTop2+VectorMargin
+// all present), the oracle harness always computes VectorMargin as
+// VectorTop1.Similarity-VectorTop2.Similarity (oracle_live_test.go)
+// whenever it has two ranked subjects to compute it FROM, so a report where
+// the stored field disagrees with that recomputation, is MISSING despite
+// two ranked subjects being present, or has a non-finite similarity cannot
+// be trusted -- something corrupted it, hand-edited it, or a producer bug
+// wrote it incorrectly.
+//
+// r4 J3 (accepted): the ORIGINAL H2 check only ran when VectorMargin was
+// ALSO non-nil, silently treating "two subjects present, margin absent" the
+// SAME as "no margin was ever claimed" (VectorTop2 itself nil) -- but those
+// are different states. The producer contract (oracle_live_test.go, both
+// the scored-case and control-case measurement paths) always writes
+// VectorMargin whenever it writes VectorTop2, so an absent margin alongside
+// a present VectorTop2 IS corruption -- silently skipping such a case could
+// drop exactly the LARGEST wrong-top1 margin in the report (the one most
+// likely to have been tampered with to hide it) while ApplyReady stayed
+// true, understating M. Only a case with VectorTop2 itself nil (no second
+// ranked subject at all -- margin is genuinely undefined, not merely
+// unwritten) is exempt.
+//
+// label identifies which population (report.Cases vs report.ControlCases)
+// for the error message.
+func checkMarginConsistency(cases []CalibrationCase, label string) error {
+	for i, c := range cases {
+		hasTop1 := c.VectorTop1 != nil
+		hasTop2 := c.VectorTop2 != nil
+		hasMargin := c.VectorMargin != nil
+
+		// codex r6 L3 (accepted): the closed set of valid (VectorTop1,
+		// VectorTop2, VectorMargin) shapes is EXACTLY three -- {all absent}
+		// (no vector-arm data at all), {VectorTop1 only} (one distinct
+		// subject, no competitor to measure a margin against), and
+		// {VectorTop1+VectorTop2+VectorMargin} (a full measurement, still
+		// validated numerically below). Every OTHER combination -- a
+		// VectorTop2 or VectorMargin present without VectorTop1, a
+		// VectorMargin present without VectorTop2 (r4 J3's own asymmetric
+		// case, now folded into this single enumeration), or VectorTop1+
+		// VectorTop2 present with VectorMargin absent (r3 H2/r4 J3's
+		// original check) -- is a shape the producer (oracle_live_test.go's
+		// measureOneTermVectorArm/measureControlCase) never writes, so its
+		// presence means the report was corrupted, hand-edited, or written
+		// by a buggy producer, not that this case is merely unmeasured.
+		switch {
+		case !hasTop1 && !hasTop2 && !hasMargin:
+			continue
+		case hasTop1 && !hasTop2 && !hasMargin:
+			continue
+		case hasTop1 && hasTop2 && hasMargin:
+			// Valid shape; still needs the numeric cross-check below.
+		case hasTop1 && hasTop2 && !hasMargin:
+			return fmt.Errorf("%w: %s[%d] has both VectorTop1 and VectorTop2 but no VectorMargin -- the producer always writes one alongside the other, so absence is corruption, not an unmeasured case", ErrMarginReportInternallyInconsistent, label, i)
+		default:
+			return fmt.Errorf("%w: %s[%d] has an impossible vector-arm shape (VectorTop1 present=%v, VectorTop2 present=%v, VectorMargin present=%v) -- the only valid shapes are {all absent}, {VectorTop1 only}, or {VectorTop1+VectorTop2+VectorMargin}", ErrMarginReportInternallyInconsistent, label, i, hasTop1, hasTop2, hasMargin)
+		}
+
+		s1, s2 := c.VectorTop1.Similarity, c.VectorTop2.Similarity
+		if math.IsNaN(s1) || math.IsInf(s1, 0) || math.IsNaN(s2) || math.IsInf(s2, 0) {
+			return fmt.Errorf("%w: %s[%d] has a non-finite vector-arm similarity (top1=%v top2=%v)", ErrMarginReportInternallyInconsistent, label, i, s1, s2)
+		}
+		// codex r8 O4 (accepted): the PRODUCTION invariant
+		// 0 <= top2.Similarity <= top1.Similarity <= 1 -- embedprovider.
+		// CosineFromDistance (the SAME conversion both production's
+		// vectorSearchNodesWithOverFetch and the oracle harness's
+		// trueCosineSimilarity ultimately rely on) is UNCONDITIONALLY
+		// clamped to [0,1], and "top1"/"top2" are BY DEFINITION the
+		// higher/lower of the two entries this measurement ranked (the
+		// harness's own merge keeps the MAX similarity per subject, then
+		// sorts descending before naming top1/top2) -- so top1 < top2 or
+		// either value outside [0,1] is not a valid measurement under any
+		// circumstance, corrupted or hand-edited data notwithstanding.
+		// Without this check, a REVERSED ranking (top1/top2 swapped, e.g.
+		// by a producer bug) still recomputes an internally "consistent"
+		// but NEGATIVE margin that passes the check below unnoticed -- and
+		// a negative value entering wrongMargins could itself produce a
+		// NEGATIVE ThresholdM, which the RUNTIME gate
+		// (vectorMarginCommitThreshold > 0, ResolveFromMergedCandidates)
+		// would then silently read as "uncalibrated" and disable the
+		// carve-out -- a calibration bug masquerading as an inert,
+		// unremarkable zero rather than surfacing as the hard failure it
+		// actually is. Fail loud HERE instead, at calibration time.
+		if s1 < 0 || s1 > 1 || s2 < 0 || s2 > 1 || s1 < s2 {
+			return fmt.Errorf("%w: %s[%d] violates the production similarity invariant 0<=top2<=top1<=1 (top1=%v top2=%v)", ErrMarginReportInternallyInconsistent, label, i, s1, s2)
+		}
+		if recomputed := s1 - s2; recomputed != *c.VectorMargin {
+			return fmt.Errorf("%w: %s[%d] stored vector_margin=%v, but top1.similarity(%v)-top2.similarity(%v)=%v", ErrMarginReportInternallyInconsistent, label, i, *c.VectorMargin, s1, s2, recomputed)
+		}
+	}
+	return nil
+}
+
+// MarginCalibrationOptions parameterizes CalibrateMarginFromReport. Mirrors
+// CalibrationOptions' identity-pinning fields exactly (same exact-measurement
+// rationale); there is no TargetRecall analogue here -- M is sized from a
+// zero-tolerance construction (see the function doc comment), not a
+// recall-gate percentile.
+type MarginCalibrationOptions struct {
+	// TargetEmbedIdentity and TargetDimension are the embed retrieval
+	// identity string and embedding width the CALLER intends to apply this
+	// recommendation to. See CalibrationOptions' fields of the same name.
+	TargetEmbedIdentity string
+	TargetDimension     int
+	// TargetTau and TargetTopK are CHAOS-3829 codex r1 F7 (accepted): the
+	// similarity floor and ANN result-set size the CALLER intends this M to
+	// gate under. Both are REQUIRED (TargetTau > 0, TargetTopK > 0) and must
+	// EXACTLY match report.Tau/report.TopK, or CalibrateMarginFromReport
+	// refuses with ErrMarginReportConfigMismatch -- the same
+	// exact-measurement discipline CalibrationOptions' identity/dimension
+	// pinning already enforces, extended here because M's zero-tolerance
+	// construction is only meaningful if the wrong-top1 margins it was
+	// computed from were measured at the EXACT tau/topK the runtime carve-out
+	// will actually operate under: a report measured at a different tau
+	// admits/rejects a different candidate population entirely (a lower tau
+	// lets more, closer near-duplicates survive to compete for top-1/top-2),
+	// and a different topK changes vectorSearchNodesWithOverFetch's own
+	// returnCap and therefore which candidates the ANN call even returns.
+	TargetTau  float64
+	TargetTopK int
+}
+
+// MarginCalibrationResult is CalibrateMarginFromReport's recommendation plus
+// the diagnostics that justify it -- so a caller never has to take
+// ThresholdM on faith.
+type MarginCalibrationResult struct {
+	// ThresholdM is the recommended VectorMarginCommitThreshold: the
+	// smallest value such that EVERY wrong-top1 margin this report measured
+	// (among the eligible, corroborated-top1 population -- see the function
+	// doc comment's Phase 2(c) revision for why vectorSearchComplete is not
+	// part of this predicate) falls STRICTLY below it. A POINTER: nil when
+	// SafetyMeasured is false -- see that field's doc comment for why an M
+	// computed from an empty wrong-sample would be a vacuous-truth hazard,
+	// not a validated recommendation.
+	ThresholdM *float64
+	// WrongMarginMax is the largest wrong-top1 margin observed -- the exact
+	// value ThresholdM was derived from (one float64 ULP above it, via
+	// math.Nextafter), reported so a caller can see the empirical bound this
+	// recommendation rests on without re-deriving it from ThresholdM. Also a
+	// pointer, nil under the same condition as ThresholdM.
+	WrongMarginMax *float64
+
+	// ApplyReady is FAIL-CLOSED, equal to SafetyMeasured: false whenever no
+	// wrong-top1 case was measured in the eligible population at all. This
+	// mirrors CalibrateFromReport's own "measured := len(wrongPool) > 0"
+	// negative-gate-unmeasured guard exactly -- an M computed from zero wrong
+	// samples would vacuously "reject everything wrong" the same way an
+	// empty wrongPool vacuously "rejects" 100% of nothing there. Unlike
+	// CalibrateFromReport's negative gate (a THRESHOLD on a computed reject
+	// rate), there is no separate threshold to fail here once SafetyMeasured
+	// is true: M is constructed by definition to reject every wrong-top1
+	// margin this report measured, so there is nothing further to gate on
+	// besides whether that construction had any data to work from.
+	ApplyReady bool
+	// Note explains the verdict in one or two sentences, set on every
+	// outcome, mirroring NegativeGateNote's pattern.
+	Note string
+
+	// SafetyMeasured is WrongSampleSize > 0 -- whether ThresholdM rests on
+	// at least one observed wrong-top1 case. ReachMeasured is
+	// CorrectSampleSize > 0 -- whether AchievedReach is a real fraction
+	// (denominator > 0) rather than a vacuous 0. Exposed as named booleans
+	// so a caller need not re-derive them from the sample-size fields below.
+	SafetyMeasured bool
+	ReachMeasured  bool
+
+	// CorrectSampleSize/WrongSampleSize are the eligible population's split
+	// by top-1 correctness (VectorTop1 matches the case's expected subject,
+	// or not). WrongSampleSize includes both wrong-top1 SCORED cases and
+	// corroborated-with-margin CONTROL cases (a control top-1 is always
+	// wrong -- see the function doc comment's Phase 2(c) UNION rule).
+	CorrectSampleSize int
+	WrongSampleSize   int
+	// WrongSampleSizeFromControls is the CONTROL-sourced subset of
+	// WrongSampleSize -- how many of the wrong-top1 margins came from a
+	// corroborated no-match control rather than a wrong-top1 scored case.
+	// Reported separately so a caller can see how much of the safety bound
+	// rests on which population.
+	WrongSampleSizeFromControls int
+
+	// ControlsInReport/ControlsWithVectorArmData/ControlsCorroborated are
+	// Phase 2(c)'s explicit "record as a measured fact, not silently"
+	// counters (team-lead dispatch): the TOTAL control cases in the report,
+	// how many of those reached term-level vector-arm evaluation at all
+	// (VectorTop1 != nil), and how many of THOSE were corroborated --
+	// always populated, even when zero, so a reader never has to infer
+	// "zero controls were corroborated" from an absent field.
+	// ControlsCorroboratedWithoutMargin is the (expected small/zero) subset
+	// of ControlsCorroborated whose vector arm proposed only ONE distinct
+	// subject -- corroborated, but with no second candidate to measure a
+	// margin against, so it cannot feed WrongSampleSize (see the function
+	// doc comment).
+	ControlsInReport                  int
+	ControlsWithVectorArmData         int
+	ControlsCorroborated              int
+	ControlsCorroboratedWithoutMargin int
+
+	// ExcludedFallbackCases/ExcludedFallbackControls are CHAOS-3829 codex r6
+	// L1's (accepted) diagnostic: how many otherwise-eligible SCORED /
+	// CONTROL cases (corroborated top-1, measurable margin -- every OTHER
+	// eligibility condition already satisfied) were excluded from
+	// CorrectSampleSize/WrongSampleSize specifically because
+	// UsedTermFallback was set. See the function doc comment's L1 section
+	// for why a fallback case's margin measures geometry the term-sourced-
+	// only carve-out can never see in production. Recorded unconditionally
+	// (even when zero), mirroring the Controls* counters' own "measured
+	// fact, not silently" discipline.
+	ExcludedFallbackCases    int
+	ExcludedFallbackControls int
+
+	// AchievedReach is the fraction of CORRECT-top1 eligible cases whose
+	// VectorMargin clears ThresholdM -- how many of the cases where this
+	// carve-out could have safely committed actually would, at the
+	// recommended M. 0 whenever ReachMeasured or SafetyMeasured is false (no
+	// denominator, or no M to test against).
+	AchievedReach float64
+}
+
+// MarginCalibrationArtifact wraps a MarginCalibrationResult with the
+// provenance a WRITTEN, on-disk artifact needs (codex r3 H3, mirroring
+// CalibrationArtifact's identical shape/rationale) -- a bare
+// MarginCalibrationResult carries the RECOMMENDATION but nothing that
+// identifies what it was recommended FOR: no embedding identity, no
+// dimension, no tau/topK, no source-report provenance. Two files written by
+// two runs against DIFFERENT embedding spaces (or different tau/topK) are
+// byte-for-byte indistinguishable as MarginCalibrationResult JSON, despite
+// CalibrateMarginFromReport itself refusing to MIX spaces/configs at
+// generation time (ErrEmbeddingIdentityMismatch / ErrMarginReportConfigMismatch)
+// -- that check guards the run that PRODUCES the file, not a later run,
+// script, or human that picks the file back up days afterward with no
+// memory of which identity/tau/topK it was for.
+type MarginCalibrationArtifact struct {
+	MarginCalibrationResult
+
+	// TargetEmbedIdentity, TargetDimension, TargetTau, and TargetTopK are
+	// the MarginCalibrationOptions this artifact was computed FOR -- a
+	// caller re-reading this file later re-derives its OWN target the same
+	// way CalibrateMarginFromReport's caller did and compares before
+	// trusting ThresholdM, exactly mirroring the generation-time check.
+	TargetEmbedIdentity string  `json:"target_embed_identity"`
+	TargetDimension     int     `json:"target_dimension"`
+	TargetTau           float64 `json:"target_tau"`
+	TargetTopK          int     `json:"target_topk"`
+
+	// SourceReportPath is the source report's own path on disk (empty when
+	// the report was built in memory rather than read from a file -- e.g.
+	// every synthetic-fixture test in this package). SourceReportSHA256 is
+	// the SHA-256 of the source report's own ON-DISK BYTES -- see
+	// NewMarginCalibrationArtifact's own doc comment (codex r8 O3) for why
+	// this must be the ACTUAL file content, not a re-marshalling of the
+	// (reduced) CalibrationReport struct.
+	SourceReportPath   string `json:"source_report_path,omitempty"`
+	SourceReportSHA256 string `json:"source_report_sha256,omitempty"`
+}
+
+// NewMarginCalibrationArtifact builds the provenance-carrying wrapper a
+// written artifact uses (see MarginCalibrationArtifact's doc comment) from a
+// CalibrateMarginFromReport call's own inputs and result -- reportPath is
+// the SOURCE report's path on disk (empty when the report was built in
+// memory rather than read from a file).
+//
+// reportBytes is CHAOS-3829 codex r8 O3's (accepted) fix: the RAW bytes the
+// caller actually read from reportPath, hashed DIRECTLY when present. The
+// ORIGINAL implementation hashed json.Marshal(report) instead -- report is
+// CalibrationReport, a DELIBERATELY REDUCED mirror of the real oracle report
+// JSON (CalibrationReport's own doc comment: "only the fields the
+// calibration math reads"), so that re-marshalling drops every field the
+// harness actually wrote but this package's struct doesn't declare, and
+// reorders/reformats what survives -- the resulting hash identified a
+// LOSSY RE-SERIALIZATION, never the actual file on disk, defeating the
+// entire point of a content hash (a caller re-reading the artifact days
+// later cannot verify it against the source file's own sha256sum, because
+// the two were never computed from the same bytes). reportBytes==nil falls
+// back to the original marshal-based hash -- this is the SYNTHETIC-FIXTURE
+// path (every non-live test in this package builds a CalibrationReport
+// directly in memory, with no real file to hash the bytes of at all; H3's
+// own reportPath="fake, need not exist on disk" tests rely on this
+// fallback staying non-empty), not a regression of the fix -- the fix only
+// changes behavior when real bytes exist to prefer.
+func NewMarginCalibrationArtifact(result MarginCalibrationResult, report CalibrationReport, opts MarginCalibrationOptions, reportPath string, reportBytes []byte) MarginCalibrationArtifact {
+	artifact := MarginCalibrationArtifact{
+		MarginCalibrationResult: result,
+		TargetEmbedIdentity:     opts.TargetEmbedIdentity,
+		TargetDimension:         opts.TargetDimension,
+		TargetTau:               opts.TargetTau,
+		TargetTopK:              opts.TargetTopK,
+		SourceReportPath:        reportPath,
+	}
+	if len(reportBytes) > 0 {
+		sum := sha256.Sum256(reportBytes)
+		artifact.SourceReportSHA256 = hex.EncodeToString(sum[:])
+	} else if encoded, err := json.Marshal(report); err == nil {
+		sum := sha256.Sum256(encoded)
+		artifact.SourceReportSHA256 = hex.EncodeToString(sum[:])
+	}
+	return artifact
+}
+
+// CalibrateMarginFromReport computes a recommended VectorMarginCommitThreshold
+// (M) from one EXTENDED oracle report (CHAOS-3829 Phase 1/2(c)'s
+// VectorTop1/VectorTop2/VectorMargin fields on both report.Cases (scored) and
+// report.ControlCases) -- the calibration input for the ratified commit-path
+// carve-out in graphrank.ResolveFromMergedCandidates: corroborated top-1 +
+// margin(top1,top2) >= M.
+//
+// ELIGIBLE POPULATION (Phase 2(c) revision -- see the section doc comment
+// above for why vectorSearchComplete is no longer part of this predicate):
+//
+//   - SCORED cases (report.Cases): eligible when the vector arm's top-1
+//     subject was corroborated by a second mechanism (the EXACT
+//     corroboration precondition the carve-out also checks) AND a margin
+//     was measurable (VectorTop1 AND VectorTop2 both present, i.e. at least
+//     two distinct vector-arm subjects were proposed). CORRECT when
+//     VectorTop1 names the case's own expected subject (ExpectKind/
+//     ExpectID), WRONG otherwise. This is a property of the RANKING (is the
+//     vector arm's own top choice right), not of retrievability (a case can
+//     be "hit" -- the correct answer is SOMEWHERE in the oracle's top-K --
+//     while VectorTop1 is a different, wrong subject with a higher raw
+//     similarity).
+//   - CONTROL cases (report.ControlCases): eligible under the SAME
+//     corroborated + measurable-margin predicate, and ALWAYS WRONG when
+//     eligible -- a no-match control has no correct subject at all, so a
+//     corroborated top-1 is wrong by definition (team-lead dispatch,
+//     2026-08-16: "(corroborated AND top1 != expect_id) over scored cases
+//     UNION (corroborated) over controls"). ControlsInReport/
+//     ControlsWithVectorArmData/ControlsCorroborated/
+//     ControlsCorroboratedWithoutMargin are recorded UNCONDITIONALLY (never
+//     silently) so a report where zero controls were even corroborated
+//     shows that as a measured zero, not an absent field.
+//
+// A case/control outside this population never reaches the carve-out in
+// production either, so its margin says nothing about how M should be set --
+// including one whose vector arm found only ONE distinct subject
+// (VectorMargin nil): there is no competitor to measure a gap against, which
+// is a different situation from a measured, arbitrarily small gap, and
+// folding it in as "infinite margin" or "zero margin" would both be
+// fabricating a number this report never measured.
+//
+// codex r6 L1 (accepted): a case/control with UsedTermFallback set is ALSO
+// excluded from the eligible population, over and above the predicate
+// above -- a fallback case embedded the ENTIRE question, not this
+// resolution's per-term Search calls, but production's carve-out is
+// TERM-SOURCED ONLY (codex r1 F3 excludes the question-level pass from
+// vectorArmSimilarity entirely), so a fallback case's margin measures
+// geometry the carve-out can never actually see. ExcludedFallbackCases/
+// ExcludedFallbackControls record how many otherwise-eligible cases this
+// cost, so a caller can see the trim rather than infer it. This is
+// population-TRIMMING, not sample-hiding: if excluding every fallback case
+// empties the wrong population, the existing ApplyReady=false vacuous-truth
+// guard below fires on its own -- no separate guard is needed for that.
+//
+// codex r6 L2 (accepted): report.Controls (the harness's own declared
+// control-case count) must equal len(report.ControlCases) or this function
+// refuses with ErrMarginReportControlsCountMismatch before reading a single
+// control case -- see that error's doc comment for why a truncated report
+// must never silently shrink the negative-gate population.
+//
+// M: the smallest value such that EVERY WRONG-top1 margin in the eligible
+// population (scored-wrong UNION control-corroborated) falls STRICTLY below
+// it -- one float64 ULP above the largest observed wrong margin
+// (math.Nextafter(max, +Inf); recallGateThreshold uses the same
+// boundary-inclusion idiom for tau, in the opposite direction -- there the
+// boundary sample must clear the gate, here it must NOT). This is a
+// ZERO-TOLERANCE construction, not a percentile: CHAOS-3829's ratified
+// sequencing gate requires 0 wrong commits before merge (the AC-3778-4
+// re-gate), so M is picked to reject every wrong-top1 case this report ever
+// measured, not merely most of them. A small WrongSampleSize means this
+// empirical bound is correspondingly less trustworthy -- WrongSampleSize
+// (and its WrongSampleSizeFromControls breakdown) is reported precisely so a
+// caller can judge that, rather than this function silently padding the
+// estimate with an invented safety margin.
+//
+// FAIL CLOSED (ApplyReady=false, ThresholdM nil) when no wrong-top1 case was
+// measured in the eligible population at all: see ApplyReady's doc comment.
+//
+// A report with ZERO eligible cases in the population (not just the wrong
+// half -- CorrectSampleSize+WrongSampleSize == 0) returns ErrNoMarginSamples:
+// there is nothing here to calibrate M from, not even an unsafe
+// recommendation.
+func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationOptions) (MarginCalibrationResult, error) {
+	if opts.TargetEmbedIdentity == "" || opts.TargetDimension <= 0 ||
+		report.EmbedIdentity == "" || report.EmbedDimension <= 0 ||
+		report.EmbedIdentity != opts.TargetEmbedIdentity || report.EmbedDimension != opts.TargetDimension {
+		return MarginCalibrationResult{}, ErrEmbeddingIdentityMismatch
+	}
+	// codex r1 F7: pin report.Tau/report.TopK the SAME way identity/dimension
+	// are pinned above -- see TargetTau/TargetTopK's own doc comment for why
+	// a mismatch here invalidates M exactly as an identity/dimension mismatch
+	// would.
+	if opts.TargetTau <= 0 || opts.TargetTopK <= 0 ||
+		report.Tau != opts.TargetTau || report.TopK != opts.TargetTopK {
+		return MarginCalibrationResult{}, ErrMarginReportConfigMismatch
+	}
+	// codex r6 L2 (accepted): report.Controls is the harness's own DECLARED
+	// control-case count, written in lockstep with ControlCases (oracle_live_test.go
+	// increments both in the same loop iteration) -- under an honest,
+	// complete write the two are ALWAYS equal by construction. A mismatch
+	// means this report was truncated (a partial write, a size-limited
+	// fetch, a corrupted file) after the harness produced it, silently
+	// shrinking the negative-gate population to however many control cases
+	// happened to survive -- the "impossible total" idiom
+	// hardNegativeCaseCount's decision table uses, applied here at the
+	// whole-report level: a declared count that disagrees with the actual
+	// serialized array length cannot be trusted for ANY of it, so this
+	// hard-fails before a single control case is read, rather than silently
+	// calibrating M from a partial population.
+	if report.Controls != len(report.ControlCases) {
+		return MarginCalibrationResult{}, fmt.Errorf("%w: report declares %d control cases but control_cases carries %d", ErrMarginReportControlsCountMismatch, report.Controls, len(report.ControlCases))
+	}
+	// codex r7 M3 (accepted): EXACT symmetric check for the SCORED
+	// population -- see CalibrationReport.Scored's doc comment and
+	// ErrMarginReportControlsCountMismatch's identical rationale above,
+	// applied here to report.Cases instead of report.ControlCases.
+	if report.Scored != len(report.Cases) {
+		return MarginCalibrationResult{}, fmt.Errorf("%w: report declares %d scored cases but cases carries %d", ErrMarginReportScoredCountMismatch, report.Scored, len(report.Cases))
+	}
+	// codex r3 H2 (accepted): report.Cases[i].VectorMargin is REDUNDANT with
+	// VectorTop1/VectorTop2's own Similarity values -- the oracle harness
+	// always computes it as their difference (oracle_live_test.go) and
+	// never as an independently-sourced number. Trusting the STORED field
+	// without cross-checking it against the values it was supposedly
+	// derived from would let a corrupted, hand-edited, or buggy report
+	// silently mis-measure M; same class of hazard F6 closed for the
+	// harness-vs-gate arithmetic, extended here to the calibration
+	// report's own internal consistency. Checked BEFORE any margin is
+	// trusted, over BOTH populations (scored and control cases) -- a single
+	// inconsistency anywhere hard-fails the whole calibration, the same
+	// "reject the impossible cell" idiom hardNegativeCaseCount's decision
+	// table uses (this package, below), scaled up to whole-report rejection
+	// because a report that fails its own internal arithmetic cannot be
+	// trusted piecemeal.
+	if err := checkMarginConsistency(report.Cases, "Cases"); err != nil {
+		return MarginCalibrationResult{}, err
+	}
+	if err := checkMarginConsistency(report.ControlCases, "ControlCases"); err != nil {
+		return MarginCalibrationResult{}, err
+	}
+
+	var correctMargins, wrongMargins []float64
+	excludedFallbackCases := 0
+	for _, c := range report.Cases {
+		if c.VectorTop1 == nil || c.VectorTop2 == nil || c.VectorMargin == nil {
+			continue
+		}
+		if !c.VectorTop1.Corroborated {
+			continue
+		}
+		// codex r6 L1 (accepted): a case that used the whole-question
+		// fallback embedded the ENTIRE question text, not this resolution's
+		// per-term Search calls -- but production's carve-out is
+		// TERM-SOURCED ONLY (codex r1 F3 deliberately excludes the
+		// question-level SearchQuestion pass from vectorArmSimilarity; a
+		// term-less resolution has an empty side-map and the rescue simply
+		// cannot fire). A fallback case's margin therefore measures a
+		// geometry the carve-out can NEVER see in production, and must be
+		// excluded from the eligible population -- counted here (not
+		// silently dropped) so a caller can see how much of the report this
+		// cost. If excluding every fallback case empties the wrong
+		// population entirely, the EXISTING ApplyReady=false vacuous-truth
+		// guard below fires on its own; no separate guard is needed for
+		// that case.
+		if c.UsedTermFallback {
+			excludedFallbackCases++
+			continue
+		}
+		// H2: use the RECOMPUTED margin (single authority), not the stored
+		// field -- checkMarginConsistency above already proved the two are
+		// numerically identical for every case that reaches this loop, so
+		// this is not a behavior change, only which of two equal values is
+		// read.
+		margin := c.VectorTop1.Similarity - c.VectorTop2.Similarity
+		if c.VectorTop1.Kind == c.ExpectKind && c.VectorTop1.CanonicalID == c.ExpectID {
+			correctMargins = append(correctMargins, margin)
+		} else {
+			wrongMargins = append(wrongMargins, margin)
+		}
+	}
+
+	// Phase 2(c): the control-sourced half of the wrong-top1 UNION -- a
+	// corroborated control top-1 is wrong BY DEFINITION (no correct subject
+	// exists for it to match). Every counter here is recorded
+	// unconditionally, per team-lead's explicit "record as a measured fact,
+	// not silently" instruction.
+	controlsInReport := len(report.ControlCases)
+	controlsWithVectorArmData, controlsCorroborated, controlsCorroboratedWithoutMargin := 0, 0, 0
+	wrongFromControls := 0
+	excludedFallbackControls := 0
+	for _, c := range report.ControlCases {
+		if c.VectorTop1 == nil {
+			continue
+		}
+		controlsWithVectorArmData++
+		if !c.VectorTop1.Corroborated {
+			continue
+		}
+		controlsCorroborated++
+		if c.VectorTop2 == nil || c.VectorMargin == nil {
+			controlsCorroboratedWithoutMargin++
+			continue
+		}
+		// codex r6 L1 (accepted): same exclusion as the scored-case loop
+		// above -- a fallback control's margin measures whole-question
+		// geometry the term-sourced-only carve-out never sees. Checked
+		// AFTER controlsCorroborated/controlsCorroboratedWithoutMargin are
+		// already tallied (those are raw, measured facts about the case
+		// independent of eligibility, per Phase 2(c)'s own "record
+		// unconditionally" discipline) and BEFORE the case can feed
+		// wrongMargins.
+		if c.UsedTermFallback {
+			excludedFallbackControls++
+			continue
+		}
+		// H2: recomputed margin, single authority -- see the scored-case
+		// loop above.
+		wrongMargins = append(wrongMargins, c.VectorTop1.Similarity-c.VectorTop2.Similarity)
+		wrongFromControls++
+	}
+
+	if len(correctMargins)+len(wrongMargins) == 0 {
+		return MarginCalibrationResult{}, ErrNoMarginSamples
+	}
+
+	result := MarginCalibrationResult{
+		SafetyMeasured:                    len(wrongMargins) > 0,
+		ReachMeasured:                     len(correctMargins) > 0,
+		CorrectSampleSize:                 len(correctMargins),
+		WrongSampleSize:                   len(wrongMargins),
+		WrongSampleSizeFromControls:       wrongFromControls,
+		ControlsInReport:                  controlsInReport,
+		ControlsWithVectorArmData:         controlsWithVectorArmData,
+		ControlsCorroborated:              controlsCorroborated,
+		ControlsCorroboratedWithoutMargin: controlsCorroboratedWithoutMargin,
+		ExcludedFallbackCases:             excludedFallbackCases,
+		ExcludedFallbackControls:          excludedFallbackControls,
+	}
+
+	if !result.SafetyMeasured {
+		result.Note = fmt.Sprintf(
+			"M UNMEASURED: no wrong-top1 case was found in the eligible population (%d correct-top1 case(s), 0 wrong-top1; %d/%d controls corroborated) -- ThresholdM cannot be validated against a single wrong commit without vacuously trusting an empty sample. Re-run the oracle harness against a larger/different corpus slice, or size M by hand from a larger offline sample.",
+			result.CorrectSampleSize, controlsCorroborated, controlsInReport,
+		)
+		return result, nil
+	}
+
+	maxWrong := wrongMargins[0]
+	for _, m := range wrongMargins[1:] {
+		if m > maxWrong {
+			maxWrong = m
+		}
+	}
+	threshold := math.Nextafter(maxWrong, math.Inf(1))
+	result.ThresholdM = &threshold
+	result.WrongMarginMax = &maxWrong
+	result.ApplyReady = true
+
+	clearing := 0
+	if result.ReachMeasured {
+		for _, m := range correctMargins {
+			if m >= threshold {
+				clearing++
+			}
+		}
+		result.AchievedReach = float64(clearing) / float64(len(correctMargins))
+	}
+
+	smallSampleCaveat := ""
+	if len(wrongMargins) < 3 {
+		smallSampleCaveat = fmt.Sprintf(" CAVEAT: only %d wrong-top1 sample(s) -- this bound may not generalize past this report's small sample; re-run against a broader corpus before treating M as final.", len(wrongMargins))
+	}
+	controlBreakdown := fmt.Sprintf(" (%d of %d wrong-top1 sample(s) from a corroborated control.)", wrongFromControls, len(wrongMargins))
+	switch {
+	case !result.ReachMeasured:
+		result.Note = fmt.Sprintf(
+			"M=%.6f rejects all %d measured wrong-top1 case(s); no correct-top1 case was measured in the eligible population, so AchievedReach is unmeasured (reported as 0).%s%s",
+			threshold, len(wrongMargins), controlBreakdown, smallSampleCaveat,
+		)
+	case clearing == 0:
+		result.Note = fmt.Sprintf(
+			"M=%.6f rejects all %d measured wrong-top1 case(s), but 0 of %d correct-top1 case(s) clear it -- this carve-out would have zero reach at the recommended M on this sample.%s%s",
+			threshold, len(wrongMargins), len(correctMargins), controlBreakdown, smallSampleCaveat,
+		)
+	default:
+		result.Note = fmt.Sprintf(
+			"M=%.6f rejects all %d measured wrong-top1 case(s); %d of %d correct-top1 case(s) (%.1f%%) clear it.%s%s",
+			threshold, len(wrongMargins), clearing, len(correctMargins), result.AchievedReach*100, controlBreakdown, smallSampleCaveat,
+		)
+	}
+	return result, nil
 }
 
 // hardNegativeCaseCount is codex round-5 FIX B's EXHAUSTIVE decision table

@@ -41,7 +41,7 @@ func resolveOne(candidates ...contextfabric.SubjectCandidate) contextfabric.Subj
 	for _, candidate := range candidates {
 		bySubject[SubjectKey(candidate.Subject)] = candidate
 	}
-	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false)
+	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true)
 }
 
 // AC-3778-3: "A vector hit alone never commits a subject." This holds by
@@ -294,7 +294,7 @@ func TestF1_AStrongLexicalCommitSurvivesAVectorSearchThatFoundNothing(t *testing
 	// the lexical commit stands.
 	notTruncated := ResolveFromMergedCandidates(
 		map[string]contextfabric.SubjectCandidate{SubjectKey(strong.Subject): strong},
-		map[string]string{}, map[string]bool{}, 10, true, false,
+		map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true,
 	)
 	if len(notTruncated.Committed) != 1 {
 		t.Fatalf("a strong unopposed lexical candidate must commit, got %v", notTruncated.Committed)
@@ -305,7 +305,7 @@ func TestF1_AStrongLexicalCommitSurvivesAVectorSearchThatFoundNothing(t *testing
 	// COST of the defect, so the fix cannot be reverted without a red test.
 	truncated := ResolveFromMergedCandidates(
 		map[string]contextfabric.SubjectCandidate{SubjectKey(strong.Subject): strong},
-		map[string]string{}, map[string]bool{}, 10, true, true,
+		map[string]string{}, map[string]bool{}, 10, true, true, nil, 0, false, 10, 20, true,
 	)
 	if len(truncated.Committed) != 0 {
 		t.Fatal("this test no longer demonstrates the cost it exists to pin: " +
@@ -343,7 +343,7 @@ func TestF4_DegradationDoesNotBlockAnAutoCommitTheWayTruncationDoes(t *testing.T
 	// Degradation is NOT an input to ResolveFromMergedCandidates at all --
 	// only truncation is -- so a degraded-but-untruncated resolution still
 	// commits.
-	resolution := ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false)
+	resolution := ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true)
 	if len(resolution.Committed) != 1 {
 		t.Fatalf("degradation must not block an unopposed strong commit, got %v", resolution.Committed)
 	}

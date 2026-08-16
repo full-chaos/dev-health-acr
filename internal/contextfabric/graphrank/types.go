@@ -55,6 +55,34 @@ type CandidateNode struct {
 	// through unchanged rather than guessing a default, so a candidate whose
 	// mechanism was never declared can never accidentally corroborate another.
 	Mechanism contextfabric.MatchMechanism
+	// VectorSimilarity is CHAOS-3829's commit-path carve-out input: the RAW
+	// (unclamped) similarity a MatchVector-mechanism adapter found this
+	// candidate at. Nil for every other mechanism, and nil whenever the
+	// adapter did not compute one.
+	//
+	// Deliberately SEPARATE from Relevance/Score, and NEVER fed into
+	// ResultConfidence or any other confidence-shaped consumer -- same
+	// hazard class Score's own doc comment names ("a raw value sitting
+	// where a caller might read it as a confidence is a loaded gun"; here a
+	// raw similarity in [0,1] would silently satisfy ResultConfidence's
+	// `score >= 0 && score <= 1 -> return score` fallback if it were ever
+	// placed in Score).
+	//
+	// WHY THIS EXISTS ALONGSIDE Relevance: a vector-mechanism adapter
+	// CORRECTLY clamps a candidate's Relevance to a floor whenever ITS OWN
+	// search call truncated (see falkorgraph's
+	// vectorSearchNodesWithOverFetch) -- that clamp is the right, safe
+	// default for ordinary candidate ranking/confidence, since a truncated
+	// call's own per-candidate score cannot be trusted in isolation. But it
+	// makes a MARGIN between two candidates the SAME call already returned
+	// read as zero regardless of their real similarity gap. CHAOS-3829's
+	// carve-out needs exactly that gap: an ANN k-NN result is
+	// distance-ordered, so truncation can only ever drop candidates BEYOND
+	// the returned set -- it cannot reorder or misrepresent the relative
+	// gap between two candidates that WERE returned. VectorSimilarity
+	// carries the value that argument depends on; Relevance keeps
+	// protecting every other, per-candidate-trust use unchanged.
+	VectorSimilarity *float64
 }
 
 // CandidateEdge is the same idea for a relationship/edge result.
