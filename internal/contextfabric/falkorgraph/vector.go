@@ -546,7 +546,11 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	if !hasLexicalContent(term) {
 		return nil, false, false, nil
 	}
-	lexical, truncated, err := a.fulltextSearchNodes(ctx, key, orgID, term, limit, temporal)
+	// codex round-6 P2 (fix A): subject resolution is the ONE path the
+	// CHAOS-3838 union/lexicon-expansion contract belongs to -- see
+	// fulltextSearchNodesForResolution's own doc comment for why
+	// DiscoverContext must never share it.
+	lexical, truncated, err := a.fulltextSearchNodesForResolution(ctx, key, orgID, term, limit, temporal)
 	if err != nil {
 		return nil, false, false, err
 	}

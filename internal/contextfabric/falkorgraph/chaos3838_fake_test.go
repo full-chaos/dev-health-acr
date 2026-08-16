@@ -31,7 +31,7 @@ func TestFulltextSearchNodes_LexiconWidensTheQueryWithoutChangingConfidence(t *t
 		return []row{synonymOnlyHit}, nil
 	}}
 	adapter := newFakeAdapter(t, fake)
-	candidates, truncated, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 10, temporalFilter{})
+	candidates, truncated, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "PR", 10, temporalFilter{})
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestFulltextSearchNodes_UnmatchedTermBuildsTheIdenticalQuery(t *testing.T) 
 		return nil, nil
 	}}
 	adapter := newFakeAdapter(t, fake)
-	if _, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "horizontal scaling readiness", 10, temporalFilter{}); err != nil {
+	if _, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "horizontal scaling readiness", 10, temporalFilter{}); err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
 	const want = "horizontal|scaling|readiness"
@@ -80,7 +80,7 @@ func TestFulltextSearchNodes_LexiconDoesNotInflateAFullOriginalTermMatch(t *test
 	strongHit := fulltextRow("pull_request", "pr_1", "PR review", "PR review", nil)
 	fake := fixedRowsFulltextConn([]row{strongHit})
 	adapter := newFakeAdapter(t, fake)
-	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR review", 10, temporalFilter{})
+	candidates, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "PR review", 10, temporalFilter{})
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
@@ -593,7 +593,7 @@ func TestFulltextSearchNodes_MultiWordSynonymIsAPhraseClauseNotBareOR(t *testing
 		}
 	}}
 	adapter := newFakeAdapter(t, fake)
-	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 10, temporalFilter{})
+	candidates, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "PR", 10, temporalFilter{})
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
@@ -629,7 +629,7 @@ func TestFulltextSearchNodes_SingleWordSynonymsStillOR(t *testing.T) {
 		return nil, nil
 	}}
 	adapter := newFakeAdapter(t, fake)
-	if _, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "repo", 10, temporalFilter{}); err != nil {
+	if _, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "repo", 10, temporalFilter{}); err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
 	if len(capturedQueries) != 2 {
@@ -681,7 +681,7 @@ func TestFulltextSearchNodes_ExpansionNeverDisplacesABaseHit(t *testing.T) {
 		}
 	}}
 	adapter := newFakeAdapter(t, fake)
-	candidates, truncated, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 1, temporalFilter{})
+	candidates, truncated, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "PR", 1, temporalFilter{})
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
@@ -735,7 +735,7 @@ func TestFulltextSearchNodes_LimitSizedUnauthorizedBaseDoesNotStarveExpansion(t 
 		}
 	}}
 	adapter := newFakeAdapter(t, fake)
-	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 2, temporalFilter{})
+	candidates, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "PR", 2, temporalFilter{})
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
@@ -789,7 +789,7 @@ func TestFulltextSearchNodes_TieBreakAppliesToTheKindFilteredBranchToo(t *testin
 		return nil, nil
 	}}
 	adapter := newFakeAdapter(t, fake)
-	if _, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "repository", 10, temporalFilter{}); err != nil {
+	if _, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "repository", 10, temporalFilter{}); err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
 	if len(capturedCyphers) != 2 {
@@ -842,7 +842,7 @@ func TestFulltextSearchNodes_OverlapWithBaseDoesNotStarveANewSynonymOnlyRow(t *t
 		}
 	}}
 	adapter := newFakeAdapter(t, fake)
-	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 2, temporalFilter{})
+	candidates, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "PR", 2, temporalFilter{})
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
@@ -853,4 +853,144 @@ func TestFulltextSearchNodes_OverlapWithBaseDoesNotStarveANewSynonymOnlyRow(t *t
 		}
 	}
 	t.Fatalf("candidates = %#v, want the genuinely new synonym-only row (pr_c) present -- heavy overlap with base must not crowd it out of the batch's own truncation window before dedup runs", candidates)
+}
+
+// TestFulltextSearchNodes_LaterBatchOverlapWithAnEarlierBatchDoesNotStarveIt
+// is the codex round-6 P2 (fix B) regression proof: round-5 sized each
+// batch's fetch budget against len(baseCandidates) ONLY -- correct for
+// overlap with base, but a term can trigger TWO expansion batches (one
+// kind-agnostic, one kind-scoped), and the SECOND batch's own top-ranked
+// rows can overlap with the FIRST batch's newly-added rows just as easily
+// as with base. term = "repository ticket" triggers exactly that: the
+// kind-agnostic {"ticket","issue","work item"} group (batch 1, runs
+// first per lexiconExpansionBatches' fixed order) and the kind-scoped
+// {"repo","repository"} group (batch 2). Batch 2's fake rows duplicate
+// batch 1's two new rows, with a genuinely new row (rowZ) ranked
+// immediately after -- exactly at the round-5-only formula's blind spot
+// (fetchBudget computed from len(baseCandidates)=0 would never have
+// widened batch 2's fetch to see past the duplicates at all). MUTATION
+// CHECK: reverting fetchBudget from `limit + len(seen)` back to
+// `limit + len(baseCandidates)` makes this fail -- rowZ disappears.
+func TestFulltextSearchNodes_LaterBatchOverlapWithAnEarlierBatchDoesNotStarveIt(t *testing.T) {
+	rowX := fulltextRow("work_item", "wi_x", "Shared X", "ticket issue work item shared X", nil)
+	rowY := fulltextRow("work_item", "wi_y", "Shared Y", "ticket issue work item shared Y", nil)
+	rowZ := fulltextRow("repository", "repo_z", "New repo only", "repository only new", nil)
+
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		q, _ := params["query"].(string)
+		_, hasKind := params["kind"]
+		switch {
+		case q == "repository|ticket":
+			// Base: nothing literally named both "repository" and "ticket".
+			return nil, nil
+		case q == `issue|"work item"` && !hasKind:
+			// Batch 1 (kind-agnostic "ticket" group additions): two
+			// genuinely new rows, filling limit=2 exactly.
+			return []row{rowX, rowY}, nil
+		case q == "repo" && hasKind:
+			// Batch 2 (kind-scoped "repo" group addition): its OWN raw
+			// ranking duplicates batch 1's rows first, THEN the genuinely
+			// new rowZ -- at the OLD, too-narrow fetch's exact blind spot.
+			return []row{rowX, rowY, rowZ}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	candidates, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "repository ticket", 2, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodesForResolution() error = %v", err)
+	}
+	newUUID := subjectUUID("repository", "repo_z")
+	for _, c := range candidates {
+		if c.UUID == newUUID {
+			return
+		}
+	}
+	t.Fatalf("candidates = %#v, want the genuinely new repository-only row (repo_z) present -- overlap with an EARLIER batch's rows must not crowd it out of a LATER batch's own truncation window before dedup runs", candidates)
+}
+
+// --- codex round-6 P2 (fix A): the union/lexicon contract is subject-resolution-only ---
+
+// TestFulltextSearchNodes_PlainVersionNeverExpandsAndNeverExceedsLimit is
+// the fix A regression proof: the PLAIN fulltextSearchNodes (DiscoverContext's
+// only caller) must issue exactly ONE query -- no lexicon expansion, no
+// union, regardless of whether the text matches a lexicon group -- and its
+// result must never exceed `limit`. This is the property DiscoverContext's
+// own per-node edgesOfNode cost depends on staying bounded.
+func TestFulltextSearchNodes_PlainVersionNeverExpandsAndNeverExceedsLimit(t *testing.T) {
+	rows := []row{
+		fulltextRow("pull_request", "pr_1", "PR one", "PR one", nil),
+		fulltextRow("pull_request", "pr_2", "PR two", "PR two", nil),
+		fulltextRow("pull_request", "pr_3", "PR three", "PR three", nil),
+	}
+	var queryCalls int
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		queryCalls++
+		return rows, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	// "PR" is a lexicon-matching term (the {"pr","pull request"} group) --
+	// if this were routed through the union, it would trigger a second
+	// query and could return more than `limit` candidates.
+	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 2, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	if queryCalls != 1 {
+		t.Fatalf("queryCalls = %d, want exactly 1 -- the plain path must never run a second, lexicon-expansion query", queryCalls)
+	}
+	if len(candidates) > 2 {
+		t.Fatalf("candidates = %#v, want at most limit=2 -- the plain path must never exceed its caller's bound", candidates)
+	}
+}
+
+// TestFulltextSearchNodes_ResolutionPathStillUnionsForTheSameInput is
+// PlainVersionNeverExpands' direct control: the SAME lexicon-matching term,
+// through fulltextSearchNodesForResolution, still runs the union (more
+// than one query call) -- proving the split isolates DiscoverContext
+// without silently disabling subject resolution's own CHAOS-3838 behavior.
+func TestFulltextSearchNodes_ResolutionPathStillUnionsForTheSameInput(t *testing.T) {
+	var queryCalls int
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		queryCalls++
+		return nil, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	if _, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "PR", 2, temporalFilter{}); err != nil {
+		t.Fatalf("fulltextSearchNodesForResolution() error = %v", err)
+	}
+	if queryCalls != 2 {
+		t.Fatalf("queryCalls = %d, want exactly 2 (base + the lexicon-expansion batch) -- the resolution path must retain the union behavior", queryCalls)
+	}
+}
+
+// TestHybridSearchNodes_LexicalArmUsesTheResolutionUnionPath is the REAL
+// production-wiring mutation check for fix A: hybridSearchNodes (the ONLY
+// caller vector.go routes through) must call fulltextSearchNodesForResolution,
+// not the plain fulltextSearchNodes -- asserted here by counting FULLTEXT
+// query calls specifically (hybridSearchNodes also issues a vector query,
+// which this must not confuse with the lexical arm's own call count).
+// TestFulltextSearchNodes_ResolutionPathStillUnionsForTheSameInput alone
+// does NOT catch a regression where vector.go's call site is silently
+// reverted to the plain function, because it calls
+// fulltextSearchNodesForResolution directly -- this test calls
+// hybridSearchNodes itself, the actual production entry point, closing
+// that gap. MUTATION CHECK: reverting vector.go's call site back to plain
+// fulltextSearchNodes makes this fail (fulltextQueryCalls drops to 1).
+func TestHybridSearchNodes_LexicalArmUsesTheResolutionUnionPath(t *testing.T) {
+	var fulltextQueryCalls int
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.fulltext.queryNodes") {
+			fulltextQueryCalls++
+		}
+		return nil, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "test-key", "org-1", "PR", 10, &resolutionFence{}, temporalFilter{}); err != nil {
+		t.Fatalf("hybridSearchNodes() error = %v", err)
+	}
+	if fulltextQueryCalls != 2 {
+		t.Fatalf("fulltextQueryCalls = %d, want exactly 2 (base + the lexicon-expansion batch) -- hybridSearchNodes' lexical arm must use fulltextSearchNodesForResolution, not the plain, DiscoverContext-only fulltextSearchNodes", fulltextQueryCalls)
+	}
 }

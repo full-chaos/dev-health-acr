@@ -263,7 +263,7 @@ func TestFulltextSearchNodes_RepositoryTermDoesNotSurfaceOtherKindsViaTheRepoLab
 		}
 	}}
 	adapter := newFakeAdapter(t, fake)
-	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "repository", 10, temporalFilter{})
+	candidates, _, err := adapter.fulltextSearchNodesForResolution(context.Background(), "test-key", "org-1", "repository", 10, temporalFilter{})
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
