@@ -8,13 +8,27 @@
 # baked into a script file (sol review F12).
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
 # git-aware repo root (sol review R2 residual): correct regardless of the
 # checkout's directory NAME, unlike a hard-coded "acr-wt-trial" path
 # component would be. Falls back to the path-relative derivation only if
 # git itself is unavailable.
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-toplevel 2>/dev/null)"
-if [[ -z "$repo_root" ]]; then
-  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+#
+# sol review F1 round 2: under `set -e` (line 9), a bare assignment whose
+# RHS command substitution fails (`x=$(failing-cmd)`) kills the script on
+# the spot -- that failure is NOT exempted from -e just because it
+# happened inside `$(...)`. Every fallback below therefore lives inside an
+# `if`/`elif` CONDITION, never a bare assignment: -e is suspended while
+# evaluating the command list of an if/elif/while/until condition, so a
+# failing probe there falls through to the next branch instead of exiting
+# the script. (Sol proved the pre-fix version dead-code by simulating a
+# missing git: it died on this exact line 127 before ever reaching the
+# "if git itself is unavailable" branch that line's own comment promised.)
+if repo_root="$(cd "$script_dir" && git rev-parse --show-toplevel 2>/dev/null)" && [[ -n "$repo_root" ]]; then
+  :
+else
+  repo_root="$(cd "$script_dir/../.." && pwd -P)"
 fi
 # dev_health_root resolves via the git COMMON dir, not repo_root/.. --
 # repo_root (--show-toplevel) is the CURRENT worktree's own root, which for
@@ -26,25 +40,27 @@ fi
 # this repo, so its grandparent is dev-health regardless of which worktree
 # sourced this script.
 #
-# sol review F1: --git-common-dir alone is not enough. From a PLAIN
-# (non-worktree) checkout with cwd anywhere other than the repo root, git
-# prints a path RELATIVE TO THE CALLER'S CWD (e.g. "../../.git" from
-# scripts/trial) -- resolving that against a *different* cwd than the one
-# that produced it (the caller's, not the script directory's) lands on the
-# wrong root or fails outright. Prefer --path-format=absolute (git >=
-# 2.31, always prints an absolute path regardless of cwd shape); if an
-# older git rejects that flag, fall back to resolving the (possibly
-# relative) output inside the SAME subshell/cwd that produced it, which is
-# correct in either case because the relative path and the cd that follows
-# it now share one cwd context; if git itself is unavailable, fall back to
-# the pre-CHAOS-3855 path-relative derivation.
-common_git_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
-if [[ -n "$common_git_dir" ]]; then
+# sol review F1 round 1: --git-common-dir alone is not enough. From a
+# PLAIN (non-worktree) checkout with cwd anywhere other than the repo
+# root, git prints a path RELATIVE TO THE CALLER'S CWD (e.g. "../../.git"
+# from scripts/trial) -- resolving that against a *different* cwd than
+# the one that produced it lands on the wrong root or fails outright.
+# Prefer --path-format=absolute (git >= 2.31, always prints an absolute
+# path regardless of cwd shape); if an older git rejects that flag, fall
+# back to resolving the (possibly relative) output inside the SAME
+# subshell/cwd that produced it; if git itself is unavailable, fall back
+# to the pre-CHAOS-3855 path-relative derivation. As above, each attempt
+# is an if/elif CONDITION so a failing probe falls through instead of
+# aborting the script.
+if common_git_dir="$(cd "$script_dir" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    && [[ -n "$common_git_dir" ]]; then
   dev_health_root="$(cd "$common_git_dir/../.." && pwd -P)"
+elif legacy_common_git_dir="$(cd "$script_dir" && git rev-parse --git-common-dir 2>/dev/null)" \
+    && [[ -n "$legacy_common_git_dir" ]] \
+    && dev_health_root="$(cd "$script_dir" && cd "$legacy_common_git_dir/../.." && pwd -P)" \
+    && [[ -n "$dev_health_root" ]]; then
+  :
 else
-  dev_health_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd "$(git rev-parse --git-common-dir 2>/dev/null)/../.." 2>/dev/null && pwd -P)"
-fi
-if [[ -z "$dev_health_root" ]]; then
   dev_health_root="$(cd "$repo_root/.." && pwd -P)"
 fi
 
