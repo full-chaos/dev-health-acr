@@ -273,6 +273,15 @@ func TestAmbiguityBenchmarkMeasuresTheHybridLift(t *testing.T) {
 		// successful run that gated on nothing (codex round-1 F6).
 		t.Fatal("ACR_TEST_EMBED_BASE_URL is not set; the hybrid half cannot run and the AC-3778-2 gate would measure nothing")
 	}
+	// codex r8 N1 (accepted hardening kernel): a vector-only-but-uncalibrated
+	// misconfiguration (e.g. ACR_TEST_EMBED_PROVIDER left unset/wrong, or a
+	// dimension mismatch) would let this benchmark run to completion and
+	// report a REAL lift number computed WITHOUT the CHAOS-3829 commit-path
+	// carve-out ever firing -- a measurement-fails-toward-fine hazard: a
+	// silently mis-armed run reads as a legitimate (if disappointing) lift
+	// result rather than the "this run measured the wrong thing" it
+	// actually is. See assertCommitPathCarveOutArmed's own doc comment.
+	assertCommitPathCarveOutArmed(t, embedderOptions)
 	hybridAdapter, err := NewWithEmbedder(graphConfig, embedderOptions)
 	if err != nil {
 		t.Fatalf("hybrid adapter: %v", err)
@@ -298,6 +307,73 @@ func TestAmbiguityBenchmarkMeasuresTheHybridLift(t *testing.T) {
 	// pass, which is why the two run first.
 	if lift < 25.0 {
 		t.Errorf("AC-3778-2 NOT MET: lift %+.1f percentage points, bar +25.0", lift)
+	}
+}
+
+// assertCommitPathCarveOutArmed is CHAOS-3829 codex r8 N1's (accepted
+// hardening kernel) benchmark precondition: EmbedderFromEnv installs a
+// POSITIVE VectorMarginCommitThreshold/CalibratedTopK pair ONLY when the
+// active configuration resolved to a CALIBRATED retrieval-policy entry
+// (LookupRetrievalPolicy matched this run's embed identity+dimension) AND
+// the effective similarity floor equals that entry's own calibrated tau
+// (the G3/H1(a) floor-override gate, vector.go) -- so checking these two
+// fields IS the authoritative "is the calibrated identity active" check,
+// with no separate identity-string re-derivation needed (EmbedderFromEnv is
+// the single authority for that decision; duplicating its lookup here would
+// only risk drifting from it).
+//
+// Without this assertion, a misconfigured run (ACR_TEST_EMBED_PROVIDER left
+// unset or wrong, a dimension mismatch, an explicit floor override that
+// diverges from the calibrated tau) would still have a non-nil
+// embedderOptions.Embedder -- the ONLY thing the pre-existing "Embedder ==
+// nil" check above catches -- and would run to completion reporting a REAL
+// lift number computed with the commit-path carve-out PERMANENTLY disabled
+// (M=0), which reads as a legitimate measurement of AC-3778-2 rather than
+// "this run never armed the thing it exists to measure". This is the
+// measurement-fails-toward-fine class this ticket has closed elsewhere
+// (r6 L1/L2/L3, r7 M3): a hardening test's own precondition must fail
+// LOUD, never silently narrow what got measured.
+func assertCommitPathCarveOutArmed(t runnerT, options EmbedderOptions) {
+	t.Helper()
+	if options.VectorMarginCommitThreshold <= 0 || options.CalibratedTopK <= 0 {
+		t.Fatalf(
+			"ambiguity benchmark precondition FAILED: active retrieval policy has VectorMarginCommitThreshold=%v CalibratedTopK=%v -- the CHAOS-3829 commit-path carve-out this benchmark exists to measure can never fire with either at zero, so a run past this point would silently re-measure only the pre-3829 gates while reporting a real-looking lift number. Set ACR_TEST_EMBED_PROVIDER (and BASE_URL/MODEL/DIMENSION) to match the calibrated identity in retrieval_policy.go's calibratedIdentityText3Large table, with no explicit ACR_TEST_EMBED_SIMILARITY_FLOOR override diverging from that entry's own tau.",
+			options.VectorMarginCommitThreshold, options.CalibratedTopK,
+		)
+	}
+}
+
+// TestAssertCommitPathCarveOutArmed_ZeroMFailsThePrecondition is
+// assertCommitPathCarveOutArmed's own pinning test: a zero-M (uncalibrated)
+// EmbedderOptions -- the exact shape a misconfigured benchmark run would
+// produce -- must fail loud, entirely independent of any live environment
+// (this test needs no ACR_TEST_FALKOR_ADDR/embedder env at all, unlike the
+// benchmark itself).
+func TestAssertCommitPathCarveOutArmed_ZeroMFailsThePrecondition(t *testing.T) {
+	fake := &fakeRunnerT{}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(fakeRunnerTFatal); !ok {
+					panic(r)
+				}
+			}
+		}()
+		assertCommitPathCarveOutArmed(fake, EmbedderOptions{})
+	}()
+	if !fake.failed {
+		t.Fatal("expected Fatalf for a zero-M/zero-CalibratedTopK EmbedderOptions")
+	}
+}
+
+// TestAssertCommitPathCarveOutArmed_CalibratedOptionsProceeds is the
+// positive control: a properly calibrated EmbedderOptions (both fields
+// positive) must not fail.
+func TestAssertCommitPathCarveOutArmed_CalibratedOptionsProceeds(t *testing.T) {
+	fake := &fakeRunnerT{}
+	assertCommitPathCarveOutArmed(fake, EmbedderOptions{VectorMarginCommitThreshold: 0.05, CalibratedTopK: 20})
+	if fake.failed {
+		t.Fatalf("assertCommitPathCarveOutArmed called Fatalf for a properly calibrated EmbedderOptions: logs=%v", fake.logs)
 	}
 }
 

@@ -14,14 +14,35 @@ import (
 // runnerT interface so tau_calibration_test.go's fakeRunnerT double covers
 // this runner too without any new test-double machinery.
 //
-// Unlike runCalibrationRunner, this runner does NOT fail the test (t.Fatalf)
-// when ApplyReady is false: CHAOS-3829's ratified sequencing explicitly asks
-// for phase 1+2 results to be REPORTED to team-lead for ratification, not
-// silently gated on a mandatory pass here -- an insufficient-data verdict IS
-// the deliverable phase 2 is supposed to surface (e.g. "M UNMEASURED, needs
-// a broader corpus"), not a reason to hide the run behind a failing exit
-// code the way a NOT-apply-ready RETRIEVAL policy is (that tool's fail-closed
-// posture protects an operator from silently shipping tau/K; this one is a
+// codex r8 N2 (accepted, REVERSES the paragraph below -- kept, not deleted,
+// per house style for a superseded rationale): this runner now DOES fail
+// the test (t.Fatalf, no artifact written) when ApplyReady is false,
+// mirroring runCalibrationRunner's own "codex round-4 FIX C" idiom exactly
+// (tau_calibration_live_test.go). The ORIGINAL divergence below was correct
+// for the window it was written in -- CHAOS-3829's Phase 1/2 ran BEFORE any
+// commit-path code existed, so a not-apply-ready verdict was itself the
+// deliverable a human read to decide whether to proceed at all. That
+// window closed at Phase 3: the carve-out has shipped in graphrank since,
+// M is a live, calibrated, safety-critical threshold a runtime resolution
+// path reads, and this runner is now the RECALIBRATION tool an operator
+// (or CI) re-runs after any harness/report change -- exactly
+// runCalibrationRunner's own "measurement report that gates a running
+// system" class, not a one-time pre-ship report. Logging a NOT-apply-ready
+// verdict and still writing an artifact at exit 0 is the false-pass class
+// r8 closed elsewhere in this ticket (the ambiguity benchmark's N1
+// precondition assertion): a human or automation watching only the exit
+// code, or only file-presence at outputPath, would see "done" for a run
+// that measured nothing safe to apply.
+//
+// SUPERSEDED RATIONALE (Phase 1/2, no longer the operative one): this
+// runner does NOT fail the test (t.Fatalf) when ApplyReady is false:
+// CHAOS-3829's ratified sequencing explicitly asks for phase 1+2 results to
+// be REPORTED to team-lead for ratification, not silently gated on a
+// mandatory pass here -- an insufficient-data verdict IS the deliverable
+// phase 2 is supposed to surface (e.g. "M UNMEASURED, needs a broader
+// corpus"), not a reason to hide the run behind a failing exit code the way
+// a NOT-apply-ready RETRIEVAL policy is (that tool's fail-closed posture
+// protects an operator from silently shipping tau/K; this one is a
 // measurement report a human reads before ANY commit-path code exists to
 // ship at all).
 // reportPath is the SOURCE report's own path on disk (empty when the
@@ -60,6 +81,17 @@ func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts Margin
 		t.Logf("  VERDICT: SAFETY-MEASURED -- %s", result.Note)
 	} else {
 		t.Logf("  VERDICT: NOT SAFETY-MEASURED -- %s", result.Note)
+	}
+
+	// codex r8 N2 (accepted): FAIL BEFORE WRITING ANY ARTIFACT -- see this
+	// function's own doc comment for why this reverses the ORIGINAL
+	// Phase-1/2 divergence from runCalibrationRunner's identical gate. The
+	// t.Logf lines above are the diagnostic surface (mirrors
+	// tau_calibration_live_test.go's runCalibrationRunner exactly); no file
+	// is left behind for a downstream consumer to mistake for a ready
+	// threshold.
+	if !result.ApplyReady {
+		t.Fatalf("margin calibration NOT apply-ready -- no artifact written. %s", result.Note)
 	}
 
 	if outputPath != "" {

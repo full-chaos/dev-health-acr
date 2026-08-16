@@ -929,32 +929,64 @@ func TestCalibrateMarginFromReport_AllAbsentIsAValidShape(t *testing.T) {
 
 // --- runMarginCalibrationRunner (margin_calibration_live_test.go) ----------
 
-// TestMarginCalibrationRunner_GateFailingReportStillWritesAnArtifact is the
-// deliberate DIVERGENCE from runCalibrationRunner's own gate-failing
-// behavior: this runner never calls Fatalf on ApplyReady=false -- an
-// insufficient-data margin verdict is itself the phase-2 deliverable, to be
-// read by a human (see runMarginCalibrationRunner's doc comment), not a
-// reason to withhold output the way a not-apply-ready RETRIEVAL policy is.
-func TestMarginCalibrationRunner_GateFailingReportStillWritesAnArtifact(t *testing.T) {
+// TestMarginCalibrationRunner_GateFailingReportFailsWithoutWritingAnArtifact
+// is codex r8 N2's core pinning test, REVERSING the runner's ORIGINAL
+// Phase-1/2 divergence (see runMarginCalibrationRunner's own doc comment for
+// why): a not-apply-ready verdict now calls Fatalf and writes NOTHING to
+// outputPath, exactly mirroring runCalibrationRunner's own gate-failing
+// behavior (tau_calibration_live_test.go) -- a downstream consumer must
+// never see a "done" exit code, or a file at outputPath, for a run that
+// measured no wrong-top1 case to validate M against.
+func TestMarginCalibrationRunner_GateFailingReportFailsWithoutWritingAnArtifact(t *testing.T) {
 	report := marginReport(
 		eligibleCase("project", "p1", "project", "p1", 0.10), // correct only -- SafetyMeasured=false
 	)
 	fake := &fakeRunnerT{}
 	outputPath := t.TempDir() + "/margin.json"
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(fakeRunnerTFatal); !ok {
+					panic(r)
+				}
+			}
+		}()
+		runMarginCalibrationRunner(fake, report, marginTestOpts, "", outputPath)
+	}()
+	if !fake.failed {
+		t.Fatal("expected Fatalf for a not-apply-ready (SafetyMeasured=false) report")
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("expected NO artifact written for a not-apply-ready verdict, os.Stat err=%v", err)
+	}
+}
+
+// TestMarginCalibrationRunner_ApplyReadyReportStillWritesTheArtifact is the
+// positive-direction control for N2's reversal: an ApplyReady=true report
+// must still complete normally and write its artifact -- the Fatalf gate
+// added above must fire ONLY on ApplyReady=false, never as a side effect on
+// the success path.
+func TestMarginCalibrationRunner_ApplyReadyReportStillWritesTheArtifact(t *testing.T) {
+	report := marginReport(
+		eligibleCase("project", "wrong", "project", "correct", 0.10), // wrong -- SafetyMeasured=true
+		eligibleCase("project", "p2", "project", "p2", 0.40),         // correct
+	)
+	fake := &fakeRunnerT{}
+	outputPath := t.TempDir() + "/margin.json"
 	runMarginCalibrationRunner(fake, report, marginTestOpts, "", outputPath)
 	if fake.failed {
-		t.Fatalf("runMarginCalibrationRunner called Fatalf, want it to complete and write the diagnostic artifact regardless: logs=%v", fake.logs)
+		t.Fatalf("runMarginCalibrationRunner called Fatalf, want it to complete normally for an apply-ready report: logs=%v", fake.logs)
 	}
 	encoded, err := os.ReadFile(outputPath)
 	if err != nil {
-		t.Fatalf("expected an artifact to be written even on a not-apply-ready verdict: %v", err)
+		t.Fatalf("expected an artifact to be written for an apply-ready verdict: %v", err)
 	}
 	var decoded MarginCalibrationResult
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("decode written artifact: %v", err)
 	}
-	if decoded.ApplyReady {
-		t.Fatal("written artifact ApplyReady = true, want false (this fixture has no wrong-top1 case)")
+	if !decoded.ApplyReady {
+		t.Fatal("written artifact ApplyReady = false, want true (this fixture has both a wrong-top1 and a correct-top1 case)")
 	}
 }
 
