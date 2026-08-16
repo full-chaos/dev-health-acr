@@ -12,11 +12,18 @@ import (
 // is exposed too (the carve-out's whole REACH property depends on firing
 // even when it is true -- see vectorMarginCommit's own doc comment).
 func resolveOneWithVectorMargin(searchTruncated bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
+	return resolveOneWithVectorMarginAndMax(10, searchTruncated, vectorArmSimilarity, threshold, candidates...)
+}
+
+// resolveOneWithVectorMarginAndMax is resolveOneWithVectorMargin with an
+// explicit max (ResolveFromMergedCandidates' own max parameter) -- CHAOS-3829
+// codex r1 F1's tests need to vary this below the default of 10.
+func resolveOneWithVectorMarginAndMax(max int, searchTruncated bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
 	bySubject := make(map[string]contextfabric.SubjectCandidate, len(candidates))
 	for _, candidate := range candidates {
 		bySubject[SubjectKey(candidate.Subject)] = candidate
 	}
-	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, searchTruncated, vectorArmSimilarity, threshold)
+	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, max, true, searchTruncated, vectorArmSimilarity, threshold)
 }
 
 // TestChaos3829_CarveOutRescuesTheExactTwoCorroboratedCandidatesScenario is
@@ -260,5 +267,142 @@ func TestChaos3829_DeterministicTieBreakOnEqualSimilarity(t *testing.T) {
 	tied := resolveOneWithVectorMargin(false, similarities, 0.01, a, b)
 	if len(tied.Committed) != 0 {
 		t.Fatalf("a genuine similarity TIE (margin=0) must never clear a positive threshold, got %v", tied.Committed)
+	}
+}
+
+// --- codex r1 F0: competitor is NOT restricted to commitIndex -------------
+
+// TestChaos3829_F0_HigherSimilarityFilteredCompetitorBlocksCommit is the
+// core F0 pinning test: vectorArmSimilarity carries a subject that never
+// became a SubjectCandidate at all (simulating a raw ANN result
+// NodeCandidate rejected -- authorization, an internal filter, or any
+// other reason) at a HIGHER similarity than the only eligible candidate.
+// The resulting margin is negative and must fail closed, even though the
+// filtered subject was never in commitIndex.
+func TestChaos3829_F0_HigherSimilarityFilteredCompetitorBlocksCommit(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject): 0.70,
+		// "filtered-out" never appears in the candidates list below at
+		// all -- it is NOT commit-eligible -- but it IS in the side map,
+		// with a HIGHER similarity than auth.
+		"project\x00filtered-out": 0.95,
+	}
+	// Only ONE candidate is commit-eligible (auth) -- the OLD (pre-F0)
+	// logic would have found no second commitIndex entry at all and
+	// refused for lack of a competitor; make sure a SECOND eligible-but-
+	// lower-similarity candidate exists too, so the old logic WOULD have
+	// found a (weaker) competitor and fired, proving this test actually
+	// distinguishes the two behaviors.
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities[SubjectKey(authz.Subject)] = 0.60 // lower than auth -- old logic's "competitor"
+
+	resolution := resolveOneWithVectorMargin(false, similarities, 0.05, auth, authz)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- the filtered competitor's higher similarity must yield a negative margin", resolution.Committed)
+	}
+}
+
+// TestChaos3829_F0_LowerSimilarityFilteredCompetitorDoesNotBlockCommit is
+// the non-regression control for F0: a filtered-out subject with a LOWER
+// similarity than the eligible top must not interfere -- F0 only widens
+// what counts as a competitor, it never narrows what can win.
+func TestChaos3829_F0_LowerSimilarityFilteredCompetitorDoesNotBlockCommit(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+		"project\x00filtered-out": 0.10, // lower than both -- never becomes the competitor
+	}
+	resolution := resolveOneWithVectorMargin(false, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
+		t.Fatalf("resolution.Committed = %v, want exactly [auth] -- a lower-similarity filtered subject must not block the commit", resolution.Committed)
+	}
+}
+
+// --- codex r1 F4: corroboration is narrowed to Vector+Lexical specifically -
+
+// TestChaos3829_F4_VectorPlusTraversalIsNotTheMeasuredPairing proves the
+// narrowed corroboration check: a top candidate corroborated by
+// MatchVector+MatchTraversalParent (2 distinct mechanisms -- the OLD,
+// broader DistinctMechanismCount>=2 test would have accepted this) must NOT
+// fire the carve-out, because that pairing was never part of what
+// CalibrateMarginFromReport measured (lexical arm specifically).
+func TestChaos3829_F4_VectorPlusTraversalIsNotTheMeasuredPairing(t *testing.T) {
+	top := corroborationCandidate("auth", 0.60, contextfabric.MatchVector, contextfabric.MatchTraversalParent)
+	second := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(top.Subject):    0.90,
+		SubjectKey(second.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMargin(false, similarities, 0.10, top, second)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- Vector+Traversal is not the measured corroboration pairing", resolution.Committed)
+	}
+}
+
+// TestChaos3829_F4_VectorPlusExactIsNotTheMeasuredPairing is the same
+// narrowing proof for a Vector+Exact pairing.
+func TestChaos3829_F4_VectorPlusExactIsNotTheMeasuredPairing(t *testing.T) {
+	top := corroborationCandidate("auth", 0.60, contextfabric.MatchVector, contextfabric.MatchExact)
+	second := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(top.Subject):    0.90,
+		SubjectKey(second.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMargin(false, similarities, 0.10, top, second)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- Vector+Exact is not the measured corroboration pairing", resolution.Committed)
+	}
+}
+
+// TestChaos3829_F4_VectorPlusLexicalStillFires is the positive control:
+// the ONE pairing F4 keeps enabled.
+func TestChaos3829_F4_VectorPlusLexicalStillFires(t *testing.T) {
+	top := corroborationCandidate("auth", 0.60, contextfabric.MatchVector, contextfabric.MatchLexical)
+	second := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(top.Subject):    0.90,
+		SubjectKey(second.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMargin(false, similarities, 0.10, top, second)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
+		t.Fatalf("resolution.Committed = %v, want exactly [auth] -- Vector+Lexical is the measured, enabled pairing", resolution.Committed)
+	}
+}
+
+// --- codex r1 F1: fail-closed when max < 2 ---------------------------------
+
+// TestChaos3829_F1_MaxBelowTwoNeverFires proves an otherwise-perfect
+// scenario (decisive margin, corroborated top-1) still refuses when
+// MaxSubjectCandidates < 2 -- there is no completeness bound for an
+// unseen second-place candidate when a Search call can return at most one
+// row per term.
+func TestChaos3829_F1_MaxBelowTwoNeverFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginAndMax(1, false, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- max=1 has no completeness bound for the carve-out", resolution.Committed)
+	}
+}
+
+// TestChaos3829_F1_MaxAtTwoStillFires is the boundary positive control:
+// max==2 (not merely >2) is sufficient.
+func TestChaos3829_F1_MaxAtTwoStillFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginAndMax(2, false, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
+		t.Fatalf("resolution.Committed = %v, want exactly [auth] at max=2", resolution.Committed)
 	}
 }

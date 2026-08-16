@@ -244,16 +244,23 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	retrievalDegraded := false
 	// vectorArmSimilarity is CHAOS-3829's commit-path carve-out input: a
 	// SEPARATE, SIDE map of subject key -> the HIGHEST raw vector-arm
-	// similarity any Search/SearchQuestion result proposed for that
-	// subject, across every term AND the question-level pass. Deliberately
-	// independent of candidatesBySubject's own MergeCandidates merge (which
-	// keeps only the WINNING mechanism's Confidence and discards the
-	// loser's) -- once two mechanisms have merged into one SubjectCandidate,
-	// the vector arm's OWN raw contribution is unrecoverable from it if a
-	// different mechanism happened to win, which is exactly the failure
-	// mode this side channel avoids. Built here, alongside the main merge,
-	// by mergeSearchResults; consumed only by ResolveFromMergedCandidates'
-	// carve-out.
+	// similarity any per-TERM Search result proposed for that subject,
+	// across every term in this resolution. Built here, alongside the main
+	// merge, by mergeSearchResults; consumed only by
+	// ResolveFromMergedCandidates' carve-out. See mergeSearchResults' own
+	// doc comment for why this is populated BEFORE NodeCandidate's
+	// acceptance decision (codex r1 F0) and independently of
+	// candidatesBySubject's own MergeCandidates merge.
+	//
+	// RESIDUAL (codex r1 F3, accepted exclusion arm): the question-level
+	// SearchQuestion pass below is passed nil for this parameter, not this
+	// map -- the CHAOS-3829 calibration oracle never measured
+	// question-pass-sourced similarities, so this carve-out's reach is
+	// scoped to per-term-Search-sourced vector evidence only. A subject
+	// found ONLY via the question-level pass can still win the EXISTING
+	// lone/top-of-two/exact-label gates; it simply cannot participate in
+	// (or be blocked by) this specific carve-out. This is a documented
+	// reach limitation, not a follow-up to build.
 	vectorArmSimilarity := make(map[string]float64)
 	for _, term := range terms {
 		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
@@ -312,7 +319,10 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// confidence and mechanism come ONLY from the vector similarity
 			// band (node.Relevance/node.Mechanism), by construction --
 			// see NodeCandidate's doc comment.
-			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, vectorArmSimilarity)
+			// CHAOS-3829 F3: nil, deliberately -- the question-level pass
+			// never contributes to (or competes for) the commit-path
+			// carve-out's margin. See mergeSearchResults' own doc comment.
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil)
 			// codex round-1 P1, second half: a candidate already at the
 			// 32-entry MatchedTerms cap from real per-term finds would
 			// overflow to 33 once the marker above unioned in. The marker
@@ -361,25 +371,55 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 // vectorArmSimilarity is CHAOS-3829's side channel (see ResolveSubjects'
 // own doc comment on the map it builds and hands in here): every result
 // node whose Mechanism is MatchVector and whose VectorSimilarity is set
-// updates this map, keyed by the CANDIDATE's own subject key, keeping the
-// HIGHEST observed value -- BEFORE MergeCandidates runs, so it is
-// independent of which mechanism ends up "winning" the merged candidate's
-// Confidence. A traversed observation's PARENT candidate never receives an
-// entry here: the vector similarity describes the OBSERVATION node itself,
-// not the different subject traversal proposes.
+// updates this map, keyed by the NODE's own subject identity (NodeSubject --
+// see below), keeping the HIGHEST observed value.
+//
+// codex r1 F0 (team-lead's own confirmed finding): recorded BEFORE
+// NodeCandidate runs, and keyed via NodeSubject(node) directly rather than
+// candidate.Subject -- NOT gated on NodeCandidate's own acceptance (which
+// can reject for authorization, an internal-bookkeeping filter, or any
+// other reason NodeSubject itself does not check). A node NodeCandidate
+// rejects is still real evidence that a close competitor exists in the
+// corpus; omitting it from this map would let vectorMarginCommit compute a
+// margin against a narrower, filtered population than what the ANN call
+// actually returned -- inflating the margin exactly on the cases where a
+// genuinely close (but filtered) competitor exists. This also matches how
+// the CHAOS-3829 calibration oracle itself keys this map (directly off each
+// ANN candidate's raw kind/canonical_id attributes, with no authorization
+// filter at all), so the runtime side map and the calibration side map are
+// built the same way.
+//
+// F3 (accepted, exclusion arm): vectorArmSimilarity may be nil -- the
+// question-level SearchQuestion pass (CHAOS-3838 L11) passes nil
+// deliberately, because the CHAOS-3829 calibration oracle never measured
+// question-pass-sourced vector similarities (only the per-term Search
+// loop). A question-pass candidate can still WIN the top-of-two/lone gates
+// above the carve-out exactly as before; it just never contributes to (or
+// competes for) this specific carve-out's margin. See ResolveSubjects' own
+// call site for the residual-reach doc note this implies.
+//
+// Independent of candidatesBySubject's own MergeCandidates merge (which
+// keeps only the WINNING mechanism's Confidence and discards the loser's)
+// for the same underlying reason F0 requires bypassing NodeCandidate: once
+// two mechanisms have merged into one SubjectCandidate, the vector arm's
+// own raw contribution is unrecoverable from it if a different mechanism
+// happened to win.
 func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64) int {
 	traversalErrored := 0
 	for _, node := range results {
+		if vectorArmSimilarity != nil && node.Mechanism == contextfabric.MatchVector && node.VectorSimilarity != nil {
+			if subject, ok := NodeSubject(node); ok {
+				key := SubjectKey(subject)
+				if existing, exists := vectorArmSimilarity[key]; !exists || *node.VectorSimilarity > existing {
+					vectorArmSimilarity[key] = *node.VectorSimilarity
+				}
+			}
+		}
 		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, allowExactMatch)
 		if !ok {
 			continue
 		}
 		key := SubjectKey(candidate.Subject)
-		if node.Mechanism == contextfabric.MatchVector && node.VectorSimilarity != nil {
-			if existing, exists := vectorArmSimilarity[key]; !exists || *node.VectorSimilarity > existing {
-				vectorArmSimilarity[key] = *node.VectorSimilarity
-			}
-		}
 		// CHAOS-3778: MergeCandidates replaces a plain "keep the higher
 		// confidence" here. The higher-confidence finding still supplies
 		// the spine and the base confidence, so nothing about a

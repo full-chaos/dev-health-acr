@@ -192,7 +192,24 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		// (corroboration + a measurable, sufficiently large vector-arm
 		// top-1/top-2 similarity margin) and why it may fire even when
 		// searchTruncated is the reason ambiguous is true.
-		if ambiguous && vectorMarginCommitThreshold > 0 {
+		//
+		// codex r1 F1 (accepted, narrowed): max>=2 is REQUIRED. At
+		// max>=2, the merged cross-call top-2 argument is conservative --
+		// any candidate this resolution never even SAW (beyond every
+		// individual Search call's own returned set, as opposed to F0's
+		// "returned but NodeCandidate-rejected" case, which
+		// vectorArmSimilarity already covers) has similarity <= that
+		// call's own Kth-ranked (least-similar) returned row, which is in
+		// turn <= the merged, cross-call vectorArmSimilarity's own second
+		// entry -- so a truly UNSEEN candidate can never be closer than
+		// the competitor this function already found. At max==1, a Search
+		// call returns AT MOST one row per term, so there is no such
+		// bound at all: an unseen second-place candidate could have any
+		// similarity whatsoever, and the "competitor" this function finds
+		// (if any, from a DIFFERENT term's own single result) carries no
+		// guarantee of being the TRUE nearest one. Fail closed rather than
+		// trust a margin with no completeness bound behind it.
+		if ambiguous && vectorMarginCommitThreshold > 0 && max >= 2 {
 			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted
@@ -259,32 +276,48 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 
 // vectorMarginCommit implements CHAOS-3829's ratified commit-path carve-out
 // (chris-ratified 2026-08-15/16, geometry finalized 2026-08-16 dropping the
-// original vectorSearchComplete conjunct -- see ResolveFromMergedCandidates'
-// own doc comment for the call site). candidates/commitIndex are the SAME
-// values ResolveFromMergedCandidates' own gates just finished computing --
-// commitIndex already excludes a blocked observation, so this function can
-// never consider a subject the existing eligibility rules already ruled
-// out.
+// original vectorSearchComplete conjunct; codex round-1 findings F0/F4
+// adjudicated 2026-08-16 -- see ResolveFromMergedCandidates' own doc
+// comment for the call site). candidates/commitIndex are the SAME values
+// ResolveFromMergedCandidates' own gates just finished computing --
+// commitIndex already excludes a blocked observation, so TOP (below) can
+// never be a subject the existing eligibility rules already ruled out.
 //
-// Ranks every commitIndex entry that has a vectorArmSimilarity value (a
-// subject with NO vector-mechanism finding at all is simply absent from
-// that map and never participates) by that similarity, descending, and
-// fires ONLY when ALL of:
+// TOP is the highest-vector-similarity entry, among commitIndex candidates
+// that have a vectorArmSimilarity value at all (a subject with NO
+// vector-mechanism finding is simply absent from that map and can never be
+// top). COMPETITOR is the highest-vector-similarity entry ANYWHERE ELSE in
+// vectorArmSimilarity -- deliberately NOT restricted to commitIndex (codex
+// r1 F0): vectorArmSimilarity is populated from every raw ANN result
+// BEFORE NodeCandidate's authorization/acceptance decision runs (see
+// mergeSearchResults), so a genuinely closer competitor that NodeCandidate
+// rejected (or that never became a commit-eligible candidate for any other
+// reason) still counts as a competitor here. If that competitor's
+// similarity exceeds top's, the resulting margin is NEGATIVE, which can
+// never clear a positive threshold -- an automatic, structural fail-closed,
+// not a special case this function has to detect.
 //
-//  1. at least two DISTINCT such candidates exist -- a margin needs a
-//     competitor to measure a gap against; a single vector-tagged candidate
-//     is not a margin, and treating it as an infinite or zero margin would
-//     both be fabricating a value this function never measured (mirrors
-//     CalibrateMarginFromReport's identical eligibility rule, tau_calibration.go);
-//  2. the top one (by vector similarity) is CORROBORATED --
-//     DistinctMechanismCount of its merged MatchMechanisms is >= 2, the
-//     EXACT rule CorroboratedConfidence itself already reads (untouched:
-//     this function never calls CorroboratedConfidence or reads Confidence
-//     at all, only MatchMechanisms, which that function also leaves alone);
-//  3. the margin between the top two's raw vector similarities is >=
-//     threshold (M, a per-embedder-identity calibrated constant the caller
-//     already validated is > 0 before calling -- see
-//     falkorgraph/retrieval_policy.go's RetrievalPolicy.VectorMarginCommitThreshold).
+// Fires ONLY when ALL of:
+//
+//  1. TOP exists (>=1 commitIndex candidate carries a vectorArmSimilarity
+//     value) AND COMPETITOR exists (>=1 OTHER entry exists anywhere in
+//     vectorArmSimilarity) -- a margin needs a competitor to measure a gap
+//     against; neither existing alone is a margin, and treating either
+//     absence as an infinite or zero margin would be fabricating a value
+//     this function never measured (mirrors CalibrateMarginFromReport's
+//     identical eligibility rule, tau_calibration.go);
+//  2. TOP is CORROBORATED under the NARROWED, MEASURED pairing (codex r1
+//     F4): its merged MatchMechanisms must include BOTH MatchVector AND
+//     MatchLexical specifically -- see vectorArmCorroborated's own doc
+//     comment for why this replaces the broader
+//     DistinctMechanismCount>=2-of-anything test CorroboratedConfidence
+//     itself uses for the EXISTING lone/top-of-two gates (untouched: this
+//     function never calls CorroboratedConfidence or reads Confidence at
+//     all);
+//  3. the margin (TOP's similarity minus COMPETITOR's) is >= threshold (M,
+//     a per-embedder-identity calibrated constant the caller already
+//     validated is > 0 before calling -- see falkorgraph/retrieval_policy.go's
+//     RetrievalPolicy.VectorMarginCommitThreshold).
 //
 // Returns ok=false on any missing input above; the caller's existing
 // ambiguous verdict then stands entirely unchanged.
@@ -303,34 +336,86 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // calibration measurement had searchTruncated=true).
 func vectorMarginCommit(candidates []contextfabric.SubjectCandidate, commitIndex []int, vectorArmSimilarity map[string]float64, threshold float64) (int, bool) {
 	type ranked struct {
-		index      int
+		key        string
 		similarity float64
 	}
-	var byVectorSimilarity []ranked
+	entries := make([]ranked, 0, len(vectorArmSimilarity))
+	for key, similarity := range vectorArmSimilarity {
+		entries = append(entries, ranked{key: key, similarity: similarity})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].similarity == entries[j].similarity {
+			return entries[i].key < entries[j].key
+		}
+		return entries[i].similarity > entries[j].similarity
+	})
+
+	eligibleByKey := make(map[string]int, len(commitIndex))
 	for _, index := range commitIndex {
-		similarity, ok := vectorArmSimilarity[SubjectKey(candidates[index].Subject)]
-		if !ok {
+		eligibleByKey[SubjectKey(candidates[index].Subject)] = index
+	}
+
+	// TOP: the highest-similarity entry that is ALSO a commit-eligible
+	// candidate -- may skip past one or more higher-similarity, non-eligible
+	// entries, which is exactly what makes those entries available as the
+	// competitor below.
+	topEntry := -1
+	for i, e := range entries {
+		if _, ok := eligibleByKey[e.key]; ok {
+			topEntry = i
+			break
+		}
+	}
+	if topEntry == -1 {
+		return 0, false
+	}
+	top := entries[topEntry]
+	topIndex := eligibleByKey[top.key]
+
+	// COMPETITOR: the highest-similarity entry OTHER than top, from the
+	// FULL side map -- see the function doc comment (F0) for why this is
+	// not restricted to commitIndex.
+	competitorEntry := -1
+	for i := range entries {
+		if i == topEntry {
 			continue
 		}
-		byVectorSimilarity = append(byVectorSimilarity, ranked{index: index, similarity: similarity})
+		competitorEntry = i
+		break
 	}
-	if len(byVectorSimilarity) < 2 {
+	if competitorEntry == -1 {
 		return 0, false
 	}
-	sort.Slice(byVectorSimilarity, func(i, j int) bool {
-		if byVectorSimilarity[i].similarity == byVectorSimilarity[j].similarity {
-			return SubjectKey(candidates[byVectorSimilarity[i].index].Subject) < SubjectKey(candidates[byVectorSimilarity[j].index].Subject)
-		}
-		return byVectorSimilarity[i].similarity > byVectorSimilarity[j].similarity
-	})
-	top, second := byVectorSimilarity[0], byVectorSimilarity[1]
-	if DistinctMechanismCount(candidates[top.index].MatchMechanisms) < 2 {
+	competitor := entries[competitorEntry]
+
+	if !vectorArmCorroborated(candidates[topIndex].MatchMechanisms) {
 		return 0, false
 	}
-	if margin := top.similarity - second.similarity; margin < threshold {
+	if margin := top.similarity - competitor.similarity; margin < threshold {
 		return 0, false
 	}
-	return top.index, true
+	return topIndex, true
+}
+
+// vectorArmCorroborated is CHAOS-3829 codex r1 F4's NARROWED corroboration
+// check for the commit-path carve-out specifically: the MEASURED pairing
+// CalibrateMarginFromReport actually calibrated M against is "the oracle's
+// vector arm AND its lexical arm (fulltextSearchNodesForResolution) both
+// independently proposed this subject" -- i.e. MatchVector AND MatchLexical
+// SPECIFICALLY, not "any two distinct recognized mechanisms" the way
+// CorroboratedConfidence's own, broader DistinctMechanismCount>=2 test
+// reads for the EXISTING lone/top-of-two gates (left entirely unchanged --
+// this function is called ONLY from vectorMarginCommit). A vector+traversal
+// or vector+exact pairing was never part of the calibrated population and
+// must not enable this specific carve-out; MatchLexical is the mechanism
+// falkorgraph's hybridSearchNodes stamps on every fulltextSearchNodesForResolution
+// result (vector.go, immediately after that call), the SAME production
+// function the oracle harness calls directly for its own lexical-arm
+// measurement (measureOneTermVectorArm, oracle_live_test.go) -- see
+// TestHybridSearchNodes_StampsMatchLexicalOnFulltextResults for the pinning
+// test keeping that mechanism choice honest.
+func vectorArmCorroborated(mechanisms []contextfabric.MatchMechanism) bool {
+	return HasMechanism(mechanisms, contextfabric.MatchVector) && HasMechanism(mechanisms, contextfabric.MatchLexical)
 }
 
 // AnyCallerSourced reports whether any resolved candidate came from a

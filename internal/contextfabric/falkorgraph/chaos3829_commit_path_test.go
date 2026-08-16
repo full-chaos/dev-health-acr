@@ -256,3 +256,37 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWithoutCalibration(t *te
 		t.Fatalf("resolution.Committed = %v, want none -- uncalibrated M must never enable the carve-out", resolution.Committed)
 	}
 }
+
+// TestHybridSearchNodes_StampsMatchLexicalOnFulltextResults is the codex r1
+// F4 pinning test graphrank's vectorArmCorroborated doc comment cites: every
+// fulltextSearchNodesForResolution result hybridSearchNodes returns is
+// stamped contextfabric.MatchLexical (vector.go, immediately after that
+// call) -- the EXACT mechanism value the commit-path carve-out's narrowed
+// corroboration check requires alongside MatchVector. If this ever changes
+// (a different mechanism, or the stamp moves/is removed), the carve-out's
+// F4 doc comment -- and its safety property -- silently stops matching
+// what production actually does, so this must fail loudly first.
+func TestHybridSearchNodes_StampsMatchLexicalOnFulltextResults(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.fulltext.queryNodes") {
+			return []row{{
+				"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Auth", propSearchText: "auth"}},
+				"score": 1.0,
+			}}, nil
+		}
+		return nil, nil
+	}}
+	// No embedder configured -- isolates the lexical arm's own stamping,
+	// independent of the vector arm.
+	adapter := newFakeAdapter(t, fake)
+	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}, temporalFilter{})
+	if err != nil {
+		t.Fatalf("hybridSearchNodes: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected exactly one lexical candidate, got %#v", candidates)
+	}
+	if candidates[0].Mechanism != contextfabric.MatchLexical {
+		t.Fatalf("candidates[0].Mechanism = %q, want MatchLexical -- the exact mechanism graphrank's vectorArmCorroborated (F4) requires alongside MatchVector", candidates[0].Mechanism)
+	}
+}
