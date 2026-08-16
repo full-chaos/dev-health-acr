@@ -323,6 +323,30 @@ func (f *fileExchangeRuntime) SynthesizeAnswer(ctx context.Context, principal st
 	return draft, receipt, nil
 }
 
+// exchangeRoundTripTestTimeout bounds BOTH sides of the round trip below:
+// the exchange()'s own poll-until-deadline loop, and the responder
+// goroutine's request-discovery poll. CHAOS-3863: these used to be two
+// independent hardcoded bounds (a 5s exchange timeout and an unrelated
+// ~2s/100-iteration discovery poll) that were each too tight under
+// suite-load contention -- CI and a local GOMAXPROCS=1-plus-CPU-load repro
+// both observed the exchange side hit its 5.00s deadline while the
+// transport itself was still working correctly, just scheduled slowly.
+// Deriving both sides from one generous-but-bounded constant (20s, matching
+// the sidecar's reapRunnerTimeout precedent from commit 3531804) makes the
+// test load-tolerant without turning it into an unbounded hang: a
+// genuinely broken transport still fails within 20s.
+//
+// This bound assumes no concurrent `go test` invocation on the same host
+// (single-flight): two overlapping `go test` runs recompiling shared
+// packages can still starve this past 20s even though the transport is
+// healthy. That is a known false-red mode covered by the repo's
+// single-flight doctrine for gate/verify runs, not something this bound
+// tries to absorb -- raising it further would only slow genuine-failure
+// detection without buying real tolerance, since any fixed wall-clock
+// bound loses to sufficient external CPU starvation. CI's verify job runs
+// single-flight by construction.
+const exchangeRoundTripTestTimeout = 20 * time.Second
+
 // TestFileExchangeRoundTrip is the compatibility proof sol review R3
 // demanded: a synthetic request goes out, a responder-SHAPED response
 // (built independently of this file's own types, matching only the
@@ -332,7 +356,7 @@ func (f *fileExchangeRuntime) SynthesizeAnswer(ctx context.Context, principal st
 // a live trial run.
 func TestFileExchangeRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	runtime, err := newFileExchangeRuntime(dir, "compat-test-model", 5*time.Second)
+	runtime, err := newFileExchangeRuntime(dir, "compat-test-model", exchangeRoundTripTestTimeout)
 	if err != nil {
 		t.Fatalf("newFileExchangeRuntime: %v", err)
 	}
@@ -348,7 +372,12 @@ func TestFileExchangeRoundTrip(t *testing.T) {
 	go func() {
 		defer close(done)
 		var reqPath string
-		for i := 0; i < 100; i++ {
+		// Discovery-poll deadline shares exchangeRoundTripTestTimeout with
+		// the exchange side above (CHAOS-3863) instead of its own
+		// independent iteration-count bound, so neither side of the round
+		// trip can starve the other under suite-load contention.
+		discoveryDeadline := time.Now().Add(exchangeRoundTripTestTimeout)
+		for time.Now().Before(discoveryDeadline) {
 			entries, _ := os.ReadDir(filepath.Join(dir, "requests"))
 			if len(entries) > 0 {
 				reqPath = filepath.Join(dir, "requests", entries[0].Name())
