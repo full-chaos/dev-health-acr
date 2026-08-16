@@ -286,38 +286,99 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	// RediSearch-query-syntax-safe, for the Cypher query string below).
 	//
 	// CHAOS-3838 (spec L13): deliberately anchored to the ORIGINAL text,
-	// never to the lexicon-expanded query built below. Confidence is a
-	// promise about how much of THIS query's own terms a candidate covers;
-	// widening the denominator with synonym words the caller never typed
-	// would dilute -- never improve -- the coverage ratio of every
-	// candidate that matches only the original term, silently demoting
-	// results that worked before this ticket. Expansion is allowed to find
-	// MORE candidates (via queryTerms below); it must never change how
-	// confidently an already-findable one scores.
+	// never to any lexicon-expanded query. Confidence is a promise about
+	// how much of THIS query's own terms a candidate covers; widening the
+	// denominator with synonym words the caller never typed would dilute
+	// -- never improve -- the coverage ratio of every candidate that
+	// matches only the original term, silently demoting results that
+	// worked before this ticket. Expansion is allowed to find MORE
+	// candidates; it must never change how confidently an already-findable
+	// one scores.
 	matchTerms := fulltextWords(text)
 	termCount := len(matchTerms)
-	// CHAOS-3838 (spec L13): the RediSearch OR-query is built from the
-	// lexicon-widened text, so a candidate whose own text carries only the
-	// synonym ("pull request") and not the caller's literal term ("PR") can
-	// still be FOUND. queryTerms stays EXACTLY `terms` -- same slice, same
-	// order, same case -- whenever expandWithLexicon(text) matches nothing
-	// (the common case), so this call's query string, and every existing
-	// caller/test that depends on it, is byte-identical to before this
-	// ticket. Only a real lexicon match re-tokenizes the widened text, in
-	// which case queryTerms is `terms` PLUS the (order-preserved) synonym
-	// tokens appended after them -- a harmless OR-duplicate is possible
-	// (e.g. a synonym phrase re-tokenizing a word already in text) but is
-	// never de-duplicated or reordered here, since RediSearch OR tolerates
-	// a repeated term and reordering would cost the byte-identity guarantee
-	// above for no benefit.
-	queryTerms := terms
-	if expanded := expandWithLexicon(text); expanded != text {
-		queryTerms = tokenizeForFulltext(expanded)
+
+	// The BASE query, byte-identical to this function's pre-CHAOS-3838
+	// shape: exactly `terms`, exactly `limit`, its own truncation sentinel.
+	baseQuery := strings.Join(terms, "|")
+	baseCandidates, baseTruncated, err := a.runFulltextQuery(ctx, key, orgID, baseQuery, limit, temporal, matchTerms, termCount)
+	if err != nil {
+		return nil, false, err
 	}
-	query := strings.Join(queryTerms, "|")
+
+	additions := lexiconAdditions(text)
+	if len(additions) == 0 {
+		// The overwhelmingly common case: no lexicon phrase matched, so
+		// this call never runs a second query at all -- same one round
+		// trip as before this ticket.
+		return baseCandidates, baseTruncated, nil
+	}
+
+	// codex round-3 P2 (fix C): a widened single query is NOT a union under
+	// a server-side LIMIT -- synonym-heavy rows can out-rank and displace
+	// an already-correct base hit past the limit+1 cutoff, so expansion
+	// could REMOVE a previously-resolvable subject instead of only adding
+	// candidates (the promise this whole lexicon design depends on). Fix:
+	// the expansion query runs SEPARATELY, over its OWN terms only (never
+	// re-including `terms` -- the base query already covers those), and its
+	// rows are unioned in AFTER base's own `limit` slots are already
+	// claimed, filling ONLY the capacity base did not use. A base hit is
+	// therefore never at risk of eviction by an expansion-surfaced row,
+	// regardless of relative RediSearch score.
+	seen := make(map[string]bool, len(baseCandidates))
+	for _, c := range baseCandidates {
+		seen[c.UUID] = true
+	}
+	remaining := limit - len(baseCandidates)
+	if remaining < 0 {
+		remaining = 0
+	}
+	expansionQuery := lexiconExpansionQuery(additions)
+	expansionCandidates, expansionTruncated, err := a.runFulltextQuery(ctx, key, orgID, expansionQuery, limit, temporal, matchTerms, termCount)
+	if err != nil {
+		return nil, false, err
+	}
+	// overflow tracks capacity this UNION step itself could not fit --
+	// distinct from expansionTruncated (the expansion query's OWN
+	// limit+1 server-side sentinel). Either one means a genuinely
+	// competing candidate may have gone unshown, so either sets the
+	// overall truncated signal.
+	overflow := false
+	result := baseCandidates
+	added := 0
+	for _, c := range expansionCandidates {
+		if seen[c.UUID] {
+			continue
+		}
+		if added >= remaining {
+			overflow = true
+			continue
+		}
+		seen[c.UUID] = true
+		result = append(result, c)
+		added++
+	}
+	return result, baseTruncated || expansionTruncated || overflow, nil
+}
+
+// runFulltextQuery issues ONE RediSearch fulltext query and converts its
+// rows into scored CandidateNode, applying the SAME limit+1 truncation
+// sentinel and matched-term-coverage confidence math fulltextSearchNodes
+// has always used (Codex R2-1 / D11 / AC-3778-0 -- see that function's own
+// doc comment for the full rationale). Extracted so fulltextSearchNodes'
+// base query and its lexicon-expansion query (codex round-3 P2, fix C) run
+// through the exact same row-to-candidate conversion and can never
+// independently drift on it -- the two queries differ ONLY in which
+// RediSearch query string and which rows they see, never in how a row
+// becomes a candidate.
+//
+// matchTerms/termCount are always the CALLER's original text's own words
+// (fulltextSearchNodes' matchTerms), passed straight through regardless of
+// which query string this particular call runs -- confidence stays a
+// promise about the original text on every call, base or expansion alike.
+func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string, limit int, temporal temporalFilter, matchTerms []string, termCount int) ([]graphrank.CandidateNode, bool, error) {
 	// Codex R2-1: request one more row than the caller's budget so a
 	// truncated result set can be told apart from a genuinely complete one
-	// (see this function's doc comment).
+	// (see fulltextSearchNodes' doc comment).
 	cypher := fmt.Sprintf(
 		"CALL db.idx.fulltext.queryNodes('%s', $query) YIELD node, score "+
 			"WHERE node.%s = $org%s "+
@@ -329,7 +390,7 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 		return nil, false, safeDependencyError("search context graph", err)
 	}
 	// truncated reports whether the corpus actually had MORE than `limit`
-	// matches -- never whether it merely equaled it.
+	// matches for THIS query -- never whether it merely equaled it.
 	truncated := len(rows) > limit
 	if truncated {
 		rows = rows[:limit]
@@ -353,6 +414,44 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 		candidates = append(candidates, candidate)
 	}
 	return candidates, truncated, nil
+}
+
+// lexiconExpansionQuery builds the RediSearch query string for the
+// domain-lexicon synonym ADDITIONS only (never re-including the caller's
+// own terms -- fulltextSearchNodes' base query already covers those).
+//
+// codex round-3 P1 (fix B): a multi-word synonym ("pull request") must
+// never be OR-tokenized into independent single-word disjuncts -- doing so
+// let a candidate containing ONLY "request" (nothing about pull requests at
+// all) read as a lexical hit for the "PR" group, purely because "request"
+// happened to be one of the OR-joined words. A single-word synonym has no
+// such hazard (the word itself IS the whole concept), so it stays an
+// ordinary OR term via tokenizeForFulltext, identically to how a caller's
+// own term is treated. A multi-word synonym instead becomes a RediSearch
+// EXACT PHRASE clause (double-quoted), which requires the words to appear
+// adjacently and in order -- injection-safe by construction, not merely by
+// escaping: every element of additions is a domainLexiconGroups literal
+// (compileLexicon's init-time validation panics if one ever contains a
+// literal `"`), never caller-supplied text, so there is no untrusted value
+// on this path for a quote to smuggle anything through.
+func lexiconExpansionQuery(additions []string) string {
+	parts := make([]string, 0, len(additions))
+	for _, addition := range additions {
+		if len(strings.Fields(addition)) <= 1 {
+			parts = append(parts, tokenizeForFulltext(addition)...)
+			continue
+		}
+		parts = append(parts, lexiconPhraseClause(addition))
+	}
+	return strings.Join(parts, "|")
+}
+
+// lexiconPhraseClause renders a multi-word lexicon phrase as a RediSearch
+// exact-phrase clause. See lexiconExpansionQuery's doc comment for the
+// injection-safety argument -- phrase MUST be a domainLexiconGroups
+// literal, never caller text.
+func lexiconPhraseClause(phrase string) string {
+	return `"` + phrase + `"`
 }
 
 // tokenizeForFulltext splits free text into RediSearch-safe search terms.

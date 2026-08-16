@@ -717,35 +717,41 @@ type boundedQueryResult struct {
 }
 
 // boundedQueryText computes the bounded query text for text (CHAOS-3838
-// question-level path, codex round-1 P2 fix B): lexicon-widened (spec
-// L13's vectorQueryText), then bounded to EXACTLY what Embed will actually
-// transmit -- via embedprovider.ApplyQueryPrefix's own prefix-aware budget
-// when a query prefix is configured (that method already truncates the
-// substance to (MaxTextRunes - len(prefix)) runes before prepending the
-// prefix; CALLERS MUST NOT ALSO PRE-TRUNCATE FOR THAT PURPOSE, per its own
-// doc comment), or via the SAME embedprovider.TruncateRunes/a.embedBudgetRunes()
-// authority Embed's own internal truncation uses when no prefix is
-// configured (the deployed openai/text-embedding-3-large identity today:
-// PrefixFamilyNone, so this is the live branch). Neither branch re-derives
-// or duplicates embedprovider's own cap arithmetic -- see the doc comments
-// on ApplyDocumentPrefix/ApplyQueryPrefix and embedBudgetRunes.
+// question-level path, codex round-1 P2 fix B, corrected round-3 P1 fix A):
+// lexicon-widened (spec L13's vectorQueryText), prefixed via
+// a.queryPrefixed (embedprovider.ApplyQueryPrefix when a prefix family is
+// configured, else the identity function), then UNCONDITIONALLY bounded to
+// a.embedBudgetRunes() via embedprovider.TruncateRunes -- the SAME two
+// primitives Embed's own internal truncation is built from, never
+// re-derived. One path, no branch on prefix presence (see the inline
+// comment below for why a branch there was the round-1 fix's own bug).
 func (a *Adapter) boundedQueryText(text string) boundedQueryResult {
 	widened := vectorQueryText(text)
 	prefixed := a.queryPrefixed(widened)
-	if a.applyQueryPrefix == nil {
-		// No prefix configured: queryPrefixed was a no-op above, so this is
-		// the one place truncation happens before the guard runs.
-		bounded := embedprovider.TruncateRunes(prefixed, a.embedBudgetRunes())
-		return boundedQueryResult{transmitted: bounded, substance: bounded}
-	}
-	// A prefix WAS applied: prefixed already carries prefix+budgeted
-	// substance <= MaxTextRunes (ApplyQueryPrefix's own contract, verified
-	// idempotent on an already-bounded string). a.queryPrefixed("") calls
-	// the SAME captured closure on empty substance to derive exactly the
-	// prefix literal it prepends, so stripping it back off here can never
-	// disagree with what was actually prepended above.
-	prefixOnly := a.queryPrefixed("")
-	return boundedQueryResult{transmitted: prefixed, substance: strings.TrimPrefix(prefixed, prefixOnly)}
+	// codex round-3 P1 (fix A): ONE path, unconditional -- no branch on
+	// whether a.applyQueryPrefix is nil. The round-1 fix branched on that,
+	// reasoning "a configured prefix already budgets itself via
+	// ApplyQueryPrefix's own contract" -- true only when the prefix STRING
+	// is non-empty. embedprovider.applyPrefixWithBudget's very first line is
+	// `if prefix == "" { return text }`, a complete bypass of ALL budgeting
+	// -- and a.applyQueryPrefix is a non-nil bound method (embedder.ApplyQueryPrefix)
+	// for EVERY configured embedder regardless of prefix family, including
+	// PrefixFamilyNone (the DEPLOYED production default for
+	// openai/text-embedding-3-large, embedprovider.PrefixFamilyNone == "").
+	// So the "prefix WAS applied" branch was, in the live default
+	// configuration, silently trusting an untruncated string -- exactly the
+	// original P2 hole, reopened by the branch meant to close it. Bounding
+	// here UNCONDITIONALLY, after the fact, cannot diverge from a REAL
+	// prefix's own internal budgeting (already <= a.embedBudgetRunes(),
+	// this TruncateRunes is then a no-op) and is the ONLY thing that
+	// actually bounds an EMPTY-prefix or no-prefix result.
+	bounded := embedprovider.TruncateRunes(prefixed, a.embedBudgetRunes())
+	// prefixOnly is derived the SAME way (queryPrefixed then the SAME
+	// unconditional bound), so it can never disagree with what bounded
+	// actually carries as its prefix, whatever a.applyQueryPrefix does or
+	// does not do with an empty substance.
+	prefixOnly := embedprovider.TruncateRunes(a.queryPrefixed(""), a.embedBudgetRunes())
+	return boundedQueryResult{transmitted: bounded, substance: strings.TrimPrefix(bounded, prefixOnly)}
 }
 
 // recordVectorDegraded reports a vector-retrieval degradation to telemetry.

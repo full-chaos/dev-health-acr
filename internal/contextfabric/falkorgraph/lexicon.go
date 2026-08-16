@@ -1,6 +1,7 @@
 package falkorgraph
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -101,6 +102,19 @@ func compileLexicon(groups [][]string) []lexiconGroup {
 	for _, group := range groups {
 		lg := lexiconGroup{phrases: group, lowerPhrases: make([]string, len(group))}
 		for i, phrase := range group {
+			// codex round-3 P1 (fix B): a multi-word phrase becomes a
+			// double-quoted RediSearch exact-phrase clause
+			// (queries.go's lexiconPhraseClause), injection-safe only
+			// because every phrase here is a fixed, code-owned literal that
+			// can NEVER contain a literal `"` -- enforced here, once, at
+			// init, rather than trusted at every call site. A phrase that
+			// somehow did contain one would let it escape the clause it is
+			// built into; failing loudly at package init (a code-review-time
+			// mistake, not a runtime/user-input one) is strictly better than
+			// a silent, per-call injection-safety assumption nothing checks.
+			if strings.Contains(phrase, `"`) {
+				panic(fmt.Sprintf("falkorgraph: domain lexicon phrase %q contains a literal double quote, which would break its RediSearch exact-phrase clause -- remove or rewrite it", phrase))
+			}
 			lg.lowerPhrases[i] = strings.ToLower(phrase)
 		}
 		compiled = append(compiled, lg)
@@ -156,24 +170,16 @@ func hasWholeWordPhrase(lowerText, lowerPhrase string) bool {
 	return false
 }
 
-// expandWithLexicon returns text widened with any domain-lexicon synonym
-// phrases matched WITHIN it, for building a wider RETRIEVAL QUERY only.
-//
-// Byte-identical to text when no lexicon phrase is found -- the common case
-// for most terms/questions -- so a caller that does not match anything pays
-// no behavior change at all: the RediSearch query is unchanged, the embedded
-// text is unchanged, and the embedcache (T11) key is unchanged (still a
-// cache hit for a repeated unmatched term).
-//
-// CALLERS MUST NEVER key confidence/relevance scoring off this function's
-// output. fulltextSearchNodes' matched-term coverage and any embedding
-// similarity threshold were measured/calibrated against the ORIGINAL term
-// text; this function exists only to widen what gets FOUND, never to change
-// how confidently a find is scored. See queries.go's fulltextSearchNodes and
-// vector.go's hybridSearchNodes for how each arm keeps that boundary.
-func expandWithLexicon(text string) string {
+// lexiconAdditions returns the domain-lexicon synonym phrases matched
+// WITHIN text, in fixed (domainLexiconGroups declaration) order -- the ONE
+// primitive both expandWithLexicon (text-concatenation, for the vector arm)
+// and queries.go's lexiconExpansionQuery (phrase-aware OR-query
+// construction, for the lexical arm, codex round-3 P1/P2) build from, so
+// the two arms can never independently decide "what matched" differently.
+// Empty input, or no match, returns nil.
+func lexiconAdditions(text string) []string {
 	if strings.TrimSpace(text) == "" {
-		return text
+		return nil
 	}
 	lowerText := strings.ToLower(text)
 	seen := make(map[string]struct{})
@@ -198,6 +204,30 @@ func expandWithLexicon(text string) string {
 			additions = append(additions, phrase)
 		}
 	}
+	return additions
+}
+
+// expandWithLexicon returns text widened with any domain-lexicon synonym
+// phrases matched WITHIN it (lexiconAdditions), for building a wider
+// RETRIEVAL QUERY only -- specifically, the VECTOR arm's embedded text
+// (vector.go's vectorQueryText). The lexical arm does NOT use this
+// function; queries.go's lexiconExpansionQuery builds its own phrase-aware
+// query from the same lexiconAdditions instead, because embedding text has
+// no adjacency/phrase concept for expandWithLexicon's plain concatenation
+// to violate, while a RediSearch OR-query does (codex round-3 P1).
+//
+// Byte-identical to text when no lexicon phrase is found -- the common case
+// for most terms/questions -- so a caller that does not match anything pays
+// no behavior change at all: the embedded text is unchanged, and the
+// embedcache (T11) key is unchanged (still a cache hit for a repeated
+// unmatched term).
+//
+// CALLERS MUST NEVER key confidence/relevance scoring off this function's
+// output. Any embedding similarity threshold was measured/calibrated
+// against the ORIGINAL term text; this function exists only to widen what
+// gets FOUND, never to change how confidently a find is scored.
+func expandWithLexicon(text string) string {
+	additions := lexiconAdditions(text)
 	if len(additions) == 0 {
 		return text
 	}

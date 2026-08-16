@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -380,5 +381,309 @@ func TestBoundedQueryText_NoPrefixTruncatesToTheEmbedBudget(t *testing.T) {
 	}
 	if want := "hello"; got.transmitted != want {
 		t.Fatalf("boundedQueryText().transmitted = %q, want %q (truncated to MaxTextRunes=5)", got.transmitted, want)
+	}
+}
+
+// --- codex round-3 P1 (fix A): the guard/cap pair must hold under EVERY prefix configuration ---
+
+// realNomicEmbedder builds a REAL embedprovider.Embedder configured for the
+// nomic prefix family, for tests that need genuine budget-aware
+// ApplyQueryPrefix behavior (embedprovider.applyPrefixWithBudget's actual
+// arithmetic) rather than a hand-rolled test double that could silently
+// diverge from it. MaxTextRunes is pinned to the config validation floor
+// (embedprovider.MinimumMaxTextRunes, 2000) since Config.validate rejects
+// anything lower.
+func realNomicEmbedder(t *testing.T) *embedprovider.Embedder {
+	t.Helper()
+	env := map[string]string{
+		embedprovider.EnvBaseURL: "https://embed.example/v1", embedprovider.EnvProvider: "nomic",
+		embedprovider.EnvModel: "nomic-embed-text", embedprovider.EnvDimension: "768",
+		embedprovider.EnvPrefixFamily: "nomic",
+	}
+	cfg, err := embedprovider.ConfigFromEnv(func(key string) (string, bool) { v, ok := env[key]; return v, ok })
+	if err != nil {
+		t.Fatalf("embedprovider.ConfigFromEnv: %v", err)
+	}
+	source, err := embedprovider.New(cfg)
+	if err != nil {
+		t.Fatalf("embedprovider.New: %v", err)
+	}
+	return source
+}
+
+// realNoneEmbedder builds a REAL embedprovider.Embedder with PrefixFamilyNone
+// (unset -- the deployed production identity's actual configuration) --
+// ApplyQueryPrefix is a genuine, non-nil bound method whose underlying
+// prefix string is empty. This is the exact shape codex round-3 P1
+// identified as the hole in round-1's fix: "ApplyQueryPrefix is non-nil"
+// was treated as "a real prefix was applied and already budgeted itself",
+// which is false for this configuration.
+func realNoneEmbedder(t *testing.T) *embedprovider.Embedder {
+	t.Helper()
+	env := map[string]string{
+		embedprovider.EnvBaseURL: "https://embed.example/v1", embedprovider.EnvProvider: "openai",
+		embedprovider.EnvModel: "text-embedding-3-large", embedprovider.EnvDimension: "3072",
+	}
+	cfg, err := embedprovider.ConfigFromEnv(func(key string) (string, bool) { v, ok := env[key]; return v, ok })
+	if err != nil {
+		t.Fatalf("embedprovider.ConfigFromEnv: %v", err)
+	}
+	source, err := embedprovider.New(cfg)
+	if err != nil {
+		t.Fatalf("embedprovider.New: %v", err)
+	}
+	if source.QueryPrefix() != "" {
+		t.Fatalf("test fixture bug: QueryPrefix() = %q, want empty (PrefixFamilyNone)", source.QueryPrefix())
+	}
+	return source
+}
+
+// TestQuestionVectorSearchNodes_GuardBoundsMatchPrefixConfiguration is the
+// codex round-3 P1 regression proof: round-1's fix B branched on whether
+// a.applyQueryPrefix was nil, reasoning a CONFIGURED prefix already bounds
+// itself via ApplyQueryPrefix's own budget. That's true only when the
+// configured prefix STRING is non-empty -- PrefixFamilyNone (the DEPLOYED
+// production default for openai/text-embedding-3-large) leaves
+// a.applyQueryPrefix non-nil (embedder.ApplyQueryPrefix is always a valid
+// bound method once an embedder is attached) while its underlying prefix
+// string is "", and embedprovider.applyPrefixWithBudget's very first line
+// (`if prefix == "" { return text }`) skips ALL budgeting in that case --
+// so the "prefix configured" branch silently trusted UNBOUNDED text in
+// exactly the deployed default configuration, reopening the original P2
+// hole one layer down. This test matrix proves the fix holds under BOTH a
+// real prefix (nomic) and no prefix at all -- symmetric guard behavior
+// regardless of prefix configuration. MUTATION CHECK: reverting
+// boundedQueryText to branch on `a.applyQueryPrefix == nil` (skipping the
+// unconditional TruncateRunes) makes the no-prefix-style case here still
+// pass but was proven, by hand, to let the SAME punctuation-then-content
+// question through unbounded under PrefixFamilyNone specifically -- see
+// the freeze report for that reproduction.
+func TestQuestionVectorSearchNodes_GuardBoundsMatchPrefixConfiguration(t *testing.T) {
+	nomic := realNomicEmbedder(t)
+	none := realNoneEmbedder(t)
+	const nomicMaxRunes = embedprovider.MinimumMaxTextRunes // 2000, the config validation floor
+
+	type prefixCase struct {
+		name             string
+		attach           func(embedder contextfabric.Embedder) EmbedderOptions
+		punctuationRunes int // must exceed this config's own effective budget
+	}
+	cases := []prefixCase{
+		{
+			name: "no prefix configured at all (ApplyQueryPrefix left nil)",
+			attach: func(embedder contextfabric.Embedder) EmbedderOptions {
+				return EmbedderOptions{Embedder: embedder, SimilarityFloor: 0.55, MaxTextRunes: 20}
+			},
+			punctuationRunes: 20,
+		},
+		{
+			// THE case codex round-3 P1 is about: this is exactly what
+			// EmbedderFromEnv produces for the DEPLOYED production identity
+			// (openai/text-embedding-3-large, PrefixFamilyNone) --
+			// ApplyQueryPrefix is a non-nil bound method, but its
+			// underlying prefix STRING is "". Before this round's fix, this
+			// exact configuration hit the "prefix configured" branch and
+			// trusted ApplyQueryPrefix's own (silently skipped) budgeting.
+			name: "PrefixFamilyNone WITH ApplyQueryPrefix set (the deployed production shape)",
+			attach: func(embedder contextfabric.Embedder) EmbedderOptions {
+				return EmbedderOptions{Embedder: embedder, SimilarityFloor: 0.55, MaxTextRunes: none.MaxTextRunes(), ApplyQueryPrefix: none.ApplyQueryPrefix}
+			},
+			punctuationRunes: embedprovider.DefaultMaxTextRunes,
+		},
+		{
+			name: "nomic prefix configured (a genuinely non-empty prefix, sanity anchor)",
+			attach: func(embedder contextfabric.Embedder) EmbedderOptions {
+				return EmbedderOptions{Embedder: embedder, SimilarityFloor: 0.55, MaxTextRunes: nomic.MaxTextRunes(), ApplyQueryPrefix: nomic.ApplyQueryPrefix}
+			},
+			punctuationRunes: nomicMaxRunes,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name+"/punctuation beyond cap never embeds", func(t *testing.T) {
+			question := strings.Repeat(".", tc.punctuationRunes) + " auth service reliability"
+			fake := &fakeConn{}
+			fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+				return []indexStatus{operationalVectorIndex(4)}, nil
+			}
+			adapter := newFakeAdapter(t, fake)
+			embedder := &stubEmbedder{vector: []float32{1, 0, 0, 0}}
+			adapter.attachEmbedder(tc.attach(embedder))
+
+			candidates, truncated, degraded, err := adapter.questionVectorSearchNodes(context.Background(), "test-key", "org-1", question, 10, &resolutionFence{}, temporalFilter{})
+			if err != nil {
+				t.Fatalf("questionVectorSearchNodes() error = %v", err)
+			}
+			if candidates != nil || truncated || degraded {
+				t.Fatalf("questionVectorSearchNodes() = (%v, truncated=%v, degraded=%v), want (nil, false, false) -- the bounded bytes are pure punctuation", candidates, truncated, degraded)
+			}
+			if embedder.calls != 0 {
+				t.Fatalf("embedder.calls = %d, want 0 -- content past the embed truncation cap must never make it to the provider, under THIS prefix configuration", embedder.calls)
+			}
+		})
+
+		t.Run(tc.name+"/content within cap proceeds", func(t *testing.T) {
+			const question = "..... auth service reliability question"
+			fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+				if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+					return nil, nil
+				}
+				return []row{{
+					"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Auth"}},
+					"score": 0.10,
+				}}, nil
+			}}
+			fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+				return []indexStatus{operationalVectorIndex(4)}, nil
+			}
+			adapter := newFakeAdapter(t, fake)
+			embedder := &stubEmbedder{vector: []float32{1, 0, 0, 0}}
+			adapter.attachEmbedder(tc.attach(embedder))
+
+			candidates, _, degraded, err := adapter.questionVectorSearchNodes(context.Background(), "test-key", "org-1", question, 10, &resolutionFence{}, temporalFilter{})
+			if err != nil {
+				t.Fatalf("questionVectorSearchNodes() error = %v", err)
+			}
+			if degraded {
+				t.Fatal("degraded = true, want false for content that survives truncation")
+			}
+			if embedder.calls != 1 {
+				t.Fatalf("embedder.calls = %d, want exactly 1 -- content within the cap must still be embedded, under THIS prefix configuration", embedder.calls)
+			}
+			if len(candidates) != 1 {
+				t.Fatalf("candidates = %#v, want 1", candidates)
+			}
+		})
+	}
+}
+
+// --- codex round-3 P1 (fix B): multi-word synonyms are phrase clauses, not bare OR ---
+
+// TestFulltextSearchNodes_MultiWordSynonymIsAPhraseClauseNotBareOR is the
+// regression proof: term "PR" widens via the {"pr","pull request"} group.
+// This fake distinguishes the query string production actually sends:
+// EXACT "pull request" is the phrase-clause query the fix must produce;
+// "pull|request" is the bare-OR query the bug would have produced (a real
+// RediSearch server would return a "request"-only row for that shape, a
+// false positive). If production ever regresses to bare-OR tokenizing the
+// synonym, this fake's "pull|request" branch fires instead and the
+// assertion below fails -- this IS the mutation check codex asked for,
+// built into the fixture rather than requiring a manual code revert.
+func TestFulltextSearchNodes_MultiWordSynonymIsAPhraseClauseNotBareOR(t *testing.T) {
+	requestOnly := fulltextRow("work_item", "wi_1", "Feature request", "Feature request from a customer", nil)
+	pullRequestRow := fulltextRow("pull_request", "pr_1", "Fix login bug", "Fix login bug pull request", nil)
+
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		q, _ := params["query"].(string)
+		switch q {
+		case "PR":
+			// Base query: nothing in this fixture literally contains "PR".
+			return nil, nil
+		case `"pull request"`:
+			// The FIX's shape: an exact-phrase clause. A real RediSearch
+			// server only returns rows carrying the adjacent phrase.
+			return []row{pullRequestRow}, nil
+		case "pull|request":
+			// The BUG's shape: bare OR-tokenized words. A real RediSearch
+			// server would return ANY row containing either word alone --
+			// including the false-positive requestOnly.
+			return []row{requestOnly, pullRequestRow}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 10, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	requestOnlyUUID := subjectUUID("work_item", "wi_1")
+	pullRequestUUID := subjectUUID("pull_request", "pr_1")
+	var sawRequestOnly, sawPullRequest bool
+	for _, c := range candidates {
+		if c.UUID == requestOnlyUUID {
+			sawRequestOnly = true
+		}
+		if c.UUID == pullRequestUUID {
+			sawPullRequest = true
+		}
+	}
+	if sawRequestOnly {
+		t.Fatalf("candidates = %#v, want the \"request\"-only subject ABSENT -- a multi-word synonym must require the complete phrase, not fire on one of its words alone", candidates)
+	}
+	if !sawPullRequest {
+		t.Fatalf("candidates = %#v, want the genuine \"pull request\" subject present", candidates)
+	}
+}
+
+// TestFulltextSearchNodes_SingleWordSynonymsStillOR proves the fix is
+// scoped to multi-word synonyms only: a single-word synonym ("repository"
+// for "repo") has no phrase-adjacency concept to violate and must keep
+// widening as an ordinary OR term, exactly as before this round.
+func TestFulltextSearchNodes_SingleWordSynonymsStillOR(t *testing.T) {
+	var capturedQueries []string
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if q, ok := params["query"].(string); ok {
+			capturedQueries = append(capturedQueries, q)
+		}
+		return nil, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	if _, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "repo", 10, temporalFilter{}); err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	if len(capturedQueries) != 2 {
+		t.Fatalf("captured queries = %v, want exactly 2 (base + expansion)", capturedQueries)
+	}
+	if capturedQueries[0] != "repo" {
+		t.Fatalf("base query = %q, want %q unchanged", capturedQueries[0], "repo")
+	}
+	if capturedQueries[1] != "repository" {
+		t.Fatalf("expansion query = %q, want the single-word synonym as a bare OR term, not phrase-quoted", capturedQueries[1])
+	}
+}
+
+// --- codex round-3 P2 (fix C): expansion only ever ADDS candidates, never displaces a base hit ---
+
+// TestFulltextSearchNodes_ExpansionNeverDisplacesABaseHit is the regression
+// proof: a base hit ("target") must survive regardless of how many
+// synonym-matched rows the expansion query returns, or how a combined
+// single-query LIMIT would have ranked them. limit=1 here to make the
+// starvation scenario concrete: base finds exactly 1 (its own full
+// budget), so expansion has ZERO remaining capacity -- proving base's
+// candidate is never at risk, and that the overall call still reports
+// truncated=true (competing expansion-only candidates genuinely existed
+// and could not be shown), never silently drops that signal.
+func TestFulltextSearchNodes_ExpansionNeverDisplacesABaseHit(t *testing.T) {
+	target := fulltextRow("pull_request", "pr_target", "Fix login bug", "Fix login bug pull request", nil)
+	synonymRow1 := fulltextRow("pull_request", "pr_syn1", "Unrelated one", "Unrelated one pull request", nil)
+	synonymRow2 := fulltextRow("pull_request", "pr_syn2", "Unrelated two", "Unrelated two pull request", nil)
+	synonymRow3 := fulltextRow("pull_request", "pr_syn3", "Unrelated three", "Unrelated three pull request", nil)
+
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		q, _ := params["query"].(string)
+		switch q {
+		case "PR":
+			return []row{target}, nil
+		case `"pull request"`:
+			// Three DISTINCT, higher-scoring synonym rows -- in the old
+			// single-query design these could have out-ranked and pushed
+			// "target" past a shared limit+1 cutoff.
+			return []row{synonymRow1, synonymRow2, synonymRow3}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	candidates, truncated, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 1, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	targetUUID := subjectUUID("pull_request", "pr_target")
+	if len(candidates) != 1 || candidates[0].UUID != targetUUID {
+		t.Fatalf("candidates = %#v, want ONLY the base hit \"target\" -- it must never be displaced by expansion rows", candidates)
+	}
+	if !truncated {
+		t.Fatal("truncated = false, want true -- three genuinely competing expansion-only candidates existed and could not fit the remaining budget")
 	}
 }
