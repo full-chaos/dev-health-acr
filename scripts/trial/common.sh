@@ -66,6 +66,18 @@ fi
 # substitutions INHERIT -e from the caller, so without this an early
 # tier's failure would abort the function itself before trying the next
 # tier, silently reintroducing round 2's exact bug one level down).
+#
+# Accepted residual (chris, 2026-08-16): the landmark check proves a
+# candidate LOOKS like the dev-health root (ops/.env present under it);
+# it is not a unique-identity proof. A stray ops/.env sitting at a WRONG
+# candidate (e.g. worktrees/acr/ops/.env, reachable only when git is
+# absent and tier 3's repo_root/.. derivation is active -- see tier 3
+# below) would false-accept that candidate. Contrived filesystem state
+# only, not something a normal checkout produces; downstream corpus
+# SHA-256 self-certification and credential validity bound the damage
+# if it ever happened. Do not add a second landmark or an identity check
+# here without a measured need -- this is a deliberate stopping point,
+# not an oversight.
 resolve_dev_health_root() (
   set +e
   local candidate legacy_common_git_dir
@@ -106,7 +118,13 @@ resolve_dev_health_root() (
 if dev_health_root="$(resolve_dev_health_root)"; then
   :
 else
-  echo "common.sh: could not resolve the dev-health root -- tried git --path-format=absolute --git-common-dir, bare git --git-common-dir, and \$repo_root/.. (from $script_dir), and none of them contained ops/.env. Run from a checkout where ops/.env exists two levels above this repo, or export ACR_TRIAL_CORPUS/ACR_TRIAL_RESULTS_DIR explicitly to bypass this resolution." >&2
+  # sol review (ancillary wording defect): this message used to claim
+  # exporting ACR_TRIAL_CORPUS/ACR_TRIAL_RESULTS_DIR bypasses this
+  # resolution -- false, both are only read AFTER a successful
+  # resolution (see the `:=` defaults below), and `exit 1` on the next
+  # line means this script never reaches them. There is no env var that
+  # bypasses resolve_dev_health_root itself.
+  echo "common.sh: could not resolve the dev-health root -- tried git --path-format=absolute --git-common-dir, bare git --git-common-dir, and \$repo_root/.. (from $script_dir), and none of them contained ops/.env. Run this from a checkout where ops/.env exists two levels above this repo (or make sure git is on PATH and resolves this repo's common dir correctly)." >&2
   exit 1
 fi
 
