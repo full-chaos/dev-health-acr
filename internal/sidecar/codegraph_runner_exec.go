@@ -15,30 +15,41 @@ const codeGraphWaitDelay = 100 * time.Millisecond
 
 // classifyCodeGraphSpawnError turns a cmd.StdoutPipe()/cmd.Start() failure
 // into the right sentinel instead of collapsing every failure into
-// errCodeGraphExecutableAbsent (CHAOS-3861). Three buckets:
+// errCodeGraphExecutableAbsent (CHAOS-3861). Four buckets:
 //
-//   - fs.ErrNotExist / fs.ErrPermission: the executable genuinely isn't
-//     there, or isn't usable as configured (wrong path, deleted, chmod'd
-//     away). A persistent configuration problem -- errCodeGraphExecutableAbsent,
-//     unchanged from before this fix.
+//   - fs.ErrNotExist / fs.ErrPermission / ENOEXEC: the executable genuinely
+//     isn't there, or isn't usable as configured (wrong path, deleted,
+//     chmod'd away, or -- sol review F1 -- present and executable-bit-set
+//     but a broken/truncated/wrong-architecture binary the kernel refuses
+//     to run). All three are the SAME kind of problem from an operator's
+//     perspective: something persistent and non-retryable is wrong with
+//     what ACR_CONTEXT_FABRIC_MODEL_EXECUTABLE (or the default resolver)
+//     points at. errCodeGraphExecutableAbsent, unchanged shape from before
+//     this fix.
 //   - a transient host-resource errno (EAGAIN/EMFILE/ENOMEM on the
 //     platforms that have them): the executable is fine, but the OS could
 //     not fork a new process for it RIGHT NOW. Worth a bounded retry, so
 //     it gets its own sentinel, errCodeGraphSpawnUnavailable, and -- unlike
-//     the other two buckets -- the raw OS error is preserved in the chain
+//     the other buckets -- the raw OS error is preserved in the chain
 //     (wrapped, never swallowed) so a caller or log line can see exactly
 //     what the host reported.
-//   - anything else: propagated wrapped rather than forced into either
-//     bucket. Unclassified, but truthful -- better than a confident wrong
-//     answer.
+//   - anything else: errCodeGraphSpawnFailed, ALSO carrying the raw error.
+//     Sol review F1: this bucket used to have no sentinel of its own, so
+//     localIndexErrorCodeFor's `default` case mapped it to
+//     LocalIndexErrorMalformed -- which lies at the operator surface (an
+//     acr-mcp doctor/receipt reader reading "local_index_malformed" would
+//     reasonably conclude the CodeGraph OUTPUT was invalid, when in fact
+//     the process never even started). errCodeGraphSpawnFailed's own code,
+//     LocalIndexErrorSpawnFailed, says only what is actually known: spawn
+//     failed for a reason this classifier does not recognize.
 func classifyCodeGraphSpawnError(err error) error {
 	switch {
-	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission), isCodeGraphExecFormatError(err):
 		return errors.Join(errCodeGraphExecutableAbsent, ErrCodeGraphUnavailable)
 	case isTransientCodeGraphSpawnErrno(err):
 		return errors.Join(errCodeGraphSpawnUnavailable, ErrCodeGraphUnavailable, err)
 	default:
-		return errors.Join(ErrCodeGraphUnavailable, err)
+		return errors.Join(errCodeGraphSpawnFailed, ErrCodeGraphUnavailable, err)
 	}
 }
 

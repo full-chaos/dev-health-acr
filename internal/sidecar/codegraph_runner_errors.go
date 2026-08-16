@@ -17,7 +17,17 @@ const (
 	// "absent" because it is transient and, in principle, retryable,
 	// where "absent" is a persistent configuration problem. See
 	// classifyCodeGraphSpawnError.
-	LocalIndexErrorSpawnUnavailable      LocalIndexErrorCode = "local_index_spawn_unavailable"
+	LocalIndexErrorSpawnUnavailable LocalIndexErrorCode = "local_index_spawn_unavailable"
+	// LocalIndexErrorSpawnFailed is sol review F1 (CHAOS-3861): the
+	// classifyCodeGraphSpawnError bucket for a cmd.Start()/StdoutPipe()
+	// failure that is neither "genuinely absent" (fs.ErrNotExist/
+	// fs.ErrPermission/ENOEXEC) nor a recognized transient host-resource
+	// errno. Before this code existed, that bucket had no sentinel of its
+	// own, so localIndexErrorCodeFor's default case mapped it to
+	// LocalIndexErrorMalformed -- an operator-facing lie: "malformed"
+	// means the CodeGraph process ran and produced invalid output, not
+	// that it never started at all.
+	LocalIndexErrorSpawnFailed           LocalIndexErrorCode = "local_index_spawn_failed"
 	LocalIndexErrorMissing               LocalIndexErrorCode = "local_index_missing"
 	LocalIndexErrorIncompatibleVersion   LocalIndexErrorCode = "local_index_incompatible_version"
 	LocalIndexErrorStale                 LocalIndexErrorCode = "local_index_stale"
@@ -39,13 +49,19 @@ var (
 	// executable exists and is usable, but the host could not fork a
 	// new process for it right now. See classifyCodeGraphSpawnError.
 	errCodeGraphSpawnUnavailable = errors.New("codegraph could not be started: host process resources are exhausted")
-	errLocalIndexConfigInvalid   = errors.New("local index configuration invalid")
-	errLocalIndexDisabled        = errors.New("local index disabled")
-	errCodeGraphMissing          = errors.New("codegraph index missing")
-	errCodeGraphMismatch         = errors.New("codegraph worktree mismatch")
-	errCodeGraphStale            = errors.New("codegraph index stale")
-	errCodeGraphUnsupported      = errors.New("codegraph unsupported capability")
-	errCodeGraphIncompatible     = errors.New("codegraph incompatible version")
+	// errCodeGraphSpawnFailed is sol review F1 (CHAOS-3861): the
+	// classifyCodeGraphSpawnError catch-all for a spawn failure that is
+	// neither absent nor a recognized transient errno. Named for what is
+	// actually known -- spawn failed, cause unrecognized -- rather than
+	// implying anything about CodeGraph's OUTPUT (which never ran).
+	errCodeGraphSpawnFailed    = errors.New("codegraph could not be started for an unrecognized reason")
+	errLocalIndexConfigInvalid = errors.New("local index configuration invalid")
+	errLocalIndexDisabled      = errors.New("local index disabled")
+	errCodeGraphMissing        = errors.New("codegraph index missing")
+	errCodeGraphMismatch       = errors.New("codegraph worktree mismatch")
+	errCodeGraphStale          = errors.New("codegraph index stale")
+	errCodeGraphUnsupported    = errors.New("codegraph unsupported capability")
+	errCodeGraphIncompatible   = errors.New("codegraph incompatible version")
 )
 
 // LocalIndexError is a safe, structured local-index failure classification.
@@ -82,6 +98,8 @@ func localIndexErrorCodeFor(err error) LocalIndexErrorCode {
 		return LocalIndexErrorExecutableAbsent
 	case errors.Is(err, errCodeGraphSpawnUnavailable):
 		return LocalIndexErrorSpawnUnavailable
+	case errors.Is(err, errCodeGraphSpawnFailed):
+		return LocalIndexErrorSpawnFailed
 	case errors.Is(err, errCodeGraphMissing):
 		return LocalIndexErrorMissing
 	case errors.Is(err, errCodeGraphMismatch):

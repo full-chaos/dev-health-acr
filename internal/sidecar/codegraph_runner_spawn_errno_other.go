@@ -12,3 +12,9 @@ package sidecar
 // credential_keyring_procgroup_other.go for the established pattern this
 // file follows.
 func isTransientCodeGraphSpawnErrno(err error) bool { return false }
+
+// isCodeGraphExecFormatError never classifies a spawn failure as an
+// ENOEXEC-shaped broken binary on a platform without that POSIX errno
+// (sol review F1, CHAOS-3861). Falls through classifyCodeGraphSpawnError's
+// default case, same reasoning as isTransientCodeGraphSpawnErrno above.
+func isCodeGraphExecFormatError(err error) bool { return false }

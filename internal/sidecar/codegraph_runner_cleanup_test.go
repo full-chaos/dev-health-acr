@@ -119,6 +119,33 @@ func statusWithBoundedSpawnRetry(t *testing.T, runner CodeGraphRunner, ctx conte
 	return payload, elapsed, err
 }
 
+// assertCodeGraphLateForkReapedIfSpawned wraps assertCodeGraphProcessExited
+// for the F2 late-fork guard (sol review, CHAOS-3861). The late fork is
+// DELIBERATELY racing the go-side kill decision -- see the decode-failure
+// family's own comment on why that race cannot be made fully
+// deterministic via shell scripting (SIGKILL is unconditional and
+// immediate for anything already alive when it fires; the only way to
+// test "did the second kill catch a straggler the first kill missed" is
+// for that straggler to come into existence chronologically after the
+// first kill already ran, which this test approximates but cannot
+// guarantee). On some runs -- confirmed empirically under `go test -race`,
+// whose instrumentation overhead shifts the race -- the late fork may
+// never get to write its pid file at all, caught by the FIRST kill before
+// it could run. That is a vacuous, uninformative outcome, not a failure:
+// nothing was left unreaped, there is simply nothing to check that run.
+// When the pid file DOES exist (the common case across this family's many
+// repeated attempts), this defers to the normal, strict
+// assertCodeGraphProcessExited -- which the F2 mutation test (temporarily
+// disabling the post-Wait kill and confirming "malformed" then failed)
+// proved genuinely catches a broken second kill when the race lands.
+func assertCodeGraphLateForkReapedIfSpawned(t *testing.T, pidPath string) {
+	t.Helper()
+	if _, err := os.Stat(pidPath); errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	assertCodeGraphProcessExited(t, pidPath)
+}
+
 // TestReapTimingConstantsPreserveTheDiscriminator pins the one relationship
 // the reap tests depend on. If the runner timeout ever reached or exceeded
 // the grandchild sleep, an unreaped process group would return normally
@@ -134,12 +161,29 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 	requireProcessGroupKill(t)
 
 	for _, test := range []struct {
-		name    string
-		output  string
-		wantErr error
+		name string
+		// outputMayBlockOnKill: the "oversized" output writes more than
+		// maxCodeGraphStdoutBytes through a pipe whose OS buffer is far
+		// smaller (~64KiB); runCodeGraphJSON kills the group the INSTANT it
+		// reads past the limit, with no wait for the writer to finish
+		// flushing. Left foreground, that kill can (and empirically does)
+		// land while `head`/`tr` are still blocked mid-write, so the script
+		// never reaches the late-fork line placed after it -- not flaky,
+		// near-deterministic given a 1MiB write through a much smaller
+		// buffer. Backgrounding it in its own subshell decouples the late
+		// fork from whether the output pipeline survives to be killed.
+		// "malformed" does NOT need this (and backgrounding it introduces
+		// a DIFFERENT race -- the late fork can then race the FIRST kill
+		// instead of reliably following it, since there is no longer a
+		// foreground statement forcing it to wait): its output is small
+		// enough to write in one syscall, so staying foreground is both
+		// simpler and, empirically, more reliable.
+		outputMayBlockOnKill bool
+		output               string
+		wantErr              error
 	}{
 		{name: "malformed", output: "printf '{not-json}'", wantErr: errCodeGraphDecode},
-		{name: "oversized", output: `head -c 1048576 /dev/zero | tr '\000' ' '; printf not-json`, wantErr: ErrCodeGraphOutputTooLarge},
+		{name: "oversized", outputMayBlockOnKill: true, output: `head -c 1048576 /dev/zero | tr '\000' ' '; printf not-json`, wantErr: ErrCodeGraphOutputTooLarge},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			run := func(t *testing.T) {
@@ -172,16 +216,32 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 				// no fork at all) replaces it: the parent blocks on the
 				// read until the grandchild writes to the FIFO, no
 				// polling required. The second, untracked
-				// `sh -c 'sleep N' &` this test used to also spawn is
-				// dropped for the same reason -- assertCodeGraphProcessGroupExited
-				// already proves the whole group (leader plus every
-				// descendant) is gone; it does not need a SECOND
-				// descendant to prove that, only at least one.
+				// sol review F2: the second, untracked `sh -c 'sleep N' &`
+				// spawned AFTER test.output was NOT redundant coverage of
+				// "the group has more than one member" -- it is commit
+				// 322576a's late-fork guard. runCodeGraphJSON kills the
+				// process group TWICE: once right after decode fails
+				// (before cmd.Wait()), and again right after cmd.Wait()
+				// returns. A descendant forked AFTER the first kill (like
+				// this one, spawned once test.output has already run) can
+				// only ever be caught by the SECOND kill; without a late
+				// fork actually happening in this test, removing that
+				// second kill would leave nothing alive to detect and the
+				// test would pass either way. Restored below with its own
+				// tracked PID file so it gets its own explicit
+				// assertCodeGraphProcessExited, not just inferred from the
+				// group-level check.
+				lateForkPIDPath := filepath.Join(directory, "latefork.pid")
+				outputStatement := test.output
+				if test.outputMayBlockOnKill {
+					outputStatement = "( " + test.output + " ) &"
+				}
 				runner := newTestCodeGraphRunner(t, "printf '%s\\n' \"$$\" > "+shellQuote(shellPIDPath)+"\n"+
 					"mkfifo "+shellQuote(grandchildReadyFIFOPath)+"\n"+
 					"sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; printf x > \"$2\"; sleep "+reapSleepArgument()+"' sh "+shellQuote(grandchildPIDPath)+" "+shellQuote(grandchildReadyFIFOPath)+" &\n"+
 					"read _ < "+shellQuote(grandchildReadyFIFOPath)+"\n"+
-					test.output)
+					outputStatement+"\n"+
+					"sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; sleep "+reapSleepArgument()+"' sh "+shellQuote(lateForkPIDPath)+" &")
 				runner.Config.Timeout = reapRunnerTimeout
 
 				_, elapsed, err := statusWithBoundedSpawnRetry(t, runner, context.Background(), directory)
@@ -194,6 +254,7 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 				require.NotErrorIs(t, err, context.DeadlineExceeded)
 				assertCodeGraphProcessExited(t, shellPIDPath)
 				assertCodeGraphProcessExited(t, grandchildPIDPath)
+				assertCodeGraphLateForkReapedIfSpawned(t, lateForkPIDPath)
 				assertCodeGraphProcessGroupExited(t, shellPIDPath)
 			}
 
