@@ -43,6 +43,11 @@ func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts Margin
 		result.CorrectSampleSize, result.WrongSampleSize, result.WrongSampleSizeFromControls)
 	t.Logf("  controls: in_report=%d with_vector_arm_data=%d corroborated=%d corroborated_without_margin=%d",
 		result.ControlsInReport, result.ControlsWithVectorArmData, result.ControlsCorroborated, result.ControlsCorroboratedWithoutMargin)
+	// codex r6 L1: how many otherwise-eligible cases the whole-question
+	// fallback exclusion cost, reported explicitly rather than left to be
+	// inferred from a smaller-than-expected sample size.
+	t.Logf("  excluded (whole-question fallback): scored=%d controls=%d",
+		result.ExcludedFallbackCases, result.ExcludedFallbackControls)
 	if result.ThresholdM != nil {
 		t.Logf("  ThresholdM(M)=%s  WrongMarginMax=%s  AchievedReach=%.4f",
 			strconv.FormatFloat(*result.ThresholdM, 'g', -1, 64),

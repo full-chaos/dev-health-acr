@@ -81,6 +81,11 @@ func marginReportWithControls(cases []CalibrationCase, controls []CalibrationCas
 	return CalibrationReport{
 		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
 		Tau: testMarginTau, TopK: testMarginTopK, Cases: cases, ControlCases: controls,
+		// codex r6 L2: Controls must equal len(controls) -- mirrors the
+		// harness's own honest-write invariant (both incremented together,
+		// oracle_live_test.go), so every fixture built through this helper
+		// stays a VALID (non-truncated) report by construction.
+		Controls: len(controls),
 	}
 }
 
@@ -233,7 +238,12 @@ func TestCalibrateMarginFromReport_IncludesTruncatedVectorArm(t *testing.T) {
 
 func TestCalibrateMarginFromReport_ExcludesNilVectorTop2(t *testing.T) {
 	c := eligibleCase("project", "p1", "project", "p1", 0.3)
+	// codex r6 L3: VectorTop2 nil with VectorMargin still set is an
+	// IMPOSSIBLE shape (checkMarginConsistency now refuses it before this
+	// eligibility check ever runs) -- clear both together, the shape a
+	// real "only one distinct vector-arm subject" case actually has.
 	c.VectorTop2 = nil
+	c.VectorMargin = nil
 	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
 	if !errors.Is(err, ErrNoMarginSamples) {
 		t.Fatalf("a case with no second vector-arm subject (no margin) must be excluded, got err=%v", err)
@@ -614,6 +624,261 @@ func TestCalibrateMarginFromReport_NilVectorTop2StillExemptFromJ3(t *testing.T) 
 	c.VectorMargin = nil
 	if _, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts); !errors.Is(err, ErrNoMarginSamples) {
 		t.Fatalf("err = %v, want ErrNoMarginSamples (excluded by eligibility, not flagged as inconsistent)", err)
+	}
+}
+
+// --- codex r6 L1: whole-question-fallback cases are excluded ---------------
+
+// TestCalibrateMarginFromReport_FallbackWrongCaseExcludedFromWrongSampleSize
+// is L1's core pinning test: a WRONG-top1 case that used the whole-question
+// fallback carries the HIGHEST margin in the report -- if it were included,
+// it would set ThresholdM. Excluding it must both drop WrongSampleSize AND
+// lower ThresholdM to the next-highest (non-fallback) wrong margin.
+func TestCalibrateMarginFromReport_FallbackWrongCaseExcludedFromWrongSampleSize(t *testing.T) {
+	fallbackWrong := eligibleCase("project", "wrong-fallback", "project", "correct-a", 0.50) // highest margin, must NOT set M
+	fallbackWrong.UsedTermFallback = true
+	realWrong := eligibleCase("project", "wrong-real", "project", "correct-b", 0.10) // the ONLY margin that should set M
+	report := marginReport(fallbackWrong, realWrong)
+	realWrongMargin := *realWrong.VectorMargin
+
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.WrongSampleSize != 1 {
+		t.Fatalf("WrongSampleSize = %d, want 1 -- the fallback case must be excluded", result.WrongSampleSize)
+	}
+	if result.ExcludedFallbackCases != 1 {
+		t.Fatalf("ExcludedFallbackCases = %d, want 1", result.ExcludedFallbackCases)
+	}
+	if result.WrongMarginMax == nil || *result.WrongMarginMax != realWrongMargin {
+		t.Fatalf("WrongMarginMax = %v, want %v (the real case's margin, not the fallback's higher one)", result.WrongMarginMax, realWrongMargin)
+	}
+}
+
+// TestCalibrateMarginFromReport_FallbackCorrectCaseExcludedFromCorrectSampleSize
+// is the CORRECT-top1 half of L1: a fallback case that would otherwise have
+// been correct must not inflate CorrectSampleSize/AchievedReach either.
+func TestCalibrateMarginFromReport_FallbackCorrectCaseExcludedFromCorrectSampleSize(t *testing.T) {
+	fallbackCorrect := eligibleCase("project", "p1", "project", "p1", 0.30)
+	fallbackCorrect.UsedTermFallback = true
+	wrong := eligibleCase("project", "wrong", "project", "correct", 0.10)
+	report := marginReport(fallbackCorrect, wrong)
+
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.CorrectSampleSize != 0 {
+		t.Fatalf("CorrectSampleSize = %d, want 0 -- the fallback correct case must be excluded", result.CorrectSampleSize)
+	}
+	if result.ExcludedFallbackCases != 1 {
+		t.Fatalf("ExcludedFallbackCases = %d, want 1", result.ExcludedFallbackCases)
+	}
+	if result.ReachMeasured {
+		t.Fatal("ReachMeasured = true, want false -- the only correct-top1 case was excluded")
+	}
+}
+
+// TestCalibrateMarginFromReport_FallbackControlExcluded is the CONTROL half
+// of L1.
+func TestCalibrateMarginFromReport_FallbackControlExcluded(t *testing.T) {
+	fallbackControl := eligibleControlCase("project", "ghost", 0.20)
+	fallbackControl.UsedTermFallback = true
+	report := marginReportWithControls(
+		[]CalibrationCase{eligibleCase("project", "p1", "project", "p1", 0.10)},
+		[]CalibrationCase{fallbackControl},
+	)
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.WrongSampleSizeFromControls != 0 || result.WrongSampleSize != 0 {
+		t.Fatalf("WrongSampleSizeFromControls=%d WrongSampleSize=%d, want both 0 -- the fallback control must be excluded", result.WrongSampleSizeFromControls, result.WrongSampleSize)
+	}
+	if result.ExcludedFallbackControls != 1 {
+		t.Fatalf("ExcludedFallbackControls = %d, want 1", result.ExcludedFallbackControls)
+	}
+	// The RAW measured facts (corroboration) are still recorded per Phase
+	// 2(c)'s "unconditionally" discipline -- only the WRONG-population
+	// contribution is what L1 excludes.
+	if result.ControlsCorroborated != 1 {
+		t.Fatalf("ControlsCorroborated = %d, want 1 -- corroboration is a measured fact independent of the fallback exclusion", result.ControlsCorroborated)
+	}
+}
+
+// TestCalibrateMarginFromReport_AllFallbackEmptiesWrongPopulationVacuously
+// proves team-lead's own stated consequence: excluding every wrong-top1
+// case as fallback empties WrongSampleSize entirely, and the EXISTING
+// ApplyReady=false vacuous-truth guard fires on its own -- no separate
+// guard was added for this case.
+func TestCalibrateMarginFromReport_AllFallbackEmptiesWrongPopulationVacuously(t *testing.T) {
+	fallbackWrong := eligibleCase("project", "wrong", "project", "correct", 0.30)
+	fallbackWrong.UsedTermFallback = true
+	// A non-fallback CORRECT case keeps the OVERALL eligible population
+	// non-empty (CorrectSampleSize+WrongSampleSize > 0), so this test
+	// exercises the ApplyReady=false vacuous-truth guard specifically --
+	// not ErrNoMarginSamples, which fires only when the population is
+	// empty on BOTH sides (see TestCalibrateMarginFromReport_NoEligibleCasesIsAnError
+	// for that separate, pre-existing case).
+	onlyCorrect := eligibleCase("project", "p1", "project", "p1", 0.10)
+	report := marginReport(fallbackWrong, onlyCorrect)
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.ApplyReady || result.SafetyMeasured {
+		t.Fatalf("ApplyReady=%v SafetyMeasured=%v, want both false -- the only wrong-top1 case was excluded as fallback", result.ApplyReady, result.SafetyMeasured)
+	}
+	if result.ExcludedFallbackCases != 1 {
+		t.Fatalf("ExcludedFallbackCases = %d, want 1", result.ExcludedFallbackCases)
+	}
+	if result.CorrectSampleSize != 1 {
+		t.Fatalf("CorrectSampleSize = %d, want 1 -- the non-fallback correct case must still be included", result.CorrectSampleSize)
+	}
+}
+
+// TestCalibrateMarginFromReport_NonFallbackCasesUnaffectedByL1 is the
+// negative control: with UsedTermFallback left at its zero value (false,
+// every pre-L1 fixture's implicit state), ExcludedFallbackCases/
+// ExcludedFallbackControls stay 0 and every sample is included exactly as
+// before this fix.
+func TestCalibrateMarginFromReport_NonFallbackCasesUnaffectedByL1(t *testing.T) {
+	report := marginReportWithControls(
+		[]CalibrationCase{eligibleCase("project", "wrong", "project", "correct", 0.10)},
+		[]CalibrationCase{eligibleControlCase("project", "ghost", 0.20)},
+	)
+	result, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v", err)
+	}
+	if result.ExcludedFallbackCases != 0 || result.ExcludedFallbackControls != 0 {
+		t.Fatalf("ExcludedFallbackCases=%d ExcludedFallbackControls=%d, want both 0", result.ExcludedFallbackCases, result.ExcludedFallbackControls)
+	}
+	if result.WrongSampleSize != 2 {
+		t.Fatalf("WrongSampleSize = %d, want 2 -- neither case used the fallback", result.WrongSampleSize)
+	}
+}
+
+// --- codex r6 L2: report.Controls must mirror len(ControlCases) ------------
+
+// TestCalibrateMarginFromReport_ControlsCountMismatchIsAnError is L2's core
+// pinning test: report.Controls disagrees with len(report.ControlCases),
+// simulating a truncated report -- must hard-fail before a single control
+// case is read.
+func TestCalibrateMarginFromReport_ControlsCountMismatchIsAnError(t *testing.T) {
+	report := marginReportWithControls(nil, []CalibrationCase{eligibleControlCase("project", "ghost", 0.20)})
+	report.Controls = 5 // the harness declared 5, but only 1 survived
+	_, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if !errors.Is(err, ErrMarginReportControlsCountMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportControlsCountMismatch", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_ControlsCountMismatchWhenTruncatedToZeroIsAnError
+// proves the check catches a report truncated all the way to ZERO surviving
+// control cases too, not merely a partial truncation.
+func TestCalibrateMarginFromReport_ControlsCountMismatchWhenTruncatedToZeroIsAnError(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.10))
+	report.Controls = 3 // declared 3, ControlCases is empty
+	_, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if !errors.Is(err, ErrMarginReportControlsCountMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportControlsCountMismatch", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_ControlsCountMatchProceeds is the positive
+// control: report.Controls==len(ControlCases) (marginReportWithControls'
+// own construction) must not be refused -- already exercised implicitly by
+// every OTHER control-population test in this file passing; pinned here
+// explicitly as its own named assertion, mirroring
+// TestCalibrateMarginFromReport_ConsistentMarginsStillProceed's pattern.
+func TestCalibrateMarginFromReport_ControlsCountMatchProceeds(t *testing.T) {
+	report := marginReportWithControls(nil, []CalibrationCase{eligibleControlCase("project", "ghost", 0.20)})
+	if _, err := CalibrateMarginFromReport(report, marginTestOpts); err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v, want no error when Controls matches len(ControlCases)", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_ZeroControlsDeclaredAndZeroPresentProceeds
+// proves the check does not misfire on the ordinary "no controls in this
+// report at all" case (report.Controls==0==len(nil)) -- marginReport's own
+// construction, already exercised by most tests in this file; pinned
+// explicitly so a future change to the check's zero-handling trips a named
+// test.
+func TestCalibrateMarginFromReport_ZeroControlsDeclaredAndZeroPresentProceeds(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.30))
+	if _, err := CalibrateMarginFromReport(report, marginTestOpts); err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v, want no error for a report with no controls at all", err)
+	}
+}
+
+// --- codex r6 L3: the closed set of valid vector-arm shapes -----------------
+
+// TestCalibrateMarginFromReport_VectorTop2WithoutVectorTop1IsAnError is L3's
+// asymmetric core pinning test: VectorTop2 present, VectorTop1 nil -- an
+// impossible shape (a "second place" cannot exist without a "first place").
+func TestCalibrateMarginFromReport_VectorTop2WithoutVectorTop1IsAnError(t *testing.T) {
+	c := eligibleCase("project", "p1", "project", "p1", 0.30)
+	c.VectorTop1 = nil
+	// c.VectorTop2 and c.VectorMargin stay set from eligibleCase.
+	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_VectorMarginWithoutVectorTop1IsAnError is
+// the same proof for VectorMargin present with VectorTop1 nil (VectorTop2
+// also present here, since VectorMargin cannot exist without SOME top2 to
+// have been subtracted from).
+func TestCalibrateMarginFromReport_VectorMarginWithoutVectorTop1IsAnError(t *testing.T) {
+	c := eligibleCase("project", "p1", "project", "p1", 0.30)
+	c.VectorTop1 = nil
+	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_VectorMarginWithoutVectorTop2IsAnError proves
+// the LAST impossible cell: VectorTop1 present, VectorTop2 nil, but
+// VectorMargin somehow present (a margin with no second value to have been
+// computed from).
+func TestCalibrateMarginFromReport_VectorMarginWithoutVectorTop2IsAnError(t *testing.T) {
+	c := eligibleCase("project", "p1", "project", "p1", 0.30)
+	c.VectorTop2 = nil
+	// c.VectorMargin stays set from eligibleCase -- the impossible cell.
+	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_VectorTop1OnlyIsAValidShape is the positive
+// control for L3's SECOND valid shape (one distinct vector-arm subject, no
+// competitor) -- must proceed to the eligibility loop (and there be
+// excluded for lack of a margin, per the PRE-EXISTING
+// TestCalibrateMarginFromReport_ExcludesNilVectorTop2 behavior), not be
+// flagged as an impossible shape.
+func TestCalibrateMarginFromReport_VectorTop1OnlyIsAValidShape(t *testing.T) {
+	c := eligibleCase("project", "p1", "project", "p1", 0.30)
+	c.VectorTop2 = nil
+	c.VectorMargin = nil
+	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if !errors.Is(err, ErrNoMarginSamples) {
+		t.Fatalf("err = %v, want ErrNoMarginSamples -- {VectorTop1 only} is a VALID shape, excluded by eligibility, not flagged as inconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_AllAbsentIsAValidShape is the positive
+// control for L3's FIRST valid shape (no vector-arm data measured for this
+// case at all).
+func TestCalibrateMarginFromReport_AllAbsentIsAValidShape(t *testing.T) {
+	c := CalibrationCase{Cause: "subject_missing", ExpectKind: "project", ExpectID: "p1"}
+	_, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts)
+	if !errors.Is(err, ErrNoMarginSamples) {
+		t.Fatalf("err = %v, want ErrNoMarginSamples -- {all absent} is a VALID shape, excluded by eligibility, not flagged as inconsistent", err)
 	}
 }
 

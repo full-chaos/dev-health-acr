@@ -332,27 +332,71 @@ func TestResolveSubjects_CommitPathCarveOutFiresThroughTheRealAdapterWiring(t *t
 }
 
 // TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrowsBelowTwo
-// is codex r5 K2's end-to-end pinning test: the SAME fixture and calibrated
-// M/CalibratedTopK as the wiring proof above, but this adapter's config.MaxResults
-// is 1 -- the real production seam (a.config.MaxResults -> ResolveDeps.MaxResultsCap
-// -> ResolveSubjects' effectiveSearchLimit) must narrow the effective per-call
-// bound to 1 even though request.Options.MaxSubjectCandidates (10) alone would
-// have cleared the OLD, pre-K2 max>=2 test. Proves the fix reaches all the way
-// from config through reader.go's real wiring, not merely the graphrank-level
-// algorithm (see graphrank's TestChaos3829_K2_EffectiveSearchLimitBelowTwoNeverFires
-// for that unit-level pinning).
+// is codex r5 K2's end-to-end pinning test, REBUILT per codex r6 L4 (accepted):
+// the original single-term version was VACUOUS -- vectorSearchNodesWithOverFetch's
+// own `survivors[:returnCap]` slice (vector.go) already trims a SINGLE term's
+// raw ANN rows down to returnCap=multiplier*limit=1*1=1 BEFORE
+// mergeSearchResults ever sees a second row, so that fixture had NO
+// competitor in vectorArmSimilarity REGARDLESS of whether the MaxResultsCap
+// wiring under test was even present -- it was proving "no competitor",
+// not "effective-limit guard fired".
+//
+// Fixed here with TWO interpreted subject terms, each its OWN Search call
+// (and therefore its OWN independent returnCap=1 slice) contributing a
+// DIFFERENT top-1 subject -- mergeSearchResults' cross-term side-map (keyed
+// by subject, MAX similarity across every term, see its own doc comment)
+// therefore ends up with the SAME >=2 DISTINCT entries a real cap=1
+// deployment queried with >=2 terms would produce, giving vectorMarginCommit
+// a genuine TOP+COMPETITOR pair to work with. The ONLY thing left to block
+// the commit is effectiveSearchLimit(1) < 2 -- exactly the K2 guard this
+// test exists to pin, isolated from K2's own F1 lower-bound sibling this
+// time by construction, not by accident.
 func TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrowsBelowTwo(t *testing.T) {
+	vectorCalls, lexicalCalls := 0, 0
 	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		switch {
 		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
-			return []row{
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service"}}, "score": 0.05},
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service"}}, "score": 0.30},
-			}, nil
+			vectorCalls++
+			switch vectorCalls {
+			case 1:
+				// term "auth": distance 0.05 -> similarity 0.95 (decisive top-1).
+				return []row{
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service"}}, "score": 0.05},
+				}, nil
+			case 2:
+				// term "identity": distance 0.30 -> similarity 0.70, above
+				// tau (0.55) -- the cross-term competitor, from a DIFFERENT
+				// Search call's own (independently returnCap=1-sliced)
+				// result.
+				return []row{
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service"}}, "score": 0.30},
+				}, nil
+			default:
+				// A 3rd+ call is CHAOS-3838's question-level SearchQuestion
+				// pass (reader.go wires it unconditionally; this fixture's
+				// non-empty Question triggers it) -- codex r1 F3 passes nil
+				// for vectorArmSimilarity on that call specifically, so
+				// whatever it returns never touches the side-map this test
+				// is exercising. Returning nothing keeps the fixture
+				// minimal.
+				return nil, nil
+			}
 		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
-			return []row{
-				{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth"}}, "score": 1.0},
-			}, nil
+			lexicalCalls++
+			if lexicalCalls == 1 {
+				// term "auth": lexical also finds authsvc -- the ONLY
+				// corroborated (Vector+Lexical) candidate, so it alone can
+				// ever be TOP under vectorArmCorroborated's own narrowed
+				// pairing (F4).
+				return []row{
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth"}}, "score": 1.0},
+				}, nil
+			}
+			// term "identity": no lexical hit -- identitysvc stays
+			// vector-only (uncorroborated), present purely as the
+			// cross-term competitor and the ordinary top-of-two gate's
+			// second commit-eligible candidate.
+			return nil, nil
 		default:
 			return nil, nil
 		}
@@ -376,13 +420,87 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrows
 		Question: "who owns auth",
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
-	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
+	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth", "identity"}}
 	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
+	if vectorCalls < 2 {
+		t.Fatalf("vectorCalls = %d, want >=2 -- this test requires two INDEPENDENT Search calls to produce the cross-term side-map, not a single call returning two rows", vectorCalls)
+	}
 	if len(resolution.Committed) != 0 {
-		t.Fatalf("resolution.Committed = %v, want none -- a config MaxResults cap of 1 must narrow the effective search limit below the carve-out's floor of 2, even though request.Options.MaxSubjectCandidates (10) alone would not", resolution.Committed)
+		t.Fatalf("resolution.Committed = %v, want none -- a config MaxResults cap of 1 must narrow the effective search limit below the carve-out's floor of 2, even though request.Options.MaxSubjectCandidates (10) alone would not, and even with a genuine cross-term competitor available", resolution.Committed)
+	}
+}
+
+// TestResolveSubjects_CommitPathCarveOutFiresWithTwoTermsAtCapTwo is the
+// positive control for the rebuilt L4 test above: the IDENTICAL two-term
+// fixture, but MaxResults=2 (not 1) -- effectiveSearchLimit becomes 2,
+// clearing the carve-out's lower bound, so the SAME cross-term competitor
+// that blocked the commit above now lets it fire. Proves the L4 rebuild
+// exercises a REAL, bidirectional guard (the cross-term side-map, TOP,
+// and COMPETITOR are unchanged between this test and the one above -- only
+// the cap differs), not a fixture that always refuses regardless of what
+// MaxResultsCap wiring is present.
+func TestResolveSubjects_CommitPathCarveOutFiresWithTwoTermsAtCapTwo(t *testing.T) {
+	vectorCalls, lexicalCalls := 0, 0
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			vectorCalls++
+			switch vectorCalls {
+			case 1:
+				return []row{
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service"}}, "score": 0.05},
+				}, nil
+			case 2:
+				return []row{
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "identitysvc", propLabel: "Identity Service"}}, "score": 0.30},
+				}, nil
+			default:
+				// A 3rd+ call is CHAOS-3838's question-level SearchQuestion
+				// pass (F3 excludes it from the side-map) -- see the
+				// disabled-fixture test's identical comment.
+				return nil, nil
+			}
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			lexicalCalls++
+			if lexicalCalls == 1 {
+				return []row{
+					{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "authsvc", propLabel: "Auth Service", propSearchText: "auth"}}, "score": 1.0},
+				}, nil
+			}
+			return nil, nil
+		default:
+			return nil, nil
+		}
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter, err := newWithAPI(Config{
+		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second, MaxAttempts: 1,
+		MaxResults: 2, // the ONLY difference from the test above
+		PoolSize:   1, AllowInsecure: true,
+	}, fake)
+	if err != nil {
+		t.Fatalf("newWithAPI() error = %v", err)
+	}
+	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: []float32{1, 0, 0, 0}}, SimilarityFloor: 0.55})
+	adapter.vectorMarginCommitThreshold = 0.10
+	adapter.calibratedTopK = 20
+
+	request := contextfabric.InvestigationRequest{
+		Question: "who owns auth",
+		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
+	}
+	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth", "identity"}}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects: %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "authsvc" {
+		t.Fatalf("resolution.Committed = %v, want exactly [authsvc] -- MaxResults=2 clears the effective-limit floor for the SAME cross-term fixture", resolution.Committed)
 	}
 }
 
