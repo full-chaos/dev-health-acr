@@ -49,6 +49,34 @@ func TestCodeGraphRunner_RedactsPath(t *testing.T) {
 	require.NotContains(t, err.Error(), path)
 }
 
+// TestCodeGraphRunner_ClassifiesAGenuineENOENTAsExecutableAbsent proves the
+// CHAOS-3861 fix's wiring end to end, not just classifyCodeGraphSpawnError
+// in isolation: unlike TestCodeGraphRunner_RejectsUntrustedExecutable and
+// TestCodeGraphRunner_RedactsPath above (which fail inside
+// CodeGraphRunner.executable()'s own pre-flight resolution, before ever
+// reaching runCodeGraphJSON), this uses the resolveExecutable test seam to
+// bypass that pre-flight check the way newTestCodeGraphRunner does, so the
+// failure genuinely occurs at cmd.Start() inside runCodeGraphJSON -- the
+// exact call site this fix changed. The path really does not exist, so
+// this is real ENOENT, not a synthetic error, deterministic and safe to
+// run in any CI environment.
+func TestCodeGraphRunner_ClassifiesAGenuineENOENTAsExecutableAbsent(t *testing.T) {
+	// Given
+	missing := filepath.Join(t.TempDir(), "codegraph-does-not-exist")
+	runner := CodeGraphRunner{
+		Config:            LocalIndexConfig{Executable: missing, Timeout: 3 * time.Second},
+		resolveExecutable: func(string) (string, error) { return missing, nil },
+	}
+
+	// When
+	_, err := runner.Status(context.Background(), directGuardFixture(t))
+
+	// Then
+	require.ErrorIs(t, err, errCodeGraphExecutableAbsent)
+	require.ErrorIs(t, err, ErrCodeGraphUnavailable)
+	require.NotErrorIs(t, err, errCodeGraphSpawnUnavailable, "a genuinely missing file must never be misclassified as a transient spawn failure")
+}
+
 func TestCodeGraphRunner_KillsOversizedOutput(t *testing.T) {
 	// Given
 	runner := newTestCodeGraphRunner(t, `printf '"'; head -c 1048577 /dev/zero | tr '\000' a; printf '"'`)
