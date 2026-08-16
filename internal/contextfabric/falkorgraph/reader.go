@@ -128,6 +128,33 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// not, and was never, a claim that the RUNTIME gate requires
 		// matching K -- this proof is what establishes that the runtime
 		// gate does not, for any K>=2.
+		//
+		// codex r4 J1 (REFUTED, SECOND raise of the K premise -- a NEW
+		// mechanism angle, checked and refuted the same way): where G1
+		// argued K-invariance for an IDEALIZED exact k-NN, J1 asked whether
+		// the DEPLOYED index's own ANN APPROXIMATION reopens the question --
+		// it does not. retrieval_policy.go's calibratedIdentityText3Large
+		// pins EfRuntime=200 for this identity, and the pinned HNSW module
+		// (CHAOS-3832, verified live) explores with ef = max(efRuntime, K)
+		// -- so for every K the API allows (1-50), efRuntime=200 already
+		// dominates: ef stays fixed at 200 regardless of K, meaning the
+		// EXPLORED candidate set HNSW considers is IDENTICAL across every
+		// allowed K. K changes only how much of that one fixed exploration
+		// is RETURNED (the top-K prefix of it) -- never what was explored.
+		// G1's argument above ("true#2 is at worst rank 2 in call t*, so it
+		// is returned at any K>=2") therefore applies UNCHANGED over this
+		// SAME fixed explored set: rank-2-of-explored is in every returned
+		// prefix K>=2, independent of K. The index's own recall imperfection
+		// (CHAOS-3832's measured 0.979 at efRuntime=200) is a property of ef
+		// alone, not of K -- and it is not a NEW hazard M was calibrated
+		// blind to: the oracle's own wrong-top1 population (calibratedIdentityText3Large's
+		// doc comment) already includes an ann_loss case, meaning M was
+		// measured against the ACTUAL deployed ANN's imperfect recall, not
+		// an idealized exact k-NN that never misses. This premise has now
+		// been raised and refuted TWICE under two different mechanism
+		// framings (r2 G1: exact-KNN/runtime-K; r4 J1: ANN-approximation/ef)
+		// -- both settled; a third raise is premise-cycling, not new
+		// information.
 		VectorMarginCommitThreshold: a.vectorMarginCommitThreshold,
 	}
 	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)

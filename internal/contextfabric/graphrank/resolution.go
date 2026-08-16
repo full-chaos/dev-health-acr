@@ -40,8 +40,9 @@ import (
 // nothing committed -- see the rescue block after the switch below, and
 // vectorMarginCommit's own doc comment for the full precondition set and
 // the soundness argument for why it may fire even when searchTruncated is
-// true.
-func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64) contextfabric.SubjectResolution {
+// true. retrievalDegraded (codex r4 J2, accepted) additionally gates the
+// rescue -- see the rescue block's own comment for why.
+func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -225,7 +226,32 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		// the caller's literal, exact-matching term actually referred to;
 		// picking the higher-margin one would silently override a
 		// deliberate, ratified design decision with an unrelated signal.
-		if ambiguous && vectorMarginCommitThreshold > 0 && max >= 2 && len(exactIndex) < 2 {
+		//
+		// codex r4 J2 (accepted, narrowed): the ERR arm of the reviewed
+		// claim was impossible (ResolveSubjects returns immediately on any
+		// per-term Search error, before this function is ever reached --
+		// no partial-map-after-error state exists), but the DEGRADED arm
+		// is real: a successful call whose vector arm degraded (e.g. an
+		// embedder failure that still falls back to a lexical-only result,
+		// ResolveDeps.Search's own degraded return) leaves
+		// vectorArmSimilarity missing that term's competitors, the SAME
+		// incompleteness class F0/F1 already guard against for a
+		// truncated/too-small-K search -- except here the calibration
+		// harness (oracle_live_test.go's live driver) HARD-FAILS on any
+		// degradation rather than measuring it, so a degraded resolution
+		// was NEVER part of the population M was calibrated against, at
+		// any margin. retrievalDegraded gates the rescue accordingly --
+		// conservative scope, deliberately: ANY retrieval degradation
+		// anywhere in this resolution (not just on the term that would
+		// have produced the missing competitor) disables the carve-out,
+		// which is the cleanest statement of "calibration measured only
+		// CLEAN resolutions" available without threading per-term
+		// degradation state through the merge. The EXISTING confidence
+		// gates above (lone 0.72, top-of-two 0.88/0.12, the exact-label
+		// override) are entirely untouched by this -- they already had
+		// their own, independent relationship to degradation before
+		// CHAOS-3829 and this ticket does not change it.
+		if ambiguous && vectorMarginCommitThreshold > 0 && max >= 2 && len(exactIndex) < 2 && !retrievalDegraded {
 			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted

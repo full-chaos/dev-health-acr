@@ -572,6 +572,51 @@ func TestCalibrateMarginFromReport_ConsistentMarginsStillProceed(t *testing.T) {
 	}
 }
 
+// --- codex r4 J3: two ranked subjects present but margin missing = corrupt -
+
+// TestCalibrateMarginFromReport_MissingMarginWithBothTopsPresentIsAnError is
+// J3's core pinning test: VectorTop1 AND VectorTop2 are both present (two
+// ranked subjects genuinely exist), but VectorMargin is nil -- the producer
+// always writes one alongside the other, so this specific combination is
+// corruption, not an unmeasured case, and must hard-fail rather than
+// silently exclude what could be the LARGEST wrong-top1 margin in the
+// report.
+func TestCalibrateMarginFromReport_MissingMarginWithBothTopsPresentIsAnError(t *testing.T) {
+	broken := eligibleCase("project", "p1", "project", "correct-elsewhere", 0.30)
+	broken.VectorMargin = nil // VectorTop1/VectorTop2 both still present
+	_, err := CalibrateMarginFromReport(marginReport(broken), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_MissingMarginWithBothTopsPresentInControlIsAnError
+// is the same proof for a CONTROL case.
+func TestCalibrateMarginFromReport_MissingMarginWithBothTopsPresentInControlIsAnError(t *testing.T) {
+	broken := eligibleControlCase("project", "ghost", 0.20)
+	broken.VectorMargin = nil
+	_, err := CalibrateMarginFromReport(marginReportWithControls(nil, []CalibrationCase{broken}), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_NilVectorTop2StillExemptFromJ3 proves J3 did
+// NOT broaden the exemption boundary: a case with VectorTop2 itself nil (no
+// second ranked subject at all -- margin is genuinely UNDEFINED, not merely
+// unwritten) is still exempt, exactly as it was before this fix -- pinned
+// separately from TestCalibrateMarginFromReport_ExcludesNilVectorTop2
+// (which asserts the ELIGIBILITY-loop behavior) to assert the
+// CONSISTENCY-check behavior specifically.
+func TestCalibrateMarginFromReport_NilVectorTop2StillExemptFromJ3(t *testing.T) {
+	c := eligibleCase("project", "p1", "project", "p1", 0.30)
+	c.VectorTop2 = nil
+	c.VectorMargin = nil
+	if _, err := CalibrateMarginFromReport(marginReport(c), marginTestOpts); !errors.Is(err, ErrNoMarginSamples) {
+		t.Fatalf("err = %v, want ErrNoMarginSamples (excluded by eligibility, not flagged as inconsistent)", err)
+	}
+}
+
 // --- runMarginCalibrationRunner (margin_calibration_live_test.go) ----------
 
 // TestMarginCalibrationRunner_GateFailingReportStillWritesAnArtifact is the

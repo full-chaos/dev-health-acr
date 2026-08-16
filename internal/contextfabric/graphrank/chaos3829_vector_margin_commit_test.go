@@ -11,6 +11,8 @@ import (
 // tests that exercise the commit-path carve-out directly. searchTruncated
 // is exposed too (the carve-out's whole REACH property depends on firing
 // even when it is true -- see vectorMarginCommit's own doc comment).
+// retrievalDegraded defaults to false (not degraded) -- codex r4 J2's own
+// tests use resolveOneWithVectorMarginDegraded instead.
 func resolveOneWithVectorMargin(searchTruncated bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
 	return resolveOneWithVectorMarginAndMax(10, searchTruncated, vectorArmSimilarity, threshold, candidates...)
 }
@@ -18,12 +20,26 @@ func resolveOneWithVectorMargin(searchTruncated bool, vectorArmSimilarity map[st
 // resolveOneWithVectorMarginAndMax is resolveOneWithVectorMargin with an
 // explicit max (ResolveFromMergedCandidates' own max parameter) -- CHAOS-3829
 // codex r1 F1's tests need to vary this below the default of 10.
+// retrievalDegraded defaults to false.
 func resolveOneWithVectorMarginAndMax(max int, searchTruncated bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
+	return resolveOneWithVectorMarginFull(max, searchTruncated, false, vectorArmSimilarity, threshold, candidates...)
+}
+
+// resolveOneWithVectorMarginDegraded is resolveOneWithVectorMargin (max=10)
+// with an explicit retrievalDegraded -- CHAOS-3829 codex r4 J2's own tests.
+func resolveOneWithVectorMarginDegraded(searchTruncated, retrievalDegraded bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
+	return resolveOneWithVectorMarginFull(10, searchTruncated, retrievalDegraded, vectorArmSimilarity, threshold, candidates...)
+}
+
+// resolveOneWithVectorMarginFull is the single authority every helper above
+// funnels through, so they cannot independently drift on how a
+// ResolveFromMergedCandidates call is built.
+func resolveOneWithVectorMarginFull(max int, searchTruncated, retrievalDegraded bool, vectorArmSimilarity map[string]float64, threshold float64, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
 	bySubject := make(map[string]contextfabric.SubjectCandidate, len(candidates))
 	for _, candidate := range candidates {
 		bySubject[SubjectKey(candidate.Subject)] = candidate
 	}
-	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, max, true, searchTruncated, vectorArmSimilarity, threshold)
+	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, max, true, searchTruncated, vectorArmSimilarity, threshold, retrievalDegraded)
 }
 
 // TestChaos3829_CarveOutRescuesTheExactTwoCorroboratedCandidatesScenario is
@@ -446,5 +462,44 @@ func TestChaos3829_G2_SingleExactMatchStillUsesTheOverrideNotTheRescue(t *testin
 	resolution := resolveOneWithVectorMargin(false, similarities, 0.01, exact, other)
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "exact" {
 		t.Fatalf("resolution.Committed = %v, want exactly [exact] via the unique exact-label override", resolution.Committed)
+	}
+}
+
+// --- codex r4 J2: a degraded resolution must never reach the rescue -------
+
+// TestChaos3829_J2_RetrievalDegradedNeverReachesTheRescue is the core J2
+// pinning test: an otherwise-perfect rescue scenario (decisive margin,
+// corroborated top-1) stays ambiguous when retrievalDegraded=true --
+// mirroring the max<2 (F1) fail-closed shape. A degraded resolution was
+// never part of the population CalibrateMarginFromReport's oracle harness
+// measured (it hard-fails on any degradation), so its margin -- however
+// decisive-looking -- has no calibration backing it.
+func TestChaos3829_J2_RetrievalDegradedNeverReachesTheRescue(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginDegraded(false, true, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- a degraded resolution must never reach the rescue", resolution.Committed)
+	}
+}
+
+// TestChaos3829_J2_NotDegradedStillFires is the positive control: the exact
+// same fixture, retrievalDegraded=false, must still fire (proving the
+// refusal above is specifically about the new guard, not some other
+// difference between the two tests).
+func TestChaos3829_J2_NotDegradedStillFires(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.75, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.60,
+	}
+	resolution := resolveOneWithVectorMarginDegraded(false, false, similarities, 0.10, auth, authz)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
+		t.Fatalf("resolution.Committed = %v, want exactly [auth] when NOT degraded", resolution.Committed)
 	}
 }

@@ -664,22 +664,37 @@ var ErrMarginReportConfigMismatch = errors.New("calibration report's tau/topK is
 var ErrMarginReportInternallyInconsistent = errors.New("calibration report case's stored vector_margin does not match its own top-1/top-2 similarities")
 
 // checkMarginConsistency validates every CalibrationCase in cases whose
-// VectorTop1/VectorTop2/VectorMargin are ALL present (codex r3 H2): the
-// oracle harness always computes VectorMargin as
-// VectorTop1.Similarity-VectorTop2.Similarity (oracle_live_test.go), so a
-// report where the stored field disagrees with that recomputation, or
-// where either similarity is not a finite number, cannot be trusted --
-// something corrupted it, hand-edited it, or a producer bug wrote it
-// incorrectly. label identifies which population (report.Cases vs
-// report.ControlCases) for the error message. A case with any of the
-// three fields nil is skipped here (unaffected) -- the caller's own
-// eligibility loop already excludes it from calibration for an unrelated
-// reason (no margin was ever claimed), which is a different, already-
-// handled state from "a margin was claimed and it's wrong".
+// VectorTop1 AND VectorTop2 are BOTH present (codex r3 H2, extended by
+// codex r4 J3): the oracle harness always computes VectorMargin as
+// VectorTop1.Similarity-VectorTop2.Similarity (oracle_live_test.go)
+// whenever it has two ranked subjects to compute it FROM, so a report where
+// the stored field disagrees with that recomputation, is MISSING despite
+// two ranked subjects being present, or has a non-finite similarity cannot
+// be trusted -- something corrupted it, hand-edited it, or a producer bug
+// wrote it incorrectly.
+//
+// r4 J3 (accepted): the ORIGINAL H2 check only ran when VectorMargin was
+// ALSO non-nil, silently treating "two subjects present, margin absent" the
+// SAME as "no margin was ever claimed" (VectorTop2 itself nil) -- but those
+// are different states. The producer contract (oracle_live_test.go, both
+// the scored-case and control-case measurement paths) always writes
+// VectorMargin whenever it writes VectorTop2, so an absent margin alongside
+// a present VectorTop2 IS corruption -- silently skipping such a case could
+// drop exactly the LARGEST wrong-top1 margin in the report (the one most
+// likely to have been tampered with to hide it) while ApplyReady stayed
+// true, understating M. Only a case with VectorTop2 itself nil (no second
+// ranked subject at all -- margin is genuinely undefined, not merely
+// unwritten) is exempt.
+//
+// label identifies which population (report.Cases vs report.ControlCases)
+// for the error message.
 func checkMarginConsistency(cases []CalibrationCase, label string) error {
 	for i, c := range cases {
-		if c.VectorTop1 == nil || c.VectorTop2 == nil || c.VectorMargin == nil {
+		if c.VectorTop1 == nil || c.VectorTop2 == nil {
 			continue
+		}
+		if c.VectorMargin == nil {
+			return fmt.Errorf("%w: %s[%d] has both VectorTop1 and VectorTop2 but no VectorMargin -- the producer always writes one alongside the other, so absence is corruption, not an unmeasured case", ErrMarginReportInternallyInconsistent, label, i)
 		}
 		s1, s2 := c.VectorTop1.Similarity, c.VectorTop2.Similarity
 		if math.IsNaN(s1) || math.IsInf(s1, 0) || math.IsNaN(s2) || math.IsInf(s2, 0) {
