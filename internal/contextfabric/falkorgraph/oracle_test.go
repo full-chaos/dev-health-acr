@@ -445,6 +445,105 @@ func TestWriteFileMode0600OnANewFile(t *testing.T) {
 	}
 }
 
+// TestVectorArmTop2OrdersDescendingWithDeterministicTieBreak is CHAOS-3829
+// Phase 1's pinning test for the pure top-2 selection CalibrateMarginFromReport
+// (Phase 2) will read VectorMargin from.
+func TestVectorArmTop2OrdersDescendingWithDeterministicTieBreak(t *testing.T) {
+	bySubject := map[string]vectorArmSubject{
+		subjectMapKey("project", "low"):  {Kind: "project", CanonicalID: "low", Similarity: 0.3},
+		subjectMapKey("project", "high"): {Kind: "project", CanonicalID: "high", Similarity: 0.9},
+		subjectMapKey("project", "mid"):  {Kind: "project", CanonicalID: "mid", Similarity: 0.6},
+	}
+	top1, top2 := vectorArmTop2(bySubject)
+	if top1 == nil || top1.CanonicalID != "high" {
+		t.Fatalf("top1 = %+v, want high (0.9)", top1)
+	}
+	if top2 == nil || top2.CanonicalID != "mid" {
+		t.Fatalf("top2 = %+v, want mid (0.6)", top2)
+	}
+}
+
+func TestVectorArmTop2TiesBreakByKindThenCanonicalID(t *testing.T) {
+	bySubject := map[string]vectorArmSubject{
+		subjectMapKey("project", "b"): {Kind: "project", CanonicalID: "b", Similarity: 0.5},
+		subjectMapKey("project", "a"): {Kind: "project", CanonicalID: "a", Similarity: 0.5},
+	}
+	top1, top2 := vectorArmTop2(bySubject)
+	if top1 == nil || top1.CanonicalID != "a" {
+		t.Fatalf("top1 = %+v, want a (deterministic tie-break)", top1)
+	}
+	if top2 == nil || top2.CanonicalID != "b" {
+		t.Fatalf("top2 = %+v, want b", top2)
+	}
+}
+
+func TestVectorArmTop2ReturnsNilSlotsWhenFewerThanTwoDistinctSubjects(t *testing.T) {
+	top1, top2 := vectorArmTop2(nil)
+	if top1 != nil || top2 != nil {
+		t.Fatalf("empty input: got top1=%+v top2=%+v, want both nil", top1, top2)
+	}
+	one := map[string]vectorArmSubject{subjectMapKey("project", "only"): {Kind: "project", CanonicalID: "only", Similarity: 0.7}}
+	top1, top2 = vectorArmTop2(one)
+	if top1 == nil || top1.CanonicalID != "only" {
+		t.Fatalf("single entry: top1 = %+v, want only", top1)
+	}
+	if top2 != nil {
+		t.Fatalf("single entry: top2 = %+v, want nil -- margin is undefined with no competitor, not zero", top2)
+	}
+}
+
+// TestMergeVectorArmSimilarityKeepsHighestAcrossTerms proves the max-wins
+// merge rule: a subject the ANN result names twice (once per one of two
+// simulated terms) keeps its HIGHEST observed raw similarity, mirroring
+// graphrank.MergeCandidates.
+func TestMergeVectorArmSimilarityKeepsHighestAcrossTerms(t *testing.T) {
+	corpus := []oracleVector{
+		{Kind: "project", CanonicalID: "p1", Vector: []float64{1, 0}},
+	}
+	bySubject := map[string]vectorArmSubject{}
+	// Term 1: query orthogonal-ish, low similarity.
+	mergeVectorArmSimilarity(bySubject, []graphrank.CandidateNode{
+		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "p1"}},
+	}, []float64{0.1, 0.99}, corpus)
+	firstSimilarity := bySubject[subjectMapKey("project", "p1")].Similarity
+	// Term 2: query parallel, similarity 1.0 -- must WIN over the lower value.
+	mergeVectorArmSimilarity(bySubject, []graphrank.CandidateNode{
+		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "p1"}},
+	}, []float64{1, 0}, corpus)
+	got := bySubject[subjectMapKey("project", "p1")].Similarity
+	if got != 1 {
+		t.Fatalf("merged similarity = %v, want 1 (the higher of the two terms' observations, first was %v)", got, firstSimilarity)
+	}
+}
+
+// TestMergeVectorArmSimilaritySkipsCandidatesAbsentFromCorpus is the
+// defensive-tolerance case documented on mergeVectorArmSimilarity: an ANN
+// candidate this harness cannot look up in the fetched corpus must not
+// fault the run.
+func TestMergeVectorArmSimilaritySkipsCandidatesAbsentFromCorpus(t *testing.T) {
+	bySubject := map[string]vectorArmSubject{}
+	mergeVectorArmSimilarity(bySubject, []graphrank.CandidateNode{
+		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "not-in-corpus"}},
+	}, []float64{1, 0}, nil)
+	if len(bySubject) != 0 {
+		t.Fatalf("bySubject = %+v, want empty -- the candidate has no corpus entry to compute a similarity from", bySubject)
+	}
+}
+
+func TestMergeLexicalArmSubjectsRecordsIdentityOnly(t *testing.T) {
+	bySubject := map[string]bool{}
+	mergeLexicalArmSubjects(bySubject, []graphrank.CandidateNode{
+		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "p1"}},
+		{Attributes: map[string]interface{}{propKind: "work_item", propCanonicalID: "w1"}},
+	})
+	if !bySubject[subjectMapKey("project", "p1")] || !bySubject[subjectMapKey("work_item", "w1")] {
+		t.Fatalf("bySubject = %+v, want both p1 and w1 present", bySubject)
+	}
+	if len(bySubject) != 2 {
+		t.Fatalf("bySubject has %d entries, want exactly 2", len(bySubject))
+	}
+}
+
 func TestFetchEmbedderFenceCorpusRequiresAnEmbedder(t *testing.T) {
 	adapter := newFakeAdapter(t, &fakeConn{})
 	_, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org")

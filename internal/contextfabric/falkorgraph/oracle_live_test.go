@@ -8,6 +8,8 @@ import (
 	"os"
 	"sort"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
 // embedQueryTerms embeds terms through the SAME query-prefixing path
@@ -308,18 +310,41 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 		annHit, oracleHit := false, false
 		var bestCorrectSimilarity, bestWrongSimilarity *float64
 		var hardNegatives []hardNegative
+		// CHAOS-3829 Phase 1: vector-arm/lexical-arm bookkeeping, merged
+		// across every active term the same way a real ResolveSubjects call
+		// would merge per-term Search results into one candidatesBySubject
+		// map (see mergeVectorArmSimilarity/mergeLexicalArmSubjects' doc
+		// comments).
+		vectorArmSimilarity := map[string]vectorArmSubject{}
+		lexicalArmSubjects := map[string]bool{}
+		vectorSearchTruncatedAnyTerm := false
 
 		for i, term := range activeTerms {
 			query64 := float64Vector(vectors[i])
 
 			// ANN: the real production function, same floor, same index.
-			annCandidates, _, err := adapter.vectorSearchNodes(ctx, key, orgID, vectors[i], tau, topK)
+			annCandidates, vectorTruncated, err := adapter.vectorSearchNodes(ctx, key, orgID, vectors[i], tau, topK)
 			if err != nil {
 				t.Fatalf("vectorSearchNodes(%q): %v", term, err)
 			}
 			if containsANNCandidate(annCandidates, testCase.ExpectKind, testCase.ExpectID) {
 				annHit = true
 			}
+			if vectorTruncated {
+				vectorSearchTruncatedAnyTerm = true
+			}
+			mergeVectorArmSimilarity(vectorArmSimilarity, annCandidates, query64, corpusVectors)
+
+			// Lexical: the SAME production function hybridSearchNodes calls
+			// for this term, run independently here so this case's
+			// corroboration status (did the lexical arm ALSO propose this
+			// vector-arm subject) can be measured directly rather than
+			// inferred.
+			lexicalCandidates, _, lexErr := adapter.fulltextSearchNodesForResolution(ctx, key, orgID, term, topK, temporalFilter{})
+			if lexErr != nil {
+				t.Fatalf("fulltextSearchNodesForResolution(%q): %v", term, lexErr)
+			}
+			mergeLexicalArmSubjects(lexicalArmSubjects, lexicalCandidates)
 
 			// Oracle: RAW ranking for S+/S-/hard-negatives, floor-filtered +
 			// tie-inclusive top-K for the retrievability check (findings 2
@@ -375,6 +400,24 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 		result.HardNegatives = capped
 		result.HardNegativeAboveTauCount = &aboveTauCount
 		result.HardNegativesTruncated = &truncated
+
+		// CHAOS-3829 Phase 1: the disaggregated vector-arm truncation signal
+		// and the vector-arm top-1/top-2 identities + raw similarities +
+		// corroboration status, merged across every active term above.
+		vst := vectorSearchTruncatedAnyTerm
+		result.VectorSearchTruncated = &vst
+		top1, top2 := vectorArmTop2(vectorArmSimilarity)
+		if top1 != nil {
+			top1.Corroborated = lexicalArmSubjects[subjectMapKey(top1.Kind, top1.CanonicalID)]
+			result.VectorTop1 = top1
+		}
+		if top2 != nil {
+			top2.Corroborated = lexicalArmSubjects[subjectMapKey(top2.Kind, top2.CanonicalID)]
+			result.VectorTop2 = top2
+			margin := top1.Similarity - top2.Similarity
+			result.VectorMargin = &margin
+		}
+
 		report.Cases = append(report.Cases, result)
 
 		dist := report.PerKind[testCase.ExpectKind]
@@ -398,6 +441,25 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 	if report.FallbackCount > 0 {
 		t.Logf("AC-3831 harness-parity NOTICE: %d/%d cases used the whole-question fallback (see oracleCaseResult.UsedTermFallback per case)", report.FallbackCount, report.Total)
 	}
+
+	// CHAOS-3829 Phase 1 summary: how many scored cases had a complete
+	// (untruncated) vector arm, a measurable margin, and a corroborated
+	// top-1 -- quick operator sanity-check ahead of CalibrateMarginFromReport
+	// (Phase 2) actually sizing M from the full per-case data in report.Cases.
+	vectorComplete, marginMeasured, top1Corroborated := 0, 0, 0
+	for _, c := range report.Cases {
+		if c.VectorSearchTruncated != nil && !*c.VectorSearchTruncated {
+			vectorComplete++
+		}
+		if c.VectorMargin != nil {
+			marginMeasured++
+		}
+		if c.VectorTop1 != nil && c.VectorTop1.Corroborated {
+			top1Corroborated++
+		}
+	}
+	t.Logf("CHAOS-3829 Phase 1 vector-arm summary: vector_search_complete=%d/%d margin_measured=%d/%d top1_corroborated=%d/%d",
+		vectorComplete, report.Scored, marginMeasured, report.Scored, top1Corroborated, report.Scored)
 
 	writeOracleReport(t, report)
 }
@@ -498,6 +560,44 @@ type oracleCaseResult struct {
 	// durable per-case, not only a run-level t.Logf count, so a mixed run
 	// cannot masquerade as full parity).
 	UsedTermFallback bool `json:"used_term_fallback"`
+	// VectorSearchTruncated is CHAOS-3829 Phase 1's disaggregated vector-arm
+	// truncation signal: true if the ANN call (vectorSearchNodes, i.e.
+	// vectorSearchNodesWithOverFetch at multiplier=1 -- today's deployed
+	// default for this identity, see retrieval_policy.go's OverFetchMultiplier:0)
+	// reported truncated=true for ANY of this case's active terms.
+	//
+	// Unlike hybridSearchNodes' combined `truncated` return (an OR of the
+	// LEXICAL and VECTOR arms, which is what searchTruncated ultimately
+	// carries into graphrank.ResolveFromMergedCandidates), this field is the
+	// VECTOR arm ALONE -- exactly the disaggregated signal CHAOS-3829's
+	// ratified commit-path carve-out needs (vectorSearchComplete =
+	// !VectorSearchTruncated): an untruncated vector arm's k-NN ranking is
+	// complete (globally distance-ordered) even when the lexical arm
+	// truncated, so the two truncation facts must not be collapsed into one
+	// bit for this measurement the way production's own combined signal
+	// does for retrieval purposes.
+	//
+	// A POINTER: nil for a case that never reached term-level evaluation
+	// (subject_missing/vector_missing/gated causes, mirroring
+	// CorrectSimilarity's own nil convention) -- there was no vector search
+	// to report a truncation status for.
+	VectorSearchTruncated *bool `json:"vector_search_truncated,omitempty"`
+	// VectorTop1 and VectorTop2 are the two highest-RAW-similarity subjects
+	// the vector arm proposed for this case, merged by MAX similarity across
+	// the case's active terms (mirroring graphrank.MergeCandidates' max-
+	// confidence-wins rule), each carrying its own corroboration status. nil
+	// when the vector arm proposed fewer than 1 (VectorTop1) or 2
+	// (VectorTop2) DISTINCT subjects across every active term.
+	VectorTop1 *vectorArmSubject `json:"vector_top1,omitempty"`
+	VectorTop2 *vectorArmSubject `json:"vector_top2,omitempty"`
+	// VectorMargin is VectorTop1.Similarity - VectorTop2.Similarity -- the
+	// EXACT quantity CHAOS-3829's ratified VectorMarginCommitThreshold (M)
+	// gates on. nil whenever VectorTop2 is nil (fewer than two distinct
+	// vector-arm subjects -- margin is undefined, not zero: a case with only
+	// one vector-arm candidate has no competitor to measure a gap against,
+	// which is a different situation from a measured, arbitrarily small
+	// gap).
+	VectorMargin *float64 `json:"vector_margin,omitempty"`
 }
 
 // hardNegative is one wrong-but-close neighbor harvested for L4's tau
@@ -510,6 +610,34 @@ type hardNegative struct {
 	CanonicalID string  `json:"canonical_id"`
 	Label       string  `json:"label"`
 	Similarity  float64 `json:"similarity"`
+}
+
+// vectorArmSubject is one subject the vector arm proposed for a scored case
+// (CHAOS-3829 Phase 1), carrying only structural identity + a numeric
+// similarity -- never label/question text, matching hardNegative's own
+// provenance discipline (CHAOS-3834's report rules: identity/dimension
+// stamped at the report level, no corpus text anywhere in it).
+//
+// Similarity is the RAW true-cosine similarity between this case's query
+// vector and this subject's stored embedding (trueCosineSimilarity, the
+// SAME oracle-side function that computes CorrectSimilarity/BestWrongSimilarity
+// above) -- not production's transformed Relevance/Confidence, which clamps
+// to the floor whenever the call truncated (vector.go's
+// vectorSearchNodesWithOverFetch) and would make a margin computed from it
+// meaningless on exactly the truncated cases CHAOS-3829's ratified geometry
+// cares most about.
+type vectorArmSubject struct {
+	Kind        string  `json:"kind"`
+	CanonicalID string  `json:"canonical_id"`
+	Similarity  float64 `json:"similarity"`
+	// Corroborated reports whether the LEXICAL arm (fulltextSearchNodesForResolution,
+	// merged across this case's active terms, the same production function
+	// hybridSearchNodes calls) ALSO proposed this exact subject for this
+	// case -- production's DistinctMechanismCount>=2 test restricted to the
+	// two mechanisms this harness runs directly (lexical, vector); a
+	// traversal- or question-pass-sourced corroboration is out of scope for
+	// this measurement, same as everywhere else in this harness.
+	Corroborated bool `json:"corroborated"`
 }
 
 // kindDistribution is the raw per-kind S+/S- sample set (embed-text spec §5
@@ -642,6 +770,90 @@ func summarizeHardNegatives(negatives []hardNegative, tau float64, cap int) (cap
 		capped = full
 	}
 	return capped, aboveTauCount, truncated
+}
+
+// subjectMapKey is the SAME (kind, canonicalID) composite key
+// dedupeHardNegatives uses, extracted as its own function for CHAOS-3829
+// Phase 1's vector-arm/lexical-arm subject bookkeeping -- a NUL byte cannot
+// occur in either a graph kind or a canonical ID (both closed structural
+// identifiers, never free text), so this is collision-free.
+func subjectMapKey(kind, canonicalID string) string {
+	return kind + "\x00" + canonicalID
+}
+
+// mergeVectorArmSimilarity folds one term's vector-arm ANN result into
+// bySubject, keeping each subject's HIGHEST observed raw similarity across
+// this case's active terms -- CHAOS-3829 Phase 1, mirroring
+// graphrank.MergeCandidates' max-confidence-wins rule (a monotonic function
+// of similarity within one call's config, so "highest similarity" and
+// "highest confidence" agree here). corpus is used to look up each ANN
+// candidate's stored vector so its RAW true-cosine similarity against query
+// can be computed -- see vectorArmSubject's doc comment for why this must be
+// the raw similarity, not production's transformed/floor-clamped Relevance.
+// A candidate absent from corpus (should not happen under a passed org-level
+// fence, but defensively tolerated) is skipped rather than faulting the run.
+func mergeVectorArmSimilarity(bySubject map[string]vectorArmSubject, candidates []graphrank.CandidateNode, query []float64, corpus []oracleVector) {
+	for _, c := range candidates {
+		kind := propStringValue(c.Attributes[propKind])
+		canonicalID := propStringValue(c.Attributes[propCanonicalID])
+		if kind == "" || canonicalID == "" {
+			continue
+		}
+		vector, ok := findVector(corpus, kind, canonicalID)
+		if !ok {
+			continue
+		}
+		similarity := trueCosineSimilarity(query, vector.Vector)
+		key := subjectMapKey(kind, canonicalID)
+		if existing, exists := bySubject[key]; !exists || similarity > existing.Similarity {
+			bySubject[key] = vectorArmSubject{Kind: kind, CanonicalID: canonicalID, Similarity: similarity}
+		}
+	}
+}
+
+// mergeLexicalArmSubjects folds one term's lexical-arm result into the
+// (kind,canonicalID)-keyed set bySubject exists in -- CHAOS-3829 Phase 1's
+// corroboration-status input. Only identity is recorded: the lexical arm's
+// own similarity/relevance is not part of this measurement.
+func mergeLexicalArmSubjects(bySubject map[string]bool, candidates []graphrank.CandidateNode) {
+	for _, c := range candidates {
+		kind := propStringValue(c.Attributes[propKind])
+		canonicalID := propStringValue(c.Attributes[propCanonicalID])
+		if kind == "" || canonicalID == "" {
+			continue
+		}
+		bySubject[subjectMapKey(kind, canonicalID)] = true
+	}
+}
+
+// vectorArmTop2 returns the two highest-similarity entries of bySubject,
+// descending, with a deterministic tie-break (kind then canonical ID --
+// bruteForceRank/dedupeHardNegatives' own convention) so two runs over the
+// same input never disagree about which of an exact tie is "top". Returns
+// nil for either slot bySubject does not have enough distinct entries for.
+func vectorArmTop2(bySubject map[string]vectorArmSubject) (top1, top2 *vectorArmSubject) {
+	ordered := make([]vectorArmSubject, 0, len(bySubject))
+	for _, s := range bySubject {
+		ordered = append(ordered, s)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Similarity != ordered[j].Similarity {
+			return ordered[i].Similarity > ordered[j].Similarity
+		}
+		if ordered[i].Kind != ordered[j].Kind {
+			return ordered[i].Kind < ordered[j].Kind
+		}
+		return ordered[i].CanonicalID < ordered[j].CanonicalID
+	})
+	if len(ordered) > 0 {
+		v := ordered[0]
+		top1 = &v
+	}
+	if len(ordered) > 1 {
+		v := ordered[1]
+		top2 = &v
+	}
+	return top1, top2
 }
 
 func sortedKinds(perKind map[string]*kindDistribution) []string {
