@@ -108,7 +108,18 @@ func (f *fileExchangeRuntime) exchange(ctx context.Context, operation, system, p
 			}
 			var resp exchangeResponse
 			if err := json.Unmarshal(raw, &resp); err != nil {
-				return nil, fmt.Errorf("parse exchange response %s: %w", respPath, err)
+				// Torn-read protection (fable-review finding): a responder
+				// that writes the response file in place (not
+				// temp-file-then-rename) can be observed mid-write by our
+				// poll tick. A parse failure here is treated as "not ready
+				// yet" and retried until the deadline, not a hard failure
+				// -- the alternative (failing on the first malformed read)
+				// would misclassify a normal write-in-progress race as a
+				// responder error.
+				if time.Now().After(deadline) {
+					return nil, fmt.Errorf("file-exchange timed out after %s: response file never parsed cleanly (last error: %w)", f.timeout, err)
+				}
+				continue
 			}
 			if resp.Error != "" {
 				return nil, fmt.Errorf("exchange responder reported an error: %s", resp.Error)

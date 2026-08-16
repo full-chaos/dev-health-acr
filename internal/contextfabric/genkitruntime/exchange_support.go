@@ -67,6 +67,20 @@ func ParseInterpretationOutput(raw []byte, defaultTime contextfabric.TimeContext
 // constrained structured output binds InterpretQuestion's model call to,
 // as a JSON Schema document -- the same contract a non-genkit responder
 // must be told to follow.
+//
+// FIDELITY NOTE (fable-review finding, documented rather than fixed): this
+// uses invopop/jsonschema's default $ref/$defs-nested output. Genkit's own
+// OpenAI structured-output binding (ai.WithCustomConstrainedOutput, see
+// runtime.go's sdkGenerator) flattens the schema before handing it to the
+// provider -- OpenAI's strict json_schema mode does not accept $ref
+// indirection the way this raw reflection does. A responder that itself
+// enforces the schema strictly (rather than a capable LLM reading it as
+// documentation, which is what this trial's fable-5 responder did
+// successfully) would need the SAME flattening genkit applies, which this
+// function does not perform. Acceptable for this trial's purpose (a smart
+// out-of-process agent responder); would need genkit's flattening mapper
+// reused (not reimplemented) before this schema could drive a strict
+// non-LLM validator.
 func InterpretationOutputSchema() ([]byte, error) {
 	return json.MarshalIndent(jsonschema.Reflect(&interpretationOutput{}), "", "  ")
 }

@@ -144,6 +144,16 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	options := hosted.Options{ServiceVersion: "chaos-3742-generative-trial", Logger: logger, Now: time.Now}
+	// caseTimeout bounds ONE Investigate() call, which can make up to two
+	// sequential generative calls (interpret, then synthesize). 240s is
+	// generous for a real API arm (historical p99 ~95s per LEG). For the
+	// file-exchange arm this MUST exceed 2x the per-call exchange timeout
+	// (fable-review S4/T5 finding: the prior fixed 240s could truncate an
+	// exchange call before its own advertised timeout ever fired, making a
+	// slow-but-legitimate responder answer look like a technical failure)
+	// -- set generously below rather than trusting the two bounds to agree
+	// by coincidence.
+	caseTimeout := 240 * time.Second
 	if exchangeDir != "" {
 		timeout := 10 * time.Minute
 		if raw := os.Getenv("ACR_TEST_TRIAL_EXCHANGE_TIMEOUT"); raw != "" {
@@ -158,7 +168,8 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 			t.Fatalf("create file-exchange runtime: %v", ferr)
 		}
 		options.ModelRuntimeOverride = exchangeRuntime
-		t.Logf("arm %q uses the FILE-EXCHANGE diagnostic transport at %s (timeout %s/call) -- latency and token cost are NOT comparable to a real provider", arm, exchangeDir, timeout)
+		caseTimeout = 2*timeout + 30*time.Second
+		t.Logf("arm %q uses the FILE-EXCHANGE diagnostic transport at %s (timeout %s/call, case budget %s) -- latency and token cost are NOT comparable to a real provider", arm, exchangeDir, timeout, caseTimeout)
 	}
 	rt, err := hosted.Open(ctx, cfg, options)
 	if err != nil {
@@ -183,11 +194,22 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	// 3-6 case targeted subset, so they are skipped in that mode.
 	targeted := os.Getenv("ACR_TEST_TRIAL_INDICES") != ""
 
+	// Sanity-anchor checkpoint positions (fable-review "LIMIT<15 handling"
+	// finding): the ORIGINAL fixed pos==9/pos==14 checks silently never
+	// fired at all for a run shorter than 10/15 cases (ACR_TEST_TRIAL_LIMIT
+	// under those values), so a short diagnostic run got NONE of the
+	// systematic-failure/over-commit protection a full run gets. Both
+	// checkpoints now scale to whatever the run actually has -- the LAST
+	// position when the run is shorter than the nominal window, so a
+	// short run is always checked once, at its own end, rather than never.
+	earlyAbortCheckpoint := min(9, len(indices)-1)
+	overCommitCheckpoint := min(14, len(indices)-1)
+
 	report := trialReport{Arm: arm, CorpusTotal: len(corpus), CasesRun: 0}
 	firstTen := make([]caseOutcome, 0, 10)
 	for pos, i := range indices {
 		testCase := corpus[i]
-		outcome := runTrialCase(ctx, t, investigator, principal, i, testCase)
+		outcome := runTrialCase(ctx, t, investigator, principal, i, testCase, caseTimeout)
 		report.Cases = append(report.Cases, outcome)
 		report.CasesRun++
 		tallyOutcome(&report, outcome)
@@ -206,14 +228,14 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 			break
 		}
 
-		if pos < 10 {
+		if pos <= earlyAbortCheckpoint {
 			firstTen = append(firstTen, outcome)
 		}
-		if pos == 9 {
+		if pos == earlyAbortCheckpoint {
 			if class, count, correct := earlyAbortSignature(firstTen); count >= 6 && correct <= 1 {
 				report.EarlyAbort = true
-				report.EarlyAbortSignature = fmt.Sprintf("%s x%d/10 (correct=%d)", class, count, correct)
-				t.Logf("EARLY ABORT for arm %q: dominant failure class %q in %d/10 first cases, only %d correct -- stopping this arm early per the systematic-failure control", arm, class, count, correct)
+				report.EarlyAbortSignature = fmt.Sprintf("%s x%d/%d (correct=%d)", class, count, len(firstTen), correct)
+				t.Logf("EARLY ABORT for arm %q: dominant failure class %q in %d/%d first cases, only %d correct -- stopping this arm early per the systematic-failure control", arm, class, count, len(firstTen), correct)
 				break
 			}
 		}
@@ -222,7 +244,7 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		// enough cases to be meaningful (very high or persistently zero
 		// commit rate) means STOP and report a suspected harness-wiring
 		// issue before finishing the arm.
-		if pos == 14 {
+		if pos == overCommitCheckpoint {
 			rate := float64(report.CommittedTotal) / float64(report.CasesRun)
 			if rate > 0.30 {
 				report.SuspectedWiringIssue = fmt.Sprintf("commit rate %.0f%% after %d cases is far above the benchmark's ~8%% -- suspected over-commit", rate*100, report.CasesRun)
@@ -289,8 +311,70 @@ func loadTrialCorpus(t *testing.T, path string) []trialCase {
 // that case -- hosted.Options.ModelRuntimeOverride takes priority in
 // buildContextFabricInvestigator -- so those ACR_TEST_TRIAL_MODEL* inputs
 // are not required.
+// acrEnvIsolationAllowlist is every real ACR_* / FALKOR_* env var this
+// composition path reads (per falkorgraph.ConfigFromEnv, embedprovider.
+// ConfigFromEnv, modelprovider.ConfigFromEnv, modelconfigcrypto.
+// ConfigFromEnv, and config.Load itself) that wireProductionEnv explicitly
+// sets below. clearAmbientACREnv (fable-review finding) unsets every OTHER
+// ACR_-prefixed var found in the ambient process environment BEFORE this
+// function sets anything, so an ambient leak (a stray direnv-loaded value,
+// a leftover export from a prior manual run in the same shell) can never
+// silently reach this harness's composition -- explicit allowlist, not
+// unset-by-default-and-hope. V3 (this session) found the runner shell
+// already clean; this makes that guaranteed rather than merely observed.
+var acrEnvIsolationAllowlist = map[string]bool{
+	"ACR_ENVIRONMENT": true, "ACR_REQUEST_TIMEOUT": true, "ACR_REQUIRE_BACKING_STORES": true,
+	"ACR_POSTGRES_DSN": true, "ACR_POSTGRES_CONNECTION_KIND": true, "ACR_CLICKHOUSE_DSN": true,
+	"ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED": true, "ACR_CONTEXT_FABRIC_FALKOR_ADDR": true,
+	"ACR_CONTEXT_FABRIC_FALKOR_TLS": true, "ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE": true,
+	"ACR_CONTEXT_FABRIC_MODEL_PROVIDER": true, "ACR_CONTEXT_FABRIC_MODEL": true,
+	"ACR_CONTEXT_FABRIC_MODEL_FALLBACK": true, "ACR_CONTEXT_FABRIC_MODEL_API_KEY": true,
+	"ACR_CONTEXT_FABRIC_EMBED_BASE_URL": true, "ACR_CONTEXT_FABRIC_EMBED_PROVIDER": true,
+	"ACR_CONTEXT_FABRIC_EMBED_MODEL": true, "ACR_CONTEXT_FABRIC_EMBED_DIMENSION": true,
+	"ACR_CONTEXT_FABRIC_EMBED_API_KEY": true, "ACR_CONTEXT_FABRIC_EMBED_TIMEOUT": true,
+	"ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES": true,
+	"ACR_EVIDENCE_ID_ACTIVE_KID":                     true, "ACR_EVIDENCE_ID_KEYS": true,
+	"ACR_DEVICE_VERIFICATION_URL": true,
+}
+
+// clearAmbientACREnv unsets every ACR_-prefixed ambient env var NOT in
+// acrEnvIsolationAllowlist, restoring each on test cleanup. In particular
+// this guarantees ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS/
+// _ACTIVE_KID (modelconfigcrypto's BYO-LLM keys -- see buildOrgModelConfigStore)
+// are absent, so the per-organization model-config resolver
+// (wrapWithOrgModelRuntimeResolver) can never wrap a
+// ModelRuntimeOverride (arm 4) in an org's stored config: that resolver
+// is constructed as nil whenever modelconfigcrypto.Configured is false,
+// and returns the deployment-default runtime completely unchanged when
+// nil -- see its own doc comment. Belt-and-suspenders alongside the
+// V1-confirmed-empty org_model_config table for 70d529e0.
+//
+// Also spares this harness's OWN ACR_TEST_TRIAL_* input namespace (a
+// distinct prefix from the production ACR_CONTEXT_FABRIC_*/ACR_* names it
+// protects) -- those are read via os.Getenv/requireEnv elsewhere in this
+// same function and must survive.
+func clearAmbientACREnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(key, "ACR_") || strings.HasPrefix(key, "ACR_TEST_TRIAL_") || acrEnvIsolationAllowlist[key] {
+			continue
+		}
+		original, hadValue := os.LookupEnv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("clear ambient env %s: %v", key, err)
+		}
+		t.Cleanup(func() {
+			if hadValue {
+				_ = os.Setenv(key, original)
+			}
+		})
+	}
+}
+
 func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	t.Helper()
+	clearAmbientACREnv(t)
 	set := func(key, value string) {
 		if value != "" {
 			t.Setenv(key, value)
@@ -338,6 +422,19 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	set("ACR_EVIDENCE_ID_ACTIVE_KID", "trial")
 	set("ACR_EVIDENCE_ID_KEYS", "trial="+base64.StdEncoding.EncodeToString(key))
 	set("ACR_DEVICE_VERIFICATION_URL", "http://127.0.0.1/unused-trial-device-endpoint")
+
+	if modelOverridden {
+		// Belt-and-suspenders for arm 4 (fable-review finding): assert the
+		// BYO-LLM crypto keys are absent, so the org-config resolver is
+		// provably nil and cannot wrap ModelRuntimeOverride in a stored
+		// per-org config. clearAmbientACREnv already guarantees this; this
+		// is a loud, explicit check rather than trusting that silently.
+		for _, envVar := range []string{"ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS", "ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_ACTIVE_KID"} {
+			if v := os.Getenv(envVar); v != "" {
+				t.Fatalf("%s is set (%d bytes) with ModelRuntimeOverride active -- the org-config resolver would wrap the override in a stored per-org model config; clear it before running arm 4", envVar, len(v))
+			}
+		}
+	}
 }
 
 // contextFabricRejectionClass mirrors internal/api/context_fabric_routes.go's
@@ -412,7 +509,7 @@ type caseOutcome struct {
 	RetrievalDegraded      bool    `json:"retrieval_degraded,omitempty"`
 }
 
-func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase) caseOutcome {
+func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, caseTimeout time.Duration) caseOutcome {
 	t.Helper()
 	isControl := tc.ExpectID == ""
 	request := contractsv1.ContextFabricInvestigationRequest{
@@ -427,7 +524,7 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 		Consumer: contractsv1.ContextFabricConsumerInfo{Name: "chaos-3742-trial", Version: "0.1.0", Surface: "trial"},
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, 240*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
 
 	started := time.Now()
@@ -514,6 +611,18 @@ func successStage(status contractsv1.ContextFabricInvestigationStatus, committed
 			return "usable_answer"
 		}
 		return "clarification_required"
+	case contractsv1.ContextFabricInvestigationDegraded:
+		// fable-review finding: degraded previously fell into the generic
+		// default branch, which reports committedCount==0 as
+		// "clarification_required" -- wrong for degraded (the engine
+		// reached a terminal degraded verdict, it did not ask a
+		// clarifying question). Named explicitly: a real resolution/
+		// synthesis outcome that is neither a clean answer nor a
+		// clarification request.
+		if committedCount > 0 {
+			return "committed_no_synthesis"
+		}
+		return "degraded"
 	default:
 		if committedCount > 0 {
 			return "committed_no_synthesis"
