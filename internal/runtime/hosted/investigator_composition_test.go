@@ -206,39 +206,62 @@ func TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority(t *te
 	}
 	engineValue := reflect.ValueOf(engine).Elem()
 
-	if v := engineValue.FieldByName("reuseProjectionVersion").String(); v == "" {
+	if v := mustField(t, engineValue, "reuseProjectionVersion").String(); v == "" {
 		t.Error("reuseProjectionVersion is empty; the projection-version dimension of reuse silently never matches")
 	}
-	if n := engineValue.FieldByName("reuseModelIdentities").Len(); n == 0 {
+	if n := mustField(t, engineValue, "reuseModelIdentities").Len(); n == 0 {
 		t.Error("reuseModelIdentities is empty; the model-identity dimension of reuse silently never matches")
 	}
 
-	retrieval := engineValue.FieldByName("reuseRetrievalIdentity")
-	if v := retrieval.FieldByName("EmbedRetrievalIdentity").String(); v == "" {
+	retrieval := mustField(t, engineValue, "reuseRetrievalIdentity")
+	if v := mustField(t, retrieval, "EmbedRetrievalIdentity").String(); v == "" {
 		t.Error("reuseRetrievalIdentity.EmbedRetrievalIdentity is empty (CHAOS-3833)")
 	}
-	if v := retrieval.FieldByName("RetrievalPolicyVersion").String(); v == "" {
+	if v := mustField(t, retrieval, "RetrievalPolicyVersion").String(); v == "" {
 		t.Error("reuseRetrievalIdentity.RetrievalPolicyVersion is empty (CHAOS-3833)")
 	}
 
-	prompts := engineValue.FieldByName("reusePromptVersions")
-	if v := prompts.FieldByName("InterpretationPromptVersion").String(); v == "" {
+	prompts := mustField(t, engineValue, "reusePromptVersions")
+	if v := mustField(t, prompts, "InterpretationPromptVersion").String(); v == "" {
 		t.Error("reusePromptVersions.InterpretationPromptVersion is empty (CHAOS-3862): open.go's wiring silently disabled this dimension of reuse")
 	}
-	if v := prompts.FieldByName("SynthesisPromptVersion").String(); v == "" {
+	if v := mustField(t, prompts, "SynthesisPromptVersion").String(); v == "" {
 		t.Error("reusePromptVersions.SynthesisPromptVersion is empty (CHAOS-3862): open.go's wiring silently disabled this dimension of reuse")
 	}
 
-	authorities := engineValue.FieldByName("reuseVersionAuthorities")
-	if v := authorities.FieldByName("QueryVersion").String(); v == "" {
+	authorities := mustField(t, engineValue, "reuseVersionAuthorities")
+	if v := mustField(t, authorities, "QueryVersion").String(); v == "" {
 		t.Error("reuseVersionAuthorities.QueryVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
 	}
-	if v := authorities.FieldByName("CanonicalServiceVersion").String(); v == "" {
+	if v := mustField(t, authorities, "CanonicalServiceVersion").String(); v == "" {
 		t.Error("reuseVersionAuthorities.CanonicalServiceVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
 	}
-	if v := authorities.FieldByName("ModelOutputSchemaVersion").String(); v == "" {
+	if v := mustField(t, authorities, "ModelOutputSchemaVersion").String(); v == "" {
 		t.Error("reuseVersionAuthorities.ModelOutputSchemaVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
 	}
+}
+
+// mustField is reflect.Value.FieldByName, made safe against the exact trap
+// sol review caught (CHAOS-3862 round 2 verification, luna P2):
+// FieldByName on a struct that has no field of that name returns the zero
+// Value, and Value.String() on an INVALID Value does not panic -- it
+// returns the literal string "<invalid Value>", which is non-empty. Every
+// caller above that did `field.String() == ""` to check "was this wired"
+// would therefore silently PASS if the field it meant to read had been
+// renamed or removed: parent-level renames still panic (FieldByName on an
+// invalid Value panics), so ONLY child-field renames evaded the check --
+// exactly the asymmetry that made this easy to miss by eye. mustField
+// closes it uniformly for every FieldByName call in this test: an invalid
+// result fails the test immediately, naming the exact missing field,
+// rather than either panicking with a generic reflect error or silently
+// stringifying to a non-empty placeholder.
+func mustField(t *testing.T, parent reflect.Value, name string) reflect.Value {
+	t.Helper()
+	field := parent.FieldByName(name)
+	if !field.IsValid() {
+		t.Fatalf("field %q does not exist on %s -- was it renamed or removed?", name, parent.Type())
+	}
+	return field
 }
 
 // TestBuildContextFabricInvestigator_reuseInvalidatorIsNilWhenReuseIsDisabled
