@@ -40,28 +40,74 @@ fi
 # this repo, so its grandparent is dev-health regardless of which worktree
 # sourced this script.
 #
-# sol review F1 round 1: --git-common-dir alone is not enough. From a
-# PLAIN (non-worktree) checkout with cwd anywhere other than the repo
-# root, git prints a path RELATIVE TO THE CALLER'S CWD (e.g. "../../.git"
-# from scripts/trial) -- resolving that against a *different* cwd than
-# the one that produced it lands on the wrong root or fails outright.
-# Prefer --path-format=absolute (git >= 2.31, always prints an absolute
-# path regardless of cwd shape); if an older git rejects that flag, fall
-# back to resolving the (possibly relative) output inside the SAME
-# subshell/cwd that produced it; if git itself is unavailable, fall back
-# to the pre-CHAOS-3855 path-relative derivation. As above, each attempt
-# is an if/elif CONDITION so a failing probe falls through instead of
-# aborting the script.
-if common_git_dir="$(cd "$script_dir" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
-    && [[ -n "$common_git_dir" ]]; then
-  dev_health_root="$(cd "$common_git_dir/../.." && pwd -P)"
-elif legacy_common_git_dir="$(cd "$script_dir" && git rev-parse --git-common-dir 2>/dev/null)" \
-    && [[ -n "$legacy_common_git_dir" ]] \
-    && dev_health_root="$(cd "$script_dir" && cd "$legacy_common_git_dir/../.." && pwd -P)" \
-    && [[ -n "$dev_health_root" ]]; then
+# sol review F1, round 3 (closing the class, not another spot-guard):
+# round 1 found --git-common-dir alone insufficient (a plain checkout at
+# a non-root cwd gets a path relative to the CALLER's cwd back); round 2
+# found the fallback chain itself was dead code under `set -e` (a bare
+# `x=$(failing-cmd)` aborts the script even though it "looks like" part
+# of an if-condition, unless it truly is one); round 3's mutation showed
+# a probe can SUCCEED (exit 0) while returning a well-formed but WRONG
+# path (e.g. a --path-format=absolute shim pointing at a directory that
+# does not exist) -- no per-step guard on any single git invocation can
+# rule that out in general. Patching a fourth spot-guard would just be
+# the fourth round of the same defect class.
+#
+# Instead: validate the RESULT, not the mechanics that produced it. Each
+# tier below produces a CANDIDATE path, and a candidate is accepted only
+# if it passes a landmark check (ops/.env exists under it) -- the one
+# thing every consumer of dev_health_root actually needs. A wrong path,
+# an empty path, a nonexistent path, and a cd failure are then all the
+# SAME outcome (landmark check fails, fall through to the next tier), so
+# no future regression in any one tier's git invocation can reopen this
+# bug class. The whole resolution runs inside one function, called
+# exactly once via the `if` below -- that `if` is the ONLY place in this
+# routine `set -e` can see a failure; everything inside the function
+# runs under an explicit `set +e` of its own (subshells/command
+# substitutions INHERIT -e from the caller, so without this an early
+# tier's failure would abort the function itself before trying the next
+# tier, silently reintroducing round 2's exact bug one level down).
+resolve_dev_health_root() (
+  set +e
+  local candidate legacy_common_git_dir
+
+  # Tier 1: git --path-format=absolute --git-common-dir (git >= 2.31,
+  # always an absolute path regardless of the caller's cwd).
+  candidate="$(cd "$script_dir" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  [[ -n "$candidate" ]] && candidate="$(cd "$candidate/../.." 2>/dev/null && pwd -P)"
+  if [[ -n "$candidate" && -f "$candidate/ops/.env" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  # Tier 2: bare git --git-common-dir (older git rejects --path-format).
+  # May print a path RELATIVE TO $script_dir's cwd, so it is resolved in
+  # the same subshell/cwd that produced it.
+  legacy_common_git_dir="$(cd "$script_dir" && git rev-parse --git-common-dir 2>/dev/null)"
+  [[ -n "$legacy_common_git_dir" ]] && candidate="$(cd "$script_dir" && cd "$legacy_common_git_dir/../.." 2>/dev/null && pwd -P)"
+  if [[ -n "$candidate" && -f "$candidate/ops/.env" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  # Tier 3: git unavailable entirely -- the pre-CHAOS-3855 path-relative
+  # derivation. Correct for a plain, non-worktree checkout; cannot be
+  # correct for a linked worktree (there is no way to find the shared
+  # root without asking git), but that combination is not realistic --
+  # git is required to create/use a worktree in the first place.
+  candidate="$(cd "$repo_root/.." 2>/dev/null && pwd -P)"
+  if [[ -n "$candidate" && -f "$candidate/ops/.env" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  return 1
+)
+
+if dev_health_root="$(resolve_dev_health_root)"; then
   :
 else
-  dev_health_root="$(cd "$repo_root/.." && pwd -P)"
+  echo "common.sh: could not resolve the dev-health root -- tried git --path-format=absolute --git-common-dir, bare git --git-common-dir, and \$repo_root/.. (from $script_dir), and none of them contained ops/.env. Run from a checkout where ops/.env exists two levels above this repo, or export ACR_TRIAL_CORPUS/ACR_TRIAL_RESULTS_DIR explicitly to bypass this resolution." >&2
+  exit 1
 fi
 
 # The withheld corpus and the trial-results output dir live in the parent
