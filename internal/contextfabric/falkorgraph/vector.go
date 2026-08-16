@@ -904,17 +904,38 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 		// env-configurable source anywhere in embedprovider -- there is no
 		// operator value to preserve for either, so the calibrated table
 		// stays the sole source for both, unconditionally.
-		if explicitFloor, ok := lookup(embedprovider.EnvSimilarityFloor); !(ok && strings.TrimSpace(explicitFloor) != "") {
+		explicitFloor, hasExplicitFloor := lookup(embedprovider.EnvSimilarityFloor)
+		explicitFloorSet := hasExplicitFloor && strings.TrimSpace(explicitFloor) != ""
+		if !explicitFloorSet {
 			if floorApplicable(policy.SimilarityFloor) {
 				options.SimilarityFloor = policy.SimilarityFloor
 			}
 		}
 		options.OverFetchMultiplier = policy.OverFetchMultiplier
 		options.EfRuntime = policy.EfRuntime
-		// CHAOS-3829: like OverFetchMultiplier/EfRuntime above, no operator
-		// env knob exists for this -- the calibrated table is the sole
-		// source, unconditionally.
-		options.VectorMarginCommitThreshold = policy.VectorMarginCommitThreshold
+		// CHAOS-3829 codex r2 G3 (accepted): M was calibrated at the
+		// POLICY's tau (0.30 for this identity) -- CalibrateMarginFromReport's
+		// F7 pinning already refuses to compute M from a report measured at
+		// a different tau, the SAME discipline this guard extends to the
+		// RUNTIME side: M must only install when the EFFECTIVE floor this
+		// deployment will actually run under is that SAME calibrated tau.
+		// An explicit ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR override
+		// (honored above, unconditionally, per codex round-1 P1) can set a
+		// LOWER effective floor than the policy's -- admitting an
+		// UNMEASURED population the calibration never saw (e.g. a true #2
+		// competitor that only appears below 0.30, where M's zero-tolerance
+		// construction has no data to have bounded it against). Installing
+		// M against that population would be exactly the "gate arithmetic
+		// must equal calibration arithmetic" violation codex r1 F6/F7
+		// closed for the harness side; this closes the SAME hazard for an
+		// operator-supplied runtime override. No operator env knob exists
+		// for VectorMarginCommitThreshold itself (like OverFetchMultiplier/
+		// EfRuntime, there is nothing to preserve there) -- what changes
+		// here is ONLY whether M installs at all, gated on whether the
+		// floor it was calibrated against is the one actually in effect.
+		if !explicitFloorSet {
+			options.VectorMarginCommitThreshold = policy.VectorMarginCommitThreshold
+		}
 	}
 	return options, nil
 }

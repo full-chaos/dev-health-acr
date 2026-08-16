@@ -85,6 +85,49 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// policy for this identity, or no embedder at all) disables the
 		// carve-out entirely -- see ResolveDeps.VectorMarginCommitThreshold's
 		// own doc comment.
+		//
+		// codex r2 G1 (REFUTED, proof recorded here so this premise cannot
+		// re-cycle): claimed the carve-out is unsafe at a runtime
+		// MaxSubjectCandidates (limit K, request.Options.MaxSubjectCandidates
+		// in graphrank.ResolveSubjects) different from the report's
+		// calibrated TopK=20. False for any K>=2 -- the production margin
+		// is K-INVARIANT and EXACT, not merely approximately safe:
+		//
+		// Let s(x) = max over this resolution's terms of sim(term, x) (the
+		// vectorArmSimilarity side map's own definition, mergeSearchResults
+		// -- keeps the HIGHEST observed value across terms). top1 and the
+		// TRUE #2 competitor rank by s. Let t* be the ONE term whose own
+		// Search call attains s(true#2) for the true #2 (i.e. true#2's
+		// best-across-terms similarity is realized in call t*). ANY
+		// subject x that would outrank true#2 within call t* has
+		// sim(t*, x) > sim(t*, true#2) = s(true#2) (by t*'s own
+		// maximality) >= ... i.e. s(x) >= sim(t*,x) > s(true#2), so x's
+		// own cross-term maximum EXCEEDS true#2's -- meaning x is top1,
+		// not a rival to true#2's #2 standing. So AT MOST ONE subject
+		// (top1 itself) can outrank true#2 within call t* -- true#2 is at
+		// WORST rank 2 in that one call, and a k-NN call returns its own
+		// top-K by construction, so true#2 IS RETURNED at any K>=2 in call
+		// t*. F0's pre-NodeCandidate-rejection recording (mergeSearchResults)
+		// then captures it into the side map regardless of downstream
+		// eligibility, and by definition of "true #2" nothing else in the
+		// side map can exceed s(true#2) -- so vectorMarginCommit's
+		// COMPETITOR equals s(true#2) EXACTLY, at every K>=2, independent
+		// of K's specific value. Corroboration at a smaller runtime lexical
+		// limit is a SUBSET of what a larger limit would find (fewer
+		// lexical proposals can only fail to corroborate a top-1 that a
+		// wider search would have corroborated) -- so a narrower K can only
+		// ever LOSE commits (fail closed further), never fabricate one.
+		// K<2 is already refused independently (codex r1 F1, above this
+		// call site in resolution.go).
+		//
+		// DISTINCT FROM MarginCalibrationOptions.TargetTopK (codex r1 F7):
+		// that pin is REPORT-PROVENANCE discipline for the MEASUREMENT
+		// chain -- it says the calibration report's own S+/S- harvest was
+		// gathered at a stated K, so a caller cannot silently apply M
+		// against a report measured under a DIFFERENT harvest depth. It is
+		// not, and was never, a claim that the RUNTIME gate requires
+		// matching K -- this proof is what establishes that the runtime
+		// gate does not, for any K>=2.
 		VectorMarginCommitThreshold: a.vectorMarginCommitThreshold,
 	}
 	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)

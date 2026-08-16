@@ -209,7 +209,23 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		// (if any, from a DIFFERENT term's own single result) carries no
 		// guarantee of being the TRUE nearest one. Fail closed rather than
 		// trust a margin with no completeness bound behind it.
-		if ambiguous && vectorMarginCommitThreshold > 0 && max >= 2 {
+		//
+		// codex r2 G2 (accepted, ratified-invariant violation): a
+		// duplicate exact-label collision (len(exactIndex) >= 2) must NOT
+		// reach the rescue, regardless of what caused ambiguous=true above
+		// (searchTruncated, or the top-of-two test on two tied
+		// Confidence==1 exact matches -- both leave ambiguous=true here).
+		// CHAOS-3810's own doc comment on the exact-label override rules
+		// this irreducibly ambiguous by design: two subjects share the
+		// IDENTICAL label, and only the caller (via a canonical SubjectHint,
+		// the truncation-immune ExactHint path) can say which one was
+		// meant. A vector-similarity margin between two SAME-LABELED
+		// subjects answers a different question entirely -- "which is
+		// closer in embedding space" -- and says NOTHING about which one
+		// the caller's literal, exact-matching term actually referred to;
+		// picking the higher-margin one would silently override a
+		// deliberate, ratified design decision with an unrelated signal.
+		if ambiguous && vectorMarginCommitThreshold > 0 && max >= 2 && len(exactIndex) < 2 {
 			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted

@@ -406,3 +406,45 @@ func TestChaos3829_F1_MaxAtTwoStillFires(t *testing.T) {
 		t.Fatalf("resolution.Committed = %v, want exactly [auth] at max=2", resolution.Committed)
 	}
 }
+
+// --- codex r2 G2: an exact-label collision must never reach the rescue ----
+
+// TestChaos3829_G2_ExactLabelCollisionNeverReachesTheRescue is the core G2
+// pinning test: two candidates BOTH satisfy the CHAOS-3810 exact-label
+// override's own precondition (Confidence==1, MatchExact present) --
+// len(exactIndex)==2, a genuinely irreducible collision per that carve-out's
+// own doc comment (only a caller-explicit SubjectHint can disambiguate) --
+// and one of them ALSO has a decisively higher vector-arm similarity and
+// would otherwise clear vectorMarginCommit's own criteria outright. The
+// resolution must stay ambiguous: mutating away the len(exactIndex)<2 guard
+// makes this test fail (the higher-similarity duplicate wins instead).
+func TestChaos3829_G2_ExactLabelCollisionNeverReachesTheRescue(t *testing.T) {
+	dup1 := corroborationCandidate("dup1", 1, contextfabric.MatchExact, contextfabric.MatchVector, contextfabric.MatchLexical)
+	dup2 := corroborationCandidate("dup2", 1, contextfabric.MatchExact, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(dup1.Subject): 0.95, // decisively higher -- would otherwise win the rescue outright
+		SubjectKey(dup2.Subject): 0.50,
+	}
+	resolution := resolveOneWithVectorMargin(false, similarities, 0.05, dup1, dup2)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %v, want none -- an exact-label collision must stay ambiguous regardless of vector margin", resolution.Committed)
+	}
+}
+
+// TestChaos3829_G2_SingleExactMatchStillUsesTheOverrideNotTheRescue is the
+// non-regression control: a UNIQUE exact match (len(exactIndex)==1) is
+// entirely unaffected -- it still commits through CHAOS-3810's own
+// override, never through the rescue at all (which never even runs, since
+// ambiguous never becomes true in this case).
+func TestChaos3829_G2_SingleExactMatchStillUsesTheOverrideNotTheRescue(t *testing.T) {
+	exact := corroborationCandidate("exact", 1, contextfabric.MatchExact)
+	other := corroborationCandidate("other", 0.60, contextfabric.MatchVector, contextfabric.MatchLexical)
+	similarities := map[string]float64{
+		SubjectKey(exact.Subject): 0.10, // deliberately LOW -- must win via the exact override, not the rescue
+		SubjectKey(other.Subject): 0.99,
+	}
+	resolution := resolveOneWithVectorMargin(false, similarities, 0.01, exact, other)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "exact" {
+		t.Fatalf("resolution.Committed = %v, want exactly [exact] via the unique exact-label override", resolution.Committed)
+	}
+}

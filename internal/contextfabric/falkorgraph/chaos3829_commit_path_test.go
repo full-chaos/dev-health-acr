@@ -128,6 +128,56 @@ func TestEmbedderFromEnv_CalibratedIdentityAppliesVectorMarginCommitThreshold(t 
 	}
 }
 
+// TestEmbedderFromEnv_ExplicitSimilarityFloorOverrideDisablesM is CHAOS-3829
+// codex r2 G3's core pinning test: an operator-supplied
+// ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR below the policy's calibrated
+// tau admits an UNMEASURED population -- M must stay at its zero
+// ("uncalibrated"/disabled) value in that case, even though the identity
+// otherwise matches the calibrated table entry exactly.
+func TestEmbedderFromEnv_ExplicitSimilarityFloorOverrideDisablesM(t *testing.T) {
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
+		embedprovider.EnvSimilarityFloor: "0.10", // below the policy's calibrated 0.30
+	}))
+	if err != nil {
+		t.Fatalf("EmbedderFromEnv: %v", err)
+	}
+	if options.SimilarityFloor != 0.10 {
+		t.Fatalf("SimilarityFloor = %v, want the explicit override 0.10 to be honored (codex round-1 P1, unrelated to this fix)", options.SimilarityFloor)
+	}
+	if options.VectorMarginCommitThreshold != 0 {
+		t.Fatalf("VectorMarginCommitThreshold = %v, want 0 -- M was calibrated at tau=0.30, not the overridden 0.10, and must not install against an unmeasured floor", options.VectorMarginCommitThreshold)
+	}
+}
+
+// TestEmbedderFromEnv_NoFloorOverrideStillAppliesM is the positive control:
+// with NO explicit floor override, the effective floor equals the policy's
+// calibrated tau, and M installs exactly as before this fix.
+func TestEmbedderFromEnv_NoFloorOverrideStillAppliesM(t *testing.T) {
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(nil))
+	if err != nil {
+		t.Fatalf("EmbedderFromEnv: %v", err)
+	}
+	if options.VectorMarginCommitThreshold <= 0 {
+		t.Fatalf("VectorMarginCommitThreshold = %v, want the calibrated positive M when the floor is NOT overridden", options.VectorMarginCommitThreshold)
+	}
+}
+
+// TestEmbedderFromEnv_BlankSimilarityFloorOverrideStillAppliesM proves a
+// BLANK env var does not count as an override (mirrors envFloat's own
+// "set AND non-blank" definition of explicit, codex round-1 P1) -- M must
+// still install.
+func TestEmbedderFromEnv_BlankSimilarityFloorOverrideStillAppliesM(t *testing.T) {
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
+		embedprovider.EnvSimilarityFloor: "",
+	}))
+	if err != nil {
+		t.Fatalf("EmbedderFromEnv: %v", err)
+	}
+	if options.VectorMarginCommitThreshold <= 0 {
+		t.Fatalf("VectorMarginCommitThreshold = %v, want the calibrated positive M -- a blank override is not an explicit one", options.VectorMarginCommitThreshold)
+	}
+}
+
 // TestAttachEmbedder_CapturesVectorMarginCommitThreshold proves the adapter
 // field wiring: attachEmbedder captures EmbedderOptions.VectorMarginCommitThreshold
 // the same way it captures OverFetchMultiplier/EfRuntime.
