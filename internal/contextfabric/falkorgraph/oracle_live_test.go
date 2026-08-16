@@ -22,10 +22,22 @@ import (
 // queries prefixed ones. Extracted as its own method (not inlined at the
 // call site) so it is unit-testable with a fake embedder, without a live
 // embedder/graph connection -- see TestEmbedQueryTerms_AppliesTheSameQueryPrefixProductionUses.
+// CHAOS-3829 codex r1 F2 (accepted): production's hybridSearchNodes embeds
+// a.queryPrefixed(vectorQueryText(term)) -- CHAOS-3838's domain-lexicon
+// widening runs BEFORE the query prefix, not merely alongside it. This
+// function previously embedded a.queryPrefixed(term) directly, skipping
+// vectorQueryText entirely, so every similarity this harness ever measured
+// for a lexicon-matched term was computed against a DIFFERENT embedding
+// than what production actually embeds for that same term -- silently
+// invalidating any calibration derived from it. vectorQueryText is a no-op
+// for a term the lexicon has no opinion about (lexicon.go's own doc
+// comment), so this is a behavior change ONLY for lexicon-matched terms --
+// which is the whole point of routing through the SAME production
+// text-composition authority rather than a second, driftable copy of it.
 func (a *Adapter) embedQueryTerms(ctx context.Context, terms []string) ([][]float32, error) {
 	prefixed := make([]string, len(terms))
 	for i, term := range terms {
-		prefixed[i] = a.queryPrefixed(term)
+		prefixed[i] = a.queryPrefixed(vectorQueryText(term))
 	}
 	return a.embedder.Embed(ctx, prefixed)
 }
@@ -252,7 +264,7 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 			// negative-gate population CalibrateMarginFromReport's M must
 			// dominate. See measureControlCase's doc comment.
 			report.Controls++
-			report.ControlCases = append(report.ControlCases, measureControlCase(ctx, t, adapter, key, orgID, testCase, corpusVectors, tau, topK, includeRawText, usedFallback))
+			report.ControlCases = append(report.ControlCases, measureControlCase(ctx, t, adapter, key, orgID, testCase, tau, topK, includeRawText, usedFallback))
 			continue
 		}
 		report.Scored++
@@ -325,7 +337,7 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 			// annCandidates back to THIS loop -- reused for the ann_loss/hit
 			// bookkeeping below -- so the ANN call is issued exactly ONCE
 			// per term, not twice.
-			annCandidates, vectorTruncated := measureOneTermVectorArm(ctx, t, adapter, key, orgID, term, query64, vectors[i], corpusVectors, tau, topK, vectorArmSimilarity, lexicalArmSubjects)
+			annCandidates, vectorTruncated := measureOneTermVectorArm(ctx, t, adapter, key, orgID, term, vectors[i], tau, topK, vectorArmSimilarity, lexicalArmSubjects)
 			if containsANNCandidate(annCandidates, testCase.ExpectKind, testCase.ExpectID) {
 				annHit = true
 			}
@@ -808,18 +820,39 @@ func subjectMapKey(kind, canonicalID string) string {
 // the raw similarity, not production's transformed/floor-clamped Relevance.
 // A candidate absent from corpus (should not happen under a passed org-level
 // fence, but defensively tolerated) is skipped rather than faulting the run.
-func mergeVectorArmSimilarity(bySubject map[string]vectorArmSubject, candidates []graphrank.CandidateNode, query []float64, corpus []oracleVector) {
+// CHAOS-3829 codex r1 F6 (accepted): reads each candidate's OWN
+// production-computed VectorSimilarity (vector.go's
+// vectorSearchNodesWithOverFetch, set unconditionally/unclamped -- see
+// CandidateNode.VectorSimilarity's doc comment) rather than independently
+// recomputing true-cosine similarity against a separately-fetched corpus
+// vector. The two are mathematically the SAME quantity in theory, but the
+// commit-path carve-out's zero-tolerance, one-ULP-above-the-max
+// construction (CalibrateMarginFromReport) is only meaningful if the
+// calibration measures the EXACT arithmetic the runtime gate will later
+// compare against -- a recomputed value that merely AGREES in the common
+// case is not the same guarantee as reading the identical stored value. The
+// true-cosine recompute (trueCosineSimilarity + corpus lookup) remains the
+// correct tool for this harness's PRE-existing S+/S-/hard-negative
+// bookkeeping (bestCorrectSimilarity, bestWrongNeighbor, dedupeHardNegatives),
+// which measures recall over the FULL corpus via brute force -- a
+// different question than "what did this ANN call actually return",
+// unaffected by this fix.
+func mergeVectorArmSimilarity(bySubject map[string]vectorArmSubject, candidates []graphrank.CandidateNode) {
 	for _, c := range candidates {
 		kind := propStringValue(c.Attributes[propKind])
 		canonicalID := propStringValue(c.Attributes[propCanonicalID])
 		if kind == "" || canonicalID == "" {
 			continue
 		}
-		vector, ok := findVector(corpus, kind, canonicalID)
-		if !ok {
+		if c.VectorSimilarity == nil {
+			// Defensive: every MatchVector candidate vector.go returns
+			// carries this unconditionally; a nil value here means the
+			// candidate did not actually come from the vector arm (or a
+			// future backend change dropped the field), and there is
+			// nothing to merge.
 			continue
 		}
-		similarity := trueCosineSimilarity(query, vector.Vector)
+		similarity := *c.VectorSimilarity
 		key := subjectMapKey(kind, canonicalID)
 		if existing, exists := bySubject[key]; !exists || similarity > existing.Similarity {
 			bySubject[key] = vectorArmSubject{Kind: kind, CanonicalID: canonicalID, Similarity: similarity}
@@ -867,14 +900,14 @@ func filterActiveTerms(terms []string) []string {
 // no-match CONTROL measurement (measureControlCase), so the two paths
 // cannot independently drift on how a found node becomes part of this
 // measurement.
-func measureOneTermVectorArm(ctx context.Context, t *testing.T, adapter *Adapter, key, orgID, term string, query64 []float64, rawVector []float32, corpusVectors []oracleVector, tau float64, topK int, bySubject map[string]vectorArmSubject, lexicalSubjects map[string]bool) (annCandidates []graphrank.CandidateNode, vectorTruncated bool) {
+func measureOneTermVectorArm(ctx context.Context, t *testing.T, adapter *Adapter, key, orgID, term string, rawVector []float32, tau float64, topK int, bySubject map[string]vectorArmSubject, lexicalSubjects map[string]bool) (annCandidates []graphrank.CandidateNode, vectorTruncated bool) {
 	t.Helper()
 	// ANN: the real production function, same floor, same index.
 	annCandidates, vectorTruncated, err := adapter.vectorSearchNodes(ctx, key, orgID, rawVector, tau, topK)
 	if err != nil {
 		t.Fatalf("vectorSearchNodes(%q): %v", term, err)
 	}
-	mergeVectorArmSimilarity(bySubject, annCandidates, query64, corpusVectors)
+	mergeVectorArmSimilarity(bySubject, annCandidates)
 
 	// Lexical: the SAME production function hybridSearchNodes calls for
 	// this term, run independently here so this case's corroboration status
@@ -916,7 +949,7 @@ func finalizeVectorArmTop2(bySubject map[string]vectorArmSubject, lexicalSubject
 // a result with every Vector* field left nil/zero -- there was no vector
 // search to report data for, mirroring the SCORED path's own nil convention
 // for a case that never reached term-level evaluation.
-func measureControlCase(ctx context.Context, t *testing.T, adapter *Adapter, key, orgID string, testCase ambiguityCase, corpusVectors []oracleVector, tau float64, topK int, includeRawText, usedFallback bool) oracleCaseResult {
+func measureControlCase(ctx context.Context, t *testing.T, adapter *Adapter, key, orgID string, testCase ambiguityCase, tau float64, topK int, includeRawText, usedFallback bool) oracleCaseResult {
 	t.Helper()
 	result := oracleCaseResult{
 		Question:         redactText(testCase.Question, includeRawText),
@@ -939,8 +972,7 @@ func measureControlCase(ctx context.Context, t *testing.T, adapter *Adapter, key
 	lexicalSubjects := map[string]bool{}
 	anyTruncated := false
 	for i, term := range activeTerms {
-		query64 := float64Vector(vectors[i])
-		_, vectorTruncated := measureOneTermVectorArm(ctx, t, adapter, key, orgID, term, query64, vectors[i], corpusVectors, tau, topK, bySubject, lexicalSubjects)
+		_, vectorTruncated := measureOneTermVectorArm(ctx, t, adapter, key, orgID, term, vectors[i], tau, topK, bySubject, lexicalSubjects)
 		if vectorTruncated {
 			anyTruncated = true
 		}

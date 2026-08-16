@@ -495,38 +495,40 @@ func TestVectorArmTop2ReturnsNilSlotsWhenFewerThanTwoDistinctSubjects(t *testing
 // TestMergeVectorArmSimilarityKeepsHighestAcrossTerms proves the max-wins
 // merge rule: a subject the ANN result names twice (once per one of two
 // simulated terms) keeps its HIGHEST observed raw similarity, mirroring
-// graphrank.MergeCandidates.
+// graphrank.MergeCandidates. CHAOS-3829 codex r1 F6: similarity now comes
+// from each CandidateNode's own VectorSimilarity (production's
+// vector.go-computed value), not a recomputed one -- these fixtures set it
+// directly.
 func TestMergeVectorArmSimilarityKeepsHighestAcrossTerms(t *testing.T) {
-	corpus := []oracleVector{
-		{Kind: "project", CanonicalID: "p1", Vector: []float64{1, 0}},
-	}
+	low, high := 0.10, 1.0
 	bySubject := map[string]vectorArmSubject{}
-	// Term 1: query orthogonal-ish, low similarity.
+	// Term 1: low similarity.
 	mergeVectorArmSimilarity(bySubject, []graphrank.CandidateNode{
-		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "p1"}},
-	}, []float64{0.1, 0.99}, corpus)
+		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "p1"}, VectorSimilarity: &low},
+	})
 	firstSimilarity := bySubject[subjectMapKey("project", "p1")].Similarity
-	// Term 2: query parallel, similarity 1.0 -- must WIN over the lower value.
+	// Term 2: similarity 1.0 -- must WIN over the lower value.
 	mergeVectorArmSimilarity(bySubject, []graphrank.CandidateNode{
-		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "p1"}},
-	}, []float64{1, 0}, corpus)
+		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "p1"}, VectorSimilarity: &high},
+	})
 	got := bySubject[subjectMapKey("project", "p1")].Similarity
 	if got != 1 {
 		t.Fatalf("merged similarity = %v, want 1 (the higher of the two terms' observations, first was %v)", got, firstSimilarity)
 	}
 }
 
-// TestMergeVectorArmSimilaritySkipsCandidatesAbsentFromCorpus is the
-// defensive-tolerance case documented on mergeVectorArmSimilarity: an ANN
-// candidate this harness cannot look up in the fetched corpus must not
-// fault the run.
-func TestMergeVectorArmSimilaritySkipsCandidatesAbsentFromCorpus(t *testing.T) {
+// TestMergeVectorArmSimilaritySkipsCandidatesWithNilVectorSimilarity is the
+// F6-era defensive-tolerance case: a candidate with no VectorSimilarity at
+// all (should not happen for a genuine MatchVector production result, but
+// defensively tolerated -- see mergeVectorArmSimilarity's own doc comment)
+// must not fault the run or be recorded.
+func TestMergeVectorArmSimilaritySkipsCandidatesWithNilVectorSimilarity(t *testing.T) {
 	bySubject := map[string]vectorArmSubject{}
 	mergeVectorArmSimilarity(bySubject, []graphrank.CandidateNode{
-		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "not-in-corpus"}},
-	}, []float64{1, 0}, nil)
+		{Attributes: map[string]interface{}{propKind: "project", propCanonicalID: "no-similarity"}},
+	})
 	if len(bySubject) != 0 {
-		t.Fatalf("bySubject = %+v, want empty -- the candidate has no corpus entry to compute a similarity from", bySubject)
+		t.Fatalf("bySubject = %+v, want empty -- a candidate with nil VectorSimilarity has nothing to merge", bySubject)
 	}
 }
 
@@ -581,11 +583,10 @@ func TestMeasureOneTermVectorArm_MergesANNAndLexicalResults(t *testing.T) {
 		return []row{{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Auth"}}, "score": 1.0}}, nil
 	}}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0}}, 0.05)
-	corpus := []oracleVector{{Kind: "project", CanonicalID: "p1", Vector: []float64{1, 0, 0}}}
 
 	bySubject := map[string]vectorArmSubject{}
 	lexicalSubjects := map[string]bool{}
-	annCandidates, truncated := measureOneTermVectorArm(context.Background(), t, adapter, "key", "org-1", "auth", []float64{1, 0, 0}, []float32{1, 0, 0}, corpus, 0.05, 10, bySubject, lexicalSubjects)
+	annCandidates, truncated := measureOneTermVectorArm(context.Background(), t, adapter, "key", "org-1", "auth", []float32{1, 0, 0}, 0.05, 10, bySubject, lexicalSubjects)
 
 	if truncated {
 		t.Fatal("truncated = true, want false")
@@ -612,7 +613,7 @@ func TestMeasureControlCase_NoActiveTermsReturnsAnEmptyResultWithoutAnyLiveCall(
 	embedder := &stubEmbedder{vector: []float32{1, 0, 0}}
 	adapter := vectorAdapter(t, &fakeConn{}, embedder, 0.05)
 	testCase := ambiguityCase{Question: "???", SubjectTerms: []string{"???", "..."}}
-	result := measureControlCase(context.Background(), t, adapter, "key", "org-1", testCase, nil, 0.05, 10, false, false)
+	result := measureControlCase(context.Background(), t, adapter, "key", "org-1", testCase, 0.05, 10, false, false)
 	if result.Cause != oracleCauseControl {
 		t.Fatalf("Cause = %q, want %q", result.Cause, oracleCauseControl)
 	}
@@ -641,10 +642,9 @@ func TestMeasureControlCase_CorroboratedTopIsRecorded(t *testing.T) {
 		return []row{{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "ghost", propLabel: "Ghost Project"}}, "score": 1.0}}, nil
 	}}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0}}, 0.05)
-	corpus := []oracleVector{{Kind: "project", CanonicalID: "ghost", Vector: []float64{1, 0, 0}}}
 	testCase := ambiguityCase{Question: "does the ghost project exist", SubjectTerms: []string{"ghost project"}}
 
-	result := measureControlCase(context.Background(), t, adapter, "key", "org-1", testCase, corpus, 0.05, 10, false, false)
+	result := measureControlCase(context.Background(), t, adapter, "key", "org-1", testCase, 0.05, 10, false, false)
 
 	if result.VectorSearchTruncated == nil || *result.VectorSearchTruncated {
 		t.Fatalf("VectorSearchTruncated = %v, want a present false", result.VectorSearchTruncated)

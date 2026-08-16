@@ -9,12 +9,23 @@ import (
 	"testing"
 )
 
-// marginTestOpts is the shared target identity/dimension every synthetic
-// fixture in this file uses -- mirrors tau_calibration_test.go's
+// testMarginTau/testMarginTopK are the shared target tau/topK every
+// synthetic fixture in this file uses (codex r1 F7), mirroring
+// testEmbedIdentity/testDimension's convention.
+const (
+	testMarginTau  = 0.30
+	testMarginTopK = 20
+)
+
+// marginTestOpts is the shared target identity/dimension/tau/topK every
+// synthetic fixture in this file uses -- mirrors tau_calibration_test.go's
 // testEmbedIdentity/testDimension convention (these tests exercise the
-// margin MATH, not the identity gate, which has its own dedicated tests
-// below).
-var marginTestOpts = MarginCalibrationOptions{TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+// margin MATH, not the identity/tau/topK gate, which has its own dedicated
+// tests below).
+var marginTestOpts = MarginCalibrationOptions{
+	TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension,
+	TargetTau: testMarginTau, TargetTopK: testMarginTopK,
+}
 
 // eligibleCase builds one CalibrationCase already inside CalibrateMarginFromReport's
 // eligible population (corroborated top-1, measurable margin --
@@ -35,7 +46,10 @@ func eligibleCase(top1Kind, top1ID, expectKind, expectID string, margin float64)
 }
 
 func marginReport(cases ...CalibrationCase) CalibrationReport {
-	return CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases}
+	return CalibrationReport{
+		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
+		Tau: testMarginTau, TopK: testMarginTopK, Cases: cases,
+	}
 }
 
 // eligibleControlCase builds one no-match CONTROL CalibrationCase (Phase
@@ -54,7 +68,10 @@ func eligibleControlCase(top1Kind, top1ID string, margin float64) CalibrationCas
 }
 
 func marginReportWithControls(cases []CalibrationCase, controls []CalibrationCase) CalibrationReport {
-	return CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases, ControlCases: controls}
+	return CalibrationReport{
+		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
+		Tau: testMarginTau, TopK: testMarginTopK, Cases: cases, ControlCases: controls,
+	}
 }
 
 func TestCalibrateMarginFromReport_MismatchedEmbedIdentityIsAnError(t *testing.T) {
@@ -78,6 +95,75 @@ func TestCalibrateMarginFromReport_AbsentTargetIsAnError(t *testing.T) {
 	_, err := CalibrateMarginFromReport(report, MarginCalibrationOptions{})
 	if !errors.Is(err, ErrEmbeddingIdentityMismatch) {
 		t.Fatalf("err = %v, want ErrEmbeddingIdentityMismatch", err)
+	}
+}
+
+// --- codex r1 F7: report Tau/TopK must be pinned, same as identity/dimension.
+
+func TestCalibrateMarginFromReport_MismatchedTauIsAnError(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.3))
+	opts := marginTestOpts
+	opts.TargetTau = testMarginTau + 0.05
+	_, err := CalibrateMarginFromReport(report, opts)
+	if !errors.Is(err, ErrMarginReportConfigMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportConfigMismatch", err)
+	}
+}
+
+func TestCalibrateMarginFromReport_MismatchedTopKIsAnError(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.3))
+	opts := marginTestOpts
+	opts.TargetTopK = testMarginTopK + 5
+	_, err := CalibrateMarginFromReport(report, opts)
+	if !errors.Is(err, ErrMarginReportConfigMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportConfigMismatch", err)
+	}
+}
+
+func TestCalibrateMarginFromReport_AbsentReportTauIsAnError(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.3))
+	report.Tau = 0
+	_, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if !errors.Is(err, ErrMarginReportConfigMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportConfigMismatch", err)
+	}
+}
+
+func TestCalibrateMarginFromReport_AbsentReportTopKIsAnError(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.3))
+	report.TopK = 0
+	_, err := CalibrateMarginFromReport(report, marginTestOpts)
+	if !errors.Is(err, ErrMarginReportConfigMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportConfigMismatch", err)
+	}
+}
+
+func TestCalibrateMarginFromReport_NonPositiveTargetTauIsAnError(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.3))
+	opts := marginTestOpts
+	opts.TargetTau = 0
+	_, err := CalibrateMarginFromReport(report, opts)
+	if !errors.Is(err, ErrMarginReportConfigMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportConfigMismatch", err)
+	}
+}
+
+func TestCalibrateMarginFromReport_NonPositiveTargetTopKIsAnError(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.3))
+	opts := marginTestOpts
+	opts.TargetTopK = 0
+	_, err := CalibrateMarginFromReport(report, opts)
+	if !errors.Is(err, ErrMarginReportConfigMismatch) {
+		t.Fatalf("err = %v, want ErrMarginReportConfigMismatch", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_MatchingTauAndTopKProceeds is the positive
+// counterpart: exact-matching Tau/TopK must NOT be refused.
+func TestCalibrateMarginFromReport_MatchingTauAndTopKProceeds(t *testing.T) {
+	report := marginReport(eligibleCase("project", "p1", "project", "p1", 0.3))
+	if _, err := CalibrateMarginFromReport(report, marginTestOpts); err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v, want no error for exact-matching tau/topK", err)
 	}
 }
 

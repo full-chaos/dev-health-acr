@@ -648,6 +648,13 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 // field's doc comment).
 var ErrNoMarginSamples = errors.New("calibration report has no eligible vector-margin samples (corroborated top-1 + >=2 distinct vector-arm subjects)")
 
+// ErrMarginReportConfigMismatch reports that report.Tau/report.TopK is
+// absent, non-positive, or does not exactly match
+// MarginCalibrationOptions.TargetTau/TargetTopK (codex r1 F7) -- see those
+// fields' doc comment for why a mismatch here invalidates M the same way an
+// embed-identity/dimension mismatch does.
+var ErrMarginReportConfigMismatch = errors.New("calibration report's tau/topK is missing or does not match the target tau/topK")
+
 // MarginCalibrationOptions parameterizes CalibrateMarginFromReport. Mirrors
 // CalibrationOptions' identity-pinning fields exactly (same exact-measurement
 // rationale); there is no TargetRecall analogue here -- M is sized from a
@@ -659,6 +666,22 @@ type MarginCalibrationOptions struct {
 	// recommendation to. See CalibrationOptions' fields of the same name.
 	TargetEmbedIdentity string
 	TargetDimension     int
+	// TargetTau and TargetTopK are CHAOS-3829 codex r1 F7 (accepted): the
+	// similarity floor and ANN result-set size the CALLER intends this M to
+	// gate under. Both are REQUIRED (TargetTau > 0, TargetTopK > 0) and must
+	// EXACTLY match report.Tau/report.TopK, or CalibrateMarginFromReport
+	// refuses with ErrMarginReportConfigMismatch -- the same
+	// exact-measurement discipline CalibrationOptions' identity/dimension
+	// pinning already enforces, extended here because M's zero-tolerance
+	// construction is only meaningful if the wrong-top1 margins it was
+	// computed from were measured at the EXACT tau/topK the runtime carve-out
+	// will actually operate under: a report measured at a different tau
+	// admits/rejects a different candidate population entirely (a lower tau
+	// lets more, closer near-duplicates survive to compete for top-1/top-2),
+	// and a different topK changes vectorSearchNodesWithOverFetch's own
+	// returnCap and therefore which candidates the ANN call even returns.
+	TargetTau  float64
+	TargetTopK int
 }
 
 // MarginCalibrationResult is CalibrateMarginFromReport's recommendation plus
@@ -811,6 +834,14 @@ func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationO
 		report.EmbedIdentity == "" || report.EmbedDimension <= 0 ||
 		report.EmbedIdentity != opts.TargetEmbedIdentity || report.EmbedDimension != opts.TargetDimension {
 		return MarginCalibrationResult{}, ErrEmbeddingIdentityMismatch
+	}
+	// codex r1 F7: pin report.Tau/report.TopK the SAME way identity/dimension
+	// are pinned above -- see TargetTau/TargetTopK's own doc comment for why
+	// a mismatch here invalidates M exactly as an identity/dimension mismatch
+	// would.
+	if opts.TargetTau <= 0 || opts.TargetTopK <= 0 ||
+		report.Tau != opts.TargetTau || report.TopK != opts.TargetTopK {
+		return MarginCalibrationResult{}, ErrMarginReportConfigMismatch
 	}
 
 	var correctMargins, wrongMargins []float64

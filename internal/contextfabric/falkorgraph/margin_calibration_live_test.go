@@ -32,7 +32,7 @@ func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts Margin
 		t.Fatalf("CalibrateMarginFromReport: %v", err)
 	}
 
-	t.Logf("CHAOS-3829 Phase 2 margin calibration (target identity=%s dim=%d):", opts.TargetEmbedIdentity, opts.TargetDimension)
+	t.Logf("CHAOS-3829 Phase 2 margin calibration (target identity=%s dim=%d tau=%v topK=%d):", opts.TargetEmbedIdentity, opts.TargetDimension, opts.TargetTau, opts.TargetTopK)
 	t.Logf("  eligible population: correct-top1=%d wrong-top1=%d (of which %d from a corroborated control)",
 		result.CorrectSampleSize, result.WrongSampleSize, result.WrongSampleSizeFromControls)
 	t.Logf("  controls: in_report=%d with_vector_arm_data=%d corroborated=%d corroborated_without_margin=%d",
@@ -79,8 +79,16 @@ func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts Margin
 //	ACR_TEST_MARGIN_CALIBRATION_REPORT=/path/to/oracle-report.json \
 //	ACR_TEST_MARGIN_CALIBRATION_TARGET_IDENTITY='provider/model#tag' \
 //	ACR_TEST_MARGIN_CALIBRATION_TARGET_DIMENSION=3072 \
+//	ACR_TEST_MARGIN_CALIBRATION_TARGET_TAU=0.30 \
+//	ACR_TEST_MARGIN_CALIBRATION_TARGET_TOPK=20 \
 //	[ACR_TEST_MARGIN_CALIBRATION_OUTPUT=/path/to/margin.json] \
 //	  go test ./internal/contextfabric/falkorgraph -run CalibrateVectorMarginFromReportFile -v
+//
+// TARGET_TAU/TARGET_TOPK (codex r1 F7) state the similarity floor/ANN
+// result-set size the operator intends this M to gate under; the report
+// must have been measured at EXACTLY those values or CalibrateMarginFromReport
+// refuses (ErrMarginReportConfigMismatch) -- same discipline as
+// TARGET_IDENTITY/TARGET_DIMENSION.
 //
 // The report is expected to be exactly what TestExactSearchOracleDecomposesRetrievalMisses
 // (oracle_live_test.go, CHAOS-3829 Phase 1 extension) writes.
@@ -97,6 +105,14 @@ func TestCalibrateVectorMarginFromReportFile(t *testing.T) {
 	if err != nil || targetDimension <= 0 {
 		t.Fatalf("ACR_TEST_MARGIN_CALIBRATION_TARGET_DIMENSION must be a positive integer: %v", err)
 	}
+	targetTau, err := strconv.ParseFloat(os.Getenv("ACR_TEST_MARGIN_CALIBRATION_TARGET_TAU"), 64)
+	if err != nil || targetTau <= 0 {
+		t.Fatalf("ACR_TEST_MARGIN_CALIBRATION_TARGET_TAU must be a positive number: %v", err)
+	}
+	targetTopK, err := strconv.Atoi(os.Getenv("ACR_TEST_MARGIN_CALIBRATION_TARGET_TOPK"))
+	if err != nil || targetTopK <= 0 {
+		t.Fatalf("ACR_TEST_MARGIN_CALIBRATION_TARGET_TOPK must be a positive integer: %v", err)
+	}
 
 	encoded, err := os.ReadFile(reportPath)
 	if err != nil {
@@ -110,5 +126,7 @@ func TestCalibrateVectorMarginFromReportFile(t *testing.T) {
 	runMarginCalibrationRunner(t, report, MarginCalibrationOptions{
 		TargetEmbedIdentity: targetEmbedIdentity,
 		TargetDimension:     targetDimension,
+		TargetTau:           targetTau,
+		TargetTopK:          targetTopK,
 	}, os.Getenv("ACR_TEST_MARGIN_CALIBRATION_OUTPUT"))
 }
