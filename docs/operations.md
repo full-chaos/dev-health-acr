@@ -381,8 +381,8 @@ new build.
 | `ACR_CONTEXT_FABRIC_MODEL_API_KEY` / `_FILE` | *(unset)* | Bearer credential, `KEY`/`KEY_FILE` convention (`config.SecretValue`). Required unless a base URL is set. |
 | `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible API root. Set this for BYO. |
 | `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Plugin namespace, recorded verbatim as `ModelExecutionReceipt.Provider`. Give a BYO endpoint its own stable name so replay can tell receipts apart. |
-| `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5-nano` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. |
-| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call), but **effectively required in practice — set it to `gpt-5.6-luna` alongside the `gpt-5-nano` default.** See the measurements below. |
+| `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5.6-luna` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. Default changed from `gpt-5-nano` to `gpt-5.6-luna` in CHAOS-3855 — see the measurements below. |
+| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call). As of CHAOS-3855, no fallback is recommended for the default `gpt-5.6-luna` primary — see the measurements below. |
 | `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` | `45s` | Bounds one generation attempt (1s–2m). |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` | `2` | Attempts `genkitruntime` makes per operation (1–3). |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | `2` | The OpenAI SDK's own retry loop *within* one attempt (0–5). Set `0` to make `genkitruntime` the single retry owner — the right choice for a local BYO server. |
@@ -784,9 +784,9 @@ it counted only `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_
   `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`/`_MAX_ATTEMPTS` as the primary — see
   `modelprovider.runtimeConfig`) only after every primary attempt has
   failed, and wait for it in-line before returning. With a fallback
-  configured — the standing recommendation above — this roughly DOUBLES
-  the worst case per operation, not zero: primary attempts, then fallback
-  attempts.
+  configured (opt-in; not the default since CHAOS-3855 — see below) this
+  roughly DOUBLES the worst case per operation, not zero: primary
+  attempts, then fallback attempts.
 - **`ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` adds real wall-clock
   time beyond `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`, not inside it.** The
   OpenAI SDK's own retry loop
@@ -814,16 +814,39 @@ worst_case    = per_operation × 2   # interpret, then synthesize, sequentially
 ```
 
 With the documented defaults (`45s` timeout, `2` attempts, `2` transport
-retries) and the standing fallback recommendation: `per_attempt` = 45 + 2×8
-= 61s, `per_leg` = 2×61 = 122s, `per_operation` = 122×2 = 244s, `worst_case`
-= 244×2 = **~490s**. Without a fallback configured, halve `per_operation`
-to **~245s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
+retries): `per_attempt` = 45 + 2×8 = 61s, `per_leg` = 2×61 = 122s. As of
+CHAOS-3855 the default deployment has no fallback configured, so
+`per_operation` = 122, `worst_case` = 122×2 = **~245s**. If an operator
+opts a fallback back in, `per_operation` doubles to 244 and `worst_case`
+doubles to **~490s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
 deployment's actual configuration, plus headroom, and treat the 8s
 per-transport-retry term as a floor, not a ceiling, if the configured
 provider is known to return long `Retry-After` values. The timeout is
 global to the API, not per-route, so raising it also loosens the bound on
 every other route; a per-route timeout is the cleaner fix and is not
 implemented yet.
+
+**CHAOS-3855 update: the production default is now `gpt-5.6-luna` alone, no
+fallback.** The CHAOS-3742 five-arm generative trial measured `gpt-5.6-luna`
+alone as equal-or-better than the `gpt-5-nano` + `gpt-5.6-luna` fallback chain
+described below (1/30 strict vs. 0/30 strict) at roughly 2.4x fewer tokens
+per corpus run (82K vs. 193K); `gpt-5-nano` was the weakest interpreter and
+the dominant source of fact-parameter rejections. The CHAOS-3770 measurements
+and the "fallback is required" conclusion immediately below predate that
+trial and are kept for historical context, not as the current recommendation.
+
+**Migrating off the pre-CHAOS-3855 recommendation.** A deployment still
+carrying the old recommendation sets only
+`ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` and leaves
+`ACR_CONTEXT_FABRIC_MODEL` unset. Before CHAOS-3855 that resolved to
+`gpt-5-nano` primary / `gpt-5.6-luna` fallback; after CHAOS-3855,
+`ACR_CONTEXT_FABRIC_MODEL` defaults to `gpt-5.6-luna` too, so the same
+environment now names an identical primary and fallback. `Config.validate`
+fails loud on that (by design — a silent dedupe would hide a
+misconfiguration), so the deployment fails to start with a `must name a
+different model` error until the operator **unsets
+`ACR_CONTEXT_FABRIC_MODEL_FALLBACK`** (the new default primary needs no
+fallback) or points it at a genuinely different model.
 
 **Model choice matters, and `gpt-5-nano` alone is not enough.** Measured
 live against `gpt-5-nano` (the CHAOS-3770 acceptance probes, both skipped
@@ -894,11 +917,12 @@ mini's true rate on current prompts is **unmeasured and expected to be
 materially better than 4 of 12**. The nano and fallback rows were also
 measured on v3.
 
-So the standing recommendation is unchanged for now — `gpt-5-nano` with the
-`gpt-5.6-luna` fallback is the only combination measured to answer reliably —
-but `gpt-5-mini` is the open question worth settling before treating that as
-final, because a primary that answers on its own would remove the second
-billable call the fallback costs. Re-run
+The standing recommendation above (`gpt-5-nano` with the `gpt-5.6-luna`
+fallback) is superseded as of CHAOS-3855: the CHAOS-3742 five-arm trial found
+`gpt-5.6-luna` alone, with no fallback, an equal-or-better and materially
+cheaper production configuration — see the callout above. `gpt-5-mini`
+remains an open question worth settling against `gpt-5.6-luna` alone rather
+than against the retired nano/fallback pairing. Re-run
 `go test ./internal/api -run LiveEndpoint` with `ACR_TEST_MODEL=gpt-5-mini`
 on the current prompts to settle it.
 

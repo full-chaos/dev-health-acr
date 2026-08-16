@@ -18,6 +18,22 @@ func lookupFrom(values map[string]string) func(string) (string, bool) {
 	}
 }
 
+// TestDefaultModel_isTheCHAOS3855RatifiedValue is the sol review F3 fix: a
+// regression that reverts DefaultModel back to "gpt-5-nano" would still
+// pass every OTHER test in this file, because they all compare against the
+// DefaultModel constant itself (e.g. cfg.Model != DefaultModel), which is
+// tautological once the constant is wrong -- a mutation to DefaultModel's
+// value has no test that can catch it. This test pins the ratified decision
+// as a LITERAL, deliberately not routed through the constant, so it is the
+// one place a silent revert of the CHAOS-3855 default gets caught.
+func TestDefaultModel_isTheCHAOS3855RatifiedValue(t *testing.T) {
+	const chaos3855RatifiedDefaultModel = "gpt-5.6-luna"
+	if DefaultModel != chaos3855RatifiedDefaultModel {
+		t.Fatalf("DefaultModel = %q, want the CHAOS-3855 ratified default %q (gpt-5.6-luna alone, no fallback -- see docs/operations.md)",
+			DefaultModel, chaos3855RatifiedDefaultModel)
+	}
+}
+
 func TestConfigured_isFalseWithoutAnyProviderSelection(t *testing.T) {
 	// Given an environment that carries the Context Fabric read flag and an
 	// ambient OpenAI credential, but no ACR model provider selection.
@@ -90,8 +106,8 @@ func TestConfigFromEnv_appliesProviderShapedDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Then the CHAOS-3770 decision (OpenAI + gpt-5-nano) is the default,
-	// and nothing else is inferred.
+	// Then the CHAOS-3855 decision (OpenAI + gpt-5.6-luna, no fallback) is
+	// the default, and nothing else is inferred.
 	if cfg.Provider != DefaultProvider || cfg.Model != DefaultModel {
 		t.Fatalf("provider/model = %q/%q, want %q/%q", cfg.Provider, cfg.Model, DefaultProvider, DefaultModel)
 	}
