@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,15 +136,46 @@ func statusWithBoundedSpawnRetry(t *testing.T, runner CodeGraphRunner, ctx conte
 // nothing was left unreaped, there is simply nothing to check that run.
 // When the pid file DOES exist (the common case across this family's many
 // repeated attempts), this defers to the normal, strict
-// assertCodeGraphProcessExited -- which the F2 mutation test (temporarily
-// disabling the post-Wait kill and confirming "malformed" then failed)
-// proved genuinely catches a broken second kill when the race lands.
-func assertCodeGraphLateForkReapedIfSpawned(t *testing.T, pidPath string) {
+// assertCodeGraphProcessExited, and increments spawned -- see
+// requireCodeGraphLateForkSpawnedAtLeastOnce, called once per variant
+// after every repetition (serial and concurrent) has run, for why a
+// per-run vacuous pass must not be allowed to go unnoticed forever.
+// Verified at development time (no standing mutation-test harness exists
+// in this repo, and none is required): with the post-Wait kill in
+// waitCodeGraphProcessGroup temporarily commented out, "malformed" failed
+// here (an unreaped process was still alive); restoring the kill made it
+// pass again -- confirming this assertion genuinely catches a broken
+// second kill when the race lands, not just when the mock happens to
+// agree with itself.
+func assertCodeGraphLateForkReapedIfSpawned(t *testing.T, pidPath string, spawned *atomic.Int32) {
 	t.Helper()
 	if _, err := os.Stat(pidPath); errors.Is(err, os.ErrNotExist) {
 		return
 	}
+	spawned.Add(1)
 	assertCodeGraphProcessExited(t, pidPath)
+}
+
+// requireCodeGraphLateForkSpawnedAtLeastOnce is sol review F2's non-vacuity
+// detector (CHAOS-3861): assertCodeGraphLateForkReapedIfSpawned tolerating
+// "the late fork never wrote its pid file" as a per-run vacuous pass is
+// correct (a genuinely unreaped straggler still fails loud), but LEFT
+// UNCHECKED across every repetition, a broken late-fork spawn line (a typo
+// in the shell script, a removed mkfifo, anything that stops the late
+// fork from ever running at all) would ALSO look exactly like "vacuous
+// pass" every single time -- silently disarming the guard forever with
+// zero coverage and zero signal. Call this once per variant, after BOTH
+// the serial 50-loop and the concurrent block have finished (t.Run for
+// the "concurrent" subtest blocks until all of its parallel children
+// complete, so this is safe to call immediately after it returns): if the
+// late fork could not spawn even once across ~58 attempts
+// (50 + concurrentCleanupSubtests), either the shell script itself is
+// broken or the host is too resource-constrained to run this test family
+// at all -- both are worth failing loudly for, not silently tolerating.
+func requireCodeGraphLateForkSpawnedAtLeastOnce(t *testing.T, spawned *atomic.Int32) {
+	t.Helper()
+	require.Greater(t, spawned.Load(), int32(0),
+		"the late-fork guard never observed a single spawn across every repetition -- either the shell script that spawns it is broken, or the host could not fork at all; assertCodeGraphLateForkReapedIfSpawned's per-run tolerance would otherwise hide this forever")
 }
 
 // TestReapTimingConstantsPreserveTheDiscriminator pins the one relationship
@@ -178,6 +210,17 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 		// foreground statement forcing it to wait): its output is small
 		// enough to write in one syscall, so staying foreground is both
 		// simpler and, empirically, more reliable.
+		//
+		// Consequence for what each variant actually proves (sol review,
+		// CHAOS-3861 F2 verification): "oversized"'s late fork is launched
+		// alongside (not strictly after) the primary output, since
+		// backgrounding removes the foreground wait that would otherwise
+		// force it to come later -- it can be, and often is, forked BEFORE
+		// the first kill. That still exercises real coverage (a group
+		// member the first kill DOES catch, proving group-kill semantics
+		// generally), but it is not 322576a's late-fork-after-first-kill
+		// temporal proof; that proof lives in "malformed", whose late fork
+		// stays sequenced strictly after test.output by staying foreground.
 		outputMayBlockOnKill bool
 		output               string
 		wantErr              error
@@ -186,6 +229,12 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 		{name: "oversized", outputMayBlockOnKill: true, output: `head -c 1048576 /dev/zero | tr '\000' ' '; printf not-json`, wantErr: ErrCodeGraphOutputTooLarge},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			// sol review F2 non-vacuity detector: see
+			// requireCodeGraphLateForkSpawnedAtLeastOnce's doc comment.
+			// Scoped per-variant (malformed and oversized each get their
+			// own counter), incremented from any goroutine since the
+			// concurrent block below calls run(t) from parallel subtests.
+			var lateForkSpawned atomic.Int32
 			run := func(t *testing.T) {
 				t.Helper()
 				directory := t.TempDir()
@@ -215,7 +264,8 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 				// churn). A FIFO plus a blocking `read` (a shell builtin,
 				// no fork at all) replaces it: the parent blocks on the
 				// read until the grandchild writes to the FIFO, no
-				// polling required. The second, untracked
+				// polling required.
+				//
 				// sol review F2: the second, untracked `sh -c 'sleep N' &`
 				// spawned AFTER test.output was NOT redundant coverage of
 				// "the group has more than one member" -- it is commit
@@ -254,7 +304,7 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 				require.NotErrorIs(t, err, context.DeadlineExceeded)
 				assertCodeGraphProcessExited(t, shellPIDPath)
 				assertCodeGraphProcessExited(t, grandchildPIDPath)
-				assertCodeGraphLateForkReapedIfSpawned(t, lateForkPIDPath)
+				assertCodeGraphLateForkReapedIfSpawned(t, lateForkPIDPath, &lateForkSpawned)
 				assertCodeGraphProcessGroupExited(t, shellPIDPath)
 			}
 
@@ -270,6 +320,11 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 					})
 				}
 			})
+
+			// t.Run above blocks until every one of its subtests --
+			// including the parallel "cleanup" ones -- has completed, so
+			// lateForkSpawned's final value is stable here.
+			requireCodeGraphLateForkSpawnedAtLeastOnce(t, &lateForkSpawned)
 		})
 	}
 }

@@ -2,12 +2,20 @@
 
 package sidecar
 
+// This build tag (!darwin && !linux) covers more than Windows -- it also
+// matches the BSDs and other POSIX-like unixes this repo does not target
+// (see the Makefile: only darwin, linux, and windows are built/vetted).
+// Those platforms' syscall packages likely DO define EAGAIN/EMFILE/ENOMEM
+// the same way darwin/linux do; this file's `false` here is deliberately
+// conservative for ALL of them, not a claim that they lack the errno
+// semantics. What genuinely differs is Windows' CreateProcess failure
+// model, which does not map to POSIX fork/exec errno at all -- that is
+// the platform this fallback exists FOR.
+//
 // isTransientCodeGraphSpawnErrno never classifies a spawn failure as
-// host-resource-transient on a platform without POSIX fork/exec errno
-// semantics (EAGAIN/EMFILE/ENOMEM do not apply the same way to Windows'
-// CreateProcess failure modes). A cmd.Start()/cmd.StdoutPipe() failure
-// there falls through classifyCodeGraphSpawnError's default case:
-// propagated wrapped and truthful, just not classified as either
+// host-resource-transient here. A cmd.Start()/cmd.StdoutPipe() failure
+// falls through classifyCodeGraphSpawnError's default case: propagated
+// wrapped and truthful, just not classified as either
 // errCodeGraphExecutableAbsent or errCodeGraphSpawnUnavailable. See
 // credential_keyring_procgroup_other.go for the established pattern this
 // file follows.
