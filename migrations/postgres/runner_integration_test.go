@@ -22,8 +22,9 @@ import (
 // 3786's reuse-epoch cutover and 0013 is 3781's time-axis reuse key. (The
 // runner sorts by version and rejects only duplicates, so a gap applies
 // cleanly -- but there is no gap to tolerate here now.) 0014 is
-// CHAOS-3833's embed-retrieval reuse-key columns.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+// CHAOS-3833's embed-retrieval reuse-key columns. 0015 is CHAOS-3862's
+// prompt-version reuse-key columns.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

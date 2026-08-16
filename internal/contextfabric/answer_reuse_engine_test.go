@@ -891,7 +891,7 @@ type snapshotCapturingResultStore struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity) error {
+func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions) error {
 	s.saveCalled = true
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
@@ -1080,7 +1080,7 @@ type keyRecordingResultStore struct {
 	savedKey string
 }
 
-func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity) error {
+func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity, _ ReusePromptVersions) error {
 	s.saved = result
 	s.savedKey = timeAxisKey
 	return nil
@@ -1258,16 +1258,19 @@ func TestF1_UnclampedRequestsKeyIdenticallyAcrossArrivals(t *testing.T) {
 }
 
 // retrievalRecordingResultStore records the CHAOS-3833 retrieval identity
-// Save was given, so a test can assert lookup and save carry the same
-// deployment-current pair.
+// AND the CHAOS-3862 prompt versions Save was given, so a test can assert
+// lookup and save carry the same deployment-current pair for either
+// dimension.
 type retrievalRecordingResultStore struct {
-	saveCalled     bool
-	savedRetrieval ReuseRetrievalIdentity
+	saveCalled         bool
+	savedRetrieval     ReuseRetrievalIdentity
+	savedPromptVersion ReusePromptVersions
 }
 
-func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity) error {
+func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity, promptVersions ReusePromptVersions) error {
 	s.saveCalled = true
 	s.savedRetrieval = retrieval
+	s.savedPromptVersion = promptVersions
 	return nil
 }
 
@@ -1357,6 +1360,91 @@ func TestCHAOS3833_RetrievalIdentityFlowsToBothLookupAndSave(t *testing.T) {
 	}
 	if store.savedRetrieval != retrieval {
 		t.Errorf("Save retrieval = %+v, want %+v", store.savedRetrieval, retrieval)
+	}
+}
+
+// TestCHAOS3862_PromptVersionsFlowToBothLookupAndSave is the prompt-version
+// twin of TestCHAOS3833_RetrievalIdentityFlowsToBothLookupAndSave: the SAME
+// EngineOptions.ReusePromptVersions value must appear in every lookup's
+// ReuseKey (as the two conjunctive dimensions) AND as Save's explicit
+// promptVersions parameter, so the persisted columns and the compared
+// predicates cannot drift within one process. A fresh investigation is
+// driven end to end so both sides actually run.
+func TestCHAOS3862_PromptVersionsFlowToBothLookupAndSave(t *testing.T) {
+	t.Parallel()
+
+	promptVersions := ReusePromptVersions{
+		InterpretationPromptVersion: "context-fabric-interpretation.v7",
+		SynthesisPromptVersion:      "context-fabric-synthesis.v9",
+	}
+	store := &retrievalRecordingResultStore{}
+	var lookupKeys []ReuseKey
+	gate := reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+		lookupKeys = append(lookupKeys, key)
+		return InvestigationResult{}, false, nil
+	})
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{
+				Shape: ShapeSingleSubject, RequestedJudgment: "status",
+				TimeContext:      request.TimeContext,
+				FactRequirements: []FactRequirement{{Kind: FactStatus}},
+			}, nil
+		}),
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			context: GraphContext{
+				DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			},
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
+				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Fine.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results: store, ReuseGate: gate,
+	}, EngineOptions{
+		ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() },
+		NewResultID:         func() string { return "result_promptver01" },
+		ReusePromptVersions: promptVersions,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(lookupKeys) != 1 {
+		t.Fatalf("FindReusable called %d times, want 1", len(lookupKeys))
+	}
+	if lookupKeys[0].InterpretationPromptVersion != promptVersions.InterpretationPromptVersion {
+		t.Errorf("lookup key InterpretationPromptVersion = %q, want %q", lookupKeys[0].InterpretationPromptVersion, promptVersions.InterpretationPromptVersion)
+	}
+	if lookupKeys[0].SynthesisPromptVersion != promptVersions.SynthesisPromptVersion {
+		t.Errorf("lookup key SynthesisPromptVersion = %q, want %q", lookupKeys[0].SynthesisPromptVersion, promptVersions.SynthesisPromptVersion)
+	}
+	if !store.saveCalled {
+		t.Fatal("Save was never called")
+	}
+	if store.savedPromptVersion != promptVersions {
+		t.Errorf("Save promptVersions = %+v, want %+v", store.savedPromptVersion, promptVersions)
 	}
 }
 
@@ -1467,6 +1555,132 @@ func TestCHAOS3834_RetrievalPolicyVersionChangeInvalidatesStoredAnswerReuse(t *t
 		}
 		if result.Reused {
 			t.Fatal("Investigate() result.Reused = true, want false: a RetrievalPolicyVersion change must invalidate reuse, never silently serve a pre-policy answer")
+		}
+	})
+}
+
+// storedUnderPromptVersionsGate simulates ONE previously-stored answer,
+// saved while the deployment ran (savedInterpretationVersion,
+// savedSynthesisVersion), and reports a hit only when a lookup's
+// ReuseKey carries BOTH values exactly -- the two conjunctive equality
+// predicates migration 0015 adds (store.go's `AND
+// interpretation_prompt_version = $10 AND synthesis_prompt_version =
+// $11`). Used below to prove that EITHER prompt version changing, by
+// itself, turns a would-have-been-a-hit into a miss.
+func storedUnderPromptVersionsGate(savedInterpretationVersion, savedSynthesisVersion string, candidate InvestigationResult) reuseGateFunc {
+	return func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+		if key.InterpretationPromptVersion != savedInterpretationVersion || key.SynthesisPromptVersion != savedSynthesisVersion {
+			return InvestigationResult{}, false, nil
+		}
+		return candidate, true, nil
+	}
+}
+
+// TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse is
+// CHAOS-3862's fail-pre proof that InterpretationPromptVersion and
+// SynthesisPromptVersion each PARTICIPATE in the reuse key: with every
+// other request property held identical, changing EITHER the
+// deployment's current interpretation prompt version or its current
+// synthesis prompt version -- alone -- turns a stored answer from
+// reusable into a miss. This is exactly the mechanism a prompt deploy
+// (e.g. interpretation v6->v7) depends on: a stale-prompt answer must not
+// keep serving from reuse for the rest of its staleness window. Run this
+// test against a build that dropped either field from ReuseKey (or
+// stopped comparing it) and the corresponding "changed version" subtest
+// fails: the stale candidate would still come back as a hit.
+func TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse(t *testing.T) {
+	t.Parallel()
+
+	project, candidate := reusableCandidate()
+	// Simulates a row Save persisted while the deployment ran
+	// interpretation v6 and synthesis v8.
+	gate := storedUnderPromptVersionsGate("context-fabric-interpretation.v6", "context-fabric-synthesis.v8", candidate)
+
+	buildEngine := func(t *testing.T, currentInterpretationVersion, currentSynthesisVersion string) *Engine {
+		t.Helper()
+		engine, err := NewEngine(EngineDependencies{
+			Interpreter: interpreterFunc(func(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
+				return InterpretedQuestion{
+					Shape: ShapeSingleSubject, RequestedJudgment: "status",
+					TimeContext:      request.TimeContext,
+					FactRequirements: []FactRequirement{{Kind: FactStatus}},
+				}, nil
+			}),
+			Graph: graphReaderStub{
+				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+				context: GraphContext{
+					DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{},
+					Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				},
+			},
+			Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+				return CanonicalFactBundle{
+					Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+					Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+				}, nil
+			}),
+			Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+				return InvestigationResult{
+					Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
+					StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+					Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+					ClaimedFacts:        []ClaimedFact{},
+					Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+					DeterministicAnswer: "Fine.", Warnings: []string{},
+					Versions: VersionSet{
+						Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+						InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+					},
+				}, nil
+			}),
+			Results: &resultStoreStub{}, ReuseGate: gate,
+		}, EngineOptions{
+			ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() },
+			NewResultID: func() string { return "result_fresh_00002" },
+			ReusePromptVersions: ReusePromptVersions{
+				InterpretationPromptVersion: currentInterpretationVersion,
+				SynthesisPromptVersion:      currentSynthesisVersion,
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewEngine() error = %v", err)
+		}
+		return engine
+	}
+
+	t.Run("unchanged versions still reuse the stored answer", func(t *testing.T) {
+		t.Parallel()
+		engine := buildEngine(t, "context-fabric-interpretation.v6", "context-fabric-synthesis.v8")
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if !result.Reused {
+			t.Fatal("Investigate() result.Reused = false, want true when the current prompt versions match the stored row's")
+		}
+	})
+
+	t.Run("changed interpretation version misses -- the stale answer is not reused", func(t *testing.T) {
+		t.Parallel()
+		engine := buildEngine(t, "context-fabric-interpretation.v7", "context-fabric-synthesis.v8")
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if result.Reused {
+			t.Fatal("Investigate() result.Reused = true, want false: an interpretation prompt bump must invalidate reuse, never silently serve a stale-prompt answer")
+		}
+	})
+
+	t.Run("changed synthesis version misses -- the stale answer is not reused", func(t *testing.T) {
+		t.Parallel()
+		engine := buildEngine(t, "context-fabric-interpretation.v6", "context-fabric-synthesis.v9")
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if result.Reused {
+			t.Fatal("Investigate() result.Reused = true, want false: a synthesis prompt bump must invalidate reuse, never silently serve a stale-prompt answer")
 		}
 	})
 }

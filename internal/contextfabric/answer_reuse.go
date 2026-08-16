@@ -330,6 +330,14 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// different embed-text/retrieval-policy semantics never matches.
 		EmbedRetrievalIdentity: e.reuseRetrievalIdentity.EmbedRetrievalIdentity,
 		RetrievalPolicyVersion: e.reuseRetrievalIdentity.RetrievalPolicyVersion,
+		// CHAOS-3862: the SAME deployment-current pair Save persists, from
+		// the same EngineOptions field, so lookup and save cannot drift
+		// within one process -- mirroring the EmbedRetrievalIdentity/
+		// RetrievalPolicyVersion comment immediately above. Conjunctive
+		// equality means a pre-0015 row (NULL columns) or a row produced
+		// under a different prompt version never matches.
+		InterpretationPromptVersion: e.reusePromptVersions.InterpretationPromptVersion,
+		SynthesisPromptVersion:      e.reusePromptVersions.SynthesisPromptVersion,
 	}
 	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {

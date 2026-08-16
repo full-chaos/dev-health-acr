@@ -190,7 +190,14 @@ type InvestigationResultStore interface {
 	// Explicit parameter for the same reason as the snapshot and epoch:
 	// a caller who forgets it must fail to compile, and an implementation
 	// must never substitute a value it derived some other way.
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity) error
+	//
+	// The final ReusePromptVersions is the CHAOS-3862 twin of the same
+	// idea, one dimension over: the deployment-CURRENT interpretation and
+	// synthesis prompt versions, persisted so a reuse lookup can bind to
+	// the prompt an already-stored answer was actually produced under,
+	// not just the model that produced it. Same explicit-parameter
+	// discipline, same reason.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions) error
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
 }
 
@@ -305,14 +312,45 @@ type SourceWatermarkSnapshot map[string]string
 // old policy need their own dimension to stop matching. Its own column
 // rather than a suffix on the embed identity, so a reuse miss stays
 // attributable to policy-vs-embed specifically.
+//
+// InterpretationPromptVersion and SynthesisPromptVersion are the
+// CHAOS-3862 eighth and ninth dimensions. Answer reuse runs BEFORE
+// Interpret (Engine.tryReuse, AC-3782-1's zero-model-call guarantee) and a
+// hit is served without ever calling Synthesize either -- so a reused
+// answer skips BOTH model steps, not just interpretation. Before this
+// fix, a prompt bump (e.g. interpretation v6->v7) left every already-
+// stored answer for the identical question fully reusable for up to the
+// configured staleness window: nothing in the key changed, because the
+// prompt text a stored answer was PRODUCED under was never part of it,
+// even though ModelExecutionReceipt.PromptVersion already recorded it on
+// every fresh execution. Two dedicated columns, not one and not folded
+// into ModelIdentities, for the same per-dimension-diagnosability reason
+// EmbedRetrievalIdentity/RetrievalPolicyVersion are two columns rather
+// than one: a prompt-version miss must stay attributable to
+// interpretation vs. synthesis specifically, and ModelIdentities'
+// membership test is disjunctive (ALTERNATIVES a stored row's identity
+// must be ONE of), which cannot carry a second, unrelated conjunctive
+// constraint -- see EmbedRetrievalIdentity's doc comment immediately
+// above for the identical reasoning applied to a different dimension.
+//
+// Both are computed from the RUNNING binary's configuration (genkitruntime's
+// own prompt-version defaulting -- see
+// genkitruntime.DefaultInterpretationPromptVersion/
+// DefaultSynthesisPromptVersion) at save and lookup time, exactly like
+// EmbedRetrievalIdentity/RetrievalPolicyVersion: the discriminator changes
+// atomically with a deploy, no rebuild required, so it closes the same
+// deploy->cutover gap for a prompt bump that 0014 closed for an embed-text
+// change.
 type ReuseKey struct {
-	QuestionHash           string
-	ContractVersion        string
-	ProjectionVersion      string
-	ModelIdentities        []string
-	TimeAxisKey            string
-	EmbedRetrievalIdentity string
-	RetrievalPolicyVersion string
+	QuestionHash                string
+	ContractVersion             string
+	ProjectionVersion           string
+	ModelIdentities             []string
+	TimeAxisKey                 string
+	EmbedRetrievalIdentity      string
+	RetrievalPolicyVersion      string
+	InterpretationPromptVersion string
+	SynthesisPromptVersion      string
 }
 
 // ReuseRetrievalIdentity carries the deployment-CURRENT values of the two
@@ -331,6 +369,24 @@ type ReuseRetrievalIdentity struct {
 	// RetrievalPolicyVersion is the manually bumped retrieval-policy
 	// constant (e.g. "rp1") -- see falkorgraph.RetrievalPolicyVersion.
 	RetrievalPolicyVersion string
+}
+
+// ReusePromptVersions carries the deployment-CURRENT interpretation and
+// synthesis prompt versions (CHAOS-3862), computed once at composition
+// time from the SAME genkitruntime defaulting InterpretQuestion and
+// SynthesizeAnswer actually use (genkitruntime.DefaultInterpretationPromptVersion/
+// DefaultSynthesisPromptVersion, or a Config override if one is ever
+// wired). Engine uses the SAME value on both sides -- inside the ReuseKey
+// a lookup builds AND as Save's explicit parameter -- so the persisted
+// columns and the compared predicates can never drift apart within one
+// process, mirroring ReuseRetrievalIdentity's contract exactly. Either
+// field left empty means "this deployment does not participate in that
+// prompt-version-keyed dimension of reuse": Save persists SQL NULL and
+// FindReusable reports an ordinary miss on it -- fail-closed, never a
+// lookup that silently ignores the dimension.
+type ReusePromptVersions struct {
+	InterpretationPromptVersion string
+	SynthesisPromptVersion      string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

@@ -61,14 +61,27 @@ var testReuseRetrievalIdentity = contextfabric.ReuseRetrievalIdentity{
 	RetrievalPolicyVersion: "rp1",
 }
 
+// testReusePromptVersions is the CHAOS-3862 deployment-current
+// interpretation/synthesis prompt version pair every reuse-participating
+// Save and lookup in this file shares -- mirroring testReuseRetrievalIdentity
+// exactly. Tests that want the prompt-version dimension to MISS build a
+// divergent value explicitly.
+var testReusePromptVersions = contextfabric.ReusePromptVersions{
+	InterpretationPromptVersion: "context-fabric-interpretation.v7",
+	SynthesisPromptVersion:      "context-fabric-synthesis.v9",
+}
+
 func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKey {
 	return contextfabric.ReuseKey{
 		// CHAOS-3833: the same pair Save persisted, compared conjunctively.
 		EmbedRetrievalIdentity: testReuseRetrievalIdentity.EmbedRetrievalIdentity,
 		RetrievalPolicyVersion: testReuseRetrievalIdentity.RetrievalPolicyVersion,
-		QuestionHash:           contextfabric.QuestionHash(result.Question),
-		ContractVersion:        result.Versions.ContractVersion,
-		ProjectionVersion:      result.Versions.ProjectionVersion,
+		// CHAOS-3862: same conjunctive-equality mirror, one dimension over.
+		InterpretationPromptVersion: testReusePromptVersions.InterpretationPromptVersion,
+		SynthesisPromptVersion:      testReusePromptVersions.SynthesisPromptVersion,
+		QuestionHash:                contextfabric.QuestionHash(result.Question),
+		ContractVersion:             result.Versions.ContractVersion,
+		ProjectionVersion:           result.Versions.ProjectionVersion,
 		// A single-member chain: the exact identity this result was
 		// stored under. Most tests in this file want the baseline "the
 		// key that was actually stored still matches" case; CHAOS-3786
@@ -99,7 +112,7 @@ func saveWithReuseSnapshot(t *testing.T, ctx context.Context, store *pginvestiga
 	require.NoError(t, err)
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions))
 }
 
 // TestFindReusable_HappyPathRoundTrip proves the baseline: a result saved
@@ -141,7 +154,7 @@ func TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot(t *testing.T) {
 	// Deliberately NOT using saveWithReuseSnapshot -- plain Save with a
 	// nil reuse snapshot and a nil epoch, exactly what a Save call from a
 	// caller that doesn't know about answer reuse would pass.
-	require.NoError(t, store.Save(ctx, principal, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), testReuseRetrievalIdentity))
+	require.NoError(t, store.Save(ctx, principal, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), testReuseRetrievalIdentity, testReusePromptVersions))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -593,7 +606,7 @@ func TestAC_3782_4_RebuildBetweenSnapshotAndSaveIsCaughtByEpochNotTimestamp(t *t
 	// exactly what a timestamp-only check would have called "fresh" --
 	// but carries the STALE epoch captured before the rebuild.
 	result := reusableResult("result_reuse_epoch_race01", principal.OrgID, "Did the mid-flight rebuild get caught?")
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -640,7 +653,7 @@ func TestFindReusable_NilEpochAtSaveIsNeverReusable(t *testing.T) {
 	require.NoError(t, err)
 
 	result := reusableResult("result_reuse_epoch_nil01", principal.OrgID, "Was the no-epoch save left unreusable?")
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -719,7 +732,7 @@ func TestSave_EmptyModelIdentityPersistsAsNeverReusable(t *testing.T) {
 
 	result := reusableResult("result_reuse_no_model_id01", principal.OrgID, "Was the empty model identity save left unreusable?")
 	result.Versions.ModelIdentity = ""
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -832,4 +845,120 @@ func TestFindReusable_EmptyRetrievalKeyFieldsMissWithoutQuerying(t *testing.T) {
 	_, ok, err = store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty retrieval policy version in the key to miss")
+}
+
+// TestFindReusable_InterpretationPromptVersionIsConjunctive is CHAOS-3862's
+// store-level closure, the interpretation twin of
+// TestFindReusable_EmbedRetrievalIdentityIsConjunctive above: the
+// interpretation prompt version is a dedicated EQUALITY dimension, so a
+// stored answer stops matching the moment the deployment's interpretation
+// prompt bumps (e.g. v6->v7) -- for the rest of the row's staleness
+// window, not merely until the next rebuild. This is the RED-FIRST proof
+// for the ticket's own reproduction case: "a v6-stamped stored answer must
+// NOT serve a v7 lookup."
+func TestFindReusable_InterpretationPromptVersionIsConjunctive(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-interpretation-prompt"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_interp_prompt01", principal.OrgID, "Does an interpretation prompt bump invalidate reuse?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	// Same everything, different interpretation prompt version -- what a
+	// post-deploy binary (v6->v7) computes.
+	changed := reuseKeyFor(result)
+	changed.InterpretationPromptVersion = "context-fabric-interpretation.v6"
+	_, ok, err := store.FindReusable(ctx, principal, changed)
+	require.NoError(t, err)
+	require.False(t, ok, "expected a changed interpretation prompt version to miss conjunctively")
+
+	// And the unchanged version still hits -- the dimension discriminates,
+	// it does not blanket-disable.
+	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok, "expected the identical interpretation prompt version to still match")
+}
+
+// TestFindReusable_SynthesisPromptVersionIsConjunctive: the synthesis twin
+// of the test above. Answer reuse skips Synthesize on a hit too (Engine.
+// tryReuse runs before Interpret AND serves without ever calling
+// Synthesize), so a synthesis prompt bump is exactly the same hazard from
+// the other end of the same mechanism.
+func TestFindReusable_SynthesisPromptVersionIsConjunctive(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-synthesis-prompt"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_synth_prompt01", principal.OrgID, "Does a synthesis prompt bump invalidate reuse?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	changed := reuseKeyFor(result)
+	changed.SynthesisPromptVersion = "context-fabric-synthesis.v8"
+	_, ok, err := store.FindReusable(ctx, principal, changed)
+	require.NoError(t, err)
+	require.False(t, ok, "expected a changed synthesis prompt version to miss conjunctively")
+
+	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok, "expected the identical synthesis prompt version to still match")
+}
+
+// TestFindReusable_PreMigrationNullPromptVersionColumnsNeverMatch pins the
+// per-replica fail-closed property migration 0015's header documents:
+// every pre-migration row holds NULL in both new columns, and NULL never
+// satisfies an equality predicate, so a predicate-carrying binary can
+// never reuse a pre-change answer. Simulated by NULLing the columns on a
+// row saved through the current binary -- byte-for-byte what a pre-0015
+// row looks like to this query.
+func TestFindReusable_PreMigrationNullPromptVersionColumnsNeverMatch(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-prompt-pre-migration"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_prompt_premigration01", principal.OrgID, "Is a pre-migration prompt-version row unreusable?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	_, err := db.ExecContext(ctx, `
+UPDATE acr.context_fabric_investigation_results
+   SET interpretation_prompt_version = NULL, synthesis_prompt_version = NULL
+ WHERE result_id = $1`, result.ResultID)
+	require.NoError(t, err)
+
+	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.False(t, ok, "expected a pre-0015-shaped row (NULL prompt-version columns) to never match the conjunctive predicates")
+}
+
+// TestFindReusable_EmptyPromptVersionKeyFieldsMissWithoutQuerying: a
+// composition that never supplied the prompt-version discriminators must
+// produce an ordinary miss, never a lookup that silently ignores the
+// dimensions -- the same fail-closed convention as an empty question hash
+// or an empty retrieval key field.
+func TestFindReusable_EmptyPromptVersionKeyFieldsMissWithoutQuerying(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-empty-prompt-key"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_prompt_emptykey01", principal.OrgID, "Does an empty prompt-version key fail closed?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	missing := reuseKeyFor(result)
+	missing.InterpretationPromptVersion = ""
+	_, ok, err := store.FindReusable(ctx, principal, missing)
+	require.NoError(t, err)
+	require.False(t, ok, "expected an empty interpretation prompt version in the key to miss")
+
+	missing = reuseKeyFor(result)
+	missing.SynthesisPromptVersion = ""
+	_, ok, err = store.FindReusable(ctx, principal, missing)
+	require.NoError(t, err)
+	require.False(t, ok, "expected an empty synthesis prompt version in the key to miss")
 }

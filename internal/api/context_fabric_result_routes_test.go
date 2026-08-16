@@ -43,7 +43,7 @@ func seedResult(t *testing.T, store *memoryinvestigation.Store, orgID, resultID 
 	// off" values, and the current-axis key is CHAOS-3781's fixed literal.
 	// These tests seed results to exercise RETRIEVAL, which does not depend
 	// on reuse bookkeeping either way.
-	if err := store.Save(context.Background(), storage.Principal{OrgID: orgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}); err != nil {
+	if err := store.Save(context.Background(), storage.Principal{OrgID: orgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}); err != nil {
 		t.Fatalf("seed result: %v", err)
 	}
 	return result
@@ -257,8 +257,8 @@ type countingResultStore struct {
 	calls int
 }
 
-func (s *countingResultStore) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity) error {
-	return s.inner.Save(ctx, principal, result, reuseSnapshot, reuseEpoch, timeAxisKey, retrieval)
+func (s *countingResultStore) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity, promptVersions contextfabric.ReusePromptVersions) error {
+	return s.inner.Save(ctx, principal, result, reuseSnapshot, reuseEpoch, timeAxisKey, retrieval, promptVersions)
 }
 
 func (s *countingResultStore) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.InvestigationResult, error) {

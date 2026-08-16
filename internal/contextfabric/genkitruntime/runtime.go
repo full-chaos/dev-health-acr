@@ -21,7 +21,7 @@ import (
 const SDKVersion = "v1.11.0"
 
 const (
-	// defaultInterpretationPromptVersion is v3 as of CHAOS-3770's live
+	// DefaultInterpretationPromptVersion is v3 as of CHAOS-3770's live
 	// acceptance: v2 (CHAOS-3754) extended the interpretation system
 	// prompt (prompts.go) to cover conversational-reference resolution,
 	// alias/acronym/previous-name subject terms, and subjectless
@@ -84,8 +84,14 @@ const (
 	//     rather than leaving the model to infer a vocabulary from the
 	//     length/count bounds alone and invent keys the registry always
 	//     rejects.
-	defaultInterpretationPromptVersion = "context-fabric-interpretation.v7"
-	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
+	//
+	// Exported (CHAOS-3862): answer reuse must bind a lookup to the SAME
+	// deployment-current value this defaulting uses, before Interpret ever
+	// runs -- see contextfabric.ReuseKey.InterpretationPromptVersion's doc
+	// comment. Composition reads this constant directly rather than a
+	// second, independently-maintained copy, so the two can never drift.
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v7"
+	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
 	// longer free text), requires a claimed fact's subject to be one the
@@ -181,7 +187,9 @@ const (
 	// each). A prompt version names one exact text, so the merged text --
 	// which is neither branch's v8 -- takes the next number rather than
 	// leaving two different prompts sharing a version string.
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v9"
+	// Exported for the same CHAOS-3862 reason as
+	// DefaultInterpretationPromptVersion above.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v9"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )
@@ -300,10 +308,10 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 		config.ModelVersion = config.Model
 	}
 	if strings.TrimSpace(config.InterpretationPromptVersion) == "" {
-		config.InterpretationPromptVersion = defaultInterpretationPromptVersion
+		config.InterpretationPromptVersion = DefaultInterpretationPromptVersion
 	}
 	if strings.TrimSpace(config.SynthesisPromptVersion) == "" {
-		config.SynthesisPromptVersion = defaultSynthesisPromptVersion
+		config.SynthesisPromptVersion = DefaultSynthesisPromptVersion
 	}
 	if strings.TrimSpace(config.SchemaVersion) == "" {
 		config.SchemaVersion = defaultSchemaVersion
