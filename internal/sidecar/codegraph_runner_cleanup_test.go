@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -134,12 +136,18 @@ func statusWithBoundedSpawnRetry(t *testing.T, runner CodeGraphRunner, ctx conte
 // never get to write its pid file at all, caught by the FIRST kill before
 // it could run. That is a vacuous, uninformative outcome, not a failure:
 // nothing was left unreaped, there is simply nothing to check that run.
-// When the pid file DOES exist (the common case across this family's many
-// repeated attempts), this defers to the normal, strict
-// assertCodeGraphProcessExited, and increments spawned -- see
-// requireCodeGraphLateForkSpawnedAtLeastOnce, called once per variant
-// after every repetition (serial and concurrent) has run, for why a
-// per-run vacuous pass must not be allowed to go unnoticed forever.
+// When the pid file DOES exist, this defers to the normal, strict
+// assertCodeGraphProcessExited (a genuinely unreaped straggler still
+// fails loud, unconditionally) and increments spawned -- see
+// logCodeGraphLateForkSpawnCount, called once per variant after every
+// repetition (serial and concurrent) has run. spawned is logged only, not
+// asserted on: the coverage GUARANTEE for the post-Wait kill lives in
+// TestWaitCodeGraphProcessGroup_ReapsAGroupMemberThatJoinedAfterTheFirstKill
+// (a deterministic Go-level test with no shell timing dependency at all);
+// this shell probe is opportunistic realism on top of that, not a proof
+// obligation in its own right -- CI proved this race resolves in the
+// first kill's favor essentially always there, so asserting spawned > 0
+// here would itself be flaky on exactly the runner that matters most.
 // Verified at development time (no standing mutation-test harness exists
 // in this repo, and none is required): with the post-Wait kill in
 // waitCodeGraphProcessGroup temporarily commented out, "malformed" failed
@@ -156,26 +164,128 @@ func assertCodeGraphLateForkReapedIfSpawned(t *testing.T, pidPath string, spawne
 	assertCodeGraphProcessExited(t, pidPath)
 }
 
-// requireCodeGraphLateForkSpawnedAtLeastOnce is sol review F2's non-vacuity
-// detector (CHAOS-3861): assertCodeGraphLateForkReapedIfSpawned tolerating
-// "the late fork never wrote its pid file" as a per-run vacuous pass is
-// correct (a genuinely unreaped straggler still fails loud), but LEFT
-// UNCHECKED across every repetition, a broken late-fork spawn line (a typo
-// in the shell script, a removed mkfifo, anything that stops the late
-// fork from ever running at all) would ALSO look exactly like "vacuous
-// pass" every single time -- silently disarming the guard forever with
-// zero coverage and zero signal. Call this once per variant, after BOTH
-// the serial 50-loop and the concurrent block have finished (t.Run for
-// the "concurrent" subtest blocks until all of its parallel children
-// complete, so this is safe to call immediately after it returns): if the
-// late fork could not spawn even once across ~58 attempts
-// (50 + concurrentCleanupSubtests), either the shell script itself is
-// broken or the host is too resource-constrained to run this test family
-// at all -- both are worth failing loudly for, not silently tolerating.
-func requireCodeGraphLateForkSpawnedAtLeastOnce(t *testing.T, spawned *atomic.Int32) {
+// logCodeGraphLateForkSpawnCount is CHAOS-3861's third round on this
+// guard, and the one that settles the division of labor for good.
+//
+// Round 1 (sol review F2) restored the shell late fork after an earlier
+// pass deleted it. Round 2 (sol/luna review) added a HARD non-vacuity
+// assertion here -- require.Greater(spawned, 0) -- reasoning that a
+// per-run vacuous pass (tolerated because SIGKILL is unconditional for
+// anything already alive, so "never got forked at all" cannot be
+// distinguished from "forked and correctly reaped" by construction) must
+// not be allowed to look identical to "the spawn line itself is broken"
+// across EVERY repetition. That reasoning was sound, and the assertion
+// did exactly its job: on the CI runner that surfaced it, spawned was 0
+// across all ~58 repetitions, PROVING the shell race resolves in the
+// first kill's favor there essentially always -- CI scheduling makes the
+// leader's own decode-failure-triggered kill so fast relative to a
+// backgrounded `&` job's own fork/exec that the late fork routinely never
+// exists at all when the group dies. Locally the race goes the other way
+// often enough to look "reliable"; it never was, on the runner that
+// actually matters, and 322576a's original guard (no detector at all) had
+// been silently CI-vacuous since the day it was written -- nobody could
+// see it before round 2 added a mechanism capable of seeing it.
+//
+// The structural fix (per team lead's ruling) is
+// TestWaitCodeGraphProcessGroup_ReapsAGroupMemberThatJoinedAfterTheFirstKill
+// below: a deterministic, Go-level test that drives runCodeGraphJSON's
+// exact kill/wait sequence itself, constructing the "group member joined
+// after the first kill" ordering directly (Setpgid+Pgid into an existing
+// group) instead of hoping a shell script's own fork lands in that
+// window. THAT test is where the coverage guarantee for the post-Wait
+// kill now lives, unconditionally, on every machine, every run. This
+// shell probe is downgraded to opportunistic realism only: still spawns,
+// still gets a strict assertCodeGraphProcessExited when it DOES land (a
+// genuinely unreaped straggler still fails loud, unconditionally), but no
+// longer asserts on how OFTEN it lands -- that number is real information
+// about the host, not a proof obligation this shell mechanism can
+// actually discharge. Logged, never failed, never skipped.
+func logCodeGraphLateForkSpawnCount(t *testing.T, spawned *atomic.Int32) {
 	t.Helper()
-	require.Greater(t, spawned.Load(), int32(0),
-		"the late-fork guard never observed a single spawn across every repetition -- either the shell script that spawns it is broken, or the host could not fork at all; assertCodeGraphLateForkReapedIfSpawned's per-run tolerance would otherwise hide this forever")
+	t.Logf("late fork (shell probe, opportunistic -- see TestWaitCodeGraphProcessGroup_ReapsAGroupMemberThatJoinedAfterTheFirstKill for the actual coverage guarantee) spawned in %d of ~58 repetitions (50 serial + %d concurrent)", spawned.Load(), concurrentCleanupSubtests)
+}
+
+// TestWaitCodeGraphProcessGroup_ReapsAGroupMemberThatJoinedAfterTheFirstKill
+// is the deterministic coverage guarantee logCodeGraphLateForkSpawnCount's
+// doc comment refers to. It drives the EXACT production sequence
+// runCodeGraphJSON uses after a decode failure -- killKeyringProcessGroupID
+// (the first, pre-Wait kill) then waitCodeGraphProcessGroup (cmd.Wait()
+// plus the second, post-Wait kill) -- but with the TEST controlling
+// ordering directly instead of racing a shell script against it:
+//  1. Start a group leader and capture its process group.
+//  2. Call killKeyringProcessGroupID on that group -- the exact first
+//     kill runCodeGraphJSON issues.
+//  3. ONLY THEN start a second process, explicitly joined into the SAME
+//     existing group via SysProcAttr{Setpgid: true, Pgid: processGroup}.
+//     This process cannot possibly have existed when step 2 ran; there is
+//     no race to lose, by construction, not by timing luck.
+//  4. Call waitCodeGraphProcessGroup -- the exact function runCodeGraphJSON
+//     calls immediately after its own first kill -- and assert the late
+//     joiner is dead.
+//
+// If the post-Wait kill inside waitCodeGraphProcessGroup were ever
+// removed or broken, the late joiner from step 3 would never die (nothing
+// else in this test kills it), and this test would fail every run, on
+// any machine -- no CI-only vacuity possible, because nothing here
+// depends on scheduling.
+//
+// Verification note (found the hard way, worth recording): the "late"
+// process here is a DIRECT CHILD OF THIS TEST, unlike the shell-forked
+// grandchildren elsewhere in this file, which become children of PID 1
+// once their shell parent exits and so get reaped automatically. A direct
+// child that this test does not reap itself stays a zombie -- kill(pid,
+// 0), the mechanism assertCodeGraphPIDExited/assertCodeGraphProcessExited
+// use, reports a zombie as "alive" regardless of whether it has actually
+// been killed, since a zombie is still a real kernel entry. An earlier
+// draft of this test used that helper and appeared to show the post-Wait
+// kill NOT reaching the late joiner at all -- reproduced identically via
+// a hand-rolled probe on both darwin and a linux container, looking like
+// a genuine, portable kernel limitation -- until re-checking with
+// late.Wait() (which blocks until the process actually exits AND reaps
+// it) showed the kill lands within milliseconds every time. This test
+// therefore reaps and observes "late" directly via Wait(), the correct
+// mechanism for a process this test itself parented, instead of the
+// zombie-blind polling helper.
+func TestWaitCodeGraphProcessGroup_ReapsAGroupMemberThatJoinedAfterTheFirstKill(t *testing.T) {
+	requireProcessGroupKill(t)
+
+	// Given a process group leader...
+	leader := exec.Command("sh", "-c", "sleep 30")
+	configureKeyringProcessGroup(leader)
+	require.NoError(t, leader.Start())
+	processGroup := captureKeyringProcessGroup(leader)
+	t.Cleanup(func() { _ = killKeyringProcessGroupID(processGroup) })
+
+	// ...whose group has already received the FIRST (pre-Wait) kill...
+	require.NoError(t, killKeyringProcessGroupID(processGroup))
+
+	// ...before a SECOND process joins that SAME group -- deterministically
+	// after the first kill, by construction (Setpgid+Pgid places it
+	// directly into processGroup), not by hoping a shell fork wins a race
+	// against another process's kill() syscall.
+	late := exec.Command("sleep", "30")
+	late.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: processGroup}
+	require.NoError(t, late.Start())
+	lateDone := make(chan error, 1)
+	go func() { lateDone <- late.Wait() }()
+
+	// When: the exact sequencing runCodeGraphJSON runs immediately after
+	// its own first kill.
+	_ = waitCodeGraphProcessGroup(leader, processGroup)
+
+	// Then: the late joiner -- which the first kill could not possibly
+	// have caught, since it did not exist yet -- must be reaped by the
+	// second kill inside waitCodeGraphProcessGroup. A bounded wait, not a
+	// hard timeout failure mode: if the kill genuinely does not land, late
+	// keeps running its own 30s sleep and lateDone never fires within this
+	// window, which is exactly the signal a broken second kill should
+	// produce.
+	select {
+	case err := <-lateDone:
+		require.Error(t, err, "late should have been killed, not exited on its own")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the late-joining group member was not reaped within 2s of waitCodeGraphProcessGroup returning -- the post-Wait kill did not reach it")
+	}
 }
 
 // TestReapTimingConstantsPreserveTheDiscriminator pins the one relationship
@@ -229,8 +339,8 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 		{name: "oversized", outputMayBlockOnKill: true, output: `head -c 1048576 /dev/zero | tr '\000' ' '; printf not-json`, wantErr: ErrCodeGraphOutputTooLarge},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			// sol review F2 non-vacuity detector: see
-			// requireCodeGraphLateForkSpawnedAtLeastOnce's doc comment.
+			// Opportunistic spawn count (logged, not asserted -- see
+			// logCodeGraphLateForkSpawnCount's doc comment for why).
 			// Scoped per-variant (malformed and oversized each get their
 			// own counter), incremented from any goroutine since the
 			// concurrent block below calls run(t) from parallel subtests.
@@ -347,8 +457,10 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 
 			// t.Run above blocks until every one of its subtests --
 			// including the parallel "cleanup" ones -- has completed, so
-			// lateForkSpawned's final value is stable here.
-			requireCodeGraphLateForkSpawnedAtLeastOnce(t, &lateForkSpawned)
+			// lateForkSpawned's final value is stable here. Logged only,
+			// per team lead's ruling -- see logCodeGraphLateForkSpawnCount's
+			// doc comment for why this is no longer a failing assertion.
+			logCodeGraphLateForkSpawnCount(t, &lateForkSpawned)
 		})
 	}
 }
