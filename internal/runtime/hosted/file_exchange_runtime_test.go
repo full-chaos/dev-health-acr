@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -67,6 +68,41 @@ func newFileExchangeRuntime(dir, model string, timeout time.Duration) (*fileExch
 	}
 	return &fileExchangeRuntime{dir: dir, model: model, timeout: timeout, poll: 500 * time.Millisecond, nonce: hex.EncodeToString(nonceBytes)}, nil
 }
+
+// ============================================================================
+// ENVELOPE CONTRACT (sol review R3 -- this is the authoritative spec any
+// responder implementation, human or agent, must follow). File names are
+// identical between requests/ and responses/: "<seq6>-<operation>.json",
+// e.g. "000001-interpret.json". A responder watches requests/ and, for
+// each new file, writes the SAME filename to responses/.
+//
+// Request file (exchangeRequest below), a JSON object with these fields:
+//   operation      "interpret" | "synthesize"
+//   seq            monotonic integer, matches the filename
+//   session_nonce  a per-run random string -- MUST be echoed back verbatim
+//   system         the exact system prompt
+//   prompt         the exact JSON user payload
+//   output_schema  the exact output JSON Schema (flattened, no $ref/$defs)
+//   instructions   plain-text guidance (also states the echo requirement)
+//
+// Response file (exchangeResponse below) the responder writes, a JSON
+// object with these fields:
+//   session_nonce  MUST equal the request's session_nonce EXACTLY -- a
+//                  missing, empty, or mismatched value is treated as "not
+//                  ready yet" and retried until this run's exchange
+//                  timeout, then reported as deadline_exceeded (never
+//                  silently accepted as a real answer). THIS FIELD IS
+//                  REQUIRED ON BOTH SUCCESS AND ERROR RESPONSES.
+//   output         present on success: a JSON object matching the
+//                  request's output_schema exactly
+//   error          present on failure INSTEAD of output: free-text reason
+//                  (sol review F11: this harness never serializes this
+//                  text into any report -- only a fixed class + its byte
+//                  length reach a report field)
+//
+// See TestFileExchangeRoundTrip below for a mechanical proof this consumer
+// accepts an envelope shaped exactly like this contract.
+// ============================================================================
 
 // exchangeRequest is the self-contained file a responder reads: the full
 // prompt exactly as the real API would receive it, plus the exact output
@@ -189,7 +225,13 @@ func (f *fileExchangeRuntime) exchange(ctx context.Context, operation, system, p
 			}
 			if resp.SessionNonce != f.nonce {
 				if time.Now().After(deadline) {
-					return nil, fmt.Errorf("%w: waited %s for a matching session_nonce on %s", errExchangeSessionMismatch, f.timeout, respPath)
+					// sol review R4: multi-%w so errors.Is(err,
+					// context.DeadlineExceeded) still matches -- this
+					// exhausted the same deadline every other timeout path
+					// here does, and must classify as deadline_exceeded,
+					// not fall through to dependency_unavailable just
+					// because a MORE SPECIFIC sentinel is also true.
+					return nil, fmt.Errorf("%w: %w: waited %s for a matching session_nonce on %s", context.DeadlineExceeded, errExchangeSessionMismatch, f.timeout, respPath)
 				}
 				continue
 			}
@@ -279,4 +321,84 @@ func (f *fileExchangeRuntime) SynthesizeAnswer(ctx context.Context, principal st
 	receipt.OutputDigest = contextfabric.DigestModelValue(raw)
 	receipt.Outcome = "pending_validation"
 	return draft, receipt, nil
+}
+
+// TestFileExchangeRoundTrip is the compatibility proof sol review R3
+// demanded: a synthetic request goes out, a responder-SHAPED response
+// (built independently of this file's own types, matching only the
+// documented ENVELOPE CONTRACT above) comes back, and this consumer
+// accepts it. No live corpus, no hosted.Open, no network -- fast, and
+// runs on every `go test ./internal/runtime/hosted` invocation, not just
+// a live trial run.
+func TestFileExchangeRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	runtime, err := newFileExchangeRuntime(dir, "compat-test-model", 5*time.Second)
+	if err != nil {
+		t.Fatalf("newFileExchangeRuntime: %v", err)
+	}
+
+	type responderShapedReply struct {
+		SessionNonce string `json:"session_nonce"`
+		Output       struct {
+			Answer string `json:"answer"`
+		} `json:"output"`
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var reqPath string
+		for i := 0; i < 100; i++ {
+			entries, _ := os.ReadDir(filepath.Join(dir, "requests"))
+			if len(entries) > 0 {
+				reqPath = filepath.Join(dir, "requests", entries[0].Name())
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if reqPath == "" {
+			t.Error("request file never appeared")
+			return
+		}
+		raw, err := os.ReadFile(reqPath)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+		var req exchangeRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			t.Errorf("parse request: %v", err)
+			return
+		}
+		if req.SessionNonce == "" {
+			t.Error("request carries no session_nonce -- contract violation")
+			return
+		}
+		reply := responderShapedReply{SessionNonce: req.SessionNonce}
+		reply.Output.Answer = "ok"
+		body, err := json.Marshal(reply)
+		if err != nil {
+			t.Errorf("marshal responder-shaped reply: %v", err)
+			return
+		}
+		respPath := filepath.Join(filepath.Dir(filepath.Dir(reqPath)), "responses", filepath.Base(reqPath))
+		if err := os.WriteFile(respPath, body, 0o644); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}()
+
+	out, err := runtime.exchange(context.Background(), "interpret", "system prompt", "user prompt", []byte(`{"type":"object"}`))
+	<-done
+	if err != nil {
+		t.Fatalf("exchange rejected a contract-shaped response: %v", err)
+	}
+	var got struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal accepted output: %v", err)
+	}
+	if got.Answer != "ok" {
+		t.Fatalf("output = %+v, want answer=ok", got)
+	}
 }

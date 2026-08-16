@@ -99,8 +99,8 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	arm := os.Getenv("ACR_TEST_TRIAL_ARM")
 	runStartedAt := time.Now().UTC().Format(time.RFC3339)
 
-	corpus := loadTrialCorpus(t, corpusPath)
-	corpusHash := corpusSHA256(t, corpusPath)
+	corpus, corpusHash := loadTrialCorpus(t, corpusPath)
+	source := requireGitSourceIdentity(t)
 	// indices is the ordered set of corpus positions this run processes.
 	// ACR_TEST_TRIAL_INDICES (comma-separated, e.g. "27,28,29") selects an
 	// EXACT subset -- for targeted reclassification reruns, so a rerun does
@@ -214,8 +214,8 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 
 	provenance := trialProvenance{
 		CorpusSHA256: corpusHash, Transport: "real_api", RunStartedAt: runStartedAt,
-		SourceCommit: gitHeadSHA(t),
-		Model:        os.Getenv("ACR_TEST_TRIAL_MODEL"), ModelFallback: os.Getenv("ACR_TEST_TRIAL_MODEL_FALLBACK"),
+		SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
+		Model: os.Getenv("ACR_TEST_TRIAL_MODEL"), ModelFallback: os.Getenv("ACR_TEST_TRIAL_MODEL_FALLBACK"),
 	}
 	if exchangeRuntime != nil {
 		provenance.Transport = "file_exchange"
@@ -284,30 +284,44 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		report.Arm, report.CasesRun, report.CorpusTotal, report.Correct, report.WrongCommit, report.ControlViolations, report.NoCommit, report.Unusable, report.EarlyAbort, report.ControlViolationAbort, report.SuspectedWiringIssue, report.StageDistribution, outPath)
 }
 
-// corpusSHA256 hashes the RAW corpus file bytes (sol review F2 provenance
-// binding) -- never its parsed content, so the hash also catches a
-// whitespace/formatting-only difference between two nominally-identical
-// corpus files.
-func corpusSHA256(t *testing.T, path string) string {
-	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("hash trial corpus: %v", err)
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+// gitSourceIdentity reports the worktree's exact source state: HEAD SHA,
+// whether the tree is dirty (git status --porcelain non-empty), and, when
+// dirty, a digest of the actual diff content (so two independently-dirty
+// runs are distinguishable, not just both flagged "dirty=true").
+//
+// FAILS CLOSED (sol review R1, from F2): a report whose provenance cannot
+// name what code produced it is worse than no report -- refuse to run
+// rather than silently write "" and let a reader assume "clean, known
+// commit". A worktree/`git` genuinely unavailable is exactly the case
+// provenance exists to catch, not paper over.
+type gitSourceIdentity struct {
+	commit     string
+	dirty      bool
+	diffDigest string // empty when !dirty
 }
 
-// gitHeadSHA reports the worktree's current commit, or "" if it cannot be
-// determined (never fatal -- provenance is best-effort, not a gate).
-func gitHeadSHA(t *testing.T) string {
+func requireGitSourceIdentity(t *testing.T) gitSourceIdentity {
 	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	headOut, err := exec.Command("git", "rev-parse", "HEAD").Output()
 	if err != nil {
-		t.Logf("gitHeadSHA: %v (provenance.source_commit will be empty)", err)
-		return ""
+		t.Fatalf("determine source commit (required for report provenance -- refusing to run rather than report with an unknown source identity): %v", err)
 	}
-	return strings.TrimSpace(string(out))
+	commit := strings.TrimSpace(string(headOut))
+	statusOut, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatalf("determine worktree dirty state (required for report provenance): %v", err)
+	}
+	identity := gitSourceIdentity{commit: commit}
+	if strings.TrimSpace(string(statusOut)) != "" {
+		identity.dirty = true
+		diffOut, err := exec.Command("git", "diff", "HEAD").Output()
+		if err != nil {
+			t.Fatalf("hash worktree diff for a dirty tree (required for report provenance): %v", err)
+		}
+		sum := sha256.Sum256(diffOut)
+		identity.diffDigest = hex.EncodeToString(sum[:])
+	}
+	return identity
 }
 
 func requireEnv(t *testing.T, key string) string {
@@ -328,12 +342,18 @@ type trialCase struct {
 	ExpectID   string `json:"expect_id"`
 }
 
-func loadTrialCorpus(t *testing.T, path string) []trialCase {
+// loadTrialCorpus reads the corpus file ONCE (sol review R1, from F2:
+// provenance must hash the exact bytes that were parsed, not a second,
+// separately-read copy that could in principle differ) and returns both
+// the parsed cases and the SHA-256 of those same raw bytes.
+func loadTrialCorpus(t *testing.T, path string) ([]trialCase, string) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read trial corpus: %v", err)
 	}
+	sum := sha256.Sum256(raw)
+	hash := hex.EncodeToString(sum[:])
 	var corpus []trialCase
 	if err := json.Unmarshal(raw, &corpus); err != nil {
 		t.Fatalf("parse trial corpus: %v", err)
@@ -341,7 +361,7 @@ func loadTrialCorpus(t *testing.T, path string) []trialCase {
 	if len(corpus) < 50 {
 		t.Fatalf("trial corpus has %d cases; CHAOS-3742 requires at least 50", len(corpus))
 	}
-	return corpus
+	return corpus, hash
 }
 
 // wireProductionEnv maps this harness's dedicated ACR_TEST_TRIAL_* inputs
@@ -723,8 +743,14 @@ type trialProvenance struct {
 	Transport         string `json:"transport"` // "real_api" | "file_exchange"
 	ExchangeModelName string `json:"exchange_model_name,omitempty"`
 	ExchangeSessionID string `json:"exchange_session_id,omitempty"`
-	SourceCommit      string `json:"source_commit,omitempty"`
-	RunStartedAt      string `json:"run_started_at"`
+	SourceCommit      string `json:"source_commit"`
+	// SourceDirty/SourceDiffDigest (sol review R1): a report built from an
+	// uncommitted change is still valid data, but must say so rather than
+	// implying it came from SourceCommit's exact tree. DiffDigest lets two
+	// independently-dirty runs be told apart, not just both "dirty=true".
+	SourceDirty      bool   `json:"source_dirty"`
+	SourceDiffDigest string `json:"source_diff_digest,omitempty"`
+	RunStartedAt     string `json:"run_started_at"`
 }
 
 type trialReport struct {
