@@ -16,12 +16,53 @@ import (
 // failed -- which is how it came to advertise "at most 64 fact_requirements"
 // against a schema that said 50 and a vocabulary that permits 20.
 // Interpolation makes the statement and the enforcement the same fact.
+//
+// Two more measured defects, both fixed here (CHAOS-3742 five-arm
+// generative trial, chris-ratified 2026-08-16 roadmap):
+//
+//   - CHAOS-3856: the trial's dominant failure (~85-90% of the corpus) was a
+//     clarification wall -- this prompt told the model subject_terms "may be
+//     exact names, aliases, acronyms, previous names, or provider
+//     identifiers" with no ordering preference, and a real model reliably
+//     read that as license to paraphrase (the trial's own arm-4 responder
+//     self-assessed that it "deliberately kept aliases to close
+//     paraphrases", the natural reading of that sentence). A paraphrased
+//     term has no exact substring in the source text for the lexical
+//     retrieval arm to anchor on, so commit gates that require vector+
+//     LEXICAL corroboration never fire and the investigation asks for
+//     clarification instead. The benchmark run using author-supplied,
+//     lexically-anchored terms committed ~4/30; models emitting paraphrases
+//     committed 0-4/30. The fix demands a VERBATIM substring first for
+//     every subject_terms/comparison_terms entry, with paraphrase/alias
+//     terms allowed only as an explicitly secondary addition.
+//   - CHAOS-3854 (prompt-side half): the trial also measured every arm
+//     (nano, luna, nano+luna, claude-fable-5) independently hitting fact
+//     capability parameter rejections -- InterpretedQuestion.Validate()
+//     passes a fact_requirements[].parameters key of any spelling (it only
+//     bounds length and count), but internal/contextfabric/fact_registry.go
+//     rejects any key not on that capability's FactCapability.
+//     AllowedParameters allowlist, and -- measured directly against this
+//     package's newCapability wiring in internal/contextfabric/
+//     devhealthfacts -- every one of the 19 production fact capabilities
+//     declares an EMPTY AllowedParameters list, so any key the model
+//     invents ("term", "item_name", "definition_source", "subject_term",
+//     "description" were the ones the trial actually observed) always
+//     fails, unclassified, as a fact_read 500. The complete, current
+//     "allowed parameter vocabulary per capability" the ticket asks this
+//     prompt to state is therefore the empty set for every capability; the
+//     correct prompt-side fix is to say exactly that, so the model stops
+//     inventing keys instead of being handed a fabricated non-empty
+//     vocabulary. The provider-side contract fix (a real per-capability
+//     allowlist, or providers tolerating unknown parameters, or the error
+//     taxonomy gap in the route's classifier) is the separate, out-of-scope
+//     half of CHAOS-3854.
 var interpretationSystemPrompt = fmt.Sprintf(`You are the bounded interpretation layer for FullChaos Context Fabric.
 Interpret any authorized natural-language engineering question. Questions are open-ended and are not matched to a finite allowlist.
 Return only the requested structured output. Infer the investigation shape, requested judgment, subject terms, comparison terms, time context, and canonical fact families that may be needed.
 Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: %s. Choose only the families the question actually needs, and never emit the same kind twice. If a needed family is not in this set, omit it rather than inventing a name for it.
+fact_requirements[].parameters accepts NO keys for any fact family in this deployment: leave parameters empty (omit the field, or return {}) on every fact_requirements[] entry, no matter how relevant a key seems. Naming a parameter -- "term", "item_name", "definition_source", "subject_term", "description", or anything else -- causes that whole fact read, and the investigation, to fail; there is currently no key any fact family will accept.
 Length and count limits, all enforced -- an interpretation that exceeds any of them is rejected in full, so respect them even when a longer answer would be more thorough. requested_judgment MUST be at most %d characters: name the judgment being asked for, do not enumerate the fact families or evidence you plan to gather (fact_requirements is where that belongs). At most %d subject_terms and %d comparison_terms, each at most %d characters. At most %d fact_requirements. Each fact_requirements[].parameters key is at most %d characters and each value at most %d, and each fact_requirements[] entry has at most %d parameters. clarification_reason is at most %d characters.
-Subject terms may be exact names, aliases, acronyms, previous names, or provider identifiers -- extract whatever the question actually uses, without normalizing to a single canonical spelling.
+For subject_terms and comparison_terms, the term you list FIRST for each subject MUST be copied VERBATIM from the question text -- the exact substring as the user wrote it, same spelling, same casing, same punctuation, never corrected, translated, or normalized to a canonical or official name. Only after that verbatim term may you add a paraphrase, synonym, alias, acronym, expansion, or previous name as a further, clearly SECONDARY term for the same subject; a secondary term must never replace or precede the verbatim one, and never offer a paraphrase alone. Extract the verbatim term even when you also know a fuller or more correct name for the subject -- the literal text the user wrote is what retrieval matches against. Only when the question describes a subject with no literal substring you could copy (a purely indirect description, naming no name) may that subject's first term be your own best non-verbatim term instead.
 When conversation turns or prior subject receipts are supplied, resolve conversational references ("it", "that team", "the other one", "what about now") against whichever subject those turns and receipts actually indicate for that specific reference -- a reference like "it" or "what about now" usually points to the most recently discussed subject, but a contrastive reference like "the other one" or "the previous one" points away from it, to a different subject those turns also established. Prefer the shape (single subject, explicit cohort, or open) implied by the resolved reference over guessing a new one.
 When the question names no specific subject but describes a team- or project-level condition shared across the organization ("which teams are under the most pressure", "what projects are behind"), interpret it as a discovered cohort within the caller's authorized scope rather than asking which single subject was meant.
 Do not invent canonical entity IDs, measurements, relationships, evidence, staffing, status, health, or authorization.
