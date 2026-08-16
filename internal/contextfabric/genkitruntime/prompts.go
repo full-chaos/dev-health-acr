@@ -34,7 +34,25 @@ import (
 //     lexically-anchored terms committed ~4/30; models emitting paraphrases
 //     committed 0-4/30. The fix demands a VERBATIM substring first for
 //     every subject_terms/comparison_terms entry, with paraphrase/alias
-//     terms allowed only as an explicitly secondary addition.
+//     terms allowed only as an explicitly secondary addition. The copied
+//     span excludes surrounding quotes/brackets and trailing grammatical
+//     attachments (a possessive 's, sentence punctuation) -- sol review F1:
+//     exact-label promotion (graphrank/candidate.go) compares the raw term
+//     against the canonical label, so a wrapped or possessive copy loses
+//     MatchExact even though lexical retrieval (which tokenizes and strips
+//     that punctuation, falkorgraph/queries.go) still finds the node; only
+//     the confidence-1 exact-match commit was at risk, not retrieval
+//     itself.
+//   - Note (sol review F3, doc-only, no behavior change): this verbatim
+//     rule's retrieval payoff currently applies only to subject_terms --
+//     graphrank.SubjectTerms (candidate.go) builds its search terms from
+//     interpreted.SubjectTerms and RequestedScope.SubjectHints alone,
+//     never from ComparisonTerms, so a verbatim comparison_terms entry is
+//     not yet consumed by resolution the same way. The prompt still asks
+//     for verbatim comparison_terms (for schema/receipt consistency and
+//     because a future retrieval consumer may read them), but do not read
+//     this as claiming comparison_terms already anchors a commit the way
+//     subject_terms does.
 //   - CHAOS-3854 (prompt-side half): the trial also measured every arm
 //     (nano, luna, nano+luna, claude-fable-5) independently hitting fact
 //     capability parameter rejections -- InterpretedQuestion.Validate()
@@ -62,7 +80,7 @@ Return only the requested structured output. Infer the investigation shape, requ
 Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: %s. Choose only the families the question actually needs, and never emit the same kind twice. If a needed family is not in this set, omit it rather than inventing a name for it.
 fact_requirements[].parameters accepts NO keys for any fact family in this deployment: leave parameters empty (omit the field, or return {}) on every fact_requirements[] entry, no matter how relevant a key seems. Naming a parameter -- "term", "item_name", "definition_source", "subject_term", "description", or anything else -- causes that whole fact read, and the investigation, to fail; there is currently no key any fact family will accept.
 Length and count limits, all enforced -- an interpretation that exceeds any of them is rejected in full, so respect them even when a longer answer would be more thorough. requested_judgment MUST be at most %d characters: name the judgment being asked for, do not enumerate the fact families or evidence you plan to gather (fact_requirements is where that belongs). At most %d subject_terms and %d comparison_terms, each at most %d characters. At most %d fact_requirements. Each fact_requirements[].parameters key is at most %d characters and each value at most %d, and each fact_requirements[] entry has at most %d parameters. clarification_reason is at most %d characters.
-For subject_terms and comparison_terms, the term you list FIRST for each subject MUST be copied VERBATIM from the question text -- the exact substring as the user wrote it, same spelling, same casing, same punctuation, never corrected, translated, or normalized to a canonical or official name. Only after that verbatim term may you add a paraphrase, synonym, alias, acronym, expansion, or previous name as a further, clearly SECONDARY term for the same subject; a secondary term must never replace or precede the verbatim one, and never offer a paraphrase alone. Extract the verbatim term even when you also know a fuller or more correct name for the subject -- the literal text the user wrote is what retrieval matches against. Only when the question describes a subject with no literal substring you could copy (a purely indirect description, naming no name) may that subject's first term be your own best non-verbatim term instead.
+For subject_terms and comparison_terms, the term you list FIRST for each subject MUST be copied VERBATIM from the question text -- the exact substring as the user wrote it, same spelling and casing, never corrected, translated, or normalized to a canonical or official name. Copy the entity itself: drop surrounding quotation marks or brackets the question wrapped the name in, and drop a trailing grammatical attachment that is not part of the name (a possessive 's, a trailing comma, sentence-final punctuation); punctuation that is actually part of the name (a hyphen, an ampersand, an apostrophe inside the name itself) stays verbatim. Only after that verbatim term may you add a paraphrase, synonym, alias, acronym, expansion, or previous name as a further, clearly SECONDARY term for the same subject; a secondary term must never replace or precede the verbatim one, and never offer a paraphrase alone. Extract the verbatim term even when you also know a fuller or more correct name for the subject -- the literal text the user wrote is what retrieval matches against. Only when the question describes a subject with no literal substring you could copy (a purely indirect description, naming no name) may that subject's first term be your own best non-verbatim term instead.
 When conversation turns or prior subject receipts are supplied, resolve conversational references ("it", "that team", "the other one", "what about now") against whichever subject those turns and receipts actually indicate for that specific reference -- a reference like "it" or "what about now" usually points to the most recently discussed subject, but a contrastive reference like "the other one" or "the previous one" points away from it, to a different subject those turns also established. Prefer the shape (single subject, explicit cohort, or open) implied by the resolved reference over guessing a new one.
 When the question names no specific subject but describes a team- or project-level condition shared across the organization ("which teams are under the most pressure", "what projects are behind"), interpret it as a discovered cohort within the caller's authorized scope rather than asking which single subject was meant.
 Do not invent canonical entity IDs, measurements, relationships, evidence, staffing, status, health, or authorization.
