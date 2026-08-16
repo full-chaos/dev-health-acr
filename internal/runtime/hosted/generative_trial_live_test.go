@@ -141,6 +141,16 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		report.CasesRun++
 		tallyOutcome(&report, outcome)
 
+		// Sanity-anchor control (team-lead ruling): ANY control commitment
+		// is a red flag reported immediately, not batched to the end --
+		// stop this arm right here rather than spend the rest of the
+		// budget on a possibly-miswired harness.
+		if outcome.Outcome == "control_violation" {
+			report.ControlViolationAbort = true
+			t.Logf("STOP: arm %q committed a subject for a no-match CONTROL case at index %d -- suspected harness-wiring issue, aborting this arm for review rather than finishing it", arm, i)
+			break
+		}
+
 		if i < 10 {
 			firstTen = append(firstTen, outcome)
 		}
@@ -149,6 +159,19 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 				report.EarlyAbort = true
 				report.EarlyAbortSignature = fmt.Sprintf("%s x%d/10 (correct=%d)", class, count, correct)
 				t.Logf("EARLY ABORT for arm %q: dominant failure class %q in %d/10 first cases, only %d correct -- stopping this arm early per the systematic-failure control", arm, class, count, correct)
+				break
+			}
+		}
+		// Sanity-anchor control (team-lead ruling): the benchmark's own
+		// resolution behavior commits ~4/50 (~8%). A wild divergence after
+		// enough cases to be meaningful (very high or persistently zero
+		// commit rate) means STOP and report a suspected harness-wiring
+		// issue before finishing the arm.
+		if i == 14 {
+			rate := float64(report.CommittedTotal) / float64(report.CasesRun)
+			if rate > 0.30 {
+				report.SuspectedWiringIssue = fmt.Sprintf("commit rate %.0f%% after %d cases is far above the benchmark's ~8%% -- suspected over-commit", rate*100, report.CasesRun)
+				t.Logf("STOP: arm %q -- %s", arm, report.SuspectedWiringIssue)
 				break
 			}
 		}
@@ -161,8 +184,8 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	if err := os.WriteFile(outPath, blob, 0o644); err != nil {
 		t.Fatalf("write report: %v", err)
 	}
-	t.Logf("arm=%s cases_run=%d/%d correct=%d wrong_commit=%d control_violations=%d no_commit=%d unusable=%d early_abort=%v -> %s",
-		report.Arm, report.CasesRun, report.CorpusTotal, report.Correct, report.WrongCommit, report.ControlViolations, report.NoCommit, report.Unusable, report.EarlyAbort, outPath)
+	t.Logf("arm=%s cases_run=%d/%d correct=%d wrong_commit=%d control_violations=%d no_commit=%d unusable=%d early_abort=%v control_violation_abort=%v suspected_wiring_issue=%q stages=%v -> %s",
+		report.Arm, report.CasesRun, report.CorpusTotal, report.Correct, report.WrongCommit, report.ControlViolations, report.NoCommit, report.Unusable, report.EarlyAbort, report.ControlViolationAbort, report.SuspectedWiringIssue, report.StageDistribution, outPath)
 }
 
 func requireEnv(t *testing.T, key string) string {
@@ -282,10 +305,16 @@ func contextFabricRejectionClass(err error) string {
 }
 
 type caseOutcome struct {
-	Index              int    `json:"index"`
-	IsControl          bool   `json:"is_control"`
-	ExpectKind         string `json:"expect_kind,omitempty"`
-	Outcome            string `json:"outcome"`
+	Index      int    `json:"index"`
+	IsControl  bool   `json:"is_control"`
+	ExpectKind string `json:"expect_kind,omitempty"`
+	Outcome    string `json:"outcome"`
+	// Stage buckets the outcome by how FAR the investigation got, for the
+	// stage-resolved distribution team-lead asked for: interpret_rejected /
+	// synthesis_rejected / model_call_failed (stage-ambiguous provider/
+	// transport failure) / invalid_result_downstream / no_match /
+	// clarification_required / committed_no_synthesis / usable_answer.
+	Stage              string `json:"stage"`
 	Status             string `json:"status,omitempty"`
 	ErrorClass         string `json:"error_class,omitempty"`
 	CommittedCount     int    `json:"committed_count"`
@@ -324,11 +353,13 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 	if err != nil {
 		outcome.ErrorClass = contextFabricRejectionClass(err)
 		outcome.Outcome = "error:" + outcome.ErrorClass
+		outcome.Stage = errorStage(outcome.ErrorClass)
 		return outcome
 	}
 	if verr := result.Validate(); verr != nil {
 		outcome.ErrorClass = "invalid_result_downstream"
 		outcome.Outcome = "error:" + outcome.ErrorClass
+		outcome.Stage = "invalid_result_downstream"
 		return outcome
 	}
 
@@ -357,7 +388,45 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 	default:
 		outcome.Outcome = "wrong_commit"
 	}
+	outcome.Stage = successStage(result.Status, outcome.CommittedCount)
 	return outcome
+}
+
+// errorStage maps an error-path failure class to the stage bucket
+// team-lead asked for. interpretation_rejected/synthesis_rejected are
+// stage-exact by construction; the remaining classes (model_output_invalid,
+// dependency_unavailable, rate_limited, deadline_exceeded, invalid_time_bound,
+// unclassified) can occur at either the interpret or synthesize call and
+// contextfabric's sentinels do not carry which -- bucketed together rather
+// than guessed.
+func errorStage(class string) string {
+	switch class {
+	case "interpretation_rejected":
+		return "interpret_rejected"
+	case "synthesis_rejected":
+		return "synthesis_rejected"
+	default:
+		return "model_call_failed"
+	}
+}
+
+func successStage(status contractsv1.ContextFabricInvestigationStatus, committedCount int) string {
+	switch status {
+	case contractsv1.ContextFabricInvestigationNoMatch:
+		return "no_match"
+	case contractsv1.ContextFabricInvestigationClarificationRequired:
+		return "clarification_required"
+	case contractsv1.ContextFabricInvestigationComplete, contractsv1.ContextFabricInvestigationPartial:
+		if committedCount > 0 {
+			return "usable_answer"
+		}
+		return "clarification_required"
+	default:
+		if committedCount > 0 {
+			return "committed_no_synthesis"
+		}
+		return "clarification_required"
+	}
 }
 
 func committedMatchesTrial(committed []contractsv1.ContextFabricSubjectRef, tc trialCase) bool {
@@ -370,21 +439,36 @@ func committedMatchesTrial(committed []contractsv1.ContextFabricSubjectRef, tc t
 }
 
 type trialReport struct {
-	Arm                 string         `json:"arm"`
-	CorpusTotal         int            `json:"corpus_total"`
-	CasesRun            int            `json:"cases_run"`
-	Correct             int            `json:"correct"`
-	WrongCommit         int            `json:"wrong_commit"`
-	ControlViolations   int            `json:"control_violations"`
-	NoCommit            int            `json:"no_commit"`
-	Unusable            int            `json:"unusable"`
-	FailureClasses      map[string]int `json:"failure_classes,omitempty"`
-	EarlyAbort          bool           `json:"early_abort"`
-	EarlyAbortSignature string         `json:"early_abort_signature,omitempty"`
-	Cases               []caseOutcome  `json:"cases"`
+	Arm               string         `json:"arm"`
+	CorpusTotal       int            `json:"corpus_total"`
+	CasesRun          int            `json:"cases_run"`
+	Correct           int            `json:"correct"`
+	WrongCommit       int            `json:"wrong_commit"`
+	ControlViolations int            `json:"control_violations"`
+	NoCommit          int            `json:"no_commit"`
+	Unusable          int            `json:"unusable"`
+	CommittedTotal    int            `json:"committed_total"`
+	FailureClasses    map[string]int `json:"failure_classes,omitempty"`
+	// StageDistribution is the stage-resolved outcome distribution
+	// team-lead asked for -- most cases are expected to end in
+	// clarification_required for every arm (the benchmark commits only
+	// 4/50), so this is where an honest read of synthesis-quality coverage
+	// (or the lack of it) lives, not just the top-line correct/total.
+	StageDistribution     map[string]int `json:"stage_distribution"`
+	EarlyAbort            bool           `json:"early_abort"`
+	EarlyAbortSignature   string         `json:"early_abort_signature,omitempty"`
+	ControlViolationAbort bool           `json:"control_violation_abort"`
+	SuspectedWiringIssue  string         `json:"suspected_wiring_issue,omitempty"`
+	Cases                 []caseOutcome  `json:"cases"`
 }
 
 func tallyOutcome(report *trialReport, outcome caseOutcome) {
+	if report.StageDistribution == nil {
+		report.StageDistribution = map[string]int{}
+	}
+	report.StageDistribution[outcome.Stage]++
+	report.CommittedTotal += outcome.CommittedCount
+
 	switch {
 	case outcome.Outcome == "correct":
 		report.Correct++
