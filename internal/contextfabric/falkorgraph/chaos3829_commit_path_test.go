@@ -149,6 +149,47 @@ func TestEmbedderFromEnv_ExplicitSimilarityFloorOverrideDisablesM(t *testing.T) 
 	}
 }
 
+// TestEmbedderFromEnv_ExplicitFloorEqualToCalibratedTauKeepsM is CHAOS-3829
+// codex r3 H1(a)'s core pinning test: an explicit
+// ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR set to EXACTLY the calibrated
+// tau (0.30) must NOT disable M -- the effective floor is unchanged, so M
+// still measures the population it was calibrated against. The ORIGINAL
+// presence-based G3 fix would have wrongly disabled M here; this test
+// distinguishes the value-based fix from that.
+func TestEmbedderFromEnv_ExplicitFloorEqualToCalibratedTauKeepsM(t *testing.T) {
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
+		embedprovider.EnvSimilarityFloor: "0.30", // exactly the calibrated tau for this identity
+	}))
+	if err != nil {
+		t.Fatalf("EmbedderFromEnv: %v", err)
+	}
+	if options.SimilarityFloor != 0.30 {
+		t.Fatalf("SimilarityFloor = %v, want 0.30", options.SimilarityFloor)
+	}
+	if options.VectorMarginCommitThreshold <= 0 {
+		t.Fatalf("VectorMarginCommitThreshold = %v, want the calibrated positive M -- the explicit override equals the calibrated tau, so the effective floor is unchanged", options.VectorMarginCommitThreshold)
+	}
+}
+
+// TestEmbedderFromEnv_ExplicitFloorDifferentFromCalibratedTauDropsM is the
+// contrasting negative control, at a DIFFERENT explicit value than the
+// disables-M test above (which uses 0.10) -- both must drop M, proving the
+// value comparison, not merely presence, is what is being tested.
+func TestEmbedderFromEnv_ExplicitFloorDifferentFromCalibratedTauDropsM(t *testing.T) {
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
+		embedprovider.EnvSimilarityFloor: "0.45",
+	}))
+	if err != nil {
+		t.Fatalf("EmbedderFromEnv: %v", err)
+	}
+	if options.SimilarityFloor != 0.45 {
+		t.Fatalf("SimilarityFloor = %v, want the explicit override 0.45", options.SimilarityFloor)
+	}
+	if options.VectorMarginCommitThreshold != 0 {
+		t.Fatalf("VectorMarginCommitThreshold = %v, want 0 -- 0.45 != the calibrated tau 0.30", options.VectorMarginCommitThreshold)
+	}
+}
+
 // TestEmbedderFromEnv_NoFloorOverrideStillAppliesM is the positive control:
 // with NO explicit floor override, the effective floor equals the policy's
 // calibrated tau, and M installs exactly as before this fix.

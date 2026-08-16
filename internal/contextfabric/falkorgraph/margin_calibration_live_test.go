@@ -24,7 +24,13 @@ import (
 // posture protects an operator from silently shipping tau/K; this one is a
 // measurement report a human reads before ANY commit-path code exists to
 // ship at all).
-func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts MarginCalibrationOptions, outputPath string) {
+// reportPath is the SOURCE report's own path on disk (empty when the
+// caller built report directly in memory, e.g. every non-live test in this
+// package) -- codex r3 H3: threaded through solely so
+// NewMarginCalibrationArtifact can stamp the written artifact with full
+// provenance (target tau/topK, source report path + content hash),
+// mirroring CalibrationArtifact's identical shape and rationale.
+func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts MarginCalibrationOptions, reportPath, outputPath string) {
 	t.Helper()
 
 	result, err := CalibrateMarginFromReport(report, opts)
@@ -52,11 +58,8 @@ func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts Margin
 	}
 
 	if outputPath != "" {
-		encoded, err := json.MarshalIndent(struct {
-			MarginCalibrationResult
-			TargetEmbedIdentity string `json:"target_embed_identity"`
-			TargetDimension     int    `json:"target_dimension"`
-		}{result, opts.TargetEmbedIdentity, opts.TargetDimension}, "", "  ")
+		artifact := NewMarginCalibrationArtifact(result, report, opts, reportPath)
+		encoded, err := json.MarshalIndent(artifact, "", "  ")
 		if err != nil {
 			t.Fatalf("encode margin calibration artifact: %v", err)
 		}
@@ -128,5 +131,5 @@ func TestCalibrateVectorMarginFromReportFile(t *testing.T) {
 		TargetDimension:     targetDimension,
 		TargetTau:           targetTau,
 		TargetTopK:          targetTopK,
-	}, os.Getenv("ACR_TEST_MARGIN_CALIBRATION_OUTPUT"))
+	}, reportPath, os.Getenv("ACR_TEST_MARGIN_CALIBRATION_OUTPUT"))
 }

@@ -655,6 +655,43 @@ var ErrNoMarginSamples = errors.New("calibration report has no eligible vector-m
 // embed-identity/dimension mismatch does.
 var ErrMarginReportConfigMismatch = errors.New("calibration report's tau/topK is missing or does not match the target tau/topK")
 
+// ErrMarginReportInternallyInconsistent reports that a CalibrationCase's
+// stored VectorMargin does not equal VectorTop1.Similarity -
+// VectorTop2.Similarity (codex r3 H2), or that either similarity is
+// non-finite -- see checkMarginConsistency's doc comment. Wraps the
+// specific case's population/index/details via fmt.Errorf's %w for a
+// caller that wants to log or inspect the failure programmatically.
+var ErrMarginReportInternallyInconsistent = errors.New("calibration report case's stored vector_margin does not match its own top-1/top-2 similarities")
+
+// checkMarginConsistency validates every CalibrationCase in cases whose
+// VectorTop1/VectorTop2/VectorMargin are ALL present (codex r3 H2): the
+// oracle harness always computes VectorMargin as
+// VectorTop1.Similarity-VectorTop2.Similarity (oracle_live_test.go), so a
+// report where the stored field disagrees with that recomputation, or
+// where either similarity is not a finite number, cannot be trusted --
+// something corrupted it, hand-edited it, or a producer bug wrote it
+// incorrectly. label identifies which population (report.Cases vs
+// report.ControlCases) for the error message. A case with any of the
+// three fields nil is skipped here (unaffected) -- the caller's own
+// eligibility loop already excludes it from calibration for an unrelated
+// reason (no margin was ever claimed), which is a different, already-
+// handled state from "a margin was claimed and it's wrong".
+func checkMarginConsistency(cases []CalibrationCase, label string) error {
+	for i, c := range cases {
+		if c.VectorTop1 == nil || c.VectorTop2 == nil || c.VectorMargin == nil {
+			continue
+		}
+		s1, s2 := c.VectorTop1.Similarity, c.VectorTop2.Similarity
+		if math.IsNaN(s1) || math.IsInf(s1, 0) || math.IsNaN(s2) || math.IsInf(s2, 0) {
+			return fmt.Errorf("%w: %s[%d] has a non-finite vector-arm similarity (top1=%v top2=%v)", ErrMarginReportInternallyInconsistent, label, i, s1, s2)
+		}
+		if recomputed := s1 - s2; recomputed != *c.VectorMargin {
+			return fmt.Errorf("%w: %s[%d] stored vector_margin=%v, but top1.similarity(%v)-top2.similarity(%v)=%v", ErrMarginReportInternallyInconsistent, label, i, *c.VectorMargin, s1, s2, recomputed)
+		}
+	}
+	return nil
+}
+
 // MarginCalibrationOptions parameterizes CalibrateMarginFromReport. Mirrors
 // CalibrationOptions' identity-pinning fields exactly (same exact-measurement
 // rationale); there is no TargetRecall analogue here -- M is sized from a
@@ -767,6 +804,65 @@ type MarginCalibrationResult struct {
 	AchievedReach float64
 }
 
+// MarginCalibrationArtifact wraps a MarginCalibrationResult with the
+// provenance a WRITTEN, on-disk artifact needs (codex r3 H3, mirroring
+// CalibrationArtifact's identical shape/rationale) -- a bare
+// MarginCalibrationResult carries the RECOMMENDATION but nothing that
+// identifies what it was recommended FOR: no embedding identity, no
+// dimension, no tau/topK, no source-report provenance. Two files written by
+// two runs against DIFFERENT embedding spaces (or different tau/topK) are
+// byte-for-byte indistinguishable as MarginCalibrationResult JSON, despite
+// CalibrateMarginFromReport itself refusing to MIX spaces/configs at
+// generation time (ErrEmbeddingIdentityMismatch / ErrMarginReportConfigMismatch)
+// -- that check guards the run that PRODUCES the file, not a later run,
+// script, or human that picks the file back up days afterward with no
+// memory of which identity/tau/topK it was for.
+type MarginCalibrationArtifact struct {
+	MarginCalibrationResult
+
+	// TargetEmbedIdentity, TargetDimension, TargetTau, and TargetTopK are
+	// the MarginCalibrationOptions this artifact was computed FOR -- a
+	// caller re-reading this file later re-derives its OWN target the same
+	// way CalibrateMarginFromReport's caller did and compares before
+	// trusting ThresholdM, exactly mirroring the generation-time check.
+	TargetEmbedIdentity string  `json:"target_embed_identity"`
+	TargetDimension     int     `json:"target_dimension"`
+	TargetTau           float64 `json:"target_tau"`
+	TargetTopK          int     `json:"target_topk"`
+
+	// SourceReportPath is the source report's own path on disk (empty when
+	// the report was built in memory rather than read from a file -- e.g.
+	// every synthetic-fixture test in this package). SourceReportSHA256 is
+	// the SHA-256 of the source report's own JSON encoding, ALWAYS present
+	// when the report itself is non-empty -- mirrors
+	// CalibrationArtifact.SourceReportPath/SourceReportSHA256 exactly, same
+	// rationale (a path can go stale; the hash identifies the EXACT
+	// measurement data regardless).
+	SourceReportPath   string `json:"source_report_path,omitempty"`
+	SourceReportSHA256 string `json:"source_report_sha256,omitempty"`
+}
+
+// NewMarginCalibrationArtifact builds the provenance-carrying wrapper a
+// written artifact uses (see MarginCalibrationArtifact's doc comment) from a
+// CalibrateMarginFromReport call's own inputs and result -- reportPath is
+// the SOURCE report's path on disk (empty when the report was built in
+// memory rather than read from a file).
+func NewMarginCalibrationArtifact(result MarginCalibrationResult, report CalibrationReport, opts MarginCalibrationOptions, reportPath string) MarginCalibrationArtifact {
+	artifact := MarginCalibrationArtifact{
+		MarginCalibrationResult: result,
+		TargetEmbedIdentity:     opts.TargetEmbedIdentity,
+		TargetDimension:         opts.TargetDimension,
+		TargetTau:               opts.TargetTau,
+		TargetTopK:              opts.TargetTopK,
+		SourceReportPath:        reportPath,
+	}
+	if encoded, err := json.Marshal(report); err == nil {
+		sum := sha256.Sum256(encoded)
+		artifact.SourceReportSHA256 = hex.EncodeToString(sum[:])
+	}
+	return artifact
+}
+
 // CalibrateMarginFromReport computes a recommended VectorMarginCommitThreshold
 // (M) from one EXTENDED oracle report (CHAOS-3829 Phase 1/2(c)'s
 // VectorTop1/VectorTop2/VectorMargin fields on both report.Cases (scored) and
@@ -843,6 +939,27 @@ func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationO
 		report.Tau != opts.TargetTau || report.TopK != opts.TargetTopK {
 		return MarginCalibrationResult{}, ErrMarginReportConfigMismatch
 	}
+	// codex r3 H2 (accepted): report.Cases[i].VectorMargin is REDUNDANT with
+	// VectorTop1/VectorTop2's own Similarity values -- the oracle harness
+	// always computes it as their difference (oracle_live_test.go) and
+	// never as an independently-sourced number. Trusting the STORED field
+	// without cross-checking it against the values it was supposedly
+	// derived from would let a corrupted, hand-edited, or buggy report
+	// silently mis-measure M; same class of hazard F6 closed for the
+	// harness-vs-gate arithmetic, extended here to the calibration
+	// report's own internal consistency. Checked BEFORE any margin is
+	// trusted, over BOTH populations (scored and control cases) -- a single
+	// inconsistency anywhere hard-fails the whole calibration, the same
+	// "reject the impossible cell" idiom hardNegativeCaseCount's decision
+	// table uses (this package, below), scaled up to whole-report rejection
+	// because a report that fails its own internal arithmetic cannot be
+	// trusted piecemeal.
+	if err := checkMarginConsistency(report.Cases, "Cases"); err != nil {
+		return MarginCalibrationResult{}, err
+	}
+	if err := checkMarginConsistency(report.ControlCases, "ControlCases"); err != nil {
+		return MarginCalibrationResult{}, err
+	}
 
 	var correctMargins, wrongMargins []float64
 	for _, c := range report.Cases {
@@ -852,10 +969,16 @@ func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationO
 		if !c.VectorTop1.Corroborated {
 			continue
 		}
+		// H2: use the RECOMPUTED margin (single authority), not the stored
+		// field -- checkMarginConsistency above already proved the two are
+		// numerically identical for every case that reaches this loop, so
+		// this is not a behavior change, only which of two equal values is
+		// read.
+		margin := c.VectorTop1.Similarity - c.VectorTop2.Similarity
 		if c.VectorTop1.Kind == c.ExpectKind && c.VectorTop1.CanonicalID == c.ExpectID {
-			correctMargins = append(correctMargins, *c.VectorMargin)
+			correctMargins = append(correctMargins, margin)
 		} else {
-			wrongMargins = append(wrongMargins, *c.VectorMargin)
+			wrongMargins = append(wrongMargins, margin)
 		}
 	}
 
@@ -880,7 +1003,9 @@ func CalibrateMarginFromReport(report CalibrationReport, opts MarginCalibrationO
 			controlsCorroboratedWithoutMargin++
 			continue
 		}
-		wrongMargins = append(wrongMargins, *c.VectorMargin)
+		// H2: recomputed margin, single authority -- see the scored-case
+		// loop above.
+		wrongMargins = append(wrongMargins, c.VectorTop1.Similarity-c.VectorTop2.Similarity)
 		wrongFromControls++
 	}
 

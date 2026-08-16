@@ -35,13 +35,21 @@ var marginTestOpts = MarginCalibrationOptions{
 // WRONG one), margin is VectorMargin.
 func eligibleCase(top1Kind, top1ID, expectKind, expectID string, margin float64) CalibrationCase {
 	top2Similarity := 0.5 // arbitrary; only top1's identity/margin matter to the math
+	top1Similarity := top2Similarity + margin
 	return CalibrationCase{
 		ExpectKind:            expectKind,
 		ExpectID:              expectID,
 		VectorSearchTruncated: boolPtr(false),
-		VectorTop1:            &CalibrationVectorArmSubject{Kind: top1Kind, CanonicalID: top1ID, Similarity: top2Similarity + margin, Corroborated: true},
+		VectorTop1:            &CalibrationVectorArmSubject{Kind: top1Kind, CanonicalID: top1ID, Similarity: top1Similarity, Corroborated: true},
 		VectorTop2:            &CalibrationVectorArmSubject{Kind: "project", CanonicalID: "top2", Similarity: top2Similarity},
-		VectorMargin:          floatPtr(margin),
+		// codex r3 H2: derived from the SAME subtraction checkMarginConsistency
+		// requires (top1.Similarity - top2.Similarity), not the raw `margin`
+		// argument directly -- top1Similarity itself was computed as
+		// top2Similarity+margin above, and floating-point addition/
+		// subtraction is not exactly invertible ((a+b)-a != b bit-for-bit
+		// in general), so passing `margin` here would fail the new
+		// consistency check on a fixture that is otherwise perfectly valid.
+		VectorMargin: floatPtr(top1Similarity - top2Similarity),
 	}
 }
 
@@ -59,11 +67,13 @@ func marginReport(cases ...CalibrationCase) CalibrationReport {
 // value.
 func eligibleControlCase(top1Kind, top1ID string, margin float64) CalibrationCase {
 	top2Similarity := 0.5
+	top1Similarity := top2Similarity + margin
 	return CalibrationCase{
 		VectorSearchTruncated: boolPtr(false),
-		VectorTop1:            &CalibrationVectorArmSubject{Kind: top1Kind, CanonicalID: top1ID, Similarity: top2Similarity + margin, Corroborated: true},
+		VectorTop1:            &CalibrationVectorArmSubject{Kind: top1Kind, CanonicalID: top1ID, Similarity: top1Similarity, Corroborated: true},
 		VectorTop2:            &CalibrationVectorArmSubject{Kind: "project", CanonicalID: "control-top2", Similarity: top2Similarity},
-		VectorMargin:          floatPtr(margin),
+		// codex r3 H2: see eligibleCase's identical comment.
+		VectorMargin: floatPtr(top1Similarity - top2Similarity),
 	}
 }
 
@@ -277,12 +287,16 @@ func TestCalibrateMarginFromReport_AllCorrectIsUnmeasuredNotApplyReady(t *testin
 // margin observed, so that re-testing every wrong case against M (margin >=
 // M) never commits.
 func TestCalibrateMarginFromReport_MRejectsEveryObservedWrongMargin(t *testing.T) {
-	report := marginReport(
-		eligibleCase("project", "wrong-a", "project", "correct-a", 0.05), // wrong, low margin
-		eligibleCase("project", "wrong-b", "project", "correct-b", 0.20), // wrong, HIGHEST margin -- must set M
-		eligibleCase("project", "p3", "project", "p3", 0.35),             // correct, clears the resulting M
-		eligibleCase("project", "p4", "project", "p4", 0.15),             // correct, does NOT clear it
-	)
+	wrongA := eligibleCase("project", "wrong-a", "project", "correct-a", 0.05) // wrong, low margin
+	wrongB := eligibleCase("project", "wrong-b", "project", "correct-b", 0.20) // wrong, HIGHEST margin -- must set M
+	p3 := eligibleCase("project", "p3", "project", "p3", 0.35)                 // correct, clears the resulting M
+	p4 := eligibleCase("project", "p4", "project", "p4", 0.15)                 // correct, does NOT clear it
+	report := marginReport(wrongA, wrongB, p3, p4)
+	// The actual stored/recomputed margins -- NOT the clean decimal
+	// arguments above, which eligibleCase's H2-safe construction does not
+	// reproduce bit-for-bit (see that function's own comment).
+	wrongAMargin, wrongBMargin := *wrongA.VectorMargin, *wrongB.VectorMargin
+
 	result, err := CalibrateMarginFromReport(report, marginTestOpts)
 	if err != nil {
 		t.Fatalf("CalibrateMarginFromReport: %v", err)
@@ -293,18 +307,18 @@ func TestCalibrateMarginFromReport_MRejectsEveryObservedWrongMargin(t *testing.T
 	if result.ThresholdM == nil {
 		t.Fatal("ThresholdM = nil, want a computed value")
 	}
-	if result.WrongMarginMax == nil || *result.WrongMarginMax != 0.20 {
-		t.Fatalf("WrongMarginMax = %v, want 0.20 (the largest of the two wrong margins)", result.WrongMarginMax)
+	if result.WrongMarginMax == nil || *result.WrongMarginMax != wrongBMargin {
+		t.Fatalf("WrongMarginMax = %v, want %v (the largest of the two wrong margins)", result.WrongMarginMax, wrongBMargin)
 	}
-	if *result.ThresholdM <= 0.20 {
-		t.Fatalf("ThresholdM = %v, want strictly greater than 0.20 (the largest wrong margin)", *result.ThresholdM)
+	if *result.ThresholdM <= wrongBMargin {
+		t.Fatalf("ThresholdM = %v, want strictly greater than %v (the largest wrong margin)", *result.ThresholdM, wrongBMargin)
 	}
-	if math.Nextafter(0.20, math.Inf(1)) != *result.ThresholdM {
-		t.Fatalf("ThresholdM = %v, want exactly one ULP above 0.20 (%v)", *result.ThresholdM, math.Nextafter(0.20, math.Inf(1)))
+	if math.Nextafter(wrongBMargin, math.Inf(1)) != *result.ThresholdM {
+		t.Fatalf("ThresholdM = %v, want exactly one ULP above %v (%v)", *result.ThresholdM, wrongBMargin, math.Nextafter(wrongBMargin, math.Inf(1)))
 	}
-	// Every wrong margin (0.05, 0.20) must fall strictly below M: re-testing
-	// the sample against M must commit zero wrong cases.
-	for _, wrong := range []float64{0.05, 0.20} {
+	// Every wrong margin must fall strictly below M: re-testing the sample
+	// against M must commit zero wrong cases.
+	for _, wrong := range []float64{wrongAMargin, wrongBMargin} {
 		if wrong >= *result.ThresholdM {
 			t.Fatalf("wrong margin %v clears ThresholdM %v -- M does not reject every observed wrong case", wrong, *result.ThresholdM)
 		}
@@ -382,7 +396,12 @@ func TestCalibrateMarginFromReport_SmallWrongSampleCaveatAppearsInNote(t *testin
 // ExpectID comparison -- a control has no correct subject to compare
 // against at all.
 func TestCalibrateMarginFromReport_CorroboratedControlIsWrongByDefinition(t *testing.T) {
-	report := marginReportWithControls(nil, []CalibrationCase{eligibleControlCase("project", "ghost", 0.20)})
+	control := eligibleControlCase("project", "ghost", 0.20)
+	// The wrong margin actually stored/recomputed, matching eligibleControlCase's
+	// own construction exactly (not the literal 0.20 -- see that function's
+	// H2 comment on why they can differ by float64 rounding).
+	wrongMargin := *control.VectorMargin
+	report := marginReportWithControls(nil, []CalibrationCase{control})
 	result, err := CalibrateMarginFromReport(report, marginTestOpts)
 	if err != nil {
 		t.Fatalf("CalibrateMarginFromReport: %v", err)
@@ -393,8 +412,8 @@ func TestCalibrateMarginFromReport_CorroboratedControlIsWrongByDefinition(t *tes
 	if result.WrongSampleSizeFromControls != 1 {
 		t.Fatalf("WrongSampleSizeFromControls = %d, want 1", result.WrongSampleSizeFromControls)
 	}
-	if result.ThresholdM == nil || *result.ThresholdM <= 0.20 {
-		t.Fatalf("ThresholdM = %v, want strictly greater than 0.20", result.ThresholdM)
+	if result.ThresholdM == nil || *result.ThresholdM <= wrongMargin {
+		t.Fatalf("ThresholdM = %v, want strictly greater than the wrong margin %v", result.ThresholdM, wrongMargin)
 	}
 }
 
@@ -494,6 +513,65 @@ func TestCalibrateMarginFromReport_ScoredWrongAndControlWrongUnion(t *testing.T)
 	}
 }
 
+// --- codex r3 H2: report internal consistency (stored margin vs recomputed) -
+
+// TestCalibrateMarginFromReport_TamperedScoredMarginIsAnError is H2's core
+// pinning test: a case whose stored VectorMargin does NOT equal
+// Top1.Similarity-Top2.Similarity (simulating corruption, hand-editing, or
+// a producer bug) must hard-fail the WHOLE calibration, not silently
+// mis-measure M from the wrong number.
+func TestCalibrateMarginFromReport_TamperedScoredMarginIsAnError(t *testing.T) {
+	tampered := eligibleCase("project", "p1", "project", "p1", 0.30)
+	wrongMargin := *tampered.VectorMargin + 1.0 // deliberately does not match top1-top2
+	tampered.VectorMargin = &wrongMargin
+	_, err := CalibrateMarginFromReport(marginReport(tampered), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_TamperedControlMarginIsAnError is the same
+// proof for a CONTROL case, pinning that checkMarginConsistency runs over
+// BOTH populations.
+func TestCalibrateMarginFromReport_TamperedControlMarginIsAnError(t *testing.T) {
+	tampered := eligibleControlCase("project", "ghost", 0.20)
+	wrongMargin := *tampered.VectorMargin + 1.0
+	tampered.VectorMargin = &wrongMargin
+	_, err := CalibrateMarginFromReport(marginReportWithControls(nil, []CalibrationCase{tampered}), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_NonFiniteSimilarityIsAnError proves a NaN
+// or infinite similarity is refused even if it happens to make the stored
+// margin subtraction "balance" -- a non-finite value can never be a real
+// measurement.
+func TestCalibrateMarginFromReport_NonFiniteSimilarityIsAnError(t *testing.T) {
+	broken := eligibleCase("project", "p1", "project", "p1", 0.30)
+	broken.VectorTop1.Similarity = math.NaN()
+	_, err := CalibrateMarginFromReport(marginReport(broken), marginTestOpts)
+	if !errors.Is(err, ErrMarginReportInternallyInconsistent) {
+		t.Fatalf("err = %v, want ErrMarginReportInternallyInconsistent for a NaN similarity", err)
+	}
+}
+
+// TestCalibrateMarginFromReport_ConsistentMarginsStillProceed is the
+// positive control: eligibleCase/eligibleControlCase's own H2-safe
+// construction (top1.Similarity-top2.Similarity, not the raw margin
+// argument) passes the consistency check cleanly -- already exercised by
+// every other test in this file succeeding, pinned here explicitly as its
+// own named assertion.
+func TestCalibrateMarginFromReport_ConsistentMarginsStillProceed(t *testing.T) {
+	report := marginReportWithControls(
+		[]CalibrationCase{eligibleCase("project", "p1", "project", "p1", 0.30)},
+		[]CalibrationCase{eligibleControlCase("project", "ghost", 0.20)},
+	)
+	if _, err := CalibrateMarginFromReport(report, marginTestOpts); err != nil {
+		t.Fatalf("CalibrateMarginFromReport: %v, want no error for internally-consistent margins", err)
+	}
+}
+
 // --- runMarginCalibrationRunner (margin_calibration_live_test.go) ----------
 
 // TestMarginCalibrationRunner_GateFailingReportStillWritesAnArtifact is the
@@ -508,7 +586,7 @@ func TestMarginCalibrationRunner_GateFailingReportStillWritesAnArtifact(t *testi
 	)
 	fake := &fakeRunnerT{}
 	outputPath := t.TempDir() + "/margin.json"
-	runMarginCalibrationRunner(fake, report, marginTestOpts, outputPath)
+	runMarginCalibrationRunner(fake, report, marginTestOpts, "", outputPath)
 	if fake.failed {
 		t.Fatalf("runMarginCalibrationRunner called Fatalf, want it to complete and write the diagnostic artifact regardless: logs=%v", fake.logs)
 	}
@@ -535,7 +613,8 @@ func TestMarginCalibrationRunner_ApplyReadyReportWritesTheThreshold(t *testing.T
 	)
 	fake := &fakeRunnerT{}
 	outputPath := t.TempDir() + "/margin.json"
-	runMarginCalibrationRunner(fake, report, marginTestOpts, outputPath)
+	fakeReportPath := t.TempDir() + "/report.json" // codex r3 H3: need not exist on disk -- only its VALUE is stamped into the artifact
+	runMarginCalibrationRunner(fake, report, marginTestOpts, fakeReportPath, outputPath)
 	if fake.failed {
 		t.Fatalf("runMarginCalibrationRunner unexpectedly called Fatalf: logs=%v", fake.logs)
 	}
@@ -543,11 +622,7 @@ func TestMarginCalibrationRunner_ApplyReadyReportWritesTheThreshold(t *testing.T
 	if err != nil {
 		t.Fatalf("read written artifact: %v", err)
 	}
-	var decoded struct {
-		MarginCalibrationResult
-		TargetEmbedIdentity string `json:"target_embed_identity"`
-		TargetDimension     int    `json:"target_dimension"`
-	}
+	var decoded MarginCalibrationArtifact
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("decode written artifact: %v", err)
 	}
@@ -556,6 +631,17 @@ func TestMarginCalibrationRunner_ApplyReadyReportWritesTheThreshold(t *testing.T
 	}
 	if decoded.TargetEmbedIdentity != testEmbedIdentity || decoded.TargetDimension != testDimension {
 		t.Fatalf("decoded target identity/dimension = %s/%d, want %s/%d", decoded.TargetEmbedIdentity, decoded.TargetDimension, testEmbedIdentity, testDimension)
+	}
+	// codex r3 H3: full provenance -- target tau/topK and source-report
+	// path/hash must ALSO round-trip, not just identity/dimension.
+	if decoded.TargetTau != testMarginTau || decoded.TargetTopK != testMarginTopK {
+		t.Fatalf("decoded target tau/topK = %v/%d, want %v/%d", decoded.TargetTau, decoded.TargetTopK, testMarginTau, testMarginTopK)
+	}
+	if decoded.SourceReportPath != fakeReportPath {
+		t.Fatalf("decoded SourceReportPath = %q, want %q", decoded.SourceReportPath, fakeReportPath)
+	}
+	if decoded.SourceReportSHA256 == "" {
+		t.Fatal("decoded SourceReportSHA256 is empty, want the source report's content hash")
 	}
 }
 
@@ -574,7 +660,7 @@ func TestMarginCalibrationRunner_InvalidReportStillFails(t *testing.T) {
 				}
 			}
 		}()
-		runMarginCalibrationRunner(fake, marginReport(), marginTestOpts, "")
+		runMarginCalibrationRunner(fake, marginReport(), marginTestOpts, "", "")
 	}()
 	if !fake.failed {
 		t.Fatal("expected Fatalf for a report with zero eligible cases (ErrNoMarginSamples)")
