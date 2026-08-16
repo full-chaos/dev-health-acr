@@ -48,6 +48,12 @@ type fakeGraphBackend struct {
 	searchQuestionErr       error
 	searchQuestionTruncated bool
 	searchQuestionDegraded  bool
+
+	// vectorMarginCommitThreshold is CHAOS-3829's M (ResolveDeps.
+	// VectorMarginCommitThreshold). Defaults to 0 ("uncalibrated"), so
+	// every pre-existing test in this file -- which never sets it -- gets
+	// the carve-out disabled, exactly the pre-ticket wiring.
+	vectorMarginCommitThreshold float64
 }
 
 func (f *fakeGraphBackend) deps() ResolveDeps {
@@ -78,6 +84,7 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 		TraversalDegraded: func(ctx context.Context, orgID string, count int) {
 			f.traversalDegraded = append(f.traversalDegraded, count)
 		},
+		VectorMarginCommitThreshold: f.vectorMarginCommitThreshold,
 	}
 	if f.enableSearchQuestion {
 		deps.SearchQuestion = func(ctx context.Context, question string, limit int) ([]CandidateNode, bool, bool, error) {

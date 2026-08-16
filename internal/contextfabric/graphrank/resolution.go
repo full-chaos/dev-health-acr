@@ -33,7 +33,15 @@ import (
 // phase 4 truncates the FINAL, already-decided candidate LIST down to max
 // entries for the response; searchTruncated is about the INPUT candidate
 // SET possibly being incomplete before phase 3's commit decision ever runs.
-func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool) contextfabric.SubjectResolution {
+//
+// CHAOS-3829 (chris-ratified, recorded 2026-08-15/16): vectorArmSimilarity
+// and vectorMarginCommitThreshold feed an ADDITIVE commit-path carve-out,
+// evaluated ONLY once the gates above have already decided ambiguous with
+// nothing committed -- see the rescue block after the switch below, and
+// vectorMarginCommit's own doc comment for the full precondition set and
+// the soundness argument for why it may fire even when searchTruncated is
+// true.
+func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -174,6 +182,24 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		default:
 			ambiguous = true
 		}
+		// CHAOS-3829: the additive commit-path carve-out, checked ONLY as
+		// a RESCUE once every gate above has already run to completion
+		// and decided ambiguous with nothing committed -- every branch
+		// above (the exact-label override, searchTruncated, the lone
+		// 0.72 gate, the top-of-two 0.88/0.12 gate) is untouched, in both
+		// code and behavior, by what follows. See vectorMarginCommit's
+		// doc comment for the full precondition set this reads
+		// (corroboration + a measurable, sufficiently large vector-arm
+		// top-1/top-2 similarity margin) and why it may fire even when
+		// searchTruncated is the reason ambiguous is true.
+		if ambiguous && vectorMarginCommitThreshold > 0 {
+			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok {
+				committedIndex[index] = true
+				candidates[index].State = contextfabric.ResolutionCommitted
+				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
+				ambiguous = false
+			}
+		}
 	}
 	if ambiguous {
 		for index := range candidates {
@@ -229,6 +255,82 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		resolution.ClarificationPrompt = ClarificationPrompt(ordered)
 	}
 	return resolution
+}
+
+// vectorMarginCommit implements CHAOS-3829's ratified commit-path carve-out
+// (chris-ratified 2026-08-15/16, geometry finalized 2026-08-16 dropping the
+// original vectorSearchComplete conjunct -- see ResolveFromMergedCandidates'
+// own doc comment for the call site). candidates/commitIndex are the SAME
+// values ResolveFromMergedCandidates' own gates just finished computing --
+// commitIndex already excludes a blocked observation, so this function can
+// never consider a subject the existing eligibility rules already ruled
+// out.
+//
+// Ranks every commitIndex entry that has a vectorArmSimilarity value (a
+// subject with NO vector-mechanism finding at all is simply absent from
+// that map and never participates) by that similarity, descending, and
+// fires ONLY when ALL of:
+//
+//  1. at least two DISTINCT such candidates exist -- a margin needs a
+//     competitor to measure a gap against; a single vector-tagged candidate
+//     is not a margin, and treating it as an infinite or zero margin would
+//     both be fabricating a value this function never measured (mirrors
+//     CalibrateMarginFromReport's identical eligibility rule, tau_calibration.go);
+//  2. the top one (by vector similarity) is CORROBORATED --
+//     DistinctMechanismCount of its merged MatchMechanisms is >= 2, the
+//     EXACT rule CorroboratedConfidence itself already reads (untouched:
+//     this function never calls CorroboratedConfidence or reads Confidence
+//     at all, only MatchMechanisms, which that function also leaves alone);
+//  3. the margin between the top two's raw vector similarities is >=
+//     threshold (M, a per-embedder-identity calibrated constant the caller
+//     already validated is > 0 before calling -- see
+//     falkorgraph/retrieval_policy.go's RetrievalPolicy.VectorMarginCommitThreshold).
+//
+// Returns ok=false on any missing input above; the caller's existing
+// ambiguous verdict then stands entirely unchanged.
+//
+// SOUND UNDER TRUNCATION: vectorArmSimilarity's values are RAW, unclamped
+// similarities (see CandidateNode.VectorSimilarity's doc comment) --
+// computed identically whether or not the search call that found a given
+// candidate itself truncated. A k-NN result is distance-ordered, so
+// truncation can only ever drop candidates BEYOND the returned set; it
+// cannot reorder or misrepresent the gap between two candidates that WERE
+// returned. This is precisely why this function reads vectorArmSimilarity,
+// never a candidate's own Confidence/Relevance (which vector.go correctly,
+// but bluntly, clamps to a shared floor for EVERY candidate once THAT
+// call's OWN search truncated -- exactly the differentiation this margin
+// needs, and exactly why almost every eligible case in the CHAOS-3829
+// calibration measurement had searchTruncated=true).
+func vectorMarginCommit(candidates []contextfabric.SubjectCandidate, commitIndex []int, vectorArmSimilarity map[string]float64, threshold float64) (int, bool) {
+	type ranked struct {
+		index      int
+		similarity float64
+	}
+	var byVectorSimilarity []ranked
+	for _, index := range commitIndex {
+		similarity, ok := vectorArmSimilarity[SubjectKey(candidates[index].Subject)]
+		if !ok {
+			continue
+		}
+		byVectorSimilarity = append(byVectorSimilarity, ranked{index: index, similarity: similarity})
+	}
+	if len(byVectorSimilarity) < 2 {
+		return 0, false
+	}
+	sort.Slice(byVectorSimilarity, func(i, j int) bool {
+		if byVectorSimilarity[i].similarity == byVectorSimilarity[j].similarity {
+			return SubjectKey(candidates[byVectorSimilarity[i].index].Subject) < SubjectKey(candidates[byVectorSimilarity[j].index].Subject)
+		}
+		return byVectorSimilarity[i].similarity > byVectorSimilarity[j].similarity
+	})
+	top, second := byVectorSimilarity[0], byVectorSimilarity[1]
+	if DistinctMechanismCount(candidates[top.index].MatchMechanisms) < 2 {
+		return 0, false
+	}
+	if margin := top.similarity - second.similarity; margin < threshold {
+		return 0, false
+	}
+	return top.index, true
 }
 
 // AnyCallerSourced reports whether any resolved candidate came from a
