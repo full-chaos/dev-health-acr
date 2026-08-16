@@ -62,6 +62,44 @@ import (
 // own doc comment for the full defect this closes.
 func runMarginCalibrationRunner(t runnerT, report CalibrationReport, opts MarginCalibrationOptions, reportPath string, reportBytes []byte, outputPath string) {
 	t.Helper()
+	// codex r10 Q1+Q2 (both accepted): mirrors runCalibrationRunner's own
+	// input/output-collision guard and remove-stale-artifact-at-start idiom
+	// EXACTLY (tau_calibration_live_test.go), reusing that file's
+	// resolvePathForIdentity -- this runner had neither before r10, despite
+	// carrying the identical hazards its sibling already closed rounds ago.
+	if outputPath != "" {
+		// Q2: input==output would DELETE (or, on a gate-pass, silently
+		// O_TRUNC-overwrite) THE SOURCE REPORT -- checked and Fatalf'd
+		// BEFORE any removal below, resolved to an absolute, symlink-free
+		// form (not a raw string compare) so two different spellings of
+		// the SAME file (a relative vs. absolute path, or a symlink) are
+		// still caught. See runCalibrationRunner's identical check for the
+		// full "gate-fail leaves nothing, gate-pass destroys the
+		// measurement either way" rationale -- unchanged here.
+		if reportPath != "" {
+			resolvedReport, err := resolvePathForIdentity(reportPath)
+			if err != nil {
+				t.Fatalf("resolve report path %s for the input/output collision check: %v", reportPath, err)
+			}
+			resolvedOutput, err := resolvePathForIdentity(outputPath)
+			if err != nil {
+				t.Fatalf("resolve output path %s for the input/output collision check: %v", outputPath, err)
+			}
+			if resolvedReport == resolvedOutput {
+				t.Fatalf("ACR_TEST_MARGIN_CALIBRATION_REPORT and the output path both resolve to %s -- refusing to run: writing the margin calibration result there would destroy the source report this run just read (a gate failure would delete it with nothing to replace it; a gate pass would silently overwrite it with the policy JSON). Use a different output path.", resolvedReport)
+			}
+		}
+		// Q1: remove any EXISTING artifact at outputPath (now proven
+		// distinct from reportPath) FIRST, before calibration even runs,
+		// so every exit path (pass, the N2 gate-fail Fatalf below, a crash
+		// mid-run) leaves either a fresh artifact or NO artifact -- never a
+		// STALE one a downstream consumer could mistake for this run's own
+		// output. A missing file is not an error (the common case); any
+		// OTHER removal failure IS one.
+		if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove stale artifact at %s before running: %v", outputPath, err)
+		}
+	}
 
 	result, err := CalibrateMarginFromReport(report, opts)
 	if err != nil {

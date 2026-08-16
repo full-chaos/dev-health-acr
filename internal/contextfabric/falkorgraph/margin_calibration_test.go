@@ -1195,3 +1195,122 @@ func TestMarginCalibrationRunner_InvalidReportStillFails(t *testing.T) {
 		t.Fatal("expected Fatalf for a report with zero eligible cases (ErrNoMarginSamples)")
 	}
 }
+
+// --- codex r10 Q1+Q2: stale-artifact removal + input/output path collision -
+
+// TestMarginCalibrationRunner_StaleArtifactIsRemovedOnAFailingRun is Q1's
+// core pinning test, mirroring TestCalibrationRunner_StaleArtifactIsRemovedOnAFailingRun
+// (tau_calibration_test.go) exactly: a PRE-EXISTING artifact at outputPath
+// (left behind by an earlier, unrelated successful run) must be removed
+// BEFORE a later gate-failing run's Fatalf -- otherwise a downstream
+// consumer reading outputPath would mistake that stale file for the
+// current (failed) run's output.
+func TestMarginCalibrationRunner_StaleArtifactIsRemovedOnAFailingRun(t *testing.T) {
+	report := marginReport(
+		eligibleCase("project", "p1", "project", "p1", 0.10), // correct only -- SafetyMeasured=false, gate fails
+	)
+	outputPath := t.TempDir() + "/margin.json"
+	if err := os.WriteFile(outputPath, []byte(`{"threshold_m": "from an earlier successful run"}`), 0o600); err != nil {
+		t.Fatalf("pre-place stale artifact: %v", err)
+	}
+
+	fake := &fakeRunnerT{}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(fakeRunnerTFatal); !ok {
+					panic(r)
+				}
+			}
+		}()
+		runMarginCalibrationRunner(fake, report, marginTestOpts, "", nil, outputPath)
+	}()
+	if !fake.failed {
+		t.Fatalf("runMarginCalibrationRunner did not call Fatalf, want it to -- this fixture's ApplyReady gate is known to fail; logs=%v", fake.logs)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("stale artifact still exists at %s (err=%v) after a failing run, want it removed", outputPath, err)
+	}
+}
+
+// TestMarginCalibrationRunner_SameReportAndOutputPathIsRefused is Q2's core
+// pinning test, mirroring TestCalibrationRunner_SameReportAndOutputPathIsRefused
+// exactly: reportPath and outputPath resolving to the SAME file must refuse
+// to run at all -- Q1's stale-artifact removal would otherwise DELETE THE
+// SOURCE REPORT before ever using it, and a gate-passing run would
+// silently O_TRUNC-overwrite it with the margin-calibration JSON either
+// way. Fixture is a genuinely APPLY-READY report (it would otherwise
+// succeed and overwrite the file), so this test is specifically about the
+// collision check firing, not incidentally riding along on an unrelated
+// gate failure. The report file's content must be BYTE-IDENTICAL
+// afterward -- "refused" means untouched, not "removed then not replaced".
+func TestMarginCalibrationRunner_SameReportAndOutputPathIsRefused(t *testing.T) {
+	report := marginReport(
+		eligibleCase("project", "wrong", "project", "correct", 0.10), // wrong -- SafetyMeasured=true
+		eligibleCase("project", "p2", "project", "p2", 0.40),         // correct
+	)
+	sharedPath := t.TempDir() + "/report.json"
+	originalContent, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal(report): %v", err)
+	}
+	if err := os.WriteFile(sharedPath, originalContent, 0o600); err != nil {
+		t.Fatalf("write the source report file: %v", err)
+	}
+
+	fake := &fakeRunnerT{}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(fakeRunnerTFatal); !ok {
+					panic(r)
+				}
+			}
+		}()
+		runMarginCalibrationRunner(fake, report, marginTestOpts, sharedPath, originalContent, sharedPath)
+	}()
+	if !fake.failed {
+		t.Fatalf("runMarginCalibrationRunner did not call Fatalf, want it to refuse when report path == output path; logs=%v", fake.logs)
+	}
+	after, err := os.ReadFile(sharedPath)
+	if err != nil {
+		t.Fatalf("source report file missing at %s after a refused run, want it UNTOUCHED: %v", sharedPath, err)
+	}
+	if string(after) != string(originalContent) {
+		t.Fatal("source report file was modified by a refused run, want it byte-identical to what was written before the call")
+	}
+}
+
+// TestMarginCalibrationRunner_DifferentReportAndOutputPathStillWorks is the
+// companion negative-of-the-negative case: a NORMAL run (report path and
+// output path genuinely different, the common case every OTHER test in
+// this file already exercises with reportPath="") must not be affected by
+// the Q2 collision check at all -- it only fires on an actual match. Uses
+// REAL, distinct on-disk paths (unlike this file's other passing tests,
+// most of which use reportPath="") specifically to prove the collision
+// check's resolvePathForIdentity comparison itself is not over-eager.
+func TestMarginCalibrationRunner_DifferentReportAndOutputPathStillWorks(t *testing.T) {
+	report := marginReport(
+		eligibleCase("project", "wrong", "project", "correct", 0.10),
+		eligibleCase("project", "p2", "project", "p2", 0.40),
+	)
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	outputPath := dir + "/margin.json"
+	reportBytes, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal(report): %v", err)
+	}
+	if err := os.WriteFile(reportPath, reportBytes, 0o600); err != nil {
+		t.Fatalf("write the source report file: %v", err)
+	}
+
+	fake := &fakeRunnerT{}
+	runMarginCalibrationRunner(fake, report, marginTestOpts, reportPath, reportBytes, outputPath)
+	if fake.failed {
+		t.Fatalf("runMarginCalibrationRunner called Fatalf, want it to complete -- report path and output path are genuinely different; logs=%v", fake.logs)
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("output file missing at %s: %v", outputPath, err)
+	}
+}
