@@ -349,6 +349,23 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	// cross-source/cross-term ranking. This is strictly SAFER than the
 	// capped version, never less correct: it can only ever surface a
 	// genuine, authorized candidate the capped version would have dropped.
+	//
+	// codex round-5 P2: that per-batch fetch was still bounded to the bare
+	// `limit`, so whenever a batch's OWN top-ranked rows overlap heavily
+	// with base (e.g. a node both mechanisms independently match), the
+	// batch's OWN limit+1 internal truncation could discard genuinely
+	// NEW, non-overlapping candidates BEFORE this loop ever got a chance
+	// to dedup them out of the way -- the union added zero recall exactly
+	// where overlap with base was highest, the opposite of the intent.
+	// Fix: fetch a WIDER budget per batch -- limit + len(baseCandidates) --
+	// before that batch's own +1 truncation-sentinel row. Overlap with
+	// base can never exceed len(baseCandidates) (there is nothing else it
+	// could be overlap WITH), so this guarantees at least `limit`
+	// genuinely-NEW rows are visible in the fetched window if that many
+	// exist, however much of the window base's own duplicates consume.
+	// Dedup runs on this WIDER set; each batch's CONTRIBUTION to result is
+	// still capped at `limit` new candidates afterward -- the cap moves
+	// from BEFORE dedup to AFTER it, which is the entire fix.
 	seen := make(map[string]bool, len(baseCandidates))
 	for _, c := range baseCandidates {
 		seen[c.UUID] = true
@@ -356,22 +373,33 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	result := baseCandidates
 	truncated := baseTruncated
 	for _, batch := range lexiconExpansionBatches(additions) {
+		fetchBudget := limit + len(baseCandidates)
 		query := lexiconExpansionQuery(batch.additions)
-		batchCandidates, batchTruncated, err := a.runFulltextQuery(ctx, key, orgID, query, limit, temporal, matchTerms, termCount, batch.kind)
+		batchCandidates, batchTruncated, err := a.runFulltextQuery(ctx, key, orgID, query, fetchBudget, temporal, matchTerms, termCount, batch.kind)
 		if err != nil {
 			return nil, false, err
 		}
-		// truncated stays the OR of every batch's OWN limit+1 server-side
+		// batchTruncated is this batch's OWN (widened) limit+1 server-side
 		// sentinel -- unaffected by authorization, which this layer has no
 		// visibility into at all (same as the pre-CHAOS-3838 base query
 		// always was).
 		truncated = truncated || batchTruncated
+		added := 0
 		for _, c := range batchCandidates {
 			if seen[c.UUID] {
 				continue
 			}
+			if added >= limit {
+				// More than `limit` genuinely NEW (non-base-overlapping)
+				// candidates existed in this batch's widened window --
+				// this batch's own natural per-source budget was exceeded,
+				// a real competitor may have gone unshown.
+				truncated = true
+				continue
+			}
 			seen[c.UUID] = true
 			result = append(result, c)
+			added++
 		}
 	}
 	return result, truncated, nil

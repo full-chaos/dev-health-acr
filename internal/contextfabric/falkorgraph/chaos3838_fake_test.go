@@ -805,3 +805,52 @@ func TestFulltextSearchNodes_TieBreakAppliesToTheKindFilteredBranchToo(t *testin
 		t.Fatalf("query[1] = %q, want the kind-scope predicate present", capturedCyphers[1])
 	}
 }
+
+// --- codex round-5 P2: fetch wide enough that overlap-with-base cannot crowd out new candidates before dedup ---
+
+// TestFulltextSearchNodes_OverlapWithBaseDoesNotStarveANewSynonymOnlyRow is
+// the regression proof: limit=2, base returns 2 rows that ALSO happen to
+// rank in the expansion batch's own top results (rowA, rowB), with a
+// genuinely NEW, synonym-only row (rowC) ranked immediately after them --
+// i.e. at position limit+1 of the batch's OWN raw result set. Before this
+// fix, the batch's own runFulltextQuery call fetched only `limit`+1=3 raw
+// rows and immediately truncated to `limit`=2 BEFORE fulltextSearchNodes
+// ever got to dedup rowA/rowB against base -- rowC never came back at all,
+// so the union added zero recall exactly where overlap with base was
+// highest. MUTATION CHECK: reverting fetchBudget from
+// `limit + len(baseCandidates)` back to bare `limit` makes this fail --
+// rowC disappears.
+func TestFulltextSearchNodes_OverlapWithBaseDoesNotStarveANewSynonymOnlyRow(t *testing.T) {
+	rowA := fulltextRow("pull_request", "pr_a", "Shared A", "PR pull request shared A", nil)
+	rowB := fulltextRow("pull_request", "pr_b", "Shared B", "PR pull request shared B", nil)
+	rowC := fulltextRow("pull_request", "pr_c", "New synonym only", "Unrelated pull request only", nil)
+
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		q, _ := params["query"].(string)
+		switch q {
+		case "PR":
+			// Base's own top-limit=2 rows: A and B (both also match the
+			// expansion phrase independently -- the overlap case).
+			return []row{rowA, rowB}, nil
+		case `"pull request"`:
+			// The expansion batch's OWN raw ranking: A, B (duplicates of
+			// base), THEN the genuinely new C at position 3 -- exactly
+			// limit+1 of the OLD, too-narrow fetch.
+			return []row{rowA, rowB, rowC}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "PR", 2, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	newUUID := subjectUUID("pull_request", "pr_c")
+	for _, c := range candidates {
+		if c.UUID == newUUID {
+			return
+		}
+	}
+	t.Fatalf("candidates = %#v, want the genuinely new synonym-only row (pr_c) present -- heavy overlap with base must not crowd it out of the batch's own truncation window before dedup runs", candidates)
+}
