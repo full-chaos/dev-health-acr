@@ -83,6 +83,51 @@ func TestNodeCandidate_AliasMatchTrustedWithKeyedLookupOnEligibleKind(t *testing
 	}
 }
 
+// TestNodeCandidate_IdentityTrustedAloneBoostsConfidenceDespiteAStaleGraphAttribute
+// is the live-reproduced projection-lag bug's OWN regression pin
+// (team-lead ruling, 2026-08-17, guardrail 3(a)): the graph node's OWN
+// "aliases" attribute does NOT contain this term -- exactly the shape a
+// node projected before this ticket's alias-computation logic existed
+// carries, or one whose next projection cycle simply hasn't run yet --
+// while node.Mechanism/FromKeyedIdentityLookup are set exactly as
+// reader.go's AliasLookup closure sets them: a genuine, existence-checked
+// match against FRESH ClickHouse data. This must still boost to confidence
+// 1 -- identityTrusted alone is the proof, not a second re-derivation
+// against the (here, deliberately stale) graph attribute.
+//
+// This test is written to FAIL on the pre-fix gate
+// (`(aliasMatched||providerMatched) && identityTrusted`, which requires
+// aliasMatched -- and aliasMatched is false here BY CONSTRUCTION, since
+// AliasAttributes(node.Attributes) does not contain "dev-health-acr") and
+// PASS on the fixed gate (`matched || identityTrusted`). Verified by hand
+// against both: reverting candidate.go's fix locally reproduces
+// `confidence = 0.5, want 1` on this exact test.
+func TestNodeCandidate_IdentityTrustedAloneBoostsConfidenceDespiteAStaleGraphAttribute(t *testing.T) {
+	t.Parallel()
+	principal := storage.Principal{OrgID: "org_1"}
+	scope := contextfabric.RequestedScope{}
+	// aliases: nil -- the graph's OWN stored attribute is stale/absent for
+	// this term, unlike TestNodeCandidate_AliasMatchTrustedWithKeyedLookupOnEligibleKind
+	// immediately above, which keeps it fresh/consistent.
+	node := aliasCandidateNode(contextfabric.SubjectRepository, "repository_1", "full-chaos/dev-health-acr", -1, nil, nil, true)
+	// reader.go sets node.Mechanism = match.Mechanism (from
+	// graphrank.MatchIdentityRows, matched against FRESH ClickHouse data)
+	// BEFORE FromKeyedIdentityLookup=true -- reproduced explicitly here
+	// since aliasCandidateNode itself does not set it.
+	node.Mechanism = contextfabric.MatchAlias
+
+	candidate, ok := NodeCandidate(principal, scope, "dev-health-acr", node, noInternalSubjects, true)
+	if !ok {
+		t.Fatal("NodeCandidate() rejected a legitimately authorized node")
+	}
+	if candidate.Confidence != 1 {
+		t.Fatalf("confidence = %v, want 1 -- identityTrusted alone (FromKeyedIdentityLookup=true, eligible kind) must boost confidence even when the graph's own \"aliases\" attribute does not (yet) contain this term (the live-reproduced projection-lag bug)", candidate.Confidence)
+	}
+	if !HasMechanism(candidate.MatchMechanisms, contextfabric.MatchAlias) {
+		t.Fatalf("mechanisms = %v, want MatchAlias present (trusted-as-declared from node.Mechanism, unaffected by this fix)", candidate.MatchMechanisms)
+	}
+}
+
 // TestNodeCandidate_KeyedLookupNeverTrustsNonEligibleKind is BLOCKING-1's
 // other half: a team candidate (scoped for COUNTING, never eligible for the
 // confidence bump) found via the keyed lookup is STILL tagged MatchAlias

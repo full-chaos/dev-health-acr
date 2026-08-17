@@ -325,6 +325,63 @@ func TestResolveSubjects_TracerObservesAliasLookupReachedThroughWiredComposition
 	}
 }
 
+// TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttribute
+// is guardrail 3(b) (team-lead ruling, 2026-08-17): the WIRED-composition
+// counterpart to TestNodeCandidate_IdentityTrustedAloneBoostsConfidenceDespiteAStaleGraphAttribute
+// (candidate.go, direct-call unit level) -- proves end-to-end, through the
+// real ResolveSubjects composition and read from the ResolutionTracer (not
+// asserted against the result alone), that the identity-trust confidence
+// boost fires when ordinary search finds NOTHING for the term (backend.searchResults
+// has no entry) AND the claimant node's own graph attributes do not contain
+// the alias (aliasCandidateNode's aliases param is nil, simulating a node
+// projected before this ticket's alias-computation logic landed). This is
+// the standing guard that would have caught the live-reproduced
+// projection-lag bug at composition level, not just in isolation.
+func TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttribute(t *testing.T) {
+	t.Parallel()
+	// aliases: nil -- the graph's OWN stored attribute is stale/absent,
+	// unlike the fresh-attribute repoNode the sibling reachability test
+	// above uses.
+	staleRepoNode := aliasCandidateNode(contextfabric.SubjectRepository, "r1", "owner/dev-health-acr", -1, nil, nil, true)
+	staleRepoNode.Mechanism = contextfabric.MatchAlias
+	backend := &fakeGraphBackend{
+		// No entry for "dev-health-acr": ordinary search finds NOTHING for
+		// this term, isolating the identity-trust path exactly as the
+		// direct-call unit test does.
+		searchResults:        map[string][]CandidateNode{},
+		enableAliasLookup:    true,
+		aliasLookupClaimants: map[string][]CandidateNode{"dev-health-acr": {staleRepoNode}},
+		aliasLookupComplete:  true,
+	}
+	tracer := &captureResolutionTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), deps)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
+		t.Fatalf("resolution.Committed = %#v, want r1 committed via the identity-trust bump despite the stale graph attribute", resolution.Committed)
+	}
+
+	corroborationEvents := tracer.eventsForStage("corroboration")
+	if len(corroborationEvents) != 1 {
+		t.Fatalf("corroboration events = %d, want exactly 1", len(corroborationEvents))
+	}
+	if corroborationEvents[0].BaseConfidence != 1 || corroborationEvents[0].FinalConfidence != 1 {
+		t.Fatalf("corroboration event base/final confidence = %v/%v, want 1/1 -- identityTrusted alone, not a re-derivation against the stale graph attribute, must be what set the base", corroborationEvents[0].BaseConfidence, corroborationEvents[0].FinalConfidence)
+	}
+	if !corroborationEvents[0].IdentityTrusted {
+		t.Error("corroboration event IdentityTrusted = false, want true")
+	}
+
+	decisionEvents := tracer.eventsForStage("decision")
+	if len(decisionEvents) != 1 || decisionEvents[0].Outcome != "committed" || !decisionEvents[0].IdentityTrusted {
+		t.Fatalf("decision events = %#v, want exactly one committed+IdentityTrusted", decisionEvents)
+	}
+}
+
 // TestResolveSubjects_AliasLookupErrorAbortsResolution mirrors Search()'s
 // own error handling: a genuine backend fault (as opposed to a
 // completeness gap) must abort the whole resolution, not silently degrade.

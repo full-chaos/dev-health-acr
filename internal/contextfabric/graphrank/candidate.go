@@ -76,15 +76,50 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 	// structural"): the confidence=1 identity bump is gated on
 	// node.FromKeyedIdentityLookup -- an explicit, adapter-declared
 	// structural marker only a genuinely complete keyed identity read may
-	// set -- AND isAliasIdentityEligibleKind, never on the mechanism VALUE
-	// or on allowExactMatch alone. An ordinary Search()-sourced node that
-	// happens to alias-match (aliasMatched/providerMatched true above) is
-	// still tagged and counted, but keeps its ordinary, non-bumped
-	// confidence: FromKeyedIdentityLookup is false for it by construction,
-	// so it can never manufacture the completeness guarantee this bump
-	// asserts on its own.
-	identityTrusted := node.FromKeyedIdentityLookup && isAliasIdentityEligibleKind(subject.Kind)
-	if matched || ((aliasMatched || providerMatched) && identityTrusted) {
+	// set -- AND isAliasIdentityEligibleKind, AND allowExactMatch (a
+	// synthetic, non-caller-typed term -- CHAOS-3838's
+	// questionProvenanceMarker -- must never win ANY promotion, alias-based
+	// or identity-trust-based, just because it happens to equal some node's
+	// stored data; the SAME discipline the matched/aliasMatched checks
+	// above already carry explicitly). Never on the mechanism VALUE alone.
+	//
+	// Fix (team-lead ruling, 2026-08-17, live-reproduced projection-lag
+	// bug): identityTrusted ALONE now gates the bump, no longer additionally
+	// conjoined with (aliasMatched || providerMatched). The prior form --
+	// `(aliasMatched || providerMatched) && identityTrusted` -- silently
+	// RE-DERIVED the match against node.Attributes (the GRAPH's own,
+	// possibly STALE "aliases"/"provider_aliases" property, last written at
+	// whatever projection cycle ran before this ticket's alias logic
+	// existed) even for a claimant reader.go had ALREADY existence-checked
+	// and keyed-matched against FRESH ClickHouse data -- reintroducing
+	// exactly the projection-lag dependency (CHAOS-3882 class) Option C's
+	// keyed-lookup/existence-check split exists to eliminate. reader.go
+	// sets FromKeyedIdentityLookup=true in EXACTLY one place
+	// (falkorgraph/reader.go, inside the loop over graphrank.MatchIdentityRows'
+	// own returned matches, AFTER a successful nodeByKindID existence
+	// check) -- identityTrusted being true is ALREADY proof of a genuine
+	// identity-class match against fresh source data; re-deriving it from
+	// the graph's own (possibly stale) attributes only ever LOSES that
+	// proof, never adds to it.
+	//
+	// allowExactMatch is now an EXPLICIT conjunct here rather than an
+	// implicit one inherited transitively through aliasMatched/
+	// providerMatched (both themselves already gated on it, inside the
+	// `if allowExactMatch && !matched && ...` block above) -- dropping the
+	// (aliasMatched||providerMatched) conjunct would otherwise have
+	// silently dropped that inherited gate too, letting a synthetic
+	// question-pass marker win via identityTrusted alone
+	// (TestNodeCandidate_AllowExactMatchFalseAlsoDisablesAliasMatch pins
+	// this). Structurally moot in production today (reader.go's AliasLookup
+	// is only ever merged with allowExactMatch=true -- resolve.go never
+	// calls it from the question pass), kept explicit anyway rather than
+	// relying on that caller discipline never changing.
+	//
+	// aliasMatched/providerMatched are UNCHANGED everywhere else (mechanism
+	// tagging below, MatchReasons, the counting scope HIGH-5 established)
+	// -- this fix touches the confidence gate only.
+	identityTrusted := allowExactMatch && node.FromKeyedIdentityLookup && isAliasIdentityEligibleKind(subject.Kind)
+	if matched || identityTrusted {
 		confidence = 1
 	}
 	if confidence == 0 {
