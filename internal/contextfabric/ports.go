@@ -697,6 +697,23 @@ type ProjectionSource interface {
 	NextProjectionBatch(context.Context, ProjectionCheckpoint) (ProjectionBatch, bool, error)
 }
 
+// ProjectionSourceVersion is an OPTIONAL capability (CHAOS-3887) a
+// ProjectionSource may implement to report its current producer
+// SourceVersion even when NextProjectionBatch found nothing to build a
+// batch from (available=false). Without this, "current" SourceVersion is
+// only ever visible on a built ProjectionBatch -- which a dormant
+// organization (no new rows since its last checkpoint) never produces, so
+// the freshness guard in ProjectionWorker.RunOnce (and, downstream, the
+// per-tick freshness telemetry projectionrun.Coordinator emits) has no
+// baseline to compare a stale checkpoint against for exactly the
+// organizations most likely to be silently stale.
+//
+// Telemetry-only: nothing in RunOnce's accept/refuse decision depends on
+// whether a source implements this.
+type ProjectionSourceVersion interface {
+	CurrentProjectionSourceVersion() string
+}
+
 // ProjectionProgress is an OPTIONAL capability a ProjectionSource may
 // implement (CHAOS-3802). It exists for one narrow, real situation: a source
 // can consume rows that are provably unpublishable -- today, ownership rows

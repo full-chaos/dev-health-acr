@@ -53,6 +53,20 @@ type fakeSource struct {
 	// used by the M2 rebuild-wedge regression test (CHAOS-3779 codex
 	// round-4) to simulate a source version change across two ticks.
 	sourceVersion string
+	// dormant simulates an organization with no new rows since its last
+	// checkpoint (CHAOS-3887): NextProjectionBatch reports available=false
+	// with no error, exactly as devhealthsource's real sources do when
+	// there is nothing new to project -- the case ProjectionWorker.RunOnce's
+	// SourceVersion guard never runs for.
+	dormant bool
+	// currentSourceVersion, when set, is what CurrentProjectionSourceVersion
+	// (contextfabric.ProjectionSourceVersion) reports -- independent of
+	// sourceVersion/validBatch's default, so a test can simulate a producer
+	// version bump a DORMANT organization's watermark has not caught up to,
+	// which never shows up in a built batch at all. Falls back to
+	// sourceVersion, then "test.v1", matching what a non-dormant NextProjectionBatch
+	// call would have put on its batch.
+	currentSourceVersion string
 }
 
 func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
@@ -67,6 +81,9 @@ func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint context
 	if f.err != nil {
 		return contextfabric.ProjectionBatch{}, false, f.err
 	}
+	if f.dormant {
+		return contextfabric.ProjectionBatch{}, false, nil
+	}
 	next := checkpoint.Cursor + "n"
 	batch := validBatch(checkpoint.OrgID, f.name, checkpoint.Cursor, next)
 	if f.sourceVersion != "" {
@@ -76,6 +93,31 @@ func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint context
 		}
 	}
 	return batch, true, nil
+}
+
+// CurrentProjectionSourceVersion implements the CHAOS-3887 optional
+// contextfabric.ProjectionSourceVersion capability, unless
+// reportsCurrentVersion is explicitly set to false.
+func (f *fakeSource) CurrentProjectionSourceVersion() string {
+	switch {
+	case f.currentSourceVersion != "":
+		return f.currentSourceVersion
+	case f.sourceVersion != "":
+		return f.sourceVersion
+	default:
+		return "test.v1"
+	}
+}
+
+// fakeSourceNoVersionCapability wraps a fakeSource but deliberately does NOT
+// implement contextfabric.ProjectionSourceVersion (embedding a *fakeSource
+// would promote CurrentProjectionSourceVersion and defeat the point), for
+// asserting the freshness signal degrades to "unknown" rather than a false
+// stale=true when a source has not adopted the capability.
+type fakeSourceNoVersionCapability struct{ inner *fakeSource }
+
+func (f fakeSourceNoVersionCapability) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	return f.inner.NextProjectionBatch(ctx, checkpoint)
 }
 
 // fakeBackend applies batches and tracks, per organization, the maximum
@@ -89,10 +131,39 @@ type fakeBackend struct {
 	failOrgs    map[string]bool
 	purged      map[string]bool
 	purgeErr    error
+	// watermarks/watermarkErrs (CHAOS-3887) let a test configure what
+	// ProjectionWatermark durably reports for a given (org, source), keyed
+	// "org\x00source" -- independent of whatever a fakeSource's
+	// NextProjectionBatch/available reports this tick, exactly like the real
+	// falkorgraph watermark node is independent of the current tick's batch.
+	watermarks    map[string]contextfabric.ProjectionWatermark
+	watermarkErrs map[string]error
 }
 
 func newFakeBackend() *fakeBackend {
-	return &fakeBackend{inFlight: map[string]int{}, maxInFlight: map[string]int{}, failOrgs: map[string]bool{}, purged: map[string]bool{}}
+	return &fakeBackend{
+		inFlight: map[string]int{}, maxInFlight: map[string]int{}, failOrgs: map[string]bool{}, purged: map[string]bool{},
+		watermarks: map[string]contextfabric.ProjectionWatermark{}, watermarkErrs: map[string]error{},
+	}
+}
+
+func watermarkKey(orgID, source string) string { return orgID + "\x00" + source }
+
+// setWatermark configures ProjectionWatermark's durable response for
+// (orgID, source) -- the CHAOS-3887 freshness signal's baseline.
+func (b *fakeBackend) setWatermark(orgID, source string, watermark contextfabric.ProjectionWatermark) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.watermarks[watermarkKey(orgID, source)] = watermark
+}
+
+// setWatermarkErr makes ProjectionWatermark fail for (orgID, source), as the
+// real falkorgraph adapter does (ErrNotFound) when nothing has ever been
+// durably projected there.
+func (b *fakeBackend) setWatermarkErr(orgID, source string, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.watermarkErrs[watermarkKey(orgID, source)] = err
 }
 
 func (b *fakeBackend) ApplyProjectionBatch(ctx context.Context, batch contextfabric.ProjectionBatch) (contextfabric.ProjectionReceipt, error) {
@@ -118,8 +189,14 @@ func (b *fakeBackend) ApplyProjectionBatch(ctx context.Context, batch contextfab
 	return contextfabric.ProjectionReceipt{BatchID: batch.BatchID, AppliedAt: time.Now().UTC(), BackendWatermark: batch.NextCursor}, nil
 }
 
-func (b *fakeBackend) ProjectionWatermark(context.Context, string, string) (contextfabric.ProjectionWatermark, error) {
-	return contextfabric.ProjectionWatermark{}, nil
+func (b *fakeBackend) ProjectionWatermark(_ context.Context, orgID, source string) (contextfabric.ProjectionWatermark, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	key := watermarkKey(orgID, source)
+	if err, ok := b.watermarkErrs[key]; ok {
+		return contextfabric.ProjectionWatermark{}, err
+	}
+	return b.watermarks[key], nil
 }
 func (b *fakeBackend) PurgeOrganization(_ context.Context, orgID string) error {
 	b.mu.Lock()
