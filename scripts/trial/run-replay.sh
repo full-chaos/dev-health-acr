@@ -24,6 +24,16 @@ export ACR_TEST_TRIAL_ARM="replay"
 if [[ -n "$LIMIT" ]]; then
   export ACR_TEST_TRIAL_LIMIT="$LIMIT"
 fi
+# ACR_TRIAL_CORPUS_SHA256 (optional): the operator's own known-good hash for
+# ACR_TRIAL_CORPUS, verified by the harness itself BEFORE any live call --
+# see TestChaos3884ReplayHarness's own doc comment.
+if [[ -n "${ACR_TRIAL_CORPUS_SHA256:-}" ]]; then
+  export ACR_TEST_TRIAL_CORPUS_SHA256="$ACR_TRIAL_CORPUS_SHA256"
+fi
+# ACR_TEST_TRIAL_BASE_SHA: origin/main's tip THIS run's branch was rebased
+# onto -- required provenance (team-lead ruling 2026-08-17), read directly
+# from git rather than trusted to an operator-supplied value.
+export ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
 
 exdir="$repo_root/.trial-exchange-replay-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$exdir/requests" "$exdir/responses"

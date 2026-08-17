@@ -129,10 +129,27 @@ type replayCaseOutcome struct {
 
 // replayReport is the whole run's artifact, written to ACR_TEST_REPLAY_OUT.
 type replayReport struct {
-	Provenance trialProvenance         `json:"provenance"`
-	CasesRun   int                     `json:"cases_run"`
-	DiffTally  map[replayDiffClass]int `json:"diff_tally"`
-	Outcomes   []replayCaseOutcome     `json:"outcomes"`
+	Provenance trialProvenance `json:"provenance"`
+	// BaseSHA is the origin/main commit this branch was rebased onto
+	// immediately before this run (team-lead ruling 2026-08-17) --
+	// SourceCommit above is this BRANCH's own tip, a separate fact.
+	BaseSHA string `json:"base_sha"`
+	// PartAMeasurementDeferred (team-lead ruling 2026-08-17, item 4):
+	// Part A's clarification-retrievability half is NOT measured by this
+	// run -- it needs a rebuilt graph (repo nodes present in SEARCH pools,
+	// not just reachable via nodeByKindID's existence check), and no
+	// Rebuild ran for this run. Always true for this harness today; kept
+	// as an explicit field (not a doc comment alone) so a reader of the
+	// artifact JSON sees the limitation without cross-referencing this
+	// source file.
+	PartAMeasurementDeferred bool `json:"part_a_measurement_deferred"`
+	// ArmBaselineLabel/ArmWiredLabel name what each arm actually is, for a
+	// reader who only has the JSON, not this file's doc comment.
+	ArmBaselineLabel string                  `json:"arm_baseline_label"`
+	ArmWiredLabel    string                  `json:"arm_wired_label"`
+	CasesRun         int                     `json:"cases_run"`
+	DiffTally        map[replayDiffClass]int `json:"diff_tally"`
+	Outcomes         []replayCaseOutcome     `json:"outcomes"`
 }
 
 // replayStatus classifies ONE arm's resolution outcome using this harness's
@@ -286,6 +303,14 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	arm := os.Getenv("ACR_TEST_TRIAL_ARM")
 
 	corpus, corpusHash := loadTrialCorpus(t, corpusPath)
+	// Expected-hash verification (optional): when the caller supplies the
+	// corpus's known-good hash out of band (never derived by reading the
+	// corpus itself here -- the operator's own separate record), a mismatch
+	// aborts before this run ever touches a live credential or model call,
+	// rather than silently scoring against unexpected content.
+	if expected := os.Getenv("ACR_TEST_TRIAL_CORPUS_SHA256"); expected != "" && expected != corpusHash {
+		t.Fatalf("corpus SHA-256 mismatch: got %s, want %s (ACR_TEST_TRIAL_CORPUS_SHA256) -- refusing to run against unexpected corpus content", corpusHash, expected)
+	}
 	source := requireGitSourceIdentity(t)
 	wireProductionEnv(t, true) // modelOverridden=true: the exchange transport never reads ACR_TEST_TRIAL_MODEL*
 
@@ -341,11 +366,16 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 
 	report := replayReport{
 		Provenance: trialProvenance{
-			CorpusSHA256: corpusHash, Transport: "real_api", RunStartedAt: runStartedAt,
+			CorpusSHA256: corpusHash, Transport: "file_exchange", RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
-			Model: os.Getenv("ACR_TEST_TRIAL_MODEL"), ModelFallback: os.Getenv("ACR_TEST_TRIAL_MODEL_FALLBACK"),
+			ExchangeModelName: arm, ExchangeSessionID: exchangeRuntime.nonce,
+			ControlsContinue: os.Getenv("ACR_TEST_TRIAL_CONTROLS_CONTINUE") == "true",
 		},
-		DiffTally: map[replayDiffClass]int{},
+		BaseSHA:                  requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
+		PartAMeasurementDeferred: true,
+		ArmBaselineLabel:         "baseline (identity-universe dependency nil, pre-CHAOS-3884 resolver behavior)",
+		ArmWiredLabel:            "wired (identity-universe dependency set, exactly as production composes it)",
+		DiffTally:                map[replayDiffClass]int{},
 	}
 
 	for i := 0; i < limit; i++ {
