@@ -11,12 +11,16 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// TestIdentityUniverseReadsAllFourKindsForOneOrganization is CHAOS-3884
+// TestIdentityUniverseReadsSliceOneKindsForOneOrganization is CHAOS-3884
 // Option C's live end-to-end proof: a live-database enumeration returns a
-// row for a seeded repository, project, team, and work item, each carrying
-// its correct kind/label/alias data -- and reports complete=true when
-// nothing exceeded the row budget.
-func TestIdentityUniverseReadsAllFourKindsForOneOrganization(t *testing.T) {
+// row for a seeded repository, project, and team, each carrying its correct
+// kind/label/alias data, reports complete=true when nothing exceeded the
+// row budget -- and (decision 2, team-lead amendment 2026-08-17) returns NO
+// row for a seeded work item, even though the table has one: work_item is
+// slice-1's deliberately excluded fourth kind, and this is the read-path
+// proof the exclusion actually holds, not just the registry-length parity
+// TestIdentityUniverseCoversExactlyTheAliasLookupScopedKinds checks.
+func TestIdentityUniverseReadsSliceOneKindsForOneOrganization(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
@@ -75,8 +79,9 @@ func TestIdentityUniverseReadsAllFourKindsForOneOrganization(t *testing.T) {
 	if !ok || team.Label != "Chaos Team" {
 		t.Fatalf("team row = %+v, ok=%v, want label=Chaos Team", team, ok)
 	}
-	workItem, ok := byKind[contractsv1.ContextFabricSubjectWorkItem]
-	if !ok || len(workItem.Aliases) != 1 || workItem.Aliases[0] != "CHAOS-100" {
-		t.Fatalf("work_item row = %+v, ok=%v, want Aliases=[CHAOS-100]", workItem, ok)
+	// decision 2: work_item is out of slice-1 scope, even though the table
+	// row seeded above exists and would have matched pre-amendment.
+	if _, ok := byKind[contractsv1.ContextFabricSubjectWorkItem]; ok {
+		t.Fatal("IdentityUniverse() returned a work_item row, want none -- decision 2 excludes work_item from slice-1 counting scope")
 	}
 }

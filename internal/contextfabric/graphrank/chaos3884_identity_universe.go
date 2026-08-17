@@ -7,11 +7,12 @@ import (
 )
 
 // IdentityRow (CHAOS-3884, Option C) is one row of a backend's COMPLETE,
-// keyed identity-universe read -- every repository/project/team/work_item
-// enumerated in full for an organization, never ranked or truncated the
-// way an ordinary Search() result is. This is the source data an
-// AliasLookup implementation matches against a resolution's own subject
-// terms, entirely in Go (CRITICAL-2's "one normal form, one
+// keyed identity-universe read -- every subject of a counting-scoped kind
+// (isAliasLookupScopedKind; slice 1: repository/project/team, see that
+// registry's own doc comment) enumerated in full for an organization, never
+// ranked or truncated the way an ordinary Search() result is. This is the
+// source data an AliasLookup implementation matches against a resolution's
+// own subject terms, entirely in Go (CRITICAL-2's "one normal form, one
 // implementation" -- see NormalizeAliasTerm).
 type IdentityRow struct {
 	Kind            contextfabric.SubjectKind

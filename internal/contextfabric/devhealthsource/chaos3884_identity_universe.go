@@ -9,20 +9,38 @@ import (
 )
 
 // identityUniverseKinds is the CHAOS-3884 Option C source-table coverage:
-// the four registered entityTables query functions that ALREADY populate
-// Aliases (repository: this ticket's Part A; project/team: native_key/
-// project_key; work_item: ticketKeyAlias) -- the identical kind set
-// graphrank.isAliasLookupScopedKind names as the counting scope. Sharing
-// this list with that registry is enforced by a dedicated test
-// (TestIdentityUniverseKindsMatchAliasLookupScope) rather than a compile-time
-// coupling, since the two lists live in different packages by design
-// (devhealthsource owns the SOURCE side, graphrank owns the RESOLUTION
-// side) and must never silently drift apart.
+// the registered entityTables query functions that ALREADY populate Aliases
+// (repository: this ticket's Part A; project/team: native_key/project_key)
+// -- the identical kind set graphrank.isAliasLookupScopedKind names as the
+// counting scope. Sharing this list with that registry is enforced by a
+// dedicated test (TestIdentityUniverseCoversExactlyTheAliasLookupScopedKinds)
+// rather than a compile-time coupling, since the two lists live in
+// different packages by design (devhealthsource owns the SOURCE side,
+// graphrank owns the RESOLUTION side) and must never silently drift apart.
+//
+// This reader (IdentityUniverse/fetchIdentityKind, below) lives IN
+// devhealthsource, not in graphrank or falkorgraph, and that is not
+// stylistic (adjustment 3, team-lead amendment 2026-08-17): the
+// authorization builders each query function calls (projectAuthorizationScope,
+// repoAuthorization) and their shared helpers (authorizationValue,
+// scopeContainsAttr) are UNEXPORTED here and in their own packages -- "call
+// the same function [the ordinary projection pipeline uses]" only works
+// in-package. Nothing is exported to make this reader live elsewhere; it is
+// a natural sibling of the projection queries reading the SAME rows.
+//
+// work_items is DELIBERATELY ABSENT for slice 1 (team-lead amendment,
+// 2026-08-17, settled decision 2) -- queryWorkItems already populates
+// Aliases (ticketKeyAlias) and could be re-added here in one line, but
+// work_item rows dwarf repository/project/team combined (3288 vs. handfuls
+// in the trial org) and would trip identityUniverseRowBudget's per-branch
+// cap on any larger org, permanently disabling the identity fast path via
+// aliasIdentityComplete=false. See graphrank.aliasLookupScopedKinds' own
+// doc comment for the full residual argument (ticket-key terms essentially
+// cannot collide with repository bare-name slugs).
 var identityUniverseKinds = []entityTable{
 	{name: "repos", query: queryRepositories},
 	{name: "projects", query: queryProjects},
 	{name: "teams", query: queryTeams},
-	{name: "work_items", query: queryWorkItems},
 }
 
 // identityUniverseRowBudget bounds the per-KIND row count IdentityUniverse
@@ -45,23 +63,28 @@ const identityUniversePageSize = 2000
 
 // IdentityUniverse (CHAOS-3884, Option C) is the complete, keyed
 // identity-claimant read graphrank.ResolveDeps.AliasLookup's own doc
-// comment describes: every repository/project/team/work_item this
-// organization has, enumerated in full by repeatedly draining each
-// registered query function's OWN cursor-paginated SELECT (the identical,
-// already-verified-live SQL the ordinary projection pipeline uses -- no
-// new query is written for this path) until each reports !truncated, not a
-// ranked/truncatable relevance search. Returns:
+// comment describes: every repository/project/team this organization has
+// (slice-1 counting scope -- see identityUniverseKinds' own doc comment for
+// why work_item is deliberately absent), enumerated in full by repeatedly
+// draining each registered query function's OWN cursor-paginated SELECT
+// (the identical, already-verified-live SQL the ordinary projection
+// pipeline uses -- no new query is written for this path) until each
+// reports !truncated, not a ranked/truncatable relevance search. Returns:
 //   - rows: every entity-shaped candidate converted to graphrank.IdentityRow
 //     (a relationship/episode/tombstone/progress-marker candidate, which
-//     these four query functions can still emit alongside their entity --
-//     e.g. work_items' BELONGS_TO_REPOSITORY edge -- is skipped; only
-//     entity.Subject identity/alias data feeds identity matching).
+//     these query functions can still emit alongside their entity, is
+//     skipped; only entity.Subject identity/alias data feeds identity
+//     matching).
 //   - observedAt: the MAX entity.ObservedAt across every row read --
 //     IdentityObservationTime's own per-call input.
 //   - complete: false if ANY kind's accumulated row count would exceed
-//     identityUniverseRowBudget -- the WHOLE call reports incomplete, not
-//     just that one kind, mirroring HIGH-3's "no cross-term shared
-//     budget, but a hit on ANY one disables the whole call" shape.
+//     identityUniverseRowBudget -- PER BRANCH (one independent budget per
+//     registered kind, fetchIdentityKind's own local `rows`), but a hit on
+//     ANY ONE branch disables the WHOLE call, never just that branch,
+//     mirroring HIGH-3's "no cross-term shared budget, but a hit on ANY one
+//     disables the whole call" shape (team-lead amendment, 2026-08-17,
+//     settled decision 2 -- pinned by
+//     TestIdentityUniverse_AnyShortBranchPoisonsCompletenessGlobally).
 func IdentityUniverse(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string) (rows []graphrank.IdentityRow, observedAt time.Time, complete bool, err error) {
 	complete = true
 	for _, table := range identityUniverseKinds {

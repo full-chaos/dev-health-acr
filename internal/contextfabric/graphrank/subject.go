@@ -129,15 +129,31 @@ func IsASCIIIdentityTerm(s string) bool {
 // coverage (the unified architecture's stated direction: label becomes a
 // key class for EVERY kind, which is how the ci_pipeline_run/pull_request
 // exactIndex truncation residual eventually closes) is a one-line addition
-// here, not a scattered set of call-site edits. Today's four kinds are
-// exactly what devhealthsource populates Aliases for as of this ticket:
-// work_item (ticketKeyAlias), team/project (native_key/project_key), and
-// repository (this ticket, bare-name/provider-variant).
+// here, not a scattered set of call-site edits.
+//
+// work_item is DELIBERATELY EXCLUDED for slice 1 (team-lead amendment,
+// 2026-08-17, settled decision 2), even though devhealthsource already
+// populates its Aliases (ticketKeyAlias) and it was counted in an earlier
+// revision of this ticket. Residual argument for the exclusion: a
+// ticket-key identity term (CHAOS-NNNN shape, first-colon rule) essentially
+// cannot collide with a repository bare-name slug, while work_item carries
+// ~99% of the identity-universe enumeration cost (3288 rows in the trial
+// org vs. handfuls for repository/project/team combined) -- on a larger
+// org that population would trip the per-branch row budget on every
+// resolution (see devhealthsource.identityUniverseRowBudget), making
+// aliasIdentityComplete false always and the whole mechanism permanently
+// inert. Team is kept even though it (like work_item) is counted but never
+// itself commit-eligible (aliasIdentityEligibleKinds) -- its own row count
+// is cheap, and it is real ambiguity-detection evidence for the repository/
+// project population that IS eligible. Widening back to work_item is a
+// one-line addition here (the registry stays growable for exactly this),
+// paired with re-adding it to devhealthsource.identityUniverseKinds --
+// see TestIdentityUniverseCoversExactlyTheAliasLookupScopedKinds, which
+// pins the two registries against each other.
 var aliasLookupScopedKinds = map[contextfabric.SubjectKind]bool{
 	contextfabric.SubjectRepository: true,
 	contextfabric.SubjectProject:    true,
 	contextfabric.SubjectTeam:       true,
-	contextfabric.SubjectWorkItem:   true,
 }
 
 // isAliasLookupScopedKind reports whether kind is in the counting scope
@@ -160,9 +176,9 @@ func IsAliasLookupScopedKind(kind contextfabric.SubjectKind) bool {
 // aliasIdentityEligibleKinds is the NARROW commit-eligibility allowlist
 // (CHAOS-3884) -- a STRICT SUBSET of aliasLookupScopedKinds. Only these
 // kinds may earn the confidence=1 identity bump and participate in the
-// identityIndex fast-path/rescue-guard machinery (resolution.go). Team and
-// work_item claimants are counted (isAliasLookupScopedKind) but never
-// themselves eligible here -- their own alias uniqueness has not been
+// identityIndex fast-path/rescue-guard machinery (resolution.go). Team
+// claimants are counted (isAliasLookupScopedKind) but never themselves
+// eligible here -- their own alias uniqueness has not been
 // separately argued the way the small, per-org-enumerable
 // repository/project population has (see the design doc's "per-kind
 // enumerability" discussion). Widening this list is a SEPARATE, explicit
