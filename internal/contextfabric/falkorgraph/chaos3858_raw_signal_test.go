@@ -80,3 +80,59 @@ func TestAdapterResolveSubjects_NilRawSignalObserverIsDefault(t *testing.T) {
 		t.Fatalf("resolution.Candidates = %#v, want exactly 1", resolution.Candidates)
 	}
 }
+
+// TestRunFulltextQuery_NilObserverLeavesRawLexicalFieldsNil is the
+// adversarial-review-requested regression pin, at the exact call site the
+// finding named (runFulltextQuery, queries.go): with no RawSignalObserver
+// configured (a.config.RawSignalObserver == nil, every production
+// deployment), LexicalMatchedTerms/LexicalTermCount must stay nil on every
+// returned CandidateNode -- not merely unread, but never assigned, so
+// `matched`/`termCount` stay pure stack locals and never escape to the heap
+// on this hot path. Guards the `if a.config.RawSignalObserver != nil` gate
+// runFulltextQuery uses directly, independent of the graphrank/resolution
+// layer above it.
+func TestRunFulltextQuery_NilObserverLeavesRawLexicalFieldsNil(t *testing.T) {
+	fullMatch := fulltextRow("incident", "full_hit", "Incident Outage", "Incident outage payment gateway", nil)
+	fake := fixedRowsFulltextConn([]row{fullMatch})
+	adapter := newFakeAdapter(t, fake)
+	// RawSignalObserver deliberately left nil (the default).
+
+	candidates, truncated, err := adapter.fulltextSearchNodes(context.Background(), "graph-key", "org-1", "incident outage payment gateway", 10, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	if truncated {
+		t.Fatalf("fulltextSearchNodes() truncated = true, want false (this test needs the !truncated branch to run)")
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v, want exactly 1", candidates)
+	}
+	if candidates[0].LexicalMatchedTerms != nil || candidates[0].LexicalTermCount != nil {
+		t.Fatalf("candidates[0] = %#v, want LexicalMatchedTerms/LexicalTermCount both nil with no RawSignalObserver configured", candidates[0])
+	}
+}
+
+// TestRunFulltextQuery_ConfiguredObserverPopulatesRawLexicalFields is the
+// positive companion: WITH a.config.RawSignalObserver set, the same call
+// DOES populate the raw pair -- proving the gate suppresses the fields only
+// when unconfigured, not unconditionally.
+func TestRunFulltextQuery_ConfiguredObserverPopulatesRawLexicalFields(t *testing.T) {
+	fullMatch := fulltextRow("incident", "full_hit", "Incident Outage", "Incident outage payment gateway", nil)
+	fake := fixedRowsFulltextConn([]row{fullMatch})
+	adapter := newFakeAdapter(t, fake)
+	adapter.config.RawSignalObserver = &fakeRawSignalObserver{}
+
+	candidates, truncated, err := adapter.fulltextSearchNodes(context.Background(), "graph-key", "org-1", "incident outage payment gateway", 10, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	if truncated {
+		t.Fatalf("fulltextSearchNodes() truncated = true, want false")
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v, want exactly 1", candidates)
+	}
+	if candidates[0].LexicalMatchedTerms == nil || candidates[0].LexicalTermCount == nil {
+		t.Fatalf("candidates[0] = %#v, want LexicalMatchedTerms/LexicalTermCount both set with a RawSignalObserver configured", candidates[0])
+	}
+}
