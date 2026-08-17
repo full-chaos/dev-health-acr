@@ -247,7 +247,7 @@ func isVectorOnlyCandidate(mechanisms []contextfabric.MatchMechanism) bool {
 // ResolveFromMergedCandidatesWithGate's doc comment for the full
 // algorithm description.
 func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool) contextfabric.SubjectResolution {
-	return ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, DefaultCommitGatePolicy(), nil, nil, false)
+	return ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, DefaultCommitGatePolicy(), nil, nil, false, nil, "")
 }
 
 // ResolveFromMergedCandidatesWithGate implements the class fix for Codex
@@ -321,7 +321,7 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // aliasIdentityComplete=false disables the fast path exactly as before
 // this ticket, so every pre-CHAOS-3884 call site (ResolveFromMergedCandidates,
 // every existing test) is byte-identical.
-func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool) contextfabric.SubjectResolution {
+func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -338,7 +338,24 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 	// function returns a single-mechanism base unchanged, so a uniform pass is
 	// both simpler and impossible to forget for a new candidate source.
 	for index := range candidates {
-		candidates[index].Confidence = CorroboratedConfidence(candidates[index].MatchMechanisms, candidates[index].Confidence)
+		base := candidates[index].Confidence
+		candidates[index].Confidence = CorroboratedConfidence(candidates[index].MatchMechanisms, base)
+		if tracer != nil {
+			// IdentityTrusted is a PROXY, not a direct read of NodeCandidate's
+			// own identityTrusted local (unreachable from here without
+			// growing the wire-contract SubjectCandidate type): true only
+			// when this candidate ALREADY carried confidence=1 before
+			// corroboration ran AND an identity-class mechanism is present --
+			// exactly the shape identityTrusted alone can produce (matched
+			// also reaches confidence=1 pre-corroboration, but tags
+			// MatchExact, not an identity-class mechanism).
+			identityTrusted := base >= 1 && (HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchAlias) || HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchProviderKey))
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "corroboration", Subject: candidates[index].Subject,
+				BaseConfidence: base, FinalConfidence: candidates[index].Confidence,
+				DistinctMechanisms: DistinctMechanismCount(candidates[index].MatchMechanisms), IdentityTrusted: identityTrusted,
+			})
+		}
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].Confidence == candidates[j].Confidence {
@@ -349,6 +366,9 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 	resolution := contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{}}
 	if len(candidates) == 0 {
 		resolution.Candidates = candidates
+		if tracer != nil {
+			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit"})
+		}
 		return resolution
 	}
 
@@ -795,6 +815,38 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 	// against.
 	if ambiguous && allowClarification {
 		resolution.ClarificationPrompt = ClarificationPrompt(ordered)
+	}
+	if tracer != nil {
+		// ONE unified decision event per resolution (not per commit-gate
+		// branch): "do NOT gold-plate" -- the branch that fired is already
+		// fully explained by the corroboration-stage events above (base vs
+		// final confidence per candidate) plus this outcome, without
+		// needing five near-identical trace call sites.
+		switch {
+		case len(resolution.Committed) == 1:
+			committedKey := SubjectKey(resolution.Committed[0])
+			winningMechanism := ""
+			identityTrusted := false
+			for index := range candidates {
+				if SubjectKey(candidates[index].Subject) != committedKey {
+					continue
+				}
+				if len(candidates[index].MatchMechanisms) > 0 {
+					winningMechanism = string(candidates[index].MatchMechanisms[0])
+				}
+				identityTrusted = candidates[index].Confidence == 1 &&
+					(HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchAlias) || HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchProviderKey))
+				break
+			}
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "decision", Subject: resolution.Committed[0],
+				Outcome: "committed", WinningMechanism: winningMechanism, IdentityTrusted: identityTrusted,
+			})
+		case len(resolution.Committed) == 0 && ambiguous:
+			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "ambiguous"})
+		case len(resolution.Committed) == 0:
+			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit"})
+		}
 	}
 	return resolution
 }

@@ -2,6 +2,8 @@ package graphrank
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"strings"
@@ -249,6 +251,97 @@ type ResolveDeps struct {
 	// non-nil err, aborting the whole resolution exactly like Search()'s
 	// own error handling.
 	AliasLookup func(ctx context.Context, orgID string, terms []string) (claimantsByTerm map[string][]CandidateNode, complete bool, err error)
+	// ResolutionTracer (CHAOS-3884, team-lead ruling 2026-08-17) is an
+	// optional, nil-by-default per-stage event emitter for the resolution
+	// CORE -- proof a resolution actually REACHED a mechanism/stage, not
+	// an inference from that mechanism's own unit tests passing in
+	// isolation. Same shape/pattern as RawSignalObserver: no production
+	// caller is required to set it, and a nil tracer is never invoked, so
+	// this has no effect on any resolution decision. See ResolutionTracer's
+	// own doc comment for the corpus-safety discipline every event field
+	// is held to.
+	ResolutionTracer ResolutionTracer
+}
+
+// ResolutionTracer receives ResolveSubjects' own per-stage trace events.
+// ONE method, like RawSignalObserver, so adding a new event FIELD later
+// never changes this interface's signature -- only ResolutionTraceEvent
+// grows.
+//
+// CORPUS-SAFETY (non-negotiable, built in from the first field, not a
+// later hardening pass): every field ResolutionTraceEvent carries is a
+// COUNT, ENUM, SUBJECT IDENTIFIER (kind+canonical_id -- the graph's own
+// stable id, already the shape trialCandidateMatchProvenance/corpus
+// provenance use elsewhere), CONFIDENCE NUMBER, or BOOL. NEVER raw term
+// text, NEVER question text, NEVER alias/label/attribute content. A
+// caller that needs to correlate two events about the SAME term without
+// exposing the term itself must hash it (TermHash below -- the identical
+// SHA-256 discipline the corpus's own provenance hash already uses), never
+// pass the term string. A resolution trace is the single most likely
+// corpus-leak vector this ticket could build; this rule has no exception.
+type ResolutionTracer interface {
+	Trace(event ResolutionTraceEvent)
+}
+
+// ResolutionTraceEvent is ONE stage event. Stage names which fields are
+// populated; every other field stays at its zero value, which is why this
+// is one struct rather than one type per stage -- adding a field here is
+// additive and never breaks an existing Trace implementation.
+type ResolutionTraceEvent struct {
+	// RequestID identifies which resolution this event belongs to --
+	// already on InvestigationRequest, zero new plumbing (per the ruling:
+	// "request.RequestID exists").
+	RequestID string
+	// Stage is a closed vocabulary: "search", "alias_lookup",
+	// "corroboration", "decision".
+	Stage string
+	// TermHash (search stage only): SHA-256 hex of the search term, never
+	// the term itself -- lets a reader correlate repeat events for the
+	// SAME term across a resolution without ever seeing what it was.
+	TermHash string
+	// SearchResultCount (search stage): the raw CandidateNode count
+	// Search() returned for this term, before authorization/dedup.
+	SearchResultCount int
+	// AliasLookupComplete/AliasLookupMatchedClaimants (alias_lookup
+	// stage): the completeness flag AliasLookup returned, and the TOTAL
+	// claimant count across every term (claimantsByTerm's total length)
+	// -- never broken down by term or alias content. THIS is the
+	// reachability answer: an alias_lookup-stage event firing at all
+	// proves AliasLookup was invoked (C1); AliasLookupMatchedClaimants>0
+	// proves it found a match (C2).
+	AliasLookupComplete         bool
+	AliasLookupMatchedClaimants int
+	// Subject (corroboration/decision stages): kind+canonical_id, the
+	// graph's own stable identifier -- never a label or matched term.
+	Subject contextfabric.SubjectRef
+	// BaseConfidence/FinalConfidence/DistinctMechanisms (corroboration
+	// stage): the pre- and post-CorroboratedConfidence values and the
+	// distinct mechanism count it computed from (mechanism.go:213 -- this
+	// is exactly where a 0.5 base either does or does not become a
+	// trusted 1.0). IdentityTrusted is a PROXY (base>=1 already true
+	// before corroboration AND the mechanism set includes an
+	// identity-class mechanism) -- resolution.go has no direct access to
+	// NodeCandidate's own identityTrusted local, and adding one would mean
+	// growing the wire-contract SubjectCandidate type, which this
+	// diagnostic does not need.
+	BaseConfidence     float64
+	FinalConfidence    float64
+	DistinctMechanisms int
+	IdentityTrusted    bool
+	// Outcome/WinningMechanism (decision stage): "committed" / "ambiguous"
+	// / "no_commit". WinningMechanism is the strongest mechanism on the
+	// committed/considered candidate (empty for a no-candidate outcome).
+	Outcome          string
+	WinningMechanism string
+}
+
+// traceTermHash is the ONE place a search term is ever hashed for
+// ResolutionTraceEvent.TermHash -- SHA-256 hex, the identical discipline
+// the corpus's own provenance hash (CorpusSHA256) already uses. Never
+// called with anything else; never reversed or looked up anywhere.
+func traceTermHash(term string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(term))))
+	return hex.EncodeToString(sum[:])
 }
 
 // RawSignalObserver is the CHAOS-3858 measurement-only capture port -- see
@@ -487,6 +580,12 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if degraded {
 			retrievalDegraded = true
 		}
+		if deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "search",
+				TermHash: traceTermHash(term), SearchResultCount: len(results),
+			})
+		}
 		// allowExactMatch=true: term here is genuine caller-derived search
 		// input (an interpreted subject term, or a requested-scope hint
 		// label -- see SubjectTerms), legitimately eligible to exact-match
@@ -508,6 +607,20 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			return contextfabric.SubjectResolution{}, err
 		}
 		aliasIdentityComplete = complete
+		if deps.ResolutionTracer != nil {
+			matched := 0
+			for _, nodes := range claimantsByTerm {
+				matched += len(nodes)
+			}
+			// THIS event firing at all is C1 (AliasLookup was invoked);
+			// AliasLookupMatchedClaimants>0 is C2 (it found a match) --
+			// team-lead's reachability question, read from the trace, not
+			// inferred from a passing unit test.
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "alias_lookup",
+				AliasLookupComplete: complete, AliasLookupMatchedClaimants: matched,
+			})
+		}
 		for term, nodes := range claimantsByTerm {
 			// allowExactMatch=true: these are the SAME genuine
 			// caller-derived terms the per-term Search loop above already
@@ -644,7 +757,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if gate == (CommitGatePolicy{}) {
 		gate = DefaultCommitGatePolicy()
 	}
-	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete)
+	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID)
 	resolution.RetrievalDegraded = retrievalDegraded
 	return resolution, nil
 }

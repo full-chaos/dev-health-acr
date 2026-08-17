@@ -25,7 +25,7 @@ func resolveWithGate(gate CommitGatePolicy, candidates ...contextfabric.SubjectC
 	for _, c := range candidates {
 		bySubject[SubjectKey(c.Subject)] = c
 	}
-	return ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, gate, nil, nil, false)
+	return ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, gate, nil, nil, false, nil, "")
 }
 
 // TestDefaultCommitGatePolicyMatchesCalibratedProductionValues pins the
@@ -451,7 +451,7 @@ func TestVectorOnlyGuardDoesNotReachTheChaos3829RescuePath(t *testing.T) {
 		SubjectKey(auth.Subject):  0.90,
 		SubjectKey(authz.Subject): 0.50,
 	}
-	resolution := ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, similarities, 0.25, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false)
+	resolution := ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, similarities, 0.25, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "")
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
 		t.Fatalf("the CHAOS-3829 rescue must still commit the higher-margin corroborated candidate, got %v", resolution.Committed)
 	}

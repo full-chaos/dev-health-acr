@@ -76,7 +76,7 @@ func TestResolveFromMergedCandidatesWithGate_UniqueIdentityCommitsAlone(t *testi
 	repo := repoAliasCandidate("r1", "chaos-ops")
 	identity, terms := identitySideChannels(repo)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true)
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true, nil, "")
 
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
 		t.Fatalf("resolution.Committed = %#v, want r1 committed via the identity fast path", resolution.Committed)
@@ -92,7 +92,7 @@ func TestResolveFromMergedCandidatesWithGate_TwoClaimantsNeverCommit(t *testing.
 	team := teamAliasCandidate("t1", "chaos")
 	identity, terms := identitySideChannels(repo, team)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, team), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true)
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, team), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true, nil, "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING committed -- a genuine collision must clarify, never silently pick", resolution.Committed)
@@ -114,7 +114,7 @@ func TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaIden
 	repo := repoAliasCandidate("r1", "chaos-ops")
 	identity, terms := identitySideChannels(repo)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, true /* searchTruncated */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete */)
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, true /* searchTruncated */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete */, nil, "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want nothing committed when aliasIdentityComplete=false", resolution.Committed)
@@ -148,7 +148,7 @@ func TestResolveFromMergedCandidatesWithGate_IdentityCollisionBlocksLoneFloor(t 
 	// aliasIdentityComplete is left false) is what blocks LoneFloor.
 	identity, terms := identitySideChannels(repo, team)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false: the confidence gates ARE reached */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: fast path never even considered */)
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false: the confidence gates ARE reached */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: fast path never even considered */, nil, "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING -- identityCollision must block LoneFloor even though repo is alone in commitIndex with confidence=1", resolution.Committed)
@@ -166,7 +166,7 @@ func TestResolveFromMergedCandidatesWithGate_IdentityCollisionBlocksTopFloor(t *
 	other := noiseCandidate("ci1", 0.6)
 	identity, terms := identitySideChannels(repo, team)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, other), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false)
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, other), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false, nil, "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING -- identityCollision must block the top-of-two gate too", resolution.Committed)
@@ -189,7 +189,7 @@ func TestResolveFromMergedCandidatesWithGate_IdentityCollisionNeverTouchesOrdina
 		State: contextfabric.ResolutionProposed, Confidence: 0.5, MatchedTerms: []string{"Ask Dev"},
 		MatchReasons: []string{"x"}, MatchMechanisms: []contextfabric.MatchMechanism{contextfabric.MatchLexical},
 	}
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(top, second), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false)
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(top, second), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "")
 
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "p1" {
 		t.Fatalf("resolution.Committed = %#v, want p1 committed via the ordinary top-of-two gate, unaffected by nil identity side channels", resolution.Committed)
@@ -264,6 +264,64 @@ func TestResolveSubjects_AliasLookupCommitsViaMatchAliasWhenOrdinarySearchMisses
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
 		t.Fatalf("resolution.Committed = %#v, want r1 committed via the MatchAlias mechanism asserted above", resolution.Committed)
+	}
+}
+
+// TestResolveSubjects_TracerObservesAliasLookupReachedThroughWiredComposition
+// is the DURABLE reachability proof (team-lead ruling, 2026-08-17): unlike
+// TestResolveSubjects_AliasLookupCommitsViaMatchAliasWhenOrdinarySearchMisses
+// (cd482b3), which calls NodeCandidate/ResolveSubjects directly and proves
+// the MATCHING logic is correct in isolation, this test proves the WIRED
+// COMPOSITION itself reaches deps.AliasLookup -- reading that fact from the
+// ResolutionTracer's own "alias_lookup" stage event, not from an assertion
+// about the RESULT. A future composition change that accidentally stops
+// wiring AliasLookup through (the exact "dead path behind a passing green
+// unit test" failure mode this ticket was built to catch) would leave this
+// event never firing, failing this test even if every OTHER resolution
+// outcome still looked plausible.
+func TestResolveSubjects_TracerObservesAliasLookupReachedThroughWiredComposition(t *testing.T) {
+	t.Parallel()
+	repoNode := aliasCandidateNode(contextfabric.SubjectRepository, "r1", "owner/dev-health-acr", -1, []string{"dev-health-acr"}, nil, true)
+	backend := &fakeGraphBackend{
+		enableAliasLookup:    true,
+		aliasLookupClaimants: map[string][]CandidateNode{"dev-health-acr": {repoNode}},
+		aliasLookupComplete:  true,
+	}
+	tracer := &captureResolutionTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+	request := testRequest()
+	request.RequestID = "request_reachability_diag"
+
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("dev-health-acr"), deps)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
+		t.Fatalf("resolution.Committed = %#v, want r1 committed", resolution.Committed)
+	}
+
+	aliasLookupEvents := tracer.eventsForStage("alias_lookup")
+	if len(aliasLookupEvents) != 1 {
+		t.Fatalf("alias_lookup stage events = %d, want exactly 1 -- the wired composition never reached deps.AliasLookup (C1==0: dead-path wiring regression)", len(aliasLookupEvents))
+	}
+	event := aliasLookupEvents[0]
+	if event.RequestID != request.RequestID {
+		t.Errorf("alias_lookup event RequestID = %q, want %q", event.RequestID, request.RequestID)
+	}
+	if !event.AliasLookupComplete {
+		t.Error("alias_lookup event AliasLookupComplete = false, want true")
+	}
+	if event.AliasLookupMatchedClaimants != 1 {
+		t.Errorf("alias_lookup event AliasLookupMatchedClaimants = %d, want 1 (C2: the match count)", event.AliasLookupMatchedClaimants)
+	}
+
+	decisionEvents := tracer.eventsForStage("decision")
+	if len(decisionEvents) != 1 || decisionEvents[0].Outcome != "committed" {
+		t.Fatalf("decision events = %#v, want exactly one committed", decisionEvents)
+	}
+	if !decisionEvents[0].IdentityTrusted {
+		t.Error("decision event IdentityTrusted = false, want true -- r1 committed via the identity-trust bump")
 	}
 }
 
