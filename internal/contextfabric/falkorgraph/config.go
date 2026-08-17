@@ -119,6 +119,14 @@ type Config struct {
 	// vendor/SQL client directly; devhealthsource's ClickHouse client type
 	// has no business appearing in a graph adapter's Config).
 	IdentityUniverse func(ctx context.Context, orgID string) (rows []graphrank.IdentityRow, observedAt time.Time, complete bool, err error)
+	// ResolutionTracer (CHAOS-3884, team-lead ruling 2026-08-17) is
+	// optional (nil-safe), same convention as RawSignalObserver above --
+	// set directly by the composition root, independent of whether an
+	// embedder or IdentityUniverse is configured. See
+	// graphrank.ResolveDeps.ResolutionTracer / graphrank.ResolutionTracer's
+	// own doc comments for the event vocabulary and the corpus-safety
+	// discipline every event field is held to.
+	ResolutionTracer graphrank.ResolutionTracer
 }
 
 // GraphTelemetry is the graph adapter's operational signal sink.

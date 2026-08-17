@@ -173,6 +173,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		MaxResultsCap:     a.config.MaxResults,
 		CommitGatePolicy:  a.commitGatePolicy,
 		RawSignalObserver: a.config.RawSignalObserver,
+		ResolutionTracer:  a.config.ResolutionTracer,
 	}
 	// CHAOS-3884 (Option C): AliasLookup is left nil (deps' own zero value)
 	// when this deployment has no identity-universe reader configured --
