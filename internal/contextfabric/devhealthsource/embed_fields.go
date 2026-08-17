@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -30,6 +31,60 @@ func ticketKeyAlias(workItemID string) string {
 		return ""
 	}
 	return remainder
+}
+
+// repositoryBareNameAlias derives a repository's bare-name alias (CHAOS-3884
+// Part A) from its org-qualified canonical slug: the last "/"-delimited
+// segment. "full-chaos/dev-health-acr" -> "dev-health-acr". A slug with no
+// "/" already IS its own bare name, so this returns "" for it (no
+// redundant self-alias -- NodeCandidate's own label check already covers
+// that case via subject.Label, and MergeMechanisms/AliasAttributes would
+// otherwise carry a value that is byte-identical to the label for every
+// single-segment slug this deployment happens to have).
+//
+// IsASCIIIdentityTerm gate (spot-check item 3a, "monitor the premise, not
+// just the equivalence"): NormalizeAliasTerm's EqualFold-equivalence proof
+// is scoped to the verified ASCII identity alphabet this org's live data
+// uses (graphrank.NormalizeAliasTerm's own doc comment). Threading a
+// logger through this producer to FLAG a non-conforming slug would require
+// widening queryFunc's shared signature (every registered table query
+// function, not just this one) for a monitoring-only concern -- out of
+// scope for this slice. Instead the exclusion IS the signal: a
+// non-ASCII-alphabet slug derives NO bare-name alias at all, so it can
+// never enter an unproven equivalence class, and its absence from the
+// graph's aliases property is directly observable (no alias means no
+// identity-mechanism commit is possible for it) rather than silently
+// trusted.
+func repositoryBareNameAlias(slug string) string {
+	idx := strings.LastIndex(slug, "/")
+	if idx < 0 {
+		return ""
+	}
+	bareName := slug[idx+1:]
+	if bareName == "" || !graphrank.IsASCIIIdentityTerm(bareName) {
+		return ""
+	}
+	return bareName
+}
+
+// repositoryProviderAlias derives a repository's provider-qualified alias
+// (CHAOS-3884 Part A): "<provider>:<slug>", e.g.
+// "github:full-chaos/dev-health-acr". This is the ONLY provider-variant
+// data available from the `repos` source query today (id, repo, provider,
+// last_synced, created_at, tags -- no separate full_name/html_url column);
+// if a richer provider-native slug field is added to the source later,
+// prefer it over this derived form. "" (no alias) when provider is unset --
+// there is nothing to qualify the slug WITH -- or when the composed value
+// fails the same ASCII-alphabet gate repositoryBareNameAlias uses.
+func repositoryProviderAlias(provider, slug string) string {
+	if provider == "" {
+		return ""
+	}
+	value := provider + ":" + slug
+	if !graphrank.IsASCIIIdentityTerm(value) {
+		return ""
+	}
+	return value
 }
 
 // joinedSortedList canonicalizes an array field for embedding text (spec §2

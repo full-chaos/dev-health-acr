@@ -19,27 +19,28 @@ func isAlreadyExists(err error) bool {
 // Node/edge property keys, shared across identity.go, projection.go, and
 // reader.go so the write and read sides never drift on a literal string.
 const (
-	propOrgID          = "org_id"
-	propKind           = "subject_kind"
-	propCanonicalID    = "canonical_id"
-	propRelationshipID = "relationship_id"
-	propLabel          = "label"
-	propAliases        = "aliases"
-	propPreviousNames  = "previous_names"
-	propProviderPrefix = "provider_"
-	propPropertyPrefix = "property_"
-	propAuthzRepos     = "authorization_repositories"
-	propAuthzProjects  = "authorization_projects"
-	propAuthzTeams     = "authorization_teams"
-	propEvidenceRefs   = "evidence_refs"
-	propSourceVersion  = "source_version"
-	propObservedAt     = "observed_at"    // RFC3339Nano, display/read-back only
-	propObservedAtNs   = "observed_at_ns" // int64 epoch-nanos, every comparison
-	propValidFrom      = "valid_from"
-	propValidFromNs    = "valid_from_ns"
-	propValidTo        = "valid_to"
-	propValidToNs      = "valid_to_ns"
-	propSearchText     = "search_text"
+	propOrgID           = "org_id"
+	propKind            = "subject_kind"
+	propCanonicalID     = "canonical_id"
+	propRelationshipID  = "relationship_id"
+	propLabel           = "label"
+	propAliases         = "aliases"
+	propProviderAliases = "provider_aliases" // CHAOS-3884
+	propPreviousNames   = "previous_names"
+	propProviderPrefix  = "provider_"
+	propPropertyPrefix  = "property_"
+	propAuthzRepos      = "authorization_repositories"
+	propAuthzProjects   = "authorization_projects"
+	propAuthzTeams      = "authorization_teams"
+	propEvidenceRefs    = "evidence_refs"
+	propSourceVersion   = "source_version"
+	propObservedAt      = "observed_at"    // RFC3339Nano, display/read-back only
+	propObservedAtNs    = "observed_at_ns" // int64 epoch-nanos, every comparison
+	propValidFrom       = "valid_from"
+	propValidFromNs     = "valid_from_ns"
+	propValidTo         = "valid_to"
+	propValidToNs       = "valid_to_ns"
+	propSearchText      = "search_text"
 
 	labelSubject   = "Subject"
 	labelRelation  = "Relates"       // generic edge label; specific type lives in the relation_type property

@@ -247,6 +247,11 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 	// visible; a wrongly-excluded real subject is not.
 	if entityOwned != nil {
 		attrs[propAliases] = graphrank.UniqueSorted(entityOwned.Aliases)
+		// CHAOS-3884: provider-qualified identity variants, same write
+		// discipline as propAliases -- a distinct property so NodeCandidate
+		// can tag MatchProviderKey separately from MatchAlias even though
+		// both flow through this identical write path.
+		attrs[propProviderAliases] = graphrank.UniqueSorted(entityOwned.ProviderAliases)
 		attrs[propPreviousNames] = graphrank.UniqueSorted(entityOwned.PreviousNames)
 		for k, v := range entityOwned.ProviderIDs {
 			attrs[propProviderPrefix+safeName(k)] = v

@@ -196,6 +196,21 @@ func TestRenamedSubjectKeepsItsRetrievalHandles(t *testing.T) {
 	}
 }
 
+// TestEveryTemplateIndexesProviderAliases is CHAOS-3884's extension of
+// TestRenamedSubjectKeepsItsRetrievalHandles: ProviderAliases is a THIRD
+// retrieval-handle source (alongside Aliases/PreviousNames), and this
+// file's own "NO RETRIEVAL HANDLE IS EVER DROPPED" invariant covers it
+// identically -- no template may drop a provider-qualified alias.
+func TestEveryTemplateIndexesProviderAliases(t *testing.T) {
+	t.Parallel()
+	for _, entity := range fullTemplateEntities() {
+		entity.ProviderAliases = append(entity.ProviderAliases, "github:provider-alias-handle")
+		if got := subjectSearchText(entity, true); !strings.Contains(got, "github:provider-alias-handle") {
+			t.Errorf("%s template dropped a provider alias: %q", entity.Subject.Kind, got)
+		}
+	}
+}
+
 // TestWriteAndEmbedPathsComposeByteIdenticalText is the §0 decision-(a)/(b)
 // proof: the lexical write path (subjectMergeAttrs -> propSearchText) and
 // the embedding pass (collectEmbedTargets) derive BYTE-IDENTICAL text for

@@ -201,12 +201,15 @@ func subjectSearchText(entity contextfabric.EntityProjection, includeBodies bool
 	return strings.TrimSpace(text)
 }
 
-// retrievalHandles is the union of an entity's aliases and previous names,
-// deduplicated and sorted -- the lexical handles entitySearchText always
-// indexed. Every template composes it exactly once.
+// retrievalHandles is the union of an entity's aliases, provider-qualified
+// aliases (CHAOS-3884), and previous names, deduplicated and sorted -- the
+// lexical handles entitySearchText always indexed. Every template composes
+// it exactly once. "NO RETRIEVAL HANDLE IS EVER DROPPED" (this file's own
+// header discipline) now covers all three sources.
 func retrievalHandles(entity contextfabric.EntityProjection) string {
-	handles := make([]string, 0, len(entity.Aliases)+len(entity.PreviousNames))
+	handles := make([]string, 0, len(entity.Aliases)+len(entity.ProviderAliases)+len(entity.PreviousNames))
 	handles = append(handles, entity.Aliases...)
+	handles = append(handles, entity.ProviderAliases...)
 	handles = append(handles, entity.PreviousNames...)
 	return capRunes(strings.Join(graphrank.UniqueSorted(handles), " "), capHandles)
 }
