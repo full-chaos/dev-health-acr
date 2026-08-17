@@ -66,12 +66,22 @@ func (s *Store) RecordModelExecution(ctx context.Context, principal storage.Prin
 	if err != nil {
 		return fmt.Errorf("pgmodelreceipts: marshal receipt: %w", err)
 	}
+	// requestID is written as SQL NULL, not an empty string, when the
+	// receipt never carried one (migration 0017's NULL-sentinel column,
+	// same discipline as every other optional reuse-key column in this
+	// schema) -- an empty string would satisfy the column's own CHECK
+	// only by accident and would collide with nothing in a request_id
+	// equality lookup, unlike a real NULL.
+	var requestID sql.NullString
+	if trimmed := strings.TrimSpace(receipt.RequestID); trimmed != "" {
+		requestID = sql.NullString{String: trimmed, Valid: true}
+	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_model_execution_receipts
-    (receipt_id, org_id, operation, provider, outcome, fallback_used, payload, started_at, completed_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    (receipt_id, org_id, operation, provider, outcome, fallback_used, payload, started_at, completed_at, request_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		id, orgID, string(receipt.Operation), receipt.Provider, receipt.Outcome, receipt.FallbackUsed,
-		payload, receipt.StartedAt, receipt.CompletedAt)
+		payload, receipt.StartedAt, receipt.CompletedAt, requestID)
 	if err != nil {
 		return fmt.Errorf("pgmodelreceipts: record receipt: %w", sanitizeError(err))
 	}

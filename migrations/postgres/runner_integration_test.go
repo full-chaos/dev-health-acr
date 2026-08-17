@@ -24,8 +24,9 @@ import (
 // cleanly -- but there is no gap to tolerate here now.) 0014 is
 // CHAOS-3833's embed-retrieval reuse-key columns. 0015 is CHAOS-3862's
 // prompt-version and version-authority reuse-key columns. 0016 is
-// CHAOS-3859's clarification-selection capture table.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+// CHAOS-3859's clarification-selection capture table. 0017 is CHAOS-3889's
+// model-execution-receipt request_id column.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

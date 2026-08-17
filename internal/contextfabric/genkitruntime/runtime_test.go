@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -672,6 +674,9 @@ func mustRuntime(t *testing.T, generator generator, override Config) *Runtime {
 	if override.Fallback != nil {
 		config.Fallback = override.Fallback
 	}
+	if override.Logger != nil {
+		config.Logger = override.Logger
+	}
 	runtime, err := newWithGenerator(config, generator)
 	if err != nil {
 		t.Fatalf("newWithGenerator() error = %v", err)
@@ -1050,6 +1055,324 @@ func TestNewWithGeneratorDefaultsVersionsFromModel(t *testing.T) {
 		runtime.config.SchemaVersion != DefaultSchemaVersion ||
 		runtime.config.EvaluatorVersion != defaultEvaluatorVersion {
 		t.Fatalf("config defaults = %#v", runtime.config)
+	}
+}
+
+// decisionRecord captures one structured log line emitted through
+// captureLogger for direct field-by-field assertion, independent of any
+// particular slog output encoding.
+type decisionRecord struct {
+	Message string
+	Attrs   map[string]any
+}
+
+// captureLogger is a minimal slog.Handler that records every log line
+// verbatim (message plus a flat key/value attribute map) so CHAOS-3889's
+// decision-event tests can assert exactly which fields a line carries --
+// including, for the corpus-safety test, that none of them ever leak
+// question/output text.
+type captureLogger struct {
+	mu      sync.Mutex
+	records []decisionRecord
+}
+
+func newCaptureLogger() (*captureLogger, *slog.Logger) {
+	h := &captureLogger{}
+	return h, slog.New(h)
+}
+
+func (h *captureLogger) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureLogger) Handle(_ context.Context, record slog.Record) error {
+	attrs := make(map[string]any, record.NumAttrs())
+	record.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, decisionRecord{Message: record.Message, Attrs: attrs})
+	return nil
+}
+
+func (h *captureLogger) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureLogger) WithGroup(string) slog.Handler      { return h }
+
+func (h *captureLogger) decisionEvents() []decisionRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []decisionRecord
+	for _, r := range h.records {
+		if r.Message == decisionEventMessage {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func attrString(t *testing.T, attrs map[string]any, key string) string {
+	t.Helper()
+	v, ok := attrs[key]
+	if !ok {
+		t.Fatalf("decision event missing attribute %q: %#v", key, attrs)
+	}
+	s, ok := v.(string)
+	if !ok {
+		t.Fatalf("decision event attribute %q = %#v, want string", key, v)
+	}
+	return s
+}
+
+func attrBool(t *testing.T, attrs map[string]any, key string) bool {
+	t.Helper()
+	v, ok := attrs[key]
+	if !ok {
+		t.Fatalf("decision event missing attribute %q: %#v", key, attrs)
+	}
+	b, ok := v.(bool)
+	if !ok {
+		t.Fatalf("decision event attribute %q = %#v, want bool", key, v)
+	}
+	return b
+}
+
+// TestDecisionEventAxisSourceReflectsWhetherTheModelSetAxis is the H6
+// acceptance test: a model-empty TimeContext.Axis (toDomain substitutes the
+// caller's default BEFORE Validate) must log axis_source="default", and an
+// ordinary model-supplied axis must log axis_source="model" -- the two
+// cases this codebase could not previously tell apart.
+func TestDecisionEventAxisSourceReflectsWhetherTheModelSetAxis(t *testing.T) {
+	t.Parallel()
+
+	defaultedHandler, defaultedLogger := newCaptureLogger()
+	defaulted := validInterpretationOutput()
+	defaulted.TimeContext.Axis = ""
+	defaultedRuntime := mustRuntime(t, &generatorStub{interpretation: defaulted}, Config{Logger: defaultedLogger})
+	if _, _, err := defaultedRuntime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+		t.Fatalf("InterpretQuestion() error = %v", err)
+	}
+	defaultedEvents := defaultedHandler.decisionEvents()
+	if len(defaultedEvents) != 1 {
+		t.Fatalf("decision events = %d, want 1: %#v", len(defaultedEvents), defaultedEvents)
+	}
+	if got := attrString(t, defaultedEvents[0].Attrs, "axis_source"); got != "default" {
+		t.Fatalf("axis_source = %q, want %q for a model-empty axis", got, "default")
+	}
+
+	modelHandler, modelLogger := newCaptureLogger()
+	modelChosen := validInterpretationOutput()
+	modelChosen.TimeContext.Axis = "current"
+	modelRuntime := mustRuntime(t, &generatorStub{interpretation: modelChosen}, Config{Logger: modelLogger})
+	if _, _, err := modelRuntime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+		t.Fatalf("InterpretQuestion() error = %v", err)
+	}
+	modelEvents := modelHandler.decisionEvents()
+	if len(modelEvents) != 1 {
+		t.Fatalf("decision events = %d, want 1: %#v", len(modelEvents), modelEvents)
+	}
+	if got := attrString(t, modelEvents[0].Attrs, "axis_source"); got != "model" {
+		t.Fatalf("axis_source = %q, want %q for a model-supplied axis", got, "model")
+	}
+}
+
+// TestDecisionEventPrimaryFailureClassificationSurvivesSuccessfulFallback is
+// the H7 acceptance test: once a fallback call succeeds, mergeFallbackReceipt
+// overwrites the receipt's own Outcome to "fallback" (CHAOS-3786 Bug A's
+// fix), which is exactly what previously made the primary's own failure
+// invisible. The decision event's primary_failure_classification must still
+// carry it, for both the interpret (generation-error) and synthesize
+// (semantic-invalid) failure shapes.
+func TestDecisionEventPrimaryFailureClassificationSurvivesSuccessfulFallback(t *testing.T) {
+	t.Parallel()
+
+	t.Run("interpret_generation_error", func(t *testing.T) {
+		t.Parallel()
+		handler, logger := newCaptureLogger()
+		runtime := mustRuntime(t, &generatorStub{
+			interpretErr: core.NewError(core.RESOURCE_EXHAUSTED, "quota exhausted for org_1"),
+		}, Config{
+			Logger:   logger,
+			Fallback: fallbackRuntime{interpreted: validInterpretedQuestion(), draft: validDraft()},
+		})
+		_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+		if err != nil {
+			t.Fatalf("InterpretQuestion() error = %v", err)
+		}
+		if receipt.Outcome != "fallback" || !receipt.FallbackUsed {
+			t.Fatalf("receipt = %#v", receipt)
+		}
+		events := handler.decisionEvents()
+		if len(events) != 1 {
+			t.Fatalf("decision events = %d, want 1: %#v", len(events), events)
+		}
+		if got := attrString(t, events[0].Attrs, "outcome"); got != "fallback" {
+			t.Fatalf("outcome = %q, want %q", got, "fallback")
+		}
+		if !attrBool(t, events[0].Attrs, "fallback_used") {
+			t.Fatal("fallback_used = false, want true")
+		}
+		if got := attrString(t, events[0].Attrs, "primary_failure_classification"); got != "rate_limited" {
+			t.Fatalf("primary_failure_classification = %q, want %q -- the primary's own failure must stay visible even though receipt.Outcome now reads %q", got, "rate_limited", "fallback")
+		}
+	})
+
+	t.Run("synthesize_semantically_invalid", func(t *testing.T) {
+		t.Parallel()
+		handler, logger := newCaptureLogger()
+		invalid := validSynthesisOutput()
+		invalid.EvidenceRefIDs = []string{"evidence_not_in_input"}
+		runtime := mustRuntime(t, &generatorStub{synthesis: invalid}, Config{
+			Logger:   logger,
+			Fallback: fallbackRuntime{interpreted: validInterpretedQuestion(), draft: validDraft()},
+		})
+		_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+		if err != nil {
+			t.Fatalf("SynthesizeAnswer() error = %v", err)
+		}
+		if receipt.Outcome != "fallback" || !receipt.FallbackUsed {
+			t.Fatalf("receipt = %#v", receipt)
+		}
+		events := handler.decisionEvents()
+		if len(events) != 1 {
+			t.Fatalf("decision events = %d, want 1: %#v", len(events), events)
+		}
+		if got := attrString(t, events[0].Attrs, "primary_failure_classification"); got != "invalid_output" {
+			t.Fatalf("primary_failure_classification = %q, want %q -- the primary's own rejection must stay visible even though receipt.Outcome now reads %q", got, "invalid_output", "fallback")
+		}
+		if got := attrString(t, events[0].Attrs, "operation"); got != "synthesize" {
+			t.Fatalf("operation = %q, want %q", got, "synthesize")
+		}
+		// The synthesize event still reports the fallback draft's own
+		// grounding counts (H8), not zeros -- a fallback answer is a real
+		// answer, and its grounding is exactly as observable as a primary
+		// answer's.
+		want := groundingCountsFrom(validDraft())
+		gotDrivers, ok := events[0].Attrs["drivers"].(int64)
+		if !ok || int(gotDrivers) != want.Drivers {
+			t.Fatalf("drivers = %#v, want %d (the fallback draft's own count)", events[0].Attrs["drivers"], want.Drivers)
+		}
+	})
+}
+
+// TestDecisionEventSynthesisGroundingCountsReflectDraft is the H8
+// acceptance test: the emitted drivers/findings/claims/evidence_refs counts
+// must match what the returned SynthesisDraft actually carries, not a
+// placeholder.
+func TestDecisionEventSynthesisGroundingCountsReflectDraft(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	runtime := mustRuntime(t, &generatorStub{synthesis: validSynthesisOutput()}, Config{Logger: logger})
+	draft, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", err)
+	}
+	events := handler.decisionEvents()
+	if len(events) != 1 {
+		t.Fatalf("decision events = %d, want 1: %#v", len(events), events)
+	}
+	want := groundingCountsFrom(draft)
+	for key, expect := range map[string]int{
+		"drivers": want.Drivers, "findings": want.Findings, "claims": want.Claims, "evidence_refs": want.EvidenceRefs,
+	} {
+		got, ok := events[0].Attrs[key]
+		if !ok {
+			t.Fatalf("decision event missing %q: %#v", key, events[0].Attrs)
+		}
+		var gotInt int
+		switch n := got.(type) {
+		case int64:
+			gotInt = int(n)
+		case int:
+			gotInt = n
+		default:
+			t.Fatalf("decision event attribute %q = %#v, want an integer", key, got)
+		}
+		if gotInt != expect {
+			t.Fatalf("decision event %q = %d, want %d (draft's actual count)", key, gotInt, expect)
+		}
+	}
+}
+
+// TestDecisionEventNeverCarriesCorpusText is the HARD corpus/PII safety
+// assertion the CHAOS-3889 ticket requires: the decision event's field set
+// is a fixed count/enum/id/bool vocabulary, and no field -- under any
+// question or model-output content -- can ever equal or contain prompt,
+// question, extracted term/subject, or model output text.
+func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
+	t.Parallel()
+	const sensitiveQuestion = "MARKER_QUESTION_9f3ac2 what is the secret release plan"
+	const sensitiveOutput = "MARKER_OUTPUT_7be910 leaked synthesis narrative"
+
+	handler, logger := newCaptureLogger()
+
+	request := validRequest()
+	request.Question = sensitiveQuestion
+	interpretRuntime := mustRuntime(t, &generatorStub{interpretation: validInterpretationOutput()}, Config{Logger: logger})
+	if _, _, err := interpretRuntime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("InterpretQuestion() error = %v", err)
+	}
+
+	synthesisOutput := validSynthesisOutput()
+	synthesisOutput.DirectJudgment = sensitiveOutput
+	synthesisOutput.CurrentState = sensitiveOutput
+	synthesizeRuntime := mustRuntime(t, &generatorStub{synthesis: synthesisOutput}, Config{Logger: logger})
+	if _, _, err := synthesizeRuntime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", err)
+	}
+
+	events := handler.decisionEvents()
+	if len(events) != 2 {
+		t.Fatalf("decision events = %d, want 2 (one interpret, one synthesize): %#v", len(events), events)
+	}
+
+	interpretFields := map[string]bool{
+		"request_id": true, "org_id_hash": true, "operation": true, "outcome": true,
+		"attempts": true, "fallback_used": true, "primary_failure_classification": true,
+		"axis_source": true,
+	}
+	synthesizeFields := map[string]bool{
+		"request_id": true, "org_id_hash": true, "operation": true, "outcome": true,
+		"attempts": true, "fallback_used": true, "primary_failure_classification": true,
+		"drivers": true, "findings": true, "claims": true, "evidence_refs": true,
+	}
+
+	for _, event := range events {
+		var allowed map[string]bool
+		switch event.Attrs["operation"] {
+		case "interpret":
+			allowed = interpretFields
+		case "synthesize":
+			allowed = synthesizeFields
+		default:
+			t.Fatalf("decision event has unexpected operation %#v", event.Attrs["operation"])
+		}
+		// Exact field-set bijection: every allowed key is present, and
+		// nothing beyond it is -- a new field cannot silently join this
+		// event without this test being updated to reason about it.
+		for key := range allowed {
+			if _, ok := event.Attrs[key]; !ok {
+				t.Fatalf("decision event for operation %v missing expected field %q: %#v", event.Attrs["operation"], key, event.Attrs)
+			}
+		}
+		if len(event.Attrs) != len(allowed) {
+			t.Fatalf("decision event for operation %v carries %d fields, want exactly %d: %#v", event.Attrs["operation"], len(event.Attrs), len(allowed), event.Attrs)
+		}
+		for key, value := range event.Attrs {
+			if !allowed[key] {
+				t.Fatalf("decision event carries unexpected field %q = %#v -- every field must be a count/enum/id/bool from the fixed CHAOS-3889 field list", key, value)
+			}
+			s, ok := value.(string)
+			if !ok {
+				continue
+			}
+			if strings.Contains(s, sensitiveQuestion) || strings.Contains(s, sensitiveOutput) ||
+				strings.Contains(s, "MARKER_QUESTION") || strings.Contains(s, "MARKER_OUTPUT") {
+				t.Fatalf("decision event field %q = %q leaks question/output text", key, s)
+			}
+		}
+		if got := attrString(t, event.Attrs, "org_id_hash"); got == "org_1" || len(got) != 12 {
+			t.Fatalf("org_id_hash = %q, want a 12-hex-character irreversible digest, never the raw org id", got)
+		}
 	}
 }
 

@@ -2,9 +2,12 @@ package genkitruntime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -227,6 +230,16 @@ type Config struct {
 	MaxAttempts                 int
 	MaxInputBytes               int
 	Fallback                    contextfabric.ModelRuntime
+	// Logger receives the ACR-owned decision-event log line CHAOS-3889 emits
+	// once per model call (see logInterpretDecision/logSynthesizeDecision).
+	// Defaults to slog.Default() when nil, matching every other
+	// nil-logger-falls-back-to-Default convention in this codebase
+	// (contextfabric.NewSlogEngineTelemetry, observability.NewSlogSink,
+	// falkorgraph.SlogTelemetry, projectionrun.SlogObserver). Not a new
+	// config knob: the event is unconditionally emitted at
+	// slog.LevelInfo, gated only by whatever level this logger's handler
+	// itself filters at.
+	Logger *slog.Logger
 }
 
 type Runtime struct {
@@ -348,6 +361,9 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	if config.MaxInputBytes < 8<<10 || config.MaxInputBytes > 1<<20 {
 		return nil, errors.New("model input bound must be between 8 KiB and 1 MiB")
 	}
+	if config.Logger == nil {
+		config.Logger = slog.Default()
+	}
 	return &Runtime{generator: gen, config: config, now: time.Now}, nil
 }
 
@@ -370,6 +386,25 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 	if err != nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, err
 	}
+
+	// CHAOS-3889 (H6/H7/H8): emit one decision-event log line for this
+	// call, covering every return path below via defer instead of a
+	// duplicated call at each return statement. receipt is mutated in
+	// place exactly as it already was; axisSource and
+	// primaryFailureClassification are set at the point each becomes
+	// knowable. The deferred read runs after the function's return values
+	// are computed, so it always sees each variable's final state. This
+	// is pure observability -- it changes nothing about what
+	// InterpretQuestion returns or how an outcome is decided.
+	var (
+		receipt                      contextfabric.ModelExecutionReceipt
+		axisSource                   string
+		primaryFailureClassification string
+	)
+	defer func() {
+		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource)
+	}()
+
 	started := r.now().UTC()
 	var output interpretationOutput
 	var usage contextfabric.ModelUsage
@@ -385,8 +420,14 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 	if generationErr != nil {
 		classifiedErr = classifyModelError(generationErr)
 	}
-	receipt := r.receipt(contextfabric.ModelOperationInterpret, r.config.InterpretationPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
+	receipt = r.receipt(contextfabric.ModelOperationInterpret, r.config.InterpretationPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
+	// RequestID correlates the durable receipt row back to this
+	// investigation (audit MED item, CHAOS-3889 secondary). Stamped once,
+	// up front, so it survives every return path below -- including
+	// mergeFallbackReceipt, which never touches this field.
+	receipt.RequestID = request.RequestID
 	if generationErr != nil {
+		primaryFailureClassification = receipt.Outcome
 		if r.config.Fallback != nil {
 			interpreted, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
 			if fallbackErr == nil {
@@ -410,8 +451,20 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 		return contextfabric.InterpretedQuestion{}, receipt, classifiedErr
 	}
 	interpreted, err := output.toDomain(request.TimeContext)
+	// H6: the caller's default TimeContext is substituted BEFORE Validate
+	// whenever the model returns an empty Axis (toDomain, below this
+	// function) -- record which happened so a defaulted axis is never
+	// byte-identical, telemetry-wise, to a model-chosen one. Read directly
+	// off the raw model output (not the post-toDomain InterpretedQuestion),
+	// which is the only place that still distinguishes them.
+	if strings.TrimSpace(output.TimeContext.Axis) == "" {
+		axisSource = "default"
+	} else {
+		axisSource = "model"
+	}
 	if err != nil {
 		receipt.Outcome = "invalid_output"
+		primaryFailureClassification = receipt.Outcome
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
 			if fallbackErr == nil {
@@ -451,6 +504,20 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if err != nil {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, err
 	}
+
+	// CHAOS-3889 (H6/H7/H8): see the matching comment in InterpretQuestion.
+	// grounding is set from whichever SynthesisDraft (primary or fallback)
+	// actually reaches a successful return; it stays zero-valued on every
+	// failure path, since no draft was ever produced to count.
+	var (
+		receipt                      contextfabric.ModelExecutionReceipt
+		primaryFailureClassification string
+		grounding                    synthesisGroundingCounts
+	)
+	defer func() {
+		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding)
+	}()
+
 	started := r.now().UTC()
 	var output synthesisOutput
 	var usage contextfabric.ModelUsage
@@ -466,13 +533,18 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if generationErr != nil {
 		classifiedErr = classifyModelError(generationErr)
 	}
-	receipt := r.receipt(contextfabric.ModelOperationSynthesize, r.config.SynthesisPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
+	receipt = r.receipt(contextfabric.ModelOperationSynthesize, r.config.SynthesisPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
+	// RequestID correlates the durable receipt row back to this
+	// investigation -- see the matching comment in InterpretQuestion.
+	receipt.RequestID = input.Request.RequestID
 	if generationErr != nil {
+		primaryFailureClassification = receipt.Outcome
 		if r.config.Fallback != nil {
 			draft, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
+				grounding = groundingCountsFrom(draft)
 				return draft, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 			// See the matching comment in InterpretQuestion: both legs
@@ -490,11 +562,13 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	}
 	if err != nil {
 		receipt.Outcome = "invalid_output"
+		primaryFailureClassification = receipt.Outcome
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
+				grounding = groundingCountsFrom(fallback)
 				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 			// Both legs failed -- see the matching comment in
@@ -514,6 +588,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	outputBytes, _ := json.Marshal(output)
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
 	receipt.Outcome = "success"
+	grounding = groundingCountsFrom(draft)
 	return draft, receipt, nil
 }
 
@@ -576,6 +651,99 @@ func receiptOutcomeForError(err error) string {
 	default:
 		return "unavailable"
 	}
+}
+
+// decisionEventMessage is the fixed message every CHAOS-3889 decision-event
+// line uses -- one literal string, never interpolated with any request- or
+// model-derived text, so grepping/alerting on it is stable regardless of
+// field values.
+const decisionEventMessage = "context fabric model decision"
+
+// decisionOrgIDHash returns a bounded, non-reversible hash of orgID for the
+// decision-event log line: 6 bytes of SHA-256, hex-encoded. This mirrors
+// devhealthsource.redactOrg's own org-id-for-logs convention
+// (internal/contextfabric/devhealthsource/clickhouse.go) byte-for-byte, so a
+// hash computed by either package means the same thing in log aggregation.
+// It is duplicated here rather than imported: redactOrg is unexported, and
+// devhealthsource is a source-ingest package genkitruntime has no other
+// reason to depend on.
+func decisionOrgIDHash(orgID string) string {
+	sum := sha256.Sum256([]byte(orgID))
+	return hex.EncodeToString(sum[:6])
+}
+
+// logInterpretDecision emits the CHAOS-3889 decision-event line for one
+// InterpretQuestion call (H6/H7). Every field is a count, enum, id, or bool:
+// request_id/org_id_hash are opaque correlation identifiers (the latter
+// irreversibly hashed), operation/outcome/axis_source/
+// primary_failure_classification are closed vocabularies already enforced
+// elsewhere (ModelOperation, receiptOutcomeForError, the model|default axis
+// source, and receiptOutcomeForError's own rate_limited/invalid_output/
+// unavailable set), and attempts/fallback_used are the receipt's own
+// bounded numeric/boolean fields. NONE of the model's prompt, question
+// text, extracted subject/term text, or output text ever reaches this call
+// -- see TestDecisionEventNeverCarriesCorpusText for the standing
+// assertion. Unconditionally logged at slog.LevelInfo: no new config knob
+// gates it, only the configured Logger's own handler level (Config.Logger's
+// doc comment).
+func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string) {
+	r.config.Logger.InfoContext(ctx, decisionEventMessage,
+		"request_id", requestID,
+		"org_id_hash", decisionOrgIDHash(orgID),
+		"operation", string(receipt.Operation),
+		"outcome", receipt.Outcome,
+		"attempts", receipt.Attempts,
+		"fallback_used", receipt.FallbackUsed,
+		"primary_failure_classification", primaryFailureClassification,
+		"axis_source", axisSource,
+	)
+}
+
+// synthesisGroundingCounts is H8's fix: how many of the synthesis draft's
+// grounding collections actually carried content, so a draft that grounded
+// 1-of-10 available facts is no longer telemetry-identical to one that used
+// all 10. Findings aggregates RemainingWork+ReadinessGaps+Conflicts (all
+// contextfabric.Finding-typed) into the single "findings" count the H8 field
+// list names, rather than three separate counts.
+type synthesisGroundingCounts struct {
+	Drivers      int
+	Findings     int
+	Claims       int
+	EvidenceRefs int
+}
+
+// groundingCountsFrom derives synthesisGroundingCounts from the ACTUAL
+// SynthesisDraft a caller is about to receive -- the primary's on a direct
+// success, or the fallback's own draft on a fallback-success return -- never
+// from the raw model output, so the counts always describe what really
+// reached the caller.
+func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingCounts {
+	return synthesisGroundingCounts{
+		Drivers:      len(draft.Drivers),
+		Findings:     len(draft.RemainingWork) + len(draft.ReadinessGaps) + len(draft.Conflicts),
+		Claims:       len(draft.ClaimedFacts),
+		EvidenceRefs: len(draft.EvidenceRefIDs),
+	}
+}
+
+// logSynthesizeDecision is logInterpretDecision's SynthesizeAnswer
+// counterpart (H7/H8). See logInterpretDecision's doc comment for the
+// corpus-safety and log-level-gating rationale, which applies identically
+// here.
+func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts) {
+	r.config.Logger.InfoContext(ctx, decisionEventMessage,
+		"request_id", requestID,
+		"org_id_hash", decisionOrgIDHash(orgID),
+		"operation", string(receipt.Operation),
+		"outcome", receipt.Outcome,
+		"attempts", receipt.Attempts,
+		"fallback_used", receipt.FallbackUsed,
+		"primary_failure_classification", primaryFailureClassification,
+		"drivers", grounding.Drivers,
+		"findings", grounding.Findings,
+		"claims", grounding.Claims,
+		"evidence_refs", grounding.EvidenceRefs,
+	)
 }
 
 func boundedJSON(value any, maximum int) ([]byte, error) {
