@@ -477,8 +477,8 @@ func TestResolveSubjects_SearchQuestionTruncationBlocksAutoCommit(t *testing.T) 
 	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_only_question", Label: "Only Question"}
 	request := testRequest()
 	// Confidence 0.9, non-exact (term text "alpha" != the node's own label)
-	// -- clears the >= 0.72 lone-candidate gate on relevance alone, so this
-	// commits unless truncation intervenes.
+	// -- clears the lone-candidate gate on relevance alone, so this commits
+	// unless truncation intervenes.
 	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.9, "*")
 	node.Mechanism = contextfabric.MatchVector
 	backend := &fakeGraphBackend{

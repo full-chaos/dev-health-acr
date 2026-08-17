@@ -14,14 +14,24 @@ import (
 // whole of AC-3778-3, so it is asserted explicitly below.
 const vectorBandCeiling = 0.70
 
-// loneCommitGate and topOfTwoGate are the shipped thresholds in
-// ResolveFromMergedCandidates. CHAOS-3778 does not change them; the
-// corroborated band is positioned AGAINST them, so a test that pins the band
-// must pin what it is positioned against.
-const (
-	loneCommitGate = 0.72
-	topOfTwoGate   = 0.88
-)
+// topOfTwoGate is the shipped top-of-two threshold in
+// ResolveFromMergedCandidates. Neither CHAOS-3778 nor CHAOS-3857 changed
+// it (TopFloor stayed 0.88 through both); the corroborated band is
+// positioned AGAINST it, so a test that pins the band must pin what it is
+// positioned against.
+const topOfTwoGate = 0.88
+
+// loneCommitGate mirrors DefaultCommitGatePolicy().LoneFloor -- read live,
+// not a hand-duplicated literal. It used to be a literal (0.72) that
+// happened to equal LoneFloor because CHAOS-3778 never touched it; CHAOS-3857
+// (chris, 2026-08-17) DID move LoneFloor, to 0.68, and the literal quietly
+// went stale -- this file kept asserting against 0.72 while production ran
+// 0.68, and its own self-check (see
+// TestAC_3778_3_VectorOnlyCandidateCannotReachTheLoneCommitGate) used the
+// SAME stale literal, so it could not catch its own drift. Reading the real
+// value here closes that class of bug for good: a future LoneFloor change
+// cannot silently desync this file from what it is actually testing.
+var loneCommitGate = DefaultCommitGatePolicy().LoneFloor
 
 func corroborationCandidate(id string, confidence float64, mechanisms ...contextfabric.MatchMechanism) contextfabric.SubjectCandidate {
 	return contextfabric.SubjectCandidate{
@@ -44,12 +54,34 @@ func resolveOne(candidates ...contextfabric.SubjectCandidate) contextfabric.Subj
 	return ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true)
 }
 
-// AC-3778-3: "A vector hit alone never commits a subject." This holds by
-// ARITHMETIC, not by a rule -- the vector band's ceiling is strictly below the
-// lone-candidate gate, so there is no vector-only confidence that can reach it.
+// AC-3778-3: "A vector hit alone never commits a subject." This has always
+// held by ARITHMETIC -- the vector band's ceiling (0.70) sits strictly
+// below the lone-candidate gate (0.72), so no vector-only confidence can
+// reach it -- but that arithmetic is no longer trusted alone: CHAOS-3857's
+// sweep briefly ratified LoneFloor=0.68 (below vectorBandCeiling, breaking
+// this exact arithmetic) before rejecting it during ship verification (see
+// graphrank.DefaultCommitGatePolicy's doc comment, resolution.go, for the
+// full record). The invariant now ALSO holds STRUCTURALLY:
+// resolution.go's isVectorOnlyCandidate guard excludes a vector-only
+// mechanism set from both the lone-candidate and top-of-two gates by
+// mechanism identity, regardless of confidence or where LoneFloor is set --
+// see TestVectorOnlyGuardBlocksLoneCommitRegardlessOfConfidence
+// (resolution_gate_policy_test.go) for the guard's own, mutation-verified
+// proof of that. The self-check below is an INFORMATIONAL canary, not a
+// pass/fail gate: it logs (never fails) whether the arithmetic still holds
+// on its own, purely so a reader scanning test output can tell which of the
+// two mechanisms (arithmetic vs. the guard) is doing the work today.
+// Deliberately non-fatal (luna review P2): a t.Fatalf here would abort
+// BEFORE the actual outcome assertion below ever ran, at the exact moment
+// -- a future LoneFloor lowered again below vectorBandCeiling -- that
+// assertion is what would prove the guard is still correctly enforcing
+// AC-3778-3. Failing the canary rather than the real assertion would both
+// misreport a working guard as broken and skip verifying it.
 func TestAC_3778_3_VectorOnlyCandidateCannotReachTheLoneCommitGate(t *testing.T) {
 	if vectorBandCeiling >= loneCommitGate {
-		t.Fatalf("vector band ceiling %v must stay strictly below the lone-candidate gate %v", vectorBandCeiling, loneCommitGate)
+		t.Logf("NOTE: vector band ceiling %v is no longer strictly below the lone-candidate gate %v -- "+
+			"AC-3778-3 now rests entirely on resolution.go's isVectorOnlyCandidate guard for this run "+
+			"(expected to still pass below; this is informational only)", vectorBandCeiling, loneCommitGate)
 	}
 	// The strongest possible vector-only candidate, unopposed.
 	resolution := resolveOne(corroborationCandidate("auth", vectorBandCeiling, contextfabric.MatchVector))
@@ -70,8 +102,15 @@ func TestAC_3778_2_CorroboratedPairReachesTheLoneCommitGate(t *testing.T) {
 	if len(resolution.Committed) != 1 {
 		t.Fatalf("a corroborated, unopposed candidate must commit, got %v (confidence %v)", resolution.Committed, resolution.Candidates[0].Confidence)
 	}
-	if got := resolution.Candidates[0].Confidence; got < loneCommitGate || got > CorroboratedCeiling {
-		t.Fatalf("corroborated confidence %v must land inside [%v, %v]", got, loneCommitGate, CorroboratedCeiling)
+	// Bound against CorroboratedFloor, not loneCommitGate: CorroboratedFloor
+	// (0.72) is the real, semantically-correct lower bound
+	// CorroboratedConfidence guarantees (mechanism.go) -- it happened to
+	// equal the lone-candidate gate before CHAOS-3857, but the two are
+	// independently ratified constants that DECOUPLED when LoneFloor moved
+	// to 0.68. A corroborated candidate clears LoneFloor with room to spare
+	// either way; CorroboratedFloor is the tighter, meaningful assertion.
+	if got := resolution.Candidates[0].Confidence; got < CorroboratedFloor || got > CorroboratedCeiling {
+		t.Fatalf("corroborated confidence %v must land inside [%v, %v]", got, CorroboratedFloor, CorroboratedCeiling)
 	}
 }
 
@@ -287,7 +326,9 @@ func TestSingleMechanismConfidenceIsUnchanged(t *testing.T) {
 // a sibling vector search found nothing -- truncation authority belongs to a
 // search that had something to truncate.
 func TestF1_AStrongLexicalCommitSurvivesAVectorSearchThatFoundNothing(t *testing.T) {
-	// A lexical hit at the band ceiling, alone, clears the 0.72 gate.
+	// A lexical hit at the band ceiling, alone, clears the lone-candidate
+	// gate (0.75 clears it whether the gate sits at the pre-CHAOS-3857 0.72
+	// or the ratified 0.68).
 	strong := corroborationCandidate("auth", 0.75, contextfabric.MatchLexical)
 
 	// The shipped behavior: the empty vector search reports no truncation, so

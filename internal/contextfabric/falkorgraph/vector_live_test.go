@@ -166,10 +166,23 @@ func TestLiveVectorSearchNormalizesRealFalkorDistances(t *testing.T) {
 		t.Fatalf("live confidences escaped the [%v, %v] band: exact=%v near=%v",
 			vectorRelevanceFloor, vectorRelevanceCeiling, exact, near)
 	}
-	// AC-3778-3, against a real server: no vector-only confidence commits.
-	if exact >= 0.72 {
-		t.Fatalf("a live vector-only candidate reached %v, at or past the lone-candidate gate", exact)
-	}
+	// AC-3778-3 is NOT provable at this layer (CHAOS-3857 un-staling sweep,
+	// chris 2026-08-17): this used to additionally assert exact < 0.72, but
+	// that was always implied by (and strictly weaker than) the
+	// vectorRelevanceCeiling check just above -- 0.70 < 0.72 unconditionally
+	// -- so it never independently exercised anything. This function tests
+	// the ADAPTER's raw output only (vectorSearchNodes, not the full
+	// resolution pipeline): a raw confidence bound here can never prove
+	// AC-3778-3 on its own, and CHAOS-3857 briefly proved that the hard way
+	// (a swept LoneFloor=0.68 broke the arithmetic this exact bound relied
+	// on, before being rejected -- see graphrank.DefaultCommitGatePolicy's
+	// doc comment for the record). graphrank.isVectorOnlyCandidate's
+	// structural guard is what actually proves the invariant now, at the
+	// resolution layer this test does not reach, regardless of what
+	// LoneFloor is set to. See graphrank's
+	// TestVectorOnlyGuardBlocksLoneCommitRegardlessOfConfidence and
+	// TestAC_3778_3_VectorOnlyCandidateCannotReachTheLoneCommitGate for the
+	// tests that actually prove the invariant end to end.
 	t.Logf("live vector confidences: exact=%v near=%v (band [%v, %v])",
 		exact, near, vectorRelevanceFloor, vectorRelevanceCeiling)
 }

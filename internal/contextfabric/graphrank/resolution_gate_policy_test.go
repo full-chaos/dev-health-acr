@@ -333,3 +333,153 @@ func TestResolveFromMergedCandidatesWithGateHonorsLoweredLoneFloor(t *testing.T)
 		t.Fatalf("with LoneFloor=0.60, Committed = %v, want [%+v]", atLoweredFloor.Committed, candidate.Subject)
 	}
 }
+
+// --- AC-3778-3 structural guard (CHAOS-3857) ---
+//
+// CHAOS-3857 swept the commit-gate thresholds and chris ratified
+// LoneFloor=0.68, then REJECTED that value during ship verification on two
+// counter-examples (see DefaultCommitGatePolicy's own doc comment for the
+// full record): the vector-only arithmetic gap this guard closes, and a
+// separate lexical wrong-commit on live infrastructure (see
+// TestLexicalThreeOfFourTokenOverlapStaysAmbiguousAtTheDefaultGate below).
+// LoneFloor stayed 0.72 -- the guard below is therefore PROVABLY INERT
+// under DefaultCommitGatePolicy() today (vectorRelevanceCeiling=0.70 sits
+// strictly below both 0.72 and 0.88, so arithmetic alone already excludes a
+// vector-only candidate from either gate). It ships anyway, deliberately:
+// it is the difference between "excluded by mechanism identity" and
+// "excluded by today's specific threshold values", and it is what makes any
+// FUTURE env-override that lowers LoneFloor below 0.70 (falkorgraph's
+// ACR_CONTEXT_FABRIC_COMMIT_LONE_FLOOR) safe by construction instead of by
+// someone remembering to re-check this arithmetic by hand. The tests below
+// prove it is load-bearing under such an override, not dead code.
+//
+// Mutation-verified (recorded here since Go has no first-class mutation
+// harness in this repo): temporarily forcing isVectorOnlyCandidate to
+// always return false, at an overridden LoneFloor below 0.70, makes a
+// vector-only candidate auto-commit that must not -- confirmed via
+// TestVectorOnlyGuardBlocksLoneCommitRegardlessOfConfidence and
+// TestAC_3778_3_VectorOnlyCandidateCannotReachTheLoneCommitGate
+// (corroboration_test.go) both failing under that mutation.
+
+// TestIsVectorOnlyCandidate pins the mechanism-identity rule directly,
+// independent of any resolution-level side effect.
+func TestIsVectorOnlyCandidate(t *testing.T) {
+	cases := []struct {
+		name           string
+		mechanisms     []contextfabric.MatchMechanism
+		wantVectorOnly bool
+	}{
+		{"vector alone", []contextfabric.MatchMechanism{contextfabric.MatchVector}, true},
+		{"nil mechanisms", nil, false},
+		{"empty mechanisms", []contextfabric.MatchMechanism{}, false},
+		{"lexical alone", []contextfabric.MatchMechanism{contextfabric.MatchLexical}, false},
+		{"vector + lexical (the CHAOS-3829 rescue's own corroboration pairing)", []contextfabric.MatchMechanism{contextfabric.MatchVector, contextfabric.MatchLexical}, false},
+		{"vector + traversal", []contextfabric.MatchMechanism{contextfabric.MatchVector, contextfabric.MatchTraversalParent}, false},
+		{"vector + exact (an exact match originally surfaced by the vector adapter)", []contextfabric.MatchMechanism{contextfabric.MatchVector, contextfabric.MatchExact}, false},
+		{"unrecognized mechanism alongside vector is dropped, leaving vector-only", []contextfabric.MatchMechanism{contextfabric.MatchVector, contextfabric.MatchMechanism("semantic")}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isVectorOnlyCandidate(c.mechanisms); got != c.wantVectorOnly {
+				t.Fatalf("isVectorOnlyCandidate(%v) = %v, want %v", c.mechanisms, got, c.wantVectorOnly)
+			}
+		})
+	}
+}
+
+// TestVectorOnlyGuardBlocksLoneCommitRegardlessOfConfidence proves the guard
+// is a MECHANISM-IDENTITY rule, not a confidence-band one: it holds even at
+// a confidence far above anything falkorgraph's real vector adapter could
+// produce (capped at vectorRelevanceCeiling=0.70), so it survives a future
+// adapter change that widened the band, or an env-override that lowered
+// LoneFloor below 0.70 -- exactly the scenario that makes this guard
+// non-dead-code despite being inert under DefaultCommitGatePolicy() today.
+func TestVectorOnlyGuardBlocksLoneCommitRegardlessOfConfidence(t *testing.T) {
+	candidate := corroborationCandidate("solo", 0.99, contextfabric.MatchVector)
+	resolution := resolveWithGate(DefaultCommitGatePolicy(), candidate)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("a vector-only candidate at confidence 0.99 must not auto-commit alone, got %v", resolution.Committed)
+	}
+	if resolution.Candidates[0].Confidence != 0.99 {
+		t.Fatalf("the guard must not alter the candidate's own confidence, got %v", resolution.Candidates[0].Confidence)
+	}
+}
+
+// TestVectorOnlyGuardBlocksTopOfTwoCommit is the same proof for the OTHER
+// gate: a vector-only top candidate must not win a top-of-two commit
+// either, even clearing both TopFloor and TopGap by a wide margin. Without
+// this case the guard would only be proven for one of the two commit paths
+// AC-3778-3 was ratified against.
+func TestVectorOnlyGuardBlocksTopOfTwoCommit(t *testing.T) {
+	top := corroborationCandidate("top", 0.99, contextfabric.MatchVector)
+	second := corroborationCandidate("second", 0.10, contextfabric.MatchLexical)
+	resolution := resolveWithGate(DefaultCommitGatePolicy(), top, second)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("a vector-only top-of-two candidate must not commit even with floor and gap both cleared, got %v", resolution.Committed)
+	}
+}
+
+// TestVectorOnlyGuardDoesNotBlockACorroboratedVectorCandidate proves the
+// guard's scope from the OTHER side: a candidate whose mechanisms include
+// MatchVector ALONGSIDE something else is never "vector-only" and must
+// commit exactly as it did before the guard existed -- this is a
+// SINGLE-mechanism rule, not a "touched vector at any point" rule.
+func TestVectorOnlyGuardDoesNotBlockACorroboratedVectorCandidate(t *testing.T) {
+	candidate := corroborationCandidate("auth", 0.62, contextfabric.MatchVector, contextfabric.MatchTraversalParent)
+	resolution := resolveWithGate(DefaultCommitGatePolicy(), candidate)
+	if len(resolution.Committed) != 1 {
+		t.Fatalf("a corroborated vector+traversal candidate must still auto-commit, got %v (confidence %v)", resolution.Committed, resolution.Candidates[0].Confidence)
+	}
+}
+
+// TestVectorOnlyGuardDoesNotReachTheChaos3829RescuePath proves the guard's
+// scope boundary the other direction: the CHAOS-3829 vector-margin rescue
+// (a SEPARATE, independently ratified commit path, deliberately untouched
+// by this guard -- see isVectorOnlyCandidate's own doc comment) can still
+// commit a vector+lexical corroborated candidate exactly as before.
+// vectorArmCorroborated's own MatchVector-AND-MatchLexical requirement
+// means a candidate the rescue commits was never vector-only to begin
+// with, so there is nothing here the guard could have blocked.
+func TestVectorOnlyGuardDoesNotReachTheChaos3829RescuePath(t *testing.T) {
+	auth := corroborationCandidate("auth", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	authz := corroborationCandidate("authz", 0.55, contextfabric.MatchVector, contextfabric.MatchLexical)
+	bySubject := map[string]contextfabric.SubjectCandidate{
+		SubjectKey(auth.Subject):  auth,
+		SubjectKey(authz.Subject): authz,
+	}
+	similarities := map[string]float64{
+		SubjectKey(auth.Subject):  0.90,
+		SubjectKey(authz.Subject): 0.50,
+	}
+	resolution := ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, similarities, 0.25, false, 10, 20, true, DefaultCommitGatePolicy())
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "auth" {
+		t.Fatalf("the CHAOS-3829 rescue must still commit the higher-margin corroborated candidate, got %v", resolution.Committed)
+	}
+}
+
+// TestLexicalThreeOfFourTokenOverlapStaysAmbiguousAtTheDefaultGate pins,
+// fast and at the unit level, the counter-example that (alongside the
+// vector-only arithmetic gap above) got LoneFloor=0.68 rejected during
+// CHAOS-3857 ship verification: TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization
+// (falkorgraph, real FalkorDB via testcontainers) searched for a work item
+// named "Repo-less work item" and got a DIFFERENT subject, "Repo-backed
+// work item", back as a false-positive lexical match -- 3 of their 4
+// tokens overlap ("Repo-", "work", "item"; only "less"/"backed" differ),
+// which fulltextRelevanceFloor/span normalizes to exactly 0.50+0.25*0.75 =
+// 0.6875. At LoneFloor=0.72 that stays ambiguous, as asserted here; at the
+// rejected LoneFloor=0.68 it auto-committed the wrong subject (confirmed by
+// toggling the constant and rerunning the live test both ways during ship
+// verification). This is a lexical-only candidate -- the vector-only guard
+// above does not and should not touch it; lexical-alone auto-commit is
+// intentional design (see falkorgraph/queries.go's fulltextRelevanceCeiling
+// doc comment). Keeping this case pinned at the FAST unit level means a
+// future LoneFloor change surfaces this specific counter-example without
+// requiring the slow, Docker-backed live suite to run.
+func TestLexicalThreeOfFourTokenOverlapStaysAmbiguousAtTheDefaultGate(t *testing.T) {
+	const threeOfFourTokenOverlapConfidence = 0.50 + 0.25*0.75 // 0.6875
+	candidate := corroborationCandidate("repo_backed_work_item", threeOfFourTokenOverlapConfidence, contextfabric.MatchLexical)
+	resolution := resolveWithGate(DefaultCommitGatePolicy(), candidate)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("a 3-of-4 lexical token overlap (confidence %v) must not auto-commit at the default gate, got %v", threeOfFourTokenOverlapConfidence, resolution.Committed)
+	}
+}

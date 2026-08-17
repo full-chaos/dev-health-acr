@@ -27,23 +27,24 @@ import (
 // production call site uses.
 type CommitGatePolicy struct {
 	// LoneFloor is the minimum Confidence a SINGLE eligible candidate must
-	// clear to auto-commit alone. Calibrated production value: 0.72.
+	// clear to auto-commit alone. Production value: 0.72, the CHAOS-3778
+	// calibration -- see DefaultCommitGatePolicy's doc comment for the
+	// CHAOS-3857 sweep that evaluated moving it, and why it stayed.
 	LoneFloor float64
 	// TopFloor is the minimum Confidence the TOP of two-or-more eligible
 	// candidates must clear before a gap-based commit is even considered.
-	// Calibrated production value: 0.88.
+	// Calibrated production value: 0.88 (unchanged by CHAOS-3857's sweep).
 	TopFloor float64
 	// TopGap is the minimum Confidence gap the top candidate must hold over
 	// the second-ranked eligible candidate for the top-of-two commit to
-	// fire. Calibrated production value: 0.12.
+	// fire. Calibrated production value: 0.12 (unchanged by CHAOS-3857's
+	// sweep).
 	TopGap float64
 }
 
-// DefaultCommitGatePolicy returns the CURRENT, calibrated production
-// commit-gate thresholds (chris-ratified, measured against the CHAOS-3742
-// five-arm generative trial and the corpus history before it). It always
-// passes Validate() -- this is asserted by
-// TestCommitGatePolicyValidate's "valid" case, so a future edit to the
+// DefaultCommitGatePolicy returns the CURRENT, ratified production
+// commit-gate thresholds. It always passes Validate() -- this is asserted
+// by TestCommitGatePolicyValidate's "valid" case, so a future edit to the
 // calibrated constants that accidentally produces an invalid policy fails
 // loudly instead of silently making every production commit decision
 // commit-nothing (see Validate's own doc comment for why that is the
@@ -52,6 +53,81 @@ type CommitGatePolicy struct {
 // use exactly this policy; only CHAOS-3857's sweep tooling (and
 // falkorgraph's env-driven override, when an operator explicitly sets one)
 // calls ResolveFromMergedCandidatesWithGate with anything else.
+//
+// CHAOS-3857 (gate-threshold sweep, chris, 2026-08) swept LoneFloor/
+// TopFloor+TopGap/M independently against the full 50-case corpus: a
+// 12-cell grid, hard-gated on wrong_commit=0 and clean controls, ran clean
+// at LoneFloor=0.68, and a direct-API confirmation run at that point
+// (committed 2/50, 0 wrong, clean controls) also passed. Chris ratified
+// 0.68 on that evidence.
+//
+// It was then REJECTED during ship verification, on two counter-examples
+// neither the corpus nor the confirmation run happened to contain --
+// recorded here because "the sweep passed" is not the whole story, and a
+// future re-attempt at lowering LoneFloor needs to know what actually broke
+// it, not just that something did:
+//
+//  1. Vector-only arithmetic: LoneFloor=0.68 sits below
+//     falkorgraph.vectorRelevanceCeiling (0.70), which breaks AC-3778-3 ("a
+//     vector hit alone never commits") by pure arithmetic -- that
+//     invariant had only ever held because vectorRelevanceCeiling was
+//     coincidentally below the OLD LoneFloor (0.72), not because anything
+//     enforced it. isVectorOnlyCandidate (below) closes this structurally
+//     now, regardless of what LoneFloor is set to.
+//  2. Lexical wrong-commit, on live infrastructure:
+//     TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization
+//     (falkorgraph, a pre-existing, unmodified test against a real
+//     FalkorDB) searched for a work item named "Repo-less work item" and
+//     got a DIFFERENT subject, "Repo-backed work item", back as a
+//     false-positive lexical match: 3 of 4 tokens overlap, which
+//     fulltextRelevanceFloor/span normalizes to 0.6875 -- inside
+//     [0.68, 0.72), so it auto-committed the WRONG subject at
+//     LoneFloor=0.68 where it correctly stayed ambiguous at 0.72
+//     (confirmed causally, both directions, by toggling this constant and
+//     rerunning the live test). See
+//     TestLexicalThreeOfFourTokenOverlapStaysAmbiguousAtTheDefaultGate
+//     (resolution_gate_policy_test.go) for the fast, unit-level pin of this
+//     exact case. Lexical-only auto-commit is intentional design in
+//     general (falkorgraph/queries.go's fulltextRelevanceCeiling doc
+//     comment) -- this is not that invariant breaking, it is a NEW
+//     population (candidates in [0.68, 0.72) specifically, reachable ONLY
+//     if LoneFloor is ever lowered again) that the swept corpus never
+//     happened to exercise turning out, empirically, to contain a real
+//     false-positive shape (two subjects with mostly-shared,
+//     generically-templated tokens and one differing word). IMPORTANT for
+//     any future reader of isVectorOnlyCandidate: this is NOT AC-3778-3 and
+//     must not be "fixed" as if it were the same hole -- AC-3778-3 is
+//     vector-specific by name and ratification, lexical-alone auto-commit
+//     at its own band ceiling is deliberate CHAOS-3778/D11-era design, and
+//     a mechanism-identity guard analogous to isVectorOnlyCandidate would
+//     be the WRONG fix here even though the symptom (a wrong commit in
+//     [0.68, 0.72)) looks superficially similar -- the actual fix, if
+//     LoneFloor is ever lowered again, is re-running (or tightening) the
+//     lexical scoring/ambiguity evaluation this counter-example exposed,
+//     not gating lexical-only candidates out of the commit gate entirely.
+//
+// Both counter-examples share the same shape: zero committed cases in
+// either the 12-cell sweep or the confirmation run ever actually landed a
+// confidence in the newly-exposed [0.68, 0.72) band (verified against the
+// stored result JSONs) -- the clean pass was a true negative on the
+// CORPUS, not evidence the band itself was safe. LoneFloor=0.68 bought no
+// measured lift and cost a demonstrated wrong-commit class; it was
+// abandoned rather than patched further.
+//
+// LoneFloor stays 0.72, which is (once again, not merely "still") exactly
+// mechanism.go's CorroboratedFloor. That equality is coincidence-by-
+// calibration -- CHAOS-3778 picked both against the same target, not a
+// structural link (CorroboratedConfidence, mechanism.go, never receives a
+// CommitGatePolicy at all, and CHAOS-3857's sweep tooling could move one
+// without the other) -- see mechanism.go's own doc comment for the full
+// account of that decoupling and why it matters even though the two values
+// currently agree again. What IS structural, and stays regardless of
+// either constant's value: isVectorOnlyCandidate (below) guards the
+// vector-only population by mechanism identity, not by arithmetic --
+// shipped anyway even though it is provably inert at today's LoneFloor
+// (0.72 > vectorRelevanceCeiling's 0.70 with room to spare), because it is
+// what makes a FUTURE env-override attempt at lowering LoneFloor safe on
+// the vector side without needing this exact investigation to repeat.
 func DefaultCommitGatePolicy() CommitGatePolicy {
 	return CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.88, TopGap: 0.12}
 }
@@ -105,6 +181,58 @@ func (g CommitGatePolicy) Validate() error {
 		return fmt.Errorf("commit gate policy: LoneFloor (%v) must not exceed TopFloor (%v)", g.LoneFloor, g.TopFloor)
 	}
 	return nil
+}
+
+// isVectorOnlyCandidate reports whether candidate's ENTIRE recognized
+// mechanism set is exactly {MatchVector} -- a single-mechanism,
+// uncorroborated vector hit.
+//
+// AC-3778-3 (CHAOS-3778, ratified): "a vector hit alone never commits a
+// subject." This has always held by ARITHMETIC alone -- falkorgraph's
+// vector band ceiling (0.70) sits strictly below the lone-candidate gate
+// (0.72), so no vector-only confidence can reach it. That is a coincidence
+// of the two constants' values, not an enforced rule: nothing in this
+// file's decision logic reads a candidate's mechanism set at all.
+// CHAOS-3857's sweep ratified, then REJECTED, a lower LoneFloor (0.68,
+// which sits below the vector ceiling and broke this exact arithmetic --
+// see DefaultCommitGatePolicy's doc comment for the full record) --
+// LoneFloor reverted to 0.72, so the arithmetic holds again today. This
+// function makes the invariant STRUCTURAL anyway, deliberately not relying
+// on that arithmetic remaining true: a candidate whose only recognized
+// mechanism is MatchVector is excluded from both confidence-threshold gates
+// below, by mechanism identity, regardless of what its own Confidence or
+// the gate's own threshold values happen to be. A future band or policy
+// change -- including another attempt at lowering LoneFloor -- can no
+// longer silently reopen this hole.
+//
+// Scope, deliberately narrow -- read this before touching either call
+// site:
+//   - Applies to the two CommitGatePolicy gates only (the lone-candidate
+//     case and the top-of-two case in the switch below). Those are the
+//     ONLY paths AC-3778-3 was ever ratified against.
+//   - Does NOT apply to the CHAOS-3829 vector-margin rescue
+//     (vectorMarginCommit, below). That is a separate, independently
+//     ratified commit path with its own precondition set -- in particular
+//     vectorArmCorroborated requires BOTH MatchVector AND MatchLexical to
+//     be present, which is structurally impossible for a candidate this
+//     function calls vector-only (a single recognized mechanism). A
+//     candidate the rescue commits is never vector-only in this sense, so
+//     there is no case to guard there, and this function must not be
+//     extended to that path -- doing so would conflate two independently
+//     ratified invariants that happen to share the word "vector".
+//   - Does NOT apply to the CHAOS-3810 exact-label-match override
+//     (exactIndex, above). An exact match always carries MatchExact
+//     alongside whatever mechanism originally surfaced the node
+//     (NodeCandidate merges both), so it is never vector-only under this
+//     definition -- no special case is needed to exclude it.
+//   - A 2+-mechanism candidate (e.g. MatchVector+MatchTraversalParent) is
+//     never vector-only either, and does not need this guard at all:
+//     CorroboratedConfidence already lifts it to >= CorroboratedFloor
+//     (0.72), comfortably above LoneFloor regardless of where LoneFloor
+//     itself is set.
+func isVectorOnlyCandidate(mechanisms []contextfabric.MatchMechanism) bool {
+	merged := MergeMechanisms(mechanisms)
+	return len(merged) == 1 && merged[0] == contextfabric.MatchVector
 }
 
 // ResolveFromMergedCandidates is ResolveFromMergedCandidatesWithGate
@@ -164,6 +292,16 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // than two independent ones. unscopedVisibility (codex r7 M1, accepted,
 // SECURITY class) is a further, independent conjunct -- see the rescue
 // block's own comment for the scope-existence-oracle hazard it closes.
+//
+// CHAOS-3857: the lone-candidate and top-of-two gates below both
+// additionally exclude a vector-only candidate by mechanism identity, not
+// merely by its confidence value -- see isVectorOnlyCandidate's own doc
+// comment for why this guard exists (a sweep-ratified attempt to lower
+// LoneFloor to 0.68 broke the arithmetic coincidence that used to enforce
+// AC-3778-3; the guard makes the invariant structural instead, and ships
+// even though LoneFloor's own value reverted, so a future lowering attempt
+// is safe on the vector side by construction) and its precise scope (the
+// CHAOS-3829 rescue below is deliberately untouched).
 func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
@@ -299,13 +437,13 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// value, which is exactly why this has to be an independent,
 			// resolution-wide signal instead.
 			ambiguous = true
-		case len(commitIndex) == 1 && gateValid && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
+		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
 			committedIndex[commitIndex[0]] = true
 			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
 		case len(commitIndex) >= 2 && gateValid:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
-			if gap := top.Confidence - second.Confidence; top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
+			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
 				committedIndex[commitIndex[0]] = true
 				candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
@@ -318,8 +456,8 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		// CHAOS-3829: the additive commit-path carve-out, checked ONLY as
 		// a RESCUE once every gate above has already run to completion
 		// and decided ambiguous with nothing committed -- every branch
-		// above (the exact-label override, searchTruncated, the lone
-		// 0.72 gate, the top-of-two 0.88/0.12 gate) is untouched, in both
+		// above (the exact-label override, searchTruncated, the
+		// lone-candidate gate, the top-of-two gate) is untouched, in both
 		// code and behavior, by what follows. See vectorMarginCommit's
 		// doc comment for the full precondition set this reads
 		// (corroboration + a measurable, sufficiently large vector-arm
@@ -428,8 +566,8 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		// which is the cleanest statement of "calibration measured only
 		// CLEAN resolutions" available without threading per-term
 		// degradation state through the merge. The EXISTING confidence
-		// gates above (lone 0.72, top-of-two 0.88/0.12, the exact-label
-		// override) are entirely untouched by this -- they already had
+		// gates above (the lone-candidate gate, the top-of-two gate, the
+		// exact-label override) are entirely untouched by this -- they already had
 		// their own, independent relationship to degradation before
 		// CHAOS-3829 and this ticket does not change it.
 		//
