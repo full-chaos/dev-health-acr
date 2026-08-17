@@ -57,6 +57,16 @@ type fakeGraphBackend struct {
 	// rawSignalObserver is CHAOS-3858's measurement-only capture (nil
 	// default, so every pre-existing test is unaffected).
 	rawSignalObserver RawSignalObserver
+
+	// CHAOS-3884 AliasLookup fixture. enableAliasLookup defaults to false,
+	// so every pre-existing test in this file -- which never sets it --
+	// gets ResolveDeps.AliasLookup == nil, exactly the pre-ticket wiring,
+	// mirroring enableSearchQuestion's own convention above.
+	enableAliasLookup    bool
+	aliasLookupClaimants map[string][]CandidateNode
+	aliasLookupComplete  bool
+	aliasLookupErr       error
+	aliasLookupCalls     [][]string
 }
 
 func (f *fakeGraphBackend) deps() ResolveDeps {
@@ -97,6 +107,15 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 				return nil, false, false, f.searchQuestionErr
 			}
 			return f.searchQuestionResults[question], f.searchQuestionTruncated, f.searchQuestionDegraded, nil
+		}
+	}
+	if f.enableAliasLookup {
+		deps.AliasLookup = func(ctx context.Context, orgID string, terms []string, timeContext contextfabric.TimeContext) (map[string][]CandidateNode, bool, error) {
+			f.aliasLookupCalls = append(f.aliasLookupCalls, terms)
+			if f.aliasLookupErr != nil {
+				return nil, false, f.aliasLookupErr
+			}
+			return f.aliasLookupClaimants, f.aliasLookupComplete, nil
 		}
 	}
 	return deps
