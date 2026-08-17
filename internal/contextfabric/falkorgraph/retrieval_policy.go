@@ -129,6 +129,35 @@ type RetrievalPolicy struct {
 // result there is the trigger to revisit this inheritance, not a reason to
 // have withheld it now). Decision recorded on CHAOS-3834.
 //
+// T4 POST-REBUILD VALIDATION (CHAOS-3834, 2026-08-17, lane-t4): the deferred
+// re-measure above has now run. CalibrateFromReport (tau_calibration.go) was
+// invoked at TargetRecall=0.90 against a real t3-tagged, post-rebuild oracle
+// report (openai/text-embedding-3-large#t3:r2000:b0:pnone dim 3072, tau=0.30,
+// 30 scored + 20 no-match control cases, SHA-256
+// bfd0eed3d2f136317d1b604e095c8d8e5156687db4d77fd5278aa68256b772a8; PROVENANCE
+// CAVEAT -- this report's hash does not match the now-vanished
+// "oracle-report-v5-r1fixes.json" CHAOS-3829's margin calibration cites as its
+// own source; same measurement family/identity/tau, but not byte-traceable to
+// that earlier run). Recommended tau=0.2821294944901428 (achieved
+// recall=0.9000), a 0.0179 delta from the inherited 0.30 -- inside the
+// chris/team-lead-set ±0.02 confirmation band. K stayed at the "unchanged"
+// default (KApplyReady=false: at least one scored case's hard-negative
+// harvest was truncated by the harness with every serialized entry already
+// clearing the recommended tau, and the report's own hard-negative-above-tau
+// totals were measured at report.Tau=0.30, not the recommended 0.2821 --
+// so the data was insufficient to size K AT THE RECOMMENDED TAU). The
+// negative gate again reported ApplyReady=false (reject rate 0.0333, far
+// below 0.90) -- EXPECTED, not a regression: this is the SAME ratified
+// "recall channel, not precision cliff" doctrine the tau=0.30 ratification
+// note below already documents; precision still comes from hybrid ranking +
+// corroboration downstream, never from this tool's tau-level ApplyReady
+// gate. VERDICT: inheritance CONFIRMED -- tau=0.30 stands, no policy/table/
+// code edit (this paragraph is documentation only), no RetrievalPolicyVersion
+// bump. A
+// fresh live oracle rerun (T4's Path B) remains available if a future
+// measurement lands closer to the ±0.02 edge or graph state materially
+// drifts from this report's 2026-08-15 snapshot.
+//
 // The OLD t2-keyed entry is DROPPED entirely, not kept alongside this one:
 // a t3-constant binary (embedTextTemplateVersion, composition.go) can never
 // produce a t2-tagged EmbedCompositionTag again, so a t2 key is permanently

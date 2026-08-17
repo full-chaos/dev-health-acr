@@ -325,6 +325,14 @@ pre-inheritance t2 key was dropped entirely — see
 the full inheritance rationale and its validation plan (the post-rebuild
 oracle re-measure).
 
+**That post-rebuild re-measure ran 2026-08-17 (CHAOS-3834, lane-t4) and
+CONFIRMED the inheritance**: `CalibrateFromReport` at `TargetRecall=0.90`
+against a real t3-tagged post-rebuild oracle report recommended
+tau=0.2821294944901428, a 0.0179 delta from the shipped 0.30 — inside the
+±0.02 confirmation band — with K staying at "unchanged". No table edit, no
+`RetrievalPolicyVersion` bump. See `calibratedIdentityText3Large`'s doc
+comment for the full result, provenance caveat, and negative-gate note.
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`
