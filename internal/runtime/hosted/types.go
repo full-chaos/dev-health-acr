@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -39,6 +40,7 @@ type Runtime struct {
 	closeErr          error
 	closers           []func() error
 	usageTelemetry    *auth.UsageTelemetry
+	clarificationSink *pgclarification.Sink
 	postgresClose     func() error
 	independentClosed bool
 	postgresClosed    bool
@@ -58,6 +60,17 @@ func (r *Runtime) Close() error {
 			r.closeErr = errors.Join(r.closeErr, r.closeIndependentLocked())
 			return errors.Join(r.closeErr, err)
 		}
+	}
+	// CHAOS-3859: same ordering discipline as usageTelemetry immediately
+	// above -- stop the worker before postgresClose() tears down the pool
+	// it writes through. A bounded 5s shutdown timeout, not an unbounded
+	// wait: this is a best-effort capture sink, not a delivery-guaranteed
+	// one, and Close's own doc comment says so.
+	if r.clarificationSink != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		closeErr := r.clarificationSink.Close(closeCtx)
+		cancel()
+		r.closeErr = errors.Join(r.closeErr, closeErr)
 	}
 	r.closeErr = errors.Join(r.closeErr, r.closeIndependentLocked())
 	if r.postgresClose != nil {

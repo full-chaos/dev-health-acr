@@ -116,6 +116,15 @@ type EngineDependencies struct {
 	// every organization) -- the correct choice only for a deployment
 	// that has no per-organization model configuration at all.
 	ReuseModelIdentityResolver ReuseModelIdentityResolver
+	// ClarificationSelectionSink is optional (CHAOS-3859, capture-only
+	// phase). When set, Engine notifies it every time a caller's
+	// PriorSubjectReceipt successfully resolves to a specific candidate
+	// from an earlier clarification_required result -- see
+	// ClarificationSelectionSink's doc comment for the fail-open contract
+	// this dependency must uphold. Leaving this nil means no selection is
+	// ever captured, exactly as if the feature did not exist -- capture
+	// is strictly additive and never changes Investigate's own behavior.
+	ClarificationSelectionSink ClarificationSelectionSink
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -169,6 +178,7 @@ type Engine struct {
 	reuseRetrievalIdentity     ReuseRetrievalIdentity
 	reusePromptVersions        ReusePromptVersions
 	reuseVersionAuthorities    ReuseVersionAuthorities
+	clarificationSelectionSink ClarificationSelectionSink
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -193,6 +203,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseGate: dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
+		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:  options.ReuseRetrievalIdentity,
 		reusePromptVersions:     options.ReusePromptVersions,
@@ -301,7 +312,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	graphRequest := request
 	var priorHints []SubjectHint
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints = e.resolvePriorSubjectHints(ctx, principal, request.PriorSubjectReceipts)
+		priorHints = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts)
 		// The v1 contract bounds RequestedScope.SubjectHints at 50
 		// (ContextFabricRequestedScope.Validate). request.Validate()
 		// already proved the caller's own hints are within that bound,
@@ -523,7 +534,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // skipped: an unresolvable prior-turn reference must degrade to "not bound"
 // rather than fail the whole investigation or fall back to an unauthorized
 // guess.
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, receipts []BoundSubjectReceipt) []SubjectHint {
+//
+// CHAOS-3859: a successful match here -- a receipt naming a real candidate
+// in a real prior result -- IS the observable "the caller resolved a
+// clarification" event, independent of whether the resulting SubjectHint
+// later survives re-authorization/graph resolution. captureClarification
+// Selection is called at exactly this point, never later, so capture
+// reflects what the caller asked for, not what Engine ultimately did with
+// it (condition 6's re-authorization is a separate, already-covered
+// concern -- see AnswerReuseGate's doc comment for the identical
+// distinction drawn between "the caller's request" and "what the backend
+// independently proves").
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt) []SubjectHint {
 	hints := make([]SubjectHint, 0, len(receipts))
 	loaded := make(map[string]InvestigationResult, len(receipts))
 	for _, receipt := range receipts {
@@ -548,6 +570,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			if candidate.ReceiptID != receiptID {
 				continue
 			}
+			e.captureClarificationSelection(ctx, principal, consumer, resultID, prior, candidate)
 			hints = append(hints, SubjectHint{
 				Kind: candidate.Subject.Kind, ID: candidate.Subject.CanonicalID,
 				Label: candidate.Subject.Label, Source: "prior_subject_receipt",
@@ -556,6 +579,42 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 		}
 	}
 	return hints
+}
+
+// captureClarificationSelection builds and hands off a
+// ClarificationSelectionEvent (CHAOS-3859 capture-only phase) for one
+// receipt that resolvePriorSubjectHints just matched against a real
+// candidate in a real prior result. A nil clarificationSelectionSink is the
+// ordinary "capture is off" case and this is a no-op. The sink call is
+// synchronous but MUST return promptly by its own documented contract --
+// see ClarificationSelectionSink's doc comment -- so this never adds
+// meaningful latency to Investigate, and it MUST NOT be able to fail this
+// call: there is no error path back from RecordSelection by design.
+func (e *Engine) captureClarificationSelection(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, priorResultID string, prior InvestigationResult, selected SubjectCandidate) {
+	if e.clarificationSelectionSink == nil {
+		return
+	}
+	offered := make([]ClarificationOfferedCandidate, len(prior.SubjectResolution.Candidates))
+	var selectedOffered ClarificationOfferedCandidate
+	for i, candidate := range prior.SubjectResolution.Candidates {
+		offered[i] = ClarificationOfferedCandidate{
+			ReceiptID: candidate.ReceiptID, SubjectKind: string(candidate.Subject.Kind),
+			SubjectCanonicalID: candidate.Subject.CanonicalID, SubjectLabel: candidate.Subject.Label,
+			State: string(candidate.State), Confidence: candidate.Confidence, Rank: i,
+		}
+		if candidate.ReceiptID == selected.ReceiptID {
+			selectedOffered = offered[i]
+		}
+	}
+	e.clarificationSelectionSink.RecordSelection(ctx, ClarificationSelectionEvent{
+		OrgID: principal.OrgID, CapturedAt: e.now().UTC(),
+		QuestionHash: QuestionHash(prior.Question), PriorResultID: priorResultID,
+		OfferedCandidates: offered, Selected: selectedOffered,
+		SelectionProvenance: clarificationSelectionProvenance(principal, consumer),
+		ProjectionVersion:   e.reuseProjectionVersion, ModelIdentities: e.reuseModelIdentities,
+		RetrievalIdentity: e.reuseRetrievalIdentity, PromptVersions: e.reusePromptVersions,
+		VersionAuthorities: e.reuseVersionAuthorities,
+	})
 }
 
 // recordPriorSubjectReceiptSkips counts every PriorSubjectReceipt that did

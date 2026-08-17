@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -121,10 +122,19 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config store: %w", err))
 	}
-	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
+	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, clarificationSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
+	// CHAOS-3859: clarificationSink owns a background worker goroutine
+	// that must stop BEFORE postgres.close() tears down the pool it
+	// writes through -- same ordering Runtime.Close already gives
+	// usageTelemetry, and for the identical reason (a worker still
+	// draining when the pool closes underneath it would just add
+	// DeliveryFailures for writes that were never going to land). nil
+	// whenever the investigator itself was not composed; Sink.Close
+	// nil-guards itself, so Runtime.Close can call it unconditionally.
+	runtime.clarificationSink = clarificationSink
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil;
 	// runtimeEvictor is a concrete *modelruntimeresolver.Resolver, possibly
 	// nil. Assigning either nil pointer directly into its interface-typed
@@ -214,13 +224,13 @@ func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
 	return falkorgraph.SlogTelemetry{Logger: logger}
 }
 
-func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, error) {
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil
 	}
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
 	}
 	// Codex round-3 F2: supply a real telemetry sink. Left nil, every graph
 	// signal -- including the per-request vector-degradation signal -- was
@@ -242,7 +252,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// leaves the lexical retrieval path exactly as it was.
 	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("load context fabric embedder configuration: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("load context fabric embedder configuration: %w", err)
 	}
 	// CHAOS-3841: an optional LRU over the READ path's single-text (query)
 	// Embed calls only -- see embedcache's package doc. Wired here, not in
@@ -253,7 +263,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// unchanged) when the cache is not enabled or no embedder is configured.
 	embedCacheConfig, err := embedcache.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("load context fabric embed query cache configuration: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("load context fabric embed query cache configuration: %w", err)
 	}
 	embedderOptions.Embedder = embedcache.Wrap(embedderOptions.Embedder, embedCacheConfig)
 	// CHAOS-3833: the deployment-current embed retrieval identity for
@@ -264,18 +274,18 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// contextfabric.ReuseKey's CHAOS-3833 doc comment.
 	embedRetrievalIdentity, err := falkorgraph.EmbedRetrievalIdentityFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("load context fabric embed retrieval identity: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("load context fabric embed retrieval identity: %w", err)
 	}
 	graphReader, err := falkorgraph.NewWithEmbedder(graphConfig, embedderOptions)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
 	}
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
 		devhealthfacts.NewProviders(clickhouse.queryClient),
 		contextfabric.FactRegistryOptions{Now: request.options.Now},
 	)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
 	}
 	// CHAOS-3782: WithAnswerReuse turns on Save's reuse-column bookkeeping
 	// and FindReusable/InvalidateOrganizationReuse. request.config.AnswerReuseMaxAge
@@ -291,7 +301,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	}
 	investigationStore, err := pginvestigation.NewStore(postgres.db, storeOpts...)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
 	// reuseSnapshotter, reuseEpochSnapshotter, and reuseInvalidator all
 	// stay nil when reuse is disabled -- Engine then never queries
@@ -330,16 +340,16 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if deploymentDefaultRuntime == nil {
 		deploymentDefaultRuntime, err = newContextFabricModelRuntime(ctx, os.LookupEnv)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 	}
 	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	receiptSink, err := buildModelReceiptSink(postgres)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
 	// -- the same typed-nil-interface trap open()'s own conversion guards
@@ -351,6 +361,22 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	var reuseModelIdentityConfigs contextfabric.OrgModelConfigResolver
 	if orgModelConfigStore != nil {
 		reuseModelIdentityConfigs = orgModelConfigStore
+	}
+	// CHAOS-3859 (capture-only phase): unconditional, independent of
+	// reuseEnabled -- capture only needs PriorSubjectReceipts resolution
+	// (e.results != nil, i.e. the investigator itself being composed),
+	// which does not require answer reuse to be turned on. Constructed
+	// here, as the LAST fallible step before NewEngine, deliberately: an
+	// earlier construction point would need its own Close() on every
+	// subsequent error return in this function to avoid leaking its
+	// background worker goroutine, and this is the only remaining one.
+	// See pgclarification.Sink's own doc comment for the fail-open,
+	// bounded-queue contract it upholds; open() below is responsible for
+	// Close()-ing it before the Postgres pool it shares with everything
+	// else in this function.
+	clarificationSink, err := pgclarification.NewSink(postgres.db, pgclarification.SinkOptions{Logger: request.options.Logger})
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("initialize clarification selection sink: %w", err)
 	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink},
@@ -389,6 +415,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// RecordPriorSubjectReceiptsSkipped counter, which had a port and
 		// a call site but no production implementation until now.
 		Telemetry: contextfabric.NewSlogEngineTelemetry(request.options.Logger),
+		// CHAOS-3859 (capture-only phase): unconditional -- see
+		// clarificationSink's own construction comment above for why this
+		// does not depend on reuseEnabled.
+		ClarificationSelectionSink: clarificationSink,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
 		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions
@@ -440,7 +470,16 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		},
 	})
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
+		// clarificationSink's worker must not outlive this function on a
+		// failed composition -- it is the only fallible step after
+		// construction, so this is the only cleanup site that needs it. A
+		// short bounded context is enough: the queue is guaranteed empty
+		// (nothing has called RecordSelection on an engine that was never
+		// returned), so Close only needs to signal the worker to exit.
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = clarificationSink.Close(closeCtx)
+		cancel()
+		return nil, nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
 	}
 	// evictor is a concrete *modelruntimeresolver.Resolver, possibly nil
 	// (when orgModelConfigStore was nil) -- guard the typed-nil-interface
@@ -451,9 +490,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// through the same interface-typed local, so it needs no separate
 	// guard here.
 	if evictor == nil {
-		return engine, investigationStore, nil, reuseInvalidator, nil
+		return engine, investigationStore, nil, reuseInvalidator, clarificationSink, nil
 	}
-	return engine, investigationStore, evictor, reuseInvalidator, nil
+	return engine, investigationStore, evictor, reuseInvalidator, clarificationSink, nil
 }
 
 // contextFabricSynthesizerOptions is the complete static version identity
