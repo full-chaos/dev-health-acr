@@ -252,6 +252,16 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// CHAOS-3858 (measurement-only): nil for every real caller. See
 	// Options.RawSignalObserver's doc comment.
 	graphConfig.RawSignalObserver = request.options.RawSignalObserver
+	// CHAOS-3884 (Option C): closes over the SAME ClickHouse query client
+	// devhealthfacts.NewProviders already uses below, so the identity
+	// universe read shares the deployment's one live ClickHouse connection
+	// rather than opening a second one. Nil-safe by construction --
+	// falkorgraph.Config.IdentityUniverse's doc comment -- so leaving this
+	// unset (e.g. in a future caller) degrades to no identity fast path,
+	// never a startup failure.
+	graphConfig.IdentityUniverse = func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+		return devhealthsource.IdentityUniverse(ctx, clickhouse.queryClient, orgID)
+	}
 	// CHAOS-3778: vector retrieval is optional. An unconfigured embedder
 	// leaves the lexical retrieval path exactly as it was.
 	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)
