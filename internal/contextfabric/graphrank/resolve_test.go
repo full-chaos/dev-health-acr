@@ -110,7 +110,7 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 		}
 	}
 	if f.enableAliasLookup {
-		deps.AliasLookup = func(ctx context.Context, orgID string, terms []string, timeContext contextfabric.TimeContext) (map[string][]CandidateNode, bool, error) {
+		deps.AliasLookup = func(ctx context.Context, orgID string, terms []string) (map[string][]CandidateNode, bool, error) {
 			f.aliasLookupCalls = append(f.aliasLookupCalls, terms)
 			if f.aliasLookupErr != nil {
 				return nil, false, f.aliasLookupErr

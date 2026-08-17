@@ -215,9 +215,12 @@ type ResolveDeps struct {
 	// guaranteed complete: a per-call row budget was exceeded, the read
 	// timed out, a source-table claimant could not be confirmed present in
 	// the graph (existence-check failure folds into incompleteness HERE,
-	// rather than as a separately-threaded flag), or timeContext's axis is
-	// non-current (temporal authority stays with the graph; a
-	// historical-axis question simply never gets this mechanism). false is
+	// rather than as a separately-threaded flag), or this resolution's time
+	// axis is non-current (temporal authority stays with the graph; a
+	// historical-axis question simply never gets this mechanism -- the
+	// implementation decides this via whatever temporal state it already
+	// captures for Search/SearchQuestion, exactly the same closure-capture
+	// shape those two use rather than a redundant parameter here). false is
 	// always the safe default -- it only disables the identity fast path
 	// (ResolveFromMergedCandidatesWithGate), never silently commits on an
 	// unverified population. nil means "this backend does not implement
@@ -225,7 +228,7 @@ type ResolveDeps struct {
 	// same convention as SearchQuestion. A genuine backend FAULT (as
 	// opposed to a completeness gap) returns a non-nil err, aborting the
 	// whole resolution exactly like Search()'s own error handling.
-	AliasLookup func(ctx context.Context, orgID string, terms []string, timeContext contextfabric.TimeContext) (claimantsByTerm map[string][]CandidateNode, complete bool, err error)
+	AliasLookup func(ctx context.Context, orgID string, terms []string) (claimantsByTerm map[string][]CandidateNode, complete bool, err error)
 }
 
 // RawSignalObserver is the CHAOS-3858 measurement-only capture port -- see
@@ -480,7 +483,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// to every pre-CHAOS-3884 backend.
 	aliasIdentityComplete := false
 	if deps.AliasLookup != nil {
-		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms, request.TimeContext)
+		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, err
 		}
