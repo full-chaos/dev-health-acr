@@ -19,7 +19,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 LIMIT="${1:-}"
 
 trial_wire_common_env
-export ACR_TEST_REPLAY_OUT="$ACR_TRIAL_RESULTS_DIR/replay-report.json"
+export ACR_TEST_REPLAY_OUT="$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay.json"
 export ACR_TEST_TRIAL_ARM="replay"
 if [[ -n "$LIMIT" ]]; then
   export ACR_TEST_TRIAL_LIMIT="$LIMIT"
