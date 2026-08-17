@@ -165,6 +165,20 @@ type ResolveDeps struct {
 	// unclamped, which a backend with no such cap (or one that never
 	// truncates below the request) can safely leave as the zero value.
 	MaxResultsCap int
+	// CommitGatePolicy is CHAOS-3857's sweep/measurement override for
+	// ResolveFromMergedCandidatesWithGate's three commit-gate thresholds
+	// (LoneFloor/TopFloor/TopGap). The ZERO VALUE means "not overridden":
+	// ResolveSubjects falls back to graphrank.DefaultCommitGatePolicy()
+	// (the calibrated production thresholds), NOT to a zero-threshold
+	// policy that would auto-commit everything -- see the call site below.
+	// This is a DIFFERENT zero-value convention than
+	// VectorMarginCommitThreshold/CalibratedTopK above (whose zero means
+	// "carve-out disabled"), because a zero commit-gate floor is never a
+	// meaningful "off" state the way a zero margin/topK is; it would be
+	// the most PERMISSIVE possible policy, the opposite of what an unset
+	// override should mean. A backend with no override leaves this at its
+	// zero value and gets exactly today's calibrated behavior.
+	CommitGatePolicy CommitGatePolicy
 }
 
 // ResolveSubjects resolves the committed/candidate subjects for an
@@ -492,7 +506,17 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		len(request.RequestedScope.RepositorySlugs) == 0 &&
 		len(request.RequestedScope.ProjectIDs) == 0 &&
 		len(request.RequestedScope.TeamIDs) == 0
-	resolution := ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility)
+	// CHAOS-3857: deps.CommitGatePolicy's zero value means "not
+	// overridden" (see ResolveDeps' own doc comment on the field) -- fall
+	// back to the calibrated production thresholds explicitly here,
+	// rather than passing a zero-valued policy straight through, so an
+	// unconfigured backend can never accidentally run with a
+	// zero-threshold (auto-commit-everything) gate.
+	gate := deps.CommitGatePolicy
+	if gate == (CommitGatePolicy{}) {
+		gate = DefaultCommitGatePolicy()
+	}
+	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate)
 	resolution.RetrievalDegraded = retrievalDegraded
 	return resolution, nil
 }

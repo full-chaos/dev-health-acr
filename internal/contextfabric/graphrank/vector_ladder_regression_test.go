@@ -72,21 +72,50 @@ func TestD11Class_NormalizedVectorRelevanceRestoresConfidenceOrder(t *testing.T)
 	}
 }
 
-// The structural guarantee that makes AC-3778-3 hold without a special case:
-// nothing a vector-only candidate can score reaches the lone-candidate gate.
+// vectorArithmeticBandCeiling is a FIXED historical reference (not
+// DefaultCommitGatePolicy().LoneFloor, and not corroboration_test.go's
+// live-reading loneCommitGate), deliberately decoupled per luna review P2:
+// this test exercises pure ResultConfidence/CorroboratedConfidence
+// arithmetic, with no resolution decision and no isVectorOnlyCandidate
+// guard involved at all, so it cannot know or care what LoneFloor is
+// CURRENTLY configured to be. Binding it to the live default would make it
+// fail the moment a future sweep intentionally lowers LoneFloor again --
+// even though resolution.go's guard would still correctly block the commit
+// at the resolution layer, exactly the scenario CHAOS-3857 shipped this
+// guard to handle. This constant instead pins the SAME arithmetic fact
+// AC-3778-3 relied on before the guard existed (vectorRelevanceCeiling
+// strictly below the pre-CHAOS-3857 lone-candidate gate), as a stable,
+// intentionally-never-auto-updated regression pin: if this specific
+// arithmetic ever needs to move, that is a deliberate, reviewed edit to
+// this test, not a side effect of changing production's LoneFloor
+// elsewhere. The guard, not this arithmetic, is what a future LoneFloor
+// change is checked against at the resolution layer -- see
+// TestVectorOnlyGuardBlocksLoneCommitRegardlessOfConfidence
+// (resolution_gate_policy_test.go).
+const vectorArithmeticBandCeiling = 0.72
+
+// The arithmetic invariant AC-3778-3 relied on before CHAOS-3857's guard
+// existed: nothing a vector-only candidate can score, by the confidence
+// math alone, reaches vectorArithmeticBandCeiling. This is a NECESSARY
+// property of the vector band's own calibration (unrelated to whatever
+// LoneFloor production currently uses), not the thing that makes AC-3778-3
+// hold today -- resolution.go's isVectorOnlyCandidate guard is what does
+// that, structurally, regardless of this arithmetic. See
+// TestAC_3778_3_VectorOnlyCandidateCannotReachTheLoneCommitGate
+// (corroboration_test.go) for the resolution-level proof.
 func TestD11Class_NoVectorOnlyConfidenceCanReachTheCommitGate(t *testing.T) {
 	const tau = 0.55
 	for cosine := tau; cosine <= 1.0; cosine += 0.001 {
 		relevance := Normalized(0.50 + 0.20*(cosine-tau)/(1-tau))
 		confidence := ResultConfidence(relevance, nil)
-		if confidence >= loneCommitGate {
-			t.Fatalf("a vector-only candidate at cosine %v reached confidence %v, at or past the %v gate",
-				cosine, confidence, loneCommitGate)
+		if confidence >= vectorArithmeticBandCeiling {
+			t.Fatalf("a vector-only candidate at cosine %v reached confidence %v, at or past %v",
+				cosine, confidence, vectorArithmeticBandCeiling)
 		}
 		// And corroboration must not be reachable from a single mechanism.
 		single := CorroboratedConfidence([]contextfabric.MatchMechanism{contextfabric.MatchVector}, confidence)
-		if single >= loneCommitGate {
-			t.Fatalf("a single-mechanism vector candidate reached %v, at or past the %v gate", single, loneCommitGate)
+		if single >= vectorArithmeticBandCeiling {
+			t.Fatalf("a single-mechanism vector candidate reached %v, at or past %v", single, vectorArithmeticBandCeiling)
 		}
 	}
 }

@@ -23,7 +23,9 @@ package falkorgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -399,6 +401,42 @@ func envInt(lookup func(string) (string, bool), key string, fallback int) (int, 
 		return 0, errors.New(key + " must be an integer")
 	}
 	return parsed, nil
+}
+
+// explicitEnvFloat reports (parsed, true, nil) only when key is set to a
+// non-blank value that parses as a finite float; (0, false, nil) when key
+// is genuinely absent or blank (not an override, not an error); and
+// (0, false, err) when key IS set to something non-blank that fails to
+// parse (or parses to NaN/±Inf).
+//
+// This mirrors EnvSimilarityFloor's OWN precedent EXACTLY (CHAOS-3857 sol
+// review F2, correcting an earlier version of this comment that
+// misstated it): embedprovider's envFloat treats unset/blank as "use the
+// fallback" the same way this does, but once an operator has set a
+// non-blank ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR, a garbage value
+// does NOT silently fall back to the default -- embedprovider.
+// ConfigFromEnv's own envFloat call returns a parse error that aborts
+// EmbedderFromEnv's whole composition, loudly, at startup. A silent
+// fallback on a garbage value would mask a real operator mistake (a typo
+// in a sweep cell's env, say) as "no override" -- indistinguishable from
+// a deliberately unset one. CHAOS-3857's four commit-gate env vars
+// (EmbedderFromEnv, vector.go) get the identical treatment via this
+// shared helper: blank/unset is silent and valid; set-but-unparseable is
+// a loud composition-time error naming the offending var.
+//
+// Range/cross-field validation (e.g. CommitGatePolicy.Validate()) is
+// deliberately NOT this function's job -- it only proves the raw string
+// is a usable float, the same narrow scope embedprovider's envFloat has.
+func explicitEnvFloat(lookup func(string) (string, bool), key string) (float64, bool, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return 0, false, nil
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, false, fmt.Errorf("%s must be a finite number", key)
+	}
+	return parsed, true, nil
 }
 
 func envUint(lookup func(string) (string, bool), key string, fallback uint) (uint, error) {

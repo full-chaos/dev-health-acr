@@ -67,7 +67,7 @@ func openQuestionRequest(question string) (contextfabric.InvestigationRequest, c
 // MaxSubjectCandidates truncating the result set to size 1 server-side
 // (queries.go's Cypher LIMIT, applied BEFORE normalization ever runs) --
 // stronger competing candidates could have existed and simply never made it
-// back. 0.75 clears the >= 0.72 lone-candidate auto-commit gate in
+// back. 0.75 clears the lone-candidate auto-commit gate in
 // graphrank.ResolveFromMergedCandidates, so a weak or truncated lone hit
 // committed a subject on its own.
 //
@@ -93,9 +93,10 @@ func TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 		t.Fatalf("ResolveSubjects() committed %#v from a lone hit matching only 1 of 4 query terms -- want no auto-commit (drift D11/P1: a weak or truncated lone hit must not read as an unambiguous match)", resolution.Committed)
 	}
 	// Codex R2-4: pin the exact confidence, not just "didn't commit" -- a
-	// 2-of-4 match would also stay under the 0.72 gate (0.625), so
-	// "nothing committed" alone cannot distinguish the claimed 1-of-4 edge
-	// from a different, weaker claim.
+	// 2-of-4 match would also stay under the lone-candidate gate (0.625,
+	// below both the pre- and post-CHAOS-3857 gate values), so "nothing
+	// committed" alone cannot distinguish the claimed 1-of-4 edge from a
+	// different, weaker claim.
 	if len(resolution.Candidates) != 1 {
 		t.Fatalf("ResolveSubjects() candidates = %#v, want exactly 1", resolution.Candidates)
 	}

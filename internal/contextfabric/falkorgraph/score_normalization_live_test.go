@@ -263,7 +263,12 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	if weakCandidate == nil {
 		t.Fatalf("ResolveSubjects() candidates = %#v, want the planted weak hit (%s) present -- \"nothing committed\" must not pass vacuously because nothing was found at all", resolution.Candidates, weak.CanonicalID)
 	}
-	if weakCandidate.Confidence >= 0.72 {
-		t.Fatalf("planted weak hit confidence = %v, want < 0.72 (the lone-candidate auto-commit gate) for a 1-of-4-term match", weakCandidate.Confidence)
+	// Read live, not a hand-duplicated literal (CHAOS-3857 un-staling sweep,
+	// chris 2026-08-17): this used to hardcode 0.72, which drifted the
+	// moment LoneFloor moved to 0.68 and would have kept silently passing
+	// against a threshold production no longer uses.
+	loneFloor := graphrank.DefaultCommitGatePolicy().LoneFloor
+	if weakCandidate.Confidence >= loneFloor {
+		t.Fatalf("planted weak hit confidence = %v, want < %v (the lone-candidate auto-commit gate) for a 1-of-4-term match", weakCandidate.Confidence, loneFloor)
 	}
 }

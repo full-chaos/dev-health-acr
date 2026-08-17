@@ -25,10 +25,49 @@ import (
 //     that falling to clarification under genuine ambiguity is intended
 //     behavior, not a regression.
 //
+// CHAOS-3857 (gate-threshold sweep, chris, 2026-08) evaluated moving the
+// production LoneFloor (graphrank.DefaultCommitGatePolicy) to 0.68, which
+// would have DECOUPLED it from CorroboratedFloor for the first time --
+// CorroboratedConfidence below is never even handed a CommitGatePolicy, so
+// it structurally could not have moved along with LoneFloor regardless of
+// what the sweep did. That move was ratified, then REJECTED during ship
+// verification on two counter-examples unrelated to corroboration itself
+// (see DefaultCommitGatePolicy's doc comment, resolution.go, for the full
+// record). LoneFloor reverted to 0.72, so the equality below is CURRENT
+// again, not merely historical -- but it remains coincidence-by-calibration
+// (CHAOS-3778 picked both constants against the same target; nothing ties
+// them together in code), not a structural invariant, and a future sweep
+// could decouple them again without touching this file. If that happens:
+// nothing about a corroborated (2+ distinct mechanism) candidate's
+// CONFIDENCE changes either way -- CorroboratedConfidence's own additive
+// floor (CorroboratedFloor + (Ceiling-Floor)*strength, strength >= 0)
+// guarantees its output is >= CorroboratedFloor (0.72) whenever it runs the
+// boost path, and the "never demote below base" guard means the OTHER path
+// (returning base unchanged) only fires when base already exceeds that same
+// 0.72 -- so a corroborated-unopposed candidate's confidence is
+// UNCONDITIONALLY >= CorroboratedFloor. Whether that ALSO clears LoneFloor
+// is a separate question this guarantee does not answer on its own:
+// Validate() only requires LoneFloor <= TopFloor, not LoneFloor <=
+// CorroboratedFloor, so a valid-but-unusual policy (e.g. LoneFloor=0.80,
+// TopFloor=0.88) could set LoneFloor ABOVE CorroboratedFloor, and a
+// corroborated candidate at exactly CorroboratedFloor would then NOT clear
+// it. At today's default (LoneFloor=0.72=CorroboratedFloor) it clears with
+// zero margin to spare, not "with margin" as an earlier draft of this
+// comment overclaimed -- do not read this paragraph as a guarantee that
+// holds for every CommitGatePolicy, only for the shipped default and any
+// override with LoneFloor <= CorroboratedFloor.
+//
 // The vector band itself ([0.50, 0.70], falkorgraph.vectorRelevanceFloor /
-// vectorRelevanceCeiling) sits strictly BELOW CorroboratedFloor, so a
-// vector-ONLY candidate cannot reach the lone-candidate gate by arithmetic --
-// AC-3778-3 holds without a single special case anywhere in this package.
+// vectorRelevanceCeiling) sits strictly BELOW CorroboratedFloor and below
+// today's LoneFloor (0.72), so a vector-ONLY candidate cannot reach the
+// lone-candidate gate by arithmetic today. resolution.go's
+// isVectorOnlyCandidate additionally guards this STRUCTURALLY, by
+// mechanism identity rather than by relying on that arithmetic --
+// deliberately shipped even though it is currently inert, because the
+// CHAOS-3857 evaluation showed the arithmetic alone is not something to
+// keep trusting across future threshold changes. See that function's own
+// doc comment for the full scope (in particular: this is unrelated to, and
+// does not touch, the CHAOS-3829 vector-margin rescue path).
 const (
 	CorroboratedFloor   = 0.72
 	CorroboratedCeiling = 0.86

@@ -233,11 +233,13 @@ func TestChaos3829_MarginExactlyAtThresholdFires(t *testing.T) {
 
 // TestChaos3829_NeverOverridesAnExistingLoneGateCommit proves the carve-out
 // is checked ONLY as a rescue: a lone candidate that already clears the
-// EXISTING 0.72 gate commits through that path, and the carve-out's own
-// conditions (even if satisfiable) are never consulted -- there is only one
-// commit-eligible candidate here, so vectorMarginCommit could not fire
-// anyway (needs >=2), but this test pins the ambiguous flag is never
-// touched or re-evaluated once a gate above already committed.
+// existing lone-candidate gate (via corroboration -- its two mechanisms lift
+// it well above LoneFloor regardless of where LoneFloor itself sits) commits
+// through that path, and the carve-out's own conditions (even if
+// satisfiable) are never consulted -- there is only one commit-eligible
+// candidate here, so vectorMarginCommit could not fire anyway (needs >=2),
+// but this test pins the ambiguous flag is never touched or re-evaluated
+// once a gate above already committed.
 func TestChaos3829_NeverOverridesAnExistingLoneGateCommit(t *testing.T) {
 	lone := corroborationCandidate("auth", 0.72, contextfabric.MatchVector, contextfabric.MatchLexical)
 	similarities := map[string]float64{SubjectKey(lone.Subject): 0.90}

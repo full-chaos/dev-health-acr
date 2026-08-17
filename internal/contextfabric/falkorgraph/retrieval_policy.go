@@ -397,3 +397,35 @@ func LookupRetrievalPolicy(embedIdentity string, dimension int) (RetrievalPolicy
 	policy, ok := retrievalPolicyTable[fmt.Sprintf("%s#d%d", embedIdentity, dimension)]
 	return policy, ok
 }
+
+// Environment variable names CHAOS-3857's gate-threshold sweep reads
+// (EmbedderFromEnv, vector.go). These are a MEASUREMENT/SWEEP surface, not
+// recommended deployment configuration -- chris picks the eventual
+// ratified operating point from the sweep's measured curve, not from an
+// env var left set in a deployment. Each follows EnvSimilarityFloor's own
+// per-knob "explicit override wins over the calibrated table" precedent
+// (vector.go): unset leaves the corresponding graphrank.CommitGatePolicy
+// field (or VectorMarginCommitThreshold) at its calibrated/default value,
+// never at zero.
+const (
+	// EnvCommitLoneFloor overrides graphrank.CommitGatePolicy.LoneFloor
+	// (calibrated default 0.72).
+	EnvCommitLoneFloor = "ACR_CONTEXT_FABRIC_COMMIT_LONE_FLOOR"
+	// EnvCommitTopFloor overrides graphrank.CommitGatePolicy.TopFloor
+	// (calibrated default 0.88).
+	EnvCommitTopFloor = "ACR_CONTEXT_FABRIC_COMMIT_TOP_FLOOR"
+	// EnvCommitTopGap overrides graphrank.CommitGatePolicy.TopGap
+	// (calibrated default 0.12).
+	EnvCommitTopGap = "ACR_CONTEXT_FABRIC_COMMIT_TOP_GAP"
+	// EnvVectorMarginCommitThreshold overrides CHAOS-3829's calibrated M
+	// (RetrievalPolicy.VectorMarginCommitThreshold, currently
+	// 0.03378617763519299 for the shipped identity). Unlike the three
+	// commit-gate vars above, an explicit override here does NOT bypass
+	// the existing tau-equality/[2,CalibratedTopK] validity guards
+	// (vector.go, resolution.go) -- it only replaces WHICH threshold
+	// installs once those guards already say installing one is sound, so
+	// a sweep cell still measures M's effect on the SAME calibrated,
+	// corroboration-eligible population the shipped M was calibrated
+	// against, never a population the guards would otherwise reject.
+	EnvVectorMarginCommitThreshold = "ACR_CONTEXT_FABRIC_VECTOR_MARGIN_COMMIT_THRESHOLD"
+)

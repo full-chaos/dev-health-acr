@@ -21,6 +21,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -218,6 +219,12 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		CorpusSHA256: corpusHash, Transport: "real_api", RunStartedAt: runStartedAt,
 		SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 		Model: os.Getenv("ACR_TEST_TRIAL_MODEL"), ModelFallback: os.Getenv("ACR_TEST_TRIAL_MODEL_FALLBACK"),
+		CommitGate: trialCommitGateProvenance{
+			LoneFloorEnv:                   os.Getenv(falkorgraph.EnvCommitLoneFloor),
+			TopFloorEnv:                    os.Getenv(falkorgraph.EnvCommitTopFloor),
+			TopGapEnv:                      os.Getenv(falkorgraph.EnvCommitTopGap),
+			VectorMarginCommitThresholdEnv: os.Getenv(falkorgraph.EnvVectorMarginCommitThreshold),
+		},
 	}
 	if exchangeRuntime != nil {
 		provenance.Transport = "file_exchange"
@@ -524,6 +531,23 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	set("ACR_CONTEXT_FABRIC_EMBED_TIMEOUT", "45s")
 	set("ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES", "5")
 
+	// CHAOS-3857 gate-threshold sweep: clearAmbientACREnv above already
+	// wiped any bare ACR_CONTEXT_FABRIC_COMMIT_*/VECTOR_MARGIN_COMMIT_*
+	// left in the calling shell (they do not start with ACR_TEST_TRIAL_,
+	// so they are not exempt) -- these four are OPTIONAL passthroughs, the
+	// SAME ACR_TEST_TRIAL_* wrapping convention every other trial input
+	// uses, each mapped 1:1 onto the real falkorgraph env var
+	// (falkorgraph.EnvCommitLoneFloor and friends) only when the caller
+	// actually set the corresponding ACR_TEST_TRIAL_ name. A sweep cell
+	// that only wants to vary ONE knob sets only that one; the other
+	// three staying unset is what lets CommitGatePolicy's own per-knob
+	// defaulting (vector.go's EmbedderFromEnv) apply -- see that
+	// function's CHAOS-3857 comment.
+	set(falkorgraph.EnvCommitLoneFloor, os.Getenv("ACR_TEST_TRIAL_COMMIT_LONE_FLOOR"))
+	set(falkorgraph.EnvCommitTopFloor, os.Getenv("ACR_TEST_TRIAL_COMMIT_TOP_FLOOR"))
+	set(falkorgraph.EnvCommitTopGap, os.Getenv("ACR_TEST_TRIAL_COMMIT_TOP_GAP"))
+	set(falkorgraph.EnvVectorMarginCommitThreshold, os.Getenv("ACR_TEST_TRIAL_VECTOR_MARGIN_COMMIT_THRESHOLD"))
+
 	// Throwaway evidence key: unused by the Investigate() path this
 	// harness exercises, but openClickHouse's evidence-ID codec
 	// construction requires a structurally valid one to satisfy
@@ -791,6 +815,29 @@ type trialProvenance struct {
 	SourceDirty      bool   `json:"source_dirty"`
 	SourceDiffDigest string `json:"source_diff_digest,omitempty"`
 	RunStartedAt     string `json:"run_started_at"`
+	// CommitGate is CHAOS-3857's sweep-cell record: the raw string this
+	// run actually read for each of falkorgraph's four commit-gate env
+	// vars (CommitGatePolicy's three thresholds + the M override), empty
+	// when unset. Recorded UNPARSED and UNRESOLVED deliberately -- this
+	// is a provenance record of what the SHELL COMMAND that launched this
+	// run actually set, the same discipline CorpusSHA256/SourceCommit
+	// already apply, not a restatement of falkorgraph's own default-
+	// resolution logic (which stays the single authority for what value
+	// actually took effect). An empty field means "the calibrated default
+	// applied for this knob", exactly as it does at the env-var layer
+	// itself.
+	CommitGate trialCommitGateProvenance `json:"commit_gate"`
+}
+
+// trialCommitGateProvenance is the CHAOS-3857 sweep-cell config a report
+// was run under. Field names/omitempty mirror the env vars themselves
+// (falkorgraph.EnvCommitLoneFloor and friends) so a reader can go straight
+// from a report to the exact `export` line that produced it.
+type trialCommitGateProvenance struct {
+	LoneFloorEnv                   string `json:"lone_floor_env,omitempty"`
+	TopFloorEnv                    string `json:"top_floor_env,omitempty"`
+	TopGapEnv                      string `json:"top_gap_env,omitempty"`
+	VectorMarginCommitThresholdEnv string `json:"vector_margin_commit_threshold_env,omitempty"`
 }
 
 type trialReport struct {

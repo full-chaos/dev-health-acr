@@ -168,8 +168,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// (nominal, uncapped) number. Settling G1/J1 said nothing about
 		// either, and fixing K1/K2 does not reopen G1/J1 -- they are
 		// four independent findings that happen to share a letter.
-		CalibratedTopK: a.calibratedTopK,
-		MaxResultsCap:  a.config.MaxResults,
+		CalibratedTopK:   a.calibratedTopK,
+		MaxResultsCap:    a.config.MaxResults,
+		CommitGatePolicy: a.commitGatePolicy,
 	}
 	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -882,6 +884,35 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 	if err != nil {
 		return EmbedderOptions{}, err
 	}
+	// CHAOS-3857 sol review F2b: EnvVectorMarginCommitThreshold accepts
+	// either a finite float STRICTLY GREATER THAN 0 (the numeric
+	// override, installed below only under the SAME tau-equality guard
+	// every other M value requires) or the literal string "disabled",
+	// which forces the carve-out fully off UNCONDITIONALLY. "disabled" is
+	// its own value, not merely a synonym for 0: vectorMarginCommit's own
+	// test is `margin < threshold`, and a margin (top's similarity minus
+	// its nearest competitor's) is never negative by construction, so a
+	// NUMERIC threshold of exactly 0 would make EVERY corroborated,
+	// in-envelope case satisfy `margin >= 0` -- "rescue maximally on",
+	// the opposite of what isolating M's net contribution needs. M<=0 is
+	// therefore REJECTED as a numeric value below; "disabled" is the
+	// honest way to ask for the carve-out off, and a small positive value
+	// (e.g. 1e-12) is the honest way to ask for "fire on almost anything"
+	// if that is ever genuinely wanted.
+	explicitMarginRaw, hasExplicitMarginRaw := lookup(EnvVectorMarginCommitThreshold)
+	explicitMarginSet := hasExplicitMarginRaw && strings.TrimSpace(explicitMarginRaw) != ""
+	explicitMarginDisabled := explicitMarginSet && strings.TrimSpace(explicitMarginRaw) == "disabled"
+	var explicitMarginValue float64
+	if explicitMarginSet && !explicitMarginDisabled {
+		parsed, perr := strconv.ParseFloat(strings.TrimSpace(explicitMarginRaw), 64)
+		if perr != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return EmbedderOptions{}, fmt.Errorf(`%s must be a finite number greater than 0, or the literal "disabled"`, EnvVectorMarginCommitThreshold)
+		}
+		if parsed <= 0 {
+			return EmbedderOptions{}, fmt.Errorf(`%s must be greater than 0 -- 0 is the always-fire footgun (a margin is never negative by construction, so a 0 threshold rescues every corroborated case); use "disabled" to turn the carve-out off, or a small positive value such as 1e-12 to approximate "always fire" honestly`, EnvVectorMarginCommitThreshold)
+		}
+		explicitMarginValue = parsed
+	}
 	if policy, ok := LookupRetrievalPolicy(identity, cfg.Dimension); ok {
 		// A calibrated entry's zero fields still mean "unchanged from
 		// today's default" (RetrievalPolicy's doc comment) -- e.g. the
@@ -972,7 +1003,85 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 			// invalidates the other identically. There is no scenario
 			// where M installs but CalibratedTopK does not, or vice versa.
 			options.CalibratedTopK = policy.CalibratedTopK
+			// CHAOS-3857: an explicit, NUMERIC EnvVectorMarginCommitThreshold
+			// REPLACES which threshold installs, but only once the guard
+			// above already decided installing one is sound -- it never
+			// forces M on when the tau-equality guard says off (a sweep
+			// cell must measure M's effect on the SAME corroboration-
+			// eligible population the shipped M was calibrated against,
+			// never a population the guard would otherwise reject). The
+			// "disabled" sentinel is handled separately, below, and is
+			// UNCONDITIONAL by design -- see its own comment above.
+			if explicitMarginSet && !explicitMarginDisabled {
+				options.VectorMarginCommitThreshold = explicitMarginValue
+			}
 		}
+	}
+	if explicitMarginDisabled {
+		// Unconditional (CHAOS-3857 sol review F2b): unlike a numeric
+		// override, "disabled" carries no calibration-population claim to
+		// gate -- setting the threshold to 0 can never incorrectly
+		// INSTALL a rescue (resolution.go's outer `vectorMarginCommitThreshold
+		// > 0` check already refuses to run the carve-out at all once
+		// this is 0), so there is nothing for the tau-equality guard to
+		// protect against here. Applies even for an identity with no
+		// calibrated RetrievalPolicy entry at all (where this is a no-op:
+		// options.VectorMarginCommitThreshold is already its zero value).
+		options.VectorMarginCommitThreshold = 0
+	}
+	// CHAOS-3857: the three commit-gate thresholds are graphrank's own
+	// concept (CommitGatePolicy), independent of embedder identity and
+	// calibration -- unlike VectorMarginCommitThreshold/CalibratedTopK
+	// above, they apply regardless of whether this deployment's identity
+	// has a calibrated RetrievalPolicy entry at all, and each is
+	// overridden INDEPENDENTLY: an operator sweeping just LoneFloor gets
+	// TopFloor/TopGap at their calibrated defaults, never at zero. See
+	// CommitGatePolicy's own doc comment (graphrank/resolution.go) and
+	// ResolveDeps.CommitGatePolicy's (graphrank/resolve.go) for why a
+	// zero-valued policy must never reach that struct unless genuinely
+	// nothing here was overridden -- options.CommitGatePolicy is left at
+	// its own zero value below when none of the three vars is set, so
+	// attachEmbedder/reader.go's downstream fallback-to-default still
+	// applies exactly as if this block did not run.
+	//
+	// CHAOS-3857 sol review F1/F2: each var either parses cleanly or
+	// EmbedderFromEnv fails LOUDLY here (composition aborts at startup),
+	// the SAME precedent explicitEnvFloat's own doc comment states for
+	// EnvSimilarityFloor -- a garbage or out-of-range value must never
+	// silently fall back to the calibrated default, which would mask a
+	// real sweep-cell configuration mistake. The FINAL resolved policy
+	// (explicit values merged with calibrated defaults for any knob left
+	// unset) is then validated as ONE unit via CommitGatePolicy.Validate()
+	// -- this is what catches a PARTIAL override that is individually
+	// well-formed per field but produces a cross-field-invalid policy
+	// (e.g. only LoneFloor set, above the calibrated TopFloor).
+	loneFloor, hasLoneFloor, err := explicitEnvFloat(lookup, EnvCommitLoneFloor)
+	if err != nil {
+		return EmbedderOptions{}, err
+	}
+	topFloor, hasTopFloor, err := explicitEnvFloat(lookup, EnvCommitTopFloor)
+	if err != nil {
+		return EmbedderOptions{}, err
+	}
+	topGap, hasTopGap, err := explicitEnvFloat(lookup, EnvCommitTopGap)
+	if err != nil {
+		return EmbedderOptions{}, err
+	}
+	if hasLoneFloor || hasTopFloor || hasTopGap {
+		gate := graphrank.DefaultCommitGatePolicy()
+		if hasLoneFloor {
+			gate.LoneFloor = loneFloor
+		}
+		if hasTopFloor {
+			gate.TopFloor = topFloor
+		}
+		if hasTopGap {
+			gate.TopGap = topGap
+		}
+		if err := gate.Validate(); err != nil {
+			return EmbedderOptions{}, fmt.Errorf("invalid commit gate sweep cell (%s/%s/%s): %w", EnvCommitLoneFloor, EnvCommitTopFloor, EnvCommitTopGap, err)
+		}
+		options.CommitGatePolicy = gate
 	}
 	return options, nil
 }
