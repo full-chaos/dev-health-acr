@@ -16,12 +16,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -151,7 +153,13 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	options := hosted.Options{ServiceVersion: "chaos-3742-generative-trial", Logger: logger, Now: time.Now}
+	// rawSignals (CHAOS-3858, measurement-only) captures the raw pre-remap
+	// retrieval signal for every case's resolution -- see
+	// trialRawSignalCollector's own doc comment. Wired unconditionally: it
+	// costs nothing when nothing reads its snapshot, and every existing
+	// report field stays additive/optional regardless.
+	rawSignals := &trialRawSignalCollector{}
+	options := hosted.Options{ServiceVersion: "chaos-3742-generative-trial", Logger: logger, Now: time.Now, RawSignalObserver: rawSignals}
 	// caseTimeout bounds ONE Investigate() call, which can make up to two
 	// sequential generative calls (interpret, then synthesize). 240s is
 	// generous for a real API arm (historical p99 ~95s per LEG). For the
@@ -204,6 +212,17 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	// 3-6 case targeted subset, so they are skipped in that mode.
 	targeted := os.Getenv("ACR_TEST_TRIAL_INDICES") != ""
 
+	// controlsContinue (CHAOS-3858 scorecard mode) opts a run OUT of the
+	// control-violation abort below: it RECORDS the violation (same
+	// ControlViolationAbort/outcome bookkeeping) and keeps going, instead of
+	// stopping the arm. DEFAULT UNCHANGED -- every existing caller (every
+	// ACR_TEST_TRIAL_* invocation that does not set this) still aborts on
+	// the first control violation, exactly as today; this is an explicit
+	// opt-in for the one case that needs every one of the 50 corpus cases
+	// scored even if a control misfires (the epic's standing scorecard),
+	// not a general relaxation of the sanity-anchor control.
+	controlsContinue := os.Getenv("ACR_TEST_TRIAL_CONTROLS_CONTINUE") == "true"
+
 	// Sanity-anchor checkpoint positions (fable-review "LIMIT<15 handling"
 	// finding): the ORIGINAL fixed pos==9/pos==14 checks silently never
 	// fired at all for a run shorter than 10/15 cases (ACR_TEST_TRIAL_LIMIT
@@ -219,6 +238,7 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		CorpusSHA256: corpusHash, Transport: "real_api", RunStartedAt: runStartedAt,
 		SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 		Model: os.Getenv("ACR_TEST_TRIAL_MODEL"), ModelFallback: os.Getenv("ACR_TEST_TRIAL_MODEL_FALLBACK"),
+		ControlsContinue: controlsContinue,
 		CommitGate: trialCommitGateProvenance{
 			LoneFloorEnv:                   os.Getenv(falkorgraph.EnvCommitLoneFloor),
 			TopFloorEnv:                    os.Getenv(falkorgraph.EnvCommitTopFloor),
@@ -237,7 +257,7 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	firstTen := make([]caseOutcome, 0, 10)
 	for pos, i := range indices {
 		testCase := corpus[i]
-		outcome := runTrialCase(ctx, t, investigator, principal, i, testCase, caseTimeout)
+		outcome := runTrialCase(ctx, t, investigator, principal, i, testCase, caseTimeout, rawSignals)
 		report.Cases = append(report.Cases, outcome)
 		report.CasesRun++
 		tallyOutcome(&report, outcome)
@@ -251,9 +271,13 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 		// stop this arm right here rather than spend the rest of the
 		// budget on a possibly-miswired harness.
 		if outcome.Outcome == "control_violation" {
-			report.ControlViolationAbort = true
-			t.Logf("STOP: arm %q committed a subject for a no-match CONTROL case at index %d -- suspected harness-wiring issue, aborting this arm for review rather than finishing it", arm, i)
-			break
+			if controlsContinue {
+				t.Logf("RECORDED (controls_continue): arm %q committed a subject for a no-match CONTROL case at index %d -- continuing per ACR_TEST_TRIAL_CONTROLS_CONTINUE", arm, i)
+			} else {
+				report.ControlViolationAbort = true
+				t.Logf("STOP: arm %q committed a subject for a no-match CONTROL case at index %d -- suspected harness-wiring issue, aborting this arm for review rather than finishing it", arm, i)
+				break
+			}
 		}
 
 		if pos <= earlyAbortCheckpoint {
@@ -648,6 +672,104 @@ type trialCandidateMatchProvenance struct {
 	// topNonCommittedMatchProvenance's own doc comments), so once present,
 	// Confidence must always serialize, even at exactly 0.
 	Confidence float64 `json:"confidence"`
+	// RawVectorSimilarity/RawLexicalMatchedTerms/RawLexicalTermCount
+	// (CHAOS-3858, additive/optional, measurement-only) are the raw
+	// pre-remap signal graphrank.RawSignalObserver captured for this SAME
+	// candidate, BEFORE falkorgraph's [0.50,0.75]/vector-band linear
+	// remaps collapsed it into Confidence above -- see that observer's own
+	// doc comment (graphrank/resolve.go) for the post-authorization-only
+	// scope guarantee. omitempty/nil throughout: absent means "no raw
+	// signal was captured for this candidate's mechanism" (e.g. an
+	// exact-only match, or a run with no RawSignalObserver wired), never
+	// "zero".
+	RawVectorSimilarity    *float64 `json:"raw_vector_similarity,omitempty"`
+	RawLexicalMatchedTerms *int     `json:"raw_lexical_matched_terms,omitempty"`
+	RawLexicalTermCount    *int     `json:"raw_lexical_term_count,omitempty"`
+}
+
+// trialRawSignalCollector implements graphrank.RawSignalObserver
+// (CHAOS-3858, measurement-only): it accumulates the raw pre-remap signal
+// ResolveSubjects reports for every ACCEPTED candidate during ONE
+// Investigate() call, keyed by graphrank.SubjectKey (the SAME identity
+// committedMatchProvenance/topNonCommittedMatchProvenance already key on).
+// A subject search may surface the same candidate more than once across
+// multiple search terms in one resolution; this keeps the STRONGEST
+// observed raw value per mechanism, the same "keep highest" idiom
+// mergeSearchResults' own vectorArmSimilarity side-channel already uses.
+//
+// reset()/snapshotAndReset() give runTrialCase exactly one case's worth of
+// data: reset() before Investigate(), snapshotAndReset() immediately after
+// reading the result -- so case N's raw signal can never leak into case
+// N+1's report entry.
+type trialRawSignalCollector struct {
+	mu        sync.Mutex
+	bySubject map[string]graphrank.CandidateNode
+}
+
+func (c *trialRawSignalCollector) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bySubject = nil
+}
+
+func (c *trialRawSignalCollector) snapshotAndReset() map[string]graphrank.CandidateNode {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	snapshot := c.bySubject
+	c.bySubject = nil
+	return snapshot
+}
+
+func (c *trialRawSignalCollector) ObserveCandidate(subjectKey string, node graphrank.CandidateNode) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.bySubject == nil {
+		c.bySubject = map[string]graphrank.CandidateNode{}
+	}
+	existing, ok := c.bySubject[subjectKey]
+	if !ok {
+		c.bySubject[subjectKey] = node
+		return
+	}
+	if node.VectorSimilarity != nil && (existing.VectorSimilarity == nil || *node.VectorSimilarity > *existing.VectorSimilarity) {
+		existing.VectorSimilarity = node.VectorSimilarity
+	}
+	if node.LexicalMatchedTerms != nil && node.LexicalTermCount != nil && *node.LexicalTermCount > 0 {
+		newRatio := float64(*node.LexicalMatchedTerms) / float64(*node.LexicalTermCount)
+		haveExisting := existing.LexicalMatchedTerms != nil && existing.LexicalTermCount != nil && *existing.LexicalTermCount > 0
+		existingRatio := 0.0
+		if haveExisting {
+			existingRatio = float64(*existing.LexicalMatchedTerms) / float64(*existing.LexicalTermCount)
+		}
+		if !haveExisting || newRatio > existingRatio {
+			existing.LexicalMatchedTerms = node.LexicalMatchedTerms
+			existing.LexicalTermCount = node.LexicalTermCount
+		}
+	}
+	c.bySubject[subjectKey] = existing
+}
+
+// attachRawSignal enriches one already-built trialCandidateMatchProvenance
+// (in place) with the raw signal snapshot recorded for the SAME subject
+// (Kind+CanonicalID -> graphrank.SubjectKey, the identical identity the
+// snapshot is keyed by). No-op on a nil prov (topNonCommittedMatchProvenance
+// may return nil) or when the snapshot has no entry for this subject (e.g.
+// an exact-hint-only commit, which never goes through mergeSearchResults at
+// all).
+func attachRawSignal(prov *trialCandidateMatchProvenance, snapshot map[string]graphrank.CandidateNode) {
+	if prov == nil || snapshot == nil {
+		return
+	}
+	key := graphrank.SubjectKey(contractsv1.ContextFabricSubjectRef{
+		Kind: contractsv1.ContextFabricSubjectKind(prov.Kind), CanonicalID: prov.CanonicalID,
+	})
+	node, ok := snapshot[key]
+	if !ok {
+		return
+	}
+	prov.RawVectorSimilarity = node.VectorSimilarity
+	prov.RawLexicalMatchedTerms = node.LexicalMatchedTerms
+	prov.RawLexicalTermCount = node.LexicalTermCount
 }
 
 // candidateMatchProvenance projects the fields
@@ -667,6 +789,49 @@ func candidateMatchProvenance(cand contractsv1.ContextFabricSubjectCandidate) tr
 		Mechanisms:  mechanisms,
 		Confidence:  cand.Confidence,
 	}
+}
+
+// candidatePoolMechanismComposition is the CHAOS-3858 population-attribution
+// record: how many candidates in the FULL post-Phase-4 pool
+// (result.SubjectResolution.Candidates, the same slice CandidateCount/
+// TopCandidateConfidence already read) carry each distinct mechanism SET,
+// keyed by the comma-joined mechanism list. It answers "is this an
+// unanswerable-question pool (anchor-free) or a real-subject pool
+// (anchored)" at the POPULATION level, which is what CHAOS-3858's
+// mechanism-anchor design needs measured before it can be built --
+// TopCandidateConfidence alone cannot answer that (see this trial's own
+// prior finding: control and real no-commit pools share the same [0.50,
+// 0.755] confidence band).
+//
+// Aggregated counts only, same privacy posture as candidateMatchProvenance:
+// no canonical ID, no kind, no label, no per-candidate identity of any
+// kind -- only "N candidates had mechanism set S" for whichever sets
+// actually appeared. A candidate with NO recognized mechanism (mechanism.go:
+// "an empty value records no mechanism... legal") is counted under the
+// literal key "none" rather than an empty string, so it is distinguishable
+// from an absent map entry.
+//
+// candidates' own MatchMechanisms is already canonically ordered (
+// graphrank.MergeMechanisms is the only place that field is ever set), so
+// joining it as-is is a stable set key without this test package importing
+// graphrank to re-derive the order.
+func candidatePoolMechanismComposition(candidates []contractsv1.ContextFabricSubjectCandidate) map[string]int {
+	if len(candidates) == 0 {
+		return nil
+	}
+	composition := make(map[string]int)
+	for _, cand := range candidates {
+		key := "none"
+		if len(cand.MatchMechanisms) > 0 {
+			mechanisms := make([]string, 0, len(cand.MatchMechanisms))
+			for _, mechanism := range cand.MatchMechanisms {
+				mechanisms = append(mechanisms, string(mechanism))
+			}
+			key = strings.Join(mechanisms, ",")
+		}
+		composition[key]++
+	}
+	return composition
 }
 
 // subjectRefKey/subjectCandidateKey give committed/candidate matching a
@@ -806,11 +971,21 @@ type caseOutcome struct {
 	// still fully valid input to anything that decodes caseOutcome.
 	CommittedMatches     []trialCandidateMatchProvenance `json:"committed_matches,omitempty"`
 	TopNonCommittedMatch *trialCandidateMatchProvenance  `json:"top_non_committed_match,omitempty"`
+	// CandidatePoolMechanisms (CHAOS-3858, additive/optional -- same
+	// discipline as CommittedMatches/TopNonCommittedMatch above): counts of
+	// the FULL post-Phase-4 candidate pool by mechanism SET, e.g.
+	// {"lexical":6,"vector":2,"lexical,vector":2}. Absence must be read as
+	// "not recorded", never "empty pool" -- CandidateCount already carries
+	// that. See candidatePoolMechanismComposition's own doc comment.
+	CandidatePoolMechanisms map[string]int `json:"candidate_pool_mechanisms,omitempty"`
 }
 
-func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, caseTimeout time.Duration) caseOutcome {
+func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, caseTimeout time.Duration, rawSignals *trialRawSignalCollector) caseOutcome {
 	t.Helper()
 	isControl := tc.ExpectID == ""
+	if rawSignals != nil {
+		rawSignals.reset()
+	}
 	request := contractsv1.ContextFabricInvestigationRequest{
 		SchemaVersion: contractsv1.ContextFabricInvestigationRequestSchema,
 		RequestID:     fmt.Sprintf("request_trial%06d", index),
@@ -857,6 +1032,14 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 	outcome.RetrievalDegraded = result.SubjectResolution.RetrievalDegraded
 	outcome.CommittedMatches = committedMatchProvenance(result.SubjectResolution.Committed, result.SubjectResolution.Candidates)
 	outcome.TopNonCommittedMatch = topNonCommittedMatchProvenance(result.SubjectResolution.Committed, result.SubjectResolution.Candidates)
+	outcome.CandidatePoolMechanisms = candidatePoolMechanismComposition(result.SubjectResolution.Candidates)
+	if rawSignals != nil {
+		snapshot := rawSignals.snapshotAndReset()
+		for i := range outcome.CommittedMatches {
+			attachRawSignal(&outcome.CommittedMatches[i], snapshot)
+		}
+		attachRawSignal(outcome.TopNonCommittedMatch, snapshot)
+	}
 	outcome.AnswerLength = len(result.DeterministicAnswer)
 	outcome.ClaimedFacts = len(result.ClaimedFacts)
 	outcome.Drivers = len(result.Drivers)
@@ -979,6 +1162,12 @@ type trialProvenance struct {
 	SourceDirty      bool   `json:"source_dirty"`
 	SourceDiffDigest string `json:"source_diff_digest,omitempty"`
 	RunStartedAt     string `json:"run_started_at"`
+	// ControlsContinue (CHAOS-3858 scorecard mode) records whether this run
+	// was launched with ACR_TEST_TRIAL_CONTROLS_CONTINUE=true -- i.e.
+	// whether a control-violation outcome recorded and continued instead of
+	// aborting the arm. false (the default) for every run before this
+	// field existed and every run that does not set the env var.
+	ControlsContinue bool `json:"controls_continue"`
 	// CommitGate is CHAOS-3857's sweep-cell record: the raw string this
 	// run actually read for each of falkorgraph's four commit-gate env
 	// vars (CommitGatePolicy's three thresholds + the M override), empty

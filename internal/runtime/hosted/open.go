@@ -248,6 +248,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// internal/contextfabric/AGENTS.md's "reported, never inferred"
 	// invariant only cosmetically.
 	graphConfig.Telemetry = falkorGraphTelemetry(request.options.Logger)
+	// CHAOS-3858 (measurement-only): nil for every real caller. See
+	// Options.RawSignalObserver's doc comment.
+	graphConfig.RawSignalObserver = request.options.RawSignalObserver
 	// CHAOS-3778: vector retrieval is optional. An unconfigured embedder
 	// leaves the lexical retrieval path exactly as it was.
 	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)

@@ -33,6 +33,7 @@ import (
 
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
 const (
@@ -95,6 +96,15 @@ type Config struct {
 	// Telemetry is optional (nil-safe), same contract as
 	// zepgraph.GraphTelemetry.
 	Telemetry GraphTelemetry
+	// RawSignalObserver (CHAOS-3858, measurement-only) is optional
+	// (nil-safe), set directly by the composition root the same way
+	// Telemetry is -- a Go interface value, never env-derived, and
+	// independent of whether an embedder is configured (unlike
+	// EmbedderOptions.CommitGatePolicy, this is not vector-retrieval-gated:
+	// it reports the lexical raw signal too). See
+	// graphrank.ResolveDeps.RawSignalObserver's doc comment for the full
+	// scope. No production composition root sets this.
+	RawSignalObserver graphrank.RawSignalObserver
 }
 
 // GraphTelemetry is the graph adapter's operational signal sink.

@@ -179,6 +179,37 @@ type ResolveDeps struct {
 	// override should mean. A backend with no override leaves this at its
 	// zero value and gets exactly today's calibrated behavior.
 	CommitGatePolicy CommitGatePolicy
+	// RawSignalObserver (CHAOS-3858, measurement-only) is an optional,
+	// nil-by-default hook: when set, ResolveSubjects reports the raw
+	// pre-remap signal (CandidateNode.VectorSimilarity,
+	// LexicalMatchedTerms/LexicalTermCount) for every ACCEPTED candidate --
+	// i.e. AFTER NodeCandidate's own authorization/acceptance check, never
+	// before, so this cannot become the kind of pre-authorization existence
+	// oracle vectorArmSimilarity's own doc comment (mergeSearchResults)
+	// warns about: it only ever describes a candidate the caller's own
+	// result already contains. No production caller sets this -- every real
+	// deployment leaves it nil, and a nil observer is never invoked, so
+	// this has no effect on any resolution decision. Exists to let a
+	// measurement harness (never a production consumer) compare the raw
+	// signal against the remapped Confidence without touching any commit
+	// gate.
+	RawSignalObserver RawSignalObserver
+}
+
+// RawSignalObserver is the CHAOS-3858 measurement-only capture port -- see
+// ResolveDeps.RawSignalObserver's doc comment for the "never before
+// authorization, never a production consumer" scope this is held to.
+type RawSignalObserver interface {
+	// ObserveCandidate reports one accepted candidate's raw retrieval
+	// signal. subjectKey is SubjectKey(candidate.Subject) -- the same
+	// identity the trial harness's own committed_matches/
+	// top_non_committed_match provenance already keys on -- and node is the
+	// FULL CandidateNode NodeCandidate just accepted, so an observer can
+	// read whichever raw field its mechanism populated (VectorSimilarity
+	// for MatchVector, LexicalMatchedTerms/LexicalTermCount for
+	// MatchLexical) without this interface needing to grow a new method
+	// per mechanism.
+	ObserveCandidate(subjectKey string, node CandidateNode)
 }
 
 // ResolveSubjects resolves the committed/candidate subjects for an
@@ -624,6 +655,9 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 			continue
 		}
 		key := SubjectKey(candidate.Subject)
+		if deps.RawSignalObserver != nil {
+			deps.RawSignalObserver.ObserveCandidate(key, node)
+		}
 		// CHAOS-3778: MergeCandidates replaces a plain "keep the higher
 		// confidence" here. The higher-confidence finding still supplies
 		// the spine and the base confidence, so nothing about a

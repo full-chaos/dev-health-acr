@@ -469,6 +469,28 @@ func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string
 		if !truncated {
 			matched := fulltextMatchedTermCount(graphrank.StringAttribute(candidate.Attributes, propSearchText), matchTerms)
 			relevance = fulltextRelevanceFromMatchedTerms(matched, termCount)
+			// CHAOS-3858 measurement-only capture: the exact (matched,
+			// termCount) pair the remap above just consumed, before it is
+			// gone. See CandidateNode.LexicalMatchedTerms' doc comment --
+			// never read by any confidence/decision path, only by an
+			// optional RawSignalObserver.
+			//
+			// Gated on a.config.RawSignalObserver != nil (adversarial-review
+			// finding): every production deployment leaves that nil, and
+			// without this gate `matched`/`termCount` -- otherwise pure
+			// stack locals consumed only by the remap above -- would escape
+			// to the heap on EVERY non-truncated candidate (this function is
+			// also DiscoverContext's shared authority, which never consumes
+			// an observer at all), a real, unconditional per-candidate
+			// allocation cost the "measurement-only, zero production cost"
+			// design goal cannot pay. The two-word CandidateNode struct
+			// widening this pair still costs is the same FIXED, already-
+			// accepted precedent VectorSimilarity (CHAOS-3829) set; this
+			// gate removes the ADDITIONAL heap-escape cost on top of it.
+			if a.config.RawSignalObserver != nil {
+				candidate.LexicalMatchedTerms = &matched
+				candidate.LexicalTermCount = &termCount
+			}
 		}
 		candidate.Relevance = graphrank.Normalized(relevance)
 		candidates = append(candidates, candidate)

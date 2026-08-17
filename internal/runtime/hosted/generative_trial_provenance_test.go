@@ -237,7 +237,13 @@ func TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText(t *testing.T) {
 	// below exists as the STRUCTURAL guarantee, walking the TYPE via
 	// reflection rather than one instance's marshaled output -- the two are
 	// complementary, not redundant (luna review finding, CHAOS-3880).
-	allowedTags := map[string]bool{"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true}
+	allowedTags := map[string]bool{
+		"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true,
+		// CHAOS-3858 additive/optional raw-signal fields -- see
+		// trialCandidateMatchProvenance's own doc comment. Raw
+		// vector-similarity/matched-term-coverage numbers, never identity.
+		"raw_vector_similarity": true, "raw_lexical_matched_terms": true, "raw_lexical_term_count": true,
+	}
 	full := trialCandidateMatchProvenanceAllFields()
 	fullBlob, err := json.Marshal(full)
 	if err != nil {
@@ -293,7 +299,10 @@ func walkJSONObjectKeys(t *testing.T, raw json.RawMessage, seen map[string]bool)
 // nested struct/slice/pointer field, so a future field that is itself a
 // struct is caught too, not only a flat top-level scalar.
 func TestTrialCandidateMatchProvenanceStructFields_onlyAllowedJSONTags(t *testing.T) {
-	allowed := map[string]bool{"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true}
+	allowed := map[string]bool{
+		"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true,
+		"raw_vector_similarity": true, "raw_lexical_matched_terms": true, "raw_lexical_term_count": true,
+	}
 	seen := map[string]bool{}
 	walkStructJSONTags(reflect.TypeOf(trialCandidateMatchProvenance{}), seen)
 	if len(seen) == 0 {
@@ -334,11 +343,19 @@ func walkStructJSONTags(typ reflect.Type, seen map[string]bool) {
 // JSON tag the type can ever emit (a zero-valued field would be dropped by
 // omitempty and silently escape the check).
 func trialCandidateMatchProvenanceAllFields() trialCandidateMatchProvenance {
+	sim, matched, termCount := 0.61, 2, 4
 	return trialCandidateMatchProvenance{
 		Kind:        "project",
 		CanonicalID: "project_x",
 		Mechanisms:  []string{"vector"},
 		Confidence:  0.5,
+		// CHAOS-3858: populated here too, so the INSTANCE-level canary
+		// (TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText)
+		// actually exercises these fields on the wire, not just the
+		// structural one.
+		RawVectorSimilarity:    &sim,
+		RawLexicalMatchedTerms: &matched,
+		RawLexicalTermCount:    &termCount,
 	}
 }
 
@@ -370,6 +387,31 @@ func TestCaseOutcome_newProvenanceFieldsAreAdditiveAndOptional(t *testing.T) {
 		if strings.Contains(text, key) {
 			t.Fatalf("caseOutcome JSON = %s, want it to OMIT %q when unset (omitempty)", text, key)
 		}
+	}
+}
+
+// TestCaseOutcome_candidatePoolMechanismsIsAdditiveAndOptional is
+// CHAOS-3858's extension of the CHAOS-3880 additive-field discipline above,
+// applied to CandidatePoolMechanisms: a pre-CHAOS-3858 report JSON (no
+// candidate_pool_mechanisms key) must still decode cleanly, and the field
+// must be omitted from the wire when unset, exactly like its two CHAOS-3880
+// siblings.
+func TestCaseOutcome_candidatePoolMechanismsIsAdditiveAndOptional(t *testing.T) {
+	legacy := `{"index":0,"is_control":false,"outcome":"correct","stage":"usable_answer","committed_count":1,"latency_ms":120}`
+	var decoded caseOutcome
+	if err := json.Unmarshal([]byte(legacy), &decoded); err != nil {
+		t.Fatalf("decode pre-CHAOS-3858 report shape: %v", err)
+	}
+	if decoded.CandidatePoolMechanisms != nil {
+		t.Fatalf("decoded CandidatePoolMechanisms = %+v, want nil for a legacy payload with no such key", decoded.CandidatePoolMechanisms)
+	}
+
+	blob, err := json.Marshal(caseOutcome{Index: 0, Outcome: "correct", Stage: "usable_answer", CommittedCount: 1, LatencyMS: 120})
+	if err != nil {
+		t.Fatalf("marshal zero-valued new field: %v", err)
+	}
+	if strings.Contains(string(blob), "candidate_pool_mechanisms") {
+		t.Fatalf("caseOutcome JSON = %s, want it to OMIT \"candidate_pool_mechanisms\" when unset (omitempty)", blob)
 	}
 }
 
@@ -413,5 +455,119 @@ func TestLegacyReader_ignoresTheNewProvenanceFieldsInANewReportFile(t *testing.T
 	}
 	if legacy.Index != 3 || legacy.Outcome != "correct" || legacy.Stage != "usable_answer" || legacy.CommittedCount != 1 || legacy.LatencyMS != 250 {
 		t.Fatalf("legacy reader decoded = %+v, want the known fields carried through unchanged", legacy)
+	}
+}
+
+// --- CHAOS-3858: candidatePoolMechanismComposition ---
+//
+// candidatePoolMechanismComposition is the population-attribution signal
+// CHAOS-3858's mechanism-anchor design needs measured before it is built:
+// the FULL post-Phase-4 candidate pool's mechanism-SET composition, as
+// aggregated counts only -- see the function's own doc comment
+// (generative_trial_live_test.go) for why TopCandidateConfidence alone
+// cannot answer this (control and real no-commit pools share one
+// confidence band in this same trial's prior findings).
+
+func TestCandidatePoolMechanismComposition_nilWhenNoCandidates(t *testing.T) {
+	if got := candidatePoolMechanismComposition(nil); got != nil {
+		t.Fatalf("candidatePoolMechanismComposition(nil) = %+v, want nil", got)
+	}
+	if got := candidatePoolMechanismComposition([]contractsv1.ContextFabricSubjectCandidate{}); got != nil {
+		t.Fatalf("candidatePoolMechanismComposition(empty) = %+v, want nil", got)
+	}
+}
+
+func TestCandidatePoolMechanismComposition_aggregatesByMechanismSet(t *testing.T) {
+	candidates := []contractsv1.ContextFabricSubjectCandidate{
+		subjectCandidate("project", "project_a", 0.755, contractsv1.ContextFabricMatchLexical),
+		subjectCandidate("project", "project_b", 0.5, contractsv1.ContextFabricMatchLexical),
+		subjectCandidate("work_item", "wi_c", 0.6, contractsv1.ContextFabricMatchVector),
+		subjectCandidate("project", "project_d", 0.79, contractsv1.ContextFabricMatchLexical, contractsv1.ContextFabricMatchVector),
+	}
+
+	got := candidatePoolMechanismComposition(candidates)
+
+	want := map[string]int{"lexical": 2, "vector": 1, "lexical,vector": 1}
+	if len(got) != len(want) {
+		t.Fatalf("candidatePoolMechanismComposition = %+v, want %+v", got, want)
+	}
+	for key, count := range want {
+		if got[key] != count {
+			t.Fatalf("candidatePoolMechanismComposition[%q] = %d, want %d (full: %+v)", key, got[key], count, got)
+		}
+	}
+}
+
+// TestCandidatePoolMechanismComposition_noMechanismCountsAsNone pins the
+// legal-but-unnamed state mechanism.go documents ("an empty value records
+// no mechanism... that is legal"): such a candidate must be counted under
+// the literal "none" key, not silently dropped and not merged into an
+// empty-string key indistinguishable from a missing entry.
+func TestCandidatePoolMechanismComposition_noMechanismCountsAsNone(t *testing.T) {
+	candidates := []contractsv1.ContextFabricSubjectCandidate{
+		subjectCandidate("project", "project_a", 0.5),
+	}
+	got := candidatePoolMechanismComposition(candidates)
+	if got["none"] != 1 {
+		t.Fatalf("candidatePoolMechanismComposition = %+v, want {\"none\":1}", got)
+	}
+}
+
+// TestCandidatePoolMechanismComposition_neverCarriesIdentity is the
+// CHAOS-3858 privacy canary, same shape as
+// TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText: a pool built
+// from fixtures carrying secret labels/ids must never leak them through the
+// aggregate -- only mechanism-set strings (a closed, non-secret vocabulary)
+// and integer counts.
+func TestCandidatePoolMechanismComposition_neverCarriesIdentity(t *testing.T) {
+	candidates := []contractsv1.ContextFabricSubjectCandidate{
+		subjectCandidate("project", "project_secret_id", 0.83, contractsv1.ContextFabricMatchLexical, contractsv1.ContextFabricMatchVector),
+		subjectCandidate("work_item", "wi_secret_id_2", 0.5),
+	}
+
+	got := candidatePoolMechanismComposition(candidates)
+	blob, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal candidatePoolMechanismComposition: %v", err)
+	}
+	text := string(blob)
+
+	forbidden := []string{"SECRET LABEL", "secret search term", "secret match reason", "project_secret_id", "wi_secret_id_2", "project", "work_item"}
+	for _, f := range forbidden {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(f)) {
+			t.Fatalf("candidatePoolMechanismComposition JSON leaked forbidden content %q: %s", f, text)
+		}
+	}
+
+	// Positive assertion: the allowed keys/values ARE present.
+	for _, want := range []string{`"lexical,vector":1`, `"none":1`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("candidatePoolMechanismComposition JSON = %s, want it to contain %q", text, want)
+		}
+	}
+}
+
+// TestCandidatePoolMechanismComposition_keysAreClosedMechanismVocabularyOnly
+// is the STRUCTURAL companion to the canary above: every comma-separated
+// element of every non-"none" key must be a mechanism
+// contractsv1.ValidContextFabricSubjectMatchMechanism recognizes -- i.e. the
+// key space is drawn entirely from the closed, non-secret mechanism enum
+// (plus the "none" sentinel), never from candidate-supplied text.
+func TestCandidatePoolMechanismComposition_keysAreClosedMechanismVocabularyOnly(t *testing.T) {
+	candidates := []contractsv1.ContextFabricSubjectCandidate{
+		subjectCandidate("project", "project_a", 0.9, contractsv1.ContextFabricMatchExact),
+		subjectCandidate("project", "project_b", 0.6, contractsv1.ContextFabricMatchLexical, contractsv1.ContextFabricMatchVector, contractsv1.ContextFabricMatchTraversalParent),
+		subjectCandidate("project", "project_c", 0.5),
+	}
+	got := candidatePoolMechanismComposition(candidates)
+	for key := range got {
+		if key == "none" {
+			continue
+		}
+		for _, mechanism := range strings.Split(key, ",") {
+			if !contractsv1.ValidContextFabricSubjectMatchMechanism(contractsv1.ContextFabricSubjectMatchMechanism(mechanism)) {
+				t.Fatalf("candidatePoolMechanismComposition key %q contains unrecognized mechanism %q", key, mechanism)
+			}
+		}
 	}
 }
