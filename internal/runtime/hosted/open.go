@@ -225,13 +225,27 @@ func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
 	return falkorgraph.SlogTelemetry{Logger: logger}
 }
 
-func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, error) {
-	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
-		return nil, nil, nil, nil, nil, nil
-	}
+// buildContextFabricGraphReader composes the falkorgraph.Adapter (plus its
+// paired embed-retrieval identity, which callers of buildContextFabricInvestigator
+// still need downstream for EngineOptions.ReuseVersionAuthorities) --
+// factored out of buildContextFabricInvestigator (CHAOS-3884 replay
+// harness, team-lead ruling 2026-08-17 option (c)) so a SECOND graph reader
+// pointed at the SAME live graph, differing ONLY in wireIdentityUniverse,
+// can be built without duplicating this composition logic. Production
+// (buildContextFabricInvestigator) always passes wireIdentityUniverse=true
+// -- this parameter exists for the replay harness alone; no other caller
+// should ever pass false.
+//
+// wireIdentityUniverse=false leaves graphConfig.IdentityUniverse unset,
+// which is EXACTLY pre-CHAOS-3884 behavior (Config.IdentityUniverse's own
+// doc comment: nil-safe, degrades to no identity fast path). This is the
+// replay harness's "arm A" / baseline: the OLD resolver behavior recovered
+// inside the NEW binary, by construction, because CHAOS-3884's entire
+// commit-path change sits behind this one nil-checked dependency.
+func buildContextFabricGraphReader(request buildRequest, clickhouse clickHouseComponents, wireIdentityUniverse bool) (contextfabric.GraphReader, string, error) {
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
+		return nil, "", fmt.Errorf("load context fabric graph configuration: %w", err)
 	}
 	// Codex round-3 F2: supply a real telemetry sink. Left nil, every graph
 	// signal -- including the per-request vector-degradation signal -- was
@@ -252,21 +266,23 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// CHAOS-3858 (measurement-only): nil for every real caller. See
 	// Options.RawSignalObserver's doc comment.
 	graphConfig.RawSignalObserver = request.options.RawSignalObserver
-	// CHAOS-3884 (Option C): closes over the SAME ClickHouse query client
-	// devhealthfacts.NewProviders already uses below, so the identity
-	// universe read shares the deployment's one live ClickHouse connection
-	// rather than opening a second one. Nil-safe by construction --
-	// falkorgraph.Config.IdentityUniverse's doc comment -- so leaving this
-	// unset (e.g. in a future caller) degrades to no identity fast path,
-	// never a startup failure.
-	graphConfig.IdentityUniverse = func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
-		return devhealthsource.IdentityUniverse(ctx, clickhouse.queryClient, orgID)
+	if wireIdentityUniverse {
+		// CHAOS-3884 (Option C): closes over the SAME ClickHouse query client
+		// devhealthfacts.NewProviders already uses below, so the identity
+		// universe read shares the deployment's one live ClickHouse connection
+		// rather than opening a second one. Nil-safe by construction --
+		// falkorgraph.Config.IdentityUniverse's doc comment -- so leaving this
+		// unset (e.g. in a future caller) degrades to no identity fast path,
+		// never a startup failure.
+		graphConfig.IdentityUniverse = func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+			return devhealthsource.IdentityUniverse(ctx, clickhouse.queryClient, orgID)
+		}
 	}
 	// CHAOS-3778: vector retrieval is optional. An unconfigured embedder
 	// leaves the lexical retrieval path exactly as it was.
 	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("load context fabric embedder configuration: %w", err)
+		return nil, "", fmt.Errorf("load context fabric embedder configuration: %w", err)
 	}
 	// CHAOS-3841: an optional LRU over the READ path's single-text (query)
 	// Embed calls only -- see embedcache's package doc. Wired here, not in
@@ -277,7 +293,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// unchanged) when the cache is not enabled or no embedder is configured.
 	embedCacheConfig, err := embedcache.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("load context fabric embed query cache configuration: %w", err)
+		return nil, "", fmt.Errorf("load context fabric embed query cache configuration: %w", err)
 	}
 	embedderOptions.Embedder = embedcache.Wrap(embedderOptions.Embedder, embedCacheConfig)
 	// CHAOS-3833: the deployment-current embed retrieval identity for
@@ -288,11 +304,22 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// contextfabric.ReuseKey's CHAOS-3833 doc comment.
 	embedRetrievalIdentity, err := falkorgraph.EmbedRetrievalIdentityFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("load context fabric embed retrieval identity: %w", err)
+		return nil, "", fmt.Errorf("load context fabric embed retrieval identity: %w", err)
 	}
 	graphReader, err := falkorgraph.NewWithEmbedder(graphConfig, embedderOptions)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
+		return nil, "", fmt.Errorf("initialize context fabric graph adapter: %w", err)
+	}
+	return graphReader, embedRetrievalIdentity, nil
+}
+
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, error) {
+	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
+		return nil, nil, nil, nil, nil, nil
+	}
+	graphReader, embedRetrievalIdentity, err := buildContextFabricGraphReader(request, clickhouse, true)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
 	}
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
 		devhealthfacts.NewProviders(clickhouse.queryClient),
