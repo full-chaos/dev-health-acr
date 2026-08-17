@@ -293,7 +293,7 @@ type ResolutionTraceEvent struct {
 	// "request.RequestID exists").
 	RequestID string
 	// Stage is a closed vocabulary: "search", "alias_lookup",
-	// "corroboration", "decision".
+	// "corroboration", "decision", "identity_gate".
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -318,21 +318,41 @@ type ResolutionTraceEvent struct {
 	// stage): the pre- and post-CorroboratedConfidence values and the
 	// distinct mechanism count it computed from (mechanism.go:213 -- this
 	// is exactly where a 0.5 base either does or does not become a
-	// trusted 1.0). IdentityTrusted is a PROXY (base>=1 already true
-	// before corroboration AND the mechanism set includes an
-	// identity-class mechanism) -- resolution.go has no direct access to
-	// NodeCandidate's own identityTrusted local, and adding one would mean
-	// growing the wire-contract SubjectCandidate type, which this
-	// diagnostic does not need.
+	// trusted 1.0).
 	BaseConfidence     float64
 	FinalConfidence    float64
 	DistinctMechanisms int
-	IdentityTrusted    bool
 	// Outcome/WinningMechanism (decision stage): "committed" / "ambiguous"
 	// / "no_commit". WinningMechanism is the strongest mechanism on the
 	// committed/considered candidate (empty for a no-candidate outcome).
 	Outcome          string
 	WinningMechanism string
+	// FromKeyedIdentityLookup/EligibleKind/AliasMatched/ProviderMatched/
+	// GateFired (identity_gate stage ONLY -- team-lead ruling, 2026-08-17,
+	// guardrail 6): the ACTUAL confidence-gate INPUTS, emitted from WITHIN
+	// NodeCandidate itself (candidate.go), where these are real locals --
+	// never reconstructed downstream as a proxy. An earlier version of
+	// this event collapsed these into one "IdentityTrusted" bool computed
+	// in resolution.go from already-merged/corroborated values (base>=1 +
+	// an identity-class mechanism present); that proxy was WRONG in
+	// exactly the bug this ticket found live: pre-fix, FromKeyedIdentityLookup
+	// could be true while the gate still never fired (aliasMatched false
+	// against a stale graph attribute), and the proxy reported
+	// IdentityTrusted=false -- hiding the exact bug it existed to expose.
+	// Recording the real inputs instead makes the trace PROVE the fix:
+	// pre-fix a case reads {FromKeyedIdentityLookup:true, AliasMatched:false,
+	// GateFired:false, FinalConfidence:0.755}; post-fix
+	// {FromKeyedIdentityLookup:true, GateFired:true, FinalConfidence:1}.
+	// FinalConfidence (shared with the corroboration stage above) carries
+	// this event's own resulting confidence -- NodeCandidate's PRE-merge
+	// value, not corroboration's POST-merge one; the two stages are never
+	// emitted for the same call, so there is no ambiguity reading a report
+	// by Stage.
+	FromKeyedIdentityLookup bool
+	EligibleKind            bool
+	AliasMatched            bool
+	ProviderMatched         bool
+	GateFired               bool
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -407,7 +427,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// unlike CHAOS-3838's question-provenance marker below, this is
 		// genuine caller-supplied identity, and this whole branch already
 		// forces Confidence/MatchExact explicitly regardless.
-		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true)
+		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true, deps.ResolutionTracer, request.RequestID)
 		if !ok {
 			continue
 		}
@@ -874,7 +894,7 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 				}
 			}
 		}
-		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, allowExactMatch)
+		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, allowExactMatch, deps.ResolutionTracer, request.RequestID)
 		if !ok {
 			continue
 		}

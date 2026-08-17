@@ -320,8 +320,14 @@ func TestResolveSubjects_TracerObservesAliasLookupReachedThroughWiredComposition
 	if len(decisionEvents) != 1 || decisionEvents[0].Outcome != "committed" {
 		t.Fatalf("decision events = %#v, want exactly one committed", decisionEvents)
 	}
-	if !decisionEvents[0].IdentityTrusted {
-		t.Error("decision event IdentityTrusted = false, want true -- r1 committed via the identity-trust bump")
+
+	identityGateEvents := tracer.eventsForStage("identity_gate")
+	if len(identityGateEvents) != 1 {
+		t.Fatalf("identity_gate events = %d, want exactly 1", len(identityGateEvents))
+	}
+	gate := identityGateEvents[0]
+	if !gate.FromKeyedIdentityLookup || !gate.EligibleKind || !gate.GateFired || gate.FinalConfidence != 1 {
+		t.Errorf("identity_gate event = %#v, want FromKeyedIdentityLookup/EligibleKind/GateFired all true and FinalConfidence 1 -- r1 committed via the identity-trust bump", gate)
 	}
 }
 
@@ -372,13 +378,35 @@ func TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttrib
 	if corroborationEvents[0].BaseConfidence != 1 || corroborationEvents[0].FinalConfidence != 1 {
 		t.Fatalf("corroboration event base/final confidence = %v/%v, want 1/1 -- identityTrusted alone, not a re-derivation against the stale graph attribute, must be what set the base", corroborationEvents[0].BaseConfidence, corroborationEvents[0].FinalConfidence)
 	}
-	if !corroborationEvents[0].IdentityTrusted {
-		t.Error("corroboration event IdentityTrusted = false, want true")
-	}
 
 	decisionEvents := tracer.eventsForStage("decision")
-	if len(decisionEvents) != 1 || decisionEvents[0].Outcome != "committed" || !decisionEvents[0].IdentityTrusted {
-		t.Fatalf("decision events = %#v, want exactly one committed+IdentityTrusted", decisionEvents)
+	if len(decisionEvents) != 1 || decisionEvents[0].Outcome != "committed" {
+		t.Fatalf("decision events = %#v, want exactly one committed", decisionEvents)
+	}
+
+	// THE before/after story guardrail 6 asked for, read from the REAL gate
+	// inputs (not a proxy): FromKeyedIdentityLookup=true (the identity read
+	// verified this claimant), AliasMatched=false (the graph's OWN
+	// attribute is stale -- aliasCandidateNode's aliases param is nil),
+	// GateFired=true anyway (the fix), FinalConfidence=1. Pre-fix this same
+	// event would have read GateFired=false, FinalConfidence=0.5 -- the
+	// exact bug, visible in the trace instead of hidden by a collapsed bool.
+	identityGateEvents := tracer.eventsForStage("identity_gate")
+	if len(identityGateEvents) != 1 {
+		t.Fatalf("identity_gate events = %d, want exactly 1", len(identityGateEvents))
+	}
+	gate := identityGateEvents[0]
+	if !gate.FromKeyedIdentityLookup {
+		t.Error("identity_gate event FromKeyedIdentityLookup = false, want true")
+	}
+	if gate.AliasMatched {
+		t.Error("identity_gate event AliasMatched = true, want false -- the graph's own attribute is deliberately stale in this test")
+	}
+	if !gate.GateFired {
+		t.Error("identity_gate event GateFired = false, want true -- this is the fix: identityTrusted alone must fire the gate despite AliasMatched=false")
+	}
+	if gate.FinalConfidence != 1 {
+		t.Errorf("identity_gate event FinalConfidence = %v, want 1", gate.FinalConfidence)
 	}
 }
 

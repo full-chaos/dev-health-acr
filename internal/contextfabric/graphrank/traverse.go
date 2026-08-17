@@ -110,7 +110,14 @@ func TraverseObservationToSubject(
 			uncertain = true
 			continue
 		}
-		candidate, ok := NodeCandidate(principal, scope, term, source, isInternal, allowExactMatch)
+		// tracer=nil, requestID="": traversal-parent candidates are one hop
+		// removed from the direct match this ticket's identity gate is
+		// scoped to (CHAOS-3884), and TraverseObservationToSubject has no
+		// natural access to a per-request tracer/RequestID without
+		// threading them through its own signature -- out of scope here;
+		// see NodeCandidate's own doc comment for the identity_gate event
+		// this omits for a traversal-sourced candidate.
+		candidate, ok := NodeCandidate(principal, scope, term, source, isInternal, allowExactMatch, nil, "")
 		if !ok || IsObservationSubjectKind(candidate.Subject.Kind) {
 			continue
 		}

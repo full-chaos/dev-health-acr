@@ -43,12 +43,19 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"base_confidence", event.BaseConfidence, "final_confidence", event.FinalConfidence,
-			"distinct_mechanisms", event.DistinctMechanisms, "identity_trusted", event.IdentityTrusted)
+			"distinct_mechanisms", event.DistinctMechanisms)
 	case "decision":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: decision",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
-			"outcome", event.Outcome, "winning_mechanism", event.WinningMechanism, "identity_trusted", event.IdentityTrusted)
+			"outcome", event.Outcome, "winning_mechanism", event.WinningMechanism)
+	case "identity_gate":
+		t.logger.DebugContext(ctx, "context fabric resolution trace: identity gate",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"from_keyed_identity_lookup", event.FromKeyedIdentityLookup, "eligible_kind", event.EligibleKind,
+			"alias_matched", event.AliasMatched, "provider_matched", event.ProviderMatched,
+			"gate_fired", event.GateFired, "final_confidence", event.FinalConfidence)
 	default:
 		t.logger.DebugContext(ctx, "context fabric resolution trace: unknown stage",
 			"request_id", event.RequestID, "stage", event.Stage)

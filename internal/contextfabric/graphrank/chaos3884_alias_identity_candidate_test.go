@@ -44,7 +44,7 @@ func TestNodeCandidate_AliasMatchTaggedButNotTrustedWithoutKeyedLookup(t *testin
 	scope := contextfabric.RequestedScope{}
 	node := aliasCandidateNode(contextfabric.SubjectRepository, "repository_1", "full-chaos/dev-health-acr", -1, []string{"dev-health-acr"}, nil, false)
 
-	candidate, ok := NodeCandidate(principal, scope, "dev-health-acr", node, noInternalSubjects, true)
+	candidate, ok := NodeCandidate(principal, scope, "dev-health-acr", node, noInternalSubjects, true, nil, "")
 	if !ok {
 		t.Fatal("NodeCandidate() rejected a legitimately authorized alias-matching node")
 	}
@@ -68,7 +68,7 @@ func TestNodeCandidate_AliasMatchTrustedWithKeyedLookupOnEligibleKind(t *testing
 	scope := contextfabric.RequestedScope{}
 	node := aliasCandidateNode(contextfabric.SubjectRepository, "repository_1", "full-chaos/dev-health-acr", -1, []string{"dev-health-acr"}, nil, true)
 
-	candidate, ok := NodeCandidate(principal, scope, "dev-health-acr", node, noInternalSubjects, true)
+	candidate, ok := NodeCandidate(principal, scope, "dev-health-acr", node, noInternalSubjects, true, nil, "")
 	if !ok {
 		t.Fatal("NodeCandidate() rejected a legitimately authorized alias-matching node")
 	}
@@ -116,7 +116,7 @@ func TestNodeCandidate_IdentityTrustedAloneBoostsConfidenceDespiteAStaleGraphAtt
 	// since aliasCandidateNode itself does not set it.
 	node.Mechanism = contextfabric.MatchAlias
 
-	candidate, ok := NodeCandidate(principal, scope, "dev-health-acr", node, noInternalSubjects, true)
+	candidate, ok := NodeCandidate(principal, scope, "dev-health-acr", node, noInternalSubjects, true, nil, "")
 	if !ok {
 		t.Fatal("NodeCandidate() rejected a legitimately authorized node")
 	}
@@ -139,7 +139,7 @@ func TestNodeCandidate_KeyedLookupNeverTrustsNonEligibleKind(t *testing.T) {
 	scope := contextfabric.RequestedScope{}
 	node := aliasCandidateNode(contextfabric.SubjectTeam, "team_1", "Chaos Team", -1, []string{"chaos"}, nil, true)
 
-	candidate, ok := NodeCandidate(principal, scope, "chaos", node, noInternalSubjects, true)
+	candidate, ok := NodeCandidate(principal, scope, "chaos", node, noInternalSubjects, true, nil, "")
 	if !ok {
 		t.Fatal("NodeCandidate() rejected a legitimately authorized alias-matching team node")
 	}
@@ -164,7 +164,7 @@ func TestNodeCandidate_NonScopedKindNeverAttemptsAliasMatch(t *testing.T) {
 	scope := contextfabric.RequestedScope{}
 	node := aliasCandidateNode(contractsCIRunKind(), "ci_run_1", "nightly build", -1, []string{"chaos"}, nil, true)
 
-	candidate, ok := NodeCandidate(principal, scope, "chaos", node, noInternalSubjects, true)
+	candidate, ok := NodeCandidate(principal, scope, "chaos", node, noInternalSubjects, true, nil, "")
 	if !ok {
 		t.Fatal("NodeCandidate() rejected a legitimately authorized node")
 	}
@@ -185,7 +185,7 @@ func TestNodeCandidate_ProviderAliasMatchTaggedDistinctlyFromAlias(t *testing.T)
 	scope := contextfabric.RequestedScope{}
 	node := aliasCandidateNode(contextfabric.SubjectRepository, "repository_1", "full-chaos/dev-health-acr", -1, []string{"dev-health-acr"}, []string{"github:full-chaos/dev-health-acr"}, true)
 
-	candidate, ok := NodeCandidate(principal, scope, "github:full-chaos/dev-health-acr", node, noInternalSubjects, true)
+	candidate, ok := NodeCandidate(principal, scope, "github:full-chaos/dev-health-acr", node, noInternalSubjects, true, nil, "")
 	if !ok {
 		t.Fatal("NodeCandidate() rejected a legitimately authorized node")
 	}
@@ -219,7 +219,7 @@ func TestNodeCandidate_ExactLabelTakesPriorityOverAlias(t *testing.T) {
 	// that the label check must win before the alias check is even tried.
 	node := aliasCandidateNode(contextfabric.SubjectProject, "project_1", "chaos-ops", -1, []string{"chaos-ops"}, nil, true)
 
-	candidate, ok := NodeCandidate(principal, scope, "chaos-ops", node, noInternalSubjects, true)
+	candidate, ok := NodeCandidate(principal, scope, "chaos-ops", node, noInternalSubjects, true, nil, "")
 	if !ok {
 		t.Fatal("NodeCandidate() rejected a legitimately authorized node")
 	}
@@ -246,7 +246,7 @@ func TestNodeCandidate_AllowExactMatchFalseAlsoDisablesAliasMatch(t *testing.T) 
 	const marker = "[full question]"
 	node := aliasCandidateNode(contextfabric.SubjectRepository, "repository_1", "full-chaos/dev-health-acr", -1, []string{marker}, nil, true)
 
-	candidate, ok := NodeCandidate(principal, scope, marker, node, noInternalSubjects, false)
+	candidate, ok := NodeCandidate(principal, scope, marker, node, noInternalSubjects, false, nil, "")
 	if !ok {
 		t.Fatal("NodeCandidate() rejected a legitimately authorized node")
 	}

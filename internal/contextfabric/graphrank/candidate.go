@@ -30,7 +30,19 @@ import (
 // happens to equal. Every pre-existing caller (the exact-hint path, the
 // per-term hybrid-search path, and traversal reached from either) passes
 // true, preserving byte-identical behavior for genuine caller-typed terms.
-func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedScope, term string, node CandidateNode, isInternal func(contextfabric.SubjectRef) bool, allowExactMatch bool) (contextfabric.SubjectCandidate, bool) {
+// tracer/requestID (CHAOS-3884, team-lead ruling 2026-08-17, guardrail 6):
+// optional (nil-safe) -- when tracer is set, this function emits its OWN
+// "identity_gate" ResolutionTraceEvent carrying the REAL confidence-gate
+// inputs (FromKeyedIdentityLookup, eligible kind, aliasMatched,
+// providerMatched, whether the gate fired, the resulting confidence) for
+// every isAliasLookupScopedKind candidate -- the one place these are
+// genuine local variables, never reconstructed downstream from an
+// already-merged/corroborated SubjectCandidate. Scoped to
+// isAliasLookupScopedKind (the SAME gate the alias/provider detection
+// below already uses) so this never fires for the vast majority of
+// candidates (ci_pipeline_run, pull_request, ...) the identity mechanism
+// was never going to touch.
+func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedScope, term string, node CandidateNode, isInternal func(contextfabric.SubjectRef) bool, allowExactMatch bool, tracer ResolutionTracer, requestID string) (contextfabric.SubjectCandidate, bool) {
 	if !AuthorizedAttributes(principal, scope, node.Attributes) {
 		return contextfabric.SubjectCandidate{}, false
 	}
@@ -124,6 +136,14 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 	}
 	if confidence == 0 {
 		confidence = 0.5
+	}
+	if tracer != nil && isAliasLookupScopedKind(subject.Kind) {
+		tracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "identity_gate", Subject: subject,
+			FromKeyedIdentityLookup: node.FromKeyedIdentityLookup, EligibleKind: isAliasIdentityEligibleKind(subject.Kind),
+			AliasMatched: aliasMatched, ProviderMatched: providerMatched,
+			GateFired: matched || identityTrusted, FinalConfidence: confidence,
+		})
 	}
 	reason := "Hybrid graph search matched the subject label or indexed context."
 	switch {

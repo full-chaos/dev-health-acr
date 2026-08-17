@@ -341,19 +341,18 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		base := candidates[index].Confidence
 		candidates[index].Confidence = CorroboratedConfidence(candidates[index].MatchMechanisms, base)
 		if tracer != nil {
-			// IdentityTrusted is a PROXY, not a direct read of NodeCandidate's
-			// own identityTrusted local (unreachable from here without
-			// growing the wire-contract SubjectCandidate type): true only
-			// when this candidate ALREADY carried confidence=1 before
-			// corroboration ran AND an identity-class mechanism is present --
-			// exactly the shape identityTrusted alone can produce (matched
-			// also reaches confidence=1 pre-corroboration, but tags
-			// MatchExact, not an identity-class mechanism).
-			identityTrusted := base >= 1 && (HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchAlias) || HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchProviderKey))
+			// The identity-gate STORY (was FromKeyedIdentityLookup honored)
+			// is NOT reconstructed here (team-lead ruling, 2026-08-17,
+			// guardrail 6) -- it is emitted from WITHIN NodeCandidate
+			// itself (candidate.go), where the real gate inputs are local
+			// variables, as its own "identity_gate" stage event. This
+			// corroboration event stays scoped to what genuinely belongs
+			// at THIS post-merge point: the base-to-final confidence
+			// transition and the distinct mechanism count.
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "corroboration", Subject: candidates[index].Subject,
 				BaseConfidence: base, FinalConfidence: candidates[index].Confidence,
-				DistinctMechanisms: DistinctMechanismCount(candidates[index].MatchMechanisms), IdentityTrusted: identityTrusted,
+				DistinctMechanisms: DistinctMechanismCount(candidates[index].MatchMechanisms),
 			})
 		}
 	}
@@ -826,7 +825,6 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		case len(resolution.Committed) == 1:
 			committedKey := SubjectKey(resolution.Committed[0])
 			winningMechanism := ""
-			identityTrusted := false
 			for index := range candidates {
 				if SubjectKey(candidates[index].Subject) != committedKey {
 					continue
@@ -834,13 +832,17 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 				if len(candidates[index].MatchMechanisms) > 0 {
 					winningMechanism = string(candidates[index].MatchMechanisms[0])
 				}
-				identityTrusted = candidates[index].Confidence == 1 &&
-					(HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchAlias) || HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchProviderKey))
 				break
 			}
+			// Whether the identity gate specifically was WHY this
+			// committed (as opposed to an ordinary exact/lexical/vector
+			// commit) is answered by correlating this event's Subject with
+			// the SAME subject's own "identity_gate" event (emitted from
+			// NodeCandidate, the real gate inputs) -- not reconstructed
+			// here (team-lead ruling, 2026-08-17, guardrail 6).
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Subject: resolution.Committed[0],
-				Outcome: "committed", WinningMechanism: winningMechanism, IdentityTrusted: identityTrusted,
+				Outcome: "committed", WinningMechanism: winningMechanism,
 			})
 		case len(resolution.Committed) == 0 && ambiguous:
 			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "ambiguous"})
