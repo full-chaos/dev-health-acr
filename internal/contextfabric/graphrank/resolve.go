@@ -194,6 +194,38 @@ type ResolveDeps struct {
 	// signal against the remapped Confidence without touching any commit
 	// gate.
 	RawSignalObserver RawSignalObserver
+	// AliasLookup (CHAOS-3884, optional) is a COMPLETE, keyed identity-claimant
+	// read: given this resolution's own subject terms, return every subject
+	// (any isAliasLookupScopedKind kind: repository, project, team,
+	// work_item) whose canonical label OR alias/provider-alias set contains
+	// any of terms (normalized via NormalizeAliasTerm), keyed by which
+	// ORIGINAL term (as passed in, not normalized) it was found for. Unlike
+	// Search, this MUST NOT be a ranked/truncatable relevance search -- see
+	// the design doc's Option C for the completeness argument (a bounded
+	// full-population enumeration over the org's identity-bearing source
+	// data, matched in Go, existence-checked against the graph before ever
+	// being returned here). Every returned CandidateNode's
+	// FromKeyedIdentityLookup MUST be true, and its Mechanism MUST be set
+	// to the key class that matched (MatchExact for a label hit, MatchAlias
+	// for a bare-name/native-key hit, MatchProviderKey for a
+	// provider-variant hit) -- NodeCandidate trusts these AS DECLARED for a
+	// lookup-sourced node rather than re-deriving them from attribute text.
+	//
+	// complete=false whenever this resolution's identity view could not be
+	// guaranteed complete: a per-call row budget was exceeded, the read
+	// timed out, a source-table claimant could not be confirmed present in
+	// the graph (existence-check failure folds into incompleteness HERE,
+	// rather than as a separately-threaded flag), or timeContext's axis is
+	// non-current (temporal authority stays with the graph; a
+	// historical-axis question simply never gets this mechanism). false is
+	// always the safe default -- it only disables the identity fast path
+	// (ResolveFromMergedCandidatesWithGate), never silently commits on an
+	// unverified population. nil means "this backend does not implement
+	// it" -- ResolveSubjects treats that exactly like complete=false,
+	// same convention as SearchQuestion. A genuine backend FAULT (as
+	// opposed to a completeness gap) returns a non-nil err, aborting the
+	// whole resolution exactly like Search()'s own error handling.
+	AliasLookup func(ctx context.Context, orgID string, terms []string, timeContext contextfabric.TimeContext) (claimantsByTerm map[string][]CandidateNode, complete bool, err error)
 }
 
 // RawSignalObserver is the CHAOS-3858 measurement-only capture port -- see
@@ -411,6 +443,16 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// number that needs this paragraph's reasoning to validate after the
 	// fact.
 	vectorArmSimilarity := make(map[string]float64)
+	// identity/identityTerms (CHAOS-3884): the collision-detection side
+	// channel, built during EVERY merge below (per-term Search, AliasLookup,
+	// but NOT the question pass -- see that call site's own comment) so
+	// HIGH-5's counting reaches any isAliasLookupScopedKind candidate
+	// regardless of which path found it. Always initialized, even for a
+	// backend with no AliasLookup: counting still happens over ordinary
+	// Search() results (harmless -- aliasIdentityComplete stays false in
+	// that case, so nothing new can commit on the strength of it alone).
+	identity := identityClaimants{}
+	identityTerms := identityMatchTerms{}
 	for _, term := range terms {
 		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
 		if err != nil {
@@ -426,7 +468,33 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// input (an interpreted subject term, or a requested-scope hint
 		// label -- see SubjectTerms), legitimately eligible to exact-match
 		// a subject's own label.
-		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity)
+		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms)
+	}
+	// aliasIdentityComplete (CHAOS-3884): built here, between the per-term
+	// Search loop and the question pass -- LOW-12: placing the merge BEFORE
+	// the question pass means capMatchedTermsAfterQuestionMerge (below)
+	// sees and correctly caps whatever MatchedTerms this merge ADDED, in
+	// the SAME single pass it already runs, rather than needing a second
+	// capping call. deps.AliasLookup nil means "this backend does not
+	// implement it" -- aliasIdentityComplete stays false, byte-identical
+	// to every pre-CHAOS-3884 backend.
+	aliasIdentityComplete := false
+	if deps.AliasLookup != nil {
+		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms, request.TimeContext)
+		if err != nil {
+			return contextfabric.SubjectResolution{}, err
+		}
+		aliasIdentityComplete = complete
+		for term, nodes := range claimantsByTerm {
+			// allowExactMatch=true: these are the SAME genuine
+			// caller-derived terms the per-term Search loop above already
+			// used, never a synthetic marker. vectorArmSimilarity=nil:
+			// CHAOS-3829's carve-out is scoped to per-term Search-sourced
+			// vector evidence only (F3), the same exclusion the question
+			// pass already documents -- a keyed identity read is not a
+			// vector search and has nothing to contribute there.
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, nodes, candidatesBySubject, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+		}
 	}
 	// CHAOS-3838 (spec L11): the question-level pass runs AT MOST ONCE,
 	// AFTER every per-term pass above, never interleaved with it. Ordering
@@ -471,7 +539,13 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// CHAOS-3829 F3: nil, deliberately -- the question-level pass
 			// never contributes to (or competes for) the commit-path
 			// carve-out's margin. See mergeSearchResults' own doc comment.
-			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil)
+			// CHAOS-3884: identity/identityTerms also nil here -- moot in
+			// practice (allowExactMatch=false means NodeCandidate can never
+			// produce an identity mechanism from this call regardless), but
+			// nil mirrors vectorArmSimilarity's own "the question pass
+			// never contributes" convention rather than relying on that
+			// downstream guarantee alone.
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil, nil, nil)
 			// codex round-1 P1, second half: a candidate already at the
 			// 32-entry MatchedTerms cap from real per-term finds would
 			// overflow to 33 once the marker above unioned in. The marker
@@ -547,7 +621,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if gate == (CommitGatePolicy{}) {
 		gate = DefaultCommitGatePolicy()
 	}
-	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate)
+	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete)
 	resolution.RetrievalDegraded = retrievalDegraded
 	return resolution, nil
 }
@@ -639,7 +713,21 @@ func scopesUnrestricted(scopes []string) bool {
 // two mechanisms have merged into one SubjectCandidate, the vector arm's
 // own raw contribution is unrecoverable from it if a different mechanism
 // happened to win.
-func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64) int {
+// identity/identityTerms (CHAOS-3884) are the collision-detection side
+// channel -- see identityClaimants/identityMatchTerms' own doc comments
+// (chaos3884_identity.go) and recordIdentityClaim, which this function
+// calls on the FRESH, pre-MergeCandidates-union `candidate` value, exactly
+// mirroring vectorArmSimilarity's own "recorded from the per-call result,
+// independent of the eventual union" precedent -- but POST-authorization
+// (recordIdentityClaim only ever sees a candidate NodeCandidate already
+// accepted), the opposite side of vectorArmSimilarity's deliberately
+// pre-authorization placement (see recordIdentityClaim's own doc comment
+// for why: a hidden claimant must not be able to SUPPRESS a commit the
+// caller is authorized to see, the mirror-image hazard from
+// vectorArmSimilarity's own INFLATE-a-margin concern). Both nil is a valid,
+// common call shape (the question-pass call site) -- recordIdentityClaim
+// no-ops on nil, same convention as vectorArmSimilarity==nil above.
+func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64, identity identityClaimants, identityTerms identityMatchTerms) int {
 	traversalErrored := 0
 	for _, node := range results {
 		if vectorArmSimilarity != nil && node.Mechanism == contextfabric.MatchVector && node.VectorSimilarity != nil {
@@ -654,6 +742,7 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 		if !ok {
 			continue
 		}
+		recordIdentityClaim(candidate, identity, identityTerms)
 		key := SubjectKey(candidate.Subject)
 		if deps.RawSignalObserver != nil {
 			deps.RawSignalObserver.ObserveCandidate(key, node)
@@ -684,6 +773,14 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 				observationBlocked[key] = true
 				traversedKey := SubjectKey(traversed.Subject)
 				observationParentKey[key] = traversedKey
+				// CHAOS-3884: a traversal-found parent's own 0.85 one-hop
+				// discount (TraverseObservationToSubject) means its
+				// Confidence can never equal 1, so it can never itself be
+				// identityIndex-eligible -- but it is still recorded here
+				// so a DIRECTLY-found candidate colliding with it on the
+				// same term is correctly flagged (identityCollision does
+				// not care HOW the second claimant was found).
+				recordIdentityClaim(traversed, identity, identityTerms)
 				// Same merge rule as the direct-hit path above: a parent
 				// that BOTH a direct search and a traversal proposed must
 				// keep both mechanisms, because that pairing is exactly

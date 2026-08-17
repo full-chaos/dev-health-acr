@@ -247,7 +247,7 @@ func isVectorOnlyCandidate(mechanisms []contextfabric.MatchMechanism) bool {
 // ResolveFromMergedCandidatesWithGate's doc comment for the full
 // algorithm description.
 func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool) contextfabric.SubjectResolution {
-	return ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, DefaultCommitGatePolicy())
+	return ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, DefaultCommitGatePolicy(), nil, nil, false)
 }
 
 // ResolveFromMergedCandidatesWithGate implements the class fix for Codex
@@ -302,7 +302,26 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // even though LoneFloor's own value reverted, so a future lowering attempt
 // is safe on the vector side by construction) and its precise scope (the
 // CHAOS-3829 rescue below is deliberately untouched).
-func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy) contextfabric.SubjectResolution {
+// identity/identityTerms/aliasIdentityComplete (CHAOS-3884) carry the
+// keyed-identity-lookup collision-detection side channel resolve.go builds
+// during merge: identity is the per-(key class, normalized term) claimant
+// SET spanning every isAliasLookupScopedKind subject this resolution found
+// (repository, project, team, work_item -- counting is broader than
+// commit eligibility, HIGH-5); identityTerms is the per-subject list of
+// which (class,term) pairs actually produced an identity mechanism for it
+// (MEDIUM-B: uniqueness binds to the producing term, not any term);
+// aliasIdentityComplete is true only when the identity reader's OWN
+// completeness guarantee held for this resolution (its lookup succeeded
+// AND no claimant it found was absent from the graph -- a graph-missing
+// claimant folds into "not complete" here, at the SOURCE, rather than as a
+// separate threaded flag: an incomplete identity view must disable the
+// SAME fast path a truncated ordinary search would, for the same reason).
+// nil/false from any caller that does not wire the identity reader --
+// identityCollision reads a nil map exactly like an empty one, and
+// aliasIdentityComplete=false disables the fast path exactly as before
+// this ticket, so every pre-CHAOS-3884 call site (ResolveFromMergedCandidates,
+// every existing test) is byte-identical.
+func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -408,11 +427,49 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 				exactIndex = append(exactIndex, index)
 			}
 		}
+		// identityIndex (CHAOS-3884): the RAW, unconditional-on-uniqueness
+		// eligible-kind alias/provider-key population -- isAliasIdentityEligibleKind,
+		// Confidence==1 (only ever true via NodeCandidate's identityTrusted
+		// bump, which itself requires FromKeyedIdentityLookup), MatchAlias
+		// or MatchProviderKey. Deliberately NOT pre-filtered by
+		// identityCollision here (a v3 mistake, corrected): filtering
+		// membership by uniqueness made a duplicate-claimant tie
+		// UNDETECTABLE by len(identityIndex) (two colliding candidates would
+		// each independently fail their own uniqueness check and never
+		// enter the slice, reading as 0 rather than 2) -- exactly the class
+		// of bug len(exactIndex) itself avoids by staying a RAW count.
+		// Uniqueness is a SEPARATE check (identityCollision), applied at
+		// the point of commit below, not baked into membership.
+		identityIndex := make([]int, 0, len(commitIndex))
+		for _, index := range commitIndex {
+			candidate := candidates[index]
+			if candidate.Confidence != 1 || !isAliasIdentityEligibleKind(candidate.Subject.Kind) {
+				continue
+			}
+			if HasMechanism(candidate.MatchMechanisms, contextfabric.MatchAlias) || HasMechanism(candidate.MatchMechanisms, contextfabric.MatchProviderKey) {
+				identityIndex = append(identityIndex, index)
+			}
+		}
 		switch {
 		case len(exactIndex) == 1:
 			committedIndex[exactIndex[0]] = true
 			candidates[exactIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[exactIndex[0]].Subject}
+		// CHAOS-3884: the identity fast path. Sits AFTER exactIndex
+		// (Finding 1's precedence: a candidate's own canonical label is a
+		// stronger identity claim than a derived alias/provider-key handle,
+		// so an exact-label winner is never second-guessed by an alias
+		// tie), BEFORE searchTruncated (the SAME "term equality against the
+		// subject's own identity data survives ordinary search truncation"
+		// argument CHAOS-3810 already established for exactIndex, extended
+		// here because aliasIdentityComplete -- unlike searchTruncated --
+		// is a COMPLETE, keyed guarantee, not a ranked/truncatable one).
+		// identityCollision (MEDIUM-B/C) is the uniqueness check membership
+		// itself no longer performs.
+		case aliasIdentityComplete && len(identityIndex) == 1 && !identityCollision(SubjectKey(candidates[identityIndex[0]].Subject), identity, identityTerms):
+			committedIndex[identityIndex[0]] = true
+			candidates[identityIndex[0]].State = contextfabric.ResolutionCommitted
+			resolution.Committed = []contextfabric.SubjectRef{candidates[identityIndex[0]].Subject}
 		case searchTruncated:
 			// Codex round-3 review of D11/AC-3778-0: truncation is a
 			// property of the RESOLUTION, not of any one candidate's
@@ -437,13 +494,25 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// value, which is exactly why this has to be an independent,
 			// resolution-wide signal instead.
 			ambiguous = true
-		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
+		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && !identityCollision(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
 			committedIndex[commitIndex[0]] = true
 			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
 		case len(commitIndex) >= 2 && gateValid:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
-			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
+			// CHAOS-3884 spot-check item 1: identityCollision applied here
+			// too, not just the fast path above. Without this, a colliding
+			// identity candidate's confidence=1 bump (earned via an
+			// UNPROVEN-unique claim) manufactures a 1.0-vs-(whatever
+			// second scores) gap that can trivially clear TopFloor/TopGap
+			// on its own -- an existence signal (is this claim unique)
+			// laundered through a STRENGTH gate that was never designed to
+			// arbitrate identity ambiguity. A candidate with no identity
+			// match terms at all (identityTerms[key] empty) is entirely
+			// unaffected -- identityCollision returns false for it
+			// unconditionally, so this never suppresses a legitimate
+			// ordinary lexical/vector top-of-two commit.
+			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && !identityCollision(SubjectKey(top.Subject), identity, identityTerms) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
 				committedIndex[commitIndex[0]] = true
 				candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
@@ -651,7 +720,22 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
 			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK &&
 			unscopedVisibility {
-			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok {
+			// CHAOS-3884 spot-check MEDIUM-C/item 1: identityCollision is
+			// checked on the RESCUE'S OWN chosen candidate, not via
+			// len(identityIndex) (eligibility-scoped, invisible to a
+			// non-eligible-kind collision -- e.g. two teams, or a team and
+			// a repository, colliding on the same alias would leave
+			// identityIndex empty since neither/only-one is eligible, yet
+			// the repository candidate the rescue is about to pick could
+			// still be the disputed claimant). Mirrors the SAME G2
+			// rationale len(exactIndex)<2 already applies to the exact-label
+			// class, extended to the alias class: a duplicate identity
+			// match is irreducibly ambiguous, and an unrelated
+			// embedding-proximity signal must not arbitrate it. A
+			// candidate with no identity match terms at all is unaffected
+			// (identityCollision returns false), so this never touches the
+			// rescue's pre-existing, unrelated population.
+			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok && !identityCollision(SubjectKey(candidates[index].Subject), identity, identityTerms) {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}

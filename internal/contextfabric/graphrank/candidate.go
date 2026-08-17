@@ -39,16 +39,65 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 		return contextfabric.SubjectCandidate{}, false
 	}
 	confidence := ResultConfidence(node.Relevance, node.Score)
-	matched := allowExactMatch && (strings.EqualFold(strings.TrimSpace(term), node.Name) || strings.EqualFold(strings.TrimSpace(term), subject.Label))
-	if matched {
+	trimmedTerm := strings.TrimSpace(term)
+	matched := allowExactMatch && (strings.EqualFold(trimmedTerm, node.Name) || strings.EqualFold(trimmedTerm, subject.Label))
+
+	// aliasMatched/providerMatched (CHAOS-3884): the SAME allowExactMatch
+	// discipline as the label check above (a synthetic, non-caller-typed
+	// term -- CHAOS-3838's questionProvenanceMarker -- must never win this
+	// either), plus one more gate: isAliasLookupScopedKind. Detection and
+	// MECHANISM TAGGING run for every scoped kind (repository, project,
+	// team, work_item) regardless of eligibility -- HIGH-5's fix -- so a
+	// team/work_item candidate found this way is still discoverable and
+	// COUNTABLE toward collision detection even though it can never itself
+	// win the identity fast path (see the confidence gate below, and
+	// resolution.go's identityCollision). Mutually exclusive with the
+	// label check (only tried when !matched): an exact label match keeps
+	// unconditional priority, unchanged from CHAOS-3810.
+	aliasMatched := false
+	providerMatched := false
+	if allowExactMatch && !matched && isAliasLookupScopedKind(subject.Kind) {
+		for _, alias := range AliasAttributes(node.Attributes) {
+			if strings.EqualFold(trimmedTerm, alias) {
+				aliasMatched = true
+				break
+			}
+		}
+		if !aliasMatched {
+			for _, alias := range ProviderAliasAttributes(node.Attributes) {
+				if strings.EqualFold(trimmedTerm, alias) {
+					providerMatched = true
+					break
+				}
+			}
+		}
+	}
+	// identityTrusted (CHAOS-3884 spot-check item 2, "provenance made
+	// structural"): the confidence=1 identity bump is gated on
+	// node.FromKeyedIdentityLookup -- an explicit, adapter-declared
+	// structural marker only a genuinely complete keyed identity read may
+	// set -- AND isAliasIdentityEligibleKind, never on the mechanism VALUE
+	// or on allowExactMatch alone. An ordinary Search()-sourced node that
+	// happens to alias-match (aliasMatched/providerMatched true above) is
+	// still tagged and counted, but keeps its ordinary, non-bumped
+	// confidence: FromKeyedIdentityLookup is false for it by construction,
+	// so it can never manufacture the completeness guarantee this bump
+	// asserts on its own.
+	identityTrusted := node.FromKeyedIdentityLookup && isAliasIdentityEligibleKind(subject.Kind)
+	if matched || ((aliasMatched || providerMatched) && identityTrusted) {
 		confidence = 1
 	}
 	if confidence == 0 {
 		confidence = 0.5
 	}
 	reason := "Hybrid graph search matched the subject label or indexed context."
-	if matched {
+	switch {
+	case matched:
 		reason = "Exact canonical subject label match."
+	case aliasMatched:
+		reason = "Repository/project alias matched."
+	case providerMatched:
+		reason = "Provider-qualified identifier matched."
 	}
 	// CHAOS-3778 / AC-3778-6: record the retrieval mechanism the adapter
 	// declared. An exact label/name match is recorded as MatchExact IN
@@ -58,10 +107,16 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 	// exactly. Recording both cannot demote the candidate -- an exact match
 	// carries confidence 1, and CorroboratedConfidence returns 1 unchanged for
 	// any base of 1 precisely so that being found a second way never costs an
-	// exact match its certainty.
+	// exact match its certainty. CHAOS-3884: MatchAlias/MatchProviderKey
+	// follow the identical "in addition to" discipline.
 	mechanisms := MergeMechanisms([]contextfabric.MatchMechanism{node.Mechanism})
-	if matched {
+	switch {
+	case matched:
 		mechanisms = MergeMechanisms(mechanisms, []contextfabric.MatchMechanism{contextfabric.MatchExact})
+	case aliasMatched:
+		mechanisms = MergeMechanisms(mechanisms, []contextfabric.MatchMechanism{contextfabric.MatchAlias})
+	case providerMatched:
+		mechanisms = MergeMechanisms(mechanisms, []contextfabric.MatchMechanism{contextfabric.MatchProviderKey})
 	}
 	return contextfabric.SubjectCandidate{
 		ReceiptID: DeterministicUUID("context-fabric-subject-receipt", node.UUID, strings.ToLower(term)),
