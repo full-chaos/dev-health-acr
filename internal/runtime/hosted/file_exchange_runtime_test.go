@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -347,6 +348,123 @@ func (f *fileExchangeRuntime) SynthesizeAnswer(ctx context.Context, principal st
 // single-flight by construction.
 const exchangeRoundTripTestTimeout = 20 * time.Second
 
+// discoverExchangeRequestFile scans requestsDir for the first FULLY
+// PUBLISHED request file, skipping the writer's dot-prefixed in-flight temp
+// artifacts (exchange()'s temp+rename publication, sol review F8).
+//
+// CHAOS-3863 ROOT CAUSE: the pre-fix responder loop took os.ReadDir's
+// entries[0] unconditionally. os.ReadDir returns entries sorted by
+// filename, and "." (0x2E) sorts BEFORE any digit (0x30-0x39) -- so
+// whenever the writer's temp file "."+name+".tmp*" and the final
+// "<seq6>-<op>.json" coexisted in the directory (the brief but real window
+// between os.CreateTemp and os.Rename completing), entries[0] was ALWAYS
+// the temp file, deterministically, not a rare race. Under CI scheduling
+// delays that window widens enough for the discovery loop's 20ms poll to
+// land inside it often; the responder then read/parsed the wrong (transient
+// or renamed-away) path and returned early WITHOUT ever writing a response,
+// so the real exchange() call always burned its FULL configured timeout
+// before failing -- explaining the exact-5.00s/exact-20.00s CI failures.
+// Filtering out dot-prefixed names makes the responder honor the same
+// temp+rename contract the writer already publishes under.
+func discoverExchangeRequestFile(requestsDir string) (string, error) {
+	entries, err := os.ReadDir(requestsDir)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue // writer's in-flight temp file (sol review F8) -- not yet published
+		}
+		return filepath.Join(requestsDir, name), nil
+	}
+	return "", nil
+}
+
+// TestDiscoverExchangeRequestFileSkipsInFlightTempFile pins the CHAOS-3863
+// mechanism directly: with the writer's temp file AND the final published
+// file both present (the real, if brief, coexistence window during
+// exchange()'s temp+rename publish), discovery must return the FINAL file.
+// Red-first proof of the bug: `entries, _ := os.ReadDir(dir); entries[0]`
+// (the pre-fix logic) picks the temp file every time here, because
+// os.ReadDir sorts by name and "." sorts before any digit -- this is not
+// probabilistic, it is guaranteed given both names are present.
+func TestDiscoverExchangeRequestFileSkipsInFlightTempFile(t *testing.T) {
+	dir := t.TempDir()
+	const finalName = "000001-interpret.json"
+	tempName := "." + finalName + ".tmp123456"
+
+	if err := os.WriteFile(filepath.Join(dir, tempName), []byte("partial"), 0o644); err != nil {
+		t.Fatalf("seed temp file: %v", err)
+	}
+
+	// Temp file only: nothing published yet, discovery must report "not
+	// found" (empty path, no error) rather than mistaking the temp file for
+	// a ready request.
+	got, err := discoverExchangeRequestFile(dir)
+	if err != nil {
+		t.Fatalf("discoverExchangeRequestFile (temp only): %v", err)
+	}
+	if got != "" {
+		t.Fatalf("discoverExchangeRequestFile (temp only) = %q, want \"\" (temp file must never be selected)", got)
+	}
+
+	// Prove the OLD unfiltered-entries[0] logic really did pick the temp
+	// file in this exact directory state (this is the red-first assertion:
+	// comment it back in against pre-fix code and it fails; against this
+	// helper it's inert since we assert the raw entries directly, not the
+	// helper).
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("os.ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != tempName {
+		t.Fatalf("test setup invariant broken: entries = %v, want single temp file %q first", entries, tempName)
+	}
+
+	// Now the final file is published too (temp+rename's coexistence
+	// window): both names present, final file must win.
+	if err := os.WriteFile(filepath.Join(dir, finalName), []byte(`{"session_nonce":"x"}`), 0o644); err != nil {
+		t.Fatalf("seed final file: %v", err)
+	}
+	entries, err = os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("os.ReadDir: %v", err)
+	}
+	if len(entries) != 2 || entries[0].Name() != tempName {
+		t.Fatalf("test setup invariant broken: expected dot-file to sort first, got %v", entries)
+	}
+
+	got, err = discoverExchangeRequestFile(dir)
+	if err != nil {
+		t.Fatalf("discoverExchangeRequestFile (both present): %v", err)
+	}
+	want := filepath.Join(dir, finalName)
+	if got != want {
+		t.Fatalf("discoverExchangeRequestFile (both present) = %q, want %q (must never return the writer's in-flight temp file)", got, want)
+	}
+}
+
+// boundedExchangeTimeout derives this test's exchange/discovery bound from
+// go test's own -timeout deadline (t.Deadline()) when that deadline is
+// tighter than exchangeRoundTripTestTimeout, so a short -timeout run fails
+// fast with THIS test's own diagnostic (deadline_exceeded on the exchange,
+// "request file never appeared" on discovery) instead of the whole test
+// binary being killed by go test's panic-on-timeout with no such context.
+// Falls back to exchangeRoundTripTestTimeout when go test has no deadline
+// (-timeout unset, or the default 10m) or when that deadline is looser.
+func boundedExchangeTimeout(t *testing.T) time.Duration {
+	deadline, ok := t.Deadline()
+	if !ok {
+		return exchangeRoundTripTestTimeout
+	}
+	const safetyMargin = 2 * time.Second // leave room to report cleanly before go test kills the binary
+	if remaining := time.Until(deadline) - safetyMargin; remaining > 0 && remaining < exchangeRoundTripTestTimeout {
+		return remaining
+	}
+	return exchangeRoundTripTestTimeout
+}
+
 // TestFileExchangeRoundTrip is the compatibility proof sol review R3
 // demanded: a synthetic request goes out, a responder-SHAPED response
 // (built independently of this file's own types, matching only the
@@ -356,7 +474,8 @@ const exchangeRoundTripTestTimeout = 20 * time.Second
 // a live trial run.
 func TestFileExchangeRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	runtime, err := newFileExchangeRuntime(dir, "compat-test-model", exchangeRoundTripTestTimeout)
+	timeout := boundedExchangeTimeout(t)
+	runtime, err := newFileExchangeRuntime(dir, "compat-test-model", timeout)
 	if err != nil {
 		t.Fatalf("newFileExchangeRuntime: %v", err)
 	}
@@ -372,15 +491,24 @@ func TestFileExchangeRoundTrip(t *testing.T) {
 	go func() {
 		defer close(done)
 		var reqPath string
-		// Discovery-poll deadline shares exchangeRoundTripTestTimeout with
-		// the exchange side above (CHAOS-3863) instead of its own
-		// independent iteration-count bound, so neither side of the round
-		// trip can starve the other under suite-load contention.
-		discoveryDeadline := time.Now().Add(exchangeRoundTripTestTimeout)
+		// Discovery-poll deadline shares `timeout` with the exchange side
+		// above (CHAOS-3863) instead of its own independent iteration-count
+		// bound, so neither side of the round trip can starve the other
+		// under suite-load contention.
+		discoveryDeadline := time.Now().Add(timeout)
 		for time.Now().Before(discoveryDeadline) {
-			entries, _ := os.ReadDir(filepath.Join(dir, "requests"))
-			if len(entries) > 0 {
-				reqPath = filepath.Join(dir, "requests", entries[0].Name())
+			// CHAOS-3863: discoverExchangeRequestFile skips the writer's
+			// dot-prefixed in-flight temp file instead of blindly taking
+			// os.ReadDir's first (sorted-first, since "." < any digit)
+			// entry -- see the helper's doc comment for the exact
+			// lost-response mechanism this closes.
+			found, err := discoverExchangeRequestFile(filepath.Join(dir, "requests"))
+			if err != nil {
+				t.Errorf("list requests dir: %v", err)
+				return
+			}
+			if found != "" {
+				reqPath = found
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
