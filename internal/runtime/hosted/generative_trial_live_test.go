@@ -669,6 +669,49 @@ func candidateMatchProvenance(cand contractsv1.ContextFabricSubjectCandidate) tr
 	}
 }
 
+// candidatePoolMechanismComposition is the CHAOS-3858 population-attribution
+// record: how many candidates in the FULL post-Phase-4 pool
+// (result.SubjectResolution.Candidates, the same slice CandidateCount/
+// TopCandidateConfidence already read) carry each distinct mechanism SET,
+// keyed by the comma-joined mechanism list. It answers "is this an
+// unanswerable-question pool (anchor-free) or a real-subject pool
+// (anchored)" at the POPULATION level, which is what CHAOS-3858's
+// mechanism-anchor design needs measured before it can be built --
+// TopCandidateConfidence alone cannot answer that (see this trial's own
+// prior finding: control and real no-commit pools share the same [0.50,
+// 0.755] confidence band).
+//
+// Aggregated counts only, same privacy posture as candidateMatchProvenance:
+// no canonical ID, no kind, no label, no per-candidate identity of any
+// kind -- only "N candidates had mechanism set S" for whichever sets
+// actually appeared. A candidate with NO recognized mechanism (mechanism.go:
+// "an empty value records no mechanism... legal") is counted under the
+// literal key "none" rather than an empty string, so it is distinguishable
+// from an absent map entry.
+//
+// candidates' own MatchMechanisms is already canonically ordered (
+// graphrank.MergeMechanisms is the only place that field is ever set), so
+// joining it as-is is a stable set key without this test package importing
+// graphrank to re-derive the order.
+func candidatePoolMechanismComposition(candidates []contractsv1.ContextFabricSubjectCandidate) map[string]int {
+	if len(candidates) == 0 {
+		return nil
+	}
+	composition := make(map[string]int)
+	for _, cand := range candidates {
+		key := "none"
+		if len(cand.MatchMechanisms) > 0 {
+			mechanisms := make([]string, 0, len(cand.MatchMechanisms))
+			for _, mechanism := range cand.MatchMechanisms {
+				mechanisms = append(mechanisms, string(mechanism))
+			}
+			key = strings.Join(mechanisms, ",")
+		}
+		composition[key]++
+	}
+	return composition
+}
+
 // subjectRefKey/subjectCandidateKey give committed/candidate matching a
 // single comparable identity (kind+canonical_id), mirroring
 // graphrank.SubjectKey's own (kind, id) identity without importing an
@@ -806,6 +849,13 @@ type caseOutcome struct {
 	// still fully valid input to anything that decodes caseOutcome.
 	CommittedMatches     []trialCandidateMatchProvenance `json:"committed_matches,omitempty"`
 	TopNonCommittedMatch *trialCandidateMatchProvenance  `json:"top_non_committed_match,omitempty"`
+	// CandidatePoolMechanisms (CHAOS-3858, additive/optional -- same
+	// discipline as CommittedMatches/TopNonCommittedMatch above): counts of
+	// the FULL post-Phase-4 candidate pool by mechanism SET, e.g.
+	// {"lexical":6,"vector":2,"lexical,vector":2}. Absence must be read as
+	// "not recorded", never "empty pool" -- CandidateCount already carries
+	// that. See candidatePoolMechanismComposition's own doc comment.
+	CandidatePoolMechanisms map[string]int `json:"candidate_pool_mechanisms,omitempty"`
 }
 
 func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, caseTimeout time.Duration) caseOutcome {
@@ -857,6 +907,7 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 	outcome.RetrievalDegraded = result.SubjectResolution.RetrievalDegraded
 	outcome.CommittedMatches = committedMatchProvenance(result.SubjectResolution.Committed, result.SubjectResolution.Candidates)
 	outcome.TopNonCommittedMatch = topNonCommittedMatchProvenance(result.SubjectResolution.Committed, result.SubjectResolution.Candidates)
+	outcome.CandidatePoolMechanisms = candidatePoolMechanismComposition(result.SubjectResolution.Candidates)
 	outcome.AnswerLength = len(result.DeterministicAnswer)
 	outcome.ClaimedFacts = len(result.ClaimedFacts)
 	outcome.Drivers = len(result.Drivers)
