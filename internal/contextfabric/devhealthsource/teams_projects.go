@@ -247,6 +247,15 @@ func (s *TeamsProjectsSource) WithLogger(logger *slog.Logger) *TeamsProjectsSour
 	return s
 }
 
+// CurrentProjectionSourceVersion implements contextfabric.ProjectionSourceVersion
+// (CHAOS-3887) so a per-tick freshness signal can be computed for a dormant
+// organization even when NextProjectionBatch reports available=false (no new
+// rows, or the source is disabled) and never builds a batch to read a
+// current SourceVersion from.
+func (s *TeamsProjectsSource) CurrentProjectionSourceVersion() string {
+	return TeamsProjectsSourceVersion
+}
+
 func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
 	if s == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: teams/projects source is not configured")

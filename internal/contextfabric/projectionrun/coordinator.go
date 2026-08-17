@@ -2,12 +2,15 @@ package projectionrun
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -142,6 +145,7 @@ type Coordinator struct {
 	orgIDs           []string
 	sourceNames      []string
 	workers          map[string]*contextfabric.ProjectionWorker
+	sources          map[string]contextfabric.ProjectionSource // CHAOS-3887: needed for the freshness signal's current_source_version, which ProjectionWorker does not expose
 	backend          contextfabric.ProjectionBackend
 	checkpoints      contextfabric.ProjectionCheckpointStore
 	rebuildMarkers   RebuildMarker
@@ -213,6 +217,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		cfg.Observer = noopObserver{}
 	}
 	workers := make(map[string]*contextfabric.ProjectionWorker, len(cfg.Sources))
+	sources := make(map[string]contextfabric.ProjectionSource, len(cfg.Sources))
 	sourceNames := make([]string, 0, len(cfg.Sources))
 	for _, pair := range cfg.Sources {
 		if pair.Name == "" || pair.Source == nil {
@@ -226,10 +231,11 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 			return nil, fmt.Errorf("projectionrun: build worker for %q: %w", pair.Name, err)
 		}
 		workers[pair.Name] = worker
+		sources[pair.Name] = pair.Source
 		sourceNames = append(sourceNames, pair.Name)
 	}
 	return &Coordinator{
-		orgIDs: append([]string(nil), cfg.OrgIDs...), sourceNames: sourceNames, workers: workers,
+		orgIDs: append([]string(nil), cfg.OrgIDs...), sourceNames: sourceNames, workers: workers, sources: sources,
 		backend: cfg.Backend, checkpoints: cfg.Checkpoints, rebuildMarkers: cfg.RebuildMarkers,
 		locker: cfg.Locker, observer: cfg.Observer, reuseInvalidator: cfg.ReuseInvalidator,
 		poll: cfg.PollInterval, concurrency: cfg.Concurrency,
@@ -373,12 +379,36 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	}
 }
 
+// tickFreshnessStats is the CHAOS-3887 (H12) fleet aggregate: one Tick's
+// per-organization freshness classification, so "how many organizations are
+// pending a rebuild" is a single logged number instead of a grep across
+// every replica's per-pair lines. Counters, never IDs -- content-safe.
+//
+// Classification is per ORGANIZATION, not per (org, source) pair: an
+// organization counts as rebuildRequired if ANY of its configured sources'
+// freshness check found checkpoint_source_version != current_source_version
+// this tick. ok means every pair that was actually evaluated this tick came
+// back fresh. backoff means no pair was evaluated at all this tick (the
+// organization's lock was busy, a rebuild was in progress, or every source
+// is presently in its per-pair failure backoff window) -- distinct from ok
+// because "fresh" is not something this tick observed for it.
+type tickFreshnessStats struct {
+	orgsOK              int64
+	orgsRebuildRequired int64
+	orgsBackoff         int64
+}
+
+func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK, 1) }
+func (s *tickFreshnessStats) recordRebuildRequired() { atomic.AddInt64(&s.orgsRebuildRequired, 1) }
+func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBackoff, 1) }
+
 // Tick runs one bounded-concurrency pass over every configured organization.
 // Exported so hosting composition (and tests) can drive ticks explicitly
 // instead of waiting on PollInterval.
 func (c *Coordinator) Tick(ctx context.Context) {
 	sem := make(chan struct{}, c.concurrency)
 	var wg sync.WaitGroup
+	stats := &tickFreshnessStats{}
 	for _, orgID := range c.orgIDs {
 		if ctx.Err() != nil {
 			break
@@ -388,10 +418,20 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		go func(orgID string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			c.runOrg(ctx, orgID)
+			c.runOrg(ctx, orgID, stats)
 		}(orgID)
 	}
 	wg.Wait()
+	// CHAOS-3887 (H12): logged every tick, not only when something is
+	// wrong, so "no signal" and "zero orgs pending rebuild" stay
+	// distinguishable -- the same reasoning SlogObserver's doc comment
+	// gives for logging successful ticks, not just failures.
+	c.logger.InfoContext(ctx, "context_fabric: projection tick freshness summary",
+		"orgs_ok", atomic.LoadInt64(&stats.orgsOK),
+		"orgs_rebuild_required", atomic.LoadInt64(&stats.orgsRebuildRequired),
+		"orgs_backoff", atomic.LoadInt64(&stats.orgsBackoff),
+		"pending_rebuild_orgs_total", atomic.LoadInt64(&stats.orgsRebuildRequired),
+	)
 }
 
 // runOrg enforces single-flight per organization across a whole multi-source
@@ -400,16 +440,18 @@ func (c *Coordinator) Tick(ctx context.Context) {
 // across acr-projector replicas too. Both are non-blocking (TryLock /
 // pg_try_advisory_lock): a busy organization is skipped this tick, not
 // queued, so one slow organization can never starve the others.
-func (c *Coordinator) runOrg(ctx context.Context, orgID string) {
+func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFreshnessStats) {
 	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
 	mutex := mutexAny.(*sync.Mutex)
 	if !mutex.TryLock() {
+		stats.recordBackoff()
 		return
 	}
 	defer mutex.Unlock()
 
 	unlock, err := c.locker.Lock(ctx, orgID)
 	if err != nil {
+		stats.recordBackoff()
 		if !errors.Is(err, ErrOrgLocked) {
 			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		}
@@ -429,9 +471,11 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string) {
 	// projection for this org this tick regardless of outcome (the marker
 	// state, not a stale checkpoint, is the true source of truth right now).
 	if inProgress, err := c.rebuildMarkers.IsRebuildInProgress(ctx, orgID); err != nil {
+		stats.recordBackoff()
 		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	} else if inProgress {
+		stats.recordBackoff()
 		if err := c.performRebuild(ctx, orgID); err != nil {
 			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		} else {
@@ -440,18 +484,34 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string) {
 		return
 	}
 
+	evaluated, stale := false, false
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
 			return
 		}
-		c.runPair(ctx, orgID, source)
+		pairEvaluated, pairStale := c.runPair(ctx, orgID, source)
+		evaluated = evaluated || pairEvaluated
+		stale = stale || pairStale
+	}
+	switch {
+	case !evaluated:
+		stats.recordBackoff()
+	case stale:
+		stats.recordRebuildRequired()
+	default:
+		stats.recordOK()
 	}
 }
 
-func (c *Coordinator) runPair(ctx context.Context, orgID, source string) {
+// runPair runs one (org, source) tick and reports the CHAOS-3887 freshness
+// classification back to runOrg for the per-tick fleet aggregate: evaluated
+// is true when this pair's freshness was actually checked this tick (it was
+// due), and stale is true when that check found a producer-identity drift
+// pending rebuild.
+func (c *Coordinator) runPair(ctx context.Context, orgID, source string) (evaluated, stale bool) {
 	key := orgID + "\x00" + source
 	if !c.due(key) {
-		return
+		return false, false
 	}
 	started := c.now()
 	run, err := c.workers[source].RunOnce(ctx, orgID, source)
@@ -464,6 +524,101 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string) {
 	case run.Applied:
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", orgID, "source", source, "batch_id", run.BatchID, "backend_watermark", run.BackendWatermark, "duration_ms", outcome.Duration.Milliseconds())
 	}
+	// CHAOS-3887 (H1): computed and logged regardless of run.Applied/err --
+	// the whole point is that the prior guard (projector.go RunOnce) only
+	// ever compared checkpoint SourceVersion against a batch's SourceVersion
+	// INSIDE the available==true branch, so a dormant organization (no new
+	// rows, available=false, no error) got no freshness signal at all.
+	return true, c.emitProjectionFreshness(ctx, orgID, source)
+}
+
+// emitProjectionFreshness is the CHAOS-3887 (H1) per-org, per-source
+// freshness signal: it reads the durably-written falkorgraph
+// ProjectionWatermark (SourceVersion + projected_at per org/source) --
+// previously written on every successful apply and read only by the
+// acr-projector /readyz probe, which discards the value -- and compares its
+// SourceVersion against the source's CURRENT producer SourceVersion.
+//
+// Unlike the ProjectionWorker.RunOnce guard this signal is not gated on
+// batch availability: it runs for every (org, source) pair this tick
+// actually evaluates, including a dormant organization that has no new
+// rows and so never builds a batch. That is precisely the gap this ticket
+// closes -- a dormant organization's already-projected nodes staying
+// computed under stale producer logic, with no signal distinguishing it
+// from a freshly-projected one.
+//
+// stale reports true only when both a durable watermark and the source's
+// current version are known AND they differ. No watermark yet (a
+// never-projected organization/source) and no known current version (a
+// source that does not implement ProjectionSourceVersion) both report
+// stale=false -- "unknown" must never masquerade as "needs rebuild".
+//
+// Content-safe: every field is a count, version string, bool, or the
+// one-way org_id_hash -- never a raw organization identifier or any
+// projected row content.
+func (c *Coordinator) emitProjectionFreshness(ctx context.Context, orgID, source string) bool {
+	watermark, err := c.backend.ProjectionWatermark(ctx, orgID, source)
+	hash := orgIDHash(orgID)
+	if err != nil || strings.TrimSpace(watermark.SourceVersion) == "" {
+		// Not found (never durably projected yet) and a real read failure
+		// are deliberately not distinguished here (codex-round style
+		// discipline: no raw error text, and Coordinator has no
+		// backend-specific sentinel to classify by without coupling this
+		// backend-agnostic scheduler to one ProjectionBackend
+		// implementation's error types). Either way there is no durable
+		// baseline to compare against this tick, so nothing further to
+		// report but "unknown".
+		c.logger.DebugContext(ctx, "context_fabric: projection freshness unknown; no durable watermark yet",
+			"org_id_hash", hash, "source", source)
+		return false
+	}
+	current := currentSourceVersion(c.sources[source])
+	staleFields := []any{
+		"org_id_hash", hash, "source", source,
+		"checkpoint_source_version", watermark.SourceVersion, "current_source_version", current,
+	}
+	if strings.TrimSpace(current) == "" {
+		// Source does not implement the optional ProjectionSourceVersion
+		// capability -- no code-current baseline to compare the durable
+		// watermark against, so staleness is unknown, not false-positive.
+		c.logger.DebugContext(ctx, "context_fabric: projection freshness unknown; source does not report a current version", staleFields...)
+		return false
+	}
+	stale := watermark.SourceVersion != current
+	ageSeconds := c.now().UTC().Sub(watermark.ProjectedAt.UTC()).Seconds()
+	if ageSeconds < 0 {
+		ageSeconds = 0
+	}
+	fields := append(staleFields, "stale", stale, "projected_at_age_seconds", ageSeconds)
+	if stale {
+		c.logger.WarnContext(ctx, "context_fabric: projection freshness stale; rebuild required", fields...)
+	} else {
+		c.logger.DebugContext(ctx, "context_fabric: projection freshness", fields...)
+	}
+	return stale
+}
+
+// currentSourceVersion reads the CHAOS-3887 optional
+// contextfabric.ProjectionSourceVersion capability off source, returning ""
+// when source is nil or does not implement it -- the caller treats that as
+// "unknown", never as a mismatch.
+func currentSourceVersion(source contextfabric.ProjectionSource) string {
+	versioned, ok := source.(contextfabric.ProjectionSourceVersion)
+	if !ok {
+		return ""
+	}
+	return versioned.CurrentProjectionSourceVersion()
+}
+
+// orgIDHash one-way hashes orgID for telemetry (CHAOS-3887 corpus safety):
+// counts/enums/versions/hashes/bools only, never a raw organization
+// identifier. Same construction (SHA-256, first 6 bytes, hex) as
+// devhealthsource's redactOrg -- this package cannot import devhealthsource
+// (which itself imports contextfabric) without a cycle, so the scheme is
+// duplicated rather than shared, not reinvented.
+func orgIDHash(orgID string) string {
+	sum := sha256.Sum256([]byte(orgID))
+	return hex.EncodeToString(sum[:6])
 }
 
 func (c *Coordinator) due(key string) bool {

@@ -163,6 +163,15 @@ func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, ch
 	return s.plan().nextBatch(ctx, checkpoint)
 }
 
+// CurrentProjectionSourceVersion implements contextfabric.ProjectionSourceVersion
+// (CHAOS-3887) so a per-tick freshness signal can be computed for a dormant
+// organization -- one with no new ClickHouse rows since its last checkpoint,
+// so NextProjectionBatch reports available=false and never builds a
+// ProjectionBatch to read a current SourceVersion from.
+func (s *ClickHouseProjectionSource) CurrentProjectionSourceVersion() string {
+	return ClickHouseSourceVersion
+}
+
 // plan binds this source's data (its table set, batch identity, the
 // synthesized Organization seed, and the orphaned-work-item observer) to the
 // shared assembly engine in assemble.go. The paging/truncation/oversized
