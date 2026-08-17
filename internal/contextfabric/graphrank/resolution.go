@@ -1,6 +1,8 @@
 package graphrank
 
 import (
+	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -39,7 +41,13 @@ type CommitGatePolicy struct {
 
 // DefaultCommitGatePolicy returns the CURRENT, calibrated production
 // commit-gate thresholds (chris-ratified, measured against the CHAOS-3742
-// five-arm generative trial and the corpus history before it).
+// five-arm generative trial and the corpus history before it). It always
+// passes Validate() -- this is asserted by
+// TestDefaultCommitGatePolicyIsValid, so a future edit to the calibrated
+// constants that accidentally produces an invalid policy fails loudly
+// instead of silently making every production commit decision
+// commit-nothing (see Validate's own doc comment for why that is the
+// evaluator's fail-closed behavior for an invalid policy).
 // ResolveFromMergedCandidates and every existing production/test call site
 // use exactly this policy; only CHAOS-3857's sweep tooling (and
 // falkorgraph's env-driven override, when an operator explicitly sets one)
@@ -48,13 +56,66 @@ func DefaultCommitGatePolicy() CommitGatePolicy {
 	return CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.88, TopGap: 0.12}
 }
 
+// Validate reports whether g is a usable commit-gate policy: every
+// threshold finite and in (0, 1], TopGap strictly less than TopFloor (a
+// gap as wide as or wider than the floor itself is nonsensical -- it would
+// mean "the top candidate must beat the second by more than the minimum
+// confidence it must ITSELF clear"), and LoneFloor no greater than TopFloor
+// (a lone-candidate bar higher than the top-of-two bar would make the
+// EASIER-to-satisfy gate the STRICTER one, backwards from what these two
+// gates are for).
+//
+// CHAOS-3857 sol review F1 (P1): a partial override that zeroes exactly
+// one field (e.g. only LoneFloor set to 0 by a malformed sweep cell, TopFloor/
+// TopGap left at their calibrated defaults) is NOT caught by "is the whole
+// struct the zero value" -- {0, 0.88, 0.12} is a DIFFERENT, live, and
+// dangerous policy: LoneFloor=0 auto-commits every lone candidate
+// regardless of confidence. Validate closes that gap by checking the
+// ACTUAL resolved policy's field values, not merely whether the struct as
+// a whole is zero.
+//
+// Called at BOTH layers, deliberately redundant (sol F1): the env-var
+// boundary (falkorgraph.EmbedderFromEnv) calls this and REJECTS loudly --
+// composition fails at startup, so a broken sweep cell is caught
+// immediately, before a single investigation runs under it. This
+// function's OWN caller, ResolveFromMergedCandidatesWithGate, calls it
+// again and, having no error return of its own, instead makes the
+// confidence-threshold commit decision and the CHAOS-3829 margin-rescue
+// carve-out both evaluate to "commit nothing" when Validate fails -- fail
+// CLOSED, never fail open, and never silently substitute
+// DefaultCommitGatePolicy() in its place (a substitution would mask the
+// very configuration mistake this exists to surface). The redundancy is
+// intentional: ResolveFromMergedCandidatesWithGate is EXPORTED and callable
+// directly (CHAOS-3857's own sweep tooling does exactly that), so safety
+// cannot rest on the env boundary alone catching every path in.
+func (g CommitGatePolicy) Validate() error {
+	fields := []struct {
+		name  string
+		value float64
+	}{{"LoneFloor", g.LoneFloor}, {"TopFloor", g.TopFloor}, {"TopGap", g.TopGap}}
+	for _, f := range fields {
+		if math.IsNaN(f.value) || math.IsInf(f.value, 0) || f.value <= 0 || f.value > 1 {
+			return fmt.Errorf("commit gate policy: %s must be a finite number greater than 0 and at most 1, got %v", f.name, f.value)
+		}
+	}
+	if g.TopGap >= g.TopFloor {
+		return fmt.Errorf("commit gate policy: TopGap (%v) must be less than TopFloor (%v)", g.TopGap, g.TopFloor)
+	}
+	if g.LoneFloor > g.TopFloor {
+		return fmt.Errorf("commit gate policy: LoneFloor (%v) must not exceed TopFloor (%v)", g.LoneFloor, g.TopFloor)
+	}
+	return nil
+}
+
 // ResolveFromMergedCandidates is ResolveFromMergedCandidatesWithGate
 // (below) called with DefaultCommitGatePolicy() -- the calibrated
-// production thresholds. Every existing caller (production's one call
-// site in resolve.go historically, and every graphrank test) keeps
-// calling this exact function, unchanged, and gets byte-identical
-// behavior: this wrapper is the ENTIRE diff CHAOS-3857's parameterization
-// makes to this function's default behavior. See
+// production thresholds, which always pass Validate(). Every existing
+// caller (production's one call site in resolve.go historically, and
+// every graphrank test) keeps calling this exact function, unchanged, and
+// gets byte-identical behavior: WithGate's new Validate() check (sol
+// review F1) is a genuine addition to what THAT function does, but is a
+// no-op FOR THIS CALLER specifically, because DefaultCommitGatePolicy()
+// is -- and is asserted to remain -- always valid. See
 // ResolveFromMergedCandidatesWithGate's doc comment for the full
 // algorithm description.
 func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool) contextfabric.SubjectResolution {
@@ -143,6 +204,16 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		}
 	}
 	ambiguous := false
+	// CHAOS-3857 sol review F1: computed ONCE, gates BOTH the
+	// confidence-threshold decision below (the two commitIndex cases in
+	// the switch) and the CHAOS-3829 margin-rescue block further down --
+	// an invalid gate must disable both, since the rescue is itself an
+	// ALTERNATE commit path for the exact ambiguity the confidence
+	// thresholds would otherwise decide. The exact-label-match and
+	// searchTruncated cases below are DELIBERATELY unaffected: neither
+	// reads gate at all, so an operator's broken sweep cell cannot make a
+	// caller-verified exact match stop committing.
+	gateValid := gate.Validate() == nil
 	if len(committedIndex) == 0 {
 		// Observation-kind subjects (documents, episodes) are auto-commit-
 		// eligible via the confidence heuristics below only when traversal
@@ -228,11 +299,11 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// value, which is exactly why this has to be an independent,
 			// resolution-wide signal instead.
 			ambiguous = true
-		case len(commitIndex) == 1 && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
+		case len(commitIndex) == 1 && gateValid && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
 			committedIndex[commitIndex[0]] = true
 			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
-		case len(commitIndex) >= 2:
+		case len(commitIndex) >= 2 && gateValid:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
 			if gap := top.Confidence - second.Confidence; top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
 				committedIndex[commitIndex[0]] = true
@@ -433,7 +504,13 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		// consulted), so the rescue is REACHABLE by the credential shape
 		// production actually issues, closing what would otherwise have
 		// been a permanently-dead code path.
-		if ambiguous && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
+		// gateValid (CHAOS-3857 sol review F1) is a further, independent
+		// conjunct: the rescue is an ALTERNATE commit path for the exact
+		// ambiguity an invalid gate must leave fully unresolved (commit
+		// nothing), so it must be disabled by the SAME invalidity that
+		// disables the confidence-threshold cases above, not just left to
+		// fire because those cases individually declined to commit.
+		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
 			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK &&
 			unscopedVisibility {
 			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok {

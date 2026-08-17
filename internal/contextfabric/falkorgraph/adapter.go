@@ -72,10 +72,15 @@ type Adapter struct {
 	// graphrank.ResolveFromMergedCandidatesWithGate's three commit-gate
 	// thresholds. The ZERO VALUE means "not overridden" -- reader.go's
 	// ResolveDeps construction leaves it at zero for an unconfigured
-	// deployment, and graphrank.Engine.ResolveSubjects (resolve.go) is the
-	// ONE place a zero CommitGatePolicy gets replaced with
+	// deployment, and graphrank.ResolveSubjects (resolve.go) is the ONE
+	// place a zero CommitGatePolicy gets replaced with
 	// graphrank.DefaultCommitGatePolicy() -- never here, and never
-	// silently treated as a valid (auto-commit-everything) policy.
+	// silently treated as a valid (auto-commit-everything) policy. See
+	// also CommitGatePolicy.Validate() (resolution.go): even a NON-zero
+	// but invalid policy (a partial override with one field left at 0, for
+	// instance) cannot reach a live commit decision -- Validate is
+	// enforced independently at the env-var boundary
+	// (EmbedderFromEnv, vector.go) AND inside the evaluator itself.
 	commitGatePolicy graphrank.CommitGatePolicy
 
 	bootstrapMu   sync.RWMutex
@@ -143,10 +148,13 @@ type EmbedderOptions struct {
 	// resolved by EmbedderFromEnv from three explicit env vars (see that
 	// function's doc comment) using the SAME per-knob "explicit override
 	// wins" precedent EnvSimilarityFloor already established. The zero
-	// value means "no override": graphrank.Engine.ResolveSubjects falls
-	// back to graphrank.DefaultCommitGatePolicy(), never to a
-	// zero-threshold policy -- see ResolveDeps.CommitGatePolicy's doc
-	// comment. Threaded through this vector-retrieval-configuration seam
+	// value means "no override": graphrank.ResolveSubjects falls back to
+	// graphrank.DefaultCommitGatePolicy(), never to a zero-threshold
+	// policy -- see ResolveDeps.CommitGatePolicy's doc comment. A
+	// non-zero but INVALID override (see CommitGatePolicy.Validate())
+	// is rejected here, loudly, by EmbedderFromEnv before it can ever
+	// reach that fallback decision. Threaded through this
+	// vector-retrieval-configuration seam
 	// (rather than a separate, non-embedder-gated one) deliberately
 	// mirrors VectorMarginCommitThreshold/CalibratedTopK's own scoping:
 	// this is a MEASUREMENT surface for the SAME sweep, on the SAME seam,

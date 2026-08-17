@@ -1,20 +1,32 @@
 package graphrank
 
 import (
+	"math"
+	"reflect"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // This file's tests are additive-only (CHAOS-3857 gate-threshold sweep
-// parameterization): they exercise CommitGatePolicy/DefaultCommitGatePolicy
-// and ResolveFromMergedCandidatesWithGate, the new surfaces
+// parameterization): they exercise CommitGatePolicy/DefaultCommitGatePolicy/
+// Validate and ResolveFromMergedCandidatesWithGate, the new surfaces
 // ResolveFromMergedCandidates now delegates to. No existing test in this
 // package is modified -- corroboration_test.go's loneCommitGate/topOfTwoGate
 // constants and every call to ResolveFromMergedCandidates there are
-// untouched and still green, which is itself the byte-identical-behavior
-// proof: ResolveFromMergedCandidates's own logic did not change, only where
-// its three threshold literals now live.
+// untouched and still green.
+
+// resolveWithGate is this file's own thin helper, mirroring corroboration_test.go's
+// resolveOne but taking an explicit gate -- kept local to this file (not
+// added to corroboration_test.go, which stays unmodified per the sol
+// review's hard requirement).
+func resolveWithGate(gate CommitGatePolicy, candidates ...contextfabric.SubjectCandidate) contextfabric.SubjectResolution {
+	bySubject := make(map[string]contextfabric.SubjectCandidate, len(candidates))
+	for _, c := range candidates {
+		bySubject[SubjectKey(c.Subject)] = c
+	}
+	return ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, gate)
+}
 
 // TestDefaultCommitGatePolicyMatchesCalibratedProductionValues pins the
 // three calibrated thresholds this whole parameterization must never
@@ -32,30 +44,268 @@ func TestDefaultCommitGatePolicyMatchesCalibratedProductionValues(t *testing.T) 
 	}
 }
 
-// TestResolveFromMergedCandidatesIsResolveFromMergedCandidatesWithGateAtDefault
-// is the direct, mechanical byte-identical-behavior proof: for an arbitrary
-// candidate set, ResolveFromMergedCandidates's result must equal
-// ResolveFromMergedCandidatesWithGate's result when the gate argument is
-// DefaultCommitGatePolicy() -- exactly what ResolveFromMergedCandidates's
-// new one-line body does. If a future edit ever lets the two diverge (e.g.
-// someone "optimizes" the thin wrapper into a partial copy), this fails.
-func TestResolveFromMergedCandidatesIsResolveFromMergedCandidatesWithGateAtDefault(t *testing.T) {
-	bySubject := map[string]contextfabric.SubjectCandidate{}
-	for _, c := range []contextfabric.SubjectCandidate{
-		corroborationCandidate("alpha", 0.75, contextfabric.MatchLexical),
-		corroborationCandidate("beta", 0.60, contextfabric.MatchLexical),
-	} {
-		bySubject[SubjectKey(c.Subject)] = c
+// TestShippedTopOfTwoGapIsIndependentlyPinnedAt012 is sol review F3's
+// independent literal pin: unlike loneCommitGate/topOfTwoGate in
+// corroboration_test.go (which duplicate 0.72/0.88 as hand-written
+// literals to position OTHER assertions against them), nothing in this
+// package independently re-derives the shipped TopGap outside
+// DefaultCommitGatePolicy() itself -- so a test built FROM
+// DefaultCommitGatePolicy().TopGap would be circular, proving nothing
+// about whether 0.12 is really what ships. This test hardcodes 0.12
+// directly (never reads DefaultCommitGatePolicy()) and proves it via real
+// candidate confidences: a gap of exactly 0.12 commits, a gap of
+// 0.119999... (one float64 ULP under) does not.
+func TestShippedTopOfTwoGapIsIndependentlyPinnedAt012(t *testing.T) {
+	const independentTopGapLiteral = 0.12
+	top := corroborationCandidate("top", 0.90)
+	atGap := resolveWithGate(DefaultCommitGatePolicy(), top, corroborationCandidate("second-at-gap", 0.90-independentTopGapLiteral))
+	if len(atGap.Committed) != 1 {
+		t.Fatalf("gap == 0.12 (independently hardcoded): Committed = %v, want exactly one commit", atGap.Committed)
 	}
-	viaDefault := ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true)
-	viaExplicitGate := ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy())
-	if len(viaDefault.Committed) != len(viaExplicitGate.Committed) {
-		t.Fatalf("Committed length differs: default=%v explicitGate=%v", viaDefault.Committed, viaExplicitGate.Committed)
+	belowGap := resolveWithGate(DefaultCommitGatePolicy(), top, corroborationCandidate("second-below-gap", 0.90-independentTopGapLiteral+0.001))
+	if len(belowGap.Committed) != 0 {
+		t.Fatalf("gap == 0.119 (just under 0.12): Committed = %v, want none", belowGap.Committed)
 	}
-	for i := range viaDefault.Committed {
-		if viaDefault.Committed[i] != viaExplicitGate.Committed[i] {
-			t.Fatalf("Committed[%d] differs: default=%+v explicitGate=%+v", i, viaDefault.Committed[i], viaExplicitGate.Committed[i])
-		}
+}
+
+// TestCommitGateGeometry is sol review F3's table-driven sweep across
+// EVERY commit-decision shape this gate governs, including the EXACT
+// boundary values that die silently if `>=` in resolution.go ever becomes
+// `>`. For every case run "at default", it also asserts the
+// byte-identical-behavior proof (F3: compare the FULL SubjectResolution,
+// not just Committed) that ResolveFromMergedCandidates ==
+// ResolveFromMergedCandidatesWithGate(..., DefaultCommitGatePolicy()) --
+// superseding the narrower, Committed-only proof an earlier round of this
+// file had.
+func TestCommitGateGeometry(t *testing.T) {
+	type tc struct {
+		name          string
+		candidates    []contextfabric.SubjectCandidate
+		gate          CommitGatePolicy
+		useDefault    bool // when true, also proves wrapper equality against this case
+		wantCommitted int  // 0 or 1 -- every case here commits at most one subject
+	}
+	cases := []tc{
+		{
+			name:          "lone candidate well above LoneFloor commits",
+			candidates:    []contextfabric.SubjectCandidate{corroborationCandidate("solo", 0.90)},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 1,
+		},
+		{
+			name:          "lone candidate EXACTLY AT LoneFloor commits (>=, not >)",
+			candidates:    []contextfabric.SubjectCandidate{corroborationCandidate("solo-at-floor", 0.72)},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 1,
+		},
+		{
+			name:          "lone candidate just below LoneFloor does not commit",
+			candidates:    []contextfabric.SubjectCandidate{corroborationCandidate("solo-below-floor", 0.71)},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 0,
+		},
+		{
+			name: "top-of-two commits when both floor and gap clear",
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.95), corroborationCandidate("second", 0.70),
+			},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 1,
+		},
+		{
+			name: "top-of-two rejected by floor despite a huge gap",
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.85), corroborationCandidate("second", 0.10),
+			},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 0,
+		},
+		{
+			name: "top-of-two rejected by gap despite clearing the floor",
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.95), corroborationCandidate("second", 0.90),
+			},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 0,
+		},
+		{
+			name: "top-of-two commits at EXACT floor and EXACT gap boundaries (>=, not >)",
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.88), corroborationCandidate("second", 0.76),
+			},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 1,
+		},
+		{
+			name: "top-of-two rejected one ULP below the floor boundary",
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", math.Nextafter(0.88, 0)), corroborationCandidate("second", 0.10),
+			},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 0,
+		},
+		{
+			name: "top-of-two rejected one ULP below the gap boundary",
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.90), corroborationCandidate("second", math.Nextafter(0.78, 1)),
+			},
+			gate:          DefaultCommitGatePolicy(),
+			useDefault:    true,
+			wantCommitted: 0,
+		},
+		// Override cases: an explicit gate reaches and changes the
+		// decision relative to what DefaultCommitGatePolicy() would do on
+		// the SAME candidates (no wrapper-equality check -- these are not
+		// "at default").
+		{
+			name:          "lowered LoneFloor commits a candidate the default would leave ambiguous",
+			candidates:    []contextfabric.SubjectCandidate{corroborationCandidate("solo", 0.65)},
+			gate:          CommitGatePolicy{LoneFloor: 0.60, TopFloor: 0.88, TopGap: 0.12},
+			wantCommitted: 1,
+		},
+		{
+			name: "widened TopGap commits a pair the default would leave ambiguous",
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.90), corroborationCandidate("second", 0.80),
+			},
+			gate:          CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.88, TopGap: 0.05},
+			wantCommitted: 1,
+		},
+		{
+			name: "raised TopFloor rejects a pair the default would commit",
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.90), corroborationCandidate("second", 0.70),
+			},
+			gate:          CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.95, TopGap: 0.12},
+			wantCommitted: 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			viaGate := resolveWithGate(c.gate, c.candidates...)
+			if len(viaGate.Committed) != c.wantCommitted {
+				t.Fatalf("Committed = %v, want %d commit(s)", viaGate.Committed, c.wantCommitted)
+			}
+			if !c.useDefault {
+				return
+			}
+			bySubject := make(map[string]contextfabric.SubjectCandidate, len(c.candidates))
+			for _, cand := range c.candidates {
+				bySubject[SubjectKey(cand.Subject)] = cand
+			}
+			viaDefaultWrapper := ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true)
+			if !reflect.DeepEqual(viaDefaultWrapper, viaGate) {
+				t.Fatalf("ResolveFromMergedCandidates() != ResolveFromMergedCandidatesWithGate(..., DefaultCommitGatePolicy()):\n  wrapper: %+v\n  gate:    %+v", viaDefaultWrapper, viaGate)
+			}
+		})
+	}
+}
+
+// TestCommitGatePolicyValidate is a direct unit table for Validate()
+// itself, independent of any resolution behavior -- every rejection
+// reason sol review F1 named, checked in isolation.
+func TestCommitGatePolicyValidate(t *testing.T) {
+	valid := DefaultCommitGatePolicy()
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("DefaultCommitGatePolicy().Validate() = %v, want nil", err)
+	}
+	cases := []struct {
+		name string
+		gate CommitGatePolicy
+	}{
+		{"zero value", CommitGatePolicy{}},
+		{"LoneFloor zero, others default", CommitGatePolicy{LoneFloor: 0, TopFloor: 0.88, TopGap: 0.12}},
+		{"TopFloor zero, others default", CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0, TopGap: 0.12}},
+		{"TopGap zero, others default", CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.88, TopGap: 0}},
+		{"LoneFloor negative", CommitGatePolicy{LoneFloor: -0.1, TopFloor: 0.88, TopGap: 0.12}},
+		{"LoneFloor above 1", CommitGatePolicy{LoneFloor: 1.1, TopFloor: 0.88, TopGap: 0.12}},
+		{"TopFloor above 1", CommitGatePolicy{LoneFloor: 0.72, TopFloor: 1.5, TopGap: 0.12}},
+		{"TopGap above 1", CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.88, TopGap: 1.5}},
+		{"LoneFloor NaN", CommitGatePolicy{LoneFloor: math.NaN(), TopFloor: 0.88, TopGap: 0.12}},
+		{"TopFloor +Inf", CommitGatePolicy{LoneFloor: 0.72, TopFloor: math.Inf(1), TopGap: 0.12}},
+		{"TopGap -Inf", CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.88, TopGap: math.Inf(-1)}},
+		{"TopGap equals TopFloor", CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.88, TopGap: 0.88}},
+		{"TopGap exceeds TopFloor", CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.5, TopGap: 0.6}},
+		{"LoneFloor exceeds TopFloor", CommitGatePolicy{LoneFloor: 0.95, TopFloor: 0.88, TopGap: 0.12}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := c.gate.Validate(); err == nil {
+				t.Fatalf("%+v.Validate() = nil, want a rejection", c.gate)
+			}
+		})
+	}
+}
+
+// TestResolveFromMergedCandidatesWithGateCommitsNothingForAnInvalidPolicy
+// is sol review F1's exact scenario, tested DIRECTLY at the evaluator
+// layer (not just the env boundary -- falkorgraph's
+// TestEmbedderFromEnv_CrossFieldInvalidCommitGateErrorsLoudlyNamingBothFields
+// covers that layer; this one proves the evaluator ITSELF fails closed
+// even when handed an invalid policy through some OTHER path that never
+// went through EmbedderFromEnv's validation at all -- exactly the gap sol
+// found: "the exported evaluator has NO guard -- safety rests on one call
+// site").
+//
+// Both candidate sets used here would UNAMBIGUOUSLY commit under
+// DefaultCommitGatePolicy() (a lone candidate at 0.99, and a top-of-two
+// pair at 0.99/0.10) -- proving the invalid policy suppresses a commit
+// that would otherwise be a slam dunk, not merely one that was already
+// borderline.
+func TestResolveFromMergedCandidatesWithGateCommitsNothingForAnInvalidPolicy(t *testing.T) {
+	cases := []struct {
+		name       string
+		gate       CommitGatePolicy
+		candidates []contextfabric.SubjectCandidate
+	}{
+		{
+			name:       "partial zero: LoneFloor=0 alone (TopFloor/TopGap at calibrated defaults)",
+			gate:       CommitGatePolicy{LoneFloor: 0, TopFloor: 0.88, TopGap: 0.12},
+			candidates: []contextfabric.SubjectCandidate{corroborationCandidate("solo", 0.99)},
+		},
+		{
+			name: "partial zero: TopFloor=0 and TopGap=0 (LoneFloor at calibrated default)",
+			gate: CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0, TopGap: 0},
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.99), corroborationCandidate("second", 0.10),
+			},
+		},
+		{
+			name:       "cross-field invalid: LoneFloor > TopFloor",
+			gate:       CommitGatePolicy{LoneFloor: 0.95, TopFloor: 0.88, TopGap: 0.12},
+			candidates: []contextfabric.SubjectCandidate{corroborationCandidate("solo", 0.99)},
+		},
+		{
+			name: "cross-field invalid: TopGap >= TopFloor",
+			gate: CommitGatePolicy{LoneFloor: 0.72, TopFloor: 0.5, TopGap: 0.6},
+			candidates: []contextfabric.SubjectCandidate{
+				corroborationCandidate("top", 0.99), corroborationCandidate("second", 0.10),
+			},
+		},
+		{
+			name:       "NaN field",
+			gate:       CommitGatePolicy{LoneFloor: math.NaN(), TopFloor: 0.88, TopGap: 0.12},
+			candidates: []contextfabric.SubjectCandidate{corroborationCandidate("solo", 0.99)},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := c.gate.Validate(); err == nil {
+				t.Fatalf("test setup bug: %+v.Validate() = nil, this case must use an invalid policy", c.gate)
+			}
+			resolution := resolveWithGate(c.gate, c.candidates...)
+			if len(resolution.Committed) != 0 {
+				t.Fatalf("invalid gate %+v: Committed = %v, want NONE (fail closed) even though these candidates would unambiguously commit under DefaultCommitGatePolicy()", c.gate, resolution.Committed)
+			}
+		})
 	}
 }
 
@@ -66,45 +316,20 @@ func TestResolveFromMergedCandidatesIsResolveFromMergedCandidatesWithGateAtDefau
 // ambiguous, exactly as it always has -- but
 // ResolveFromMergedCandidatesWithGate with an EXPLICIT, lowered LoneFloor
 // (0.60) must commit it. Proves the new gate parameter actually reaches and
-// changes the decision, not merely that it compiles.
+// changes the decision, not merely that it compiles. (Also covered as one
+// row of TestCommitGateGeometry above; kept standalone for its narrower,
+// more readable failure message.)
 func TestResolveFromMergedCandidatesWithGateHonorsLoweredLoneFloor(t *testing.T) {
 	candidate := corroborationCandidate("solo", 0.65)
-	bySubject := map[string]contextfabric.SubjectCandidate{SubjectKey(candidate.Subject): candidate}
-
-	atDefault := ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true)
+	atDefault := resolveWithGate(DefaultCommitGatePolicy(), candidate)
 	if len(atDefault.Committed) != 0 {
 		t.Fatalf("at the calibrated default, Committed = %v, want none (0.65 < 0.72)", atDefault.Committed)
 	}
 
 	lowered := DefaultCommitGatePolicy()
 	lowered.LoneFloor = 0.60
-	atLoweredFloor := ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, lowered)
+	atLoweredFloor := resolveWithGate(lowered, candidate)
 	if len(atLoweredFloor.Committed) != 1 || atLoweredFloor.Committed[0] != candidate.Subject {
 		t.Fatalf("with LoneFloor=0.60, Committed = %v, want [%+v]", atLoweredFloor.Committed, candidate.Subject)
-	}
-}
-
-// TestResolveFromMergedCandidatesWithGateHonorsWidenedTopGap is the
-// top-of-two counterpart: two candidates whose gap (0.10) clears the
-// calibrated TopGap (0.12) is FALSE at the default -- ambiguous -- but a
-// widened-permissive override (TopGap: 0.05) commits the top candidate.
-func TestResolveFromMergedCandidatesWithGateHonorsWidenedTopGap(t *testing.T) {
-	bySubject := map[string]contextfabric.SubjectCandidate{}
-	for _, c := range []contextfabric.SubjectCandidate{
-		corroborationCandidate("top", 0.90),
-		corroborationCandidate("second", 0.80),
-	} {
-		bySubject[SubjectKey(c.Subject)] = c
-	}
-	atDefault := ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true)
-	if len(atDefault.Committed) != 0 {
-		t.Fatalf("at the calibrated default, Committed = %v, want none (gap 0.10 < 0.12)", atDefault.Committed)
-	}
-
-	widened := DefaultCommitGatePolicy()
-	widened.TopGap = 0.05
-	atWidenedGap := ResolveFromMergedCandidatesWithGate(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, widened)
-	if len(atWidenedGap.Committed) != 1 {
-		t.Fatalf("with TopGap=0.05, Committed = %v, want exactly one commit (gap 0.10 >= 0.05, top >= TopFloor)", atWidenedGap.Committed)
 	}
 }
