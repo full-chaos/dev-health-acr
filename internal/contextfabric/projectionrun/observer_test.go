@@ -48,6 +48,66 @@ func TestR4_F3_ObserverNeverLogsRawErrorText(t *testing.T) {
 	}
 }
 
+// exceptionDetailLeakCanaries lists exception-detail substrings that must
+// never reach telemetry for TestQueryBudgetExceededObservesDistinctlyAndBoundedly.
+// CHAOS-3877: deliberately distinctive (each contains a letter, never a
+// bare run of digits) so none of them can collide with an incidental
+// substring of slog's own RFC3339Nano timestamp, which is digits-only. A
+// bare "307" canary previously matched the nanosecond fraction of an
+// entirely unrelated timestamp (observed .930737748Z on a real CI run) and
+// failed the test for a reason that had nothing to do with a leak.
+var exceptionDetailLeakCanaries = []string{"17987654", "Limit for read exceeded", "exception code 307"}
+
+// structuredLeakCheck parses a single JSON log line and reports which
+// exceptionDetailLeakCanaries appear in its STRUCTURED fields -- msg and
+// every attr -- with the "time" field dropped first. CHAOS-3877: the
+// rendered line also carries slog's own timestamp, which is content this
+// observer never controls and which can incidentally contain digits
+// matching a canary (a bare "307" canary previously matched the nanosecond
+// fraction of an entirely unrelated timestamp, observed .930737748Z on a
+// real CI run); checking the whole line makes the test depend on the clock.
+// Dropping "time" before the substring check removes that dependency while
+// still catching a real leak in ANY field this observer logs today or adds
+// later -- there is no allow-list of "safe" field names to fall out of
+// date. Pure (no *testing.T): requireNoExceptionDetailLeak below is the
+// assertion wrapper production tests use; TestChaos3877_* below call this
+// directly so they can inspect a leak being found without failing.
+func structuredLeakCheck(t testing.TB, logged string) (record map[string]any, leaked []string) {
+	t.Helper()
+	if err := json.Unmarshal([]byte(strings.TrimSpace(logged)), &record); err != nil {
+		t.Fatalf("log line is not valid JSON: %v", err)
+	}
+	structured := make(map[string]any, len(record))
+	for k, v := range record {
+		if k == "time" {
+			continue
+		}
+		structured[k] = v
+	}
+	structuredBody, err := json.Marshal(structured)
+	if err != nil {
+		t.Fatalf("re-marshal structured fields: %v", err)
+	}
+	structuredText := string(structuredBody)
+	for _, leak := range exceptionDetailLeakCanaries {
+		if strings.Contains(structuredText, leak) {
+			leaked = append(leaked, leak)
+		}
+	}
+	return record, leaked
+}
+
+// requireNoExceptionDetailLeak is structuredLeakCheck plus the Fatalf a
+// production test wants: fail loud the moment any canary is found.
+func requireNoExceptionDetailLeak(t *testing.T, logged string) map[string]any {
+	t.Helper()
+	record, leaked := structuredLeakCheck(t, logged)
+	if len(leaked) > 0 {
+		t.Fatalf("raw exception detail leaked into telemetry (%q): %s", leaked, logged)
+	}
+	return record
+}
+
 // TestQueryBudgetExceededObservesDistinctlyAndBoundedly is CHAOS-3848's
 // part-2 closure test at the observer boundary: a mocked ClickHouse
 // TOO_MANY_BYTES (Code 307) failure, wrapped exactly as
@@ -66,20 +126,64 @@ func TestQueryBudgetExceededObservesDistinctlyAndBoundedly(t *testing.T) {
 	})
 
 	logged := buffer.String()
-	var record map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(logged)), &record); err != nil {
-		t.Fatalf("log line is not valid JSON: %v", err)
-	}
+	record := requireNoExceptionDetailLeak(t, logged)
 	if record["failure_class"] != failureClassBudgetExceeded {
 		t.Fatalf("failure_class = %v, want %q", record["failure_class"], failureClassBudgetExceeded)
 	}
 	if record["failure_class"] == failureClassUnavailable {
 		t.Fatal("a query-budget failure must not classify as dependency_unavailable")
 	}
-	for _, leak := range []string{"17987654", "Limit for read exceeded", "307"} {
-		if strings.Contains(logged, leak) {
-			t.Fatalf("raw exception detail leaked into telemetry (%q): %s", leak, logged)
-		}
+}
+
+// TestChaos3877_StructuredLeakCheckSurvivesTimestampCollision is the
+// red-first half of the fix's own proof: a log line shaped exactly like the
+// real CI failure (a "time" field whose nanosecond fraction contains the
+// canary digits "307", and otherwise clean structured fields) must NOT be
+// reported as a leak. Fed through the OLD whole-line check this line trips
+// a false failure; requireNoExceptionDetailLeak (the fix) must pass it.
+func TestChaos3877_StructuredLeakCheckSurvivesTimestampCollision(t *testing.T) {
+	const logged = `{"time":"2026-08-17T03:31:12.930737748Z","level":"ERROR","msg":"context_fabric: projection tick failed; checkpoint held for replay","org_id":"org_1","source":"devhealth","duration_ms":1000,"failure_class":"query_budget_exceeded"}`
+
+	// Anti-vacuity: the fixture's timestamp really does carry the collision
+	// digits (this is byte-for-byte the .930737748Z observed in CI), so the
+	// pre-fix whole-line check -- strings.Contains(logged, "307") -- really
+	// does trip on this exact line even though nothing leaked.
+	if !strings.Contains(logged, "307") {
+		t.Fatal("fixture's timestamp must contain the collision digits '307' (from .930737748Z) for this test to mean anything")
+	}
+
+	record := requireNoExceptionDetailLeak(t, logged) // must NOT fail
+	if record["failure_class"] != failureClassBudgetExceeded {
+		t.Fatalf("failure_class = %v, want %q", record["failure_class"], failureClassBudgetExceeded)
+	}
+}
+
+// TestChaos3877_StructuredLeakCheckStillCatchesRealLeaks is the green-stays-red
+// half: a real leak -- the canary landing in msg, where a genuine
+// dependency-error mistake would put it -- must still fail
+// requireNoExceptionDetailLeak. Proves the switch to structured-only
+// checking did not also silence real leaks, only the timestamp collision.
+func TestChaos3877_StructuredLeakCheckStillCatchesRealLeaks(t *testing.T) {
+	subTests := []struct {
+		name   string
+		logged string
+	}{
+		{
+			name:   "leak in msg",
+			logged: `{"time":"2026-08-17T03:31:12.000000000Z","level":"ERROR","msg":"context_fabric: projection tick failed: exception code 307","org_id":"org_1","source":"devhealth","duration_ms":1000,"failure_class":"query_budget_exceeded"}`,
+		},
+		{
+			name:   "leak in an attr",
+			logged: `{"time":"2026-08-17T03:31:12.000000000Z","level":"ERROR","msg":"context_fabric: projection tick failed; checkpoint held for replay","org_id":"org_1","source":"devhealth","duration_ms":1000,"failure_class":"query_budget_exceeded","debug_detail":"Limit for read exceeded"}`,
+		},
+	}
+	for _, st := range subTests {
+		t.Run(st.name, func(t *testing.T) {
+			_, leaked := structuredLeakCheck(t, st.logged)
+			if len(leaked) == 0 {
+				t.Fatalf("structuredLeakCheck did not catch a real leak (%s): %s", st.name, st.logged)
+			}
+		})
 	}
 }
 
