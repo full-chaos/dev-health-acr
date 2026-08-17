@@ -266,6 +266,13 @@ func buildContextFabricGraphReader(request buildRequest, clickhouse clickHouseCo
 	// CHAOS-3858 (measurement-only): nil for every real caller. See
 	// Options.RawSignalObserver's doc comment.
 	graphConfig.RawSignalObserver = request.options.RawSignalObserver
+	// CHAOS-3884 (team-lead ruling, 2026-08-17): wired unconditionally,
+	// the SAME "always on, gated by log level not by a boolean toggle"
+	// convention Telemetry above already uses -- SlogResolutionTracer logs
+	// at Debug, so it is silent for any deployment running at its usual
+	// Info/Warn level and available the moment an operator raises theirs,
+	// with no separate config knob to remember to flip.
+	graphConfig.ResolutionTracer = graphrank.NewSlogResolutionTracer(request.options.Logger)
 	if wireIdentityUniverse {
 		// CHAOS-3884 (Option C): closes over the SAME ClickHouse query client
 		// devhealthfacts.NewProviders already uses below, so the identity
