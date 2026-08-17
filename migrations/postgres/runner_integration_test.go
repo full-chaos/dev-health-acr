@@ -23,8 +23,9 @@ import (
 // runner sorts by version and rejects only duplicates, so a gap applies
 // cleanly -- but there is no gap to tolerate here now.) 0014 is
 // CHAOS-3833's embed-retrieval reuse-key columns. 0015 is CHAOS-3862's
-// prompt-version reuse-key columns.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+// prompt-version and version-authority reuse-key columns. 0016 is
+// CHAOS-3859's clarification-selection capture table.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -272,6 +273,92 @@ func TestRunner_upgradeTo15AddsPromptAndVersionAuthorityReuseKeyColumns(t *testi
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v3")
 }
 
+// TestRunner_upgradeTo16CreatesClarificationSelectionsTable is CHAOS-3859's
+// 0015->0016 upgrade proof, mirroring
+// TestRunner_upgradeTo15AddsPromptAndVersionAuthorityReuseKeyColumns's
+// released-main-fixture pattern exactly: a runner built from a FIXED file
+// subset (everything through 0015), upgraded by the full embedded set,
+// then asserted against the NEW table's complete shape -- not just "the
+// table exists," but every column and constraint 0016 adds, plus both
+// indexes, so a partially-applied or partially-idempotent migration would
+// fail this test even if the table itself came into existence.
+func TestRunner_upgradeTo16CreatesClarificationSelectionsTable(t *testing.T) {
+	// Given a database at the released main schema through migration 0015
+	// (everything CHAOS-3859 builds on top of)...
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	preClarificationCaptureFiles := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_acr_core.sql",
+		"0002_episode_repository_scoped_idempotency.sql",
+		"0003_credential_rotation_marker.sql",
+		"0004_device_authorization.sql",
+		"0005_device_authorization_hints.sql",
+		"0006_context_fabric_projection_checkpoints.sql",
+		"0007_context_fabric_projection_rebuild_markers.sql",
+		"0008_agent_episodes_updated_at.sql",
+		"0009_context_fabric_investigation_results.sql",
+		"0010_context_fabric_org_model_config.sql",
+		"0011_context_fabric_answer_reuse.sql",
+		"0012_context_fabric_reuse_fallback_identity_cutover.sql",
+		"0013_context_fabric_time_axis_reuse_key.sql",
+		"0014_context_fabric_embed_retrieval_reuse_key.sql",
+		"0015_context_fabric_prompt_version_reuse_key.sql",
+	} {
+		preClarificationCaptureFiles[name] = &fstest.MapFile{Data: mustReadFile(t, name)}
+	}
+	released, err := NewRunner(preClarificationCaptureFiles)
+	require.NoError(t, err)
+	require.NoError(t, released.Up(ctx, db))
+	requireTableAbsent(t, ctx, db, "context_fabric_clarification_selections")
+
+	// When upgrading to the full (post-CHAOS-3859) migration set.
+	latest, err := Embedded()
+	require.NoError(t, err)
+
+	// Then
+	require.NoError(t, latest.Up(ctx, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
+
+	requireTableExists(t, ctx, db, "context_fabric_clarification_selections")
+	for _, column := range []string{
+		"selection_id", "org_id", "captured_at", "question_hash", "prior_result_id",
+		"selected_receipt_id", "selected_subject_kind", "selected_subject_canonical_id",
+		"selection_provenance", "offered_candidates", "pipeline_context", "created_at",
+	} {
+		requireColumnExists(t, ctx, db, "context_fabric_clarification_selections", column)
+	}
+	for _, constraint := range []string{
+		"ck_acr_cf_clarification_selections_selection_id_length",
+		"ck_acr_cf_clarification_selections_org_id_length",
+		"ck_acr_cf_clarification_selections_question_hash_length",
+		"ck_acr_cf_clarification_selections_prior_result_id_length",
+		"ck_acr_cf_clarification_selections_receipt_id_length",
+		"ck_acr_cf_clarification_selections_subject_kind_length",
+		"ck_acr_cf_clarification_selections_subject_id_length",
+		"ck_acr_cf_clarification_selections_provenance_vocabulary",
+	} {
+		requireConstraintExists(t, ctx, db, constraint)
+	}
+	requireIndexExists(t, ctx, db, "ix_acr_cf_clarification_selections_org_captured")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_clarification_selections_org_question")
+}
+
+// TestRunner_upgradeTo16IsIdempotentOnRetry is CHAOS-3862's F3 lesson
+// applied to THIS migration: 0016 must survive being applied twice without
+// erroring (a real retry-after-partial-failure proxy -- see 0016's own
+// header comment on why every constraint is DROP-IF-EXISTS-then-ADD and
+// why there is no inline BEGIN/COMMIT).
+func TestRunner_upgradeTo16IsIdempotentOnRetry(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	runner, err := Embedded()
+	require.NoError(t, err)
+	require.NoError(t, runner.Up(ctx, db))
+	require.NoError(t, runner.Up(ctx, db), "a second Up() over an already-migrated database must not error")
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
+}
+
 func TestRunner_serializesConcurrentUp_calls(t *testing.T) {
 	// Given
 	ctx := context.Background()
@@ -490,6 +577,40 @@ func requireContextFabricInvestigationResultsColumn(t *testing.T, ctx context.Co
 		WHERE table_schema = 'acr' AND table_name = 'context_fabric_investigation_results' AND column_name = $1
 	)`, column).Scan(&exists))
 	require.True(t, exists, "missing context_fabric_investigation_results column %s", column)
+}
+
+// requireTableExists/requireTableAbsent/requireColumnExists are the
+// generic (table-parameterized) versions of the table-specific
+// require<Table>Column helpers above -- CHAOS-3859's 0016 upgrade proof
+// needs a brand-NEW table's existence checked both before (absent) and
+// after (present) the upgrade, which none of the earlier single-table
+// helpers were built to express.
+func requireTableExists(t *testing.T, ctx context.Context, db *sql.DB, table string) {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.tables WHERE table_schema = 'acr' AND table_name = $1
+	)`, table).Scan(&exists))
+	require.True(t, exists, "missing table %s", table)
+}
+
+func requireTableAbsent(t *testing.T, ctx context.Context, db *sql.DB, table string) {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.tables WHERE table_schema = 'acr' AND table_name = $1
+	)`, table).Scan(&exists))
+	require.False(t, exists, "table %s should not exist yet at this migration level", table)
+}
+
+func requireColumnExists(t *testing.T, ctx context.Context, db *sql.DB, table, column string) {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'acr' AND table_name = $1 AND column_name = $2
+	)`, table, column).Scan(&exists))
+	require.True(t, exists, "missing %s column %s", table, column)
 }
 
 // requireConstraintExists/requireIndexExists/requireIndexAbsent back

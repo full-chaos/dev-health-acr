@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -39,6 +40,7 @@ type Runtime struct {
 	closeErr          error
 	closers           []func() error
 	usageTelemetry    *auth.UsageTelemetry
+	clarificationSink *pgclarification.Sink
 	postgresClose     func() error
 	independentClosed bool
 	postgresClosed    bool
@@ -53,13 +55,52 @@ func (r *Runtime) Close() error {
 	if r.postgresClosed {
 		return r.closeErr
 	}
+	// CHAOS-3859 sol review F6: usageTelemetry and clarificationSink both
+	// write through the SAME Postgres pool postgresClose() tears down
+	// below, so BOTH must get an unconditional, independent shutdown
+	// attempt before that happens -- one timing out must never skip the
+	// other's attempt entirely. (The bug this fixes: usageTelemetry timing
+	// out used to return immediately, before clarificationSink.Close was
+	// ever called at all.) A worker that does not finish draining in time
+	// might still be mid-write through the pool -- closing it now would
+	// race that write -- so a timeout from EITHER one skips postgresClose
+	// this round (leaving postgresClosed false so a LATER Close() call
+	// retries it), exactly the protection this function already gave
+	// usageTelemetry alone. clarificationSink.Close cancels its own
+	// worker's context on ITS timeout (see Sink.Close's doc comment), so
+	// even the "we gave up waiting" case degrades safely instead of
+	// leaking a goroutine that might still touch the pool later.
+	// usageErr and sinkErr are THIS round's worker-timeout errors only --
+	// deliberately never assigned into the persistent r.closeErr field. A
+	// timed-out round leaves postgresClosed false so a LATER Close() call
+	// retries both workers; if that retry succeeds, it must report clean
+	// rather than replaying a stale error from a round that already ended.
+	// (This mirrors the pre-F6 code, which joined its own timeout err only
+	// into the transient return value, never into r.closeErr.)
+	var usageErr, sinkErr error
+	var workerTimedOut bool
 	if r.usageTelemetry != nil {
 		if err := r.usageTelemetry.Close(); errors.Is(err, auth.ErrUsageTelemetryShutdownTimeout) {
-			r.closeErr = errors.Join(r.closeErr, r.closeIndependentLocked())
-			return errors.Join(r.closeErr, err)
+			usageErr = err
+			workerTimedOut = true
 		}
 	}
+	if r.clarificationSink != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sinkErr = r.clarificationSink.Close(closeCtx)
+		cancel()
+		if sinkErr != nil {
+			workerTimedOut = true
+		}
+	}
+	// The OTHER, unrelated closers (clickhouse, entitlement, ...) share no
+	// worker with the pool, so they run regardless of the outcome above.
+	// closeIndependentLocked is itself idempotent, so persisting its result
+	// across retries is safe (unlike usageErr/sinkErr above).
 	r.closeErr = errors.Join(r.closeErr, r.closeIndependentLocked())
+	if workerTimedOut {
+		return errors.Join(r.closeErr, usageErr, sinkErr)
+	}
 	if r.postgresClose != nil {
 		r.closeErr = errors.Join(r.closeErr, r.postgresClose())
 	}
