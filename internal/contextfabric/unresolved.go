@@ -69,9 +69,26 @@ type ResultVersionProvider interface {
 const (
 	clarificationRequiredLimitationOne = "One authorized subject matched the question but could not be confirmed as its subject, so no canonical facts were read until it is confirmed."
 	clarificationRequiredLimitation    = "The question matched more than one authorized subject, so no canonical facts were read until the intended subject is confirmed."
-	// noMatchLimitation states ABSENCE, so it may only be used when the
-	// resolution genuinely produced no candidate at all.
-	noMatchLimitation = "No authorized subject in this organization's graph matched the question, so no canonical facts were read."
+	// noMatchLimitationUnproven states that retrieval found nothing, NOT that
+	// nothing exists. It is used when the candidate pool is empty and no
+	// completeness proof backs that absence -- the only case this resolver
+	// produces today (CHAOS-3885, resolution architecture v3 §9.2/§21 Phase
+	// 0.5).
+	//
+	// Retrieval cannot demonstrate exhaustiveness over an unbounded graph,
+	// and for at least one question class the universal claim this constant
+	// used to make ("No authorized subject in this organization's graph
+	// matched the question") is affirmatively FALSE: repository entities do
+	// not enter today's candidate pools at all, so an empty pool for a
+	// repository question proves nothing about whether that repository
+	// exists. The old wording asserted exhaustive absence anyway. This
+	// wording only asserts what retrieval actually observed.
+	//
+	// Phase 6 of the same architecture will introduce a SOUND no_match, proof
+	// -backed per key class (canonical ID, provider key, provider URL,
+	// qualified slug, then repository basename). See
+	// noMatchLimitationForEmptyPool, the seam that branch will extend.
+	noMatchLimitationUnproven = "Retrieval found no candidate for this question in this organization's graph, so no canonical facts were read. This search is not exhaustive, so it does not confirm that no matching subject exists."
 	// The ambiguous-and-clarification-unavailable pair (CHAOS-3810 codex
 	// round-1 P2): a no_match result reached WITH candidates attached must
 	// not claim nothing matched while the candidates it names sit in the
@@ -242,7 +259,7 @@ func (e *Engine) terminalResult(
 // PriorSubjectReceipts on a follow-up.
 func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution) (InvestigationStatus, string) {
 	if len(resolution.Candidates) == 0 {
-		return InvestigationNoMatch, noMatchLimitation
+		return InvestigationNoMatch, noMatchLimitationForEmptyPool(resolution)
 	}
 	// Exactly one uncommitted candidate is a REACHABLE state, not a
 	// theoretical one: ResolveFromMergedCandidates leaves a lone candidate
@@ -267,6 +284,21 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		return InvestigationClarificationRequired, clarificationRequiredLimitationOne
 	}
 	return InvestigationClarificationRequired, clarificationRequiredLimitation
+}
+
+// noMatchLimitationForEmptyPool selects the limitation prose an empty
+// candidate pool carries. It is the seam Phase 6 (resolution architecture v3
+// §9.2/§21) extends: once a candidate pool carries a closed completeness
+// proof for its key class, this function is where the branch to a SOUND,
+// proof-backed no_match limitation belongs, without any change to
+// resolveTerminalStatus's control flow or callers.
+//
+// No path today attaches such a proof to a resolution -- typed exact
+// readers, canonical basename projection, and per-key completeness tracking
+// are all later phases of the same architecture (§21 Phase 1-6) -- so every
+// empty pool takes the unproven branch below.
+func noMatchLimitationForEmptyPool(resolution *SubjectResolution) string {
+	return noMatchLimitationUnproven
 }
 
 // terminalVersions builds the version set for a model-free terminal result:
