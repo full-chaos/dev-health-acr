@@ -148,6 +148,15 @@ func isAliasLookupScopedKind(kind contextfabric.SubjectKind) bool {
 	return aliasLookupScopedKinds[kind]
 }
 
+// IsAliasLookupScopedKind is the exported mirror of isAliasLookupScopedKind,
+// existing so an identity-universe reader in another package (e.g.
+// devhealthsource's IdentityUniverse) can cross-check its OWN source-table
+// coverage against this package's counting scope, closing the loop a
+// cross-package registry pair can otherwise silently drift apart on.
+func IsAliasLookupScopedKind(kind contextfabric.SubjectKind) bool {
+	return isAliasLookupScopedKind(kind)
+}
+
 // aliasIdentityEligibleKinds is the NARROW commit-eligibility allowlist
 // (CHAOS-3884) -- a STRICT SUBSET of aliasLookupScopedKinds. Only these
 // kinds may earn the confidence=1 identity bump and participate in the
