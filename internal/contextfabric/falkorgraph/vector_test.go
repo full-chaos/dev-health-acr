@@ -1134,6 +1134,10 @@ type recordingTelemetry struct {
 	// not just a count, so a test can assert the exact key/policy/index
 	// values reported, not merely that SOMETHING fired.
 	efRuntimeMismatches []efRuntimeMismatchRecord
+
+	// identityGraphMissing counts every RecordIdentityGraphMissing call's
+	// count argument (CHAOS-3884).
+	identityGraphMissing int
 }
 
 // efRuntimeMismatchRecord is one recorded
@@ -1160,6 +1164,9 @@ func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string,
 }
 func (r *recordingTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key string, policyEfRuntime, indexEfRuntime int) {
 	r.efRuntimeMismatches = append(r.efRuntimeMismatches, efRuntimeMismatchRecord{key, policyEfRuntime, indexEfRuntime})
+}
+func (r *recordingTelemetry) RecordIdentityGraphMissing(_ context.Context, _ string, count int) {
+	r.identityGraphMissing += count
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

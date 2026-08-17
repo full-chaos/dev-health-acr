@@ -105,6 +105,20 @@ type Config struct {
 	// graphrank.ResolveDeps.RawSignalObserver's doc comment for the full
 	// scope. No production composition root sets this.
 	RawSignalObserver graphrank.RawSignalObserver
+	// IdentityUniverse (CHAOS-3884, Option C) is optional (nil-safe): the
+	// composition root's closure over devhealthsource.IdentityUniverse and
+	// its own ClickHouse client, bound to everything except orgID/ctx. A
+	// nil value means this deployment has no complete-enumeration identity
+	// reader wired -- ResolveSubjects' own composition leaves
+	// graphrank.ResolveDeps.AliasLookup nil in that case, byte-identical to
+	// every pre-CHAOS-3884 backend (same convention as RawSignalObserver
+	// above: no production composition root REQUIRES this, but the
+	// recommended one sets it). Kept as a plain closure rather than a
+	// devhealthsource-typed dependency so this package never imports
+	// devhealthsource (backend adapter subpackages own their own
+	// vendor/SQL client directly; devhealthsource's ClickHouse client type
+	// has no business appearing in a graph adapter's Config).
+	IdentityUniverse func(ctx context.Context, orgID string) (rows []graphrank.IdentityRow, observedAt time.Time, complete bool, err error)
 }
 
 // GraphTelemetry is the graph adapter's operational signal sink.
@@ -194,6 +208,18 @@ type GraphTelemetry interface {
 	// the CHAOS-3832/3835 rebuild path this signal is asking an operator to
 	// run, and why this is DETECTION only, never a compare-and-recreate.
 	RecordVectorIndexEfRuntimeMismatch(ctx context.Context, key string, policyEfRuntime, indexEfRuntime int)
+	// RecordIdentityGraphMissing (CHAOS-3884) fires when the Option-C
+	// identity reader's complete source-table enumeration found a
+	// repository/project/team/work_item claimant that is NOT (yet) present
+	// in the graph -- projection lag. count is how many such claimants this
+	// ONE resolution's AliasLookup call found; every one of them is
+	// excluded from the identity fast path (folded into complete=false,
+	// graphrank.ResolveDeps.AliasLookup's own doc comment) rather than
+	// silently committed on unverified data. This signal is what makes
+	// that exclusion LOUD rather than merely safe: a sustained nonzero
+	// count is a standing silent-projection-loss detector, independent of
+	// this ticket's own alias-identity concern.
+	RecordIdentityGraphMissing(ctx context.Context, orgID string, count int)
 }
 
 // NoopTelemetry discards every signal. Callers that want no telemetry pass
@@ -206,6 +232,7 @@ func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)     
 func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)              {}
 func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int, int)   {}
 func (NoopTelemetry) RecordVectorIndexEfRuntimeMismatch(context.Context, string, int, int) {}
+func (NoopTelemetry) RecordIdentityGraphMissing(context.Context, string, int)              {}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -280,6 +307,15 @@ func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, e
 func (t SlogTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key string, policyEfRuntime, indexEfRuntime int) {
 	t.logger().Warn("context_fabric: existing vector index efRuntime does not match the calibrated retrieval policy -- run the CHAOS-3832/CHAOS-3835 index rebuild to apply it",
 		"key", key, "policy_ef_runtime", policyEfRuntime, "index_ef_runtime", indexEfRuntime)
+}
+
+// RecordIdentityGraphMissing logs at Warn -- unlike RecordVectorRetrievalSuppressed's
+// deliberate INFO ("nothing is wrong"), a graph-missing identity claimant
+// means the source-of-truth tables and the graph have DIVERGED, which is
+// always worth an operator's attention regardless of whether this specific
+// resolution needed the identity fast path.
+func (t SlogTelemetry) RecordIdentityGraphMissing(_ context.Context, orgID string, count int) {
+	t.logger().Warn("context_fabric: identity-universe claimant absent from the graph (projection lag)", "org_id", orgID, "count", count)
 }
 
 func (c Config) validate() error {

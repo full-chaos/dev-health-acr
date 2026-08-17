@@ -173,6 +173,89 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		CommitGatePolicy:  a.commitGatePolicy,
 		RawSignalObserver: a.config.RawSignalObserver,
 	}
+	// CHAOS-3884 (Option C): AliasLookup is left nil (deps' own zero value)
+	// when this deployment has no identity-universe reader configured --
+	// byte-identical to every pre-CHAOS-3884 backend, same convention
+	// Config.IdentityUniverse's own doc comment documents. Assigned
+	// conditionally, not via an always-present closure that checks nil
+	// internally, so graphrank.ResolveSubjects' own "nil means
+	// unsupported" contract (SearchQuestion's identical convention) holds
+	// literally.
+	if a.config.IdentityUniverse != nil {
+		deps.AliasLookup = func(ctx context.Context, orgID string, terms []string) (map[string][]graphrank.CandidateNode, bool, error) {
+			// HIGH-6: temporal authority stays with the graph -- a
+			// historical-axis question never gets this mechanism at all,
+			// mirroring vector.go's own "PLACEMENT IS THE ARGUMENT" choice
+			// to skip a mechanism entirely on a historical axis rather
+			// than thread a rewritten predicate through a new query path.
+			if temporal.active {
+				return nil, false, nil
+			}
+			rows, _, complete, err := a.config.IdentityUniverse(ctx, orgID)
+			if err != nil {
+				return nil, false, safeDependencyError("read identity universe", err)
+			}
+			matchesByTerm := graphrank.MatchIdentityRows(rows, terms)
+			if len(matchesByTerm) == 0 {
+				return nil, complete, nil
+			}
+			// Existence check (CHAOS-3884 Option C item 1): a source-table
+			// match is NEVER trusted directly -- every claimant is
+			// confirmed present in the graph via the SAME keyed,
+			// temporal-filtered lookup ExactHint uses, and the resulting
+			// CandidateNode comes from the GRAPH's own node (toCandidateNode),
+			// never fabricated from raw ClickHouse row data. This is also
+			// why no separate authorization row-shaping/reserved-namespace
+			// re-check is needed here (a design simplification over the
+			// original brief, recorded so it reads as deliberate, not
+			// missed): a candidate this closure ever returns is
+			// AUTHORIZED EXACTLY LIKE ANY OTHER -- AuthorizedAttributes
+			// runs on it downstream via the ordinary NodeCandidate path --
+			// because it is never anything other than a real graph node's
+			// own attributes. A claimant that exists ONLY in source tables
+			// and NOT in the graph is excluded here, never granted a
+			// candidacy on the strength of ClickHouse data alone.
+			claimantsByTerm := make(map[string][]graphrank.CandidateNode, len(matchesByTerm))
+			graphMissing := 0
+			for term, matches := range matchesByTerm {
+				for _, match := range matches {
+					n, existsErr := a.nodeByKindID(ctx, key, orgID, string(match.Row.Kind), match.Row.CanonicalID, temporal)
+					// ErrNotFound is the documented, EXPECTED signal for a
+					// read-only lookup against a graph key that was never
+					// created (or a purged organization) -- client.go's own
+					// "Invalid graph operation on empty key" classification.
+					// An organization whose identity-universe source tables
+					// have rows but whose graph was never bootstrapped (no
+					// write has landed yet) is precisely a graph-missing
+					// claimant, not a backend fault -- treated identically
+					// to nodeByKindID's own ordinary "0 rows" n==nil case,
+					// never surfaced as an error that would abort the whole
+					// resolution.
+					if existsErr != nil && !errors.Is(existsErr, ErrNotFound) {
+						return nil, false, safeDependencyError("identity-universe graph existence check", existsErr)
+					}
+					if n == nil {
+						graphMissing++
+						continue
+					}
+					node := toCandidateNode(n)
+					node.Mechanism = match.Mechanism
+					node.FromKeyedIdentityLookup = true
+					claimantsByTerm[term] = append(claimantsByTerm[term], node)
+				}
+			}
+			if graphMissing > 0 && a.config.Telemetry != nil {
+				a.config.Telemetry.RecordIdentityGraphMissing(ctx, orgID, graphMissing)
+			}
+			// A graph-missing claimant folds into incompleteness for the
+			// WHOLE call (not threaded as a separate flag): an identity
+			// view that is missing even one confirmed-real claimant is not
+			// one the fast path may trust as exhaustive, the identical
+			// reasoning a truncated ordinary search already gets via
+			// searchTruncated.
+			return claimantsByTerm, complete && graphMissing == 0, nil
+		}
+	}
 	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)
 }
 
