@@ -235,6 +235,41 @@ func TestResolveSubjects_AliasLookupErrorAbortsResolution(t *testing.T) {
 	}
 }
 
+// TestResolveSubjects_GraphMissingSiblingNeverCommitsViaIdentityTrust is
+// decision 1's own pin (team-lead amendment, 2026-08-17, settled):
+// completeness is proven over the TABLE set, but identityCollision
+// (resolution.go) counts the CANDIDATE set -- a claimant that fails
+// falkorgraph's existence check silently vanishes from that count, so a
+// surviving sibling's confidence=1 identity-trust bump (NodeCandidate's
+// identityTrusted, gated on FromKeyedIdentityLookup alone) would otherwise
+// be independent of aliasIdentityComplete and could clear LoneFloor on a
+// claim never actually proven unique. reader.go's fix strips
+// FromKeyedIdentityLookup from every survivor of a call that saw ANY
+// graph-missing claimant -- this test constructs EXACTLY what that fixed
+// closure now hands to ResolveSubjects (repo alone, fromKeyedLookup=false,
+// aliasLookupComplete=false) and asserts it does not commit. Deliberately
+// isolated from live full-text search (searchResults empty for the term)
+// so nothing OTHER than the identity mechanism can explain the outcome --
+// see chaos3884_identity_lookup_live_test.go's own doc comment for why a
+// live version of this exact scenario is confounded and not attempted.
+func TestResolveSubjects_GraphMissingSiblingNeverCommitsViaIdentityTrust(t *testing.T) {
+	t.Parallel()
+	repoNode := aliasCandidateNode(contextfabric.SubjectRepository, "r1", "owner/chaos-ops", -1, []string{"chaos-ops"}, nil, false /* fromKeyedLookup=false: reader.go's post-fix demotion */)
+	backend := &fakeGraphBackend{
+		searchResults:        map[string][]CandidateNode{"chaos-ops": {}},
+		enableAliasLookup:    true,
+		aliasLookupClaimants: map[string][]CandidateNode{"chaos-ops": {repoNode}},
+		aliasLookupComplete:  false, // graphMissing > 0 somewhere in this call
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("chaos-ops"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want NOTHING -- a demoted (fromKeyedLookup=false) claimant must not commit on the strength of an identity-trust bump it no longer carries", resolution.Committed)
+	}
+}
+
 // TestResolveSubjects_NilAliasLookupIsByteIdenticalToBeforeThisTicket is the
 // backward-compatibility proof every optional ResolveDeps field carries: a
 // backend that never sets AliasLookup gets exactly the pre-CHAOS-3884

@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -181,6 +182,42 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// internally, so graphrank.ResolveSubjects' own "nil means
 	// unsupported" contract (SearchQuestion's identical convention) holds
 	// literally.
+	//
+	// Receipt notes (adjustment 5, team-lead amendment 2026-08-17): this
+	// mechanism reads TWO sources (ClickHouse's identity universe, the live
+	// graph's own nodes) that are not guaranteed to agree at every instant,
+	// and that has two BENIGN consequences worth naming rather than
+	// discovering later as surprises:
+	//   - stale-label presentation: the table can be fresher than the graph
+	//     (a rename landed in ClickHouse before the next projection cycle
+	//     wrote it to FalkorDB) -- MatchIdentityRows matches against the
+	//     table's CURRENT label/aliases, but toCandidateNode's own
+	//     presentation (Name/Attributes) comes from the graph's still-OLD
+	//     node. Cosmetic: the right subject still resolves, under its
+	//     previous display text.
+	//   - transient recall loss on rename: the reverse direction -- an old
+	//     alias that no longer appears in the table (renamed away) will not
+	//     be found via this mechanism even though the graph node might
+	//     still carry it in its own attributes and would have matched via
+	//     ORDINARY hybrid search alone. A resolution never regresses below
+	//     what search already provided; it just does not gain the identity
+	//     fast path for that one stale term until the next projection cycle
+	//     catches up.
+	// Both are transient, self-healing on the next projection cycle, and
+	// strictly weaker than the ONE guarantee that matters most here:
+	// authorization staleness FAILS CLOSED. The identity-universe table
+	// NEVER supplies authorization data to this mechanism at all -- it only
+	// ever answers "which canonical id/kind does this alias term identify."
+	// AuthorizedAttributes then evaluates EXCLUSIVELY against the graph
+	// node's OWN, CURRENT attributes (the same call every other candidate
+	// path already goes through), so whatever staleness exists is the
+	// graph's own pre-existing freshness property, identical to ordinary
+	// search's, never a NEW window this mechanism opens: a table row can
+	// never loosen, invent, or override an authorization scope the graph
+	// itself has not (yet) recorded. The worst a stale graph node can do is
+	// keep an OLD scope in effect a moment longer -- refusal or an
+	// unchanged prior authorization -- never an admission grounded in
+	// anything other than the graph's own state.
 	if a.config.IdentityUniverse != nil {
 		deps.AliasLookup = func(ctx context.Context, orgID string, terms []string) (map[string][]graphrank.CandidateNode, bool, error) {
 			// HIGH-6: temporal authority stays with the graph -- a
@@ -204,21 +241,50 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			// confirmed present in the graph via the SAME keyed,
 			// temporal-filtered lookup ExactHint uses, and the resulting
 			// CandidateNode comes from the GRAPH's own node (toCandidateNode),
-			// never fabricated from raw ClickHouse row data. This is also
-			// why no separate authorization row-shaping/reserved-namespace
-			// re-check is needed here (a design simplification over the
-			// original brief, recorded so it reads as deliberate, not
-			// missed): a candidate this closure ever returns is
-			// AUTHORIZED EXACTLY LIKE ANY OTHER -- AuthorizedAttributes
-			// runs on it downstream via the ordinary NodeCandidate path --
-			// because it is never anything other than a real graph node's
-			// own attributes. A claimant that exists ONLY in source tables
-			// and NOT in the graph is excluded here, never granted a
-			// candidacy on the strength of ClickHouse data alone.
+			// never fabricated from raw ClickHouse row data. Authorization
+			// re-application is a SEPARATE, unconditional guarantee, not a
+			// special case handled here: a candidate this closure ever
+			// returns is AUTHORIZED EXACTLY LIKE ANY OTHER --
+			// AuthorizedAttributes runs on it downstream via the ordinary
+			// NodeCandidate path, because it is never anything other than a
+			// real graph node's own attributes. isReservedIdentityProjectID
+			// below is a NARROWER, additional defense-in-depth check
+			// specific to the reserved organization-scope namespace -- see
+			// its own doc comment for why it is honestly framed as
+			// non-load-bearing today rather than claimed as strictly
+			// necessary. A claimant that exists ONLY in source tables and
+			// NOT in the graph is excluded here, never granted a candidacy
+			// on the strength of ClickHouse data alone.
 			claimantsByTerm := make(map[string][]graphrank.CandidateNode, len(matchesByTerm))
 			graphMissing := 0
 			for term, matches := range matchesByTerm {
 				for _, match := range matches {
+					// isReservedIdentityProjectID (CHAOS-3884 step 5,
+					// DEFENSE IN DEPTH, not the primary guard): since this
+					// loop builds candidates from graph nodes, a
+					// reserved-namespace project row was already rejected
+					// by devhealthsource's own producer-side guard
+					// (projectAuthorizationScope) and so never became a
+					// real graph node -- the existence check just below
+					// already enforces that rejection TRANSITIVELY
+					// (nodeByKindID reports not-found for an id nothing
+					// ever wrote). This filter's actual job is avoiding two
+					// avoidable costs for a row that can never legitimately
+					// commit anyway: a wasted graph round-trip, and a
+					// spurious graphMissing increment that would degrade
+					// aliasIdentityComplete for the WHOLE resolution over a
+					// row that was poisoned, not merely projection-lagged.
+					// It carries no load today (queryProjects already
+					// aborts the whole read on such a row, so IdentityUniverse
+					// can never even hand one to this loop) -- it becomes
+					// load-bearing only if a future refined completeness
+					// design counts over authorization-filtered TABLE rows
+					// instead of the candidate set, at which point a
+					// poisoned row surviving in that table-side count would
+					// matter.
+					if isReservedIdentityProjectID(match.Row) {
+						continue
+					}
 					n, existsErr := a.nodeByKindID(ctx, key, orgID, string(match.Row.Kind), match.Row.CanonicalID, temporal)
 					// ErrNotFound is the documented, EXPECTED signal for a
 					// read-only lookup against a graph key that was never
@@ -246,6 +312,38 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			}
 			if graphMissing > 0 && a.config.Telemetry != nil {
 				a.config.Telemetry.RecordIdentityGraphMissing(ctx, orgID, graphMissing)
+			}
+			// Decision 1 (team-lead amendment, 2026-08-17, settled): the
+			// aliasIdentityComplete flag returned below only ever gated
+			// resolution.go's OWN dedicated fast-path switch case --
+			// identityCollision, the guard LoneFloor/TopFloor/the CHAOS-3829
+			// rescue ALL use instead, counts the CANDIDATE set (claimants
+			// that reached recordIdentityClaim), not the table set this
+			// completeness flag is proven over. A claimant that fails the
+			// existence check above (graphMissing) silently vanishes from
+			// that count -- a surviving sibling then reads as uniquely
+			// claimed and, since its confidence=1 identity-trust bump
+			// (NodeCandidate's identityTrusted) is earned from
+			// FromKeyedIdentityLookup alone, independent of
+			// aliasIdentityComplete, it could still clear LoneFloor/TopFloor
+			// on the strength of a claim this call never actually proved
+			// unique. Stripping FromKeyedIdentityLookup from every survivor
+			// of THIS call when graphMissing > 0 anywhere in it closes the
+			// hole at its source: identityTrusted (and so the confidence=1
+			// bump, and so eligibility for identityIndex/LoneFloor/TopFloor/
+			// the rescue alike) requires it, so an incomplete call can never
+			// manufacture the trust any of those sites relies on, without
+			// touching resolution.go's ratified commit-gate logic at all.
+			// The survivor is not discarded -- it still competes on its
+			// ordinary (unboosted) confidence, exactly like any ordinary
+			// Search()-sourced alias match.
+			if graphMissing > 0 {
+				for term, nodes := range claimantsByTerm {
+					for i := range nodes {
+						nodes[i].FromKeyedIdentityLookup = false
+					}
+					claimantsByTerm[term] = nodes
+				}
 			}
 			// A graph-missing claimant folds into incompleteness for the
 			// WHOLE call (not threaded as a separate flag): an identity
@@ -496,3 +594,20 @@ func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
 }
 
 func ptrTime[T any](v T) *T { return &v }
+
+// isReservedIdentityProjectID (CHAOS-3884 step 5) reports whether row is a
+// SubjectProject claimant whose canonical id falls inside the reserved
+// organization-scope namespace (contractsv1.ContextFabricReservedOrganizationScopePrefix).
+// Scoped to SubjectProject only: that reserved namespace collides with
+// AuthorizationScope.ProjectIDs specifically (validateReservedOrganizationScope,
+// internal/contracts/v1) -- repository claimants carry RepositorySlugs and
+// team claimants carry TeamIDs, neither of which that check ever inspects,
+// so the collision this guards against is structurally impossible for
+// either kind. See the call site's own doc comment for why this is honest
+// defense-in-depth rather than a claim of present-day necessity.
+func isReservedIdentityProjectID(row graphrank.IdentityRow) bool {
+	if row.Kind != contextfabric.SubjectProject {
+		return false
+	}
+	return contractsv1.ContextFabricIsReservedOrganizationScopeID(strings.TrimPrefix(row.CanonicalID, "project:"))
+}

@@ -196,20 +196,38 @@ type ResolveDeps struct {
 	RawSignalObserver RawSignalObserver
 	// AliasLookup (CHAOS-3884, optional) is a COMPLETE, keyed identity-claimant
 	// read: given this resolution's own subject terms, return every subject
-	// (any isAliasLookupScopedKind kind: repository, project, team,
-	// work_item) whose canonical label OR alias/provider-alias set contains
-	// any of terms (normalized via NormalizeAliasTerm), keyed by which
-	// ORIGINAL term (as passed in, not normalized) it was found for. Unlike
-	// Search, this MUST NOT be a ranked/truncatable relevance search -- see
-	// the design doc's Option C for the completeness argument (a bounded
-	// full-population enumeration over the org's identity-bearing source
-	// data, matched in Go, existence-checked against the graph before ever
-	// being returned here). Every returned CandidateNode's
-	// FromKeyedIdentityLookup MUST be true, and its Mechanism MUST be set
-	// to the key class that matched (MatchExact for a label hit, MatchAlias
-	// for a bare-name/native-key hit, MatchProviderKey for a
-	// provider-variant hit) -- NodeCandidate trusts these AS DECLARED for a
-	// lookup-sourced node rather than re-deriving them from attribute text.
+	// (any isAliasLookupScopedKind kind -- slice 1: repository, project,
+	// team, see that registry's own doc comment for why work_item is
+	// deliberately excluded) whose canonical label OR alias/provider-alias
+	// set contains any of terms (normalized via NormalizeAliasTerm), keyed
+	// by which ORIGINAL term (as passed in, not normalized) it was found
+	// for. Unlike Search, this MUST NOT be a ranked/truncatable relevance
+	// search -- see the design doc's Option C for the completeness argument
+	// (a bounded full-population enumeration over the org's
+	// identity-bearing source data, matched in Go, existence-checked
+	// against the graph before ever being returned here). Every returned
+	// CandidateNode's Mechanism MUST be set to the key class that matched
+	// (MatchExact for a label hit, MatchAlias for a bare-name/native-key
+	// hit, MatchProviderKey for a provider-variant hit) -- NodeCandidate
+	// trusts this AS DECLARED for a lookup-sourced node rather than
+	// re-deriving it from attribute text.
+	//
+	// FromKeyedIdentityLookup MUST be true for every returned CandidateNode
+	// UNLESS this SAME call also had at least one claimant fail its own
+	// existence check (graph-missing) -- decision 1 (team-lead amendment,
+	// 2026-08-17, settled): when that happens, EVERY survivor of the call
+	// must have FromKeyedIdentityLookup false instead, not just complete
+	// (below). This is not optional hardening: identityCollision
+	// (resolution.go) counts the CANDIDATE set, not the table set
+	// completeness is proven over, so a claimant that silently vanished
+	// from that count would otherwise let a surviving sibling's
+	// confidence=1 identity-trust bump (NodeCandidate's identityTrusted,
+	// gated on FromKeyedIdentityLookup alone, independent of complete)
+	// clear LoneFloor/TopFloor/the CHAOS-3829 rescue on a claim this call
+	// never actually proved unique -- complete=false ALONE only ever
+	// disabled the one dedicated fast-path switch case, not those three
+	// other sites. See falkorgraph's own AliasLookup closure
+	// (reader.go) for the reference implementation of this rule.
 	//
 	// complete=false whenever this resolution's identity view could not be
 	// guaranteed complete: a per-call row budget was exceeded, the read
@@ -221,13 +239,15 @@ type ResolveDeps struct {
 	// implementation decides this via whatever temporal state it already
 	// captures for Search/SearchQuestion, exactly the same closure-capture
 	// shape those two use rather than a redundant parameter here). false is
-	// always the safe default -- it only disables the identity fast path
-	// (ResolveFromMergedCandidatesWithGate), never silently commits on an
-	// unverified population. nil means "this backend does not implement
-	// it" -- ResolveSubjects treats that exactly like complete=false,
-	// same convention as SearchQuestion. A genuine backend FAULT (as
-	// opposed to a completeness gap) returns a non-nil err, aborting the
-	// whole resolution exactly like Search()'s own error handling.
+	// always the safe default -- it disables the dedicated identity fast
+	// path (ResolveFromMergedCandidatesWithGate), and -- ONLY when paired
+	// with the FromKeyedIdentityLookup rule above -- never silently commits
+	// on an unverified population via any other gate either. nil means
+	// "this backend does not implement it" -- ResolveSubjects treats that
+	// exactly like complete=false, same convention as SearchQuestion. A
+	// genuine backend FAULT (as opposed to a completeness gap) returns a
+	// non-nil err, aborting the whole resolution exactly like Search()'s
+	// own error handling.
 	AliasLookup func(ctx context.Context, orgID string, terms []string) (claimantsByTerm map[string][]CandidateNode, complete bool, err error)
 }
 

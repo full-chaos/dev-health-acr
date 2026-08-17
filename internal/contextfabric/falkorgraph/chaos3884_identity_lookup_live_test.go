@@ -240,3 +240,24 @@ func TestLiveAliasIdentityGraphMissingClaimantIsExcludedAndReported(t *testing.T
 		t.Fatalf("telemetry.identityGraphMissing = %d, want 1 (RecordIdentityGraphMissing fired for the ghost claimant)", telemetry.identityGraphMissing)
 	}
 }
+
+// Decision 1's OWN pinning test ("a two-claimant scenario where one is
+// graph-missing must NOT fast-path commit the survivor") is deliberately
+// NOT a live test here. A live attempt (repo real + projected, team
+// declared in identityUniverse but never projected, both claiming the same
+// alias) is confounded: repo's alias attribute is a REAL graph value, so
+// ordinary hybrid search independently finds and scores it via full-text
+// relevance -- in a near-empty test organization that scores high enough to
+// clear LoneFloor entirely on ITS OWN, unrelated to the identity mechanism
+// this ticket touches. That is not a bug (the graph genuinely has exactly
+// one resolvable candidate once team never lands), and this ticket's fix
+// cannot and must not suppress it -- suppressing an ordinary, ungated
+// search hit would be new, unrelated behavior change. See
+// TestResolveSubjects_GraphMissingSiblingNeverCommitsViaIdentityTrust
+// (graphrank package) for decision 1's actual, isolated pin: it controls
+// ordinary search and the identity claim independently (a fake backend, no
+// live full-text scoring), proving specifically that the IDENTITY
+// MECHANISM's own confidence=1 bump never fires for a claimant reader.go
+// has demoted (FromKeyedIdentityLookup=false, graphMissing>0 in this
+// call), without needing to reason about what else might independently
+// commit the same subject.
