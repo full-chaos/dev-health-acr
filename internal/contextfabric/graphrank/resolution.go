@@ -43,9 +43,9 @@ type CommitGatePolicy struct {
 // commit-gate thresholds (chris-ratified, measured against the CHAOS-3742
 // five-arm generative trial and the corpus history before it). It always
 // passes Validate() -- this is asserted by
-// TestDefaultCommitGatePolicyIsValid, so a future edit to the calibrated
-// constants that accidentally produces an invalid policy fails loudly
-// instead of silently making every production commit decision
+// TestCommitGatePolicyValidate's "valid" case, so a future edit to the
+// calibrated constants that accidentally produces an invalid policy fails
+// loudly instead of silently making every production commit decision
 // commit-nothing (see Validate's own doc comment for why that is the
 // evaluator's fail-closed behavior for an invalid policy).
 // ResolveFromMergedCandidates and every existing production/test call site
