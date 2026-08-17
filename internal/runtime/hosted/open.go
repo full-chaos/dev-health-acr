@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedcache"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
@@ -470,6 +471,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			QueryVersion:             devhealthfacts.QueryVersion,
 			CanonicalServiceVersion:  contextfabric.CanonicalFactRegistryVersion,
 			ModelOutputSchemaVersion: genkitruntime.DefaultSchemaVersion,
+			// CHAOS-3884: one more deployment-current version authority --
+			// graphrank's own NormalizeAliasTerm definition. Wired
+			// unconditionally, same reasoning as its three siblings.
+			IdentityNormalizationVersion: graphrank.IdentityNormalizationVersion,
 		},
 	})
 	if err != nil {

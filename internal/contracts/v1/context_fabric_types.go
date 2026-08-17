@@ -987,17 +987,26 @@ type ContextFabricAuthorizationScope struct {
 }
 
 type ContextFabricEntityProjection struct {
-	Subject        ContextFabricSubjectRef             `json:"subject"`
-	Aliases        []string                            `json:"aliases,omitempty"`
-	PreviousNames  []string                            `json:"previous_names,omitempty"`
-	ProviderIDs    map[string]string                   `json:"provider_ids,omitempty"`
-	Properties     map[string]ContextFabricScalarValue `json:"properties,omitempty"`
-	Authorization  ContextFabricAuthorizationScope     `json:"authorization"`
-	EvidenceRefIDs []string                            `json:"evidence_ref_ids"`
-	ObservedAt     time.Time                           `json:"observed_at"`
-	ValidFrom      *time.Time                          `json:"valid_from,omitempty"`
-	ValidTo        *time.Time                          `json:"valid_to,omitempty"`
-	SourceVersion  string                              `json:"source_version"`
+	Subject ContextFabricSubjectRef `json:"subject"`
+	Aliases []string                `json:"aliases,omitempty"`
+	// ProviderAliases (CHAOS-3884, additive) are provider-qualified
+	// identity variants (e.g. "github:full-chaos/dev-health-acr"),
+	// distinct from Aliases' bare-name-shaped handles so a resolver can
+	// tell MatchAlias (bare name) apart from MatchProviderKey (provider
+	// variant) even though both flow through the identical
+	// projection/write/read path (falkorgraph: propAliases vs
+	// propProviderAliases). Same bounds/uniqueness/no-"|" discipline as
+	// Aliases -- see Validate().
+	ProviderAliases []string                            `json:"provider_aliases,omitempty"`
+	PreviousNames   []string                            `json:"previous_names,omitempty"`
+	ProviderIDs     map[string]string                   `json:"provider_ids,omitempty"`
+	Properties      map[string]ContextFabricScalarValue `json:"properties,omitempty"`
+	Authorization   ContextFabricAuthorizationScope     `json:"authorization"`
+	EvidenceRefIDs  []string                            `json:"evidence_ref_ids"`
+	ObservedAt      time.Time                           `json:"observed_at"`
+	ValidFrom       *time.Time                          `json:"valid_from,omitempty"`
+	ValidTo         *time.Time                          `json:"valid_to,omitempty"`
+	SourceVersion   string                              `json:"source_version"`
 }
 
 type ContextFabricRelationshipProjection struct {

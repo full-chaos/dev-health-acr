@@ -64,6 +64,15 @@ func ProviderAliasAttributes(attributes map[string]interface{}) []string {
 	return nil
 }
 
+// IdentityNormalizationVersion names the CURRENT identity-term
+// normalization definition NormalizeAliasTerm implements -- folded into
+// contextfabric.ReuseKey/ReuseVersionAuthorities as a conjunctive answer-
+// reuse dimension (CHAOS-3884) so a future tightening (e.g. adding NFC)
+// invalidates rather than silently revalidates a stored answer produced
+// under the old definition. Bump this STRING whenever NormalizeAliasTerm's
+// actual transform changes, in the same commit.
+const IdentityNormalizationVersion = "identity_norm_v1"
+
 // NormalizeAliasTerm is identity_norm_v1 (CHAOS-3884, ratified for slice 1):
 // TrimSpace + ToLower. Deliberately NOT NFC-normalizing yet -- the reviewer
 // ruled NFC not mandatory over the measured, verified-ASCII alphabet this

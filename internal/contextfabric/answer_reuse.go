@@ -340,9 +340,13 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		SynthesisPromptVersion:      e.reusePromptVersions.SynthesisPromptVersion,
 		// CHAOS-3862 round 2: same mirrored discipline, three MORE
 		// deployment-current authorities.
-		QueryVersion:             e.reuseVersionAuthorities.QueryVersion,
-		CanonicalServiceVersion:  e.reuseVersionAuthorities.CanonicalServiceVersion,
-		ModelOutputSchemaVersion: e.reuseVersionAuthorities.ModelOutputSchemaVersion,
+		// CHAOS-3884: same mirrored discipline, one more version authority
+		// (identity-term normalization -- see ReuseKey's own field doc
+		// comment).
+		IdentityNormalizationVersion: e.reuseVersionAuthorities.IdentityNormalizationVersion,
+		QueryVersion:                 e.reuseVersionAuthorities.QueryVersion,
+		CanonicalServiceVersion:      e.reuseVersionAuthorities.CanonicalServiceVersion,
+		ModelOutputSchemaVersion:     e.reuseVersionAuthorities.ModelOutputSchemaVersion,
 	}
 	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {

@@ -102,16 +102,16 @@ func (e ContextFabricEntityProjection) Validate() error {
 	if err := e.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if len(e.Aliases) > 100 || len(e.PreviousNames) > 100 || !uniqueTrimmedStrings(e.Aliases, 512) || !uniqueTrimmedStrings(e.PreviousNames, 512) || len(e.ProviderIDs) > 50 || len(e.Properties) > 100 || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) || e.ObservedAt.IsZero() || !validVersion(e.SourceVersion) {
+	if len(e.Aliases) > 100 || len(e.PreviousNames) > 100 || len(e.ProviderAliases) > 100 || !uniqueTrimmedStrings(e.Aliases, 512) || !uniqueTrimmedStrings(e.PreviousNames, 512) || !uniqueTrimmedStrings(e.ProviderAliases, 512) || len(e.ProviderIDs) > 50 || len(e.Properties) > 100 || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) || e.ObservedAt.IsZero() || !validVersion(e.SourceVersion) {
 		return fmt.Errorf("entity projection violates v1 bounds")
 	}
 	// A backend that persists a list as a delimited string (e.g. zepgraph's
 	// "|a|b|" alias encoding, before its CHAOS-3771 deletion) uses '|' as
 	// its internal separator; consistent with the authorization scope rule
-	// above, an alias/previous-name containing it must fail here rather
-	// than be silently dropped by that encoding.
-	if containsSeparatorCharacter(e.Aliases) || containsSeparatorCharacter(e.PreviousNames) {
-		return fmt.Errorf("entity alias or previous name must not contain '|'")
+	// above, an alias/previous-name/provider-alias containing it must fail
+	// here rather than be silently dropped by that encoding.
+	if containsSeparatorCharacter(e.Aliases) || containsSeparatorCharacter(e.PreviousNames) || containsSeparatorCharacter(e.ProviderAliases) {
+		return fmt.Errorf("entity alias, previous name, or provider alias must not contain '|'")
 	}
 	if err := e.Authorization.Validate(); err != nil {
 		return fmt.Errorf("authorization: %w", err)

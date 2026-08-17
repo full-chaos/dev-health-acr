@@ -171,6 +171,11 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 			modelOutputSchemaVersion = sql.NullString{String: versionAuthorities.ModelOutputSchemaVersion, Valid: true}
 		}
 	}
+	// CHAOS-3884: same gate, one more version authority.
+	var identityNormalizationVersion sql.NullString
+	if questionHash.Valid && versionAuthorities.IdentityNormalizationVersion != "" {
+		identityNormalizationVersion = sql.NullString{String: versionAuthorities.IdentityNormalizationVersion, Valid: true}
+	}
 	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
 	// EFFECTIVE request context, matching exactly what FindReusable will
 	// key with. It is NOT re-derived from result.Interpretation here -- an
@@ -192,13 +197,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 
 	insertResult, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 ON CONFLICT (result_id) DO NOTHING`,
 		resultID, orgID, payload, result.GeneratedAt,
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
-		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion)
+		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -565,6 +570,15 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// model_output_schema_version are three MORE conjunctive predicates,
 	// same migration (extended, not a new one), same NULL-never-matches
 	// shape.
+	//
+	// CHAOS-3884: identity_normalization_version is a FOURTH conjunctive
+	// predicate, migration 0017, same shape. Unlike the ones above it is
+	// compared as a plain parameter (not sql.NullString) on the lookup
+	// side, matching every other bare key.* field in this same query --
+	// an unset key.IdentityNormalizationVersion ("") can never equal a
+	// stored value (Save always persists either a real string or SQL
+	// NULL, never ''), so the fail-closed guarantee holds without needing
+	// an explicit Valid=false wrapper here.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -581,6 +595,7 @@ WHERE org_id = $1
   AND query_version = $12
   AND canonical_service_version = $13
   AND model_output_schema_version = $14
+  AND identity_normalization_version = $15
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -597,7 +612,7 @@ ORDER BY created_at DESC, result_id DESC
 LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
-		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion)
+		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion)
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):
