@@ -112,6 +112,34 @@ func TestTopNonCommittedMatchProvenance_nilWhenNoCandidatesAtAll(t *testing.T) {
 	}
 }
 
+// TestTopNonCommittedMatchProvenance_tieBreaksDeterministicallyByKeyRegardlessOfInputOrder
+// is the sol-review-requested determinism pin: graphrank's own output order
+// happens to be stable today, but this function must not silently depend on
+// that as an invisible cross-package invariant. Two non-committed candidates
+// share the SAME confidence (0.6) -- project_b (key "project|project_b")
+// must always win over work_item_a (key "work_item|work_item_a") because
+// "project" < "work_item" lexically, and that must hold NO MATTER which
+// order the caller's candidates slice lists them in. A result-file reader
+// diffing two runs over an identical underlying candidate SET must see the
+// same runner-up every time.
+func TestTopNonCommittedMatchProvenance_tieBreaksDeterministicallyByKeyRegardlessOfInputOrder(t *testing.T) {
+	a := subjectCandidate("project", "project_b", 0.6, contractsv1.ContextFabricMatchLexical)
+	b := subjectCandidate("work_item", "work_item_a", 0.6, contractsv1.ContextFabricMatchVector)
+
+	forward := topNonCommittedMatchProvenance(nil, []contractsv1.ContextFabricSubjectCandidate{a, b})
+	backward := topNonCommittedMatchProvenance(nil, []contractsv1.ContextFabricSubjectCandidate{b, a})
+
+	if forward == nil || backward == nil {
+		t.Fatalf("forward=%+v backward=%+v, want both non-nil", forward, backward)
+	}
+	if forward.Kind != "project" || forward.CanonicalID != "project_b" {
+		t.Fatalf("forward-order result = %+v, want project/project_b (lexically smallest key wins a confidence tie)", forward)
+	}
+	if backward.Kind != forward.Kind || backward.CanonicalID != forward.CanonicalID {
+		t.Fatalf("input-order dependence detected: forward=%+v backward=%+v, want identical results for the same candidate set in either order", forward, backward)
+	}
+}
+
 // TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText is the CHAOS-3880
 // privacy canary: trialCandidateMatchProvenance's own field set is IDs/kinds/
 // mechanisms/confidences only (see its doc comment) -- this proves that at
@@ -148,25 +176,56 @@ func TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText(t *testing.T) {
 	}
 
 	// Reflection-level canary on the STRUCT SHAPE itself (not only this one
-	// instance's values): every JSON tag trialCandidateMatchProvenance
-	// exposes must be one of the four allowed names. A field added later
-	// (e.g. "label" or "matched_terms") fails here even before any test
-	// data happens to populate it.
+	// instance's values): every JSON KEY trialCandidateMatchProvenance
+	// exposes, AT ANY NESTING DEPTH, must be one of the four allowed names.
+	// A field added later (e.g. "label" or "matched_terms") fails here even
+	// before any test data happens to populate it -- and walkJSONObjectKeys
+	// recurses into nested objects/arrays, so a FUTURE field that is itself
+	// a struct (not just a new top-level scalar) is caught too, not only a
+	// flat top-level key.
 	allowedTags := map[string]bool{"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true}
-	var asMap map[string]json.RawMessage
 	full := trialCandidateMatchProvenanceAllFields()
 	fullBlob, err := json.Marshal(full)
 	if err != nil {
 		t.Fatalf("marshal full-field provenance: %v", err)
 	}
-	if err := json.Unmarshal(fullBlob, &asMap); err != nil {
-		t.Fatalf("unmarshal full-field provenance: %v", err)
+	seen := map[string]bool{}
+	walkJSONObjectKeys(t, fullBlob, seen)
+	if len(seen) == 0 {
+		t.Fatal("walkJSONObjectKeys found no object keys at all -- the canary is not exercising anything")
 	}
-	for tag := range asMap {
+	for tag := range seen {
 		if !allowedTags[tag] {
 			t.Fatalf("trialCandidateMatchProvenance emitted unexpected JSON field %q -- only kind/canonical_id/mechanisms/confidence are allowed (privacy posture)", tag)
 		}
 	}
+}
+
+// walkJSONObjectKeys recursively collects every JSON OBJECT key found in raw,
+// at any nesting depth (into nested objects and array elements alike), into
+// seen. Used by the privacy canary so a future field that is itself a
+// nested struct -- not just a new top-level scalar -- cannot silently add an
+// unreviewed key that a flat, single-level unmarshal-to-map check would
+// miss entirely.
+func walkJSONObjectKeys(t *testing.T, raw json.RawMessage, seen map[string]bool) {
+	t.Helper()
+	var asObject map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &asObject); err == nil {
+		for key, value := range asObject {
+			seen[key] = true
+			walkJSONObjectKeys(t, value, seen)
+		}
+		return
+	}
+	var asArray []json.RawMessage
+	if err := json.Unmarshal(raw, &asArray); err == nil {
+		for _, elem := range asArray {
+			walkJSONObjectKeys(t, elem, seen)
+		}
+		return
+	}
+	// A scalar (string/number/bool/null) or malformed input carries no
+	// object keys of its own -- nothing further to walk.
 }
 
 // trialCandidateMatchProvenanceAllFields returns an instance with every
@@ -210,5 +269,48 @@ func TestCaseOutcome_newProvenanceFieldsAreAdditiveAndOptional(t *testing.T) {
 		if strings.Contains(text, key) {
 			t.Fatalf("caseOutcome JSON = %s, want it to OMIT %q when unset (omitempty)", text, key)
 		}
+	}
+}
+
+// legacyCaseOutcome is a stand-in for "a reader written before CHAOS-3880":
+// only the fields caseOutcome carried before this change. encoding/json
+// silently ignores JSON object keys a target struct does not declare (no
+// DisallowUnknownFields anywhere in this harness or in scripts/trial/'s
+// shell readers, which never parse specific fields at all -- grepped), so
+// this is a real guarantee, not an assumption, but CHAOS-3880's
+// backward-compatibility requirement ("old result files must remain
+// parseable by anything that reads them") cuts both ways: it is just as
+// important that something reading OLD code against a NEW-shaped file does
+// not break as the reverse (already covered above).
+type legacyCaseOutcome struct {
+	Index          int    `json:"index"`
+	Outcome        string `json:"outcome"`
+	Stage          string `json:"stage"`
+	CommittedCount int    `json:"committed_count"`
+	LatencyMS      int64  `json:"latency_ms"`
+}
+
+// TestLegacyReader_ignoresTheNewProvenanceFieldsInANewReportFile is the
+// OTHER direction of the backward-compatibility requirement: a NEW report
+// JSON (committed_matches/top_non_committed_match present) decoded by an OLD
+// reader shape must succeed and simply not see the new data, not error or
+// corrupt the fields it does know about.
+func TestLegacyReader_ignoresTheNewProvenanceFieldsInANewReportFile(t *testing.T) {
+	newShaped := caseOutcome{
+		Index: 3, Outcome: "correct", Stage: "usable_answer", CommittedCount: 1, LatencyMS: 250,
+		CommittedMatches:     []trialCandidateMatchProvenance{{Kind: "project", CanonicalID: "project_x", Mechanisms: []string{"vector", "lexical"}, Confidence: 0.79}},
+		TopNonCommittedMatch: &trialCandidateMatchProvenance{Kind: "project", CanonicalID: "project_y", Mechanisms: []string{"lexical"}, Confidence: 0.6},
+	}
+	blob, err := json.Marshal(newShaped)
+	if err != nil {
+		t.Fatalf("marshal new-shaped caseOutcome: %v", err)
+	}
+
+	var legacy legacyCaseOutcome
+	if err := json.Unmarshal(blob, &legacy); err != nil {
+		t.Fatalf("a pre-CHAOS-3880 reader shape failed to decode a NEW report file: %v", err)
+	}
+	if legacy.Index != 3 || legacy.Outcome != "correct" || legacy.Stage != "usable_answer" || legacy.CommittedCount != 1 || legacy.LatencyMS != 250 {
+		t.Fatalf("legacy reader decoded = %+v, want the known fields carried through unchanged", legacy)
 	}
 }

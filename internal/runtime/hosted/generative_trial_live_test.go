@@ -702,6 +702,19 @@ func committedMatchProvenance(committed []contractsv1.ContextFabricSubjectRef, c
 // NOT among the committed subjects -- the runner-up a threshold-sweep reader
 // needs to see: how close did the next candidate come, and by which
 // mechanism(s), to committing instead (or in addition).
+//
+// Tie-break is EXPLICIT and independent of input order (sol-review finding,
+// CHAOS-3880): the ascending subjectCandidateKey (kind+canonical_id) wins a
+// confidence tie, not "whichever the caller's candidates slice happened to
+// list first". graphrank.ResolveFromMergedCandidatesWithGate's own output
+// order is, as of this writing, already fully deterministic (it sorts by
+// confidence desc/key asc before Phase 3, then only reorders by committed/
+// parent/other TIER in Phase 4, stably) -- but this function does not lean
+// on that as an invisible cross-package invariant. A future graphrank change
+// to Phase 4's tiering, or a caller that assembles `candidates` some other
+// way, must not silently change which runner-up this harness reports for an
+// identical candidate SET, which is what "first encountered wins" would have
+// done.
 func topNonCommittedMatchProvenance(committed []contractsv1.ContextFabricSubjectRef, candidates []contractsv1.ContextFabricSubjectCandidate) *trialCandidateMatchProvenance {
 	committedKeys := make(map[string]bool, len(committed))
 	for _, ref := range committed {
@@ -712,8 +725,14 @@ func topNonCommittedMatchProvenance(committed []contractsv1.ContextFabricSubject
 		if committedKeys[subjectCandidateKey(candidates[i])] {
 			continue
 		}
-		if best == nil || candidates[i].Confidence > best.Confidence {
-			best = &candidates[i]
+		cand := &candidates[i]
+		switch {
+		case best == nil:
+			best = cand
+		case cand.Confidence > best.Confidence:
+			best = cand
+		case cand.Confidence == best.Confidence && subjectCandidateKey(*cand) < subjectCandidateKey(*best):
+			best = cand
 		}
 	}
 	if best == nil {
