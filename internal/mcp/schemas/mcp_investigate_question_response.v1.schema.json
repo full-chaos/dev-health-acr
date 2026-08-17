@@ -2772,6 +2772,17 @@
               "maxItems": 100,
               "uniqueItems": true
             },
+            "provider_aliases": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[^|]*$"
+              },
+              "maxItems": 100,
+              "uniqueItems": true
+            },
             "previous_names": {
               "type": "array",
               "items": {

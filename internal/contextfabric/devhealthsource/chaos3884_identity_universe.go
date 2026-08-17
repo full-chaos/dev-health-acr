@@ -37,6 +37,12 @@ import (
 // aliasIdentityComplete=false. See graphrank.aliasLookupScopedKinds' own
 // doc comment for the full residual argument (ticket-key terms essentially
 // cannot collide with repository bare-name slugs).
+// devhealthschema:not-a-production-replica this is a SUBSET of entityTables (tables.go), the same
+// producer registry, reusing its own query functions verbatim -- it mirrors
+// no column type, engine or sort key of its own, so it cannot drift from
+// production the way a rival schema declaration would; devhealthschema
+// remains the only physical source. No new ingest path or query is
+// introduced here.
 var identityUniverseKinds = []entityTable{
 	{name: "repos", query: queryRepositories},
 	{name: "projects", query: queryProjects},
