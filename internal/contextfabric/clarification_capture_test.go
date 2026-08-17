@@ -2,6 +2,8 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +161,52 @@ func TestCHAOS3859_CaptureRecordsSelectionOnMatchingPriorSubjectReceipt(t *testi
 	}
 	if event.VersionAuthorities.QueryVersion != "devhealthfacts.clickhouse.v1" {
 		t.Errorf("VersionAuthorities.QueryVersion = %q", event.VersionAuthorities.QueryVersion)
+	}
+}
+
+// TestCHAOS3859_CaptureNeverLeaksSubjectLabelContent is sol review F2's
+// second-round strengthening: the FIRST-round test only asserted the
+// marshaled JSON never contained the literal substring "label", which a
+// future field rename (e.g. a hypothetical subject_display_name) would
+// silently evade while the underlying leak of raw display text kept
+// happening. This test is content-based instead: twoCandidatePriorResult's
+// real SubjectRef.Label values ("Ask Dev", "Ask Web") are exactly the
+// shape of a raw incident/project TITLE production would attach upstream.
+// It marshals the CAPTURED event through encoding/json -- the same
+// marshaler pgclarification.Sink uses for offered_candidates -- and checks
+// the WHOLE event, not just OfferedCandidates, so a leak into ANY field
+// (Selected, a field added later, ...) is caught regardless of its name.
+// This is half of a two-part chain: this test proves engine.go's
+// construction never copies label content into the Go struct in the first
+// place; pgclarification's own (separately strengthened) persistence test
+// proves that whatever DOES end up in the struct never reaches a
+// persisted column either.
+func TestCHAOS3859_CaptureNeverLeaksSubjectLabelContent(t *testing.T) {
+	t.Parallel()
+	prior := twoCandidatePriorResult()
+	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+	sink := &recordingClarificationSink{}
+	engine := mustEngineForClarificationCaptureTest(t, store, sink)
+
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "receipt_selected_01"}}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_capture_canary"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("sink.events = %#v, want exactly 1 captured selection", sink.events)
+	}
+
+	marshaled, err := json.Marshal(sink.events[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(event) error = %v", err)
+	}
+	raw := string(marshaled)
+	for _, canary := range []string{"Ask Dev", "Ask Web"} {
+		if strings.Contains(raw, canary) {
+			t.Fatalf("captured event contains raw subject label content %q -- want the label NEVER copied into the captured event, regardless of which field carries it (sol review F2, content-based): %s", canary, raw)
+		}
 	}
 }
 

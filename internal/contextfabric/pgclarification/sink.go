@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -72,27 +73,35 @@ type SinkMetrics struct {
 	DeliveryFailures int64
 }
 
+// sinkMetrics' four counters are atomic.Int64, not mutex-guarded (sol
+// review F4-a): RecordSelection's full-queue branch increments dropped on
+// the CALLER's own goroutine (see the package doc on dropSummaryInterval),
+// while Metrics() and the worker's periodic summary read from a completely
+// different goroutine. A shared sync.Mutex would let a caller's
+// RecordSelection contend with -- and however briefly, block behind -- a
+// concurrent Metrics() read, which is exactly the kind of caller-path
+// latency this sink exists to avoid. Independent atomics give every
+// counter lock-free increments and reads with no cross-goroutine
+// contention at all.
 type sinkMetrics struct {
-	enqueued         int64
-	dropped          int64
-	delivered        int64
-	deliveryFailures int64
-	mu               sync.Mutex
+	enqueued         atomic.Int64
+	dropped          atomic.Int64
+	delivered        atomic.Int64
+	deliveryFailures atomic.Int64
 }
 
-func (m *sinkMetrics) addEnqueued()  { m.mu.Lock(); m.enqueued++; m.mu.Unlock() }
-func (m *sinkMetrics) addDropped()   { m.mu.Lock(); m.dropped++; m.mu.Unlock() }
-func (m *sinkMetrics) addDelivered() { m.mu.Lock(); m.delivered++; m.mu.Unlock() }
-func (m *sinkMetrics) addFailure()   { m.mu.Lock(); m.deliveryFailures++; m.mu.Unlock() }
+func (m *sinkMetrics) addEnqueued()  { m.enqueued.Add(1) }
+func (m *sinkMetrics) addDropped()   { m.dropped.Add(1) }
+func (m *sinkMetrics) addDelivered() { m.delivered.Add(1) }
+func (m *sinkMetrics) addFailure()   { m.deliveryFailures.Add(1) }
 func (m *sinkMetrics) snapshot() SinkMetrics {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return SinkMetrics{Enqueued: m.enqueued, Dropped: m.dropped, Delivered: m.delivered, DeliveryFailures: m.deliveryFailures}
+	return SinkMetrics{
+		Enqueued: m.enqueued.Load(), Dropped: m.dropped.Load(),
+		Delivered: m.delivered.Load(), DeliveryFailures: m.deliveryFailures.Load(),
+	}
 }
 func (m *sinkMetrics) droppedCount() int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.dropped
+	return m.dropped.Load()
 }
 
 // Sink is a single-worker, bounded-queue contextfabric.ClarificationSelectionSink.
@@ -238,6 +247,22 @@ func (s *Sink) run() {
 // doc comment for why that split exists. Returns the dropped count it just
 // logged against, so the caller can update its own "last reported"
 // baseline.
+// logDroppedSummary calls s.logger.Warn synchronously, on the WORKER's own
+// goroutine, not the caller's -- sol review F4-b, ruled an accepted
+// residual rather than something to also make async. The original P2 this
+// fixes was RecordSelection logging on the ENGINE path (the goroutine that
+// serves an actual investigation), which this Sink no longer does at all;
+// that path is now provably clean (see TestRecordSelection_DropsOnFullQueueWithoutBlocking's
+// blockingHandler, which would hang the TEST if it ever regressed). A
+// pathologically blocking slog.Handler here can only stall THIS worker's
+// own loop: run() will not drain the next queued insert, or check the
+// ticker again, until this call returns, so drops accumulate in the queue
+// (bounded, so callers keep getting the same non-blocking enqueue-or-drop
+// behavior) and the periodic summary itself falls behind -- capture
+// degrades, but no investigation anywhere is delayed by so much as one
+// tick. Making this async too would add a second unbounded queue (log
+// messages instead of events) with no caller-latency benefit to justify
+// the complexity, so it stays synchronous.
 func (s *Sink) logDroppedSummary(lastLogged int64) int64 {
 	current := s.metrics.droppedCount()
 	if current == lastLogged {

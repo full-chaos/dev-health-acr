@@ -161,6 +161,44 @@ func TestInsertContext_NeverPersistsSubjectLabelContent(t *testing.T) {
 	require.NotContains(t, raw, "label", "offered_candidates must never carry subject display-label content or key (sol review F2)")
 }
 
+// TestInsertContext_PersistedRowNeverContainsSubjectLabelContent is sol
+// review F2's second-round strengthening: the test above checks only
+// offered_candidates for the literal substring "label" -- a rename-evadable
+// field-name check, scoped to one column. This test is content-based
+// instead (the load-bearing half of the F2 fix): distinctSubjectLabelCanary
+// values are the SAME canary strings contextfabric's own
+// TestCHAOS3859_CaptureNeverLeaksSubjectLabelContent uses, exactly the
+// shape of a raw incident/project TITLE production would attach upstream
+// as SubjectRef.Label. It dumps the ENTIRE persisted row via
+// to_jsonb(t)::text -- every column, not just one -- so a leak into ANY
+// column, including one added later under any name, is caught regardless
+// of what it's called. Together with contextfabric's test (which proves
+// the label never even reaches the Go struct engine.go hands to a sink),
+// this closes the same rename-evadable gap the field-name check alone
+// could not.
+func TestInsertContext_PersistedRowNeverContainsSubjectLabelContent(t *testing.T) {
+	ctx := context.Background()
+	db := newClarificationTestDatabase(t, ctx)
+	sink, err := NewSink(db, SinkOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sink.Close(closeCtx)
+	})
+
+	event := validEvent("org-clarify-no-label-content")
+	require.NoError(t, sink.insertContext(ctx, event))
+
+	var rowJSON string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT to_jsonb(t)::text FROM acr.context_fabric_clarification_selections t WHERE prior_result_id = $1`,
+		event.PriorResultID).Scan(&rowJSON))
+	for _, canary := range []string{"Ask Dev", "Ask Web"} {
+		require.NotContains(t, rowJSON, canary, "persisted row must never carry raw subject label content (sol review F2, content-based, whole-row check): %s", rowJSON)
+	}
+}
+
 // TestInsertContext_RejectsMalformedEventsWithoutTouchingTheDatabase is the
 // red-first proof for validateEvent: a malformed event must fail BEFORE
 // any SQL runs, and must insert nothing.

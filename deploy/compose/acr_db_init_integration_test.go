@@ -40,20 +40,28 @@ import (
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 )
 
-// requirePostgresClientTools skips (never fails) when psql/pg_isready are
-// not on PATH. acr-db-init.sh shells out to both; no CI workflow in this
-// repository currently installs postgresql-client (grepped
-// .github/workflows/*.yml), so hard-failing here would break any such
-// workflow the moment this file is picked up rather than proving anything
-// about the grant itself. Skipping (with the exact reason) is the same
-// "absent means degrade, never fail" convention this codebase already
-// applies to every other optional local dependency -- the honest tradeoff
-// for a test whose entire point is shelling out to the REAL script rather
-// than a hand-copied duplicate of its SQL.
+// requirePostgresClientTools skips when psql/pg_isready are not on PATH in
+// local dev, but FAILS in CI. acr-db-init.sh shells out to both, and
+// .github/workflows/ci.yml's verify job now installs postgresql-client
+// specifically so this test genuinely runs there (CHAOS-3859 sol review
+// F1 follow-up) -- a skip is how migration 0016's table shipped with no
+// runtime grant at all the first time: a test that can quietly skip in the
+// one environment meant to enforce it reads as passing when it never ran.
+// Locally, a contributor without postgresql-client installed still gets
+// the polite "absent means degrade" skip this codebase applies to every
+// other optional local dependency; CI has no such excuse once the tool is
+// installed by name in the workflow, so there a missing tool is a real
+// regression (an accidental removal of that install step, a runner image
+// change) and must fail loudly instead of silently no-op'ing the grant
+// proof.
 func requirePostgresClientTools(t *testing.T) {
 	t.Helper()
+	inCI := os.Getenv("CI") == "true" || os.Getenv("GITHUB_ACTIONS") == "true"
 	for _, tool := range []string{"psql", "pg_isready", "sh"} {
 		if _, err := exec.LookPath(tool); err != nil {
+			if inCI {
+				t.Fatalf("%s not found on PATH in CI -- the verify job is expected to install postgresql-client before running Go tests; this test must not silently skip in the one environment meant to enforce acr-db-init.sh's runtime-acl grants", tool)
+			}
 			t.Skipf("%s not found on PATH -- skipping the real acr-db-init.sh integration proof (see this file's own package doc comment for why this is a skip, not a failure)", tool)
 		}
 	}
