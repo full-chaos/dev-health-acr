@@ -88,6 +88,20 @@ func TestClassifyCodeGraphSpawnError_PinsTheClassificationBoundary(t *testing.T)
 			wantCode:             LocalIndexErrorSpawnUnavailable,
 		},
 		{
+			// CHAOS-3878: the exact CI signature -- 'fork/exec
+			// .../codegraph: text file busy' -- from a concurrent-fork
+			// race (golang#22315 family): a sibling forked at the wrong
+			// moment briefly inherits an open write fd on the just-built
+			// codegraph binary, and the kernel refuses to exec a target
+			// with a write-open fd. Self-clearing, retry-worthy -- same
+			// bucket as EAGAIN/EMFILE/ENOMEM, not "missing or unusable".
+			name:                 "text file busy (ETXTBSY) classifies as spawn-unavailable",
+			err:                  &fs.PathError{Op: "fork/exec", Path: "/tmp/codegraph", Err: syscall.ETXTBSY},
+			wantSpawnUnavailable: true,
+			wantRawErrPreserved:  true,
+			wantCode:             LocalIndexErrorSpawnUnavailable,
+		},
+		{
 			// Neither bucket: propagated wrapped and truthful rather than
 			// forced into a wrong classification. sol review F1: this used
 			// to map to LocalIndexErrorMalformed (the localIndexErrorCodeFor
