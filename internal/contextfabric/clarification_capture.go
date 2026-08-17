@@ -28,11 +28,20 @@ import (
 // ties or a future non-confidence ranking change would silently reorder a
 // re-derived rank, but this field is what the pipeline ACTUALLY presented
 // the caller, in the order it actually presented it.
+//
+// Deliberately NOT SubjectRef.Label (sol review F2): a label is
+// caller-facing display TEXT with no length bound of its own -- an
+// incident title, a PR title, anything a subject's owner chose to name it
+// -- and persisting it into this table would put uncontrolled, unbounded
+// display content into a training-data sink whose entire contract is
+// "ids, ranks, confidences, receipt ids." Kind + CanonicalID is already
+// the full identity a consumer needs; a label is re-derivable from the
+// canonical id at consumption time by whichever future phase actually
+// needs display text, which capture-only is not.
 type ClarificationOfferedCandidate struct {
 	ReceiptID          string  `json:"receipt_id"`
 	SubjectKind        string  `json:"subject_kind"`
 	SubjectCanonicalID string  `json:"subject_canonical_id"`
-	SubjectLabel       string  `json:"subject_label"`
 	State              string  `json:"state"`
 	Confidence         float64 `json:"confidence"`
 	Rank               int     `json:"rank"`
@@ -116,6 +125,21 @@ type ClarificationSelectionSink interface {
 	RecordSelection(ctx context.Context, event ClarificationSelectionEvent)
 }
 
+// clarificationProvenanceWebAssertion/MCP/Workbench/Other are the CLOSED
+// vocabulary clarificationSelectionProvenance returns (sol review F5) --
+// and the exact set migration 0016's ck_acr_cf_clarification_selections_
+// provenance_vocabulary CHECK constraint enumerates. Keep both in sync: a
+// value here with no matching CHECK entry (or vice versa) is a real
+// drift, not a real caller's fault -- unknown/free-form callers already
+// collapse to clarificationProvenanceOther in Go, before any INSERT is
+// attempted.
+const (
+	clarificationProvenanceWebAssertion = "web_assertion"
+	clarificationProvenanceMCP          = "credential_mcp"
+	clarificationProvenanceWorkbench    = "credential_workbench"
+	clarificationProvenanceOther        = "credential_other"
+)
+
 // clarificationSelectionProvenance derives a BEST-EFFORT human-vs-agent
 // proxy from the two signals that exist today, neither of which was
 // designed for this purpose:
@@ -124,27 +148,46 @@ type ClarificationSelectionSink interface {
 //     caller-asserted): AuthenticationMethodWebAssertion means a Dev
 //     Health web session authenticated this call -- the strongest
 //     available "a human is driving a browser" signal this codebase has.
-//   - ConsumerInfo.Surface is caller-supplied for most callers, but the
-//     MCP sidecar hardcodes it to the literal "mcp" specifically so a
-//     tool argument can never spoof it (internal/sidecar/
-//     api_client_investigation.go) -- so "mcp" specifically IS
-//     spoof-resistant, even though Surface as a whole is not.
+//   - ConsumerInfo.Surface is caller-supplied for most callers -- a
+//     free-form, ACR_context_fabric_types-validated 1..200 character
+//     string, NOT a closed enum at the contract level -- but two values
+//     are real, known, first-party surfaces: the MCP sidecar hardcodes it
+//     to the literal "mcp" specifically so a tool argument can never
+//     spoof it (internal/sidecar/api_client_investigation.go), and
+//     "workbench" is the Dev Health web product's own Context Fabric
+//     surface (see internal/contextfabric/model_test.go and
+//     internal/contracts/v1/context_fabric_contracts_test.go's fixtures,
+//     which document it even though the web product's own request-
+//     building code lives outside this repo).
 //
 // Neither signal was built to answer "did a human or an agent pick this
 // candidate" -- an agent can run inside a web session, and a human can
 // paste MCP tool output by hand. This function documents that limitation
 // rather than hiding it: the returned label names WHICH signal produced
 // it, not a bare "human"/"agent" claim.
+//
+// CLOSED vocabulary (sol review F5): an EARLIER version of this function
+// concatenated "credential_" with the raw, caller-supplied Surface string
+// verbatim. That was wrong two ways at once -- Surface's own 200-character
+// contract bound is wider than this table's persisted-provenance column,
+// so a legitimate long Surface value would silently fail the INSERT's own
+// CHECK constraint; and an arbitrary caller-controlled string (a Surface
+// value could be anything up to 200 characters) had no business reaching
+// a persisted column verbatim regardless of length, the same content-
+// safety discipline this codebase applies everywhere a caller-supplied
+// string could carry more than it claims to. Every Surface value that is
+// not a KNOWN first-party surface now collapses to the single
+// clarificationProvenanceOther constant -- never persisted verbatim.
 func clarificationSelectionProvenance(principal storage.Principal, consumer ConsumerInfo) string {
-	surface := strings.TrimSpace(consumer.Surface)
-	switch {
-	case principal.AuthenticationMethod == storage.AuthenticationMethodWebAssertion:
-		return "web_assertion"
-	case surface == "mcp":
-		return "credential_mcp"
-	case surface != "":
-		return "credential_" + surface
+	if principal.AuthenticationMethod == storage.AuthenticationMethodWebAssertion {
+		return clarificationProvenanceWebAssertion
+	}
+	switch strings.TrimSpace(consumer.Surface) {
+	case "mcp":
+		return clarificationProvenanceMCP
+	case "workbench":
+		return clarificationProvenanceWorkbench
 	default:
-		return "credential_unknown_surface"
+		return clarificationProvenanceOther
 	}
 }

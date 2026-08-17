@@ -10,7 +10,9 @@ package pgclarification
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,11 +37,20 @@ const (
 	// NOT derived from the request context that produced the event --
 	// RecordSelection's ctx parameter only governs the instant, non-blocking
 	// enqueue; by the time the worker dequeues and inserts, the original
-	// HTTP/MCP request may already have returned. Using context.Background()
-	// plus this fixed timeout is what makes this genuinely fire-and-forget
-	// rather than accidentally tying delivery to a caller who has already
-	// gone away.
+	// HTTP/MCP request may already have returned. Deriving each insert's
+	// context from the Sink's own long-lived workerCtx (canceled only by
+	// Close, see below) rather than the caller's request context is what
+	// makes this genuinely fire-and-forget rather than accidentally tying
+	// delivery to a caller who has already gone away.
 	defaultInsertTimeout = 5 * time.Second
+	// dropSummaryInterval bounds how often the WORKER goroutine (never the
+	// caller) logs a queue-full summary -- sol review F4: RecordSelection's
+	// full-queue branch used to call the logger synchronously from the
+	// CALLER's own goroutine, so a blocking slog.Handler could delay a real
+	// investigation. The caller path now only ever increments an atomic
+	// counter; this interval is how often the worker checks it for
+	// anything new to report.
+	dropSummaryInterval = 30 * time.Second
 )
 
 // SinkOptions configures Sink. Every field has a sane default; the zero
@@ -78,6 +89,11 @@ func (m *sinkMetrics) snapshot() SinkMetrics {
 	defer m.mu.Unlock()
 	return SinkMetrics{Enqueued: m.enqueued, Dropped: m.dropped, Delivered: m.delivered, DeliveryFailures: m.deliveryFailures}
 }
+func (m *sinkMetrics) droppedCount() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.dropped
+}
 
 // Sink is a single-worker, bounded-queue contextfabric.ClarificationSelectionSink.
 // It never creates a goroutine per request or per event -- one background
@@ -86,14 +102,25 @@ func (m *sinkMetrics) snapshot() SinkMetrics {
 // per-request goroutines are themselves a resource-exhaustion hazard under
 // load, not just a delivery-ordering nuisance).
 type Sink struct {
-	db            *sql.DB
-	queue         chan contextfabric.ClarificationSelectionEvent
-	stop          chan struct{}
-	done          chan struct{}
-	stopOnce      sync.Once
+	db       *sql.DB
+	queue    chan contextfabric.ClarificationSelectionEvent
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+	// workerCtx/cancelWorker (sol review F6) bound every background
+	// INSERT this Sink's worker attempts, for as long as the worker is
+	// running. Close cancels it on its OWN timeout (not just on a clean
+	// stop) specifically so a worker that is still mid-INSERT when the
+	// caller gives up waiting abandons that INSERT immediately, rather
+	// than racing whatever the caller does next (in
+	// internal/runtime/hosted's case, closing the very Postgres pool this
+	// context's query is using).
+	workerCtx     context.Context
+	cancelWorker  context.CancelFunc
 	insertTimeout time.Duration
 	logger        *slog.Logger
 	metrics       sinkMetrics
+	generateID    func() (string, error)
 }
 
 // NewSink builds a Sink around a caller-owned *sql.DB and starts its
@@ -116,13 +143,17 @@ func NewSink(db *sql.DB, options SinkOptions) (*Sink, error) {
 	if options.Logger == nil {
 		options.Logger = slog.Default()
 	}
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
 	sink := &Sink{
 		db:            db,
 		queue:         make(chan contextfabric.ClarificationSelectionEvent, options.QueueCapacity),
 		stop:          make(chan struct{}),
 		done:          make(chan struct{}),
+		workerCtx:     workerCtx,
+		cancelWorker:  cancelWorker,
 		insertTimeout: options.InsertTimeout,
 		logger:        options.Logger,
+		generateID:    generateUUID,
 	}
 	go sink.run()
 	return sink, nil
@@ -131,10 +162,13 @@ func NewSink(db *sql.DB, options SinkOptions) (*Sink, error) {
 // RecordSelection implements contextfabric.ClarificationSelectionSink.
 // It NEVER blocks and NEVER returns an error to the caller (the interface
 // itself has no error return) -- a full queue drops the newest event and
-// logs a low-cardinality warning, exactly like
-// auth.UsageTelemetry.Enqueue's own documented "intentionally lossy" queue-
-// full behavior. This is the fail-open contract Engine.Investigate depends
-// on: capture must never break or delay an investigation.
+// increments a low-cardinality counter ONLY (sol review F4: this branch
+// runs in the CALLER's own goroutine, so it must never touch the logger --
+// a blocking slog.Handler on this path would delay a real investigation.
+// The worker goroutine, never the caller, is what turns a nonzero drop
+// count into a log line -- see run()'s periodic summary below). This is
+// the fail-open contract Engine.Investigate depends on: capture must
+// never break or delay an investigation.
 func (s *Sink) RecordSelection(_ context.Context, event contextfabric.ClarificationSelectionEvent) {
 	if s == nil {
 		return
@@ -144,7 +178,6 @@ func (s *Sink) RecordSelection(_ context.Context, event contextfabric.Clarificat
 		s.metrics.addEnqueued()
 	default:
 		s.metrics.addDropped()
-		s.logger.Warn("clarification selection capture dropped", "reason", "queue_full")
 	}
 }
 
@@ -157,13 +190,15 @@ func (s *Sink) Metrics() SinkMetrics {
 }
 
 // Close stops the background worker and waits for it to drain whatever was
-// already queued, or for ctx to expire, whichever comes first. Safe to call
-// more than once. Callers that own a Runtime-style shutdown sequence should
-// Close the Sink BEFORE closing the underlying *sql.DB, mirroring
-// auth.UsageTelemetry's own ordering in internal/runtime/hosted -- a worker
-// still draining when the pool closes underneath it would just add
-// DeliveryFailures for events that were never going to land anyway, but
-// closing in the right order avoids that entirely.
+// already queued, or for ctx to expire, whichever comes first. On a
+// timeout, Close cancels the worker's own context (sol review F6) so a
+// still-running INSERT abandons immediately rather than being left to race
+// whatever the caller does next -- callers that own a Runtime-style
+// shutdown sequence should still Close the Sink BEFORE closing the
+// underlying *sql.DB (mirroring auth.UsageTelemetry's own ordering in
+// internal/runtime/hosted), but this cancellation is the second,
+// independent line of defense for the case where that ordering is not
+// enough on its own. Safe to call more than once.
 func (s *Sink) Close(ctx context.Context) error {
 	if s == nil {
 		return nil
@@ -171,23 +206,46 @@ func (s *Sink) Close(ctx context.Context) error {
 	s.stopOnce.Do(func() { close(s.stop) })
 	select {
 	case <-s.done:
+		s.cancelWorker()
 		return nil
 	case <-ctx.Done():
+		s.cancelWorker()
 		return ctx.Err()
 	}
 }
 
 func (s *Sink) run() {
 	defer close(s.done)
+	ticker := time.NewTicker(dropSummaryInterval)
+	defer ticker.Stop()
+	var lastLoggedDropped int64
 	for {
 		select {
 		case event := <-s.queue:
 			s.insert(event)
+		case <-ticker.C:
+			lastLoggedDropped = s.logDroppedSummary(lastLoggedDropped)
 		case <-s.stop:
 			s.drain()
+			s.logDroppedSummary(lastLoggedDropped)
 			return
 		}
 	}
+}
+
+// logDroppedSummary is called ONLY from the worker goroutine (run/drain),
+// never from RecordSelection's caller path -- see RecordSelection's own
+// doc comment for why that split exists. Returns the dropped count it just
+// logged against, so the caller can update its own "last reported"
+// baseline.
+func (s *Sink) logDroppedSummary(lastLogged int64) int64 {
+	current := s.metrics.droppedCount()
+	if current == lastLogged {
+		return lastLogged
+	}
+	s.logger.Warn("clarification selection capture dropped (periodic summary)",
+		"dropped_since_last_summary", current-lastLogged, "dropped_total", current)
+	return current
 }
 
 // drain flushes whatever is already sitting in the queue at Close time,
@@ -205,7 +263,7 @@ func (s *Sink) drain() {
 }
 
 func (s *Sink) insert(event contextfabric.ClarificationSelectionEvent) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.insertTimeout)
+	ctx, cancel := context.WithTimeout(s.workerCtx, s.insertTimeout)
 	defer cancel()
 	if err := s.insertContext(ctx, event); err != nil {
 		s.metrics.addFailure()
@@ -237,6 +295,19 @@ type pipelineContextPayload struct {
 	ModelOutputSchemaVersion    string   `json:"model_output_schema_version"`
 }
 
+// knownSelectionProvenanceValues mirrors migration 0016's
+// ck_acr_cf_clarification_selections_provenance_vocabulary CHECK exactly
+// (sol review F5's closed vocabulary) -- kept here, not imported from
+// contextfabric, so this package's own validation does not silently drift
+// from what the DATABASE actually enforces even if contextfabric's own
+// constant set ever changes shape.
+var knownSelectionProvenanceValues = map[string]struct{}{
+	"web_assertion":        {},
+	"credential_mcp":       {},
+	"credential_workbench": {},
+	"credential_other":     {},
+}
+
 // validateEvent fails closed on a malformed event -- constructing a
 // well-formed contextfabric.ClarificationSelectionEvent is Engine's
 // responsibility (captureClarificationSelection always supplies every
@@ -259,12 +330,19 @@ func validateEvent(event contextfabric.ClarificationSelectionEvent) error {
 	if event.CapturedAt.IsZero() {
 		return errors.New("pgclarification: captured_at is required")
 	}
+	if _, known := knownSelectionProvenanceValues[event.SelectionProvenance]; !known {
+		return fmt.Errorf("pgclarification: selection_provenance %q is not in the closed vocabulary", event.SelectionProvenance)
+	}
 	return nil
 }
 
 func (s *Sink) insertContext(ctx context.Context, event contextfabric.ClarificationSelectionEvent) error {
 	if err := validateEvent(event); err != nil {
 		return err
+	}
+	selectionID, err := s.generateID()
+	if err != nil {
+		return fmt.Errorf("pgclarification: generate selection id: %w", err)
 	}
 	offeredJSON, err := json.Marshal(event.OfferedCandidates)
 	if err != nil {
@@ -280,19 +358,32 @@ func (s *Sink) insertContext(ctx context.Context, event contextfabric.Clarificat
 	if err != nil {
 		return fmt.Errorf("pgclarification: marshal pipeline context: %w", err)
 	}
-	provenance := event.SelectionProvenance
-	if provenance == "" {
-		provenance = "unknown"
-	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_clarification_selections
-    (org_id, captured_at, question_hash, prior_result_id, selected_receipt_id, selected_subject_kind, selected_subject_canonical_id, selection_provenance, offered_candidates, pipeline_context)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		event.OrgID, event.CapturedAt, event.QuestionHash, event.PriorResultID,
+    (selection_id, org_id, captured_at, question_hash, prior_result_id, selected_receipt_id, selected_subject_kind, selected_subject_canonical_id, selection_provenance, offered_candidates, pipeline_context)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		selectionID, event.OrgID, event.CapturedAt, event.QuestionHash, event.PriorResultID,
 		event.Selected.ReceiptID, event.Selected.SubjectKind, event.Selected.SubjectCanonicalID,
-		provenance, offeredJSON, pipelineJSON)
+		event.SelectionProvenance, offeredJSON, pipelineJSON)
 	if err != nil {
 		return fmt.Errorf("pgclarification: insert selection: %w", err)
 	}
 	return nil
+}
+
+// generateUUID mirrors internal/contextfabric/pgmodelreceipts' own
+// generateUUID (and internal/storage/postgres/audit.go's) exactly -- this
+// repo's established idiom for an application-generated primary key
+// (crypto/rand, RFC 4122 version/variant bits set, hex-formatted), not a
+// shared helper: this table's own package owns its own copy, the same way
+// those two already independently do.
+func generateUUID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(value)
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
 }

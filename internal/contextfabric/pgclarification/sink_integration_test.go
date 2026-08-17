@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,13 +17,6 @@ import (
 
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 )
-
-// discardLogger is a *slog.Logger that never writes anywhere -- used by
-// tests that deliberately trigger a queue-full warning and don't want it
-// cluttering `go test -v` output.
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
 
 // newClarificationTestDatabase mirrors pginvestigation's own
 // newInvestigationTestDatabase exactly: a fresh testcontainers Postgres,
@@ -47,11 +41,14 @@ func newClarificationTestDatabase(t *testing.T, ctx context.Context) *sql.DB {
 }
 
 // validEvent returns a well-formed ClarificationSelectionEvent, scoped to
-// orgID, for tests that want a baseline to mutate.
+// orgID, for tests that want a baseline to mutate. Deliberately no
+// SubjectLabel anywhere (sol review F2): ClarificationOfferedCandidate has
+// no such field at all -- see TestInsertContext_NeverPersistsSubjectLabelContent
+// for the red-first proof that this table's persisted JSONB stays that way.
 func validEvent(orgID string) contextfabric.ClarificationSelectionEvent {
 	offered := []contextfabric.ClarificationOfferedCandidate{
-		{ReceiptID: "receipt-committed-01", SubjectKind: "project", SubjectCanonicalID: "project-ask-dev", SubjectLabel: "Ask Dev", State: "proposed", Confidence: 0.91, Rank: 0},
-		{ReceiptID: "receipt-committed-02", SubjectKind: "project", SubjectCanonicalID: "project-ask-web", SubjectLabel: "Ask Web", State: "proposed", Confidence: 0.62, Rank: 1},
+		{ReceiptID: "receipt-committed-01", SubjectKind: "project", SubjectCanonicalID: "project-ask-dev", State: "proposed", Confidence: 0.91, Rank: 0},
+		{ReceiptID: "receipt-committed-02", SubjectKind: "project", SubjectCanonicalID: "project-ask-web", State: "proposed", Confidence: 0.62, Rank: 1},
 	}
 	return contextfabric.ClarificationSelectionEvent{
 		OrgID: orgID, CapturedAt: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC),
@@ -70,6 +67,7 @@ func validEvent(orgID string) contextfabric.ClarificationSelectionEvent {
 }
 
 type storedSelectionRow struct {
+	SelectionID                string
 	OrgID                      string
 	CapturedAt                 time.Time
 	QuestionHash               string
@@ -78,6 +76,7 @@ type storedSelectionRow struct {
 	SelectedSubjectKind        string
 	SelectedSubjectCanonicalID string
 	SelectionProvenance        string
+	OfferedCandidatesRaw       []byte
 	OfferedCandidates          []contextfabric.ClarificationOfferedCandidate
 	PipelineContext            pipelineContextPayload
 }
@@ -85,14 +84,15 @@ type storedSelectionRow struct {
 func mustLoadSelectionRow(t *testing.T, ctx context.Context, db *sql.DB, priorResultID string) storedSelectionRow {
 	t.Helper()
 	var row storedSelectionRow
-	var offeredJSON, pipelineJSON []byte
+	var pipelineJSON []byte
 	require.NoError(t, db.QueryRowContext(ctx, `
-SELECT org_id, captured_at, question_hash, prior_result_id, selected_receipt_id, selected_subject_kind, selected_subject_canonical_id, selection_provenance, offered_candidates, pipeline_context
+SELECT selection_id, org_id, captured_at, question_hash, prior_result_id, selected_receipt_id, selected_subject_kind, selected_subject_canonical_id, selection_provenance, offered_candidates, pipeline_context
 FROM acr.context_fabric_clarification_selections WHERE prior_result_id = $1`, priorResultID).Scan(
-		&row.OrgID, &row.CapturedAt, &row.QuestionHash, &row.PriorResultID, &row.SelectedReceiptID,
-		&row.SelectedSubjectKind, &row.SelectedSubjectCanonicalID, &row.SelectionProvenance, &offeredJSON, &pipelineJSON,
+		&row.SelectionID, &row.OrgID, &row.CapturedAt, &row.QuestionHash, &row.PriorResultID, &row.SelectedReceiptID,
+		&row.SelectedSubjectKind, &row.SelectedSubjectCanonicalID, &row.SelectionProvenance, &row.OfferedCandidatesRaw, &pipelineJSON,
 	))
-	require.NoError(t, json.Unmarshal(offeredJSON, &row.OfferedCandidates))
+	require.NotEmpty(t, row.SelectionID, "selection_id must be a real application-generated primary key, not left blank")
+	require.NoError(t, json.Unmarshal(row.OfferedCandidatesRaw, &row.OfferedCandidates))
 	require.NoError(t, json.Unmarshal(pipelineJSON, &row.PipelineContext))
 	return row
 }
@@ -133,6 +133,34 @@ func TestInsertContext_PersistsEveryField(t *testing.T) {
 	}, row.PipelineContext)
 }
 
+// TestInsertContext_NeverPersistsSubjectLabelContent is the red-first proof
+// for sol review F2: offered_candidates' RAW marshaled JSON must never
+// carry subject display-label content or even a "label" key at all.
+// ClarificationOfferedCandidate has no SubjectLabel field (the Go type
+// system already makes the leak impossible today), so this asserts the
+// STORED SHAPE directly, on the raw bytes actually written to Postgres --
+// the assertion a future PR that re-added a label field to the JSON
+// payload (without also reintroducing the Go struct field, e.g. via a
+// custom MarshalJSON) would still be caught by.
+func TestInsertContext_NeverPersistsSubjectLabelContent(t *testing.T) {
+	ctx := context.Background()
+	db := newClarificationTestDatabase(t, ctx)
+	sink, err := NewSink(db, SinkOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sink.Close(closeCtx)
+	})
+
+	event := validEvent("org-clarify-no-label")
+	require.NoError(t, sink.insertContext(ctx, event))
+
+	row := mustLoadSelectionRow(t, ctx, db, event.PriorResultID)
+	raw := strings.ToLower(string(row.OfferedCandidatesRaw))
+	require.NotContains(t, raw, "label", "offered_candidates must never carry subject display-label content or key (sol review F2)")
+}
+
 // TestInsertContext_RejectsMalformedEventsWithoutTouchingTheDatabase is the
 // red-first proof for validateEvent: a malformed event must fail BEFORE
 // any SQL runs, and must insert nothing.
@@ -156,6 +184,9 @@ func TestInsertContext_RejectsMalformedEventsWithoutTouchingTheDatabase(t *testi
 		"empty selected subject kind":         func(e *contextfabric.ClarificationSelectionEvent) { e.Selected.SubjectKind = "" },
 		"empty selected subject canonical id": func(e *contextfabric.ClarificationSelectionEvent) { e.Selected.SubjectCanonicalID = "" },
 		"zero captured_at":                    func(e *contextfabric.ClarificationSelectionEvent) { e.CapturedAt = time.Time{} },
+		"provenance outside the closed vocabulary": func(e *contextfabric.ClarificationSelectionEvent) {
+			e.SelectionProvenance = "not-a-real-provenance-value"
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -226,18 +257,36 @@ func TestRecordSelection_DeliversAsynchronously(t *testing.T) {
 	require.Equal(t, int64(1), sink.Metrics().Delivered)
 }
 
+// blockingHandler is a slog.Handler whose Handle call never returns (it
+// blocks forever on an unbuffered, never-received channel receive). Wired
+// as a Sink's logger, it turns "the caller path called the logger" into an
+// immediate, unmistakable test timeout rather than a silent pass -- sol
+// review F4's own instruction: strengthen the saturation test with a
+// deliberately-blocking handler, since discardLogger() cannot distinguish
+// "never called" from "called and silently swallowed."
+type blockingHandler struct{}
+
+func (blockingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (blockingHandler) Handle(context.Context, slog.Record) error {
+	select {}
+}
+func (blockingHandler) WithAttrs([]slog.Attr) slog.Handler { return blockingHandler{} }
+func (blockingHandler) WithGroup(string) slog.Handler      { return blockingHandler{} }
+
 // TestRecordSelection_DropsOnFullQueueWithoutBlocking is the fail-open
 // proof CHAOS-3859 demands: RecordSelection must never delay a caller, even
 // when the queue is saturated and Postgres is never given a chance to
-// drain it (the worker is never started for this test's Sink -- see
-// newSinkWithoutWorker below).
+// drain it (the worker is never started for this test's Sink). The logger
+// is a blockingHandler (sol review F4), so if RecordSelection's drop path
+// ever touches it again, this test hangs and times out rather than passing
+// vacuously the way discardLogger() would.
 func TestRecordSelection_DropsOnFullQueueWithoutBlocking(t *testing.T) {
 	sink := &Sink{
 		queue: make(chan contextfabric.ClarificationSelectionEvent, 2),
 		// stop/done are deliberately left nil/unused: this Sink's worker is
 		// never started, so RecordSelection's non-blocking select is the
 		// only thing under test.
-		logger: discardLogger(),
+		logger: slog.New(blockingHandler{}),
 	}
 	event := validEvent("org-clarify-drop")
 
@@ -251,9 +300,94 @@ func TestRecordSelection_DropsOnFullQueueWithoutBlocking(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("RecordSelection blocked past a full queue -- capture must never delay a caller")
+		t.Fatal("RecordSelection blocked past a full queue -- capture must never delay a caller (or touched the logger, which this test's blockingHandler would also manifest as a hang)")
 	}
 	metrics := sink.Metrics()
 	require.Equal(t, int64(2), metrics.Enqueued, "exactly the queue capacity should have enqueued")
 	require.Equal(t, int64(8), metrics.Dropped, "the remainder must be dropped, not blocked on")
+}
+
+// capturingHandler records every log record's Message, for
+// TestWorker_LogsPeriodicDropSummary -- a real (non-discarding,
+// non-blocking) slog.Handler, since that test needs to observe what the
+// WORKER goroutine actually logs.
+type capturingHandler struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (h *capturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *capturingHandler) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.messages = append(h.messages, record.Message)
+	return nil
+}
+func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(string) slog.Handler      { return h }
+func (h *capturingHandler) snapshot() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.messages...)
+}
+
+// TestWorker_LogsPeriodicDropSummary proves the OTHER half of sol review
+// F4: dropping the synchronous caller-path log call must not mean drops
+// become invisible -- the WORKER goroutine is what turns a nonzero drop
+// count into a log line. Drops are injected by incrementing the metrics
+// counter DIRECTLY (bypassing RecordSelection/the queue entirely) so no
+// event is ever handed to the worker's insert() path -- this Sink has no
+// real *sql.DB, and insert() would otherwise be the thing under test
+// rather than logDroppedSummary. Close's own stop-path call to
+// logDroppedSummary (run()'s `case <-s.stop`) is what this test observes,
+// which is deterministic and needs no ticker wait.
+func TestWorker_LogsPeriodicDropSummary(t *testing.T) {
+	handler := &capturingHandler{}
+	sink := &Sink{
+		queue: make(chan contextfabric.ClarificationSelectionEvent, 1),
+		stop:  make(chan struct{}), done: make(chan struct{}),
+		workerCtx: context.Background(), cancelWorker: func() {},
+		logger: slog.New(handler),
+	}
+	sink.metrics.addDropped()
+	sink.metrics.addDropped()
+	go sink.run()
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, sink.Close(closeCtx), "Close's own final logDroppedSummary call must fire even without waiting for the ticker")
+
+	found := false
+	for _, message := range handler.snapshot() {
+		if strings.Contains(message, "periodic summary") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected the worker to log a periodic drop summary, got messages: %#v", handler.snapshot())
+	require.Equal(t, int64(2), sink.Metrics().Dropped)
+}
+
+// TestClose_CancelsWorkerContextOnTimeout is the red-first proof for sol
+// review F6's second, independent line of defense: if Close's own ctx
+// expires before the worker signals <-s.done> (a worker that is still
+// mid-INSERT, or simply never finishes), Close must cancel workerCtx so
+// that INSERT -- and any future one this worker might still attempt --
+// abandons immediately rather than racing whatever the caller does next
+// (in production, closing the very Postgres pool that INSERT's context
+// derives from). done is deliberately never closed here, simulating
+// exactly that "worker still running" case without needing a real slow
+// database call.
+func TestClose_CancelsWorkerContextOnTimeout(t *testing.T) {
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	sink := &Sink{
+		stop: make(chan struct{}), done: make(chan struct{}),
+		workerCtx: workerCtx, cancelWorker: cancelWorker,
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := sink.Close(closeCtx)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "Close should report its own timeout, not swallow it")
+	require.Error(t, workerCtx.Err(), "Close's timeout must cancel the worker's own context so an in-flight or future INSERT abandons immediately")
 }

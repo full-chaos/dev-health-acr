@@ -594,13 +594,30 @@ func (e *Engine) captureClarificationSelection(ctx context.Context, principal st
 	if e.clarificationSelectionSink == nil {
 		return
 	}
+	// sol review F3: gate on the EXACT same condition
+	// answerprojection.projectClarification uses (project.go:401,
+	// `result.Status != contractsv1.ContextFabricInvestigationClarificationRequired`)
+	// -- a caller can attach a PriorSubjectReceipts entry naming ANY prior
+	// result's ReceiptID regardless of that result's own Status
+	// (resolvePriorSubjectHints' own matching loop, correctly, does not
+	// care -- re-authorizing an already-committed subject on a
+	// conversational follow-up is a real, intended use of the SAME
+	// mechanism). But a result that was never presented as a clarification
+	// choice in the first place -- complete, partial, degraded, or
+	// no_match -- was never something a caller "selected" FROM; capturing
+	// its candidates as a labeled clarification choice would poison the
+	// training signal with pairs that never happened. Only a genuine
+	// clarification_required prior result is a real selection event.
+	if prior.Status != InvestigationClarificationRequired {
+		return
+	}
 	offered := make([]ClarificationOfferedCandidate, len(prior.SubjectResolution.Candidates))
 	var selectedOffered ClarificationOfferedCandidate
 	for i, candidate := range prior.SubjectResolution.Candidates {
 		offered[i] = ClarificationOfferedCandidate{
 			ReceiptID: candidate.ReceiptID, SubjectKind: string(candidate.Subject.Kind),
-			SubjectCanonicalID: candidate.Subject.CanonicalID, SubjectLabel: candidate.Subject.Label,
-			State: string(candidate.State), Confidence: candidate.Confidence, Rank: i,
+			SubjectCanonicalID: candidate.Subject.CanonicalID,
+			State:              string(candidate.State), Confidence: candidate.Confidence, Rank: i,
 		}
 		if candidate.ReceiptID == selected.ReceiptID {
 			selectedOffered = offered[i]

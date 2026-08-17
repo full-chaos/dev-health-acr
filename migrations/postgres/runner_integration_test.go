@@ -322,20 +322,21 @@ func TestRunner_upgradeTo16CreatesClarificationSelectionsTable(t *testing.T) {
 
 	requireTableExists(t, ctx, db, "context_fabric_clarification_selections")
 	for _, column := range []string{
-		"org_id", "captured_at", "question_hash", "prior_result_id",
+		"selection_id", "org_id", "captured_at", "question_hash", "prior_result_id",
 		"selected_receipt_id", "selected_subject_kind", "selected_subject_canonical_id",
 		"selection_provenance", "offered_candidates", "pipeline_context", "created_at",
 	} {
 		requireColumnExists(t, ctx, db, "context_fabric_clarification_selections", column)
 	}
 	for _, constraint := range []string{
+		"ck_acr_cf_clarification_selections_selection_id_length",
 		"ck_acr_cf_clarification_selections_org_id_length",
 		"ck_acr_cf_clarification_selections_question_hash_length",
 		"ck_acr_cf_clarification_selections_prior_result_id_length",
 		"ck_acr_cf_clarification_selections_receipt_id_length",
 		"ck_acr_cf_clarification_selections_subject_kind_length",
 		"ck_acr_cf_clarification_selections_subject_id_length",
-		"ck_acr_cf_clarification_selections_provenance_length",
+		"ck_acr_cf_clarification_selections_provenance_vocabulary",
 	} {
 		requireConstraintExists(t, ctx, db, constraint)
 	}

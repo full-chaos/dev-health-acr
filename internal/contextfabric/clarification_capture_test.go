@@ -185,6 +185,44 @@ func TestCHAOS3859_NoCaptureOnUnmatchedReceipt(t *testing.T) {
 	}
 }
 
+// TestCHAOS3859_NoCaptureOnNonClarificationPriorResult is sol review F3's
+// red-first proof: a PriorSubjectReceipts entry can name ANY prior
+// result's ReceiptID regardless of that result's own Status --
+// resolvePriorSubjectHints' matching loop correctly does not care, because
+// re-authorizing an already-committed subject on a conversational
+// follow-up ("what about it now?") is a real, intended use of the SAME
+// mechanism. But a result that was never presented as a clarification
+// choice in the first place (here: InvestigationComplete, exactly
+// mirroring answerprojection.projectClarification's own gate,
+// project.go:401) was never something a caller "selected" FROM -- only a
+// genuine clarification_required prior result is a real selection event.
+// Capturing a complete result's candidates as a labeled clarification
+// choice would poison the training signal with pairs that never happened.
+func TestCHAOS3859_NoCaptureOnNonClarificationPriorResult(t *testing.T) {
+	t.Parallel()
+	prior := twoCandidatePriorResult()
+	prior.ResultID = "result_complete_0001"
+	// The completed-result equivalent of "candidates still attached" --
+	// unresolved.go's resolveTerminalStatus documents this exact shape for
+	// no_match, and nothing about SubjectResolution.Candidates itself
+	// requires Status==clarification_required; only the Status field
+	// distinguishes "this was a clarification offer" from "this was not."
+	prior.Status = InvestigationComplete
+	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+	sink := &recordingClarificationSink{}
+	engine := mustEngineForClarificationCaptureTest(t, store, sink)
+
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "receipt_selected_01"}}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_capture_4"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("sink.events = %#v, want none for a non-clarification_required prior result (sol review F3)", sink.events)
+	}
+}
+
 // TestCHAOS3859_InvestigateSucceedsWithoutASink is the fail-open/additive
 // proof: a nil ClarificationSelectionSink (capture off, or not yet
 // composed) must not change Investigate's own behavior at all, even when
@@ -217,8 +255,13 @@ func TestClarificationSelectionProvenance(t *testing.T) {
 	}{
 		{"web assertion wins regardless of surface", storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion}, ConsumerInfo{Surface: "mcp"}, "web_assertion"},
 		{"credential + spoof-resistant mcp surface", storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential}, ConsumerInfo{Surface: "mcp"}, "credential_mcp"},
-		{"credential + another named surface", storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential}, ConsumerInfo{Surface: "workbench"}, "credential_workbench"},
-		{"credential + empty surface", storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential}, ConsumerInfo{Surface: ""}, "credential_unknown_surface"},
+		{"credential + the workbench surface", storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential}, ConsumerInfo{Surface: "workbench"}, "credential_workbench"},
+		{"credential + empty surface", storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential}, ConsumerInfo{Surface: ""}, "credential_other"},
+		// sol review F5: a closed vocabulary means an UNKNOWN, arbitrary,
+		// or caller-controlled surface value must collapse to the single
+		// clarificationProvenanceOther constant -- never persisted
+		// verbatim, regardless of length or content.
+		{"credential + an unrecognized/arbitrary surface", storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential}, ConsumerInfo{Surface: "some-arbitrary-caller-string"}, "credential_other"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

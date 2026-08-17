@@ -162,6 +162,17 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.agent_episodes TO :"runtime_user";
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.device_authorizations FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.device_authorizations TO :"runtime_user";
 
+-- CHAOS-3859 (sol review F1): the hosted runtime writes clarification-
+-- selection capture events through pgclarification.Sink -- INSERT only,
+-- mirroring audit_events immediately above exactly: this table has no
+-- read path yet (capture-only phase), so no SELECT grant either. The
+-- table needs no sequence grant at all: its primary key is an
+-- application-generated UUID string (migrations/postgres/0016, matching
+-- 0010's context_fabric_model_execution_receipts idiom), not a
+-- database-generated BIGSERIAL/IDENTITY.
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_clarification_selections FROM :"runtime_user";
+GRANT INSERT ON TABLE acr.context_fabric_clarification_selections TO :"runtime_user";
+
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON TABLES FROM :"runtime_user";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON SEQUENCES FROM PUBLIC;

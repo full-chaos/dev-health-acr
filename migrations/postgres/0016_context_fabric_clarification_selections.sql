@@ -26,13 +26,27 @@
 -- stores it -- but the ticket's explicit design directive governs this
 -- NEW table regardless.)
 --
+-- No subject LABEL either (sol review F2): offered_candidates carries
+-- receipt ids, subject kinds/canonical ids, ranks, and confidences --
+-- never SubjectRef.Label, which is caller-facing display TEXT (e.g. an
+-- incident title) with no length bound of its own. ids/kinds/ranks/
+-- confidences are the full training signal this phase needs; a label is
+-- re-derivable from the subject id at consumption time by whichever
+-- future phase actually needs display text, which this one is not.
+--
 -- Shape mirrors 0010's context_fabric_model_execution_receipts precedent
 -- exactly: an insert-only sink table with a handful of indexed/queryable
 -- columns (org_id, question_hash, captured_at) plus JSONB blobs for the
 -- structured detail (offered_candidates, pipeline_context) that doesn't
 -- need its own index yet and, per chris's own framing ("the sweep knobs
 -- may soon vary"), should stay schema-flexible rather than earning a new
--- migration every time a pipeline dimension is added.
+-- migration every time a pipeline dimension is added. The primary key
+-- ALSO mirrors that precedent (sol review F1): every other table in this
+-- schema uses an application-generated TEXT/UUID key, never a
+-- database-generated BIGSERIAL/IDENTITY sequence -- selection_id follows
+-- receipt_id's exact idiom (a Go-generated UUIDv4 string), which
+-- incidentally means this table needs no SEQUENCE privilege grant at all,
+-- only INSERT on the table itself.
 --
 -- No inline BEGIN/COMMIT, and every constraint is idempotent
 -- (DROP CONSTRAINT IF EXISTS + ADD CONSTRAINT) -- CHAOS-3862 migration
@@ -44,7 +58,7 @@
 -- CONSTRAINT retry.
 
 CREATE TABLE IF NOT EXISTS acr.context_fabric_clarification_selections (
-    id                            BIGSERIAL PRIMARY KEY,
+    selection_id                  TEXT NOT NULL PRIMARY KEY,
     -- org_id is the SAME auth boundary as investigation results
     -- (Principal.OrgID) -- every read of this table MUST filter by it;
     -- see pgclarification's own doc comment for the query-side contract.
@@ -76,19 +90,22 @@ CREATE TABLE IF NOT EXISTS acr.context_fabric_clarification_selections (
     selected_receipt_id           TEXT NOT NULL,
     selected_subject_kind         TEXT NOT NULL,
     selected_subject_canonical_id TEXT NOT NULL,
-    -- selection_provenance is a BEST-EFFORT human-vs-agent proxy (CHAOS-3859
-    -- inventory: no field in this codebase today records a trustworthy,
-    -- caller-asserted "a human picked this" fact) -- see
-    -- contextfabric.clarificationSelectionProvenance's doc comment for
-    -- exactly what it derives from and why it is a proxy, not a
-    -- classification. CHAOS-3860's stratification requirement is the
-    -- reason this column exists at all; do not read more precision into
-    -- it than the doc comment claims.
+    -- selection_provenance is a BEST-EFFORT human-vs-agent proxy over a
+    -- CLOSED vocabulary (sol review F5 -- was a free-form
+    -- "credential_"+ConsumerInfo.Surface concatenation, which both (a)
+    -- could silently drop a valid 200-char Surface past this column's
+    -- bound, and (b) could carry arbitrary caller-supplied content into
+    -- the table). See contextfabric.clarificationSelectionProvenance's
+    -- doc comment for exactly what each value derives from and why this
+    -- is a proxy, not a classification. CHAOS-3860's stratification
+    -- requirement is the reason this column exists at all; do not read
+    -- more precision into it than the doc comment claims.
     selection_provenance          TEXT NOT NULL,
     -- offered_candidates is the COMPLETE candidate set the prior result
-    -- offered (subject ids, ranks, confidences, receipt ids) -- a training
-    -- signal needs the negative examples (candidates NOT chosen) as much
-    -- as the positive one, so this is never trimmed to just the selection.
+    -- offered (subject ids/kinds, ranks, confidences, receipt ids -- NOT
+    -- labels, see header) -- a training signal needs the negative
+    -- examples (candidates NOT chosen) as much as the positive one, so
+    -- this is never trimmed to just the selection.
     offered_candidates            JSONB NOT NULL,
     -- pipeline_context is the deployment-CURRENT pipeline/gate config
     -- active at the MOMENT this selection was observed (prompt versions,
@@ -101,6 +118,15 @@ CREATE TABLE IF NOT EXISTS acr.context_fabric_clarification_selections (
     pipeline_context              JSONB NOT NULL,
     created_at                    TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+
+ALTER TABLE acr.context_fabric_clarification_selections
+    DROP CONSTRAINT IF EXISTS ck_acr_cf_clarification_selections_selection_id_length;
+ALTER TABLE acr.context_fabric_clarification_selections
+    ADD CONSTRAINT ck_acr_cf_clarification_selections_selection_id_length
+        -- Matches 0010's ck_acr_cf_model_receipts_receipt_id_length bound
+        -- exactly (8..256): a UUIDv4 string is 36 characters, comfortably
+        -- inside it, with room for a future ID-shape change.
+        CHECK (char_length(selection_id) BETWEEN 8 AND 256);
 
 ALTER TABLE acr.context_fabric_clarification_selections
     DROP CONSTRAINT IF EXISTS ck_acr_cf_clarification_selections_org_id_length;
@@ -142,10 +168,16 @@ ALTER TABLE acr.context_fabric_clarification_selections
         CHECK (char_length(selected_subject_canonical_id) BETWEEN 1 AND 256);
 
 ALTER TABLE acr.context_fabric_clarification_selections
-    DROP CONSTRAINT IF EXISTS ck_acr_cf_clarification_selections_provenance_length;
+    DROP CONSTRAINT IF EXISTS ck_acr_cf_clarification_selections_provenance_vocabulary;
 ALTER TABLE acr.context_fabric_clarification_selections
-    ADD CONSTRAINT ck_acr_cf_clarification_selections_provenance_length
-        CHECK (char_length(selection_provenance) BETWEEN 1 AND 64);
+    ADD CONSTRAINT ck_acr_cf_clarification_selections_provenance_vocabulary
+        -- CLOSED vocabulary (sol review F5), matching
+        -- contextfabric.clarificationSelectionProvenance's own exhaustive
+        -- switch exactly -- a value this CHECK rejects means the Go and
+        -- SQL vocabularies have drifted, not that a real caller supplied
+        -- something unexpected (unknown/free-form callers already map to
+        -- 'credential_other' in Go before reaching this INSERT).
+        CHECK (selection_provenance IN ('web_assertion', 'credential_mcp', 'credential_workbench', 'credential_other'));
 
 -- org_id-first, matching every other org-scoped Context Fabric table's
 -- lookup shape: every real read of this table filters by org first.
