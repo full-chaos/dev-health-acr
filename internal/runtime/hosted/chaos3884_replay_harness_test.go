@@ -68,6 +68,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,14 +115,30 @@ type replayArmOutcome struct {
 	Status         string                          `json:"status"`
 	CommittedCount int                             `json:"committed_count"`
 	Committed      []trialCandidateMatchProvenance `json:"committed,omitempty"`
-	Ambiguous      bool                            `json:"ambiguous"`
-	ErrorClass     string                          `json:"error_class,omitempty"`
+	// CandidatePool (team-lead ruling, 2026-08-17, coverage question A/B):
+	// the FULL candidate pool this arm's resolution produced, not just what
+	// committed -- reused verbatim from candidatePoolProvenance (already
+	// canaried, kind/id/mechanism/confidence only), so a reader can tell
+	// whether a repository-kind candidate was even IN the pool for a case
+	// that never committed (e.g. stuck ambiguous), and which mechanism(s)
+	// produced it.
+	CandidatePool []trialCandidateMatchProvenance `json:"candidate_pool,omitempty"`
+	Ambiguous     bool                            `json:"ambiguous"`
+	ErrorClass    string                          `json:"error_class,omitempty"`
 }
 
 // replayCaseOutcome is ONE case's full replay record.
 type replayCaseOutcome struct {
-	Index     int              `json:"index"`
-	IsControl bool             `json:"is_control"`
+	Index     int  `json:"index"`
+	IsControl bool `json:"is_control"`
+	// Axis (team-lead ruling, 2026-08-17): interpreted.TimeContext.Axis, a
+	// CLOSED VOCABULARY enum ("current"/"historical"/...), never free text
+	// -- resolve.go derives AliasLookup's temporal gate from exactly this
+	// value (reader.go:36, HIGH-6: a historical-axis question never gets
+	// the identity mechanism at all), so recording it is required to
+	// answer coverage question A (axis distribution, especially for cases
+	// with a repository candidate) without touching corpus content.
+	Axis      string           `json:"axis"`
 	Baseline  replayArmOutcome `json:"baseline"`
 	Wired     replayArmOutcome `json:"wired"`
 	DiffClass replayDiffClass  `json:"diff_class"`
@@ -184,6 +201,7 @@ func buildReplayArmOutcome(res contractsv1.ContextFabricSubjectResolution, err e
 	outcome.CommittedCount = len(res.Committed)
 	outcome.Ambiguous = res.ClarificationPrompt != ""
 	outcome.Committed = committedMatchProvenance(res.Committed, res.Candidates)
+	outcome.CandidatePool = candidatePoolProvenance(res.Candidates)
 	return outcome
 }
 
@@ -353,14 +371,33 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 
 	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
 
-	limit := len(corpus)
-	if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
-		n, convErr := strconv.Atoi(raw)
-		if convErr != nil || n <= 0 {
-			t.Fatalf("ACR_TEST_TRIAL_LIMIT must be a positive integer, got %q", raw)
+	// indices (team-lead ruling, 2026-08-17): mirrors
+	// TestGenerativeTrialCorpus's own ACR_TEST_TRIAL_INDICES/ACR_TEST_TRIAL_LIMIT
+	// pair -- a reusable capability, not narrowed for THIS run (a guessed
+	// index subset validates nothing; this run always covers the full
+	// corpus unless an operator explicitly opts into a subset later).
+	var indices []int
+	if raw := os.Getenv("ACR_TEST_TRIAL_INDICES"); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			n, convErr := strconv.Atoi(strings.TrimSpace(part))
+			if convErr != nil || n < 0 || n >= len(corpus) {
+				t.Fatalf("ACR_TEST_TRIAL_INDICES: invalid index %q (corpus has %d cases)", part, len(corpus))
+			}
+			indices = append(indices, n)
 		}
-		if n < limit {
-			limit = n
+	} else {
+		limit := len(corpus)
+		if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
+			n, convErr := strconv.Atoi(raw)
+			if convErr != nil || n <= 0 {
+				t.Fatalf("ACR_TEST_TRIAL_LIMIT must be a positive integer, got %q", raw)
+			}
+			if n < limit {
+				limit = n
+			}
+		}
+		for i := 0; i < limit; i++ {
+			indices = append(indices, i)
 		}
 	}
 
@@ -378,7 +415,7 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		DiffTally:                map[replayDiffClass]int{},
 	}
 
-	for i := 0; i < limit; i++ {
+	for _, i := range indices {
 		tc := corpus[i]
 		request := contractsv1.ContextFabricInvestigationRequest{
 			SchemaVersion: contractsv1.ContextFabricInvestigationRequestSchema,
@@ -409,6 +446,7 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 			continue
 		}
 
+		outcome.Axis = string(interpreted.TimeContext.Axis)
 		baselineRes, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted)
 		wiredRes, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted)
 		cancelCase()
