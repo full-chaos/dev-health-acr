@@ -323,7 +323,7 @@ func TestNoMatchProseDoesNotClaimAbsenceWhenCandidatesArePresent(t *testing.T) {
 		t.Fatal("the honesty valve is missing: candidates must stay attached")
 	}
 	for _, limitation := range result.Limitations {
-		if limitation == noMatchLimitation {
+		if limitation == noMatchLimitationUnproven {
 			t.Fatalf("Limitations = %#v, want the ambiguous wording, not the absence wording, while %d candidates are attached", result.Limitations, len(result.SubjectResolution.Candidates))
 		}
 	}
@@ -338,10 +338,17 @@ func TestNoMatchProseDoesNotClaimAbsenceWhenCandidatesArePresent(t *testing.T) {
 	}
 }
 
-// The other direction: genuine absence must keep the absence wording. A fix
+// The other direction: an empty pool must keep the empty-pool wording. A fix
 // that made every no_match say "several matched" would be the same defect
 // mirrored.
-func TestNoMatchProseKeepsAbsenceWordingWhenNothingMatched(t *testing.T) {
+//
+// CHAOS-3885: this wording is deliberately NOT an absence claim -- see
+// TestNoMatchLimitationForEmptyPoolIsHonestAboutExhaustiveness for that. The
+// name/comment here used to say "absence wording", which was accurate for
+// the old, retired universal claim but is not accurate for the honest
+// unproven wording that replaced it; renamed to avoid implying this test
+// re-licenses an existence claim.
+func TestNoMatchProseKeepsEmptyPoolWordingWhenNothingMatched(t *testing.T) {
 	t.Parallel()
 	graph := &acceptanceGraphReader{
 		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
@@ -353,11 +360,68 @@ func TestNoMatchProseKeepsAbsenceWordingWhenNothingMatched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	if !slices.Contains(result.Limitations, noMatchLimitation) {
-		t.Fatalf("Limitations = %#v, want the absence wording when nothing matched", result.Limitations)
+	if !slices.Contains(result.Limitations, noMatchLimitationUnproven) {
+		t.Fatalf("Limitations = %#v, want the empty-pool wording when nothing matched", result.Limitations)
 	}
 	if !strings.Contains(result.DeterministicAnswer, "No investigation subject could be resolved") {
-		t.Fatalf("DeterministicAnswer = %q, want the absence sentence", result.DeterministicAnswer)
+		t.Fatalf("DeterministicAnswer = %q, want the empty-pool sentence", result.DeterministicAnswer)
+	}
+}
+
+// CHAOS-3885 (resolution architecture v3 §9.2/§21 Phase 0.5). An empty
+// candidate pool is not a completeness proof: retrieval cannot demonstrate
+// exhaustiveness, and for repository questions specifically the pool is
+// empty by construction because repository entities never enter it today.
+// The empty-pool limitation must say retrieval found nothing, and must NOT
+// claim -- as the old wording did -- that no subject in the graph matched.
+func TestNoMatchLimitationForEmptyPoolIsHonestAboutExhaustiveness(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context:    emptyGraphContext(),
+	}
+	engine := buildTerminalEngine(t, graph, nil)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("Status = %q, want no_match: this slice weakens the limitation, not the status", result.Status)
+	}
+	// Reject the retired sentence AND its shape -- "authorized subject" +
+	// "matched the question" is the universal-existence claim's fingerprint,
+	// so a near-variant reword that keeps that shape must fail too, not just
+	// a byte-identical repeat of the retired string.
+	const retiredUniversalClaim = "No authorized subject in this organization's graph matched the question"
+	for _, limitation := range result.Limitations {
+		if strings.Contains(limitation, retiredUniversalClaim) {
+			t.Fatalf("Limitations = %#v, want no exhaustive-absence claim: retrieval cannot prove no subject exists", result.Limitations)
+		}
+		if strings.Contains(limitation, "authorized subject") && strings.Contains(limitation, "matched the question") {
+			t.Fatalf("Limitations = %#v, want no universal-existence claim (any wording asserting an authorized subject matched/did-not-match the question over the whole graph)", result.Limitations)
+		}
+	}
+	// Independent oracle (codex xhigh review nit): assert the literal wording
+	// this test expects to see, rather than only checking the returned value
+	// against the noMatchLimitationUnproven symbol the production code also
+	// uses -- a wording regression that still satisfied that symbol's own
+	// "contains not exhaustive" self-check could otherwise slip through.
+	const wantEmptyPoolLimitation = "Retrieval found no candidate for this question in this organization's graph, so no canonical facts were read. This search is not exhaustive, so it does not confirm that no matching subject exists."
+	if !slices.Contains(result.Limitations, wantEmptyPoolLimitation) {
+		t.Fatalf("Limitations = %#v, want the exact honest empty-pool wording %q", result.Limitations, wantEmptyPoolLimitation)
+	}
+}
+
+// The seam Phase 6 (§21) extends: today every empty pool takes the unproven
+// branch because no resolution path attaches a completeness proof. Pinning
+// this directly (not just through the engine) makes the seam's current
+// always-unproven behavior an explicit, refactor-visible contract.
+func TestNoMatchLimitationForEmptyPoolSeamTakesUnprovenBranchToday(t *testing.T) {
+	t.Parallel()
+	resolution := &SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+	if got := noMatchLimitationForEmptyPool(resolution); got != noMatchLimitationUnproven {
+		t.Fatalf("noMatchLimitationForEmptyPool() = %q, want the unproven wording: no path attaches a completeness proof yet", got)
 	}
 }
 
@@ -538,24 +602,24 @@ func TestTerminalResultLabelsTheTimeAHistoricalAnswerSpeaksFor(t *testing.T) {
 	}{
 		{
 			name: "valid time", time: TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, wantLabel: true,
-			wantLimitations: []string{noMatchLimitation, temporalLimitations[0]},
+			wantLimitations: []string{noMatchLimitationUnproven, temporalLimitations[0]},
 		},
 		{
 			// The ONLY axis that carries the substitution disclosure: it is
 			// answered on the valid-time window, and the answer says so.
 			name: "observed time", time: TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}, wantLabel: true,
-			wantLimitations: []string{noMatchLimitation, temporalLimitations[0], observedTimeLimitation},
+			wantLimitations: []string{noMatchLimitationUnproven, temporalLimitations[0], observedTimeLimitation},
 		},
 		{
 			name: "range", time: TimeContext{Axis: TemporalRange, Start: &asOf, End: &asOf}, wantLabel: true,
-			wantLimitations: []string{noMatchLimitation, temporalLimitations[0]},
+			wantLimitations: []string{noMatchLimitationUnproven, temporalLimitations[0]},
 		},
 		{
 			// The negative control. A current-axis terminal result must
 			// carry NO temporal label and NO historical disclosure -- both
 			// would be false statements about an answer that speaks for now.
 			name: "current", time: TimeContext{Axis: TemporalCurrent}, wantLabel: false,
-			wantLimitations: []string{noMatchLimitation},
+			wantLimitations: []string{noMatchLimitationUnproven},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
