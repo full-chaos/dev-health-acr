@@ -614,6 +614,115 @@ func contextFabricRejectionClass(err error) string {
 	}
 }
 
+// trialCandidateMatchProvenance is the CHAOS-3880 candidate attribution
+// record: which retrieval mechanism(s) proposed a candidate (exact / alias /
+// provider_key / lexical / vector / traversal_parent -- see
+// contractsv1.ContextFabricSubjectMatchMechanism) and the confidence that
+// resulted, so a reader can tell a vector-only, lexical-only, or corroborated
+// (2+ distinct mechanisms) candidate apart DIRECTLY instead of inferring the
+// population from where its confidence happened to land inside a threshold
+// band -- which is exactly what the CHAOS-3742 threshold-sweep verification
+// could not do and this ticket exists to fix.
+//
+// IDs/kinds/mechanisms/confidences ONLY (privacy posture, same as the rest of
+// this harness): Kind and CanonicalID are the graph's own canonical subject
+// identity, already the corpus's own expect_id/observed outcome shape used
+// elsewhere in this report -- never the human-readable Label
+// (ContextFabricSubjectRef.Label), never MatchedTerms, never MatchReasons.
+// Those three fields exist on the source contractsv1.ContextFabricSubjectCandidate
+// but are DELIBERATELY not copied here; see
+// TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText for the pinning
+// canary.
+type trialCandidateMatchProvenance struct {
+	Kind        string   `json:"kind,omitempty"`
+	CanonicalID string   `json:"canonical_id,omitempty"`
+	Mechanisms  []string `json:"mechanisms,omitempty"`
+	Confidence  float64  `json:"confidence,omitempty"`
+}
+
+// candidateMatchProvenance projects the fields
+// trialCandidateMatchProvenance allows out of one resolved candidate.
+// Deliberately field-by-field (not a struct literal built from cand
+// directly) so a future field added to contractsv1.ContextFabricSubjectCandidate
+// (e.g. a label, a matched term) does NOT silently start flowing into the
+// trial artifact -- see the type's own doc comment.
+func candidateMatchProvenance(cand contractsv1.ContextFabricSubjectCandidate) trialCandidateMatchProvenance {
+	mechanisms := make([]string, 0, len(cand.MatchMechanisms))
+	for _, mechanism := range cand.MatchMechanisms {
+		mechanisms = append(mechanisms, string(mechanism))
+	}
+	return trialCandidateMatchProvenance{
+		Kind:        string(cand.Subject.Kind),
+		CanonicalID: cand.Subject.CanonicalID,
+		Mechanisms:  mechanisms,
+		Confidence:  cand.Confidence,
+	}
+}
+
+// subjectRefKey/subjectCandidateKey give committed/candidate matching a
+// single comparable identity (kind+canonical_id), mirroring
+// graphrank.SubjectKey's own (kind, id) identity without importing an
+// internal package this test package does not otherwise depend on.
+func subjectRefKey(ref contractsv1.ContextFabricSubjectRef) string {
+	return string(ref.Kind) + "|" + ref.CanonicalID
+}
+
+func subjectCandidateKey(cand contractsv1.ContextFabricSubjectCandidate) string {
+	return subjectRefKey(cand.Subject)
+}
+
+// committedMatchProvenance recovers, for each committed subject (usually
+// exactly one -- committedMatchesTrial's own correctness rule requires
+// exactly one for a "correct" outcome, but this reports whatever the engine
+// actually committed, including the 0/2+ cases), the MatchMechanisms/
+// Confidence its OWN candidate entry carried. Committed subjects are refs
+// only (ContextFabricSubjectRef has no mechanism/confidence of its own) --
+// resolution.Candidates is where that data lives, and Phase 4 truncation
+// (graphrank.ResolveFromMergedCandidates) keeps every committed subject's
+// own candidate entry at tier 0, ahead of any truncation, so a committed
+// subject is never absent from candidates when this runs.
+func committedMatchProvenance(committed []contractsv1.ContextFabricSubjectRef, candidates []contractsv1.ContextFabricSubjectCandidate) []trialCandidateMatchProvenance {
+	if len(committed) == 0 {
+		return nil
+	}
+	byKey := make(map[string]contractsv1.ContextFabricSubjectCandidate, len(candidates))
+	for _, cand := range candidates {
+		byKey[subjectCandidateKey(cand)] = cand
+	}
+	matches := make([]trialCandidateMatchProvenance, 0, len(committed))
+	for _, ref := range committed {
+		if cand, ok := byKey[subjectRefKey(ref)]; ok {
+			matches = append(matches, candidateMatchProvenance(cand))
+		}
+	}
+	return matches
+}
+
+// topNonCommittedMatchProvenance is the highest-confidence candidate that is
+// NOT among the committed subjects -- the runner-up a threshold-sweep reader
+// needs to see: how close did the next candidate come, and by which
+// mechanism(s), to committing instead (or in addition).
+func topNonCommittedMatchProvenance(committed []contractsv1.ContextFabricSubjectRef, candidates []contractsv1.ContextFabricSubjectCandidate) *trialCandidateMatchProvenance {
+	committedKeys := make(map[string]bool, len(committed))
+	for _, ref := range committed {
+		committedKeys[subjectRefKey(ref)] = true
+	}
+	var best *contractsv1.ContextFabricSubjectCandidate
+	for i := range candidates {
+		if committedKeys[subjectCandidateKey(candidates[i])] {
+			continue
+		}
+		if best == nil || candidates[i].Confidence > best.Confidence {
+			best = &candidates[i]
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	provenance := candidateMatchProvenance(*best)
+	return &provenance
+}
+
 type caseOutcome struct {
 	Index      int    `json:"index"`
 	IsControl  bool   `json:"is_control"`
@@ -644,6 +753,16 @@ type caseOutcome struct {
 	ClaimedFacts           int     `json:"claimed_facts,omitempty"`
 	Drivers                int     `json:"drivers,omitempty"`
 	RetrievalDegraded      bool    `json:"retrieval_degraded,omitempty"`
+	// CommittedMatches/TopNonCommittedMatch (CHAOS-3880, additive): the
+	// committed candidate's own MatchMechanisms+Confidence, and the same for
+	// the best candidate the engine did NOT commit. Both are ADDITIVE and
+	// OPTIONAL -- omitempty, absent on every report generated before this
+	// change, and absence must be read as "not recorded", never "no
+	// mechanism matched" (mirrors ContextFabricSubjectCandidate.MatchMechanisms'
+	// own additive-optional discipline). A pre-CHAOS-3880 report JSON is
+	// still fully valid input to anything that decodes caseOutcome.
+	CommittedMatches     []trialCandidateMatchProvenance `json:"committed_matches,omitempty"`
+	TopNonCommittedMatch *trialCandidateMatchProvenance  `json:"top_non_committed_match,omitempty"`
 }
 
 func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, caseTimeout time.Duration) caseOutcome {
@@ -693,6 +812,8 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 		}
 	}
 	outcome.RetrievalDegraded = result.SubjectResolution.RetrievalDegraded
+	outcome.CommittedMatches = committedMatchProvenance(result.SubjectResolution.Committed, result.SubjectResolution.Candidates)
+	outcome.TopNonCommittedMatch = topNonCommittedMatchProvenance(result.SubjectResolution.Committed, result.SubjectResolution.Candidates)
 	outcome.AnswerLength = len(result.DeterministicAnswer)
 	outcome.ClaimedFacts = len(result.ClaimedFacts)
 	outcome.Drivers = len(result.Drivers)
