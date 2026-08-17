@@ -637,7 +637,17 @@ type trialCandidateMatchProvenance struct {
 	Kind        string   `json:"kind,omitempty"`
 	CanonicalID string   `json:"canonical_id,omitempty"`
 	Mechanisms  []string `json:"mechanisms,omitempty"`
-	Confidence  float64  `json:"confidence,omitempty"`
+	// Confidence deliberately has NO omitempty (luna review finding,
+	// CHAOS-3880): 0.0 is a legitimate, in-range confidence value (the
+	// contract's own Confidence field permits it -- see
+	// ContextFabricSubjectCandidate.Confidence / validate_context_fabric_result.go),
+	// not merely a zero-value stand-in for "absent". This record only ever
+	// exists when there IS a candidate to describe (a nil
+	// *trialCandidateMatchProvenance, or an absent slice entry, is how
+	// "no data" is represented -- see committedMatchProvenance/
+	// topNonCommittedMatchProvenance's own doc comments), so once present,
+	// Confidence must always serialize, even at exactly 0.
+	Confidence float64 `json:"confidence"`
 }
 
 // candidateMatchProvenance projects the fields
@@ -678,9 +688,21 @@ func subjectCandidateKey(cand contractsv1.ContextFabricSubjectCandidate) string 
 // Confidence its OWN candidate entry carried. Committed subjects are refs
 // only (ContextFabricSubjectRef has no mechanism/confidence of its own) --
 // resolution.Candidates is where that data lives, and Phase 4 truncation
-// (graphrank.ResolveFromMergedCandidates) keeps every committed subject's
-// own candidate entry at tier 0, ahead of any truncation, so a committed
-// subject is never absent from candidates when this runs.
+// (graphrank.ResolveFromMergedCandidatesWithGate) keeps every committed
+// subject's own candidate entry at tier 0 ahead of any truncation, in the
+// COMMON single/typical-multi-commit case.
+//
+// ALWAYS returns exactly len(committed) entries, never fewer (luna review
+// finding, CHAOS-3880): if a committed subject has no matching entry in
+// candidates -- the one gap in the tier-0 guarantee above, reachable when
+// the number of simultaneously committed exact-match subjects exceeds
+// MaxSubjectCandidates, so Phase 4's own truncation keeps only the first
+// `max` of them -- this emits an IDENTITY-ONLY record (kind/canonical_id,
+// empty mechanisms, zero confidence) rather than silently dropping the
+// entry. Silently dropping would make len(committed_matches) < CommittedCount
+// with no signal why; a reader must be able to trust that count always
+// matches, even when the per-candidate detail for one entry is unavailable.
+// See TestCommittedMatchProvenance_identityOnlyWhenNoMatchingCandidateExists.
 func committedMatchProvenance(committed []contractsv1.ContextFabricSubjectRef, candidates []contractsv1.ContextFabricSubjectCandidate) []trialCandidateMatchProvenance {
 	if len(committed) == 0 {
 		return nil
@@ -693,7 +715,9 @@ func committedMatchProvenance(committed []contractsv1.ContextFabricSubjectRef, c
 	for _, ref := range committed {
 		if cand, ok := byKey[subjectRefKey(ref)]; ok {
 			matches = append(matches, candidateMatchProvenance(cand))
+			continue
 		}
+		matches = append(matches, trialCandidateMatchProvenance{Kind: string(ref.Kind), CanonicalID: ref.CanonicalID})
 	}
 	return matches
 }

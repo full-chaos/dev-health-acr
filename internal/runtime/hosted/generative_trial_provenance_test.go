@@ -2,6 +2,7 @@ package hosted_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -68,6 +69,38 @@ func TestCommittedMatchProvenance_emptyWhenNothingCommitted(t *testing.T) {
 	}
 }
 
+// TestCommittedMatchProvenance_identityOnlyWhenNoMatchingCandidateExists is
+// the luna-review-requested pin: a committed subject with NO matching entry
+// in candidates (the narrow Phase-4-truncation gap the function's own doc
+// comment describes) must still produce a record -- identity-only, but
+// present -- so len(committed_matches) always equals len(committed) and a
+// reader can trust the count rather than silently seeing an entry vanish.
+func TestCommittedMatchProvenance_identityOnlyWhenNoMatchingCandidateExists(t *testing.T) {
+	committed := []contractsv1.ContextFabricSubjectRef{
+		{Kind: "project", CanonicalID: "project_x"},
+		{Kind: "project", CanonicalID: "project_orphan"}, // no candidate below
+	}
+	candidates := []contractsv1.ContextFabricSubjectCandidate{
+		subjectCandidate("project", "project_x", 0.9, contractsv1.ContextFabricMatchExact),
+	}
+
+	matches := committedMatchProvenance(committed, candidates)
+
+	if len(matches) != len(committed) {
+		t.Fatalf("committedMatchProvenance returned %d entries, want %d (one per committed subject, no silent drops): %+v", len(matches), len(committed), matches)
+	}
+	orphan := matches[1]
+	if orphan.Kind != "project" || orphan.CanonicalID != "project_orphan" {
+		t.Fatalf("orphan entry = %+v, want identity-only project/project_orphan", orphan)
+	}
+	if len(orphan.Mechanisms) != 0 {
+		t.Fatalf("orphan entry mechanisms = %v, want none (no candidate data was available)", orphan.Mechanisms)
+	}
+	if orphan.Confidence != 0 {
+		t.Fatalf("orphan entry confidence = %v, want 0 (no candidate data was available)", orphan.Confidence)
+	}
+}
+
 func TestTopNonCommittedMatchProvenance_picksHighestConfidenceCandidateExcludingCommitted(t *testing.T) {
 	committed := []contractsv1.ContextFabricSubjectRef{{Kind: "project", CanonicalID: "project_x"}}
 	candidates := []contractsv1.ContextFabricSubjectCandidate{
@@ -94,6 +127,24 @@ func TestTopNonCommittedMatchProvenance_picksHighestConfidenceCandidateExcluding
 
 func contextfabricMatchVectorOnly() []contractsv1.ContextFabricSubjectMatchMechanism {
 	return []contractsv1.ContextFabricSubjectMatchMechanism{contractsv1.ContextFabricMatchVector}
+}
+
+// TestCandidateMatchProvenance_zeroConfidenceStillSerializes is the
+// luna-review-requested pin for Confidence's dropped omitempty: 0.0 is a
+// legitimate, in-range confidence value, and once a provenance record
+// exists it must always carry its confidence, never silently omit it just
+// because that confidence happens to be exactly zero.
+func TestCandidateMatchProvenance_zeroConfidenceStillSerializes(t *testing.T) {
+	cand := subjectCandidate("project", "project_x", 0, contractsv1.ContextFabricMatchVector)
+
+	got := candidateMatchProvenance(cand)
+	blob, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal candidateMatchProvenance: %v", err)
+	}
+	if !strings.Contains(string(blob), `"confidence":0`) {
+		t.Fatalf("candidateMatchProvenance JSON = %s, want it to explicitly carry \"confidence\":0, not omit the key", blob)
+	}
 }
 
 func TestTopNonCommittedMatchProvenance_nilWhenEveryCandidateIsCommitted(t *testing.T) {
@@ -175,14 +226,17 @@ func TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText(t *testing.T) {
 		}
 	}
 
-	// Reflection-level canary on the STRUCT SHAPE itself (not only this one
-	// instance's values): every JSON KEY trialCandidateMatchProvenance
-	// exposes, AT ANY NESTING DEPTH, must be one of the four allowed names.
-	// A field added later (e.g. "label" or "matched_terms") fails here even
-	// before any test data happens to populate it -- and walkJSONObjectKeys
-	// recurses into nested objects/arrays, so a FUTURE field that is itself
-	// a struct (not just a new top-level scalar) is caught too, not only a
-	// flat top-level key.
+	// Instance-level canary on this populated fixture's actual wire output,
+	// at any JSON nesting depth. This is a BEHAVIORAL proof (real data
+	// really does marshal to only these keys); it depends on
+	// trialCandidateMatchProvenanceAllFields keeping every field populated,
+	// so a field that is easy to forget populating there (an omitempty
+	// field left at its zero value marshals to nothing and would silently
+	// escape THIS check alone) is why
+	// TestTrialCandidateMatchProvenanceStructFields_onlyAllowedJSONTags
+	// below exists as the STRUCTURAL guarantee, walking the TYPE via
+	// reflection rather than one instance's marshaled output -- the two are
+	// complementary, not redundant (luna review finding, CHAOS-3880).
 	allowedTags := map[string]bool{"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true}
 	full := trialCandidateMatchProvenanceAllFields()
 	fullBlob, err := json.Marshal(full)
@@ -226,6 +280,53 @@ func walkJSONObjectKeys(t *testing.T, raw json.RawMessage, seen map[string]bool)
 	}
 	// A scalar (string/number/bool/null) or malformed input carries no
 	// object keys of its own -- nothing further to walk.
+}
+
+// TestTrialCandidateMatchProvenanceStructFields_onlyAllowedJSONTags is the
+// STRUCTURAL privacy canary (luna review finding, CHAOS-3880): it walks
+// trialCandidateMatchProvenance's fields via reflect.TypeOf on the TYPE
+// itself, not by marshaling one populated instance -- so a field added
+// later is caught even if trialCandidateMatchProvenanceAllFields is never
+// updated to populate it (an omitempty field left at its zero value
+// marshals to NOTHING, which the instance-level canary above cannot see at
+// all -- that gap is exactly what this test closes). Recurses into any
+// nested struct/slice/pointer field, so a future field that is itself a
+// struct is caught too, not only a flat top-level scalar.
+func TestTrialCandidateMatchProvenanceStructFields_onlyAllowedJSONTags(t *testing.T) {
+	allowed := map[string]bool{"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true}
+	seen := map[string]bool{}
+	walkStructJSONTags(reflect.TypeOf(trialCandidateMatchProvenance{}), seen)
+	if len(seen) == 0 {
+		t.Fatal("walkStructJSONTags found no fields at all -- the canary is not exercising anything")
+	}
+	for tag := range seen {
+		if !allowed[tag] {
+			t.Fatalf("trialCandidateMatchProvenance declares a field with JSON tag %q -- only kind/canonical_id/mechanisms/confidence are allowed (privacy posture), and this would hold even if no test data ever populates it", tag)
+		}
+	}
+}
+
+// walkStructJSONTags recursively collects every JSON tag name a struct type
+// declares (unwrapping pointer/slice/array element types first), at any
+// nesting depth, into seen. Unlike walkJSONObjectKeys, this operates on the
+// reflect.Type itself, so it sees every field regardless of whether any
+// particular test instance happens to populate it.
+func walkStructJSONTags(typ reflect.Type, seen map[string]bool) {
+	for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			name = field.Name
+		}
+		seen[name] = true
+		walkStructJSONTags(field.Type, seen)
+	}
 }
 
 // trialCandidateMatchProvenanceAllFields returns an instance with every
