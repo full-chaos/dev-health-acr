@@ -106,6 +106,15 @@ type ModelExecutionReceipt struct {
 	Usage            ModelUsage     `json:"usage,omitempty"`
 	FallbackUsed     bool           `json:"fallback_used"`
 	Outcome          string         `json:"outcome"`
+	// RequestID correlates this receipt back to the originating
+	// InvestigationRequest (CHAOS-3889, audit MED item "ModelExecutionReceipt
+	// has no request_id column"). Optional and best-effort: a genkitruntime
+	// caller stamps it from InvestigationRequest.RequestID /
+	// SynthesisInput.Request.RequestID when building the receipt, but a
+	// receipt built before this field existed, or by a ModelRuntime that
+	// never received one, is still a valid receipt with RequestID empty --
+	// Validate() below only bounds it when present, never requires it.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {
@@ -130,6 +139,9 @@ func (r ModelExecutionReceipt) Validate() error {
 	}
 	if r.Usage.InputTokens < 0 || r.Usage.OutputTokens < 0 || r.Usage.TotalTokens < 0 {
 		return fmt.Errorf("model receipt usage is invalid")
+	}
+	if len(r.RequestID) > 256 {
+		return fmt.Errorf("model receipt request_id is invalid")
 	}
 	return nil
 }

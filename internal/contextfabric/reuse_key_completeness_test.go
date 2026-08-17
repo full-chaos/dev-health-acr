@@ -137,6 +137,14 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	// receipt now carries the FALLBACK's own identity, not the primary's).
 	"FallbackUsed": {reason: "per-call boolean; which identity actually produced the result is already captured via ModelIdentity/ModelIdentities (CHAOS-3786), not a separate version dimension"},
 	"Outcome":      {reason: "success/failure classification, not a version identity"},
+	// RequestID (CHAOS-3889) is a per-call CORRELATION id -- it names WHICH
+	// InvestigationRequest produced this one receipt, the opposite of a
+	// version/content-shape authority: two calls for the exact same
+	// question, contract, projection, and model identity get two different
+	// RequestIDs every time, so binding reuse to it would defeat reuse
+	// entirely (same failure mode InputDigest/OutputDigest are excluded
+	// for, just for an id instead of a content hash).
+	"RequestID": {reason: "per-call correlation id, not a version/content-shape authority -- two calls with identical content-shape authorities still get distinct RequestIDs, so binding reuse to it would defeat reuse entirely"},
 }
 
 // TestReuseKeyClassifiesEveryVersionSetField is the class-oracle sweep over
