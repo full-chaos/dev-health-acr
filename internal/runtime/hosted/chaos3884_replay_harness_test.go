@@ -140,9 +140,9 @@ type replayCaseOutcome struct {
 	// with a repository candidate) without touching corpus content.
 	Axis string `json:"axis"`
 	// IdentityUniverseCalls/IdentityMatchedRows (team-lead ruling,
-	// 2026-08-17): the reachability counters -- see
-	// identityUniverseReachability's own doc comment. Counts only, never
-	// row or term content.
+	// 2026-08-17): C1/C2, read from the durable graphrank.ResolutionTracer's
+	// own "alias_lookup" stage events -- see replayTraceCapture's own doc
+	// comment. Counts only, never row or term content.
 	IdentityUniverseCalls int              `json:"identity_universe_calls"`
 	IdentityMatchedRows   int              `json:"identity_matched_rows"`
 	Baseline              replayArmOutcome `json:"baseline"`
@@ -257,45 +257,51 @@ func classifyReplayDiff(tc trialCase, baseline, wired []contractsv1.ContextFabri
 // why the two compositions live in two places rather than one being called
 // from the other. wireIdentityUniverse=false is arm "baseline"; true is arm
 // "wired", byte-identical to production's own wiring.
-// identityUniverseReachability (team-lead ruling, 2026-08-17): a
-// content-free counter answering the COMPOSITION-ROOT REACHABILITY
-// question a passing unit test cannot answer on its own -- whether the
-// wired arm's resolver ever actually REACHES devhealthsource.IdentityUniverse
-// for a given case, not just whether the matching logic is correct in
-// isolation. calls counts invocations; lastRows caches the most recent
-// call's rows so the caller can independently recompute
-// graphrank.MatchIdentityRows against the SAME terms the resolver used --
-// only the resulting COUNT ever leaves this struct into a report field,
-// never row content. Reset (zeroed) by the caller between cases; a single
-// falkorgraph.Adapter's IdentityUniverse closure is built once and reused
-// across every case in a run, so per-case attribution requires resetting.
-type identityUniverseReachability struct {
-	calls    int
-	lastRows []graphrank.IdentityRow
+// replayTraceCapture (team-lead ruling, 2026-08-17: "STOP the throwaway
+// invocation-counter... READ reachability from" a durable
+// graphrank.ResolutionTracer instead) implements graphrank.ResolutionTracer,
+// accumulating every event in memory. Content-free by construction --
+// ResolutionTraceEvent's own fields already are (see its doc comment) --
+// so no filtering logic is needed here either. Reset between cases; a
+// single falkorgraph.Adapter is built once and reused across every case in
+// a run, so per-case attribution requires clearing between resolutions.
+type replayTraceCapture struct {
+	events []graphrank.ResolutionTraceEvent
 }
 
-func (r *identityUniverseReachability) reset() {
-	if r == nil {
-		return
+func (c *replayTraceCapture) Trace(event graphrank.ResolutionTraceEvent) {
+	c.events = append(c.events, event)
+}
+
+func (c *replayTraceCapture) reset() {
+	c.events = nil
+}
+
+// aliasLookupReachability reads C1 (was AliasLookup invoked) and C2 (did it
+// match anything) directly from the captured "alias_lookup" stage
+// events -- the reachability answer as OBSERVED by the durable tracer, not
+// inferred from a bespoke counter or a passing unit test.
+func (c *replayTraceCapture) aliasLookupReachability() (calls, matchedClaimants int) {
+	for _, e := range c.events {
+		if e.Stage != "alias_lookup" {
+			continue
+		}
+		calls++
+		matchedClaimants += e.AliasLookupMatchedClaimants
 	}
-	r.calls = 0
-	r.lastRows = nil
+	return calls, matchedClaimants
 }
 
-func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Client, wireIdentityUniverse bool, reachability *identityUniverseReachability) (contextfabric.GraphReader, error) {
+func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Client, wireIdentityUniverse bool, tracer graphrank.ResolutionTracer) (contextfabric.GraphReader, error) {
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return nil, err
 	}
 	graphConfig.Telemetry = falkorgraph.SlogTelemetry{Logger: logger}
+	graphConfig.ResolutionTracer = tracer
 	if wireIdentityUniverse {
 		graphConfig.IdentityUniverse = func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
-			rows, observedAt, complete, err := devhealthsource.IdentityUniverse(ctx, client, orgID)
-			if reachability != nil {
-				reachability.calls++
-				reachability.lastRows = rows
-			}
-			return rows, observedAt, complete, err
+			return devhealthsource.IdentityUniverse(ctx, client, orgID)
 		}
 	}
 	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)
@@ -393,8 +399,8 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build baseline graph reader: %v", err)
 	}
-	reachability := &identityUniverseReachability{}
-	wiredGraph, err := buildReplayGraphReader(logger, client, true, reachability)
+	traceCapture := &replayTraceCapture{}
+	wiredGraph, err := buildReplayGraphReader(logger, client, true, traceCapture)
 	if err != nil {
 		t.Fatalf("build wired graph reader: %v", err)
 	}
@@ -484,31 +490,18 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		}
 
 		outcome.Axis = string(interpreted.TimeContext.Axis)
-		reachability.reset()
+		traceCapture.reset()
 		baselineRes, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted)
 		wiredRes, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted)
 		cancelCase()
 
-		// Reachability counters (team-lead ruling, 2026-08-17): C1 is
-		// whether the wired arm's resolver reached
-		// devhealthsource.IdentityUniverse AT ALL for this case's terms --
-		// proof the composition wires AliasLookup through, not inferred
-		// from a unit test. C2 independently recomputes
-		// graphrank.MatchIdentityRows against the SAME terms the resolver
-		// used (graphrank.SubjectTerms(request, interpreted), the exact
-		// function resolve.go itself calls) over the rows C1's call
-		// observed -- proving whether an exact normalized match existed,
-		// again as a COUNT only, never as row/term content.
-		outcome.IdentityUniverseCalls = reachability.calls
-		if reachability.calls > 0 {
-			terms := graphrank.SubjectTerms(request, interpreted)
-			matches := graphrank.MatchIdentityRows(reachability.lastRows, terms)
-			total := 0
-			for _, m := range matches {
-				total += len(m)
-			}
-			outcome.IdentityMatchedRows = total
-		}
+		// Reachability, read from the durable ResolutionTracer (team-lead
+		// ruling, 2026-08-17), not a bespoke counter: C1 is whether the
+		// wired arm's resolver emitted an "alias_lookup" stage event AT
+		// ALL for this case -- proof the composition actually reaches
+		// deps.AliasLookup, not inferred from a unit test. C2 is that
+		// event's own AliasLookupMatchedClaimants -- did it find a match.
+		outcome.IdentityUniverseCalls, outcome.IdentityMatchedRows = traceCapture.aliasLookupReachability()
 
 		outcome.Baseline = buildReplayArmOutcome(baselineRes, baselineErr)
 		outcome.Wired = buildReplayArmOutcome(wiredRes, wiredErr)
