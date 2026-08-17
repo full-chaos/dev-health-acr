@@ -276,10 +276,10 @@ func TestRunner_upgradeTo15AddsPromptAndVersionAuthorityReuseKeyColumns(t *testi
 	} {
 		requireConstraintExists(t, ctx, db, constraint)
 	}
-	// v4 (0015's own reuse-key index) is itself superseded by 0017's v5 in
+	// v4 (0015's own reuse-key index) is itself superseded by 0018's v5 in
 	// the SAME "latest" run this test upgrades to -- see
-	// TestRunner_upgradeTo17AddsIdentityNormalizationReuseKeyColumn for the
-	// dedicated 0016->0017 proof (the v4->v5 replacement, mirroring this
+	// TestRunner_upgradeTo18AddsIdentityNormalizationReuseKeyColumn for the
+	// dedicated 0016->0018 proof (the v4->v5 replacement, mirroring this
 	// test's own v3->v4 check below). This test's own job stops at proving
 	// 0015's COLUMNS/CONSTRAINTS survive to the final schema; the index's
 	// FINAL name is that later test's responsibility, not this one's, to
@@ -374,15 +374,19 @@ func TestRunner_upgradeTo16IsIdempotentOnRetry(t *testing.T) {
 	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
 }
 
-// TestRunner_upgradeTo17AddsIdentityNormalizationReuseKeyColumn is
-// CHAOS-3884's 0016->0017 upgrade proof, mirroring
+// TestRunner_upgradeTo18AddsIdentityNormalizationReuseKeyColumn is
+// CHAOS-3884's 0016->0018 upgrade proof (renumbered from 0017 during the
+// rebase onto origin/main -- CHAOS-3889 independently claimed 0017 first;
+// see expectedMigrationVersions' own comment), mirroring
 // TestRunner_upgradeTo16CreatesClarificationSelectionsTable's
 // released-main-fixture pattern exactly: a runner built from a FIXED file
-// subset (everything through 0016), upgraded by the full embedded set,
-// then asserted against 0017's complete shape -- including the v4->v5
-// reuse-key index replacement TestRunner_upgradeTo15's own tail assertion
-// used to (incorrectly, once this migration landed) claim as final state.
-func TestRunner_upgradeTo17AddsIdentityNormalizationReuseKeyColumn(t *testing.T) {
+// subset (everything through 0016), upgraded by the full embedded set
+// (which now applies 0017 -- CHAOS-3889's unrelated model-receipts
+// request_id column, not asserted on here -- on the way to 0018), then
+// asserted against 0018's complete shape -- including the v4->v5 reuse-key
+// index replacement TestRunner_upgradeTo15's own tail assertion used to
+// (incorrectly, once this migration landed) claim as final state.
+func TestRunner_upgradeTo18AddsIdentityNormalizationReuseKeyColumn(t *testing.T) {
 	// Given a database at the released main schema through migration 0016
 	// (everything CHAOS-3884 builds on top of)...
 	ctx := context.Background()
@@ -427,10 +431,11 @@ func TestRunner_upgradeTo17AddsIdentityNormalizationReuseKeyColumn(t *testing.T)
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v4")
 }
 
-// TestRunner_upgradeTo17IsIdempotentOnRetry mirrors
-// TestRunner_upgradeTo16IsIdempotentOnRetry: 0017 must survive being
-// applied twice without erroring.
-func TestRunner_upgradeTo17IsIdempotentOnRetry(t *testing.T) {
+// TestRunner_upgradeTo18IsIdempotentOnRetry mirrors
+// TestRunner_upgradeTo16IsIdempotentOnRetry: 0018 (renumbered from 0017
+// during the rebase onto origin/main -- see expectedMigrationVersions' own
+// comment) must survive being applied twice without erroring.
+func TestRunner_upgradeTo18IsIdempotentOnRetry(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDatabase(t, ctx)
 	runner, err := Embedded()

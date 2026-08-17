@@ -121,6 +121,162 @@ func TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaIden
 	}
 }
 
+// TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaLoneFloor
+// is the codex xhigh design-review regression proof (2026-08-17, CHAOS-3891,
+// reviewer-3884 design sign-off same day; chris ruling: KEEP): the
+// pre-existing TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaIdentity
+// above uses searchTruncated=true, which diverts to ambiguous via the
+// searchTruncated case BEFORE the confidence-threshold gates are ever
+// reached -- it never actually exercised LoneFloor at all, exactly the
+// coverage gap codex's review cited. This test isolates it precisely:
+// searchTruncated=false (so LoneFloor IS reached), aliasIdentityComplete=
+// false (a truncated identity-universe read, or a graph-missing sibling --
+// either source), and a SOLE candidate with NO recorded collision
+// (identityCollision alone returns false for it: nothing else claims its
+// term). Before identityTrustUnproven existed, this candidate's
+// confidence=1 identityTrusted bump cleared LoneFloor on an unproven
+// uniqueness claim an incomplete read can never actually vouch for --
+// hand-verified red on HEAD 03fd1708732ed3a67017c537e0c611c1cdc3570a
+// (commits r1), green after threading identityTrustUnproven into the
+// LoneFloor case (resolution.go).
+func TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaLoneFloor(t *testing.T) {
+	t.Parallel()
+	repo := repoAliasCandidate("r1", "chaos-ops")
+	identity, terms := identitySideChannels(repo) // sole claimant: identityCollision alone says false
+
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false: LoneFloor IS reached */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: incomplete read */, nil, "")
+
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want NOTHING committed -- an incomplete identity read must block LoneFloor even for a candidate identityCollision alone cannot flag", resolution.Committed)
+	}
+}
+
+// TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaTopFloor
+// is the TopFloor counterpart to the LoneFloor test above -- same codex
+// xhigh finding, same "keep the fix" disposition. A lone identity-trusted
+// candidate atop an ordinary, unrelated, non-colliding candidate must not
+// clear TopFloor/TopGap on an incomplete read's unproven uniqueness claim.
+// Hand-verified red on HEAD 03fd1708732ed3a67017c537e0c611c1cdc3570a
+// (commits r1), green after threading identityTrustUnproven into the
+// TopFloor case (resolution.go).
+func TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaTopFloor(t *testing.T) {
+	t.Parallel()
+	repo := repoAliasCandidate("r1", "chaos-ops")
+	other := noiseCandidate("ci1", 0.6) // no identity mechanism, never claims repo's term
+	identity, terms := identitySideChannels(repo)
+
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, other), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: incomplete read */, nil, "")
+
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want NOTHING committed -- an incomplete identity read must block TopFloor too", resolution.Committed)
+	}
+}
+
+// TestResolveFromMergedCandidatesWithGate_TracerObservesTruncationBlockingLoneFloor
+// is the tracer-observability half of the same disposition: a
+// truncation-driven non-commit must be OBSERVABLE, not an invisible,
+// unexplained ambiguous outcome. Reuses the exact LoneFloor scenario the
+// regression test above pins, this time reading the decision-stage trace
+// event back to confirm it carries Outcome=="ambiguous",
+// AliasLookupComplete==false (the aliasIdentityComplete this resolution
+// actually used), and IdentityTrustGateBlocked==true (identifying THIS
+// specific gate, not some other reason, as why nothing committed).
+func TestResolveFromMergedCandidatesWithGate_TracerObservesTruncationBlockingLoneFloor(t *testing.T) {
+	t.Parallel()
+	repo := repoAliasCandidate("r1", "chaos-ops")
+	identity, terms := identitySideChannels(repo)
+	tracer := &captureResolutionTracer{}
+
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false */, tracer, "req-1")
+
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want nothing committed", resolution.Committed)
+	}
+	decisions := tracer.eventsForStage("decision")
+	if len(decisions) != 1 {
+		t.Fatalf("decision events = %#v, want exactly 1", decisions)
+	}
+	got := decisions[0]
+	if got.Outcome != "ambiguous" {
+		t.Fatalf("decision event Outcome = %q, want %q", got.Outcome, "ambiguous")
+	}
+	if got.AliasLookupComplete {
+		t.Fatal("decision event AliasLookupComplete = true, want false (this resolution's aliasIdentityComplete)")
+	}
+	if !got.IdentityTrustGateBlocked {
+		t.Fatal("decision event IdentityTrustGateBlocked = false, want true -- the truncation-driven non-commit must be attributable to THIS gate specifically")
+	}
+}
+
+// TestResolveFromMergedCandidatesWithGate_TracerCommitGateNamesWhichPathCommitted
+// is reviewer-3884's design-review gap (2026-08-17): Outcome=="committed"
+// alone cannot distinguish identity_fast_path from lone_floor -- both can
+// commit a MatchAlias candidate and report the identical WinningMechanism.
+// Two subtests exercise the two paths this ticket touches directly.
+func TestResolveFromMergedCandidatesWithGate_TracerCommitGateNamesWhichPathCommitted(t *testing.T) {
+	t.Run("identity_fast_path", func(t *testing.T) {
+		t.Parallel()
+		repo := repoAliasCandidate("r1", "chaos-ops")
+		identity, terms := identitySideChannels(repo)
+		tracer := &captureResolutionTracer{}
+
+		resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true /* aliasIdentityComplete=true: fast path eligible */, tracer, "req-fast")
+
+		if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
+			t.Fatalf("resolution.Committed = %#v, want r1 committed via the identity fast path", resolution.Committed)
+		}
+		decisions := tracer.eventsForStage("decision")
+		if len(decisions) != 1 || decisions[0].CommitGate != "identity_fast_path" {
+			t.Fatalf("decision events = %#v, want exactly 1 with CommitGate=%q", decisions, "identity_fast_path")
+		}
+	})
+	t.Run("lone_floor", func(t *testing.T) {
+		t.Parallel()
+		// An ordinary, non-identity lexical candidate well above LoneFloor
+		// -- no identity mechanism anywhere in the pool, so this is purely
+		// LoneFloor's own commit, unaffected by anything CHAOS-3884/3891
+		// touched.
+		lone := noiseCandidate("ci1", 0.9)
+		tracer := &captureResolutionTracer{}
+
+		resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(lone), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-lone")
+
+		if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "ci1" {
+			t.Fatalf("resolution.Committed = %#v, want ci1 committed via LoneFloor", resolution.Committed)
+		}
+		decisions := tracer.eventsForStage("decision")
+		if len(decisions) != 1 || decisions[0].CommitGate != "lone_floor" {
+			t.Fatalf("decision events = %#v, want exactly 1 with CommitGate=%q", decisions, "lone_floor")
+		}
+	})
+}
+
+// TestResolveFromMergedCandidatesWithGate_TracerDoesNotFlagOrdinaryAmbiguity
+// is the negative control TestResolveFromMergedCandidatesWithGate_TracerObservesTruncationBlockingLoneFloor
+// above needs: an ordinary top-of-two ambiguous outcome with NO identity
+// mechanism anywhere in the pool must report IdentityTrustGateBlocked=false
+// -- proving the signal above is really identityTrustUnproven's doing, not
+// something that fires for every decision regardless of cause.
+func TestResolveFromMergedCandidatesWithGate_TracerDoesNotFlagOrdinaryAmbiguity(t *testing.T) {
+	t.Parallel()
+	top := noiseCandidate("ci1", 0.9)
+	second := noiseCandidate("ci2", 0.85) // gap < TopGap: ordinary ambiguity, no identity mechanism involved
+	tracer := &captureResolutionTracer{}
+
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(top, second), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-2")
+
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want nothing committed (gap below TopGap)", resolution.Committed)
+	}
+	decisions := tracer.eventsForStage("decision")
+	if len(decisions) != 1 || decisions[0].Outcome != "ambiguous" {
+		t.Fatalf("decision events = %#v, want exactly 1 ambiguous outcome", decisions)
+	}
+	if decisions[0].IdentityTrustGateBlocked {
+		t.Fatal("decision event IdentityTrustGateBlocked = true, want false -- ordinary ambiguity unrelated to identity trust must not be flagged")
+	}
+}
+
 // TestResolveFromMergedCandidatesWithGate_IdentityCollisionBlocksLoneFloor
 // is spot-check item 1's own core regression proof: WITHOUT the
 // identityCollision guard on the LoneFloor case, a colliding candidate that

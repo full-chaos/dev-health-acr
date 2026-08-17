@@ -233,6 +233,27 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			if err != nil {
 				return nil, false, safeDependencyError("read identity universe", err)
 			}
+			// identity_universe trace event (chris ruling, 2026-08-17,
+			// "turn the silent truncation into a counted, visible event"):
+			// the RAW devhealthsource.IdentityUniverse completeness signal,
+			// emitted HERE because this is the one place it exists as a
+			// genuine local -- graphMissing (computed further below) has not
+			// folded into it yet, and resolve.go/resolution.go never see
+			// this raw value at all, only the folded aliasIdentityComplete.
+			// complete==false means fetchIdentityKind hit
+			// identityUniverseRowBudget on at least one kind for THIS call
+			// -- previously silent (the fast path's own aliasIdentityComplete
+			// gate absorbed it without ever surfacing which of "source
+			// truncated" or "graph missing" was the actual cause). request
+			// (the enclosing ResolveSubjects call's own parameter) is
+			// captured by this closure, so RequestID correlates exactly like
+			// every other stage's event.
+			if a.config.ResolutionTracer != nil {
+				a.config.ResolutionTracer.Trace(graphrank.ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "identity_universe",
+					IdentityUniverseComplete: complete,
+				})
+			}
 			matchesByTerm := graphrank.MatchIdentityRows(rows, terms)
 			if len(matchesByTerm) == 0 {
 				return nil, complete, nil

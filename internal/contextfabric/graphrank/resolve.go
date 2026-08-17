@@ -293,7 +293,7 @@ type ResolutionTraceEvent struct {
 	// "request.RequestID exists").
 	RequestID string
 	// Stage is a closed vocabulary: "search", "alias_lookup",
-	// "corroboration", "decision", "identity_gate".
+	// "corroboration", "decision", "identity_gate", "identity_universe".
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -327,6 +327,57 @@ type ResolutionTraceEvent struct {
 	// committed/considered candidate (empty for a no-candidate outcome).
 	Outcome          string
 	WinningMechanism string
+	// CommitGate (decision stage, Outcome=="committed" only; reviewer-3884
+	// design review, 2026-08-17): a closed vocabulary naming WHICH commit
+	// path actually fired -- "exact_index" | "identity_fast_path" |
+	// "lone_floor" | "top_of_two" | "vector_margin_rescue" -- empty for any
+	// non-committed outcome. WinningMechanism alone cannot answer "which
+	// GATE committed this": a MatchAlias candidate can commit via
+	// identity_fast_path OR lone_floor, both reporting the identical
+	// mechanism string, and that is exactly the distinction that makes the
+	// identityTrustUnproven-affected population (candidates the completeness
+	// fix blocks at lone_floor/top_of_two -- see IdentityTrustGateBlocked)
+	// countable from traces instead of merely inferred.
+	CommitGate string
+	// IdentityTrustGateBlocked (decision stage; codex xhigh review finding,
+	// CHAOS-3891, 2026-08-17; reviewer-3884 design sign-off same day): true
+	// when the top-ranked commit-eligible candidate was refused LoneFloor/
+	// TopFloor specifically because identityTrustUnproven fired for it
+	// (chaos3884_identity.go) -- an identity-trust bump this resolution's
+	// own aliasIdentityComplete could not vouch for as proven, so the
+	// ordinary strength gates deferred to ambiguous/clarify rather than
+	// commit on an unproven uniqueness claim. AliasLookupComplete is ALSO
+	// reused on this stage's event (same field, same meaning as on the
+	// alias_lookup-stage event -- it is the single aliasIdentityComplete
+	// value this whole resolution used) so a reader never has to
+	// reconstruct it by correlating a separate alias_lookup event: a
+	// truncation-driven non-commit is directly observable as one
+	// decision-stage event with Outcome=="ambiguous",
+	// AliasLookupComplete==false, IdentityTrustGateBlocked==true, rather
+	// than an invisible, unexplained ambiguous outcome.
+	//
+	// Evaluated only against commitIndex[0] (resolution.go) -- correct
+	// today because both the LoneFloor and TopFloor cases that consult
+	// identityTrustUnproven can only ever commit commitIndex[0] (reviewer-3884,
+	// 2026-08-17: worth flagging so a FUTURE gate that commits a different
+	// index does not silently get a stale value here while its own inline
+	// gate check stays correct -- that would read as a tracer bug, not a
+	// scope bug).
+	IdentityTrustGateBlocked bool
+	// IdentityUniverseComplete (identity_universe stage; chris ruling,
+	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
+	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
+	// aliasIdentityComplete -- true unless fetchIdentityKind hit
+	// identityUniverseRowBudget (20000) on at least one kind. This is the
+	// "turn the silent truncation into a counted, visible event" signal:
+	// an identity_universe-stage event firing at all proves the identity
+	// reader was invoked for this resolution; IdentityUniverseComplete==false
+	// is the source-table truncation itself, independent of whatever the
+	// graph-existence check (graphMissing) separately does or does not find
+	// -- the two are folded together downstream (aliasIdentityComplete) but
+	// are genuinely different failure modes, and this field is the only
+	// place the source-side one is visible on its own.
+	IdentityUniverseComplete bool
 	// FromKeyedIdentityLookup/EligibleKind/AliasMatched/ProviderMatched/
 	// GateFired (identity_gate stage ONLY -- team-lead ruling, 2026-08-17,
 	// guardrail 6): the ACTUAL confidence-gate INPUTS, emitted from WITHIN

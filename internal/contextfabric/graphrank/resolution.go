@@ -318,9 +318,18 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // SAME fast path a truncated ordinary search would, for the same reason).
 // nil/false from any caller that does not wire the identity reader --
 // identityCollision reads a nil map exactly like an empty one, and
-// aliasIdentityComplete=false disables the fast path exactly as before
-// this ticket, so every pre-CHAOS-3884 call site (ResolveFromMergedCandidates,
-// every existing test) is byte-identical.
+// aliasIdentityComplete=false disables not just the dedicated fast path
+// but also LoneFloor/TopFloor for any identity-trust candidate specifically
+// (identityTrustUnproven, chaos3884_identity.go -- codex xhigh review
+// finding, CHAOS-3891, 2026-08-17: identityCollision alone cannot see a
+// claimant an incomplete read never returned, so those strength gates
+// needed the same completeness guard the fast path already had; design
+// sign-off by reviewer-3884 the same day -- see identityTrustUnproven's own
+// doc comment for the full argument), so every pre-CHAOS-3884 call site
+// (ResolveFromMergedCandidates, every existing test) is still
+// byte-identical -- aliasIdentityComplete=false there is the SAME nil/false
+// default it always was, and identityTrustUnproven returns false
+// unconditionally for a candidate with no identity mechanism at all.
 func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
@@ -373,13 +382,48 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 
 	// Phase 3: commit decision over the FULL, untruncated ranked set.
 	committedIndex := make(map[int]bool)
+	// commitGate (reviewer-3884 design review, 2026-08-17): a closed
+	// vocabulary naming WHICH commit path actually fired --
+	// "pre_committed_exact_hint" | "exact_index" | "identity_fast_path" |
+	// "lone_floor" | "top_of_two" | "vector_margin_rescue" -- set once, at
+	// the point of commit, in every branch below (including this loop and
+	// the CHAOS-3829 rescue further down) that sets committedIndex/
+	// resolution.Committed. Empty for a non-committed outcome.
+	// WinningMechanism alone cannot answer "which GATE committed this" -- a
+	// MatchAlias candidate can commit via identity_fast_path OR lone_floor,
+	// both reporting the identical mechanism string -- and that distinction
+	// is exactly what makes the identityTrustUnproven-affected population
+	// (candidates the completeness fix blocks at lone_floor/top_of_two --
+	// see identityTrustGateBlocked below) countable from traces instead of
+	// merely inferred.
+	commitGate := ""
 	for index, candidate := range candidates {
 		if candidate.State == contextfabric.ResolutionCommitted && candidate.Confidence == 1 {
 			committedIndex[index] = true
 			resolution.Committed = append(resolution.Committed, candidate.Subject)
+			// pre_committed_exact_hint: a candidate that ARRIVED already
+			// State==Committed (ExactHint's own keyed lookup, upstream of
+			// this function entirely) -- distinct from "exact_index" below,
+			// which is THIS function's own exact-label-match tier over
+			// candidates that arrived Proposed.
+			commitGate = "pre_committed_exact_hint"
 		}
 	}
 	ambiguous := false
+	// identityTrustGateBlocked (codex xhigh review finding, 2026-08-17,
+	// team-lead-ratified "close it now"): set inside the commitIndex/
+	// identityIndex scope below, once, to whether the top-ranked
+	// commit-eligible candidate (candidates[commitIndex[0]] -- the SAME
+	// candidate both the LoneFloor and TopFloor cases evaluate,
+	// commitIndex being confidence-sorted) was refused the ordinary
+	// strength gates specifically because identityTrustUnproven fired for
+	// it, independent of whichever switch branch actually ran. Declared
+	// here (outside the if len(committedIndex)==0 block commitIndex/
+	// identityIndex are scoped to) so it survives to the decision-stage
+	// trace emission at the bottom of this function, purely for
+	// OBSERVABILITY -- it never feeds back into any commit decision
+	// itself.
+	identityTrustGateBlocked := false
 	// CHAOS-3857 sol review F1: computed ONCE, gates BOTH the
 	// confidence-threshold decision below (the two commitIndex cases in
 	// the switch) and the CHAOS-3829 margin-rescue block further down --
@@ -469,11 +513,15 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 				identityIndex = append(identityIndex, index)
 			}
 		}
+		if len(commitIndex) > 0 {
+			identityTrustGateBlocked = identityTrustUnproven(candidates[commitIndex[0]], aliasIdentityComplete)
+		}
 		switch {
 		case len(exactIndex) == 1:
 			committedIndex[exactIndex[0]] = true
 			candidates[exactIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[exactIndex[0]].Subject}
+			commitGate = "exact_index"
 		// CHAOS-3884: the identity fast path. Sits AFTER exactIndex
 		// (Finding 1's precedence: a candidate's own canonical label is a
 		// stronger identity claim than a derived alias/provider-key handle,
@@ -489,6 +537,7 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			committedIndex[identityIndex[0]] = true
 			candidates[identityIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[identityIndex[0]].Subject}
+			commitGate = "identity_fast_path"
 		case searchTruncated:
 			// Codex round-3 review of D11/AC-3778-0: truncation is a
 			// property of the RESOLUTION, not of any one candidate's
@@ -513,10 +562,21 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// value, which is exactly why this has to be an independent,
 			// resolution-wide signal instead.
 			ambiguous = true
-		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && !identityCollision(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
+		// identityTrustUnproven applied here too (codex xhigh review finding,
+		// 2026-08-17, team-lead-ratified "close it now"): identityCollision
+		// alone cannot see a claimant an INCOMPLETE identity-universe read
+		// never returned, so a truncated-read identity-trust candidate could
+		// otherwise clear LoneFloor on an unproven uniqueness claim -- see
+		// identityTrustUnproven's own doc comment (chaos3884_identity.go)
+		// for the full gap this closes. A candidate this ticket never
+		// touches (no identity mechanism, or confidence==1 via exact-label
+		// match instead) is entirely unaffected, mirroring identityCollision's
+		// own untouched-candidate guarantee immediately to its left.
+		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && !identityCollision(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && !identityTrustUnproven(candidates[commitIndex[0]], aliasIdentityComplete) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
 			committedIndex[commitIndex[0]] = true
 			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
+			commitGate = "lone_floor"
 		case len(commitIndex) >= 2 && gateValid:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
 			// CHAOS-3884 spot-check item 1: identityCollision applied here
@@ -531,10 +591,18 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// unaffected -- identityCollision returns false for it
 			// unconditionally, so this never suppresses a legitimate
 			// ordinary lexical/vector top-of-two commit.
-			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && !identityCollision(SubjectKey(top.Subject), identity, identityTerms) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
+			//
+			// identityTrustUnproven applied here too (codex xhigh review
+			// finding, 2026-08-17, team-lead-ratified "close it now"): the
+			// SAME truncated-read gap the comment above closes for
+			// identityCollision applies to TopFloor's 1.0-vs-second gap
+			// independently of it -- see identityTrustUnproven's own doc
+			// comment (chaos3884_identity.go).
+			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && !identityCollision(SubjectKey(top.Subject), identity, identityTerms) && !identityTrustUnproven(top, aliasIdentityComplete) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
 				committedIndex[commitIndex[0]] = true
 				candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
+				commitGate = "top_of_two"
 			} else {
 				ambiguous = true
 			}
@@ -754,11 +822,28 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// candidate with no identity match terms at all is unaffected
 			// (identityCollision returns false), so this never touches the
 			// rescue's pre-existing, unrelated population.
+			//
+			// Deliberately NOT also gated on !identityTrustUnproven(...,
+			// aliasIdentityComplete) the way LoneFloor/TopFloor are
+			// (reviewer-3884 design review, 2026-08-17, confirmed correct,
+			// not an oversight): identityCollision applies here because a
+			// KNOWN rival makes embedding proximity the wrong arbiter (the
+			// SAME G2 rationale the comment above already states) --
+			// completeness does not, because vectorMarginCommit picks its
+			// candidate on raw vector-arm similarity alone, never on
+			// Confidence, so a bump-derived 1.0 never feeds its margin in
+			// the first place, and the rescue's own ratified geometry
+			// already tolerates an incomplete population (it may fire even
+			// when searchTruncated -- itself a form of incompleteness -- is
+			// the reason ambiguous is true). Adding the conjunct here would
+			// narrow a separately-ratified path on a premise it never
+			// rested on.
 			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok && !identityCollision(SubjectKey(candidates[index].Subject), identity, identityTerms) {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
 				ambiguous = false
+				commitGate = "vector_margin_rescue"
 			}
 		}
 	}
@@ -842,12 +927,19 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// here (team-lead ruling, 2026-08-17, guardrail 6).
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Subject: resolution.Committed[0],
-				Outcome: "committed", WinningMechanism: winningMechanism,
+				Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: commitGate,
+				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 			})
 		case len(resolution.Committed) == 0 && ambiguous:
-			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "ambiguous"})
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "decision", Outcome: "ambiguous",
+				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
+			})
 		case len(resolution.Committed) == 0:
-			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit"})
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "decision", Outcome: "no_commit",
+				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
+			})
 		}
 	}
 	return resolution

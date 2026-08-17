@@ -48,7 +48,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		t.logger.DebugContext(ctx, "context fabric resolution trace: decision",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
-			"outcome", event.Outcome, "winning_mechanism", event.WinningMechanism)
+			"outcome", event.Outcome, "winning_mechanism", event.WinningMechanism, "commit_gate", event.CommitGate,
+			"alias_identity_complete", event.AliasLookupComplete, "identity_trust_gate_blocked", event.IdentityTrustGateBlocked)
+	case "identity_universe":
+		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"complete", event.IdentityUniverseComplete)
 	case "identity_gate":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity gate",
 			"request_id", event.RequestID, "stage", event.Stage,

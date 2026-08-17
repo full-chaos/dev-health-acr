@@ -137,3 +137,71 @@ func identityCollision(key string, claimants identityClaimants, terms identityMa
 	}
 	return false
 }
+
+// identityTrustUnproven reports whether candidate's confidence==1 rests
+// entirely on NodeCandidate's identity-trust bump (CHAOS-3884) and this
+// resolution's own identity read cannot vouch that bump as proven: the
+// SAME confidence==1/eligible-kind/MatchAlias-or-MatchProviderKey test
+// resolution.go's identityIndex membership already applies, plus one more
+// condition, !aliasIdentityComplete.
+//
+// Codex xhigh design-review (2026-08-17) finding, CHAOS-3891: aliasIdentityComplete=
+// false means EITHER the identity-universe table read was truncated
+// (devhealthsource.fetchIdentityKind's identityUniverseRowBudget) OR at
+// least one matched claimant this call found failed its graph existence
+// check (falkorgraph/reader.go's graphMissing sweep) -- either way, a
+// competing claimant may exist that this resolution never even SAW, so
+// identityCollision (which can only ever compare against claimants that
+// DID make it into this resolution) cannot detect the collision a complete
+// read would have. Before this fix, only resolution.go's dedicated
+// identity fast path (the aliasIdentityComplete&&... case) required
+// completeness -- the ordinary LoneFloor/TopFloor strength gates checked
+// identityCollision but not aliasIdentityComplete, so an identity-trust
+// candidate from an INCOMPLETE read could still auto-commit through them
+// on an unproven uniqueness claim. This closes that gap at both sites
+// without touching the fast path's own (already-correct) gating.
+//
+// CHRIS RULING (2026-08-17): KEEP -- landed ahead of an in-flight "defer,
+// instrument first" message that crossed in transit; the regression tests
+// this predicate is pinned by (chaos3884_identity_resolution_test.go) prove
+// the hole is real (the pre-fix gate wrongly commits, hand-verified both
+// ways), so shipping the fix together with the tracer's observability is
+// strictly better than deferring either alone. reviewer-3884 (the Option-C
+// design authority) independently signed off 2026-08-17: this predicate's
+// scope is correct because the confidence==1 it gates is NOT evidence
+// strength -- it is manufactured by the eligibility-gated identity bump,
+// and that bump's warrant is a complete identity read; LoneFloor/TopFloor
+// read the 1.0 AS strength, so without completeness both gates arbitrate
+// on a number whose justification was never established. Adding this
+// conjunct restores the precondition the bump silently assumed; it is not
+// an extra restriction. A candidate carrying no identity mechanism, or one
+// whose confidence==1 came from an exact label match (CHAOS-3810's
+// override, which rests on an independent, already-complete guarantee --
+// MEDIUM-D) rather than identity trust, returns false here unconditionally,
+// exactly like identityCollision's own "untouched candidate" guarantee.
+//
+// A candidate this returns true for is NOT discarded -- it simply cannot
+// win the ordinary strength gates on the strength of an unproven identity
+// claim (falls through to ambiguous/clarify, per reviewer-3884's citation
+// of the design doc's §16/§9.1 "degraded proof commits no candidate but is
+// never silently removed" rule); it may still commit on a later call once
+// aliasIdentityComplete is true again, or via whatever ordinary
+// lexical/vector evidence it independently carries.
+//
+// Deliberately NOT applied to the CHAOS-3829 vector-margin rescue
+// (resolution.go, vectorMarginCommit's own call site): that rescue picks
+// on raw vector-arm similarity, never on Confidence, so a bump-derived 1.0
+// never feeds its margin, and the rescue's own ratified geometry already
+// tolerates an incomplete population (it may fire even when searchTruncated
+// is the reason ambiguous is true) -- adding this conjunct there would
+// narrow a separately-ratified path on a premise that path never rested on
+// (reviewer-3884, 2026-08-17).
+func identityTrustUnproven(candidate contextfabric.SubjectCandidate, aliasIdentityComplete bool) bool {
+	if aliasIdentityComplete {
+		return false
+	}
+	if candidate.Confidence != 1 || !isAliasIdentityEligibleKind(candidate.Subject.Kind) {
+		return false
+	}
+	return HasMechanism(candidate.MatchMechanisms, contextfabric.MatchAlias) || HasMechanism(candidate.MatchMechanisms, contextfabric.MatchProviderKey)
+}
