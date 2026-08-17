@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -32,6 +33,13 @@ type Options struct {
 	// the generative stage while measuring the identical pipeline), never
 	// referenced by any production composition path.
 	ModelRuntimeOverride contextfabric.ModelRuntime
+	// RawSignalObserver (CHAOS-3858, measurement-only), when set, is
+	// threaded onto the graph adapter's Config.RawSignalObserver -- see
+	// that field's own doc comment and graphrank.ResolveDeps.RawSignalObserver
+	// for the full scope (post-authorization only, never a production
+	// consumer). nil (the zero value) for every real caller, same
+	// discipline as ModelRuntimeOverride above.
+	RawSignalObserver graphrank.RawSignalObserver
 }
 
 type Runtime struct {

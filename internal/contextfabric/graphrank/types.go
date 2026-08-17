@@ -83,6 +83,20 @@ type CandidateNode struct {
 	// carries the value that argument depends on; Relevance keeps
 	// protecting every other, per-candidate-trust use unchanged.
 	VectorSimilarity *float64
+	// LexicalMatchedTerms/LexicalTermCount (CHAOS-3858 measurement-only
+	// capture) are the RAW (matchedTermCount, termCount) pair a
+	// MatchLexical-mechanism adapter's own coverage computation used BEFORE
+	// fulltextRelevanceFromMatchedTerms remaps their ratio into
+	// [fulltextRelevanceFloor, fulltextRelevanceCeiling]. Same discipline as
+	// VectorSimilarity: nil for every other mechanism, nil whenever the
+	// adapter did not compute the pair (e.g. its own search call
+	// truncated, so no per-candidate coverage was ever computed -- see
+	// falkorgraph's runFulltextQuery), and NEVER fed into ResultConfidence
+	// or any other confidence-shaped consumer. Read only by an optional
+	// RawSignalObserver (resolve.go) -- production leaves that nil, so
+	// these two fields cost nothing beyond being set.
+	LexicalMatchedTerms *int
+	LexicalTermCount    *int
 }
 
 // CandidateEdge is the same idea for a relationship/edge result.

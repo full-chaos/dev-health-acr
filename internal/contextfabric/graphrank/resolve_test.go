@@ -54,6 +54,9 @@ type fakeGraphBackend struct {
 	// every pre-existing test in this file -- which never sets it -- gets
 	// the carve-out disabled, exactly the pre-ticket wiring.
 	vectorMarginCommitThreshold float64
+	// rawSignalObserver is CHAOS-3858's measurement-only capture (nil
+	// default, so every pre-existing test is unaffected).
+	rawSignalObserver RawSignalObserver
 }
 
 func (f *fakeGraphBackend) deps() ResolveDeps {
@@ -85,6 +88,7 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 			f.traversalDegraded = append(f.traversalDegraded, count)
 		},
 		VectorMarginCommitThreshold: f.vectorMarginCommitThreshold,
+		RawSignalObserver:           f.rawSignalObserver,
 	}
 	if f.enableSearchQuestion {
 		deps.SearchQuestion = func(ctx context.Context, question string, limit int) ([]CandidateNode, bool, bool, error) {

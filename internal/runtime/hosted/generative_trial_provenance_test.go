@@ -237,7 +237,13 @@ func TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText(t *testing.T) {
 	// below exists as the STRUCTURAL guarantee, walking the TYPE via
 	// reflection rather than one instance's marshaled output -- the two are
 	// complementary, not redundant (luna review finding, CHAOS-3880).
-	allowedTags := map[string]bool{"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true}
+	allowedTags := map[string]bool{
+		"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true,
+		// CHAOS-3858 additive/optional raw-signal fields -- see
+		// trialCandidateMatchProvenance's own doc comment. Raw
+		// vector-similarity/matched-term-coverage numbers, never identity.
+		"raw_vector_similarity": true, "raw_lexical_matched_terms": true, "raw_lexical_term_count": true,
+	}
 	full := trialCandidateMatchProvenanceAllFields()
 	fullBlob, err := json.Marshal(full)
 	if err != nil {
@@ -293,7 +299,10 @@ func walkJSONObjectKeys(t *testing.T, raw json.RawMessage, seen map[string]bool)
 // nested struct/slice/pointer field, so a future field that is itself a
 // struct is caught too, not only a flat top-level scalar.
 func TestTrialCandidateMatchProvenanceStructFields_onlyAllowedJSONTags(t *testing.T) {
-	allowed := map[string]bool{"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true}
+	allowed := map[string]bool{
+		"kind": true, "canonical_id": true, "mechanisms": true, "confidence": true,
+		"raw_vector_similarity": true, "raw_lexical_matched_terms": true, "raw_lexical_term_count": true,
+	}
 	seen := map[string]bool{}
 	walkStructJSONTags(reflect.TypeOf(trialCandidateMatchProvenance{}), seen)
 	if len(seen) == 0 {
@@ -334,11 +343,19 @@ func walkStructJSONTags(typ reflect.Type, seen map[string]bool) {
 // JSON tag the type can ever emit (a zero-valued field would be dropped by
 // omitempty and silently escape the check).
 func trialCandidateMatchProvenanceAllFields() trialCandidateMatchProvenance {
+	sim, matched, termCount := 0.61, 2, 4
 	return trialCandidateMatchProvenance{
 		Kind:        "project",
 		CanonicalID: "project_x",
 		Mechanisms:  []string{"vector"},
 		Confidence:  0.5,
+		// CHAOS-3858: populated here too, so the INSTANCE-level canary
+		// (TestCandidateMatchProvenanceNeverCarriesLabelsOrSearchText)
+		// actually exercises these fields on the wire, not just the
+		// structural one.
+		RawVectorSimilarity:    &sim,
+		RawLexicalMatchedTerms: &matched,
+		RawLexicalTermCount:    &termCount,
 	}
 }
 
