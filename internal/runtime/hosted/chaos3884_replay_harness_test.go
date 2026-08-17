@@ -77,7 +77,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedcache"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -247,8 +246,18 @@ func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Clien
 // comment. Skipped (like TestGenerativeTrialCorpus) when the corpus is not
 // supplied.
 //
+// The interpreter is ALWAYS fileExchangeRuntime (arm 5's own transport,
+// file_exchange_runtime_test.go) -- ACR_TEST_TRIAL_EXCHANGE_DIR is
+// required, with no metered-API fallback, so this harness cannot
+// accidentally run against a billed key. A responder (run-responder-codex.sh
+// on subscription auth) must already be watching that directory before this
+// test starts publishing requests -- mirror run-arm5.sh's lifecycle (start
+// the responder, run this test, signal DONE, wait for the responder to
+// exit), not a bare `go test` invocation.
+//
 //	ACR_TEST_TRIAL_CORPUS=<path> ACR_TEST_TRIAL_ORG=<org> \
-//	ACR_TEST_REPLAY_OUT=<path> go test ./internal/runtime/hosted \
+//	ACR_TEST_REPLAY_OUT=<path> ACR_TEST_TRIAL_EXCHANGE_DIR=<dir> \
+//	ACR_TEST_TRIAL_ARM=replay go test ./internal/runtime/hosted \
 //	  -run TestChaos3884ReplayHarness -v -timeout 2h
 func TestChaos3884ReplayHarness(t *testing.T) {
 	corpusPath := os.Getenv("ACR_TEST_TRIAL_CORPUS")
@@ -259,9 +268,26 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	outPath := requireEnv(t, "ACR_TEST_REPLAY_OUT")
 	runStartedAt := time.Now().UTC().Format(time.RFC3339)
 
+	// Subscription-only, no metered key, ever (standing rule for this
+	// epic): the interpreter is ALWAYS the SAME file-exchange transport
+	// TestGenerativeTrialCorpus's arm 5 uses (fileExchangeRuntime,
+	// file_exchange_runtime_test.go), never modelprovider.New's direct API
+	// path. ACR_TEST_TRIAL_EXCHANGE_DIR is required, not optional -- there
+	// is no metered fallback to accidentally fall into.
+	exchangeDir := requireEnv(t, "ACR_TEST_TRIAL_EXCHANGE_DIR")
+	exchangeTimeout := 10 * time.Minute
+	if raw := os.Getenv("ACR_TEST_TRIAL_EXCHANGE_TIMEOUT"); raw != "" {
+		parsed, perr := time.ParseDuration(raw)
+		if perr != nil {
+			t.Fatalf("ACR_TEST_TRIAL_EXCHANGE_TIMEOUT: %v", perr)
+		}
+		exchangeTimeout = parsed
+	}
+	arm := os.Getenv("ACR_TEST_TRIAL_ARM")
+
 	corpus, corpusHash := loadTrialCorpus(t, corpusPath)
 	source := requireGitSourceIdentity(t)
-	wireProductionEnv(t, false)
+	wireProductionEnv(t, true) // modelOverridden=true: the exchange transport never reads ACR_TEST_TRIAL_MODEL*
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -293,18 +319,12 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		t.Fatalf("build wired graph reader: %v", err)
 	}
 
-	if !modelprovider.Configured(os.LookupEnv) {
-		t.Fatal("no model provider configured; ACR_TEST_TRIAL_MODEL/_API_KEY are required (see wireProductionEnv)")
-	}
-	modelConfig, err := modelprovider.ConfigFromEnv(os.LookupEnv)
+	exchangeRuntime, err := newFileExchangeRuntime(exchangeDir, arm, exchangeTimeout)
 	if err != nil {
-		t.Fatalf("load model configuration: %v", err)
+		t.Fatalf("create file-exchange runtime: %v", err)
 	}
-	modelRuntime, err := modelprovider.New(ctx, modelConfig)
-	if err != nil {
-		t.Fatalf("initialize model runtime: %v", err)
-	}
-	interpreter := contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime}
+	interpreter := contextfabric.RuntimeQuestionInterpreter{Runtime: exchangeRuntime}
+	caseTimeout := 2*exchangeTimeout + 30*time.Second
 
 	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
 
@@ -342,7 +362,7 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 			Consumer: contractsv1.ContextFabricConsumerInfo{Name: "chaos-3884-replay", Version: "0.1.0", Surface: "trial"},
 		}
 
-		callCtx, cancelCase := context.WithTimeout(ctx, 240*time.Second)
+		callCtx, cancelCase := context.WithTimeout(ctx, caseTimeout)
 		interpreted, interpretErr := interpreter.Interpret(callCtx, principal, request)
 		var outcome replayCaseOutcome
 		outcome.Index = i
