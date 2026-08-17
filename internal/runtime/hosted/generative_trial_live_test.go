@@ -106,36 +106,7 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 
 	corpus, corpusHash := loadTrialCorpus(t, corpusPath)
 	source := requireGitSourceIdentity(t)
-	// indices is the ordered set of corpus positions this run processes.
-	// ACR_TEST_TRIAL_INDICES (comma-separated, e.g. "27,28,29") selects an
-	// EXACT subset -- for targeted reclassification reruns, so a rerun does
-	// not have to pay for the other 40+ already-known cases. Otherwise
-	// ACR_TEST_TRIAL_LIMIT (a prefix count) or the full corpus applies, as
-	// before.
-	var indices []int
-	if raw := os.Getenv("ACR_TEST_TRIAL_INDICES"); raw != "" {
-		for _, part := range strings.Split(raw, ",") {
-			n, err := strconv.Atoi(strings.TrimSpace(part))
-			if err != nil || n < 0 || n >= len(corpus) {
-				t.Fatalf("ACR_TEST_TRIAL_INDICES: invalid index %q (corpus has %d cases)", part, len(corpus))
-			}
-			indices = append(indices, n)
-		}
-	} else {
-		limit := len(corpus)
-		if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
-			n, err := strconv.Atoi(raw)
-			if err != nil || n <= 0 {
-				t.Fatalf("ACR_TEST_TRIAL_LIMIT must be a positive integer, got %q", raw)
-			}
-			if n < limit {
-				limit = n
-			}
-		}
-		for i := 0; i < limit; i++ {
-			indices = append(indices, i)
-		}
-	}
+	indices, targetedIndices := resolveTrialIndices(t, len(corpus))
 
 	// ACR_TEST_TRIAL_EXCHANGE_DIR (arm 4, diagnostic): swaps ONLY the
 	// generative transport for a file-exchange ModelRuntime an
@@ -210,7 +181,7 @@ func TestGenerativeTrialCorpus(t *testing.T) {
 	// systematic-failure/sanity-anchor controls below are calibrated
 	// against a full run starting at position 0 and would misfire on a
 	// 3-6 case targeted subset, so they are skipped in that mode.
-	targeted := os.Getenv("ACR_TEST_TRIAL_INDICES") != ""
+	targeted := targetedIndices
 
 	// controlsContinue (CHAOS-3858 scorecard mode) opts a run OUT of the
 	// control-violation abort below: it RECORDS the violation (same
@@ -433,6 +404,43 @@ func loadTrialCorpus(t *testing.T, path string) ([]trialCase, string) {
 		t.Fatalf("trial corpus has %d cases; CHAOS-3742 requires at least 50", len(corpus))
 	}
 	return corpus, hash
+}
+
+// resolveTrialIndices (CHAOS-3853: extracted out of TestGenerativeTrialCorpus
+// so the frontier-baseline-arm harness can share the exact same
+// ACR_TEST_TRIAL_INDICES/ACR_TEST_TRIAL_LIMIT semantics rather than
+// reimplementing them) returns the ordered set of corpus positions a run
+// processes, and whether this was a targeted (ACR_TEST_TRIAL_INDICES) run.
+// ACR_TEST_TRIAL_INDICES (comma-separated, e.g. "27,28,29") selects an EXACT
+// subset -- for targeted reclassification reruns, so a rerun does not have to
+// pay for the other already-known cases. Otherwise ACR_TEST_TRIAL_LIMIT (a
+// prefix count) or the full corpus applies.
+func resolveTrialIndices(t *testing.T, corpusLen int) (indices []int, targeted bool) {
+	t.Helper()
+	if raw := os.Getenv("ACR_TEST_TRIAL_INDICES"); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || n < 0 || n >= corpusLen {
+				t.Fatalf("ACR_TEST_TRIAL_INDICES: invalid index %q (corpus has %d cases)", part, corpusLen)
+			}
+			indices = append(indices, n)
+		}
+		return indices, true
+	}
+	limit := corpusLen
+	if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			t.Fatalf("ACR_TEST_TRIAL_LIMIT must be a positive integer, got %q", raw)
+		}
+		if n < limit {
+			limit = n
+		}
+	}
+	for i := 0; i < limit; i++ {
+		indices = append(indices, i)
+	}
+	return indices, false
 }
 
 // wireProductionEnv maps this harness's dedicated ACR_TEST_TRIAL_* inputs
@@ -978,6 +986,55 @@ type caseOutcome struct {
 	// "not recorded", never "empty pool" -- CandidateCount already carries
 	// that. See candidatePoolMechanismComposition's own doc comment.
 	CandidatePoolMechanisms map[string]int `json:"candidate_pool_mechanisms,omitempty"`
+	// ToolCallCount/CostUSDEstimate/WriteVerbAttempted (CHAOS-3853): added
+	// for the frontier-baseline-arm transport only -- arms 1-4 never set
+	// these (zero value / omitempty), so the existing gen-trial-*.json
+	// shape and the scoring functions that read this struct are unchanged
+	// for them. See trialProvenance.CostMethodology for what
+	// CostUSDEstimate actually measures (subscription billing means this is
+	// an ESTIMATE, not a metered figure).
+	ToolCallCount   int     `json:"tool_call_count,omitempty"`
+	CostUSDEstimate float64 `json:"cost_usd_estimate,omitempty"`
+	// WriteVerbAttempted (CHAOS-3853 team-lead ruling #4): true if the
+	// frontier agent's own transcript shows it attempted a mutating
+	// command through gh/linear-cli/clickhouse-client, REGARDLESS of
+	// whether the read-only wrapper blocked it. An attempt disqualifies
+	// the case's outcome from "correct" even if the eventual commit-or-
+	// abstain answer happened to be right -- the read-only contract itself
+	// is part of what this arm is being scored on.
+	WriteVerbAttempted bool `json:"write_verb_attempted,omitempty"`
+	// CommittedKind/CommittedID (CHAOS-3853, team-lead-requested id-space
+	// audit): the ACTUAL committed subject kind+canonical-id, frontier arm
+	// only -- arms 1-4 never set these. These are coarse IDENTIFIERS (e.g.
+	// "repository", "owner/repo" or "repository:<uuid>"), not corpus
+	// question text -- the withholding discipline above is about the
+	// question, not resolved-answer identifiers. Exists so a wrong_commit
+	// can be audited (genuinely-different-subject vs an id-format/aliasing
+	// mismatch against committedMatchesTrial's exact-string-equality rule)
+	// without a rerun.
+	CommittedKind string `json:"committed_kind,omitempty"`
+	CommittedID   string `json:"committed_id,omitempty"`
+	// ExpectID mirrors ExpectKind's existing precedent (a ground-truth
+	// ANNOTATION, not corpus question text) -- frontier harness only, set
+	// alongside CommittedID for the same audit. Arms 1-4 (runTrialCase)
+	// deliberately left unchanged; this is scoped to the CHAOS-3853 ask.
+	ExpectID string `json:"expect_id,omitempty"`
+	// AbstainReason (CHAOS-3853, frontier arm only): the model's own
+	// declared reason for a no-commit outcome -- "no_match" (nothing
+	// plausible found) vs "ambiguous" (multiple plausible subjects, could
+	// not separate). Both still tally as "no_commit" in tallyOutcome
+	// (team-lead ruling); this field records the distinction the existing
+	// outcome-class bucketing collapses.
+	AbstainReason string `json:"abstain_reason,omitempty"`
+	// ClickHouse*Tables (CHAOS-3853, frontier arm only, chris's report-shaping
+	// ask): raw-event vs Dev-Health-COMPUTED-artifact ClickHouse tables the
+	// agent actually queried for this case. Answers "did the generic agent
+	// free-ride on Dev Health's own precomputed layer" -- an answer built
+	// from computed_artifact tables is the computation layer winning
+	// through a different door, not the baseline hypothesis being tested.
+	ClickHouseRawEventTables         []string `json:"clickhouse_raw_event_tables,omitempty"`
+	ClickHouseComputedArtifactTables []string `json:"clickhouse_computed_artifact_tables,omitempty"`
+	ClickHouseUnknownTables          []string `json:"clickhouse_unknown_tables,omitempty"`
 }
 
 func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, caseTimeout time.Duration, rawSignals *trialRawSignalCollector) caseOutcome {
@@ -1180,6 +1237,18 @@ type trialProvenance struct {
 	// applied for this knob", exactly as it does at the env-var layer
 	// itself.
 	CommitGate trialCommitGateProvenance `json:"commit_gate"`
+	// CostMethodology/SandboxMode (CHAOS-3853): empty for arms 1-4. The
+	// frontier-baseline-arm runs through the codex CLI's subscription
+	// billing (team-lead ruling: "harnesses not API keys" -- see
+	// .remember/feedback_harnesses_not_api_keys.md), which is NOT metered
+	// per-call the way the OpenAI arms' receipt rows are -- CostUSDEstimate
+	// on each case is therefore a rough estimate from token-usage events in
+	// the codex transcript times a published rate card, not an authoritative
+	// bill. This field is the explicit asterisk chris accepted in place of
+	// metered cost accounting -- a reader must not treat cost_usd_estimate
+	// as comparable in kind to a real invoice line.
+	CostMethodology string `json:"cost_methodology,omitempty"`
+	SandboxMode     string `json:"sandbox_mode,omitempty"`
 }
 
 // trialCommitGateProvenance is the CHAOS-3857 sweep-cell config a report
@@ -1216,6 +1285,57 @@ type trialReport struct {
 	ControlViolationAbort bool           `json:"control_violation_abort"`
 	SuspectedWiringIssue  string         `json:"suspected_wiring_issue,omitempty"`
 	Cases                 []caseOutcome  `json:"cases"`
+	// ClickHouseUsageSummary (CHAOS-3853, frontier arm only): run-level
+	// rollup of caseOutcome.ClickHouse*Tables -- see that field's doc
+	// comment for why this split matters. nil for arms 1-4.
+	ClickHouseUsageSummary *clickHouseUsageSummary `json:"clickhouse_usage_summary,omitempty"`
+}
+
+// clickHouseUsageSummary aggregates the per-case raw-vs-computed
+// ClickHouse table split across an entire run.
+type clickHouseUsageSummary struct {
+	CasesUsingAnyClickHouse        int      `json:"cases_using_any_clickhouse"`
+	CasesUsingComputedArtifact     int      `json:"cases_using_computed_artifact"`
+	CasesUsingOnlyRawEvent         int      `json:"cases_using_only_raw_event"`
+	CasesUsingNoClickHouse         int      `json:"cases_using_no_clickhouse"`
+	DistinctRawEventTables         []string `json:"distinct_raw_event_tables,omitempty"`
+	DistinctComputedArtifactTables []string `json:"distinct_computed_artifact_tables,omitempty"`
+	DistinctUnknownTables          []string `json:"distinct_unknown_tables,omitempty"`
+}
+
+// summarizeClickHouseUsage builds the run-level rollup from every case's
+// already-computed per-case table lists -- pure aggregation, no re-parsing.
+func summarizeClickHouseUsage(cases []caseOutcome) *clickHouseUsageSummary {
+	s := &clickHouseUsageSummary{}
+	rawSeen, computedSeen, unknownSeen := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, c := range cases {
+		usedRaw := len(c.ClickHouseRawEventTables) > 0
+		usedComputed := len(c.ClickHouseComputedArtifactTables) > 0
+		usedUnknown := len(c.ClickHouseUnknownTables) > 0
+		if usedRaw || usedComputed || usedUnknown {
+			s.CasesUsingAnyClickHouse++
+		} else {
+			s.CasesUsingNoClickHouse++
+		}
+		if usedComputed {
+			s.CasesUsingComputedArtifact++
+		} else if usedRaw {
+			s.CasesUsingOnlyRawEvent++
+		}
+		for _, t := range c.ClickHouseRawEventTables {
+			rawSeen[t] = true
+		}
+		for _, t := range c.ClickHouseComputedArtifactTables {
+			computedSeen[t] = true
+		}
+		for _, t := range c.ClickHouseUnknownTables {
+			unknownSeen[t] = true
+		}
+	}
+	s.DistinctRawEventTables = sortedKeys(rawSeen)
+	s.DistinctComputedArtifactTables = sortedKeys(computedSeen)
+	s.DistinctUnknownTables = sortedKeys(unknownSeen)
+	return s
 }
 
 func tallyOutcome(report *trialReport, outcome caseOutcome) {
