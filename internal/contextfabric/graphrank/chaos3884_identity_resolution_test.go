@@ -223,6 +223,50 @@ func TestResolveSubjects_AliasLookupWiredEndToEnd(t *testing.T) {
 	}
 }
 
+// TestResolveSubjects_AliasLookupCommitsViaMatchAliasWhenOrdinarySearchMisses
+// closes the direct-assertion gap TestResolveSubjects_AliasLookupWiredEndToEnd
+// leaves structural (team-lead review, 2026-08-17, coverage question B): a
+// present-axis (testInterpreted's TimeContext.Axis) resolution where
+// backend.searchResults has NO entry for the term at all -- ordinary
+// exact/lexical/vector retrieval structurally cannot produce a candidate,
+// since Search(term) returns nothing -- and the committed candidate's OWN
+// MatchMechanisms is asserted DIRECTLY (not inferred) to contain MatchAlias
+// and NOT MatchExact. The term ("dev-health-acr") also does not equal the
+// subject's own label ("owner/dev-health-acr"), so even if ordinary search
+// had returned this node some other way, matched (exact) would still be
+// false -- this is the alias-named, non-canonical-term shape the corpus
+// coverage question (B) asks whether any real case exercises.
+func TestResolveSubjects_AliasLookupCommitsViaMatchAliasWhenOrdinarySearchMisses(t *testing.T) {
+	t.Parallel()
+	repoNode := aliasCandidateNode(contextfabric.SubjectRepository, "r1", "owner/dev-health-acr", -1, []string{"dev-health-acr"}, nil, true)
+	backend := &fakeGraphBackend{
+		enableAliasLookup:    true,
+		aliasLookupClaimants: map[string][]CandidateNode{"dev-health-acr": {repoNode}},
+		aliasLookupComplete:  true,
+	}
+	interpreted := testInterpreted("dev-health-acr")
+	if interpreted.TimeContext.Axis != contextfabric.TemporalCurrent {
+		t.Fatalf("testInterpreted's own Axis = %v, want TemporalCurrent -- this test's whole claim depends on being present-axis", interpreted.TimeContext.Axis)
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), interpreted, backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want exactly one -- ordinary search returned nothing for this term, so AliasLookup must be the only source", resolution.Candidates)
+	}
+	mechanisms := resolution.Candidates[0].MatchMechanisms
+	if !HasMechanism(mechanisms, contextfabric.MatchAlias) {
+		t.Fatalf("mechanisms = %v, want MatchAlias present", mechanisms)
+	}
+	if HasMechanism(mechanisms, contextfabric.MatchExact) {
+		t.Fatalf("mechanisms = %v, want MatchExact ABSENT -- term %q does not equal label %q", mechanisms, "dev-health-acr", "owner/dev-health-acr")
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
+		t.Fatalf("resolution.Committed = %#v, want r1 committed via the MatchAlias mechanism asserted above", resolution.Committed)
+	}
+}
+
 // TestResolveSubjects_AliasLookupErrorAbortsResolution mirrors Search()'s
 // own error handling: a genuine backend fault (as opposed to a
 // completeness gap) must abort the whole resolution, not silently degrade.
