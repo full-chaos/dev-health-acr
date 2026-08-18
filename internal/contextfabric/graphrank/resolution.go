@@ -375,7 +375,7 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 	if len(candidates) == 0 {
 		resolution.Candidates = candidates
 		if tracer != nil {
-			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit"})
+			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated})
 		}
 		return resolution
 	}
@@ -929,16 +929,19 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 				RequestID: requestID, Stage: "decision", Subject: resolution.Committed[0],
 				Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: commitGate,
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
+				SearchTruncated: searchTruncated,
 			})
 		case len(resolution.Committed) == 0 && ambiguous:
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Outcome: "ambiguous",
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
+				SearchTruncated: searchTruncated,
 			})
 		case len(resolution.Committed) == 0:
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Outcome: "no_commit",
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
+				SearchTruncated: searchTruncated,
 			})
 		}
 	}
