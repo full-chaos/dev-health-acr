@@ -199,6 +199,38 @@ runs regardless of `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` (an operator
 invoking it has already made that call) but still needs Postgres, ClickHouse,
 and a configured graph backend to do anything.
 
+**Build-aside-and-swap (CHAOS-3898 S2a-2), opt-in:** the description above
+is the LEGACY path — `PurgeOrganization` in place, then an incremental
+replay over subsequent ticks with the graph briefly empty. Setting
+`ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED=true` (on **both** `acr-api`
+and `acr-projector` — the two processes must agree on whether an
+organization's graph key resolves through the epoch pointer) switches
+`rebuild` to build the replacement graph ASIDE, at a freshly allocated
+epoch, while the CURRENT graph keeps serving unchanged and complete
+throughout; the new epoch only becomes visible to readers once every
+required source reports completion and a single atomic pointer flip
+happens. The old epoch is retained for a grace window (rollback insurance),
+then retired (`GRAPH.DELETE` + its own checkpoint set) once every reader's
+cache lease and enforced request deadline have provably drained. Related
+env vars (all optional; unset uses the documented default, `ConfigFromEnv`
+refuses a garbage value loudly):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED` | `false` | Master switch. `false` (both binaries) is byte-identical to pre-CHAOS-3898 behavior. |
+| `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_LEASE` | `1m` | KeyResolver's per-organization cache TTL (bounded at 10m). |
+| `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_REQUEST_DEADLINE` | `30s` | The enforced per-investigation-request deadline the drain-bound argument depends on — keep this **>=** `ACR_REQUEST_TIMEOUT` (`acr-api`'s own actual enforced request deadline; `acr-projector` cannot read it directly, being a separate process). |
+| `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_GRACE_WINDOW` | `24h` | How long a flipped-away epoch is retained before it becomes eligible for retirement. |
+
+```bash
+acr-projector rebuild --org <organization-id>    # begin (or resume) a build-aside epoch
+acr-projector rollback --org <organization-id>    # restore the PREVIOUS epoch during its grace window
+```
+
+`rollback` is refused outside the grace window (the prior epoch has already
+been retired, or none is open) — it is not a general-purpose "undo",
+only the specific insurance window a flip opens.
+
 **A rebuild is REQUIRED after deploying CHAOS-3781** (`devhealthsource`
 `ClickHouseSourceVersion` v3 → v4). Every producer now emits a valid-time
 window (`valid_from` / `valid_to`) derived from its source row's own
