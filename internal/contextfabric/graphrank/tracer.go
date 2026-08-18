@@ -64,6 +64,32 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"from_keyed_identity_lookup", event.FromKeyedIdentityLookup, "eligible_kind", event.EligibleKind,
 			"alias_matched", event.AliasMatched, "provider_matched", event.ProviderMatched,
 			"gate_fired", event.GateFired, "final_confidence", event.FinalConfidence)
+	case "evidence_round":
+		// CHAOS-3899 (design brief v5 §5/§6 Slice A): the shadow evidence
+		// round's own per-resolution outcome -- SUPPRESSED from any
+		// commit-path decision this slice, logged for measurement only.
+		// Content-safe: ShadowDIdentityHash is a SHA-256, never handle/
+		// anchor text; every other field is a count/enum/bool.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence round (shadow)",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"shadow_outcome", event.ShadowOutcome, "shadow_reason", event.ShadowReason,
+			"shadow_d_identity_hash", event.ShadowDIdentityHash,
+			"shadow_precondition_unproven", event.ShadowPreconditionUnproven,
+			"shadow_unscoped_visibility", event.ShadowUnscopedVisibility,
+			"shadow_non_censused_survivor", event.ShadowNonCensusedSurvivor,
+			"shadow_handle_grammar_bound", event.ShadowHandleGrammarBound,
+			"shadow_anchor_unique_claimant", event.ShadowAnchorUniqueClaimant,
+			"shadow_kinds_censused", event.ShadowKindsCensused)
+	case "evidence_probe":
+		// CHAOS-3899: ONE per-kind census receipt (brief §1.3(3), "Per-kind,
+		// never aggregated across kinds").
+		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence probe (shadow census)",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"census_kind", string(event.CensusKind), "census_complete", event.CensusComplete,
+			"census_count", event.CensusCount, "census_read_at_unix", event.CensusReadAtUnix,
+			"census_protocol", event.CensusProtocol, "census_closure_mismatch", event.CensusClosureMismatch,
+			"census_statement_count", event.CensusStatementCount, "census_rows_read", event.CensusRowsRead,
+			"census_handle_applied", event.CensusHandleApplied, "census_anchor_applied", event.CensusAnchorApplied)
 	default:
 		t.logger.DebugContext(ctx, "context fabric resolution trace: unknown stage",
 			"request_id", event.RequestID, "stage", event.Stage)
