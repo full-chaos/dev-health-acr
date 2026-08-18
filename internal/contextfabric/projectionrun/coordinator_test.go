@@ -198,7 +198,17 @@ func (b *fakeBackend) ApplyProjectionBatch(ctx context.Context, batch contextfab
 	if fail {
 		return contextfabric.ProjectionReceipt{}, fmt.Errorf("%w: fake backend failure", contextfabric.ErrUnavailable)
 	}
-	return contextfabric.ProjectionReceipt{BatchID: batch.BatchID, AppliedAt: time.Now().UTC(), BackendWatermark: batch.NextCursor}, nil
+	// CHAOS-3898 S2a-2: mirror the real falkorgraph adapter's per-kind
+	// applied counts, which ProjectionRun.ItemsApplied (a build-completion
+	// classifier's cumulative rows_projected input) is derived from --
+	// without this the fake always reported zero items applied regardless
+	// of batch content.
+	return contextfabric.ProjectionReceipt{
+		BatchID: batch.BatchID, AppliedAt: time.Now().UTC(), BackendWatermark: batch.NextCursor,
+		EntitiesApplied: len(batch.Entities), EdgesApplied: len(batch.Relationships),
+		ContentsApplied: len(batch.Contents), EpisodesApplied: len(batch.Episodes),
+		TombstonesApplied: len(batch.Tombstones),
+	}, nil
 }
 
 func (b *fakeBackend) ProjectionWatermark(_ context.Context, orgID, source string) (contextfabric.ProjectionWatermark, error) {

@@ -129,11 +129,63 @@ type Config struct {
 	// solely on watermark comparison, which is a known, accepted gap
 	// until this is wired in production composition.
 	ReuseInvalidator contextfabric.ReuseInvalidator
-	PollInterval     time.Duration
-	Concurrency      int
-	MaxBackoff       time.Duration
-	Now              func() time.Time
-	Logger           *slog.Logger
+	// Lifecycle (CHAOS-3898 S2a-2, design brief §3.1/§3.5/item 8) is
+	// optional. When set, Coordinator drives every organization rebuild
+	// and every CHAOS-3882 divergence recovery through the
+	// build-aside-and-swap lifecycle machine (BeginBuild -> per-epoch
+	// ticks -> Flip) instead of the legacy in-place PurgeOrganization
+	// path (performRebuild), and every steady-state tick reads/advances
+	// the checkpoint set of the organization's CURRENT ACTIVE epoch
+	// rather than always epoch 0 (design brief §3.4 -- required for
+	// correctness the moment any organization has ever flipped: an
+	// unmigrated organization's ActiveEpoch is always 0, so this changes
+	// nothing until BeginBuild is first called for it). nil preserves the
+	// exact pre-CHAOS-3898 behavior byte-for-byte -- see performRebuild's
+	// own doc comment. pglifecycle.Store is the production implementation.
+	Lifecycle contextfabric.GraphLifecycleStore
+	// EpochCheckpoints resolves an epoch-scoped contextfabric.ProjectionCheckpointStore
+	// VIEW (design brief §3.4) -- REQUIRED when Lifecycle is set (NewCoordinator
+	// refuses the pairing otherwise), ignored when Lifecycle is nil.
+	// pgprojection.CheckpointStore.ForEpoch is the production implementation.
+	EpochCheckpoints func(epoch int64) contextfabric.ProjectionCheckpointStore
+	// RetireScheduler (design brief §3.5) is optional: when set,
+	// Coordinator sweeps due epoch retirements once per Tick, under the
+	// SAME per-organization single-flight discipline (in-process mutex +
+	// OrgLocker) every other per-org operation in this file already has.
+	// pglifecycle.RetireExecutor is the production implementation.
+	RetireScheduler RetireScheduler
+	// LifecycleTelemetry (design brief §5b) is optional: wires
+	// cf_checkpoint_epoch_state, computed from data Coordinator already
+	// reads (checkpoint cursor ages) that pglifecycle/falkorgraph have no
+	// visibility into on their own.
+	LifecycleTelemetry contextfabric.GraphLifecycleTelemetry
+	// GraceWindow (design brief D11, operator-set) is how long a flipped
+	// epoch's predecessor is retained before it becomes eligible for
+	// retirement -- Flip's own graceWindow parameter. Defaults to 24h
+	// when Lifecycle is set and this is <= 0; ignored when Lifecycle is
+	// nil.
+	GraceWindow  time.Duration
+	PollInterval time.Duration
+	Concurrency  int
+	MaxBackoff   time.Duration
+	Now          func() time.Time
+	Logger       *slog.Logger
+}
+
+// RetireScheduler drives due per-epoch retirements to completion --
+// pglifecycle.RetireExecutor is the production implementation. Defined here
+// (an interface this package accepts, not a type it imports) rather than
+// depending on pglifecycle directly, matching RebuildMarker/OrgLocker's own
+// convention: this package stays backend-neutral; composition supplies the
+// concrete Postgres-backed type.
+type RetireScheduler interface {
+	// DueRetirements lists every retirement whose drain bound has already
+	// elapsed -- read-only, never itself mutates anything.
+	DueRetirements(ctx context.Context) ([]contextfabric.EpochRetirement, error)
+	// RunOne drives ONE (org, epoch) retirement to completion (or refuses
+	// it, recording why via Telemetry) -- see pglifecycle.RetireExecutor.RunOne's
+	// own doc comment for the guard sequence and its known gaps.
+	RunOne(ctx context.Context, orgID string, epoch int64) error
 }
 
 // Coordinator schedules contextfabric.ProjectionWorker.RunOnce across every
@@ -152,6 +204,11 @@ type Coordinator struct {
 	locker           OrgLocker
 	observer         Observer
 	reuseInvalidator contextfabric.ReuseInvalidator
+	lifecycle        contextfabric.GraphLifecycleStore
+	epochCheckpoints func(int64) contextfabric.ProjectionCheckpointStore
+	retireScheduler  RetireScheduler
+	lifecycleTelem   contextfabric.GraphLifecycleTelemetry
+	graceWindow      time.Duration
 	poll             time.Duration
 	concurrency      int
 	maxBackoff       time.Duration
@@ -163,6 +220,12 @@ type Coordinator struct {
 	backoffMu sync.Mutex
 	backoff   map[string]*pairBackoff // "orgID\x00source" -> state
 }
+
+// defaultGraceWindow is design brief D11's operator-set retention window,
+// applied only when Config.Lifecycle is set and Config.GraceWindow is
+// unset. 24h matches D11's own example range (24-72h) at its shorter,
+// more conservative end.
+const defaultGraceWindow = 24 * time.Hour
 
 type pairBackoff struct {
 	consecutiveFailures int
@@ -194,6 +257,12 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	}
 	if len(cfg.Sources) == 0 {
 		return nil, errors.New("projectionrun: at least one source is required")
+	}
+	if cfg.Lifecycle != nil && cfg.EpochCheckpoints == nil {
+		return nil, errors.New("projectionrun: EpochCheckpoints is required when Lifecycle is set")
+	}
+	if cfg.Lifecycle != nil && cfg.GraceWindow <= 0 {
+		cfg.GraceWindow = defaultGraceWindow
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval
@@ -238,6 +307,8 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		orgIDs: append([]string(nil), cfg.OrgIDs...), sourceNames: sourceNames, workers: workers, sources: sources,
 		backend: cfg.Backend, checkpoints: cfg.Checkpoints, rebuildMarkers: cfg.RebuildMarkers,
 		locker: cfg.Locker, observer: cfg.Observer, reuseInvalidator: cfg.ReuseInvalidator,
+		lifecycle: cfg.Lifecycle, epochCheckpoints: cfg.EpochCheckpoints, retireScheduler: cfg.RetireScheduler,
+		lifecycleTelem: cfg.LifecycleTelemetry, graceWindow: cfg.GraceWindow,
 		poll: cfg.PollInterval, concurrency: cfg.Concurrency,
 		maxBackoff: cfg.MaxBackoff, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
@@ -270,7 +341,96 @@ func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
 		}
 	}()
+	if c.lifecycle != nil {
+		return c.beginLifecycleBuild(ctx, orgID)
+	}
 	return c.performRebuild(ctx, orgID)
+}
+
+// Rollback restores orgID's active epoch to the one a prior flip retained
+// during its grace window (design brief §3.1 step 4/§3.4), under the same
+// single-flight guard as Rebuild. Legal only while the organization's
+// lifecycle row is in LifecycleStatusGrace; a rollback attempted outside
+// that window returns contextfabric.ErrLifecycleTransitionRefused (grace
+// has already ended -- begin_retire or the retire executor may already have
+// acted) or contextfabric.ErrLifecycleConflict (a race). The restored
+// epoch's own checkpoint set was frozen at flip time and is untouched by
+// this call -- ordinary ticks resume from it on the very next tick and
+// replay exactly the gap (pglifecycle's own TestRollback_ResumesOwnCheckpoints_NoRowSkipped
+// pins this at the storage layer). Fires the SAME reuse-invalidation bump a
+// flip fires (design brief §3.4's "belt and braces": the epoch predicate
+// alone would already reject stale reuse rows, but the bump is immediate).
+func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
+	if c.lifecycle == nil {
+		return errors.New("projectionrun: rollback requires a configured graph lifecycle store")
+	}
+	if strings.TrimSpace(orgID) == "" {
+		return errors.New("projectionrun: organization is required")
+	}
+	if !c.allowsOrg(orgID) {
+		return fmt.Errorf("projectionrun: organization %s is not in the configured allowlist", orgID)
+	}
+	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
+	mutex := mutexAny.(*sync.Mutex)
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	unlock, err := c.locker.Lock(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("projectionrun: acquire organization lock for rollback: %w", err)
+	}
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil {
+			c.logger.WarnContext(ctx, "projection organization unlock failed after rollback", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
+		}
+	}()
+
+	row, found, err := c.lifecycle.Get(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("projectionrun: read graph lifecycle row: %w", err)
+	}
+	if !found || row.Status != contextfabric.LifecycleStatusGrace {
+		return fmt.Errorf("%w: organization is not currently in a rollback-eligible grace window", contextfabric.ErrLifecycleTransitionRefused)
+	}
+	rolled, err := c.lifecycle.Rollback(ctx, orgID, row.ActiveEpoch, c.now())
+	if err != nil {
+		return fmt.Errorf("projectionrun: rollback: %w", err)
+	}
+	c.logger.WarnContext(ctx, "context_fabric: graph epoch rollback", "org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", rolled.ActiveEpoch)
+	if c.reuseInvalidator != nil {
+		if invalidateErr := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); invalidateErr != nil {
+			c.logger.WarnContext(ctx, "invalidate answer reuse after rollback failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
+		}
+	}
+	return nil
+}
+
+// beginLifecycleBuild is the CHAOS-3898 S2a-2 replacement for performRebuild's
+// purge-then-reset sequence (design brief item 8's MANDATORY conversion): it
+// durably opens a build-aside epoch (BeginBuild) and returns immediately --
+// matching performRebuild's OWN fast-return contract exactly (Rebuild's own
+// doc comment: "the next serve tick replays a full snapshot from scratch").
+// This call never itself projects anything or touches the backend; the
+// actual replay happens over subsequent ticks, driven by runOrgLifecycle's
+// build branch (runBuildTick) below.
+//
+// Idempotent the same way performRebuild is: BeginBuild refuses
+// (ErrLifecycleTransitionRefused) when a build or grace window is already
+// open for this organization, which is treated as "already in progress"
+// rather than an error -- an operator re-running `rebuild --org` while a
+// prior rebuild is still replaying must not fail loudly for doing the
+// obviously safe thing.
+func (c *Coordinator) beginLifecycleBuild(ctx context.Context, orgID string) error {
+	_, err := c.lifecycle.BeginBuild(ctx, orgID, c.sourceNames, c.now())
+	if err != nil {
+		if errors.Is(err, contextfabric.ErrLifecycleTransitionRefused) {
+			c.logger.InfoContext(ctx, "context_fabric: build-aside epoch already open for this organization; not restarting", "org_id", orgID)
+			return nil
+		}
+		return fmt.Errorf("projectionrun: begin build-aside epoch: %w", err)
+	}
+	c.logger.InfoContext(ctx, "context_fabric: build-aside epoch opened; replay will proceed over subsequent ticks", "org_id", orgID)
+	return nil
 }
 
 // performRebuild is the crash-resumable rebuild sequence, callable either as
@@ -446,6 +606,16 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// for -- see checkpointStoreDiverged's doc comment.
 		"orgs_divergence_recovered", atomic.LoadInt64(&stats.orgsDivergenceRecovered),
 	)
+	// CHAOS-3898 S2a-2 (design brief §3.1 step 5/§3.5): sweep organizations
+	// whose grace window has elapsed into begin_retire (creating the
+	// grace_expired EpochRetirement record), THEN sweep every retirement
+	// whose OWN drain bound has elapsed to actual deletion -- a no-op pair
+	// when Lifecycle/RetireScheduler are unconfigured. Order matters only
+	// for freshness (a just-expired grace can be picked up by the SAME
+	// tick's retirement sweep once its own drain bound separately elapses,
+	// not this one).
+	c.sweepGraceExpirations(ctx)
+	c.sweepRetirements(ctx)
 }
 
 // runOrg enforces single-flight per organization across a whole multi-source
@@ -454,6 +624,12 @@ func (c *Coordinator) Tick(ctx context.Context) {
 // across acr-projector replicas too. Both are non-blocking (TryLock /
 // pg_try_advisory_lock): a busy organization is skipped this tick, not
 // queued, so one slow organization can never starve the others.
+//
+// Dispatches to runOrgLifecycle when Config.Lifecycle is set (CHAOS-3898
+// S2a-2's build-aside-and-swap conversion), else to runOrgLegacy -- the
+// EXACT pre-CHAOS-3898 marker-based purge/reset behavior, byte-for-byte
+// unchanged, which every existing composition root and test that does not
+// configure Lifecycle continues to exercise.
 func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFreshnessStats) {
 	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
 	mutex := mutexAny.(*sync.Mutex)
@@ -477,6 +653,17 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 		}
 	}()
 
+	if c.lifecycle != nil {
+		c.runOrgLifecycle(ctx, orgID, stats)
+		return
+	}
+	c.runOrgLegacy(ctx, orgID, stats)
+}
+
+// runOrgLegacy is the pre-CHAOS-3898 per-org tick body, unchanged: marker-based
+// crash-resume, epoch-0-pinned divergence check, epoch-0-pinned per-source
+// ticking. The caller (runOrg) already holds both organization locks.
+func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tickFreshnessStats) {
 	// CHAOS-3753 codex finding C2 invariant: never run incremental
 	// projection against a purged-but-not-reset graph. A marker present
 	// here means a prior Rebuild (this replica or another) crashed between
@@ -506,7 +693,7 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	// resume branch: skip ordinary projection this tick regardless of
 	// outcome and drive recovery through the SAME performRebuild sequence,
 	// under the SAME org lock this method already holds.
-	if c.checkpointStoreDiverged(ctx, orgID) {
+	if c.checkpointStoreDiverged(ctx, orgID, c.checkpoints) {
 		c.recoverFromDivergence(ctx, orgID, stats)
 		return
 	}
@@ -516,7 +703,7 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 		if ctx.Err() != nil {
 			return
 		}
-		pairEvaluated, pairStale := c.runPair(ctx, orgID, source)
+		pairEvaluated, pairStale := c.runPair(ctx, orgID, source, c.checkpoints)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
 	}
@@ -528,6 +715,206 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	default:
 		stats.recordOK()
 	}
+}
+
+// runOrgLifecycle is runOrgLegacy's CHAOS-3898 S2a-2 replacement, active
+// whenever Config.Lifecycle is set (design brief item 8's MANDATORY
+// conversion): the lifecycle row itself -- not a separate marker table --
+// is the durable "is a build in progress" signal, and steady-state ticking
+// reads/advances the organization's CURRENT ACTIVE epoch's checkpoint set
+// (design brief §3.4), not always epoch 0. The caller (runOrg) already
+// holds both organization locks.
+func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *tickFreshnessStats) {
+	row, found, err := c.lifecycle.Get(ctx, orgID)
+	if err != nil {
+		stats.recordBackoff()
+		c.logger.WarnContext(ctx, "read graph lifecycle row failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		return
+	}
+	if found && row.Status == contextfabric.LifecycleStatusBuilding {
+		stats.recordBackoff()
+		c.runBuildTick(ctx, orgID, row)
+		return
+	}
+
+	epoch := int64(0)
+	checkpoints := c.checkpoints
+	if found && row.ActiveEpoch != 0 {
+		epoch = row.ActiveEpoch
+		checkpoints = c.epochCheckpoints(epoch)
+	}
+
+	if c.checkpointStoreDiverged(ctx, orgID, checkpoints) {
+		c.recoverFromDivergenceLifecycle(ctx, orgID, stats)
+		return
+	}
+
+	evaluated, stale := false, false
+	for _, source := range c.sourceNames {
+		if ctx.Err() != nil {
+			return
+		}
+		pairEvaluated, pairStale := c.runPair(ctx, orgID, source, checkpoints)
+		evaluated = evaluated || pairEvaluated
+		stale = stale || pairStale
+	}
+	c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
+	switch {
+	case !evaluated:
+		stats.recordBackoff()
+	case stale:
+		stats.recordRebuildRequired()
+	default:
+		stats.recordOK()
+	}
+}
+
+// runBuildTick drives one round of per-source ticks for an organization
+// whose lifecycle row is LifecycleStatusBuilding (design brief §3.1 step 2,
+// §3.3): every configured source's tick writes into TargetEpoch's own
+// checkpoint set and graph key (the latter resolved transparently by the
+// backend's own KeyResolver -- see falkorgraph.Config.EpochResolver), and
+// this method classifies each tick's outcome into design brief item 5's
+// four completion shapes, persisting progress via RecordSourceProgress
+// EVERY tick (not only on completion) so a source's cumulative
+// rows_projected survives a crash/restart between ticks -- see
+// classifyBuildCompletion's own doc comment. Once every required source has
+// reported a non-pending mode, it attempts Flip; Flip's own gate refuses
+// harmlessly until that is true, so calling it unconditionally every tick
+// once a build is open is always safe.
+func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contextfabric.OrgGraphLifecycle) {
+	if row.TargetEpoch == nil {
+		c.logger.WarnContext(ctx, "graph lifecycle row is building with no target epoch; skipping", "org_id", orgID)
+		return
+	}
+	targetEpoch := *row.TargetEpoch
+	checkpoints := c.epochCheckpoints(targetEpoch)
+
+	progress, err := c.lifecycle.SourceProgress(ctx, orgID, targetEpoch)
+	if err != nil {
+		c.logger.WarnContext(ctx, "read build source progress failed; skipping build tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		return
+	}
+	byName := make(map[string]contextfabric.BuildSourceProgress, len(progress))
+	for _, p := range progress {
+		byName[p.Source] = p
+	}
+
+	for _, source := range c.sourceNames {
+		if ctx.Err() != nil {
+			return
+		}
+		if existing, ok := byName[source]; ok && existing.CompletionMode != contextfabric.BuildCompletionPending {
+			continue // already terminal for this build; nothing more to do
+		}
+		if enablement, ok := c.sources[source].(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
+			if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, targetEpoch, source, contextfabric.BuildCompletionDisabledAtFreeze, 0, c.now()); rerr != nil {
+				c.logger.WarnContext(ctx, "record disabled-at-freeze source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+			}
+			continue
+		}
+		priorRows := byName[source].RowsProjected
+		c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, priorRows)
+	}
+	c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)
+
+	flipped, err := c.lifecycle.Flip(ctx, orgID, targetEpoch, c.graceWindow, c.now())
+	switch {
+	case err == nil:
+		c.logger.InfoContext(ctx, "context_fabric: graph epoch flip", "org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", flipped.ActiveEpoch)
+		if c.reuseInvalidator != nil {
+			if invalidateErr := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); invalidateErr != nil {
+				c.logger.WarnContext(ctx, "invalidate answer reuse after flip failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
+			}
+		}
+	case errors.Is(err, contextfabric.ErrLifecycleTransitionRefused):
+		// Expected, ordinary mid-build state: not every required source has
+		// reported a terminal completion yet. Next tick tries again.
+	case errors.Is(err, contextfabric.ErrLifecycleConflict):
+		c.logger.WarnContext(ctx, "flip lost a lifecycle CAS race", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+	default:
+		c.logger.WarnContext(ctx, "flip attempt failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+	}
+}
+
+// runBuildPair runs ONE source's build-epoch tick, under the SAME
+// due()/recordBackoff() per-pair scheduling gate ordinary runPair ticks
+// use (a distinct keyspace, "\x00build\x00", so a build tick and a
+// steady-state tick for the same (org, source) never share backoff state).
+func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, priorRows int64) {
+	key := orgID + "\x00build\x00" + source
+	if !c.due(key) {
+		return
+	}
+	started := c.now()
+	worker, werr := c.workerFor(source, checkpoints)
+	if werr != nil {
+		c.recordBackoff(key, werr)
+		c.logger.WarnContext(ctx, "build tick worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
+		return
+	}
+	run, err := worker.RunOnce(ctx, orgID, source)
+	c.recordBackoff(key, err)
+	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(started), At: c.now()}
+	c.observer.ObserveProjectionOutcome(outcome)
+	if err != nil {
+		c.logger.WarnContext(ctx, "build tick pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
+		return
+	}
+	total := priorRows
+	if run.Applied {
+		total += int64(run.ItemsApplied)
+	}
+	mode, terminal := classifyBuildCompletion(run)
+	if !terminal {
+		mode = contextfabric.BuildCompletionPending
+	} else {
+		c.logger.InfoContext(ctx, "context_fabric: build source completed", "org_id", orgID, "source", source, "epoch", epoch, "completion_mode", string(mode), "rows_projected", total)
+	}
+	if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, mode, total, c.now()); rerr != nil {
+		c.logger.WarnContext(ctx, "record build source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+	}
+}
+
+// classifyBuildCompletion maps one build tick's ProjectionRun onto design
+// brief §3.3/item 5's four completion shapes:
+//
+//   - Applied && CompleteEnumeration: the source itself claims this batch
+//     enumerated everything through the current cursor -- paged_final.
+//   - Applied && !CompleteEnumeration: still paging; NOT terminal. The next
+//     tick's own outcome is what eventually decides -- a source is never
+//     penalized for not claiming CompleteEnumeration on every intermediate
+//     page (episodes.go's own doc comment: only a from-scratch, untruncated
+//     page claims it truthfully today).
+//   - !Applied && PreviousCursor == "": nothing was EVER available for this
+//     organization/source, from the very first tick -- empty_first_tick.
+//   - !Applied && PreviousCursor != "": paged through some rows across
+//     earlier ticks, now genuinely caught up -- cursor_exhausted. This is
+//     the general-purpose exhaustion signal a multi-page source that never
+//     claims CompleteEnumeration on its last page still reaches correctly.
+func classifyBuildCompletion(run contextfabric.ProjectionRun) (mode contextfabric.BuildCompletionMode, terminal bool) {
+	if run.Applied {
+		if run.CompleteEnumeration {
+			return contextfabric.BuildCompletionPagedFinal, true
+		}
+		return "", false
+	}
+	if run.PreviousCursor == "" {
+		return contextfabric.BuildCompletionEmptyFirstTick, true
+	}
+	return contextfabric.BuildCompletionCursorExhausted, true
+}
+
+// workerFor constructs a contextfabric.ProjectionWorker bound to a specific
+// checkpoint view -- always freshly, never from a precomputed map:
+// NewProjectionWorker does no I/O, so there is no meaningful cost to
+// constructing one per tick, and doing so is what lets ordinary ticks,
+// build ticks, and any future epoch all share one code path with no
+// epoch-keyed cache to keep coherent. c.workers (built once at construction
+// time) exists ONLY to validate every configured source's wiring fails
+// loudly at startup, never to be read at tick time.
+func (c *Coordinator) workerFor(source string, checkpoints contextfabric.ProjectionCheckpointStore) (*contextfabric.ProjectionWorker, error) {
+	return contextfabric.NewProjectionWorker(c.sources[source], c.backend, checkpoints, contextfabric.ProjectionWorkerOptions{Now: c.now})
 }
 
 // divergenceBackoffKey is a synthetic "source" name for reusing the
@@ -574,9 +961,9 @@ const divergenceBackoffKey = "\x00chaos3882-projection-liveness-divergence"
 // TestCHAOS3887_NeverProjectedOrgReportsUnknownNotStale's exact fixture: a
 // backend watermark read failure alone, with no corroborating durable
 // checkpoint claim, is not evidence of anything.
-func (c *Coordinator) checkpointStoreDiverged(ctx context.Context, orgID string) bool {
+func (c *Coordinator) checkpointStoreDiverged(ctx context.Context, orgID string, checkpoints contextfabric.ProjectionCheckpointStore) bool {
 	for _, source := range c.sourceNames {
-		checkpoint, err := c.checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
+		checkpoint, err := checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
 		if err != nil {
 			continue // cannot read the durable baseline; not evidence either way
 		}
@@ -617,7 +1004,7 @@ func (c *Coordinator) LivenessCheck(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if c.checkpointStoreDiverged(ctx, orgID) {
+		if c.checkpointStoreDiverged(ctx, orgID, c.resolveOrgCheckpoints(ctx, orgID)) {
 			diverged = append(diverged, orgIDHash(orgID))
 		}
 	}
@@ -678,18 +1065,54 @@ func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, s
 		"org_id_hash", hash)
 }
 
+// recoverFromDivergenceLifecycle is recoverFromDivergence's CHAOS-3898
+// S2a-2 replacement (design brief item 8's MANDATORY conversion of the
+// CHAOS-3882 recovery path): it opens a build-aside epoch (beginLifecycleBuild)
+// instead of purging the organization's serving graph in place. The SAME
+// divergenceBackoffKey gate throttles a failing attempt; a SUCCEEDING
+// beginLifecycleBuild call needs no "already recovered" bit either -- once
+// the build flips, runOrgLifecycle's steady branch resolves the NEW active
+// epoch and checkpointStoreDiverged naturally reports false again, the same
+// way resetAllCheckpoints made the legacy path self-clearing.
+func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID string, stats *tickFreshnessStats) {
+	key := orgID + "\x00" + divergenceBackoffKey
+	if !c.due(key) {
+		stats.recordBackoff()
+		return
+	}
+	hash := orgIDHash(orgID)
+	c.logger.ErrorContext(ctx, "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic build-aside recovery instead of serving resolution against a silently empty or stale graph",
+		"org_id_hash", hash)
+	err := c.beginLifecycleBuild(ctx, orgID)
+	c.recordBackoff(key, err)
+	stats.recordDivergenceRecovered()
+	if err != nil {
+		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed to open a build-aside epoch; will retry with backoff",
+			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
+		return
+	}
+	c.logger.WarnContext(ctx, "context_fabric: automatic projection-liveness recovery opened a build-aside epoch; replay will proceed over subsequent ticks",
+		"org_id_hash", hash)
+}
+
 // runPair runs one (org, source) tick and reports the CHAOS-3887 freshness
 // classification back to runOrg for the per-tick fleet aggregate: evaluated
 // is true when this pair's freshness was actually checked this tick (it was
 // due), and stale is true when that check found a producer-identity drift
 // pending rebuild.
-func (c *Coordinator) runPair(ctx context.Context, orgID, source string) (evaluated, stale bool) {
+func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, stale bool) {
 	key := orgID + "\x00" + source
 	if !c.due(key) {
 		return false, false
 	}
 	started := c.now()
-	run, err := c.workers[source].RunOnce(ctx, orgID, source)
+	worker, werr := c.workerFor(source, checkpoints)
+	if werr != nil {
+		c.recordBackoff(key, werr)
+		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
+		return true, false
+	}
+	run, err := worker.RunOnce(ctx, orgID, source)
 	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(started), At: c.now()}
 	c.recordBackoff(key, err)
 	c.observer.ObserveProjectionOutcome(outcome)
@@ -771,6 +1194,178 @@ func (c *Coordinator) emitProjectionFreshness(ctx context.Context, orgID, source
 		c.logger.DebugContext(ctx, "context_fabric: projection freshness", fields...)
 	}
 	return stale
+}
+
+// resolveOrgCheckpoints returns the checkpoint-store VIEW an ordinary
+// (non-build) operation for orgID should read -- the organization's current
+// ACTIVE epoch's own set (design brief §3.4), or c.checkpoints (epoch 0)
+// when Lifecycle is unconfigured or the organization has never migrated
+// (no lifecycle row, or ActiveEpoch == 0 -- the SAME legacy row set either
+// way, since epoch 0 IS c.checkpoints' own rows). Used by LivenessCheck,
+// which -- unlike runOrgLifecycle -- has no already-fetched lifecycle row
+// to reuse.
+func (c *Coordinator) resolveOrgCheckpoints(ctx context.Context, orgID string) contextfabric.ProjectionCheckpointStore {
+	if c.lifecycle == nil {
+		return c.checkpoints
+	}
+	row, found, err := c.lifecycle.Get(ctx, orgID)
+	if err != nil || !found || row.ActiveEpoch == 0 {
+		return c.checkpoints
+	}
+	return c.epochCheckpoints(row.ActiveEpoch)
+}
+
+// recordCheckpointEpochState emits cf_checkpoint_epoch_state (design brief
+// §5b) for one (org, epoch): a no-op when LifecycleTelemetry is unconfigured.
+// cursorAge is the MAX age across every configured source's checkpoint for
+// this epoch -- "how stale is the least-fresh source", the more
+// operationally meaningful aggregate for an "at a glance" signal than a
+// per-source breakdown the interface's own (org, epoch) shape does not
+// carry.
+func (c *Coordinator) recordCheckpointEpochState(ctx context.Context, orgID string, epoch int64, state contextfabric.CheckpointEpochState, checkpoints contextfabric.ProjectionCheckpointStore) {
+	if c.lifecycleTelem == nil {
+		return
+	}
+	var maxAge time.Duration
+	for _, source := range c.sourceNames {
+		checkpoint, err := checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
+		if err != nil || checkpoint.UpdatedAt.IsZero() {
+			continue
+		}
+		age := c.now().Sub(checkpoint.UpdatedAt)
+		if age < 0 {
+			age = 0
+		}
+		if age > maxAge {
+			maxAge = age
+		}
+	}
+	c.lifecycleTelem.RecordCheckpointEpochState(ctx, orgID, epoch, state, maxAge)
+}
+
+// sweepRetirements drives every due epoch retirement to completion (design
+// brief §3.5), once per Tick, after the ordinary per-org pass -- a no-op
+// when RetireScheduler is unconfigured. Bounded by the SAME organization
+// allowlist every other entry point enforces (allowsOrg's own doc comment):
+// a replica group scoped to a subset of organizations must never retire an
+// epoch belonging to one it was not configured to project.
+func (c *Coordinator) sweepRetirements(ctx context.Context) {
+	if c.retireScheduler == nil {
+		return
+	}
+	due, err := c.retireScheduler.DueRetirements(ctx)
+	if err != nil {
+		c.logger.WarnContext(ctx, "list due epoch retirements failed", "failure_class", classifyOutcomeError(err))
+		return
+	}
+	for _, retirement := range due {
+		if ctx.Err() != nil {
+			return
+		}
+		if !c.allowsOrg(retirement.OrgID) {
+			continue
+		}
+		c.retireOne(ctx, retirement.OrgID, retirement.Epoch)
+	}
+}
+
+// retireOne drives ONE (org, epoch) retirement under the SAME per-organization
+// single-flight discipline (in-process mutex + OrgLocker) every other
+// per-org operation in this file already has -- so a retirement can never
+// run concurrently with a build/flip/rollback for the SAME organization,
+// even though RetireScheduler's own CAS machinery independently prevents a
+// double-delete.
+func (c *Coordinator) retireOne(ctx context.Context, orgID string, epoch int64) {
+	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
+	mutex := mutexAny.(*sync.Mutex)
+	if !mutex.TryLock() {
+		return // an ordinary tick or build for this organization is in flight; retry next sweep
+	}
+	defer mutex.Unlock()
+
+	unlock, err := c.locker.Lock(ctx, orgID)
+	if err != nil {
+		if !errors.Is(err, ErrOrgLocked) {
+			c.logger.WarnContext(ctx, "acquire organization lock for retirement failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		}
+		return
+	}
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil {
+			c.logger.WarnContext(ctx, "organization unlock failed after retirement", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
+		}
+	}()
+	if err := c.retireScheduler.RunOne(ctx, orgID, epoch); err != nil {
+		c.logger.WarnContext(ctx, "retire epoch failed", "org_id", orgID, "epoch", epoch, "failure_class", classifyOutcomeError(err))
+		return
+	}
+	c.logger.InfoContext(ctx, "context_fabric: epoch retired", "org_id", orgID, "epoch", epoch)
+}
+
+// sweepGraceExpirations transitions every configured organization whose
+// lifecycle row is LifecycleStatusGrace with an elapsed GraceDeadline into
+// begin_retire (design brief §3.1 step 5): the point of no return, creating
+// the grace_expired EpochRetirement record RetireScheduler later drains.
+// Bounded by the SAME organization allowlist LivenessCheck iterates, one
+// Postgres read per organization -- a no-op when Lifecycle is unconfigured.
+func (c *Coordinator) sweepGraceExpirations(ctx context.Context) {
+	if c.lifecycle == nil {
+		return
+	}
+	for _, orgID := range c.orgIDs {
+		if ctx.Err() != nil {
+			return
+		}
+		c.tryBeginRetire(ctx, orgID)
+	}
+}
+
+// tryBeginRetire attempts begin_retire for orgID under the SAME per-organization
+// single-flight discipline every other per-org operation in this file has.
+// A non-grace status, a not-yet-elapsed deadline, or a lock held by an
+// in-flight tick/build for this organization are all ordinary, expected
+// outcomes -- silently skipped, retried on the next tick -- never logged as
+// failures.
+func (c *Coordinator) tryBeginRetire(ctx context.Context, orgID string) {
+	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
+	mutex := mutexAny.(*sync.Mutex)
+	if !mutex.TryLock() {
+		return
+	}
+	defer mutex.Unlock()
+	unlock, err := c.locker.Lock(ctx, orgID)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil {
+			c.logger.WarnContext(ctx, "organization unlock failed after grace-expiration sweep", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
+		}
+	}()
+
+	row, found, err := c.lifecycle.Get(ctx, orgID)
+	if err != nil {
+		c.logger.WarnContext(ctx, "read graph lifecycle row failed during grace sweep", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		return
+	}
+	if !found || row.Status != contextfabric.LifecycleStatusGrace || row.GraceDeadline == nil {
+		return
+	}
+	now := c.now()
+	if now.Before(*row.GraceDeadline) {
+		return
+	}
+	_, retirement, err := c.lifecycle.BeginRetire(ctx, orgID, row.ActiveEpoch, now, false)
+	if err != nil {
+		// ErrLifecycleTransitionRefused/ErrLifecycleConflict are ordinary
+		// races (a concurrent rollback won, or the deadline moved) -- only
+		// anything else is worth a warning.
+		if !errors.Is(err, contextfabric.ErrLifecycleTransitionRefused) && !errors.Is(err, contextfabric.ErrLifecycleConflict) {
+			c.logger.WarnContext(ctx, "begin retire failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		}
+		return
+	}
+	c.logger.InfoContext(ctx, "context_fabric: grace window elapsed; epoch queued for retirement", "org_id", orgID, "epoch", retirement.Epoch)
 }
 
 // currentSourceVersion reads the CHAOS-3887 optional
