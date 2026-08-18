@@ -19,10 +19,23 @@ import (
 // producer queries' shape, not the aggregate/row two-statement protocol
 // this file exercises).
 type censusFakeClient struct {
-	// aggregateCount/aggregateReadAt answer the "SELECT count(), now64()"
-	// statement.
+	// aggregateCount/aggregateReadAt answer the "SELECT count(), now64(),
+	// min(<natural key>)" statement.
 	aggregateCount  uint64
 	aggregateReadAt time.Time
+	// aggregateWitness answers the aggregate statement's min(<natural
+	// key>) column (sol review correction: the identity-witness check).
+	// Empty means "default to rowKeys[0] when exactly one row key is
+	// configured" -- so every test written before the witness column
+	// existed keeps working unchanged; a test exercising the
+	// IDENTITY-SWAP race sets this explicitly to a value that DISAGREES
+	// with rowKeys[0].
+	aggregateWitness string
+	// aggregateRowCount, when >1, makes the aggregate statement return
+	// MORE THAN ONE row (simulates a backend contract violation the
+	// EXACTLY-ONE-ROW assertion must catch). 0 or 1 means "exactly one
+	// row", the normal case.
+	aggregateRowCount int
 	// rowKeys answers the row statement (LIMIT 2) -- however many entries
 	// are here are returned, letting a test simulate 0/1/2-row races.
 	rowKeys []string
@@ -38,7 +51,19 @@ func (c *censusFakeClient) Query(_ context.Context, statement string, _ []contex
 		return nil, c.err
 	}
 	if strings.Contains(statement, "count(), now64()") {
-		return &censusFakeScanner{rows: [][]any{{c.aggregateCount, c.aggregateReadAt}}}, nil
+		witness := c.aggregateWitness
+		if witness == "" && len(c.rowKeys) == 1 {
+			witness = c.rowKeys[0]
+		}
+		rowCount := c.aggregateRowCount
+		if rowCount == 0 {
+			rowCount = 1
+		}
+		rows := make([][]any, rowCount)
+		for i := range rows {
+			rows[i] = []any{c.aggregateCount, c.aggregateReadAt, witness}
+		}
+		return &censusFakeScanner{rows: rows}, nil
 	}
 	rows := make([][]any, 0, len(c.rowKeys))
 	for _, key := range c.rowKeys {
@@ -159,6 +184,72 @@ func TestRunCensus_RowLandedBetweenStatements(t *testing.T) {
 	}
 	if result.RowsRead != 2 {
 		t.Fatalf("RowsRead = %d, want 2", result.RowsRead)
+	}
+}
+
+// TestRunCensus_IdentityPreservingSwapDemotes is the sol review
+// correction's own named race scenario: the aggregate statement (a) and
+// the row statement (b) BOTH report count==1/exactly-one-row, but for a
+// DIFFERENT row -- e.g. a mutable FK moved satisfier W1 out of D's
+// population and a different satisfier W2 in, between the two statements.
+// Before the identity-witness fix, this passed every existing check
+// (count==1 twice, one row read) and would have committed W2 stamped with
+// a receipt that was actually read against W1's population. It must
+// demote to ClosureMismatch, never mint a commit.
+func TestRunCensus_IdentityPreservingSwapDemotes(t *testing.T) {
+	t.Parallel()
+	client := &censusFakeClient{
+		aggregateCount: 1, aggregateReadAt: time.Now().UTC(),
+		aggregateWitness: "repo-1:532",            // statement (a)'s own row: W1
+		rowKeys:          []string{"repo-1:9999"}, // statement (b)'s row: W2 -- count-preserving, but a DIFFERENT satisfier
+	}
+	result, err := devhealthsource.RunCensus(context.Background(), client, "org-1", contextfabric.SubjectPullRequest, pullRequestPredicate(t))
+	if err != nil {
+		t.Fatalf("RunCensus: %v", err)
+	}
+	if !result.ClosureMismatch {
+		t.Fatalf("ClosureMismatch = false, want true -- (a) attested W1 (repo-1:532), (b) returned a DIFFERENT single row W2 (repo-1:9999); count agreeing twice must not be enough to commit")
+	}
+	if result.SatisfierNaturalKey != "" {
+		t.Fatalf("SatisfierNaturalKey = %q, want empty -- an identity-preserving-count swap must never mint a commit", result.SatisfierNaturalKey)
+	}
+}
+
+// TestRunCensus_AggregateMoreThanOneRowIsAContractViolation pins the
+// EXACTLY-ONE-ROW assertion (sol review correction, setting pin): the
+// aggregate statement must return exactly one row; a backend returning
+// more must fail loudly rather than silently reading only the first.
+func TestRunCensus_AggregateMoreThanOneRowIsAContractViolation(t *testing.T) {
+	t.Parallel()
+	client := &censusFakeClient{aggregateCount: 1, aggregateReadAt: time.Now().UTC(), aggregateRowCount: 2, rowKeys: []string{"repo-1:532"}}
+	if _, err := devhealthsource.RunCensus(context.Background(), client, "org-1", contextfabric.SubjectPullRequest, pullRequestPredicate(t)); err == nil {
+		t.Fatalf("RunCensus: want an error when the aggregate statement returns more than one row, got nil")
+	}
+}
+
+// TestRunCensus_AggregateStatementPinsEmptyResultSetting pins the sol
+// review correction's setting pin: every aggregate statement carries
+// SETTINGS empty_result_for_aggregation_by_empty_set = 0, so ClickHouse
+// cannot silently return ZERO rows for an aggregate over an empty input --
+// the guarantee the empty-census receipt (Count==0 always carries a
+// non-zero CensusReadAt) structurally depends on.
+func TestRunCensus_AggregateStatementPinsEmptyResultSetting(t *testing.T) {
+	t.Parallel()
+	client := &censusFakeClient{aggregateCount: 0, aggregateReadAt: time.Now().UTC()}
+	if _, err := devhealthsource.RunCensus(context.Background(), client, "org-1", contextfabric.SubjectPullRequest, pullRequestPredicate(t)); err != nil {
+		t.Fatalf("RunCensus: %v", err)
+	}
+	found := false
+	for _, statement := range client.calls {
+		if strings.Contains(statement, "count(), now64()") {
+			found = true
+			if !strings.Contains(statement, "SETTINGS empty_result_for_aggregation_by_empty_set = 0") {
+				t.Fatalf("aggregate statement missing the empty_result_for_aggregation_by_empty_set=0 setting pin: %s", statement)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no aggregate statement was issued")
 	}
 }
 
