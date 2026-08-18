@@ -382,6 +382,20 @@ type ResolutionTraceEvent struct {
 	// gate check stays correct -- that would read as a tracer bug, not a
 	// scope bug).
 	IdentityTrustGateBlocked bool
+	// SearchTruncated (decision stage; CHAOS-3897, 2026-08-17): the SAME
+	// resolution-wide searchTruncated signal the commit switch
+	// (resolution.go) itself reads, populated onto every decision-stage
+	// event this function emits -- not reconstructed downstream. The
+	// commit switch's `case searchTruncated` sits BEFORE LoneFloor/
+	// TopFloor and short-circuits straight to ambiguous, so without this
+	// field an ambiguous decision event with CommitGate=="" cannot tell a
+	// reader whether the confidence gates ran and blocked (e.g.
+	// IdentityTrustGateBlocked==true, or an ordinary below-floor/below-gap
+	// miss) or never ran at all because truncation preempted them first.
+	// SearchTruncated==true on an ambiguous event with CommitGate=="" is
+	// the truncation-preempted case; SearchTruncated==false there means
+	// the gates themselves declined to commit.
+	SearchTruncated bool
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
