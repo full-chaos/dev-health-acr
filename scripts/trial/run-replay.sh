@@ -13,13 +13,23 @@
 # before the go test, wait for the test to finish, signal DONE, wait for the
 # responder to notice and wipe its own private CODEX_HOME) -- only the go
 # test target and output env var differ.
+#
+# CHAOS-3899: ACR_TEST_REPLAY_OUT is now a default-if-unset (":=" ), not an
+# unconditional export -- an operator running the CHAOS-3899 shadow-round
+# acceptance pass sets it explicitly (a DIFFERENT artifact path, per
+# design brief v5 §6) before invoking this script; every existing caller
+# that does not set it gets the exact same default path as before,
+# byte-identical. ACR_TEST_TRIAL_SHADOW_CENSUS=false (also optional, read
+# directly by the go test) opts back out to a zero-shadow-overhead run of
+# the ORIGINAL CHAOS-3884 replay if ever needed again.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 LIMIT="${1:-}"
 
 trial_wire_common_env
-export ACR_TEST_REPLAY_OUT="$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay.json"
+: "${ACR_TEST_REPLAY_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay.json}"
+export ACR_TEST_REPLAY_OUT
 export ACR_TEST_TRIAL_ARM="replay"
 if [[ -n "$LIMIT" ]]; then
   export ACR_TEST_TRIAL_LIMIT="$LIMIT"

@@ -128,6 +128,20 @@ type Config struct {
 	// own doc comments for the event vocabulary and the corpus-safety
 	// discipline every event field is held to.
 	ResolutionTracer graphrank.ResolutionTracer
+	// CensusFunc (CHAOS-3899, SHADOW ONLY -- design brief v5 §6 Slice A) is
+	// optional (nil-safe), same convention as RawSignalObserver/
+	// ResolutionTracer above: the composition root's closure over
+	// devhealthsource.NewCensusFunc and its own ClickHouse client, bound to
+	// everything except ctx. A nil value (the default for every existing
+	// production composition root) means graphrank.ResolveDeps.CensusFunc
+	// stays nil too, so RunShadowEvidenceRound is never even called --
+	// byte-identical to every pre-CHAOS-3899 backend. Kept as a plain
+	// closure rather than a devhealthsource-typed dependency for the exact
+	// same reason IdentityUniverse is (this package never imports
+	// devhealthsource). No production composition root sets this today;
+	// the CHAOS-3884 replay/trial harness (chaos3899_shadow_run_test.go)
+	// is the first and only caller, for measurement.
+	CensusFunc graphrank.CensusFunc
 }
 
 // GraphTelemetry is the graph adapter's operational signal sink.

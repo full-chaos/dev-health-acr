@@ -160,6 +160,61 @@ type replayCaseOutcome struct {
 	Baseline             replayArmOutcome `json:"baseline"`
 	Wired                replayArmOutcome `json:"wired"`
 	DiffClass            replayDiffClass  `json:"diff_class"`
+	// Shadow (CHAOS-3899, design brief v5 §6 Slice A acceptance run):
+	// the shadow evidence round's own outcome for this case, read from the
+	// wired arm's durable tracer (evidence_round/evidence_probe stage
+	// events) -- SUPPRESSED from ever influencing Wired/DiffClass above;
+	// this is pure measurement. Zero value (ShadowRan=false) means the
+	// round never ran for this case (not stalled, or CensusFunc unset).
+	Shadow replayShadowOutcome `json:"shadow"`
+	// BaselineElapsedMS/WiredElapsedMS (CHAOS-3899 cost-contract gate,
+	// brief §6 Slice A): wall-clock for the WHOLE arm resolve call,
+	// including the shadow round when it runs (wired arm only, stalled
+	// cases only) -- not an isolated shadow-round-only timer (no such
+	// timer exists inside ResolveSubjects), but the wired-minus-baseline
+	// DELTA on a stalled case is a directional upper bound on the round's
+	// added latency, reported as such (not overclaimed as exact).
+	BaselineElapsedMS int64 `json:"baseline_elapsed_ms"`
+	WiredElapsedMS    int64 `json:"wired_elapsed_ms"`
+}
+
+// replayShadowCensusKind is ONE per-kind census receipt (CHAOS-3899, brief
+// §1.3(3): "Per-kind, never aggregated across kinds"), read from one
+// evidence_probe stage event. Outcome-only: counts/enums/bools, exactly
+// the corpus-safety discipline every other field in this file already
+// follows.
+type replayShadowCensusKind struct {
+	Kind            string `json:"kind"`
+	Complete        bool   `json:"complete"`
+	Count           int    `json:"count"`
+	Protocol        string `json:"protocol"`
+	ClosureMismatch bool   `json:"closure_mismatch"`
+	StatementCount  int    `json:"statement_count"`
+	RowsRead        int    `json:"rows_read"`
+	HandleApplied   bool   `json:"handle_applied"`
+	AnchorApplied   bool   `json:"anchor_applied"`
+}
+
+// replayShadowOutcome is the wired arm's shadow-round Attestation for ONE
+// case, read from its own evidence_round stage event (RunShadowEvidenceRound's
+// emit closure, chaos3899_evidence_round.go) plus every evidence_probe
+// event for that same case.
+type replayShadowOutcome struct {
+	// Ran proves the round actually EXECUTED for this case (brief §6/§7's
+	// own non-vacuity bar) -- true iff an evidence_round event was
+	// captured at all. false means the resolution was not stalled
+	// (committed, or not searchTruncated), so the round's own stalled-only
+	// gate (resolve.go) never called it.
+	Ran                  bool                     `json:"ran"`
+	Outcome              string                   `json:"outcome,omitempty"`
+	Reason               string                   `json:"reason,omitempty"`
+	PreconditionUnproven bool                     `json:"precondition_unproven"`
+	NonCensusedSurvivor  bool                     `json:"non_censused_survivor"`
+	HandleGrammarBound   bool                     `json:"handle_grammar_bound"`
+	AnchorUniqueClaimant bool                     `json:"anchor_unique_claimant"`
+	KindsCensused        int                      `json:"kinds_censused"`
+	DIdentityHash        string                   `json:"d_identity_hash,omitempty"`
+	CensusKinds          []replayShadowCensusKind `json:"census_kinds,omitempty"`
 }
 
 // replayReport is the whole run's artifact, written to ACR_TEST_REPLAY_OUT.
@@ -322,13 +377,61 @@ func (c *replayTraceCapture) decisionSearchTruncated() bool {
 	return false
 }
 
-func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Client, wireIdentityUniverse bool, tracer graphrank.ResolutionTracer) (contextfabric.GraphReader, error) {
+// shadowOutcome reads THIS case's shadow-round Attestation off the durable
+// tracer (CHAOS-3899): exactly one evidence_round event per resolution
+// that reaches past the round's own axis/scope gates (RunShadowEvidenceRound's
+// own doc comment), plus one evidence_probe event per kind actually
+// censused. Absence of an evidence_round event (Ran=false) means the round
+// never ran at all for this case -- distinct from "ran and refused",
+// exactly the non-vacuity distinction the brief's own acceptance bar asks
+// for.
+func (c *replayTraceCapture) shadowOutcome() replayShadowOutcome {
+	var out replayShadowOutcome
+	for _, e := range c.events {
+		if e.Stage != "evidence_round" {
+			continue
+		}
+		out.Ran = true
+		out.Outcome = e.ShadowOutcome
+		out.Reason = e.ShadowReason
+		out.PreconditionUnproven = e.ShadowPreconditionUnproven
+		out.NonCensusedSurvivor = e.ShadowNonCensusedSurvivor
+		out.HandleGrammarBound = e.ShadowHandleGrammarBound
+		out.AnchorUniqueClaimant = e.ShadowAnchorUniqueClaimant
+		out.KindsCensused = e.ShadowKindsCensused
+		out.DIdentityHash = e.ShadowDIdentityHash
+		break // exactly one evidence_round event per resolution (emit's own guarantee)
+	}
+	for _, e := range c.events {
+		if e.Stage != "evidence_probe" {
+			continue
+		}
+		out.CensusKinds = append(out.CensusKinds, replayShadowCensusKind{
+			Kind: string(e.CensusKind), Complete: e.CensusComplete, Count: e.CensusCount,
+			Protocol: e.CensusProtocol, ClosureMismatch: e.CensusClosureMismatch,
+			StatementCount: e.CensusStatementCount, RowsRead: e.CensusRowsRead,
+			HandleApplied: e.CensusHandleApplied, AnchorApplied: e.CensusAnchorApplied,
+		})
+	}
+	return out
+}
+
+func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Client, wireIdentityUniverse bool, tracer graphrank.ResolutionTracer, censusFunc graphrank.CensusFunc) (contextfabric.GraphReader, error) {
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return nil, err
 	}
 	graphConfig.Telemetry = falkorgraph.SlogTelemetry{Logger: logger}
 	graphConfig.ResolutionTracer = tracer
+	// CHAOS-3899 (shadow only): nil for arm baseline (never wired below --
+	// see the call site) and for a caller that doesn't need the shadow
+	// measurement. graphrank.ResolveSubjects itself gates the round on
+	// "stalled resolution only" and adds its own 3s deadline + panic
+	// recovery, so setting this can never change baseline/wired's own
+	// Committed/Candidates/ClarificationPrompt output (proven by
+	// TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution,
+	// graphrank package).
+	graphConfig.CensusFunc = censusFunc
 	if wireIdentityUniverse {
 		graphConfig.IdentityUniverse = func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
 			return devhealthsource.IdentityUniverse(ctx, client, orgID)
@@ -425,12 +528,23 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	baselineGraph, err := buildReplayGraphReader(logger, client, false, nil)
+	baselineGraph, err := buildReplayGraphReader(logger, client, false, nil, nil)
 	if err != nil {
 		t.Fatalf("build baseline graph reader: %v", err)
 	}
 	traceCapture := &replayTraceCapture{}
-	wiredGraph, err := buildReplayGraphReader(logger, client, true, traceCapture)
+	// CHAOS-3899: the shadow round rides the WIRED arm only -- it is
+	// gated on graphrank.ResolveSubjects' own stalled-only trigger and
+	// traces into the SAME durable tracer this arm already has wired for
+	// CHAOS-3884/3897/3858's own reachability signals, so no third arm is
+	// needed. ACR_TEST_TRIAL_SHADOW_CENSUS=false (opt-out, default on)
+	// lets an operator run the ORIGINAL CHAOS-3884 replay with zero
+	// shadow overhead if ever needed again.
+	var censusFunc graphrank.CensusFunc
+	if os.Getenv("ACR_TEST_TRIAL_SHADOW_CENSUS") != "false" {
+		censusFunc = devhealthsource.NewCensusFunc(client)
+	}
+	wiredGraph, err := buildReplayGraphReader(logger, client, true, traceCapture, censusFunc)
 	if err != nil {
 		t.Fatalf("build wired graph reader: %v", err)
 	}
@@ -521,8 +635,12 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 
 		outcome.Axis = string(interpreted.TimeContext.Axis)
 		traceCapture.reset()
+		baselineStart := time.Now()
 		baselineRes, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted)
+		outcome.BaselineElapsedMS = time.Since(baselineStart).Milliseconds()
+		wiredStart := time.Now()
 		wiredRes, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted)
+		outcome.WiredElapsedMS = time.Since(wiredStart).Milliseconds()
 		cancelCase()
 
 		// Reachability, read from the durable ResolutionTracer (team-lead
@@ -536,6 +654,11 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		// bit off the wired arm's own decision-stage event (CHAOS-3897) --
 		// see WiredSearchTruncated's own doc comment.
 		outcome.WiredSearchTruncated = traceCapture.decisionSearchTruncated()
+		// CHAOS-3899: read AFTER both resolves (both arms share the trace
+		// capture instance, but only the wired arm's config ever sets
+		// CensusFunc, so only the wired arm's resolve can have produced
+		// evidence_round/evidence_probe events for this case).
+		outcome.Shadow = traceCapture.shadowOutcome()
 
 		outcome.Baseline = buildReplayArmOutcome(baselineRes, baselineErr)
 		outcome.Wired = buildReplayArmOutcome(wiredRes, wiredErr)
@@ -617,6 +740,50 @@ func TestClassifyReplayDiff(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReplayTraceCapture_ShadowOutcome pins CHAOS-3899's own extraction
+// logic without any live infrastructure: fabricated evidence_round/
+// evidence_probe events must round-trip into replayShadowOutcome exactly.
+func TestReplayTraceCapture_ShadowOutcome(t *testing.T) {
+	t.Parallel()
+	t.Run("never ran", func(t *testing.T) {
+		t.Parallel()
+		c := &replayTraceCapture{}
+		got := c.shadowOutcome()
+		if got.Ran {
+			t.Fatalf("shadowOutcome() = %#v, want Ran=false with no evidence_round event captured", got)
+		}
+	})
+	t.Run("ran with one census kind", func(t *testing.T) {
+		t.Parallel()
+		c := &replayTraceCapture{}
+		c.Trace(graphrank.ResolutionTraceEvent{
+			Stage: "evidence_round", ShadowOutcome: "would_commit", ShadowPreconditionUnproven: true,
+			ShadowHandleGrammarBound: true, ShadowKindsCensused: 1, ShadowDIdentityHash: "deadbeef",
+		})
+		c.Trace(graphrank.ResolutionTraceEvent{
+			Stage: "evidence_probe", CensusKind: contractsv1.ContextFabricSubjectPullRequest, CensusComplete: true,
+			CensusCount: 1, CensusProtocol: "aggregate_first", CensusStatementCount: 2, CensusRowsRead: 1, CensusHandleApplied: true,
+		})
+		got := c.shadowOutcome()
+		if !got.Ran || got.Outcome != "would_commit" || !got.PreconditionUnproven || !got.HandleGrammarBound || got.KindsCensused != 1 || got.DIdentityHash != "deadbeef" {
+			t.Fatalf("shadowOutcome() = %#v, want a fully populated would_commit record", got)
+		}
+		if len(got.CensusKinds) != 1 || got.CensusKinds[0].Kind != "pull_request" || got.CensusKinds[0].Count != 1 || !got.CensusKinds[0].HandleApplied {
+			t.Fatalf("shadowOutcome().CensusKinds = %#v, want exactly the one pull_request receipt", got.CensusKinds)
+		}
+	})
+	t.Run("unrelated stages ignored", func(t *testing.T) {
+		t.Parallel()
+		c := &replayTraceCapture{}
+		c.Trace(graphrank.ResolutionTraceEvent{Stage: "search", SearchResultCount: 5})
+		c.Trace(graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "ambiguous"})
+		got := c.shadowOutcome()
+		if got.Ran {
+			t.Fatalf("shadowOutcome() = %#v, want Ran=false -- search/decision events are not evidence_round", got)
+		}
+	})
 }
 
 func TestReplayStatus(t *testing.T) {

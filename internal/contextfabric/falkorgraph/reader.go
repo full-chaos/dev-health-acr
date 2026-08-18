@@ -187,6 +187,13 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		CommitGatePolicy:  a.commitGatePolicy,
 		RawSignalObserver: a.config.RawSignalObserver,
 		ResolutionTracer:  a.config.ResolutionTracer,
+		// CHAOS-3899 (SHADOW ONLY): nil unless the composition root sets
+		// Config.CensusFunc -- see that field's own doc comment. Threaded
+		// straight through, exactly like RawSignalObserver/ResolutionTracer
+		// above; graphrank.ResolveSubjects itself is what gates the shadow
+		// round on "stalled resolution only" and adds the 3s deadline +
+		// panic recovery, so nothing extra is needed here.
+		CensusFunc: a.config.CensusFunc,
 	}
 	// CHAOS-3884 (Option C): AliasLookup is left nil (deps' own zero value)
 	// when this deployment has no identity-universe reader configured --
