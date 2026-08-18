@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -88,7 +89,8 @@ When conversation turns or prior subject receipts are supplied, resolve conversa
 When the question names no specific subject but describes a team- or project-level condition shared across the organization ("which teams are under the most pressure", "what projects are behind"), interpret it as a discovered cohort within the caller's authorized scope rather than asking which single subject was meant.
 Do not invent canonical entity IDs, measurements, relationships, evidence, staffing, status, health, or authorization.
 Do not produce SQL, GraphQL, Cypher, graph IDs, credentials, or tool calls.
-Use clarification only when materially different authorized subjects or timeframes remain plausible and proceeding would make the answer unreliable.`,
+Use clarification only when materially different authorized subjects or timeframes remain plausible and proceeding would make the answer unreliable.
+window_class is OPTIONAL and, if present, MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Pick the class that best matches what kind of evidence-window judgment the question is asking for; omit it entirely if none fits. Never emit a timestamp, date, or duration for this -- only the class name. window_confidence is OPTIONAL and, if present, MUST be exactly "high" or "low": use "low" whenever the question could plausibly fit more than one window_class, or you are otherwise unsure of the pick.`,
 	contextFabricFactKindList,
 	contractsv1.ContextFabricRequestedJudgmentMaxLength,
 	contractsv1.ContextFabricSubjectTermsMaxCount,
@@ -99,6 +101,7 @@ Use clarification only when materially different authorized subjects or timefram
 	contractsv1.ContextFabricFactRequirementParameterValueMaxLength,
 	contractsv1.ContextFabricFactRequirementParametersMaxCount,
 	contractsv1.ContextFabricClarificationReasonMaxLength,
+	contextFabricWindowClassList,
 )
 
 // contextFabricFactKindList renders the closed fact-kind vocabulary in
@@ -113,6 +116,21 @@ var contextFabricFactKindList = func() string {
 		kinds = append(kinds, string(kind))
 	}
 	return strings.Join(kinds, ", ")
+}()
+
+// contextFabricWindowClassList renders the closed window-class vocabulary
+// (CHAOS-3900 W0, SHADOW ONLY) in published order, from the SAME
+// declaration ValidWindowClass/SanitizeWindowClass consult -- the fact-kind
+// list's own interpolation discipline, applied to a second closed
+// vocabulary that lives in package contextfabric rather than contracts/v1
+// (see chaos3900_window_vocab.go's doc comment for why).
+var contextFabricWindowClassList = func() string {
+	vocabulary := contextfabric.WindowClassVocabulary()
+	classes := make([]string, 0, len(vocabulary))
+	for _, class := range vocabulary {
+		classes = append(classes, string(class))
+	}
+	return strings.Join(classes, ", ")
 }()
 
 // contextFabricDriverCategoryList renders the closed driver-category

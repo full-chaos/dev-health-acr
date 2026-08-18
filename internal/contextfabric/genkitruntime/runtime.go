@@ -492,6 +492,15 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 	outputBytes, _ := json.Marshal(output)
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
 	receipt.Outcome = "success"
+	// CHAOS-3900 W0 (SHADOW ONLY): sanitize-before-validate (F5 control
+	// flow) -- the raw model pick is checked against the closed vocabulary
+	// HERE, strictly after toDomain/interpreted.Validate() already
+	// succeeded above, so an out-of-vocab window_class can never be the
+	// reason a whole interpretation is rejected. Captured on the receipt
+	// only (never on `interpreted`); nothing downstream of this call reads
+	// it, so this line changes no serving-path behavior.
+	receipt.WindowClass, receipt.WindowClassUnrecognized = contextfabric.SanitizeWindowClass(output.WindowClass)
+	receipt.WindowConfidence = contextfabric.SanitizeWindowConfidence(output.WindowConfidence)
 	return interpreted, receipt, nil
 }
 
@@ -938,6 +947,19 @@ type interpretationOutput struct {
 	FactRequirements    []factRequirementOutput `json:"fact_requirements"`
 	ClarificationNeeded bool                    `json:"clarification_needed"`
 	ClarificationReason string                  `json:"clarification_reason,omitempty"`
+	// WindowClass/WindowConfidence (CHAOS-3900 W0, SHADOW ONLY): the
+	// model's one-enum-pick classification of the question's evidence-
+	// window shape (design brief §2.1). Deliberately NOT part of
+	// contextfabric.InterpretedQuestion/toDomain -- sanitized directly in
+	// InterpretQuestion (below toDomain's own call site) onto
+	// ModelExecutionReceipt, so an out-of-vocab pick can never fail
+	// interpreted.Validate() (the F5 control-flow fix: interpreted.Validate()
+	// runs inside toDomain, before any caller-side fallback could run, so
+	// closed-enum enforcement must sit strictly before it, never inside
+	// it). The model never emits a timestamp for this -- only the class
+	// pick; the engine-side post-pass (graphrank.ClassifyWindow) owns bounds.
+	WindowClass      string `json:"window_class,omitempty" jsonschema:"enum=trend_assessment,enum=recent_activity_lookup,enum=state_snapshot,enum=explicit_window"`
+	WindowConfidence string `json:"window_confidence,omitempty" jsonschema:"enum=high,enum=low"`
 }
 
 type outputTimeContext struct {

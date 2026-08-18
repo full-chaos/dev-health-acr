@@ -145,6 +145,18 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	// entirely (same failure mode InputDigest/OutputDigest are excluded
 	// for, just for an id instead of a content hash).
 	"RequestID": {reason: "per-call correlation id, not a version/content-shape authority -- two calls with identical content-shape authorities still get distinct RequestIDs, so binding reuse to it would defeat reuse entirely"},
+	// WindowClass/WindowConfidence/WindowClassUnrecognized (CHAOS-3900 W0,
+	// SHADOW ONLY -- see chaos3900_window_vocab.go's package doc comment):
+	// a per-call CLASSIFICATION OUTCOME, not a version/content-shape
+	// authority. It is not even part of the served answer in W0 -- nothing
+	// downstream of Interpret reads it, so binding reuse to it would be
+	// pointless as well as wrong; the design brief's own eventual
+	// WindowInferenceVersion dimension (§5.2, a real version authority for
+	// a LATER slice, once an inferred window actually rides an answer) is
+	// the field this would graduate into if W1+ ever lands, not this one.
+	"WindowClass":             {reason: "per-call shadow classification outcome, not a version identity -- unconsumed by any served answer in W0 (see chaos3900_window_vocab.go); a future WindowInferenceVersion dimension (design brief §5.2), not this field, is the eventual reuse-key authority once a window rides an answer"},
+	"WindowConfidence":        {reason: "per-call shadow classification outcome, not a version identity -- same reasoning as WindowClass"},
+	"WindowClassUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as WindowClass"},
 }
 
 // TestReuseKeyClassifiesEveryVersionSetField is the class-oracle sweep over

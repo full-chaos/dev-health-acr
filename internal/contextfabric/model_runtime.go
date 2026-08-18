@@ -115,6 +115,19 @@ type ModelExecutionReceipt struct {
 	// never received one, is still a valid receipt with RequestID empty --
 	// Validate() below only bounds it when present, never requires it.
 	RequestID string `json:"request_id,omitempty"`
+	// WindowClass/WindowConfidence/WindowClassUnrecognized (CHAOS-3900 W0,
+	// SHADOW ONLY -- see chaos3900_window_vocab.go's package doc comment):
+	// the sanitized closed-vocabulary window classification an Interpret
+	// call produced, captured here rather than on InterpretedQuestion so
+	// this stays off the published wire contract for a slice that ships no
+	// consumer of it. Omitempty: every receipt built before this field
+	// existed, and every Operation=synthesize receipt (this classification
+	// exists only for interpretation), has it absent, not a present zero
+	// value -- the same asymmetry-avoidance ModelIdentity's own doc comment
+	// on this struct already explains.
+	WindowClass             WindowClass      `json:"window_class,omitempty"`
+	WindowConfidence        WindowConfidence `json:"window_confidence,omitempty"`
+	WindowClassUnrecognized bool             `json:"window_class_unrecognized,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {
