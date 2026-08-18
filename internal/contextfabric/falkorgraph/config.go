@@ -34,6 +34,7 @@ import (
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
 const (
@@ -228,7 +229,80 @@ type GraphTelemetry interface {
 	// count is a standing silent-projection-loss detector, independent of
 	// this ticket's own alias-identity concern.
 	RecordIdentityGraphMissing(ctx context.Context, orgID string, count int)
+	// RecordVectorFence (CHAOS-3890) fires on every AC-3778-7 read-fence
+	// check this process makes (ensureVectorReadable, via
+	// resolutionFence.readable), carrying the SPECIFIC reason the fence
+	// already computes internally -- see VectorFenceResult's own doc
+	// comment -- instead of collapsing it into RecordVectorRetrievalDegraded's
+	// bare bool. That existing signal is untouched (still fires exactly as
+	// before); this is an ADDITIONAL, more specific signal alongside it, so
+	// a dashboard/alert built on the old one keeps working unchanged.
+	//
+	// memoized reports whether THIS call reused the one probe
+	// resolutionFence caches for the lifetime of a single ResolveSubjects
+	// call (that type's own doc comment) rather than issuing a fresh one --
+	// so a reader can tell "the same verdict, reported again for a later
+	// term in this resolution" apart from "a fresh probe just ran". Fires
+	// even when result==VectorFenceOK, so an operator can see the fence
+	// PASSING, not merely infer it from an absence of failure signals.
+	RecordVectorFence(ctx context.Context, orgID string, result VectorFenceResult, memoized bool)
+	// RecordLexiconExpansion (CHAOS-3890) fires once per
+	// fulltextSearchNodesForResolution call (subject resolution's own
+	// lexical arm), reporting whether the CHAOS-3838 domain-lexicon
+	// expansion fired for this call's term, how many separate batches it
+	// ran (lexiconExpansionBatches), how many genuinely new candidates it
+	// contributed beyond the base query, and whether expansion itself was
+	// the reason this call's own truncated signal flipped true.
+	//
+	// That last fact matters operationally: fulltextSearchNodesForResolution's
+	// truncated return feeds ResolveFromMergedCandidates' searchTruncated,
+	// which can block a downstream auto-commit -- previously this was
+	// computed, used for exactly that gate, and then discarded, so an
+	// unexpected non-commit traced back to expansion-caused truncation had
+	// no operational signal to confirm it against.
+	RecordLexiconExpansion(ctx context.Context, orgID string, fired bool, batchCount, addedCandidates int, truncatedByExpansion bool)
 }
+
+// VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
+// fence's verdict (ensureVectorReadable/vectorFenceCheck). "ok" means the
+// fence passed; every other value names EXACTLY one of the checks the fence
+// already runs internally, in the order it runs them -- so a reader can
+// tell "no index has been built yet" apart from "an index exists but its
+// status/dimension could not be trusted" apart from "the embedder's
+// dimension changed" apart from "this graph holds vectors from a different
+// (or unverifiable) embedder identity" apart from "the fence's own probe
+// query failed" -- five distinct causes RecordVectorRetrievalDegraded's
+// bare bool had always flattened into one signal.
+type VectorFenceResult string
+
+const (
+	// VectorFenceOK: the fence passed. Vector retrieval proceeds.
+	VectorFenceOK VectorFenceResult = "ok"
+	// VectorFenceIndexAbsent: no vector index on Subject.embedding exists
+	// yet for this graph key (vectorIndexAbsent), or no embedder is
+	// configured for this deployment at all.
+	VectorFenceIndexAbsent VectorFenceResult = "index_absent"
+	// VectorFenceIndexUnknown: an index exists but its OPERATIONAL status
+	// or dimension could not be determined (vectorIndexUnknown) -- never
+	// treated as a match, per vectorIndexDimension's own fail-closed rule.
+	VectorFenceIndexUnknown VectorFenceResult = "index_unknown"
+	// VectorFenceDimMismatch: the index reports a dimension different from
+	// the currently configured embedder's -- e.g. a model swap that changed
+	// output width without a rebuild.
+	VectorFenceDimMismatch VectorFenceResult = "dim_mismatch"
+	// VectorFenceIdentityMismatch: verifyStoredEmbedderIdentity found (or
+	// could not rule out) a node whose stored embedder_identity disagrees
+	// with the currently configured embedder -- a same-dimension model
+	// swap, or a vector of unknown provenance (a NULL identity is treated
+	// as a mismatch, never as verified).
+	VectorFenceIdentityMismatch VectorFenceResult = "identity_mismatch"
+	// VectorFenceQueryError: the fence's own dependency query (the index
+	// inspection, or the stored-identity probe) failed -- an unverifiable
+	// fence is not a passed fence, so this fails closed exactly like every
+	// other non-ok result, but for a genuinely different, dependency-fault
+	// reason worth telling apart from a configuration/projection-lag state.
+	VectorFenceQueryError VectorFenceResult = "query_error"
+)
 
 // NoopTelemetry discards every signal. Callers that want no telemetry pass
 // this explicitly rather than leaving Config.Telemetry nil, so "no signals" is
@@ -241,6 +315,8 @@ func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)   
 func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int, int)   {}
 func (NoopTelemetry) RecordVectorIndexEfRuntimeMismatch(context.Context, string, int, int) {}
 func (NoopTelemetry) RecordIdentityGraphMissing(context.Context, string, int)              {}
+func (NoopTelemetry) RecordVectorFence(context.Context, string, VectorFenceResult, bool)   {}
+func (NoopTelemetry) RecordLexiconExpansion(context.Context, string, bool, int, int, bool) {}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -324,6 +400,53 @@ func (t SlogTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key
 // resolution needed the identity fast path.
 func (t SlogTelemetry) RecordIdentityGraphMissing(_ context.Context, orgID string, count int) {
 	t.logger().Warn("context_fabric: identity-universe claimant absent from the graph (projection lag)", "org_id", orgID, "count", count)
+}
+
+// RecordVectorFence logs at Debug when the fence passes (VectorFenceOK) --
+// passing is the expected, steady-state outcome and would be pure noise at
+// any level an operator runs in production -- and at Warn for every other
+// result: each is either a configuration/projection-lag condition
+// (index_absent, index_unknown, dim_mismatch, identity_mismatch) or a
+// dependency fault (query_error) worth an operator's attention without
+// needing to raise ACR_LOG_LEVEL first.
+//
+// request_id is read via observability.RequestIDFromContext(ctx) rather
+// than threaded as a new parameter -- ctx already carries it by the time a
+// graph read reaches this sink (api/app.go's requestIDMiddleware attaches
+// it at the HTTP boundary), and this is the one signal in this file that
+// needs per-request correlation rather than only an org_id.
+func (t SlogTelemetry) RecordVectorFence(ctx context.Context, orgID string, result VectorFenceResult, memoized bool) {
+	requestID, _ := observability.RequestIDFromContext(ctx)
+	if result == VectorFenceOK {
+		t.logger().DebugContext(ctx, "context_fabric: vector read fence passed",
+			"org_id", orgID, "request_id", requestID, "result", string(result), "memoized", memoized)
+		return
+	}
+	t.logger().WarnContext(ctx, "context_fabric: vector read fence did not pass",
+		"org_id", orgID, "request_id", requestID, "result", string(result), "memoized", memoized)
+}
+
+// RecordLexiconExpansion logs at Debug -- lexicon expansion firing is
+// ordinary, expected retrieval behavior (CHAOS-3838), not itself a problem
+// -- UNLESS it is the reason this call's own truncated signal flipped true,
+// which can block a downstream auto-commit (ResolveFromMergedCandidates'
+// searchTruncated gate): that case logs at Info so it reaches an operator's
+// default level without needing to raise it to explain an unexpected
+// non-commit.
+func (t SlogTelemetry) RecordLexiconExpansion(ctx context.Context, orgID string, fired bool, batchCount, addedCandidates int, truncatedByExpansion bool) {
+	requestID, _ := observability.RequestIDFromContext(ctx)
+	if !fired {
+		t.logger().DebugContext(ctx, "context_fabric: lexicon expansion did not fire",
+			"org_id", orgID, "request_id", requestID)
+		return
+	}
+	if truncatedByExpansion {
+		t.logger().InfoContext(ctx, "context_fabric: lexicon expansion fired and truncated this call's results",
+			"org_id", orgID, "request_id", requestID, "batch_count", batchCount, "added_candidates", addedCandidates)
+		return
+	}
+	t.logger().DebugContext(ctx, "context_fabric: lexicon expansion fired",
+		"org_id", orgID, "request_id", requestID, "batch_count", batchCount, "added_candidates", addedCandidates)
 }
 
 func (c Config) validate() error {

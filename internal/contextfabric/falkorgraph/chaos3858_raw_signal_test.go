@@ -21,7 +21,7 @@ type fakeRawSignalObserver struct {
 	observed map[string]graphrank.CandidateNode
 }
 
-func (f *fakeRawSignalObserver) ObserveCandidate(subjectKey string, node graphrank.CandidateNode) {
+func (f *fakeRawSignalObserver) ObserveCandidate(ctx context.Context, subjectKey string, node graphrank.CandidateNode) {
 	if f.observed == nil {
 		f.observed = map[string]graphrank.CandidateNode{}
 	}

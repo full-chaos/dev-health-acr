@@ -1138,6 +1138,30 @@ type recordingTelemetry struct {
 	// identityGraphMissing counts every RecordIdentityGraphMissing call's
 	// count argument (CHAOS-3884).
 	identityGraphMissing int
+
+	// vectorFences/lexiconExpansions record every RecordVectorFence/
+	// RecordLexiconExpansion call verbatim (CHAOS-3890) -- slices, so a
+	// test can assert the exact reason/memoized or fired/batch/added/
+	// truncated values reported, not merely that SOMETHING fired.
+	vectorFences      []vectorFenceRecord
+	lexiconExpansions []lexiconExpansionRecord
+}
+
+// vectorFenceRecord is one recorded RecordVectorFence call's arguments.
+type vectorFenceRecord struct {
+	orgID    string
+	result   VectorFenceResult
+	memoized bool
+}
+
+// lexiconExpansionRecord is one recorded RecordLexiconExpansion call's
+// arguments.
+type lexiconExpansionRecord struct {
+	orgID                string
+	fired                bool
+	batchCount           int
+	addedCandidates      int
+	truncatedByExpansion bool
 }
 
 // efRuntimeMismatchRecord is one recorded
@@ -1167,6 +1191,14 @@ func (r *recordingTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Contex
 }
 func (r *recordingTelemetry) RecordIdentityGraphMissing(_ context.Context, _ string, count int) {
 	r.identityGraphMissing += count
+}
+func (r *recordingTelemetry) RecordVectorFence(_ context.Context, orgID string, result VectorFenceResult, memoized bool) {
+	r.vectorFences = append(r.vectorFences, vectorFenceRecord{orgID: orgID, result: result, memoized: memoized})
+}
+func (r *recordingTelemetry) RecordLexiconExpansion(_ context.Context, orgID string, fired bool, batchCount, addedCandidates int, truncatedByExpansion bool) {
+	r.lexiconExpansions = append(r.lexiconExpansions, lexiconExpansionRecord{
+		orgID: orgID, fired: fired, batchCount: batchCount, addedCandidates: addedCandidates, truncatedByExpansion: truncatedByExpansion,
+	})
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

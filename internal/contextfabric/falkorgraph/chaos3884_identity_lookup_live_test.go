@@ -102,6 +102,10 @@ func (f *fakeIdentityTelemetry) RecordVectorIndexEfRuntimeMismatch(context.Conte
 func (f *fakeIdentityTelemetry) RecordIdentityGraphMissing(_ context.Context, _ string, count int) {
 	f.identityGraphMissing += count
 }
+func (f *fakeIdentityTelemetry) RecordVectorFence(context.Context, string, falkorgraph.VectorFenceResult, bool) {
+}
+func (f *fakeIdentityTelemetry) RecordLexiconExpansion(context.Context, string, bool, int, int, bool) {
+}
 
 // TestLiveAliasIdentityFastPathCommitsAUniqueClaimant is CHAOS-3884 Option
 // C's live end-to-end proof: a repository entity projected into a real
