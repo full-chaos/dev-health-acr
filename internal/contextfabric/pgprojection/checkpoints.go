@@ -235,6 +235,43 @@ WHERE org_id = $1 AND epoch = $2`, orgID, epoch); err != nil {
 	return nil
 }
 
+// ForEpoch returns a contextfabric.ProjectionCheckpointStore VIEW bound to
+// ONE fixed epoch, implemented by delegating to LoadProjectionCheckpointForEpoch/
+// CompareAndSwapProjectionCheckpointForEpoch above (CHAOS-3898 S2a-2, design
+// brief §3.4: "the projector reads/advances the set of the epoch it is
+// WRITING -- active epoch in steady state; target epoch while a build is
+// open").
+//
+// This is deliberately a VIEW, not an interface change: contextfabric.
+// ProjectionWorker and contextfabric.ProjectionCheckpointStore are untouched
+// (no epoch parameter added anywhere in the domain layer), so a caller that
+// wants epoch-scoped ticking simply constructs a fresh
+// contextfabric.ProjectionWorker bound to this view instead of to the plain
+// (epoch-0-pinned) CheckpointStore -- exactly the pattern
+// projectionrun.Coordinator's own workerFor uses. epoch=0 still returns a
+// working view (equivalent to the plain store, since epoch 0 is the legacy
+// row set both paths read/write identically), so callers never need to
+// special-case it.
+func (s *CheckpointStore) ForEpoch(epoch int64) contextfabric.ProjectionCheckpointStore {
+	return epochCheckpointView{store: s, epoch: epoch}
+}
+
+type epochCheckpointView struct {
+	store *CheckpointStore
+	epoch int64
+}
+
+func (v epochCheckpointView) LoadProjectionCheckpoint(ctx context.Context, orgID, source string) (contextfabric.ProjectionCheckpoint, error) {
+	return v.store.LoadProjectionCheckpointForEpoch(ctx, orgID, v.epoch, source)
+}
+
+func (v epochCheckpointView) CompareAndSwapProjectionCheckpoint(ctx context.Context, expected, updated contextfabric.ProjectionCheckpoint) error {
+	expected.Epoch, updated.Epoch = v.epoch, v.epoch
+	return v.store.CompareAndSwapProjectionCheckpointForEpoch(ctx, expected, updated)
+}
+
+var _ contextfabric.ProjectionCheckpointStore = epochCheckpointView{}
+
 func sanitizeError(err error) error {
 	if err == nil {
 		return nil
