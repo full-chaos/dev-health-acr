@@ -260,62 +260,74 @@ func TestChaos3899D2BCardinality(t *testing.T) {
 			Consumer: contractsv1.ContextFabricConsumerInfo{Name: "chaos-3899-d2b", Version: "0.1.0", Surface: "trial"},
 		}
 
+		// callCtx's cancel is DEFERRED to the end of this case's own loop
+		// iteration (a bug found live: an earlier version called
+		// cancelCase() right after the two resolves, mirroring
+		// chaos3884_replay_harness_test.go's OWN placement -- correct
+		// THERE, since nothing after it needs a live context, but wrong
+		// HERE, since this file's cardinality census calls below still
+		// need callCtx to be alive. The symptom was a 100% RunCardinalityCensus
+		// failure rate against a context already canceled before the first
+		// query ever ran -- caught by this run itself, not a unit test,
+		// because no fake-client test exercises context cancellation
+		// timing).
 		callCtx, cancelCase := context.WithTimeout(ctx, caseTimeout)
-		interpreted, interpretErr := interpreter.Interpret(callCtx, principal, request)
-		var m d2bCaseMeasurement
-		m.Index = i
-		m.IsControl = tc.ExpectID == ""
-		if interpretErr != nil {
-			m.DiffClass = replayUnchanged
-			cancelCase()
-			report.Measurements = append(report.Measurements, m)
-			report.DiffTally[m.DiffClass]++
-			report.CasesRun++
-			continue
-		}
-		m.Axis = string(interpreted.TimeContext.Axis)
-
-		baselineRes, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted)
-		wiredRes, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted)
-		cancelCase()
-
-		if baselineErr != nil || wiredErr != nil {
-			m.DiffClass = replayChangedOther
-			report.Measurements = append(report.Measurements, m)
-			report.DiffTally[m.DiffClass]++
-			report.CasesRun++
-			continue
-		}
-		m.DiffClass = classifyReplayDiff(tc, baselineRes.Committed, wiredRes.Committed)
-		report.DiffTally[m.DiffClass]++
-		report.CasesRun++
-		if m.IsControl && len(wiredRes.Committed) > 0 {
-			report.ControlsCommittedInWiredArm++
-		}
-
-		m.Stalled = replayStatus(wiredRes, nil) == "ambiguous"
-		if m.Stalled {
-			report.StalledCases++
-			kinds := pooledCensusKinds(wiredRes.Candidates)
-			m.PooledCensusKinds = len(kinds)
-			for _, kind := range kinds {
-				window, werr := devhealthsource.BuildCardinalityWindow(kind, interpreted.TimeContext.Start, interpreted.TimeContext.End, interpreted.TimeContext.AsOf)
-				if werr != nil {
-					t.Logf("case %d kind %s: BuildCardinalityWindow error: %v", i, kind, werr)
-					continue
-				}
-				result, cerr := devhealthsource.RunCardinalityCensus(callCtx, client, orgID, kind, window)
-				if cerr != nil {
-					t.Logf("case %d kind %s: RunCardinalityCensus error: %v", i, kind, cerr)
-					continue
-				}
-				m.Measurements = append(m.Measurements, d2bKindMeasurement{
-					Kind: string(kind), Count: result.Count, WindowBound: window.Bound,
-				})
+		func() {
+			defer cancelCase()
+			interpreted, interpretErr := interpreter.Interpret(callCtx, principal, request)
+			var m d2bCaseMeasurement
+			m.Index = i
+			m.IsControl = tc.ExpectID == ""
+			if interpretErr != nil {
+				m.DiffClass = replayUnchanged
+				report.Measurements = append(report.Measurements, m)
+				report.DiffTally[m.DiffClass]++
+				report.CasesRun++
+				return
 			}
-		}
-		report.Measurements = append(report.Measurements, m)
-		t.Logf("case %d: stalled=%v pooled_census_kinds=%d diff=%s axis=%s", i, m.Stalled, m.PooledCensusKinds, m.DiffClass, m.Axis)
+			m.Axis = string(interpreted.TimeContext.Axis)
+
+			baselineRes, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted)
+			wiredRes, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted)
+
+			if baselineErr != nil || wiredErr != nil {
+				m.DiffClass = replayChangedOther
+				report.Measurements = append(report.Measurements, m)
+				report.DiffTally[m.DiffClass]++
+				report.CasesRun++
+				return
+			}
+			m.DiffClass = classifyReplayDiff(tc, baselineRes.Committed, wiredRes.Committed)
+			report.DiffTally[m.DiffClass]++
+			report.CasesRun++
+			if m.IsControl && len(wiredRes.Committed) > 0 {
+				report.ControlsCommittedInWiredArm++
+			}
+
+			m.Stalled = replayStatus(wiredRes, nil) == "ambiguous"
+			if m.Stalled {
+				report.StalledCases++
+				kinds := pooledCensusKinds(wiredRes.Candidates)
+				m.PooledCensusKinds = len(kinds)
+				for _, kind := range kinds {
+					window, werr := devhealthsource.BuildCardinalityWindow(kind, interpreted.TimeContext.Start, interpreted.TimeContext.End, interpreted.TimeContext.AsOf)
+					if werr != nil {
+						t.Logf("case %d kind %s: BuildCardinalityWindow error: %v", i, kind, werr)
+						continue
+					}
+					result, cerr := devhealthsource.RunCardinalityCensus(callCtx, client, orgID, kind, window)
+					if cerr != nil {
+						t.Logf("case %d kind %s: RunCardinalityCensus error: %v", i, kind, cerr)
+						continue
+					}
+					m.Measurements = append(m.Measurements, d2bKindMeasurement{
+						Kind: string(kind), Count: result.Count, WindowBound: window.Bound,
+					})
+				}
+			}
+			report.Measurements = append(report.Measurements, m)
+			t.Logf("case %d: stalled=%v pooled_census_kinds=%d diff=%s axis=%s", i, m.Stalled, m.PooledCensusKinds, m.DiffClass, m.Axis)
+		}()
 	}
 
 	raw, err := json.MarshalIndent(report, "", "  ")
