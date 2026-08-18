@@ -116,6 +116,24 @@ type ResolveDeps struct {
 	// TraversalDegraded optionally reports how many Traverse calls in this
 	// ResolveSubjects call ended in ObservationTraversalErrored. May be nil.
 	TraversalDegraded func(ctx context.Context, orgID string, count int)
+	// SubjectCandidatesAuthzDropped (CHAOS-3888) optionally reports how many
+	// candidate nodes this ResolveSubjects call found -- via the caller's
+	// own explicit SubjectHints (ExactHint) or via per-term/question hybrid
+	// search (mergeSearchResults) -- and then excluded SPECIFICALLY because
+	// AuthorizedAttributes denied them, as opposed to any other reason
+	// NodeCandidate declines a node (not a valid subject, or an internal
+	// bookkeeping node). Mirrors TraversalDegraded's exact convention: nil
+	// means this backend does not report the signal, and the count is a
+	// single aggregate over the whole call, not per-term.
+	//
+	// Before this ticket, an authorization-filtered candidate was
+	// indistinguishable from one that simply never existed -- both
+	// disappeared into the same `!ok { continue }`, so a user-facing
+	// no_match was structurally identical whether nothing matched or
+	// something did and authorization hid it. This is the seam that makes
+	// that distinction observable, request-scoped, and content-safe (a
+	// count only, never which candidate or why beyond "authorization").
+	SubjectCandidatesAuthzDropped func(ctx context.Context, orgID string, count int)
 	// SearchQuestion optionally runs ONE additional retrieval pass over the
 	// full interpreted QUESTION text, rather than one extracted subject
 	// term (CHAOS-3838 / spec L11 -- the "union" read-side lever). Nil
@@ -464,6 +482,14 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// what a conversational reference bound to previously, and the current
 	// question may name a different subject entirely.
 	callerSourced := make(map[string]bool)
+	// subjectCandidatesAuthzDropped (CHAOS-3888) aggregates every candidate
+	// node this call found -- via an explicit SubjectHint below, or via
+	// mergeSearchResults' per-term/question passes further down -- and
+	// excluded specifically because AuthorizedAttributes denied it. Checked
+	// independently of NodeCandidate's own !ok result (which also fires for
+	// an invalid or internal-bookkeeping node, neither of which is an
+	// authorization event) so this count never over-reports.
+	subjectCandidatesAuthzDropped := 0
 	for _, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
 			continue
@@ -487,8 +513,15 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// unlike CHAOS-3838's question-provenance marker below, this is
 		// genuine caller-supplied identity, and this whole branch already
 		// forces Confidence/MatchExact explicitly regardless.
+		// CHAOS-3888: checked before NodeCandidate, not derived from its
+		// !ok result, so an invalid/internal-bookkeeping node (a different,
+		// unrelated exclusion reason) never inflates this count.
+		hintAuthorized := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
 		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true, deps.ResolutionTracer, request.RequestID)
 		if !ok {
+			if !hintAuthorized {
+				subjectCandidatesAuthzDropped++
+			}
 			continue
 		}
 		candidate.Confidence = 1
@@ -670,7 +703,9 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// input (an interpreted subject term, or a requested-scope hint
 		// label -- see SubjectTerms), legitimately eligible to exact-match
 		// a subject's own label.
-		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms)
+		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms)
+		traversalDegraded += termTraversalDegraded
+		subjectCandidatesAuthzDropped += termAuthzDropped
 	}
 	// aliasIdentityComplete (CHAOS-3884): built here, between the per-term
 	// Search loop and the question pass -- LOW-12: placing the merge BEFORE
@@ -709,7 +744,9 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// vector evidence only (F3), the same exclusion the question
 			// pass already documents -- a keyed identity read is not a
 			// vector search and has nothing to contribute there.
-			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, nodes, candidatesBySubject, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+			claimantTraversalDegraded, claimantAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, nodes, candidatesBySubject, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+			traversalDegraded += claimantTraversalDegraded
+			subjectCandidatesAuthzDropped += claimantAuthzDropped
 		}
 	}
 	// CHAOS-3838 (spec L11): the question-level pass runs AT MOST ONCE,
@@ -761,7 +798,9 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// nil mirrors vectorArmSimilarity's own "the question pass
 			// never contributes" convention rather than relying on that
 			// downstream guarantee alone.
-			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil, nil, nil)
+			questionTraversalDegraded, questionAuthzDropped := mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil, nil, nil)
+			traversalDegraded += questionTraversalDegraded
+			subjectCandidatesAuthzDropped += questionAuthzDropped
 			// codex round-1 P1, second half: a candidate already at the
 			// 32-entry MatchedTerms cap from real per-term finds would
 			// overflow to 33 once the marker above unioned in. The marker
@@ -773,6 +812,11 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)
+	}
+	// CHAOS-3888: same aggregate-report convention as TraversalDegraded
+	// immediately above.
+	if subjectCandidatesAuthzDropped > 0 && deps.SubjectCandidatesAuthzDropped != nil {
+		deps.SubjectCandidatesAuthzDropped(ctx, principal.OrgID, subjectCandidatesAuthzDropped)
 	}
 	// effectiveSearchLimit is CHAOS-3829 codex r5 K2's (accepted) fix: the
 	// REAL per-call returned-row bound every Search()/SearchQuestion() call
@@ -943,8 +987,17 @@ func scopesUnrestricted(scopes []string) bool {
 // vectorArmSimilarity's own INFLATE-a-margin concern). Both nil is a valid,
 // common call shape (the question-pass call site) -- recordIdentityClaim
 // no-ops on nil, same convention as vectorArmSimilarity==nil above.
-func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64, identity identityClaimants, identityTerms identityMatchTerms) int {
+//
+// Returns (traversalErrored, authzDropped): authzDropped (CHAOS-3888) is the
+// count of results this call excluded specifically because
+// AuthorizedAttributes denied them -- checked independently of
+// NodeCandidate's own !ok result, which also fires for an invalid or
+// internal-bookkeeping node, neither an authorization event. Folds into
+// ResolveSubjects' own subjectCandidatesAuthzDropped aggregate exactly like
+// traversalErrored folds into its traversalDegraded aggregate.
+func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64, identity identityClaimants, identityTerms identityMatchTerms) (int, int) {
 	traversalErrored := 0
+	authzDropped := 0
 	for _, node := range results {
 		if vectorArmSimilarity != nil && node.Mechanism == contextfabric.MatchVector && node.VectorSimilarity != nil {
 			if subject, ok := NodeSubject(node); ok {
@@ -954,8 +1007,12 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 				}
 			}
 		}
+		nodeAuthorized := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
 		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, allowExactMatch, deps.ResolutionTracer, request.RequestID)
 		if !ok {
+			if !nodeAuthorized {
+				authzDropped++
+			}
 			continue
 		}
 		recordIdentityClaim(candidate, identity, identityTerms)
@@ -1014,5 +1071,5 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 			}
 		}
 	}
-	return traversalErrored
+	return traversalErrored, authzDropped
 }

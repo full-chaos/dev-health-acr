@@ -367,6 +367,15 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	// nothing about the stored row is touched.
 	candidate.Reused = true
 	e.recordReuseOutcome(ctx, principal, AnswerReuseHit)
+	// CHAOS-3888: telemetry-only -- candidate.RequestID (served to the
+	// caller, unchanged, per AC-3782-2 above) is deliberately NOT touched
+	// here; this only reports whether it differs from request.RequestID,
+	// THIS call's own id, so an operator can tell "the response's
+	// RequestID names an old investigation" apart from a bug without
+	// reading the response body at all.
+	if e.telemetry != nil {
+		e.telemetry.RecordAnswerReuseServedRequestID(ctx, principal, candidate.RequestID, candidate.RequestID != request.RequestID)
+	}
 	return candidate, true
 }
 

@@ -69,6 +69,16 @@ type AdmitEdgesResult struct {
 	// and for logging -- see that function's doc comment.
 	DroppedUnknownRelationshipTypeCount int
 	DroppedUnknownRelationshipTypeNames []string
+	// DroppedSelfLoopCount (CHAOS-3888) counts edges excluded because
+	// edge.From == edge.To, one of the two conditions the loop below folds
+	// into a single `continue` alongside the internal-bookkeeping-endpoint
+	// exclusion (isInternal). Counted separately, the same "return the
+	// dropped count as a plain value" convention
+	// DroppedUnknownRelationshipTypeCount already established just above --
+	// a self-loop is a distinct, nameable reason an operator may want to
+	// watch, where an internal-bookkeeping endpoint is routine and already
+	// expected on every call.
+	DroppedSelfLoopCount int
 }
 
 // AdmitEdges applies the evidence-budget-bounded admission decision to an
@@ -93,8 +103,16 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 	requirements := make(map[contextfabric.FactKind]contextfabric.FactRequirement)
 	droppedUnknownCount := 0
 	droppedUnknownSeen := make(map[string]struct{})
+	droppedSelfLoopCount := 0
 	for _, edge := range edges {
-		if edge.From == edge.To || isInternal(edge.From) || isInternal(edge.To) {
+		// CHAOS-3888: isSelfLoop counted separately, BEFORE the combined
+		// condition below decides whether to continue -- the combined
+		// condition itself is unchanged (same edges excluded, same order),
+		// this only adds visibility into which of its two arms fired.
+		if isSelfLoop := edge.From == edge.To; isSelfLoop || isInternal(edge.From) || isInternal(edge.To) {
+			if isSelfLoop {
+				droppedSelfLoopCount++
+			}
 			continue
 		}
 		evidence := UniqueSorted(EvidenceRefs(edge.Attributes))
@@ -196,6 +214,7 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 	return AdmitEdgesResult{
 		Paths: paths, Drivers: drivers, EvidenceRefIDs: evidence, FactRequirements: factRequirements,
 		DroppedUnknownRelationshipTypeCount: droppedUnknownCount, DroppedUnknownRelationshipTypeNames: droppedUnknownNames,
+		DroppedSelfLoopCount: droppedSelfLoopCount,
 	}
 }
 
@@ -224,15 +243,26 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 // own, so (unlike DiscoverContext's old second-hop machinery) it needed no
 // change to stay shared. Ported from
 // zepgraph.(*Adapter).discoveredCohort.
-func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) *contextfabric.Cohort {
+//
+// Returns (cohort, authzDropped): authzDropped (CHAOS-3888) counts every
+// node this call excluded specifically because AuthorizedAttributes denied
+// it -- distinct from (and counted independently of) the unauthorized-node,
+// wrong-kind, or internal-bookkeeping exclusions the loop below also makes,
+// none of which is an authorization event. Mirrors AdmitEdgesResult's own
+// "return the dropped count as a plain value, let the I/O-boundary caller
+// decide what to do with it" convention -- this function stays pure, no
+// telemetry call of its own.
+func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int) {
 	if discovery.Interpretation.Shape != contextfabric.ShapeDiscoveredCohort && discovery.Interpretation.Shape != contextfabric.ShapeExplicitCohort {
-		return nil
+		return nil, 0
 	}
 	kind := interpretedCohortKind(discovery.Interpretation)
 	members := make([]contextfabric.CohortMember, 0)
 	seen := make(map[string]struct{})
+	authzDropped := 0
 	for _, node := range nodes {
 		if !AuthorizedAttributes(principal, discovery.Request.RequestedScope, node.Attributes) {
+			authzDropped++
 			continue
 		}
 		subject, ok := NodeSubject(node)
@@ -254,13 +284,13 @@ func DiscoveredCohort(principal storage.Principal, discovery contextfabric.Graph
 		}
 	}
 	if len(members) == 0 {
-		return nil
+		return nil, authzDropped
 	}
 	return &contextfabric.Cohort{
 		Kind: kind, Members: members, Exclusions: []contextfabric.CohortExclusion{},
 		Rationale: "Subjects were discovered from the authorized Context Fabric graph using the user's open-ended cohort question.",
 		Complete:  len(members) < discovery.Request.Options.MaxCohortMembers, Truncated: len(members) >= discovery.Request.Options.MaxCohortMembers,
-	}
+	}, authzDropped
 }
 
 func interpretedCohortKind(interpreted contextfabric.InterpretedQuestion) contextfabric.SubjectKind {

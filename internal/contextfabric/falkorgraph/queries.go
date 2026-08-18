@@ -856,6 +856,62 @@ const (
 	edgeLookupFailed
 )
 
+// edgeFilterReason (CHAOS-3888) classifies WHY resolveEdge returned
+// edgeFiltered -- before this, an authorization denial, a historical-window
+// exclusion, and (rarely) an unresolvable endpoint identity all collapsed
+// into the same unclassified edgeFiltered value, indistinguishable from one
+// another to any caller. Meaningful only alongside edgeFiltered; every other
+// edgeResolution value pairs with edgeFilterReasonNone.
+type edgeFilterReason int
+
+const (
+	edgeFilterReasonNone edgeFilterReason = iota
+	// edgeFilterReasonAuthz: AuthorizedAttributes denied the edge itself or
+	// one of its two resolved endpoints.
+	edgeFilterReasonAuthz
+	// edgeFilterReasonTemporalWindow: an endpoint resolved to nil under an
+	// ACTIVE historical time filter (temporal.active) -- CHAOS-3781's "did
+	// not exist at the requested time" exclusion, per resolveEdge's own
+	// existing doc comment below.
+	edgeFilterReasonTemporalWindow
+	// edgeFilterReasonInvalidSubject: an endpoint's node resolved but its
+	// UUID did not decode to a valid SubjectRef (graphrank.NodeSubject
+	// returned false) -- malformed data, not an authorization or temporal
+	// exclusion. Rare; not part of CHAOS-3888's three named counters, so
+	// hopWalk/DiscoverContext do not tally it, but it is still named here
+	// (rather than reusing edgeFilterReasonNone) so it is never
+	// misclassified as one of the other two.
+	edgeFilterReasonInvalidSubject
+)
+
+// edgeFilterCounts (CHAOS-3888) aggregates resolveEdge's edgeFilterReason
+// across many calls -- hopWalk's own inner loop, and DiscoverContext's
+// separate full-text-adjacent-edge loop, both accumulate into one of these
+// before reporting through GraphTelemetry.RecordEdgesFilteredByReason.
+// InvalidSubject is intentionally NOT a field here -- see
+// edgeFilterReasonInvalidSubject's own doc comment for why it stays
+// uncounted.
+type edgeFilterCounts struct {
+	Authz          int
+	TemporalWindow int
+}
+
+// add folds one resolveEdge call's (resolution, reason) outcome into c.
+// A no-op for edgeAdmitted/edgeLookupFailed (edgeFilterReasonNone) and for
+// edgeFilterReasonInvalidSubject, which this type deliberately does not
+// track.
+func (c *edgeFilterCounts) add(resolution edgeResolution, reason edgeFilterReason) {
+	if resolution != edgeFiltered {
+		return
+	}
+	switch reason {
+	case edgeFilterReasonAuthz:
+		c.Authz++
+	case edgeFilterReasonTemporalWindow:
+		c.TemporalWindow++
+	}
+}
+
 // resolveEdge converts a CandidateEdge (as returned by edgesOfNode) into a
 // fully-resolved graphrank.ResolvedEdge by decoding its endpoint subjectUUIDs
 // back into SubjectRefs via a node lookup for the label -- falkorgraph never
@@ -871,9 +927,13 @@ const (
 // never reach it. This mirrors zepgraph's DiscoverContext exactly:
 // graphrank.AuthorizedAttributes gates the edge, then each endpoint,
 // independently.
-func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, temporal temporalFilter) (graphrank.ResolvedEdge, edgeResolution) {
+// Returns edgeFilterReasonNone alongside every non-edgeFiltered resolution
+// (edgeAdmitted, edgeLookupFailed); the reason is only meaningful paired
+// with edgeFiltered (CHAOS-3888) -- see edgeFilterReason's own doc comment
+// for the vocabulary.
+func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, temporal temporalFilter) (graphrank.ResolvedEdge, edgeResolution, edgeFilterReason) {
 	if !graphrank.AuthorizedAttributes(principal, scope, ce.Attributes) {
-		return graphrank.ResolvedEdge{}, edgeFiltered
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz
 	}
 	fromKind, fromID := splitSubjectUUID(ce.SourceNodeUUID)
 	toKind, toID := splitSubjectUUID(ce.TargetNodeUUID)
@@ -883,38 +943,49 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 	// outside the window is a legitimate exclusion, exactly like an
 	// endpoint that no longer exists, and must not inflate
 	// Coverage.Partial.
+	//
+	// CHAOS-3888: a nil endpoint is classified edgeFilterReasonTemporalWindow
+	// only when temporal.active -- under a current-time read (no window in
+	// effect at all) a nil endpoint just means the node does not exist, which
+	// is not a temporal exclusion and must not be misreported as one.
 	fromNode, err := a.nodeByKindID(ctx, key, orgID, fromKind, fromID, temporal)
 	if err != nil {
-		return graphrank.ResolvedEdge{}, edgeLookupFailed
+		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone
 	}
 	if fromNode == nil {
-		return graphrank.ResolvedEdge{}, edgeFiltered
+		if temporal.active {
+			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow
+		}
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone
 	}
 	toNode, err := a.nodeByKindID(ctx, key, orgID, toKind, toID, temporal)
 	if err != nil {
-		return graphrank.ResolvedEdge{}, edgeLookupFailed
+		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone
 	}
 	if toNode == nil {
-		return graphrank.ResolvedEdge{}, edgeFiltered
+		if temporal.active {
+			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow
+		}
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone
 	}
 	fromCandidate := toCandidateNode(fromNode)
 	toCandidate := toCandidateNode(toNode)
 	if !graphrank.AuthorizedAttributes(principal, scope, fromCandidate.Attributes) || !graphrank.AuthorizedAttributes(principal, scope, toCandidate.Attributes) {
-		return graphrank.ResolvedEdge{}, edgeFiltered
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz
 	}
 	fromSubject, ok := graphrank.NodeSubject(fromCandidate)
 	if !ok {
-		return graphrank.ResolvedEdge{}, edgeFiltered
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject
 	}
 	toSubject, ok := graphrank.NodeSubject(toCandidate)
 	if !ok {
-		return graphrank.ResolvedEdge{}, edgeFiltered
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject
 	}
 	return graphrank.ResolvedEdge{
 		UUID: ce.UUID, Name: ce.Name, Fact: ce.Fact, From: fromSubject, To: toSubject,
 		Relevance: ce.Relevance, Score: ce.Score, Attributes: ce.Attributes,
 		CreatedAt: ce.CreatedAt, ValidAt: ce.ValidAt, InvalidAt: ce.InvalidAt, ExpiredAt: ce.ExpiredAt,
-	}, edgeAdmitted
+	}, edgeAdmitted, edgeFilterReasonNone
 }
 
 // rankCandidateEdges sorts edges by graphrank's own relevance tie-break.
@@ -954,7 +1025,8 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 // hopWalk performs a bounded N-hop traversal from one origin subject,
 // returning every neighbor node and resolved edge reached, plus a count of
 // edges/nodes dropped due to a genuine lookup failure (Codex P2c -- see
-// edgeResolution).
+// edgeResolution), plus (CHAOS-3888) an edgeFilterCounts breakdown of every
+// edge resolveEdge excluded as edgeFiltered, by reason.
 //
 // Codex P2a: walk collection is bounded by a generous superset limit (the
 // caller passes a.config.MaxResults, not request.Options.MaxRelationshipPaths),
@@ -981,19 +1053,20 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 // authorization-filtered or fails to resolve does not consume budget, so a
 // lower-ranked-but-admissible edge is never starved by a higher-ranked one
 // that turned out to be unauthorized.
-func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, error) {
+func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, error) {
 	originUUID := subjectUUID(string(origin.Kind), origin.CanonicalID)
 	visited := make(map[string]graphrank.CandidateNode)
 	var edges []graphrank.ResolvedEdge
 	seenEdge := make(map[string]bool)
 	failedLookups := 0
+	var filterCounts edgeFilterCounts
 	frontier := []string{originUUID}
 	for hop := 0; hop < maxHops && len(frontier) > 0 && (collectLimit <= 0 || len(edges) < collectLimit); hop++ {
 		var hopCandidates []graphrank.CandidateEdge
 		for _, uuid := range frontier {
 			candidateEdges, err := a.edgesOfNode(ctx, key, orgID, uuid, temporal)
 			if err != nil {
-				return nil, nil, failedLookups, err
+				return nil, nil, failedLookups, filterCounts, err
 			}
 			for _, ce := range candidateEdges {
 				if seenEdge[ce.UUID] {
@@ -1012,7 +1085,8 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 			if collectLimit > 0 && len(edges) >= collectLimit {
 				break
 			}
-			resolved, resolution := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
+			resolved, resolution, reason := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
+			filterCounts.add(resolution, reason)
 			switch resolution {
 			case edgeLookupFailed:
 				failedLookups++
@@ -1055,5 +1129,5 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	for _, n := range visited {
 		nodes = append(nodes, n)
 	}
-	return nodes, edges, failedLookups, nil
+	return nodes, edges, failedLookups, filterCounts, nil
 }

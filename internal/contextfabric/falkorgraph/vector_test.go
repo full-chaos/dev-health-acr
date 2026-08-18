@@ -1145,6 +1145,15 @@ type recordingTelemetry struct {
 	// truncated values reported, not merely that SOMETHING fired.
 	vectorFences      []vectorFenceRecord
 	lexiconExpansions []lexiconExpansionRecord
+
+	// subjectCandidatesAuthzDropped, cohortMembersAuthzDropped, and the
+	// edgesFiltered* fields count every CHAOS-3888 authz-drop-observability
+	// call's count argument.
+	subjectCandidatesAuthzDropped int
+	cohortMembersAuthzDropped     int
+	edgesFilteredAuthz            int
+	edgesFilteredTemporalWindow   int
+	edgesFilteredSelfLoop         int
 }
 
 // vectorFenceRecord is one recorded RecordVectorFence call's arguments.
@@ -1199,6 +1208,17 @@ func (r *recordingTelemetry) RecordLexiconExpansion(_ context.Context, orgID str
 	r.lexiconExpansions = append(r.lexiconExpansions, lexiconExpansionRecord{
 		orgID: orgID, fired: fired, batchCount: batchCount, addedCandidates: addedCandidates, truncatedByExpansion: truncatedByExpansion,
 	})
+}
+func (r *recordingTelemetry) RecordSubjectCandidatesAuthzDropped(_ context.Context, _ string, count int) {
+	r.subjectCandidatesAuthzDropped += count
+}
+func (r *recordingTelemetry) RecordCohortMembersAuthzDropped(_ context.Context, _ string, count int) {
+	r.cohortMembersAuthzDropped += count
+}
+func (r *recordingTelemetry) RecordEdgesFilteredByReason(_ context.Context, _ string, authz, temporalWindow, selfLoop int) {
+	r.edgesFilteredAuthz += authz
+	r.edgesFilteredTemporalWindow += temporalWindow
+	r.edgesFilteredSelfLoop += selfLoop
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {
