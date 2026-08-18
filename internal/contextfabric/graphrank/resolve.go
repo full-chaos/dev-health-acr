@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -279,6 +280,16 @@ type ResolveDeps struct {
 	// own doc comment for the corpus-safety discipline every event field
 	// is held to.
 	ResolutionTracer ResolutionTracer
+	// CensusFunc (CHAOS-3899, SHADOW ONLY -- design brief v5 §6 Slice A) is
+	// the shadow evidence round's census execution dependency. nil by
+	// default -- the same "not wired" convention every other optional
+	// dependency here uses (RawSignalObserver, ResolutionTracer): a nil
+	// CensusFunc means the shadow round NEVER RUNS, at zero cost, and every
+	// existing/production caller that does not set this field gets
+	// byte-identical behavior to before this ticket. See
+	// RunShadowEvidenceRound's own doc comment for what runs when it is
+	// set, and why the round can never influence `resolution` regardless.
+	CensusFunc CensusFunc
 }
 
 // ResolutionTracer receives ResolveSubjects' own per-stage trace events.
@@ -311,7 +322,8 @@ type ResolutionTraceEvent struct {
 	// "request.RequestID exists").
 	RequestID string
 	// Stage is a closed vocabulary: "search", "alias_lookup",
-	// "corroboration", "decision", "identity_gate", "identity_universe".
+	// "corroboration", "decision", "identity_gate", "identity_universe",
+	// "evidence_round", "evidence_probe" (CHAOS-3899).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -436,6 +448,44 @@ type ResolutionTraceEvent struct {
 	AliasMatched            bool
 	ProviderMatched         bool
 	GateFired               bool
+	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
+	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
+	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
+	// (evidence_round stage ONLY -- CHAOS-3899, design brief v5 §5/§6 Slice
+	// A): the shadow evidence round's own per-resolution outcome, SUPPRESSED
+	// from ever reaching a real commit-path decision this slice --
+	// RunShadowEvidenceRound's Attestation, corpus-safe by construction
+	// (ShadowDIdentityHash is D's SHA-256, never handle/anchor text; every
+	// other field is a count/enum/bool). One evidence_round event fires per
+	// call that reaches past the axis/scope gates -- the non-vacuity proof
+	// that the round actually ran (brief §6/§7).
+	ShadowOutcome              string
+	ShadowReason               string
+	ShadowDIdentityHash        string
+	ShadowPreconditionUnproven bool
+	ShadowUnscopedVisibility   bool
+	ShadowNonCensusedSurvivor  bool
+	ShadowHandleGrammarBound   bool
+	ShadowAnchorUniqueClaimant bool
+	ShadowKindsCensused        int
+	// CensusKind/CensusComplete/CensusCount/CensusReadAtUnix/CensusProtocol/
+	// CensusClosureMismatch/CensusStatementCount/CensusRowsRead/
+	// CensusHandleApplied/CensusAnchorApplied (evidence_probe stage ONLY,
+	// CHAOS-3899): ONE per-kind census receipt -- brief §1.3(3), "Per-kind,
+	// never aggregated across kinds". CensusReadAtUnix is the aggregate
+	// statement's own now64() receipt as a Unix epoch (never zero for a
+	// successfully executed census); CensusProtocol is always
+	// "aggregate_first" per the brief's pin.
+	CensusKind            contextfabric.SubjectKind
+	CensusComplete        bool
+	CensusCount           int
+	CensusReadAtUnix      int64
+	CensusProtocol        string
+	CensusClosureMismatch bool
+	CensusStatementCount  int
+	CensusRowsRead        int
+	CensusHandleApplied   bool
+	CensusAnchorApplied   bool
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -730,12 +780,20 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// implement it" -- aliasIdentityComplete stays false, byte-identical
 	// to every pre-CHAOS-3884 backend.
 	aliasIdentityComplete := false
+	// aliasClaimantsByTerm (CHAOS-3899, shadow-only) is deps.AliasLookup's
+	// own claimantsByTerm, retained past the block below so the shadow
+	// evidence round's anchor binding (BindAnchor) can reuse it rather than
+	// re-querying -- see the shadow-round call near this function's return.
+	// nil for a backend with no AliasLookup, the same "not implemented"
+	// convention aliasIdentityComplete=false already carries.
+	var aliasClaimantsByTerm map[string][]CandidateNode
 	if deps.AliasLookup != nil {
 		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, err
 		}
 		aliasIdentityComplete = complete
+		aliasClaimantsByTerm = claimantsByTerm
 		if deps.ResolutionTracer != nil {
 			matched := 0
 			for _, nodes := range claimantsByTerm {
@@ -897,7 +955,82 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID)
 	resolution.RetrievalDegraded = retrievalDegraded
+	// CHAOS-3899 (design brief v5 §6 Slice A, SHADOW ONLY): run the full
+	// evidence round for measurement, strictly AFTER resolution is already
+	// final -- nothing below this line may observe or mutate `resolution`,
+	// which is the whole zero-behavior-change proof (TestResolveSubjects_
+	// ShadowEvidenceRoundNeverChangesResolution pins this). Gated on
+	// deps.CensusFunc != nil (nil is the default -- zero cost, zero effect
+	// for every existing caller, the same convention every other optional
+	// ResolveDeps dependency uses) AND "stalled" (§0's own definition:
+	// nothing committed and searchTruncated) -- the brief's own cost note
+	// ("per stalled resolution... committed resolutions pay nothing").
+	if deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
+		runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps)
+	}
 	return resolution, nil
+}
+
+// evidenceRoundDeadline is design brief v5 D4's own round budget ("...+ 3s
+// wall"). runShadowEvidenceRoundForResolution derives its own
+// context.WithTimeout from it (adversarial review finding: the round had
+// no deadline of its own and could run un-bounded on the caller's
+// context), so a slow/hanging CensusFunc can extend a real request's
+// latency by at most this much, never indefinitely.
+const evidenceRoundDeadline = 3 * time.Second
+
+// runShadowEvidenceRoundForResolution assembles ShadowEvidenceRoundInput
+// from values ResolveSubjects already computed (CHAOS-3899) and runs the
+// shadow round purely for its trace side effect -- the returned Attestation
+// is discarded here on purpose; RunShadowEvidenceRound's own emit closure
+// is the ONLY place its content reaches anything observable
+// (deps.ResolutionTracer), and a nil tracer makes even that a no-op. This
+// keeps the call site in ResolveSubjects a single, auditable line with no
+// return value to (mis-)use.
+//
+// TWO hardening properties (adversarial review findings), both required
+// for "zero production behavior change" to be STRUCTURAL rather than
+// merely "true while deps.CensusFunc happens to be nil":
+//  1. A bounded sub-context (evidenceRoundDeadline) so a slow/hanging
+//     CensusFunc cannot extend the caller's own request past the brief's
+//     own 3s round budget.
+//  2. A deferred recover(): a panic inside a caller-supplied CensusFunc
+//     (or anywhere in this purely-observational path) must never escape
+//     into a real production request. Recovered silently into a
+//     probe_error trace event when a tracer is wired, rather than
+//     re-panicking or logging through a new dependency this ticket would
+//     otherwise have to add.
+//
+// interpreted.TimeContext.Axis (not request.TimeContext.Axis -- adversarial
+// review finding) is the axis the ENGINE treats as authoritative for what
+// an answer speaks for (engine.go's own clamp runs against the
+// interpretation, temporal.go's effectiveTimeContext reads
+// interpretation.TimeContext) -- reading the raw, pre-clamp request value
+// here would let a historical question submitted with the request's own
+// (possibly current) context skip D7's historical-axis-skip refusal and
+// run a current-state census against a historical question, silently on
+// the wrong axis.
+func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps) {
+	defer func() {
+		if r := recover(); r != nil && deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "evidence_round",
+				ShadowOutcome: string(ShadowWouldClarify), ShadowReason: string(ReasonProbeError),
+			})
+		}
+	}()
+	roundCtx, cancel := context.WithTimeout(ctx, evidenceRoundDeadline)
+	defer cancel()
+	pooledKinds := make([]CensusKind, 0, len(resolution.Candidates))
+	for _, candidate := range resolution.Candidates {
+		pooledKinds = append(pooledKinds, candidate.Subject.Kind)
+	}
+	RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
+		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
+		PooledKinds: pooledKinds, CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
+		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
+		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
+	}, deps.ResolutionTracer)
 }
 
 // scopesUnrestricted is CHAOS-3829 codex r8 O1's (accepted, CRITICAL
