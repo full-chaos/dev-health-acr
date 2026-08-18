@@ -11,13 +11,17 @@ import (
 )
 
 // This file is CHAOS-3898 S2a's falkorgraph-side KeyResolver plumbing
-// (design brief §3.1): the six graph-key call sites (reader.go's
-// ResolveSubjects/DiscoverContext; projection.go's ApplyProjectionBatch/
-// ProjectionWatermark/PurgeOrganization; this file's own DeleteEpochGraph)
-// resolve their key through resolveReadKey/resolveWriteKey below instead of
-// deriving graphKey(a.config.GraphPrefix, orgID) inline. A nil
+// (design brief §3.1). Of the package's five production graphKey() call
+// sites (reader.go's ResolveSubjects/DiscoverContext; projection.go's
+// ApplyProjectionBatch/ProjectionWatermark/PurgeOrganization), FOUR now
+// resolve their key through resolveReadKey/resolveWriteKey below instead
+// of deriving graphKey(a.config.GraphPrefix, orgID) inline --
+// PurgeOrganization is DELIBERATELY left alone; see its own doc comment
+// in projection.go for why. This file's own new DeleteEpochGraph (the
+// retire executor's terminal action) is a sixth, genuinely NEW call site,
+// which is where the design brief's "six call sites" count lands. A nil
 // Config.EpochResolver -- every production composition root today --
-// degrades every one of them to epoch 0's key, byte-identical to
+// degrades every rewired site to epoch 0's key, byte-identical to
 // pre-CHAOS-3898 behavior; see Config.EpochResolver's own doc comment.
 
 // resolveReadKey resolves the key a READ call site should use: the org's

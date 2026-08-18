@@ -83,6 +83,18 @@ func (e *RetireExecutor) DueRetirements(ctx context.Context) ([]contextfabric.Ep
 // non-nil error as "log and continue to the next retirement", exactly like
 // every other per-org operation in this repository (see
 // projectionrun.Coordinator.Tick's own per-org failure isolation).
+//
+// KNOWN GAP, left for the follow-up (scheduler-wiring) slice: if
+// DeleteEpochGraph or DeleteEpochCheckpoints fails AFTER the record has
+// already advanced to RetireRecordDeleting, the record is stuck there --
+// DueRetirements only lists RetireRecordDraining records, so nothing
+// automatically retries a stuck 'deleting' record today. This slice ships
+// no scheduler at all (RetireExecutor is not wired into any cron/sweep
+// loop yet), so no automatic-retry policy exists to have this gap in; the
+// slice that wires a real sweep loop (matching
+// projectionrun.Coordinator's own per-pair backoff discipline) must also
+// add a "stuck in deleting past some bound" recovery path, or a
+// deleting -> draining CAS an operator/sweep can use to retry.
 func (e *RetireExecutor) RunOne(ctx context.Context, orgID string, epoch int64) error {
 	bound, err := e.drainBound()
 	if err != nil {
