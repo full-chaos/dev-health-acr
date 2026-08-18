@@ -42,7 +42,7 @@ import (
 
 // requirePostgresClientTools skips when psql/pg_isready are not on PATH in
 // local dev, but FAILS in CI. acr-db-init.sh shells out to both, and
-// .github/workflows/ci.yml's verify job now installs postgresql-client
+// .github/workflows/ci.yml's unit and race jobs now install postgresql-client
 // specifically so this test genuinely runs there (CHAOS-3859 sol review
 // F1 follow-up) -- a skip is how migration 0016's table shipped with no
 // runtime grant at all the first time: a test that can quietly skip in the
@@ -60,7 +60,7 @@ func requirePostgresClientTools(t *testing.T) {
 	for _, tool := range []string{"psql", "pg_isready", "sh"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			if inCI {
-				t.Fatalf("%s not found on PATH in CI -- the verify job is expected to install postgresql-client before running Go tests; this test must not silently skip in the one environment meant to enforce acr-db-init.sh's runtime-acl grants", tool)
+				t.Fatalf("%s not found on PATH in CI -- the unit and race jobs are expected to install postgresql-client before running Go tests; this test must not silently skip in the one environment meant to enforce acr-db-init.sh's runtime-acl grants", tool)
 			}
 			t.Skipf("%s not found on PATH -- skipping the real acr-db-init.sh integration proof (see this file's own package doc comment for why this is a skip, not a failure)", tool)
 		}

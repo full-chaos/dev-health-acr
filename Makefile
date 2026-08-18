@@ -4,6 +4,10 @@ RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
 GOTEST_SHUFFLE_SEED ?= 20260727
 GOTEST_TIMEOUT ?= 300s
+# CI partitions the module across shard runners by passing an explicit
+# package list; the default is the whole module so local `make test*`
+# invocations are unchanged.
+GOTEST_PKGS ?= ./...
 VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
 
 # Pinned exact versions (not @latest) so the coverage/JUnit toolchain is
@@ -18,6 +22,7 @@ COVERAGE_DIR ?= .tmp/coverage
 COVERAGE_PROFILE := $(COVERAGE_DIR)/cover.out
 COVERAGE_COBERTURA := $(COVERAGE_DIR)/coverage.xml
 COVERAGE_JUNIT := $(COVERAGE_DIR)/junit.xml
+COVERAGE_JSON := $(COVERAGE_DIR)/go-test.json
 LOCAL_BUILD_VERSION := $(shell awk -F'"' '/^const localBuildVersion = / { print $$2; exit }' internal/version/version.go)
 LOCAL_BUILD_COMMIT := $(shell git rev-parse HEAD)
 LOCAL_BUILD_DATE := $(shell TZ=UTC0 git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)
@@ -44,30 +49,31 @@ fmt-check:
 	if [ -n "$$files" ]; then echo "Go files need formatting:"; echo "$$files"; exit 1; fi
 
 test:
-	go test -count=1 ./...
+	go test -count=1 $(GOTEST_PKGS)
 
 # test-race runs the same suite with the race detector and randomized test
 # order. -count=1 defeats the build cache so a warm-cache result cannot stand
 # in for a fresh run, and the pinned shuffle seed catches order-coupled state
 # that only passes because an earlier test happened to leave a seam in the
-# right position) that a fixed run order can hide indefinitely. This is
-# intentionally separate from `test` rather than folded into it: the race
-# detector and shuffled order both add real wall-clock time, and the two
-# variants catch different classes of defect -- a cold non-race run still
-# matters on its own for the timing-sensitive opener/reap tests.
+# right position) that a fixed run order can hide indefinitely. This no
+# longer contrasts with a separate plain CI run: in CI, the cold non-race run
+# is now the coverage-instrumented `test-coverage` run below, while `make
+# test` stays the plain, dependency-free local gate.
 test-race:
-	go test -count=1 -race -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) ./...
+	go test -count=1 -race -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
 
 # Keep randomized order discovery out of the deterministic verification gate.
 test-shuffle-random:
-	go test -count=1 -race -shuffle=on -timeout $(GOTEST_TIMEOUT) ./...
+	go test -count=1 -race -shuffle=on -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
 
 # test-coverage produces machine-readable CI artifacts: JUnit XML for test
-# results and Cobertura XML for coverage. gotestsum wraps a single `go test`
-# invocation (forwarding everything after `--`) so both reports come from one
-# run of the suite, not two. This is additive to `test`/`test-race`, not a
-# replacement -- those stay the plain, dependency-free gate; this target adds
-# reporting on top for CI to publish.
+# results, Cobertura XML for coverage, and a gotestsum JSON stream for
+# failure analysis. gotestsum wraps a single `go test` invocation (forwarding
+# everything after `--`), so the JSON stream, the JUnit report, and the
+# coverage profile all come from this one run of the suite, not three. CI's
+# failure-analysis step reads $(COVERAGE_JSON) directly. This is additive to
+# `test`/`test-race`, not a replacement -- those stay the plain,
+# dependency-free gate; this target adds reporting on top for CI to publish.
 #
 # CI uploads both reports with `if: always()` specifically so a failing run
 # still leaves a JUnit file showing what failed and a coverage file for the
@@ -80,8 +86,8 @@ test-shuffle-random:
 test-coverage:
 	mkdir -p $(COVERAGE_DIR)
 	status=0; \
-	go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) -- \
-		-count=1 -coverprofile=$(COVERAGE_PROFILE) ./... || status=$$?; \
+	go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
+		-count=1 -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
 	if [ -f $(COVERAGE_PROFILE) ]; then \
 		go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
 	fi; \

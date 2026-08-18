@@ -136,6 +136,14 @@ grep -F 'gh release delete-asset' "$root/scripts/release/revoke-private-release.
 if grep -F 'remote get-url origin' "$root/scripts/release/publish-private-release.sh"; then exit 1; fi
 grep -E 'gh repo clone.*--no-checkout' "$root/scripts/release/publish-private-release.sh" >/dev/null
 
+# workflow_go_version collects every go-version: value in a workflow file
+# rather than requiring exactly one line. ci.yml now has one setup-go step
+# per job (scripts, lint, unit, race, build, contracts, and the three
+# container jobs), so "exactly one go-version line" no longer holds even
+# though the intent -- CI and release pin the same explicit Go version --
+# is unchanged. This requires at least one value and all values identical,
+# then prints that single distinct value, which preserves the intent and
+# additionally catches a partial version bump that only touched some jobs.
 workflow_go_version() {
   local line value
   local -a versions=()
@@ -157,8 +165,12 @@ workflow_go_version() {
     fi
   done < "$1"
 
-  test "${#versions[@]}" -eq 1 || return 1
-  printf '%s\n' "${versions[0]}"
+  test "${#versions[@]}" -ge 1 || return 1
+  local first="${versions[0]}" v
+  for v in "${versions[@]}"; do
+    test "$v" = "$first" || return 1
+  done
+  printf '%s\n' "$first"
 }
 
 assert_go_version_pins() {
@@ -179,6 +191,15 @@ grep -v '^[[:space:]]*go-version:' "$ci_workflow" > "$tmp/ci-missing-go-version.
 if assert_go_version_pins "$tmp/ci-missing-go-version.yml" "$release_workflow"; then exit 1; fi
 sed 's/^\([[:space:]]*go-version:\).*/\1 "1.26.4"/' "$ci_workflow" > "$tmp/ci-mismatched-go-version.yml"
 if assert_go_version_pins "$tmp/ci-mismatched-go-version.yml" "$release_workflow"; then exit 1; fi
+
+# ci.yml now has one go-version: line per job's setup-go step; changing only
+# the first of several to a different value must still fail -- the workflow
+# is internally inconsistent even though every line individually parses.
+awk '
+  !done && /^[[:space:]]*go-version:/ { sub(/go-version:.*/, "go-version: \"9.9.9\""); done=1 }
+  { print }
+' "$ci_workflow" > "$tmp/ci-two-different-go-versions.yml"
+if assert_go_version_pins "$tmp/ci-two-different-go-versions.yml" "$release_workflow"; then exit 1; fi
 
 grep -F 'workflow_dispatch:' "$release_workflow" >/dev/null
 grep -F 'branches: [main]' "$release_workflow" >/dev/null
