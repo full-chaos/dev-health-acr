@@ -1,6 +1,7 @@
 package devhealthsource
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -174,6 +175,44 @@ func TestKindHasAnchorFKMatchesCensusRegistry(t *testing.T) {
 			mirrorSaysYes := graphrank.KindHasAnchorFK(kind, anchorKind)
 			if registryHasColumn != mirrorSaysYes {
 				t.Fatalf("kind=%s anchorKind=%s: censusKindRegistryEntries has column=%v, graphrank.KindHasAnchorFK=%v -- the two registries have drifted", kind, anchorKind, registryHasColumn, mirrorSaysYes)
+			}
+		}
+	}
+}
+
+// TestIdentityColumnIsTheFullCompositeNaturalKey is the v6 stamp's own
+// directive, pinned as a test: every census kind's identityColumn (used
+// BOTH as the row statement's SELECT and, wrapped in min(...), as the
+// aggregate statement's identity-witness expression) must be the base
+// table's FULL TYPED composite natural key -- exactly its own
+// devhealthschema ORDER BY sort key -- never a lossy single-column
+// serialization. A lossy witness reopens the injectivity trap: two
+// legitimately-different rows could collide under it. This asserts every
+// registry entry's identityColumn references org_id AND every other
+// sort-key column devhealthschema.go declares for that table, so a future
+// edit that narrows it back down to one column fails loudly.
+func TestIdentityColumnIsTheFullCompositeNaturalKey(t *testing.T) {
+	t.Parallel()
+	// wantColumnRefs are the exact devhealthschema ORDER BY sort-key
+	// columns (schema.go) for each census base table, alias-qualified as
+	// this registry's own entries reference them.
+	wantColumnRefs := map[contextfabric.SubjectKind][]string{
+		contextfabric.SubjectPullRequest:                  {"p.org_id", "p.repo_id", "p.number"},
+		contextfabric.SubjectWorkItem:                     {"w.org_id", "w.repo_id", "w.work_item_id"},
+		contractsv1.ContextFabricSubjectCIRun:             {"c.org_id", "c.repo_id", "c.run_id"},
+		contractsv1.ContextFabricSubjectPullRequestReview: {"r.org_id", "r.repo_id", "r.number", "r.review_id"},
+	}
+	if len(wantColumnRefs) != len(censusKindRegistryEntries) {
+		t.Fatalf("wantColumnRefs covers %d kinds, censusKindRegistryEntries has %d -- this test's own table is stale", len(wantColumnRefs), len(censusKindRegistryEntries))
+	}
+	for kind, want := range wantColumnRefs {
+		entry, ok := censusKindRegistryEntries[kind]
+		if !ok {
+			t.Fatalf("no censusKindRegistryEntries entry for %s", kind)
+		}
+		for _, column := range want {
+			if !strings.Contains(entry.identityColumn, column) {
+				t.Fatalf("kind=%s identityColumn=%q is missing sort-key column %q -- a lossy witness reopens the injectivity trap (v6 stamp)", kind, entry.identityColumn, column)
 			}
 		}
 	}

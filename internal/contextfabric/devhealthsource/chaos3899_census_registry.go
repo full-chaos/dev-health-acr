@@ -34,8 +34,19 @@ type censusKindRegistryEntry struct {
 	alias string // this entry's own table alias; every predicate/column below is alias-qualified
 	// orgColumn is the alias-qualified org_id equality column.
 	orgColumn string
-	// identityColumn is the row statement's own SELECT (the fail-closed
-	// aggregate/row-agreement check's natural key, brief §1.3(2)).
+	// identityColumn is the row statement's own SELECT AND the aggregate
+	// statement's own min(...) identity-witness expression (the fail-closed
+	// aggregate/row-agreement check's natural key, brief §1.3(2); witness
+	// requirement per the post-review v6 stamp -- see chaos3899_census.go's
+	// RunCensus doc comment). It MUST be the base table's FULL TYPED
+	// composite natural key -- exactly its own devhealthschema ORDER BY
+	// sort key (org_id, repo_id, <kind-specific columns...>), never a
+	// lossy single-column serialization -- concatenated with an
+	// unambiguous ':' separator over toString(...)-wrapped non-String
+	// columns. A lossy witness (e.g. a single opaque id column alone)
+	// would reopen exactly the injectivity trap the witness exists to
+	// close: two rows that legitimately differ in a column the witness
+	// dropped could collide under it, silently.
 	identityColumn string
 	// handlePredicate builds the registry-pinned SQL predicate for a
 	// grammar-bound handle VALUE -- "the exact SQL predicate... pinned
@@ -129,7 +140,11 @@ func ciRunIDPredicate(value string) (CensusPredicate, error) {
 var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry{
 	contextfabric.SubjectPullRequest: {
 		kind: contextfabric.SubjectPullRequest, table: "git_pull_requests", alias: "p",
-		orgColumn: "p.org_id", identityColumn: "concat(toString(p.repo_id), ':', toString(p.number))",
+		// identityColumn is git_pull_requests' OWN declared sort key
+		// (org_id, repo_id, number) -- devhealthschema.go's
+		// "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id,
+		// number)" -- verbatim, not just the (repo_id, number) pair.
+		orgColumn: "p.org_id", identityColumn: "concat(p.org_id, ':', toString(p.repo_id), ':', toString(p.number))",
 		handlePredicate: pullRequestNumberPredicate,
 		anchorColumns:   map[contextfabric.SubjectKind]string{contextfabric.SubjectRepository: "p.repo_id"},
 	},
@@ -157,7 +172,15 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		// bridging), so it remains the sole work_item anchor column for
 		// Slice A.
 		kind: contextfabric.SubjectWorkItem, table: "work_items", alias: "w",
-		orgColumn: "w.org_id", identityColumn: "w.work_item_id",
+		// identityColumn is work_items' OWN declared sort key (org_id,
+		// repo_id, work_item_id) -- devhealthschema.go's
+		// "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id,
+		// work_item_id)" -- work_item_id alone is NOT the table's natural
+		// key, repo_id is part of it too (even though repo_id is the zero
+		// UUID for a Linear item -- that value still participates in the
+		// composite honestly, it is simply constant across every
+		// Linear-sourced row rather than absent).
+		orgColumn: "w.org_id", identityColumn: "concat(w.org_id, ':', toString(w.repo_id), ':', w.work_item_id)",
 		handlePredicate: workItemTicketKeyPredicate,
 		anchorColumns: map[contextfabric.SubjectKind]string{
 			contextfabric.SubjectProject: "w.project_id",
@@ -165,7 +188,12 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 	},
 	contractsv1.ContextFabricSubjectCIRun: {
 		kind: contractsv1.ContextFabricSubjectCIRun, table: "ci_pipeline_runs", alias: "c",
-		orgColumn: "c.org_id", identityColumn: "c.run_id",
+		// identityColumn is ci_pipeline_runs' OWN declared sort key
+		// (org_id, repo_id, run_id) -- devhealthschema.go's
+		// "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id,
+		// run_id)" -- the exact three-column composite the v6 stamp's own
+		// CI-run example names.
+		orgColumn: "c.org_id", identityColumn: "concat(c.org_id, ':', toString(c.repo_id), ':', c.run_id)",
 		handlePredicate: ciRunIDPredicate,
 		anchorColumns:   map[contextfabric.SubjectKind]string{contextfabric.SubjectRepository: "c.repo_id"},
 	},
@@ -174,7 +202,16 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		// §8: "3 handle patterns" over 4 census kinds) -- this kind is only
 		// ever reachable via an anchor discriminator in Slice A.
 		kind: contractsv1.ContextFabricSubjectPullRequestReview, table: "git_pull_request_reviews", alias: "r",
-		orgColumn: "r.org_id", identityColumn: "r.review_id",
+		// identityColumn is git_pull_request_reviews' OWN declared sort
+		// key (org_id, repo_id, number, review_id) --
+		// devhealthschema.go's "ReplacingMergeTree(last_synced) ORDER BY
+		// (org_id, repo_id, number, review_id)" -- the FULL four-column
+		// composite, not review_id alone even though review_id is itself
+		// a provider-issued, likely-already-unique string: the witness
+		// must reflect the table's own declared identity, not this
+		// package's guess about which subset of it happens to be unique
+		// in practice.
+		orgColumn: "r.org_id", identityColumn: "concat(r.org_id, ':', toString(r.repo_id), ':', toString(r.number), ':', r.review_id)",
 		handlePredicate: nil,
 		anchorColumns:   map[contextfabric.SubjectKind]string{contextfabric.SubjectRepository: "r.repo_id"},
 	},
