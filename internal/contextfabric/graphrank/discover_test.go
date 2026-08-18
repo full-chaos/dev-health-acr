@@ -327,7 +327,7 @@ func TestDiscoveredCohortExcludesInternalBookkeepingSubjects(t *testing.T) {
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort := DiscoveredCohort(principal, discovery, []CandidateNode{impostorRoot, genuineTeam}, isReserved)
+	cohort, _ := DiscoveredCohort(principal, discovery, []CandidateNode{impostorRoot, genuineTeam}, isReserved)
 	if cohort == nil {
 		t.Fatal("cohort = nil, want the genuine team still discovered")
 	}
@@ -335,5 +335,59 @@ func TestDiscoveredCohortExcludesInternalBookkeepingSubjects(t *testing.T) {
 		if member.Subject.CanonicalID == "organization-root" {
 			t.Fatalf("cohort = %#v, an internal bookkeeping identifier must never surface as a cohort member", cohort)
 		}
+	}
+}
+
+// TestDiscoveredCohortReportsAuthzDroppedCount (CHAOS-3888) proves the
+// cohort_members_authz_dropped signal: a node outside the principal's
+// repository scope must be excluded from cohort membership exactly as
+// before, AND now also counted in DiscoveredCohort's second return value --
+// while an authorized sibling in the same node set must not inflate it.
+func TestDiscoveredCohortReportsAuthzDroppedCount(t *testing.T) {
+	t.Parallel()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	authorized := candidateNode(contextfabric.SubjectTeam, "team_platform", "Platform", 0.9, []string{"full-chaos/dev-health-acr"})
+	foreign := candidateNode(contextfabric.SubjectTeam, "team_foreign", "Foreign", 0.9, []string{"other/private"})
+	discovery := contextfabric.GraphDiscoveryRequest{
+		Request: testRequest(),
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: "teams_under_pressure",
+			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactHealth}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	discovery.Request.Options.MaxCohortMembers = 10
+	cohort, authzDropped := DiscoveredCohort(principal, discovery, []CandidateNode{authorized, foreign}, noInternalSubjects)
+	if cohort == nil || len(cohort.Members) != 1 || cohort.Members[0].Subject.CanonicalID != "team_platform" {
+		t.Fatalf("cohort = %#v, want only the authorized team discovered", cohort)
+	}
+	if authzDropped != 1 {
+		t.Fatalf("authzDropped = %d, want exactly 1 (the authorized member must not inflate it)", authzDropped)
+	}
+}
+
+// TestAdmitEdgesReportsSelfLoopDropsSeparatelyFromInternalEndpointDrops
+// (CHAOS-3888) proves DroppedSelfLoopCount: a self-loop edge and an
+// internal-bookkeeping-endpoint edge are both excluded by the SAME combined
+// condition as before (unchanged behavior), but only the self-loop is
+// counted -- an internal-endpoint exclusion (routine and already expected on
+// every call, per DroppedSelfLoopCount's own doc comment) must not inflate
+// it.
+func TestAdmitEdgesReportsSelfLoopDropsSeparatelyFromInternalEndpointDrops(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	root := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "organization-root", Label: "Organization"}
+	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_other", Label: "Other"}
+	isReserved := func(s contextfabric.SubjectRef) bool { return s.CanonicalID == "organization-root" }
+	edges := []ResolvedEdge{
+		testResolvedEdge("edge-self-loop", "RELATES_TO", subject, subject, 0, "evidence_self_loop_1234"),
+		testResolvedEdge("edge-bookkeeping", "HAS_SUBJECT", root, other, 0, "evidence_bookkeeping_1234"),
+	}
+	result := AdmitEdges("org_1", edges, discoverOptions(), isReserved)
+	if len(result.Paths) != 0 {
+		t.Fatalf("result.Paths = %#v, want both edges excluded (unchanged behavior)", result.Paths)
+	}
+	if result.DroppedSelfLoopCount != 1 {
+		t.Fatalf("DroppedSelfLoopCount = %d, want exactly 1 (the internal-bookkeeping drop must not inflate it)", result.DroppedSelfLoopCount)
 	}
 }

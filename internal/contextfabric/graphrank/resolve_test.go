@@ -37,6 +37,9 @@ type fakeGraphBackend struct {
 	traverse          func(ctx context.Context, term string, observation CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, ObservationTraversal)
 	isInternal        func(contextfabric.SubjectRef) bool
 	traversalDegraded []int
+	// subjectCandidatesAuthzDropped (CHAOS-3888) records every
+	// ResolveDeps.SubjectCandidatesAuthzDropped call's count argument.
+	subjectCandidatesAuthzDropped []int
 
 	// CHAOS-3838 (spec L11) SearchQuestion fixture. enableSearchQuestion
 	// defaults to false, so every pre-existing test in this file -- which
@@ -96,6 +99,9 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 		IsInternal: isInternal,
 		TraversalDegraded: func(ctx context.Context, orgID string, count int) {
 			f.traversalDegraded = append(f.traversalDegraded, count)
+		},
+		SubjectCandidatesAuthzDropped: func(ctx context.Context, orgID string, count int) {
+			f.subjectCandidatesAuthzDropped = append(f.subjectCandidatesAuthzDropped, count)
 		},
 		VectorMarginCommitThreshold: f.vectorMarginCommitThreshold,
 		RawSignalObserver:           f.rawSignalObserver,
@@ -353,6 +359,55 @@ func TestResolveSubjectsReportsTraversalDegradationThroughTelemetry(t *testing.T
 	}
 	if len(backend.traversalDegraded) != 1 || backend.traversalDegraded[0] != 1 {
 		t.Fatalf("telemetry = %#v, want exactly one degradation report of count 1", backend.traversalDegraded)
+	}
+}
+
+// TestResolveSubjectsReportsSubjectCandidatesAuthzDroppedThroughTelemetry
+// (CHAOS-3888) proves the authz-drop counter: a hybrid-search result node
+// outside the principal's repository scope must be excluded from the
+// resolution exactly as before (TestNodeCandidateFiltersUnauthorizedNodesBeforeCandidates
+// already pins that), AND now also reported through
+// ResolveDeps.SubjectCandidatesAuthzDropped -- while the AUTHORIZED sibling
+// found by the same search call must not inflate the count.
+func TestResolveSubjectsReportsSubjectCandidatesAuthzDroppedThroughTelemetry(t *testing.T) {
+	t.Parallel()
+	authorized := candidateNode(contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", 0.9, []string{"full-chaos/dev-health-acr"})
+	foreign := candidateNode(contextfabric.SubjectProject, "project_foreign", "Ask Dev Foreign", 0.95, []string{"other/private"})
+	backend := &fakeGraphBackend{
+		searchResults: map[string][]CandidateNode{"Ask Dev": {authorized, foreign}},
+	}
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	resolution, err := ResolveSubjects(context.Background(), principal, testRequest(), testInterpreted("Ask Dev"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.CanonicalID == "project_foreign" {
+			t.Fatalf("resolution.Candidates = %#v, want the unauthorized subject to never surface", resolution.Candidates)
+		}
+	}
+	if len(backend.subjectCandidatesAuthzDropped) != 1 || backend.subjectCandidatesAuthzDropped[0] != 1 {
+		t.Fatalf("subjectCandidatesAuthzDropped telemetry = %#v, want exactly one report of count 1 (the authorized sibling must not inflate it)", backend.subjectCandidatesAuthzDropped)
+	}
+}
+
+// TestResolveSubjectsExactHintForUnauthorizedSubjectReportsAuthzDropped
+// (CHAOS-3888) extends TestResolveSubjectsExactHintForUnauthorizedSubjectIsSkippedSilently:
+// the SAME unauthorized exact-hint drop must also be reported through
+// SubjectCandidatesAuthzDropped, not just silently absorbed.
+func TestResolveSubjectsExactHintForUnauthorizedSubjectReportsAuthzDropped(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_secret", Label: "Secret Project"}
+	backend := &fakeGraphBackend{exactHints: map[string]CandidateNode{
+		SubjectKey(subject): candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 1, []string{"other/private"}),
+	}}
+	request := testRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "prior_subject_receipt"}}
+	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}, request, testInterpreted(), backend.deps()); err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(backend.subjectCandidatesAuthzDropped) != 1 || backend.subjectCandidatesAuthzDropped[0] != 1 {
+		t.Fatalf("subjectCandidatesAuthzDropped telemetry = %#v, want exactly one report of count 1", backend.subjectCandidatesAuthzDropped)
 	}
 }
 

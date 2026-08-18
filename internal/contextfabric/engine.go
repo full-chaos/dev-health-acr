@@ -158,6 +158,41 @@ type EngineTelemetry interface {
 	// operator only ever seeing "reuse rarely happens" with no way to
 	// tell why.
 	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome)
+	// RecordSubjectlessTerminal (CHAOS-3888) reports WHY one Investigate
+	// call reached its own subjectless terminal path (terminalResult,
+	// unresolved.go) as a closed reason string -- "empty_pool",
+	// "authz_filtered_to_empty", or "ambiguous". See
+	// subjectlessTerminalReason's own doc comment for the exact
+	// classification and why an authorization-narrowing cause specifically
+	// must stay telemetry-only, never surfacing in the response contract.
+	RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string)
+	// RecordPriorSubjectReceiptSkipReason (CHAOS-3888) reports the SAME
+	// aggregate this call's RecordPriorSubjectReceiptsSkipped already
+	// reported, split by WHY each receipt in it was skipped -- a closed
+	// reason vocabulary: "unloadable" (the receipt's own ResultID/ReceiptID
+	// were blank, or the prior InvestigationResult failed to load),
+	// "no_match" (the prior result loaded but no candidate in it carried a
+	// matching ReceiptID), or "failed_reauth" (a hint WAS built from the
+	// receipt but its subject did not survive this call's own graph
+	// resolution -- e.g. GraphReader's exact-hint authorization check
+	// rejected it, or the caller's own SubjectHints already filled the
+	// per-request hint budget). Called once per non-zero reason, so a
+	// cratered reuse of prior receipts is diagnosable (was the store down,
+	// or is authorization narrowing?) from telemetry alone, the same
+	// motivation RecordAnswerReuse's own miss-reason split already serves
+	// for answer reuse.
+	RecordPriorSubjectReceiptSkipReason(ctx context.Context, principal storage.Principal, reason string, count int)
+	// RecordAnswerReuseServedRequestID (CHAOS-3888) reports, for every
+	// AnswerReuseHit outcome, the served (originally-stored) request id and
+	// whether it differs from the CURRENT call's own request id.
+	// AC-3782-2 requires tryReuse to serve the stored result's
+	// ResultID/RequestID/GeneratedAt UNCHANGED -- the response body
+	// contract, untouched by this ticket -- which means a caller reading
+	// InvestigationResult.RequestID off a reuse hit sees the ORIGINAL
+	// investigation's request id, not this call's own. That is correct,
+	// documented behavior, but easy to misdiagnose as a bug from the
+	// outside without a telemetry signal that names it explicitly.
+	RecordAnswerReuseServedRequestID(ctx context.Context, principal storage.Principal, servedRequestID string, requestIDMismatch bool)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -311,8 +346,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// is skipped, never trusted outright, and never treated as an error.
 	graphRequest := request
 	var priorHints []SubjectHint
+	var priorHintsUnloadable, priorHintsNoMatch int
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts)
+		priorHints, priorHintsUnloadable, priorHintsNoMatch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts)
 		// The v1 contract bounds RequestedScope.SubjectHints at 50
 		// (ContextFabricRequestedScope.Validate). request.Validate()
 		// already proved the caller's own hints are within that bound,
@@ -372,12 +408,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			reuseEpoch = &epoch
 		}
 	}
-	resolution, err := e.graph.ResolveSubjects(ctx, principal, graphRequest, interpretation)
+	// CHAOS-3888: resolveCtx carries a fresh counter cell a GraphReader MAY
+	// report authorization-dropped candidates through (RecordSubjectCandidatesAuthzDropped) --
+	// scoped to exactly this one call, never passed to DiscoverContext or
+	// anything below, so this signal can only ever describe THIS
+	// resolution. See withSubjectCandidatesAuthzDroppedRecorder's own doc
+	// comment for why a context value is the right carrier for this
+	// specific, telemetry-only signal.
+	resolveCtx, subjectCandidatesAuthzDropped := withSubjectCandidatesAuthzDroppedRecorder(ctx)
+	resolution, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	if len(request.PriorSubjectReceipts) > 0 {
-		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution)
+		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch)
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution,
@@ -406,7 +450,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch)
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped)
 	}
 
 	factRequest := CanonicalFactRequest{
@@ -545,31 +589,44 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // concern -- see AnswerReuseGate's doc comment for the identical
 // distinction drawn between "the caller's request" and "what the backend
 // independently proves").
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt) []SubjectHint {
+// Returns (hints, unloadable, noMatch) -- the latter two (CHAOS-3888) split
+// what used to be one implicit "receiptCount - len(hints)" gap into WHY each
+// non-hint receipt fell out: unloadable counts a receipt with a blank
+// ResultID/ReceiptID or whose prior InvestigationResult failed to load;
+// noMatch counts a receipt whose prior result loaded but named no matching
+// candidate. recordPriorSubjectReceiptSkips (below) computes the third
+// reason, failed_reauth, from what happens to the returned hints afterward.
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt) ([]SubjectHint, int, int) {
 	hints := make([]SubjectHint, 0, len(receipts))
 	loaded := make(map[string]InvestigationResult, len(receipts))
+	unloadable := 0
+	noMatch := 0
 	for _, receipt := range receipts {
 		if ctx.Err() != nil {
-			return hints
+			return hints, unloadable, noMatch
 		}
 		resultID := strings.TrimSpace(receipt.ResultID)
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
 		if resultID == "" || receiptID == "" {
+			unloadable++
 			continue
 		}
 		prior, ok := loaded[resultID]
 		if !ok {
 			fetched, err := e.results.Get(ctx, principal, resultID)
 			if err != nil {
+				unloadable++
 				continue
 			}
 			prior = fetched
 			loaded[resultID] = prior
 		}
+		matched := false
 		for _, candidate := range prior.SubjectResolution.Candidates {
 			if candidate.ReceiptID != receiptID {
 				continue
 			}
+			matched = true
 			e.captureClarificationSelection(ctx, principal, consumer, resultID, prior, candidate)
 			hints = append(hints, SubjectHint{
 				Kind: candidate.Subject.Kind, ID: candidate.Subject.CanonicalID,
@@ -577,8 +634,11 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			})
 			break
 		}
+		if !matched {
+			noMatch++
+		}
 	}
-	return hints
+	return hints, unloadable, noMatch
 }
 
 // captureClarificationSelection builds and hands off a
@@ -645,7 +705,14 @@ func (e *Engine) captureClarificationSelection(ctx context.Context, principal st
 // client-supplied SubjectHint goes through. Either way Investigate itself
 // never errors or otherwise surfaces the skip, so this is the only
 // operator-visible signal.
-func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution) {
+// unloadable and noMatch (CHAOS-3888) are resolvePriorSubjectHints' own two
+// skip-reason counts (see its doc comment); this function computes the
+// third, failed_reauth, from priorHints/resolution, and reports all three
+// through RecordPriorSubjectReceiptSkipReason IN ADDITION TO the existing,
+// unchanged RecordPriorSubjectReceiptsSkipped aggregate below -- the
+// aggregate's own formula and call site are byte-identical to before this
+// ticket.
+func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution, unloadable, noMatch int) {
 	if e.telemetry == nil {
 		return
 	}
@@ -662,8 +729,26 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 			survived++
 		}
 	}
-	if skipped := receiptCount - survived; skipped > 0 {
+	skipped := receiptCount - survived
+	if skipped > 0 {
 		e.telemetry.RecordPriorSubjectReceiptsSkipped(ctx, principal, skipped)
+	}
+	// CHAOS-3888: failed_reauth is everything skipped that resolvePriorSubjectHints
+	// itself did NOT already attribute to unloadable/no_match -- a hint that
+	// was built (or would have been, had the per-request SubjectHints budget
+	// not truncated it away, engine.go's own maxSubjectHints comment) but did
+	// not survive THIS call's graph resolution. Never negative: skipped is
+	// computed over priorHints (which resolvePriorSubjectHints' unloadable/
+	// noMatch counts already exclude), so skipped can only ever be >= the sum
+	// of the other two.
+	if failedReauth := skipped - unloadable - noMatch; failedReauth > 0 {
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "failed_reauth", failedReauth)
+	}
+	if unloadable > 0 {
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "unloadable", unloadable)
+	}
+	if noMatch > 0 {
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "no_match", noMatch)
 	}
 }
 

@@ -203,6 +203,25 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 type recordingTelemetry struct {
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
+
+	// subjectlessTerminalReasons, priorSubjectReceiptSkipReasons, and
+	// answerReuseServedRequestIDs (CHAOS-3888) record every call's
+	// arguments verbatim, mirroring falkorgraph's own recordingTelemetry
+	// (vector_test.go) -- a slice/struct list, not just a count, so a test
+	// can assert the EXACT reason/id values reported.
+	subjectlessTerminalReasons     []string
+	priorSubjectReceiptSkipReasons []priorSubjectReceiptSkipReasonRecord
+	answerReuseServedRequestIDs    []answerReuseServedRequestIDRecord
+}
+
+type priorSubjectReceiptSkipReasonRecord struct {
+	reason string
+	count  int
+}
+
+type answerReuseServedRequestIDRecord struct {
+	servedRequestID   string
+	requestIDMismatch bool
 }
 
 func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
@@ -211,6 +230,18 @@ func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Prin
 
 func (r *recordingTelemetry) RecordPriorSubjectReceiptsSkipped(_ context.Context, _ storage.Principal, skipped int) {
 	r.priorSubjectReceiptsSkipped = append(r.priorSubjectReceiptsSkipped, skipped)
+}
+
+func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ storage.Principal, reason string) {
+	r.subjectlessTerminalReasons = append(r.subjectlessTerminalReasons, reason)
+}
+
+func (r *recordingTelemetry) RecordPriorSubjectReceiptSkipReason(_ context.Context, _ storage.Principal, reason string, count int) {
+	r.priorSubjectReceiptSkipReasons = append(r.priorSubjectReceiptSkipReasons, priorSubjectReceiptSkipReasonRecord{reason, count})
+}
+
+func (r *recordingTelemetry) RecordAnswerReuseServedRequestID(_ context.Context, _ storage.Principal, servedRequestID string, requestIDMismatch bool) {
+	r.answerReuseServedRequestIDs = append(r.answerReuseServedRequestIDs, answerReuseServedRequestIDRecord{servedRequestID, requestIDMismatch})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {
@@ -342,6 +373,12 @@ func TestEngineSkipsUnresolvablePriorSubjectReceiptWithoutFailing(t *testing.T) 
 	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
 		t.Fatalf("telemetry = %#v, want exactly one skip of count 1 recorded", telemetry.priorSubjectReceiptsSkipped)
 	}
+	// CHAOS-3888: an unloadable prior result (store.getErr) must classify as
+	// "unloadable", never "no_match" or "failed_reauth" -- see
+	// resolvePriorSubjectHints' own doc comment for the three-reason split.
+	if want := []priorSubjectReceiptSkipReasonRecord{{"unloadable", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
+	}
 }
 
 // TestEngineDoesNotLeakOrErrorWhenPriorSubjectReceiptFailsGraphAuthorization
@@ -391,6 +428,59 @@ func TestEngineDoesNotLeakOrErrorWhenPriorSubjectReceiptFailsGraphAuthorization(
 	}
 	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
 		t.Fatalf("telemetry = %#v, want exactly one skip of count 1 recorded", telemetry.priorSubjectReceiptsSkipped)
+	}
+	// CHAOS-3888: a receipt that built a real hint but did not survive
+	// THIS call's own graph resolution must classify as "failed_reauth",
+	// distinct from "unloadable"/"no_match" -- the receipt's prior result
+	// loaded fine and named a real candidate; it is only re-resolution that
+	// declined it.
+	if want := []priorSubjectReceiptSkipReasonRecord{{"failed_reauth", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
+	}
+}
+
+// TestEngineClassifiesPriorSubjectReceiptWithNoMatchingCandidateAsNoMatch
+// (CHAOS-3888) is the third leg of the skip-reason split: a receipt whose
+// prior InvestigationResult loads fine but names no candidate carrying a
+// matching ReceiptID must classify as "no_match" -- distinct from
+// "unloadable" (the prior result itself failed to load) and
+// "failed_reauth" (a hint WAS built from a real match).
+func TestEngineClassifiesPriorSubjectReceiptWithNoMatchingCandidateAsNoMatch(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_prior_1": priorResult}}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	request := validInvestigationRequest()
+	// receipt_wrong00 names a real, loadable prior result but a ReceiptID
+	// that result never issued.
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_wrong00"}}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(graph.resolveRequests) != 1 || len(graph.resolveRequests[0].RequestedScope.SubjectHints) != 0 {
+		t.Fatalf("resolveRequests = %#v, want no hint added for a receipt naming no matching candidate", graph.resolveRequests)
+	}
+	if want := []priorSubjectReceiptSkipReasonRecord{{"no_match", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
 	}
 }
 

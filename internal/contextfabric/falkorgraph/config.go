@@ -261,6 +261,31 @@ type GraphTelemetry interface {
 	// unexpected non-commit traced back to expansion-caused truncation had
 	// no operational signal to confirm it against.
 	RecordLexiconExpansion(ctx context.Context, orgID string, fired bool, batchCount, addedCandidates int, truncatedByExpansion bool)
+	// RecordSubjectCandidatesAuthzDropped (CHAOS-3888) reports how many
+	// candidate nodes ONE ResolveSubjects call found and then excluded
+	// specifically because AuthorizedAttributes denied them -- see
+	// graphrank.ResolveDeps.SubjectCandidatesAuthzDropped's doc comment for
+	// the exact scope (explicit-hint and hybrid-search candidates; never an
+	// invalid-subject or internal-bookkeeping exclusion, neither an
+	// authorization event). Before this signal, such a drop was
+	// indistinguishable from a candidate that simply never existed --
+	// nothing anywhere counted it.
+	RecordSubjectCandidatesAuthzDropped(ctx context.Context, orgID string, count int)
+	// RecordCohortMembersAuthzDropped (CHAOS-3888) reports how many
+	// subjectless-cohort member nodes ONE DiscoverContext call excluded
+	// specifically because AuthorizedAttributes denied them -- see
+	// graphrank.DiscoveredCohort's doc comment.
+	RecordCohortMembersAuthzDropped(ctx context.Context, orgID string, count int)
+	// RecordEdgesFilteredByReason (CHAOS-3888) reports how many candidate
+	// relationship edges ONE DiscoverContext call excluded, split by reason:
+	// authz (AuthorizedAttributes denied the edge or one of its resolved
+	// endpoints), temporalWindow (an endpoint did not exist inside the
+	// requested historical window), and selfLoop (the edge's own two
+	// endpoints resolved to the same subject). Before this signal all three
+	// collapsed into the same unclassified `continue` -- a relationship
+	// hidden by authorization was indistinguishable from one that never
+	// existed at all.
+	RecordEdgesFilteredByReason(ctx context.Context, orgID string, authz, temporalWindow, selfLoop int)
 }
 
 // VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
@@ -317,6 +342,9 @@ func (NoopTelemetry) RecordVectorIndexEfRuntimeMismatch(context.Context, string,
 func (NoopTelemetry) RecordIdentityGraphMissing(context.Context, string, int)              {}
 func (NoopTelemetry) RecordVectorFence(context.Context, string, VectorFenceResult, bool)   {}
 func (NoopTelemetry) RecordLexiconExpansion(context.Context, string, bool, int, int, bool) {}
+func (NoopTelemetry) RecordSubjectCandidatesAuthzDropped(context.Context, string, int)     {}
+func (NoopTelemetry) RecordCohortMembersAuthzDropped(context.Context, string, int)         {}
+func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int)   {}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -447,6 +475,33 @@ func (t SlogTelemetry) RecordLexiconExpansion(ctx context.Context, orgID string,
 	}
 	t.logger().DebugContext(ctx, "context_fabric: lexicon expansion fired",
 		"org_id", orgID, "request_id", requestID, "batch_count", batchCount, "added_candidates", addedCandidates)
+}
+
+// RecordSubjectCandidatesAuthzDropped logs at Info, not Warn: an
+// authorization-narrowed candidate pool is ordinary, expected behavior for a
+// scoped principal, not a sign anything is broken -- the same "nothing is
+// wrong" posture RecordVectorRetrievalSuppressed already takes for a
+// deliberate, correct exclusion. It exists so a no_match/clarification
+// outcome is diagnosable (was the pool ever narrowed by authorization?)
+// without paging an operator over expected, per-request scoping.
+func (t SlogTelemetry) RecordSubjectCandidatesAuthzDropped(_ context.Context, orgID string, count int) {
+	t.logger().Info("context_fabric: subject candidates dropped by authorization", "org_id", orgID, "count", count)
+}
+
+// RecordCohortMembersAuthzDropped mirrors
+// RecordSubjectCandidatesAuthzDropped's own Info-level, "nothing is wrong"
+// posture -- see its doc comment.
+func (t SlogTelemetry) RecordCohortMembersAuthzDropped(_ context.Context, orgID string, count int) {
+	t.logger().Info("context_fabric: cohort members dropped by authorization", "org_id", orgID, "count", count)
+}
+
+// RecordEdgesFilteredByReason mirrors RecordSubjectCandidatesAuthzDropped's
+// own Info-level, "nothing is wrong" posture -- an authorization exclusion,
+// a historical-window exclusion, and a self-loop exclusion are all ordinary,
+// expected outcomes of a correct read, not degradation.
+func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID string, authz, temporalWindow, selfLoop int) {
+	t.logger().Info("context_fabric: relationship edges filtered",
+		"org_id", orgID, "authz", authz, "temporal_window", temporalWindow, "self_loop", selfLoop)
 }
 
 func (c Config) validate() error {

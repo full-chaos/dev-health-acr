@@ -9,6 +9,51 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// subjectCandidatesAuthzDroppedKey is the unexported context key
+// withSubjectCandidatesAuthzDroppedRecorder/RecordSubjectCandidatesAuthzDropped
+// share (CHAOS-3888) -- see the pair's own doc comments.
+type subjectCandidatesAuthzDroppedKey struct{}
+
+// withSubjectCandidatesAuthzDroppedRecorder attaches a fresh, zeroed counter
+// cell to ctx and returns both the derived context and a pointer to that
+// cell. Investigate calls this immediately before invoking
+// GraphReader.ResolveSubjects, and reads *counter back once that call
+// returns, to learn whether THIS resolution excluded any candidate purely on
+// authorization grounds (CHAOS-3888) -- the seam that lets
+// resolveTerminalStatus's caller classify an EMPTY candidate pool as
+// authz_filtered_to_empty rather than a true empty_pool.
+//
+// A context value, not a return value or an interface extension, precisely
+// because it is TELEMETRY, never load-bearing: nothing about the resolution
+// GraphReader returns, or about which candidates/subjects an investigation
+// commits to, depends on whether or how this cell gets written. That is what
+// makes ctx an acceptable carrier here, unlike the team-lead veto recorded
+// elsewhere in this package for genuinely load-bearing data (e.g.
+// reuseWatermarkSnapshot, EngineDependencies) -- a caller that forgets to
+// read *counter loses only diagnostic precision, never correctness, and a
+// GraphReader that never calls RecordSubjectCandidatesAuthzDropped (every
+// existing test double, and any future backend) leaves the cell at its zero
+// value, which resolveTerminalStatus's caller already treats as "nothing to
+// report" (empty_pool).
+func withSubjectCandidatesAuthzDroppedRecorder(ctx context.Context) (context.Context, *int) {
+	counter := new(int)
+	return context.WithValue(ctx, subjectCandidatesAuthzDroppedKey{}, counter), counter
+}
+
+// RecordSubjectCandidatesAuthzDropped is the write side of the pair above:
+// a GraphReader implementation (e.g. falkorgraph.Adapter.ResolveSubjects)
+// calls this, on the SAME ctx it was given, to report how many candidate
+// nodes it excluded purely because authorization denied them. A no-op when
+// ctx carries no recorder (any caller that did not opt in via
+// withSubjectCandidatesAuthzDroppedRecorder) -- exported so it is callable
+// from any package that implements GraphReader, never load-bearing per the
+// doc comment above.
+func RecordSubjectCandidatesAuthzDropped(ctx context.Context, count int) {
+	if counter, ok := ctx.Value(subjectCandidatesAuthzDroppedKey{}).(*int); ok {
+		*counter += count
+	}
+}
+
 // ErrNoInvestigationSubjects (CHAOS-3810/CHAOS-3811) classifies the one
 // failure this ticket exists to make impossible: a canonical fact read
 // attempted with neither a discovered subject nor a cohort.
@@ -136,8 +181,17 @@ func (e *Engine) terminalResult(
 	graphContext GraphContext,
 	watermark SourceWatermarkSnapshot,
 	epoch RebuildEpoch,
+	subjectCandidatesAuthzDropped int,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
+	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
+	// reached its own subjectless terminal path, never changes status,
+	// limitation, or any other field of the result below. See
+	// subjectlessTerminalReason's own doc comment for the three-value
+	// vocabulary.
+	if e.telemetry != nil {
+		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(resolution, subjectCandidatesAuthzDropped))
+	}
 	coverage := graphContext.Coverage
 	if coverage.Sources == nil {
 		coverage.Sources = []SourceObservation{}
@@ -257,6 +311,38 @@ func (e *Engine) terminalResult(
 // for. The candidates stay attached to the result either way -- they are
 // ranked and receipt-bound, so even a no_match caller can bind one through
 // PriorSubjectReceipts on a follow-up.
+// subjectlessTerminalReason (CHAOS-3888) classifies WHY resolveTerminalStatus
+// reached the subjectless terminal path, as a closed, telemetry-only
+// vocabulary -- never part of the InvestigationResult contract (see
+// SubjectResolution.RetrievalDegraded's own doc comment on why cause-level
+// retrieval detail stays out of the answer-facing response, a discipline
+// that applies with EXTRA force here: telling a caller their empty result
+// was specifically authorization-narrowed, rather than a genuine absence,
+// would be exactly the kind of existence-oracle leak CHAOS-3829's
+// unscopedVisibility guard exists to prevent on the resolution side).
+//
+//   - "empty_pool": the candidate pool was empty and nothing this
+//     resolution found was excluded by authorization -- a true absence (or
+//     at least, retrieval genuinely found nothing to exclude either way).
+//   - "authz_filtered_to_empty": the candidate pool was empty AND this
+//     resolution's own GraphReader reported (via
+//     RecordSubjectCandidatesAuthzDropped) that it excluded at least one
+//     candidate purely on authorization grounds -- structurally distinct
+//     from empty_pool: something existed, and authorization hid it.
+//   - "ambiguous": the candidate pool was non-empty (one or more
+//     uncommitted candidates) -- the clarification_required / no_match
+//     "more than one matched, or one matched but did not clear the commit
+//     gate" branch, regardless of AllowClarification.
+func subjectlessTerminalReason(resolution SubjectResolution, subjectCandidatesAuthzDropped int) string {
+	if len(resolution.Candidates) > 0 {
+		return "ambiguous"
+	}
+	if subjectCandidatesAuthzDropped > 0 {
+		return "authz_filtered_to_empty"
+	}
+	return "empty_pool"
+}
+
 func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution) (InvestigationStatus, string) {
 	if len(resolution.Candidates) == 0 {
 		return InvestigationNoMatch, noMatchLimitationForEmptyPool(resolution)

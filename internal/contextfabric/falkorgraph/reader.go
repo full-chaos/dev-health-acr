@@ -81,6 +81,19 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 				a.config.Telemetry.RecordObservationTraversalDegraded(ctx, orgID, count)
 			}
 		},
+		// CHAOS-3888: same nil-safe, aggregate-report convention as
+		// TraversalDegraded immediately above. Also reports through
+		// contextfabric.RecordSubjectCandidatesAuthzDropped -- a no-op
+		// unless the caller (Engine.Investigate) attached a recorder to
+		// this SAME ctx -- so an authz-filtered-to-empty resolution is
+		// classifiable at the terminal-result layer, not just visible in
+		// this backend's own GraphTelemetry stream.
+		SubjectCandidatesAuthzDropped: func(ctx context.Context, orgID string, count int) {
+			if a.config.Telemetry != nil {
+				a.config.Telemetry.RecordSubjectCandidatesAuthzDropped(ctx, orgID, count)
+			}
+			contextfabric.RecordSubjectCandidatesAuthzDropped(ctx, count)
+		},
 		// CHAOS-3829: the calibrated commit-path margin threshold captured
 		// at attachEmbedder time (retrieval_policy.go). Zero (no calibrated
 		// policy for this identity, or no embedder at all) disables the
@@ -420,13 +433,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// distinguishes real degradation from ordinary, silent filtering, and it
 	// alone drives Coverage.Partial.
 	failedLookups := 0
+	// edgeFilters (CHAOS-3888) aggregates every edge resolveEdge excluded as
+	// edgeFiltered across BOTH sources this function reads from (hopWalk's
+	// committed-origin traversal below, and the full-text-adjacent-edge loop
+	// further down), by reason -- see edgeFilterCounts' own doc comment.
+	var edgeFilters edgeFilterCounts
 
 	for _, subject := range request.Resolution.Committed {
-		nodes, edges, failed, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
+		nodes, edges, failed, filters, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		if err != nil {
 			return contextfabric.GraphContext{}, err
 		}
 		failedLookups += failed
+		edgeFilters.Authz += filters.Authz
+		edgeFilters.TemporalWindow += filters.TemporalWindow
 		for _, n := range nodes {
 			nk := graphrank.SubjectKey(mustSubject(n))
 			if !seenNode[nk] {
@@ -489,7 +509,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}
-		resolved, resolution := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce, temporal)
+		resolved, resolution, reason := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce, temporal)
+		edgeFilters.add(resolution, reason)
 		switch resolution {
 		case edgeLookupFailed:
 			failedLookups++
@@ -518,10 +539,25 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 
 	admission := graphrank.AdmitEdges(principal.OrgID, orderedResolved, request.Request.Options, isInternalSubject)
-	cohort := graphrank.DiscoveredCohort(principal, request, resolvedNodes, isInternalSubject)
+	cohort, cohortAuthzDropped := graphrank.DiscoveredCohort(principal, request, resolvedNodes, isInternalSubject)
 	factRequirements := admission.FactRequirements
 	if cohort != nil {
 		factRequirements = graphrank.MergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
+	}
+	// CHAOS-3888: telemetry-only, never affects Coverage/Partial/the
+	// returned Cohort or Paths -- an authorization exclusion, a
+	// self-loop exclusion, and a temporal-window exclusion are all
+	// ordinary, expected outcomes of a correct read (see
+	// GraphTelemetry.RecordEdgesFilteredByReason/
+	// RecordCohortMembersAuthzDropped's own doc comments), not
+	// degradation, so none of them touches partial/degradedReasons below.
+	if a.config.Telemetry != nil {
+		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
+			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)
+		}
+		if cohortAuthzDropped > 0 {
+			a.config.Telemetry.RecordCohortMembersAuthzDropped(ctx, principal.OrgID, cohortAuthzDropped)
+		}
 	}
 
 	// Codex P2c: a failed endpoint lookup is a real, silent loss of material
