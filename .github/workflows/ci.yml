@@ -9,31 +9,17 @@ name: ci
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  verify:
+  scripts:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
-      # actions/setup-go v6.5.0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        with:
-          go-version: '1.26.6'
-          cache: false
-      # CHAOS-3859 sol review F1: deploy/compose/acr_db_init_integration_test.go
-      # shells out to psql/pg_isready to prove acr-db-init.sh's runtime-acl
-      # grants against a real Postgres. Without this, that test's own
-      # "absent tool means skip, not fail" convention (see its own doc
-      # comment) would let it skip green in CI forever -- the exact
-      # skip-reads-as-ok trap the grant proof exists to close.
-      - name: Install PostgreSQL client for the compose ACL integration test
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y postgresql-client
-          psql --version
-          pg_isready --version
       - name: Check release setup script modes
         run: |
           test -x scripts/release/setup-cosign-key.sh
@@ -71,6 +57,10 @@ jobs:
           # shell variables such as $trivy_db_mirror and $metadata.
           find scripts/container -type f -name '*.sh' -print0 \
             | xargs -0 shellcheck -x -e SC2016
+      - name: Shellcheck CI workflow scripts
+        run: |
+          find scripts/ci -type f -name '*.sh' -print0 \
+            | xargs -0 shellcheck -x
       - name: Test release asset assembly
         run: scripts/release/test-assemble-release-assets.sh
       - name: Test container release manifest
@@ -86,21 +76,100 @@ jobs:
             --fixtures testdata/release-approvals
           "$approval_gates" --mode reject-invalid \
             --fixtures testdata/release-approvals
+      - name: Verify CI workflow contract
+        run: scripts/ci/test-workflow-contract.sh
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # Caching was previously off with no recorded rationale (checked: no
+      # commit message, PR body, or doc states one) -- every run cold-built
+      # the module, its dependencies, and every test binary from scratch.
+      # The cache is keyed on go.sum + Go version + runner, GitHub scopes
+      # caches per branch with fork PRs isolated, and nothing in the build
+      # is trusted on the basis of the cache: the reproducible container
+      # rebuild and the release pipeline both still build cold.
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.6'
+          cache: true
       - name: Verify Go formatting
         run: make fmt-check
       - name: Vet Go packages
         run: make vet
-      - name: Analyze Go tests
+      # Runs here rather than in the Go-less `scripts` job because only a real
+      # `go list ./...` can show the race matrix partitions the whole module.
+      # scripts/ci/test-workflow-contract.sh proves the matrix is well-formed;
+      # this proves it is total -- a race lane that silently tested fewer
+      # packages would still report success.
+      - name: Verify the race shards cover every package
+        run: scripts/ci/test-shard-closure.sh
+      - name: Check known Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.6'
+          cache: true
+      # CHAOS-3859 sol review F1: deploy/compose/acr_db_init_integration_test.go
+      # shells out to psql/pg_isready to prove acr-db-init.sh's runtime-acl
+      # grants against a real Postgres. Without this, that test's own
+      # "absent tool means skip, not fail" convention (see its own doc
+      # comment) would let it skip green in CI forever -- the exact
+      # skip-reads-as-ok trap the grant proof exists to close. Both the
+      # unit and race jobs run this suite, so both install the client.
+      - name: Install PostgreSQL client for the compose ACL integration test
+        run: |
+          set -euo pipefail
+          # The runner image already ships the PostgreSQL 16 client binaries;
+          # apt was only fetching the thin `postgresql-client` metapackage on
+          # top of them. Splitting one job into several multiplied that
+          # network call across every job that runs the suite, and a wedged
+          # Ubuntu mirror then stalls each of them (observed: 18+ minutes on
+          # `apt-get update` while every other lane finished). Use what is
+          # already installed, and only reach for apt when it genuinely is
+          # missing -- the step still fails, rather than skipping green, if
+          # the tools cannot be provided either way.
+          if command -v psql >/dev/null 2>&1 \
+            && command -v pg_isready >/dev/null 2>&1; then
+            psql --version
+            pg_isready --version
+            exit 0
+          fi
+          timeout 300 sudo apt-get update
+          timeout 300 sudo apt-get install --no-install-recommends -y \
+            postgresql-client
+          psql --version
+          pg_isready --version
+      # The plain non-race run and the coverage run used to be two separate
+      # cold `-count=1` runs of the same `./...` suite. They are now one
+      # run: gotestsum emits the JSON stream, the JUnit report, and the
+      # coverage profile from a single execution, so the failure analysis
+      # below, the uploaded reports, and the non-race pass/fail signal all
+      # come from this one run. The artifacts still upload with
+      # `if: always()` so a failing run still leaves reports to inspect.
+      - name: Run Go tests with coverage and JUnit reporting
         id: go-tests
         run: |
           set +e
-          go test -count=1 -json ./... >"$RUNNER_TEMP/go-test.json"
+          make test-coverage
           status=$?
           set -e
           failure="$(jq -r '
             select(.Action == "fail") |
             if .Test then (.Package + "/" + .Test) else .Package end
-          ' "$RUNNER_TEMP/go-test.json" | head -n 1)"
+          ' .tmp/coverage/go-test.json | head -n 1)"
           test -n "$failure" || failure=unknown
           failure="$(printf '%s' "$failure" | tr '\r\n' '  ' | cut -c1-180)"
           printf 'status=%s\nfailure=%s\n' "$status" "$failure" >>"$GITHUB_OUTPUT"
@@ -111,39 +180,8 @@ jobs:
             select(.Action == "output") |
             select(.Output | test("^(--- FAIL:|FAIL[[:space:]]|panic:|fatal error:|[[:space:]]+.*_test\\.go:[0-9]+:|[[:space:]]+Error Trace:|[[:space:]]+Error:|[[:space:]]+Messages:|[[:space:]]+expected|[[:space:]]+actual)")) |
             .Output
-          ' "$RUNNER_TEMP/go-test.json"
+          ' .tmp/coverage/go-test.json
           exit 1
-      - name: Run race and deterministic shuffle tests
-        run: make test-race
-      - name: Cross-compile supported targets
-        run: make crosscompile
-      - name: Verify wire contracts
-        run: make contract-test
-      - name: Verify CodeGraph contract
-        run: make codegraph-contract
-      - name: Verify canonical receipts
-        run: make canonical-receipts
-      - name: Verify full-stack offline contract
-        run: make fullstack-contract
-      - name: Build all shipped commands
-        run: make build
-      - name: Test deterministic native-client harness
-        run: make clients-real
-      - name: Test hosted runtime with disposable dependencies
-        run: make hosted-integration
-      - name: Check known Go vulnerabilities
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
-      # Reporting steps run last and with if: always() so a failure or flake
-      # in coverage/JUnit generation or upload can never skip the product
-      # verification gates above (crosscompile, contract-test, build,
-      # govulncheck, etc.) -- those must run to completion (or fail on their
-      # own terms) regardless of whether this reporting tail succeeds. This
-      # also means the reports still get generated and uploaded when an
-      # earlier gate step failed and stopped the job, giving CI a JUnit/
-      # coverage artifact to inspect for exactly the run that failed.
-      - name: Generate coverage and JUnit reports
-        if: always()
-        run: make test-coverage
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
@@ -161,7 +199,107 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-  containers:
+  race:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: race (shard ${{ matrix.shard }} of 4)
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.6'
+          cache: true
+      # CHAOS-3859 sol review F1: deploy/compose/acr_db_init_integration_test.go
+      # shells out to psql/pg_isready to prove acr-db-init.sh's runtime-acl
+      # grants against a real Postgres. Without this, that test's own
+      # "absent tool means skip, not fail" convention (see its own doc
+      # comment) would let it skip green in CI forever -- the exact
+      # skip-reads-as-ok trap the grant proof exists to close. Both the
+      # unit and race jobs run this suite, so both install the client.
+      - name: Install PostgreSQL client for the compose ACL integration test
+        run: |
+          set -euo pipefail
+          # The runner image already ships the PostgreSQL 16 client binaries;
+          # apt was only fetching the thin `postgresql-client` metapackage on
+          # top of them. Splitting one job into several multiplied that
+          # network call across every job that runs the suite, and a wedged
+          # Ubuntu mirror then stalls each of them (observed: 18+ minutes on
+          # `apt-get update` while every other lane finished). Use what is
+          # already installed, and only reach for apt when it genuinely is
+          # missing -- the step still fails, rather than skipping green, if
+          # the tools cannot be provided either way.
+          if command -v psql >/dev/null 2>&1 \
+            && command -v pg_isready >/dev/null 2>&1; then
+            psql --version
+            pg_isready --version
+            exit 0
+          fi
+          timeout 300 sudo apt-get update
+          timeout 300 sudo apt-get install --no-install-recommends -y \
+            postgresql-client
+          psql --version
+          pg_isready --version
+      # The shuffle seed and the -timeout semantics are unchanged from the
+      # single-job run; only the package set is partitioned, four ways, by
+      # scripts/ci/test-shard.sh, so each shard still runs a real subset of
+      # `go list ./...` under -race with the same deterministic shuffle.
+      - name: Run race and deterministic shuffle tests
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
+          printf 'shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
+          make test-race GOTEST_PKGS="$packages"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.6'
+          cache: true
+      - name: Cross-compile supported targets
+        run: make crosscompile
+      - name: Build all shipped commands
+        run: make build
+      - name: Test deterministic native-client harness
+        run: make clients-real
+      - name: Test hosted runtime with disposable dependencies
+        run: make hosted-integration
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.6'
+          cache: true
+      # Must run before anything else in this job that could dirty the
+      # worktree: the script refuses to start unless `git status --porcelain`
+      # is empty.
+      - name: Verify canonical receipts
+        run: make canonical-receipts
+      - name: Verify wire contracts
+        run: make contract-test
+      - name: Verify CodeGraph contract
+        run: make codegraph-contract
+      - name: Verify full-stack offline contract
+        run: make fullstack-contract
+
+  container-contract-smoke:
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout v7.0.0
@@ -212,8 +350,91 @@ jobs:
       # keeps an unreviewed image out of the stack.
       - name: Validate container contract and native runtime smoke tests
         run: make container-test
+
+  container-reproducible:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # docker/setup-qemu-action v3.6.0
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+        with:
+          # yamllint disable rule:line-length
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          # yamllint enable rule:line-length
+          cache-image: false
+      - name: Install checksum-verified Docker Buildx
+        env:
+          BUILDX_VERSION: v0.35.0
+          BUILDX_SHA256: >-
+            d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
+          BUILDX_URL: >-
+            https://github.com/docker/buildx/releases/download/v0.35.0/buildx-v0.35.0.linux-amd64
+        run: |
+          mkdir -p "$RUNNER_TEMP/buildx" "$HOME/.docker/cli-plugins"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$BUILDX_URL" \
+            --output "$RUNNER_TEMP/buildx/docker-buildx"
+          printf '%s  %s\n' \
+            "$BUILDX_SHA256" "$RUNNER_TEMP/buildx/docker-buildx" \
+            | sha256sum --check -
+          install -m 0755 \
+            "$RUNNER_TEMP/buildx/docker-buildx" \
+            "$HOME/.docker/cli-plugins/docker-buildx"
+          docker buildx version | grep -F "$BUILDX_VERSION"
+      # docker/setup-buildx-action v3.11.1
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # yamllint disable-line rule:line-length
+        with:
+          # yamllint disable rule:line-length
+          driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
+          # yamllint enable rule:line-length
+          cache-binary: false
       - name: Rebuild the clean commit reproducibly
         run: make container-reproducible
+
+  container-oci-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # docker/setup-qemu-action v3.6.0
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+        with:
+          # yamllint disable rule:line-length
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          # yamllint enable rule:line-length
+          cache-image: false
+      - name: Install checksum-verified Docker Buildx
+        env:
+          BUILDX_VERSION: v0.35.0
+          BUILDX_SHA256: >-
+            d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
+          BUILDX_URL: >-
+            https://github.com/docker/buildx/releases/download/v0.35.0/buildx-v0.35.0.linux-amd64
+        run: |
+          mkdir -p "$RUNNER_TEMP/buildx" "$HOME/.docker/cli-plugins"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$BUILDX_URL" \
+            --output "$RUNNER_TEMP/buildx/docker-buildx"
+          printf '%s  %s\n' \
+            "$BUILDX_SHA256" "$RUNNER_TEMP/buildx/docker-buildx" \
+            | sha256sum --check -
+          install -m 0755 \
+            "$RUNNER_TEMP/buildx/docker-buildx" \
+            "$HOME/.docker/cli-plugins/docker-buildx"
+          docker buildx version | grep -F "$BUILDX_VERSION"
+      # docker/setup-buildx-action v3.11.1
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # yamllint disable-line rule:line-length
+        with:
+          # yamllint disable rule:line-length
+          driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
+          # yamllint enable rule:line-length
+          cache-binary: false
+      # oci and scan must stay in one job: scan reads the `.tmp/container-oci/*.tar`
+      # archives that oci publishes, so splitting them across jobs would need an
+      # artifact hand-off for no benefit -- they are already sequential here.
       - name: Build and validate multi-architecture OCI archives
         run: make container-oci
       - name: Scan for HIGH/CRITICAL vulnerabilities and generate SPDX SBOMs
@@ -244,3 +465,37 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+
+  verify:
+    # Single required gate. Every other job in this workflow must be listed in
+    # `needs` and must have actually succeeded: `if: always()` makes this job
+    # run even when a lane failed or was skipped, and the check below rejects
+    # any result that is not `success`, so a skipped or cancelled lane can
+    # never read as green. scripts/ci/test-workflow-contract.sh enforces that
+    # every job is listed here, so adding a lane cannot silently escape it.
+    if: always()
+    needs:
+      - scripts
+      - lint
+      - unit
+      - race
+      - build
+      - contracts
+      - container-contract-smoke
+      - container-reproducible
+      - container-oci-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert every lane succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS=$'\t' read -r job result; do
+            printf '%s: %s\n' "$job" "$result"
+            if [ "$result" != success ]; then failed=1; fi
+          done < <(printf '%s' "$NEEDS" | jq -r 'to_entries[] | [.key, .value.result] | @tsv')
+          test "$(printf '%s' "$NEEDS" | jq -r 'length')" -gt 0 || {
+            printf 'no lane results were reported\n' >&2; exit 1; }
+          test "$failed" -eq 0 || { printf 'at least one lane did not succeed\n' >&2; exit 1; }

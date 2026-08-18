@@ -125,7 +125,10 @@ make verify          # fmt-check + vet + test + contract-test + fullstack-contra
 make fullstack-opencode-e2e  # Live gate: Dev Health slice + ACR + real headless OpenCode
 ```
 
-CI runs `make verify` on pull requests and pushes to `main`. Builds land in ignored `.tmp/`.
+CI (`.github/workflows/ci.yml`) runs the same gates as `make verify` on pull requests and pushes
+to `main`, split across parallel jobs (`scripts`, `lint`, `unit`, `race`, `build`, `contracts`,
+and three container jobs) behind a single required `verify` gate job that checks every other job
+succeeded. `make verify` remains the local one-command equivalent. Builds land in ignored `.tmp/`.
 
 `make fullstack-opencode-e2e` needs Docker, a sibling `full-chaos/dev-health` checkout and the
 pinned OpenCode release; it runs in its own workflow, not in `make verify`. See
