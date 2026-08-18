@@ -582,13 +582,29 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 // tables are joined LEFT, so an edge whose endpoint row cannot be resolved
 // still projects -- with the window absent, which is the admit-count-label
 // path, and the correct answer when the interval genuinely is unknowable.
+//
+// CHAOS-3898 D-7: the deployments join used to key on (org_id,
+// deployment_id) only. deployment_id is not globally unique -- two
+// different repos can both run a deployment_id that collides -- so the
+// join could pick up the WRONG repo's deployment row: either a
+// duplicate-RelationshipID wedge (two edges resolving to endpoint data
+// that implies the same RelationshipID) or, for the org-isolation-safe
+// direction, a silently wrong deploy/finish window borrowed from an
+// unrelated repo's deployment. The join now also equates d.repo_id =
+// e.repo_id, matching e's own already-qualified join to repos (the line
+// above). The chaos3898_d7_join_fix_test.go regression test pins the SQL
+// text so this predicate cannot be dropped by a future edit without a test
+// failing. operational_incidents carries no repo_id in its schema (see
+// devhealthschema.EngineFull["operational_incidents"]), so the incidents
+// join is unaffected -- this fix is scoped exactly to the join the design
+// brief's defect inventory (v4.1 §0, D-7) names.
 func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at,
        ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
        ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `
 FROM work_graph_deployment_incident_edges AS e FINAL
 INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
-LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id
+LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id AND d.repo_id = e.repo_id
 LEFT JOIN operational_incidents AS i FINAL ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
 WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.observed_at", "e.edge_id") + orderBy("e.observed_at", "e.edge_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
