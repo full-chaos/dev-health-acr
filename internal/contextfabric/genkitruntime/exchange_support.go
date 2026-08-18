@@ -63,6 +63,39 @@ func ParseInterpretationOutput(raw []byte, defaultTime contextfabric.TimeContext
 	return output.toDomain(defaultTime)
 }
 
+// InterpretationOutputWindow is the CHAOS-3900 W0 sanitized window
+// classification ParseInterpretationOutputWindow returns alongside the
+// domain InterpretedQuestion -- see that function's own doc comment.
+type InterpretationOutputWindow struct {
+	Class             contextfabric.WindowClass
+	Confidence        contextfabric.WindowConfidence
+	ClassUnrecognized bool
+}
+
+// ParseInterpretationOutputWindow decodes raw exactly like
+// ParseInterpretationOutput, and additionally returns the SAME sanitized
+// window_class/window_confidence/unrecognized capture (CHAOS-3900 W0)
+// Runtime.InterpretQuestion applies to a genkit-returned interpretationOutput
+// -- both call the identical sanitizeWindowOutput (runtime.go), so a
+// non-genkit responder (the file-exchange trial transport) can populate its
+// own ModelExecutionReceipt with a classification byte-identical to what a
+// real genkit call would have captured, never a transport-specific
+// reimplementation that could silently diverge. Only sanitized on a
+// SUCCESSFUL toDomain (mirrors Runtime.InterpretQuestion's own ordering):
+// on a toDomain/Validate failure, the returned window is the zero value.
+func ParseInterpretationOutputWindow(raw []byte, defaultTime contextfabric.TimeContext) (contextfabric.InterpretedQuestion, InterpretationOutputWindow, error) {
+	var output interpretationOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return contextfabric.InterpretedQuestion{}, InterpretationOutputWindow{}, err
+	}
+	interpreted, err := output.toDomain(defaultTime)
+	if err != nil {
+		return interpreted, InterpretationOutputWindow{}, err
+	}
+	class, confidence, unrecognized := sanitizeWindowOutput(output)
+	return interpreted, InterpretationOutputWindow{Class: class, Confidence: confidence, ClassUnrecognized: unrecognized}, nil
+}
+
 // InterpretationOutputSchema reflects the exact Go type genkit's
 // constrained structured output binds InterpretQuestion's model call to,
 // as a JSON Schema document -- the same contract a non-genkit responder

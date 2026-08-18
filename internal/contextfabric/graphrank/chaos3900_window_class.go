@@ -2,7 +2,7 @@ package graphrank
 
 import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 
-// CHAOS-3900 W0 (design brief .remember/chaos3900-design-brief.md v5.2,
+// CHAOS-3900 W0 (design brief ../.remember/chaos3900-design-brief.md (relative to the dev-health/acr repo root) v5.2,
 // §2/§2.1): the deterministic engine-side classification post-pass, SHADOW
 // ONLY (see chaos3900_window_vocab.go's own doc comment in package
 // contextfabric for the full scoping rationale). Lives in package

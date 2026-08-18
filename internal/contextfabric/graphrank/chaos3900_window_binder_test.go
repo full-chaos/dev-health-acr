@@ -1,6 +1,7 @@
 package graphrank
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -131,9 +132,11 @@ func TestProposeWindowFromSpans_EntityNameInTemporalRoleStillPassesRoleCheck(t *
 
 func TestProposeWindowFromSpans_NoRoleRefuses(t *testing.T) {
 	t.Parallel()
-	// "month" sits mid-clause with no closed preposition immediately
-	// before it and more clause follows after -- fails the role check.
-	got := ProposeWindowFromSpans("the last month numbers looked fine to everyone")
+	// "month" sits truly MID-CLAUSE: preceded by "heard" (not a closed
+	// preposition, and not clause-initial even after stripping "the" --
+	// "we heard the" still has "heard" left over) and followed by more
+	// clause. Fails the role check.
+	got := ProposeWindowFromSpans("we heard the last month numbers looked fine to everyone")
 	if got.Reason != WindowBindSpanUnbound {
 		t.Fatalf("ProposeWindowFromSpans(no role) = %#v, want WindowBindSpanUnbound", got)
 	}
@@ -142,18 +145,53 @@ func TestProposeWindowFromSpans_NoRoleRefuses(t *testing.T) {
 	}
 }
 
+func TestProposeWindowFromSpans_ClauseInitialWithLeadingArticlePasses(t *testing.T) {
+	t.Parallel()
+	// I5 pin: a bare leading article before an otherwise clause-initial
+	// span ("The last month has been rough") must still pass -- stripping
+	// the article during the preposition check leaves nothing, which IS
+	// clause-initial, not a failed preposition match.
+	got := ProposeWindowFromSpans("the last month has been rough")
+	if got.Reason != WindowBindRoutedInferred {
+		t.Fatalf("ProposeWindowFromSpans(clause-initial with leading article) = %#v, want WindowBindRoutedInferred", got)
+	}
+}
+
 func TestBoundWindowSpanCarriesNoSpanText(t *testing.T) {
 	t.Parallel()
 	// Corpus-safety structural pin: BoundWindowSpan must never grow a
-	// field that could carry matched question text -- only offsets and
-	// the fixed registry name are safe to trace.
-	span := BoundWindowSpan{}
-	_ = span.SpanStart
-	_ = span.SpanEnd
-	_ = span.Grammar
-	_ = span.RelativeID
-	// The compile-time absence of any other exported field is the actual
-	// assertion here; this test exists so a future field addition is at
-	// least forced through a reviewer's eyes on this file, not to check
-	// anything at runtime beyond "the struct still has exactly these."
+	// field that could carry matched question text -- only offsets, the
+	// fixed registry name, and the closed RelativeID are safe to trace.
+	// A future field addition (e.g. a well-meaning "SpanText string" for
+	// debugging) must fail THIS test, not merely be missed in review.
+	typ := reflect.TypeOf(BoundWindowSpan{})
+	allowed := map[string]bool{"Grammar": true, "RelativeID": true, "SpanStart": true, "SpanEnd": true}
+	if typ.NumField() != len(allowed) {
+		t.Fatalf("BoundWindowSpan has %d fields, want exactly %d (%v) -- a field was added without updating this corpus-safety pin", typ.NumField(), len(allowed), allowed)
+	}
+	forbidden := []string{"text", "span", "value", "term", "label", "matchedtext"}
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if !allowed[name] {
+			t.Fatalf("BoundWindowSpan.%s is not in the allowed field set %v -- corpus-safety review required before adding a field here", name, allowed)
+		}
+		lower := lowerASCII(name)
+		for _, bad := range forbidden {
+			if lower == bad {
+				t.Fatalf("BoundWindowSpan.%s: field name suggests free question text", name)
+			}
+		}
+	}
+}
+
+// lowerASCII mirrors the identical helper other corpus-safety canaries in
+// this repo use (e.g. internal/runtime/hosted's replay/D2(b)/W0 harnesses).
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }

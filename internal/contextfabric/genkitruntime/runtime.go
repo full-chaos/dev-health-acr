@@ -88,12 +88,29 @@ const (
 	//     length/count bounds alone and invent keys the registry always
 	//     rejects.
 	//
+	// v8 (CHAOS-3900 W0): adds the two optional window_class/
+	// window_confidence sentences (prompts.go) and the matching
+	// interpretationOutput schema fields (runtime.go) -- a genuine model-
+	// facing prompt AND schema content change (this file's own rule,
+	// stated at v3 above: "a prompt content change must bump this even
+	// though the interpretationOutput schema itself is unchanged" applies
+	// a fortiori here, since BOTH changed), even though nothing in the
+	// serving path reads the new fields (W0 is shadow/measurement only).
+	// The instruction still perturbs the model's output distribution for
+	// EVERY production interpretation call (more prompt content to
+	// attend to can shift shape/subject_terms/judgment phrasing), so a
+	// replay/evaluation pipeline reading ModelExecutionReceipt.PromptVersion
+	// (ADR 0008) must be able to tell a pre-W0 receipt from a post-W0 one,
+	// and the reuse key (answer_reuse.go, keyed on this exact constant)
+	// must not serve a pre-W0 answer as if it were interchangeable with a
+	// post-W0 one.
+	//
 	// Exported (CHAOS-3862): answer reuse must bind a lookup to the SAME
 	// deployment-current value this defaulting uses, before Interpret ever
 	// runs -- see contextfabric.ReuseKey.InterpretationPromptVersion's doc
 	// comment. Composition reads this constant directly rather than a
 	// second, independently-maintained copy, so the two can never drift.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v7"
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v8"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -498,10 +515,26 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 	// succeeded above, so an out-of-vocab window_class can never be the
 	// reason a whole interpretation is rejected. Captured on the receipt
 	// only (never on `interpreted`); nothing downstream of this call reads
-	// it, so this line changes no serving-path behavior.
-	receipt.WindowClass, receipt.WindowClassUnrecognized = contextfabric.SanitizeWindowClass(output.WindowClass)
-	receipt.WindowConfidence = contextfabric.SanitizeWindowConfidence(output.WindowConfidence)
+	// it, so this line changes no serving-path behavior. Shared with
+	// ParseInterpretationOutputWindow (exchange_support.go) so an
+	// alternate transport's receipt carries an IDENTICAL classification,
+	// never a transport-specific reimplementation that could silently
+	// drift.
+	receipt.WindowClass, receipt.WindowConfidence, receipt.WindowClassUnrecognized = sanitizeWindowOutput(output)
 	return interpreted, receipt, nil
+}
+
+// sanitizeWindowOutput applies the CHAOS-3900 W0 sanitize-before-validate
+// step to a raw model interpretationOutput's window fields. The SOLE place
+// this sanitization happens -- both Runtime.InterpretQuestion (above) and
+// ParseInterpretationOutputWindow (exchange_support.go, the file-exchange/
+// alternate-transport seam) call this, so a genkit call and a non-genkit
+// responder capture byte-identical classifications from the identical raw
+// output shape.
+func sanitizeWindowOutput(output interpretationOutput) (contextfabric.WindowClass, contextfabric.WindowConfidence, bool) {
+	class, unrecognized := contextfabric.SanitizeWindowClass(output.WindowClass)
+	confidence := contextfabric.SanitizeWindowConfidence(output.WindowConfidence)
+	return class, confidence, unrecognized
 }
 
 func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Principal, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {

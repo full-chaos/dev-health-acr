@@ -71,6 +71,24 @@ func TestClassifyWindow_IncompatiblePickDowngradesToFallback(t *testing.T) {
 	}
 }
 
+func TestClassifyWindow_IncompatiblePickWithNoFallbackAvailable(t *testing.T) {
+	t.Parallel()
+	// The only path where Source==none AND Downgraded==true both hold
+	// (M12): a model pick that's incompatible with the shape, on a shape
+	// fallbackClass itself has no entry for (explicit_cohort/open) -- so
+	// the downgrade has nowhere structurally compatible to land.
+	for _, shape := range []contextfabric.InvestigationShape{contextfabric.ShapeExplicitCohort, contextfabric.ShapeOpen} {
+		interpreted := contextfabric.InterpretedQuestion{Shape: shape}
+		got := ClassifyWindow(interpreted, contextfabric.WindowClassRecentActivityLookup, contextfabric.WindowConfidenceHigh)
+		if got.Source != WindowClassSourceNone || !got.Downgraded {
+			t.Fatalf("ClassifyWindow(incompatible pick, shape=%s, no fallback) = %#v, want Source=none, Downgraded=true", shape, got)
+		}
+		if got.Class != "" {
+			t.Fatalf("ClassifyWindow(incompatible pick, shape=%s, no fallback).Class = %q, want empty", shape, got.Class)
+		}
+	}
+}
+
 func TestClassifyWindow_ExplicitWindowNeverALegitimateModelPick(t *testing.T) {
 	t.Parallel()
 	// §2.1: explicit_window is caller-input-only by construction -- a

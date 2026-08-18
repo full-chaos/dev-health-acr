@@ -14,7 +14,7 @@
 # wait for the responder to notice and wipe its own private CODEX_HOME) --
 # only the go test target and output env var differ. This harness runs
 # THREE interpretations per corpus case (the N=3 divergence measurement,
-# design brief .remember/chaos3900-design-brief.md v5.2 §7), so it takes
+# design brief ../.remember/chaos3900-design-brief.md (relative to the dev-health/acr repo root) v5.2 §7), so it takes
 # roughly 3x as long per case as run-replay.sh's single-interpretation
 # pass -- the -timeout below and the default exchange timeout account for
 # that.

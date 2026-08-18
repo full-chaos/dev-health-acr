@@ -2,7 +2,7 @@ package contextfabric
 
 import "strings"
 
-// CHAOS-3900 W0 (design brief .remember/chaos3900-design-brief.md v5.2,
+// CHAOS-3900 W0 (design brief ../.remember/chaos3900-design-brief.md (relative to the dev-health/acr repo root) v5.2,
 // §2.1/§5.1): the closed, shadow-only window-classification vocabulary.
 //
 // SHADOW ONLY: nothing in this file is consulted by any serving-path

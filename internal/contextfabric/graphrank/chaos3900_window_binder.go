@@ -3,6 +3,7 @@ package graphrank
 import (
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
@@ -119,7 +120,7 @@ func hasWindowRole(question string, span BoundWindowSpan) bool {
 		// Clause-initial: nothing but whitespace precedes the span.
 		return true
 	}
-	lowerBefore := strings.ToLower(strings.TrimRight(before, " \t"))
+	lowerBefore := strings.ToLower(strings.TrimRightFunc(before, unicode.IsSpace))
 	// Tolerate ONE intervening closed article ("the"/"a"/"an") between the
 	// preposition and the span itself ("within THE last month", "over A
 	// past year" -- ungrammatical but harmless to also accept): the
@@ -132,6 +133,16 @@ func hasWindowRole(question string, span BoundWindowSpan) bool {
 			break
 		}
 	}
+	if lowerBefore == "" {
+		// After stripping a bare leading article ("The last month has been
+		// rough" -- before="The "), nothing else precedes the span: this
+		// IS clause-initial, re-testing the condition the top-of-function
+		// check already applies to a truly empty `before`. Without this,
+		// "The last month..." fails both the preposition check (nothing
+		// left to match) and the clause-final check (text still follows
+		// the span) and was wrongly refused.
+		return true
+	}
 	for _, prep := range windowRolePrepositions {
 		if _, ok := trimSuffixWord(lowerBefore, prep); ok {
 			return true
@@ -139,7 +150,7 @@ func hasWindowRole(question string, span BoundWindowSpan) bool {
 	}
 	after := question[span.SpanEnd:]
 	trailing := strings.TrimFunc(after, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '.' || r == '?' || r == ',' || r == '!'
+		return unicode.IsSpace(r) || r == '.' || r == '?' || r == ',' || r == '!'
 	})
 	if trailing == "" {
 		// Clause-final: only trailing whitespace/terminal punctuation
@@ -165,7 +176,7 @@ func trimSuffixWord(s, word string) (string, bool) {
 	if boundaryIdx != 0 && isWindowWordByte(s[boundaryIdx-1]) {
 		return s, false
 	}
-	return strings.TrimRight(s[:boundaryIdx], " \t"), true
+	return strings.TrimRightFunc(s[:boundaryIdx], unicode.IsSpace), true
 }
 
 func isWindowWordByte(b byte) bool {

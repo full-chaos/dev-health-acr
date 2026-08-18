@@ -1,7 +1,7 @@
 package hosted_test
 
 // CHAOS-3900 W0 window-inference shadow measurement (design brief
-// .remember/chaos3900-design-brief.md v5.2, §7 "the D2(b) rerun is the
+// ../.remember/chaos3900-design-brief.md (relative to the dev-health/acr repo root) v5.2, §7 "the D2(b) rerun is the
 // acceptance instrument"). SHADOW/MEASUREMENT ONLY, exactly like
 // chaos3899_d2b_cardinality_test.go, which this file extends rather than
 // modifies (that harness ships as part of CHAOS-3899 and stays untouched):
@@ -66,6 +66,16 @@ type w0KindMeasurement struct {
 	CountAllTime int    `json:"count_alltime"`
 	Count90D     int    `json:"count_90d"`
 	Count365D    int    `json:"count_365d"`
+	// WindowBound mirrors d2bKindMeasurement's own field: true iff the
+	// INTERPRETED question carried a real Start/End/AsOf. CountAllTime
+	// here is DELIBERATELY unconditional (built from nil/nil/nil, never
+	// from the interpreted TimeContext) -- W0 measures the two DW0
+	// candidate trailing widths against a true all-time baseline
+	// regardless of what the interpreter extracted, which is the same
+	// number as D2(b)'s own `count` ONLY when WindowBound is false. This
+	// field makes that comparability explicit per case rather than
+	// assumed from the corpus's own measured 0/50 window_bound rate.
+	WindowBound bool `json:"window_bound"`
 }
 
 // w0CaseMeasurement is ONE case's full W0 shadow record.
@@ -117,9 +127,17 @@ type w0Report struct {
 	DiffTally                   map[replayDiffClass]int `json:"diff_tally"`
 	ControlsCommittedInWiredArm int                     `json:"controls_committed_in_wired_arm"`
 	DivergentCases              int                     `json:"divergent_cases"`
-	// DivergenceRate is DivergentCases / CasesRun -- the §7/§11.1
-	// pre-registered tripwire reads directly off this field (>0.10 forces
-	// the deterministic-classifier fallback decision before W1).
+	// ClassifiedCases is how many cases reached classification at all
+	// (interpretErr == nil for the primary run) -- the denominator for
+	// DivergenceRate below, and for ClassDistribution/ClassSourceDistribution,
+	// which do NOT sum to CasesRun (an interpret-error case is counted in
+	// CasesRun but never classified).
+	ClassifiedCases int `json:"classified_cases"`
+	// DivergenceRate is DivergentCases / ClassifiedCases (never CasesRun,
+	// which would silently dilute the rate with uninterpretable cases that
+	// could never have diverged) -- the §7/§11.1 pre-registered tripwire
+	// reads directly off this field (>0.10 forces the deterministic-
+	// classifier fallback decision before W1).
 	DivergenceRate           float64             `json:"divergence_rate"`
 	ClassDistribution        map[string]int      `json:"class_distribution"`         // FinalWindowClass tally, "" counted as "none"
 	ClassSourceDistribution  map[string]int      `json:"class_source_distribution"`  // model | fallback | none
@@ -135,13 +153,6 @@ func w0DefaultRelativeString(outcome graphrank.WindowClassOutcome, policy graphr
 		return string(id)
 	}
 	return ""
-}
-
-// w0ClassSourceString renders "" for the zero WindowClassSource (a case
-// whose classification never ran, e.g. an interpret error) -- distinct
-// from WindowClassSourceNone, which is a REAL "refused to guess" outcome.
-func w0ClassSourceString(source graphrank.WindowClassSource) string {
-	return string(source)
 }
 
 // TestChaos3900W0WindowShadow is the live orchestration -- see this file's
@@ -215,18 +226,17 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create file-exchange runtime: %v", err)
 	}
-	// interpreter.Runtime is called DIRECTLY below (not via
-	// interpreter.Interpret) so this harness can also read the
-	// ModelExecutionReceipt each call produces -- the ONLY place the
-	// sanitized window_class/window_confidence capture (CHAOS-3900 W0,
-	// genkitruntime.Runtime.InterpretQuestion) is observable, since the
-	// QuestionInterpreter port (interpreter.Interpret) intentionally
-	// returns only (InterpretedQuestion, error). This harness replicates
-	// interpreter.Interpret's own post-call Validate() check by hand, for
-	// the same reason chaos3899_d2b_cardinality_test.go's own doc comment
-	// gives for every OTHER piece of logic it recomputes independently
-	// rather than borrowing.
-	interpreter := contextfabric.RuntimeQuestionInterpreter{Runtime: exchangeRuntime}
+	// exchangeRuntime.InterpretQuestion is called DIRECTLY (never through
+	// the contextfabric.RuntimeQuestionInterpreter/QuestionInterpreter
+	// wrapper) so this harness can also read the ModelExecutionReceipt
+	// each call produces -- the ONLY place the sanitized window_class/
+	// window_confidence capture (CHAOS-3900 W0) is observable, since the
+	// QuestionInterpreter port intentionally returns only
+	// (InterpretedQuestion, error). This harness replicates
+	// RuntimeQuestionInterpreter.Interpret's own post-call Validate()
+	// check by hand, for the same reason chaos3899_d2b_cardinality_test.go's
+	// own doc comment gives for every OTHER piece of logic it recomputes
+	// independently rather than borrowing.
 	caseTimeout := 2*exchangeTimeout + 30*time.Second
 
 	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
@@ -289,11 +299,23 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 		callCtx, cancelCase := context.WithTimeout(ctx, 3*caseTimeout)
 		func() {
 			defer cancelCase()
+			// Incremental write (I7): a partial artifact survives a
+			// timeout/kill mid-run instead of losing the whole batch --
+			// best-effort (log-only on failure; the final write after the
+			// loop still fails loudly via t.Fatalf).
+			defer func() {
+				if report.ClassifiedCases > 0 {
+					report.DivergenceRate = float64(report.DivergentCases) / float64(report.ClassifiedCases)
+				}
+				if werr := writeW0Report(report, outPath); werr != nil {
+					t.Logf("case %d: incremental artifact write failed: %v", i, werr)
+				}
+			}()
 			var m w0CaseMeasurement
 			m.Index = i
 			m.IsControl = tc.ExpectID == ""
 
-			primary, primaryReceipt, interpretErr := interpreter.Runtime.InterpretQuestion(callCtx, principal, buildRequest("r0"))
+			primary, primaryReceipt, interpretErr := exchangeRuntime.InterpretQuestion(callCtx, principal, buildRequest("r0"))
 			if interpretErr == nil {
 				interpretErr = primary.Validate()
 			}
@@ -305,13 +327,15 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 				return
 			}
 			m.Axis = string(primary.TimeContext.Axis)
+			windowBound := primary.TimeContext.Start != nil || primary.TimeContext.End != nil || primary.TimeContext.AsOf != nil
 			m.ModelWindowClass = string(primaryReceipt.WindowClass)
 			m.ModelWindowClassUnrecognized = primaryReceipt.WindowClassUnrecognized
 			m.ModelWindowConfidence = string(primaryReceipt.WindowConfidence)
+			report.ClassifiedCases++
 
 			classOutcome := graphrank.ClassifyWindow(primary, primaryReceipt.WindowClass, primaryReceipt.WindowConfidence)
 			m.FinalWindowClass = string(classOutcome.Class)
-			m.ClassSource = w0ClassSourceString(classOutcome.Source)
+			m.ClassSource = string(classOutcome.Source)
 			m.FinalWindowConfidence = string(classOutcome.Confidence)
 			m.ClassDowngraded = classOutcome.Downgraded
 			m.RelativeID90D = w0DefaultRelativeString(classOutcome, graphrank.WindowDefaultPolicy90D)
@@ -334,7 +358,7 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 			// discarded.
 			m.RepeatWindowClasses = []string{m.ModelWindowClass}
 			for run := 1; run <= 2; run++ {
-				repeated, repeatedReceipt, repeatErr := interpreter.Runtime.InterpretQuestion(callCtx, principal, buildRequest(fmt.Sprintf("r%d", run)))
+				repeated, repeatedReceipt, repeatErr := exchangeRuntime.InterpretQuestion(callCtx, principal, buildRequest(fmt.Sprintf("r%d", run)))
 				if repeatErr != nil || repeated.Validate() != nil {
 					m.RepeatWindowClasses = append(m.RepeatWindowClasses, "")
 					continue
@@ -392,6 +416,7 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 					}
 					m.Measurements = append(m.Measurements, w0KindMeasurement{
 						Kind: string(kind), CountAllTime: allTimeResult.Count, Count90D: r90.Count, Count365D: r365.Count,
+						WindowBound: windowBound,
 					})
 				}
 			}
@@ -401,20 +426,32 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 		}()
 	}
 
-	if report.CasesRun > 0 {
-		report.DivergenceRate = float64(report.DivergentCases) / float64(report.CasesRun)
+	if report.ClassifiedCases > 0 {
+		report.DivergenceRate = float64(report.DivergentCases) / float64(report.ClassifiedCases)
 	}
 
-	raw, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal w0 report: %v", err)
-	}
-	if err := os.WriteFile(outPath, raw, 0o600); err != nil {
+	if err := writeW0Report(report, outPath); err != nil {
 		t.Fatalf("write w0 report: %v", err)
 	}
-	t.Logf("w0 report written to %s: %d cases, %d stalled, diff_tally=%v, controls_committed_in_wired_arm=%d, divergent=%d (%.1f%%), class_distribution=%v, class_source_distribution=%v, binder_reason_distribution=%v",
+	t.Logf("w0 report written to %s: %d cases, %d stalled, diff_tally=%v, controls_committed_in_wired_arm=%d, classified=%d, divergent=%d (%.1f%%), class_distribution=%v, class_source_distribution=%v, binder_reason_distribution=%v",
 		outPath, report.CasesRun, report.StalledCases, report.DiffTally, report.ControlsCommittedInWiredArm,
-		report.DivergentCases, report.DivergenceRate*100, report.ClassDistribution, report.ClassSourceDistribution, report.BinderReasonDistribution)
+		report.ClassifiedCases, report.DivergentCases, report.DivergenceRate*100, report.ClassDistribution, report.ClassSourceDistribution, report.BinderReasonDistribution)
+}
+
+// writeW0Report marshals and writes report to outPath. Called both as the
+// I7 incremental per-case snapshot (best-effort, log-only on failure) and
+// as the final write (fail-loud via t.Fatalf at the call site) -- ONE
+// marshal/write implementation for both, so a schema change can never
+// leave the two writers producing different shapes.
+func writeW0Report(report w0Report, outPath string) error {
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal w0 report: %w", err)
+	}
+	if err := os.WriteFile(outPath, raw, 0o600); err != nil {
+		return fmt.Errorf("write w0 report: %w", err)
+	}
+	return nil
 }
 
 // classDistKey renders "" as "none" so the class_distribution map's keys

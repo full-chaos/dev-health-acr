@@ -156,6 +156,25 @@ func (r ModelExecutionReceipt) Validate() error {
 	if len(r.RequestID) > 256 {
 		return fmt.Errorf("model receipt request_id is invalid")
 	}
+	// CHAOS-3900 W0: the closed-vocabulary guarantee on WindowClass/
+	// WindowConfidence must live HERE, at the receipt's own persistence
+	// boundary (pgmodelreceipts.Store.RecordModelExecution calls Validate()
+	// before json.Marshal, store.go) -- not only inside
+	// genkitruntime.sanitizeWindowOutput, which is a property of today's
+	// ONE ModelRuntime implementation, not of ModelExecutionReceipt itself.
+	// Without this, a future ModelRuntime that assigns
+	// WindowClass(rawModelString) directly, skipping sanitization, could
+	// land question-derived free text in a durable artifact -- exactly
+	// the class of bound this repo's other closed-vocab receipt/contract
+	// fields are enforced against at their own persistence boundary, not
+	// merely by convention in the one caller that happens to sanitize
+	// today. Empty stays legal (genuinely "unset").
+	if r.WindowClass != "" && !ValidWindowClass(r.WindowClass) {
+		return fmt.Errorf("model receipt window_class is invalid")
+	}
+	if r.WindowConfidence != "" && !ValidWindowConfidence(r.WindowConfidence) {
+		return fmt.Errorf("model receipt window_confidence is invalid")
+	}
 	return nil
 }
 
