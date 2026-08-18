@@ -35,6 +35,14 @@ import (
 // (repository convention, internal/storage/AGENTS.md).
 type Store struct {
 	db *sql.DB
+	// Telemetry is the design brief §5b/v4.1 F4 signal sink: exported,
+	// settable-after-construction, nil-safe (mirrors RetireExecutor's own
+	// Telemetry field exactly -- see that type's telemetry() helper). Every
+	// CAS transition this type performs fires cf_epoch_flip/
+	// cf_epoch_rollback/cf_lifecycle_cas_conflict/cf_build_source_progress
+	// through it, wired NOW (instrument-before-flip) even though no
+	// production composition root drives a real transition yet.
+	Telemetry contextfabric.GraphLifecycleTelemetry
 }
 
 func NewStore(db *sql.DB) (*Store, error) {
@@ -42,6 +50,25 @@ func NewStore(db *sql.DB) (*Store, error) {
 		return nil, errors.New("pglifecycle: store requires a database")
 	}
 	return &Store{db: db}, nil
+}
+
+func (s *Store) telemetry() contextfabric.GraphLifecycleTelemetry {
+	if s.Telemetry != nil {
+		return s.Telemetry
+	}
+	return contextfabric.NoopGraphLifecycleTelemetry{}
+}
+
+// observedStatusOrServing normalizes Get's found=false ("no lifecycle row")
+// into contextfabric.LifecycleStatusServing for telemetry purposes -- an
+// absent row IS LifecycleStatusServing at epoch 0 (OrgGraphLifecycle's own
+// doc comment), so a CAS conflict observed against an absent row reports
+// that, not the zero-value LifecycleStatus("").
+func observedStatusOrServing(row contextfabric.OrgGraphLifecycle, found bool) contextfabric.LifecycleStatus {
+	if !found {
+		return contextfabric.LifecycleStatusServing
+	}
+	return row.Status
 }
 
 var _ contextfabric.GraphLifecycleStore = (*Store)(nil)
@@ -98,6 +125,14 @@ RETURNING active_epoch, last_allocated_epoch, status, target_epoch, grace_epoch,
 		orgID, string(requiredJSON), now)
 	result, err := scanLifecycle(row, orgID)
 	if errors.Is(err, sql.ErrNoRows) {
+		// The ON CONFLICT ... WHERE status = 'serving' predicate is itself a
+		// CAS (design brief §3.5): losing it is exactly cf_lifecycle_cas_conflict,
+		// whatever Go error variable communicates the outcome to this call's
+		// own caller. A fresh Get names the current state for the v4.1 F6
+		// winner/current-state field -- worth the extra round trip since this
+		// is the refusal path, not the hot path.
+		observedRow, observedFound, _ := s.Get(ctx, orgID)
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionBeginBuild, observedStatusOrServing(observedRow, observedFound))
 		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("%w: a build or grace window is already open for this organization", contextfabric.ErrLifecycleTransitionRefused)
 	}
 	if err != nil {
@@ -123,6 +158,7 @@ ON CONFLICT (org_id, epoch, source) DO UPDATE SET
 	if err != nil {
 		return fmt.Errorf("pglifecycle: record source progress: %w", sanitize(err))
 	}
+	s.telemetry().RecordBuildSourceProgress(ctx, orgID, epoch, source, mode, rowsProjected)
 	return nil
 }
 
@@ -180,6 +216,7 @@ func (s *Store) Flip(ctx context.Context, orgID string, expectedTargetEpoch int6
 		return contextfabric.OrgGraphLifecycle{}, err
 	}
 	if !found || current.Status != contextfabric.LifecycleStatusBuilding || current.TargetEpoch == nil || *current.TargetEpoch != expectedTargetEpoch {
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionFlip, observedStatusOrServing(current, found))
 		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("%w: no open build at epoch %d for this organization", contextfabric.ErrLifecycleConflict, expectedTargetEpoch)
 	}
 	progress, err := s.SourceProgress(ctx, orgID, expectedTargetEpoch)
@@ -213,11 +250,16 @@ RETURNING active_epoch, last_allocated_epoch, status, target_epoch, grace_epoch,
 		orgID, expectedTargetEpoch, deadline, now)
 	result, err := scanLifecycle(row, orgID)
 	if errors.Is(err, sql.ErrNoRows) {
+		// Raced between the read above and this CAS -- re-read for the F6
+		// current-state field rather than reporting the now-stale `current`.
+		observedRow, observedFound, _ := s.Get(ctx, orgID)
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionFlip, observedStatusOrServing(observedRow, observedFound))
 		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("%w: flip", contextfabric.ErrLifecycleConflict)
 	}
 	if err != nil {
 		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("pglifecycle: flip: %w", sanitize(err))
 	}
+	s.telemetry().RecordEpochFlip(ctx, orgID, current.ActiveEpoch, expectedTargetEpoch, now.Sub(current.UpdatedAt), len(current.RequiredSources))
 	return result, nil
 }
 
@@ -238,6 +280,29 @@ func (s *Store) Rollback(ctx context.Context, orgID string, expectedActiveEpoch 
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Row-lock and read the pre-image first (BeginRetire's own pattern):
+	// needed both to compute cf_epoch_rollback's graceRemaining (the
+	// UPDATE below clears grace_deadline, so it must be read before that
+	// happens) and to name the F6 current-state field on a CAS loss.
+	lockedRow := tx.QueryRowContext(ctx, `
+SELECT active_epoch, last_allocated_epoch, status, target_epoch, grace_epoch, COALESCE(required_sources, '[]'::jsonb), grace_deadline, updated_at
+FROM acr.context_fabric_graph_lifecycle
+WHERE org_id = $1
+FOR UPDATE`, orgID)
+	current, err := scanLifecycle(lockedRow, orgID)
+	notFound := errors.Is(err, sql.ErrNoRows)
+	if notFound {
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionRollback, contextfabric.LifecycleStatusServing)
+		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("%w: rollback: no lifecycle row", contextfabric.ErrLifecycleConflict)
+	}
+	if err != nil {
+		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("pglifecycle: rollback: %w", sanitize(err))
+	}
+	if current.Status != contextfabric.LifecycleStatusGrace || current.ActiveEpoch != expectedActiveEpoch {
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionRollback, current.Status)
+		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("%w: rollback", contextfabric.ErrLifecycleConflict)
+	}
+
 	row := tx.QueryRowContext(ctx, `
 UPDATE acr.context_fabric_graph_lifecycle
 SET active_epoch = grace_epoch,
@@ -250,6 +315,10 @@ RETURNING active_epoch, last_allocated_epoch, status, target_epoch, grace_epoch,
 		orgID, expectedActiveEpoch, now)
 	result, err := scanLifecycle(row, orgID)
 	if errors.Is(err, sql.ErrNoRows) {
+		// Unreachable under the row lock above absent a bug, but the CAS
+		// predicate stays as defense in depth (matches BeginRetire's own
+		// belt-and-braces posture).
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionRollback, current.Status)
 		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("%w: rollback", contextfabric.ErrLifecycleConflict)
 	}
 	if err != nil {
@@ -264,6 +333,11 @@ ON CONFLICT (org_id, epoch) DO NOTHING`, orgID, expectedActiveEpoch, now); err !
 	if err := tx.Commit(); err != nil {
 		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("pglifecycle: rollback: commit: %w", sanitize(err))
 	}
+	var graceRemaining time.Duration
+	if current.GraceDeadline != nil {
+		graceRemaining = current.GraceDeadline.Sub(now)
+	}
+	s.telemetry().RecordEpochRollback(ctx, orgID, expectedActiveEpoch, result.ActiveEpoch, graceRemaining)
 	return result, nil
 }
 
@@ -291,12 +365,14 @@ WHERE org_id = $1
 FOR UPDATE`, orgID)
 	current, err := scanLifecycle(lockedRow, orgID)
 	if errors.Is(err, sql.ErrNoRows) {
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionBeginRetire, contextfabric.LifecycleStatusServing)
 		return contextfabric.OrgGraphLifecycle{}, contextfabric.EpochRetirement{}, fmt.Errorf("%w: begin_retire: no lifecycle row", contextfabric.ErrLifecycleConflict)
 	}
 	if err != nil {
 		return contextfabric.OrgGraphLifecycle{}, contextfabric.EpochRetirement{}, fmt.Errorf("pglifecycle: begin retire: %w", sanitize(err))
 	}
 	if current.Status != contextfabric.LifecycleStatusGrace || current.ActiveEpoch != expectedActiveEpoch || current.GraceEpoch == nil {
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionBeginRetire, current.Status)
 		return contextfabric.OrgGraphLifecycle{}, contextfabric.EpochRetirement{}, fmt.Errorf("%w: begin_retire", contextfabric.ErrLifecycleConflict)
 	}
 	if !force && (current.GraceDeadline == nil || now.Before(*current.GraceDeadline)) {
@@ -312,6 +388,7 @@ WHERE org_id = $1 AND status = 'grace' AND active_epoch = $2`, orgID, expectedAc
 		return contextfabric.OrgGraphLifecycle{}, contextfabric.EpochRetirement{}, fmt.Errorf("pglifecycle: begin retire: %w", sanitize(err))
 	}
 	if rows, err := updateResult.RowsAffected(); err != nil || rows != 1 {
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionBeginRetire, current.Status)
 		return contextfabric.OrgGraphLifecycle{}, contextfabric.EpochRetirement{}, fmt.Errorf("%w: begin_retire", contextfabric.ErrLifecycleConflict)
 	}
 
