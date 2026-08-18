@@ -396,11 +396,21 @@ type tickFreshnessStats struct {
 	orgsOK              int64
 	orgsRebuildRequired int64
 	orgsBackoff         int64
+	// orgsDivergenceRecovered (CHAOS-3882) counts organizations for which
+	// THIS tick detected checkpoint-vs-store divergence and drove an
+	// automatic recovery (successful or not) -- distinct from
+	// orgsRebuildRequired, which is CHAOS-3887's "an operator must run
+	// `acr-projector rebuild --org`" signal. This one means the opposite:
+	// no operator action was needed, the coordinator already acted.
+	orgsDivergenceRecovered int64
 }
 
 func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK, 1) }
 func (s *tickFreshnessStats) recordRebuildRequired() { atomic.AddInt64(&s.orgsRebuildRequired, 1) }
 func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBackoff, 1) }
+func (s *tickFreshnessStats) recordDivergenceRecovered() {
+	atomic.AddInt64(&s.orgsDivergenceRecovered, 1)
+}
 
 // Tick runs one bounded-concurrency pass over every configured organization.
 // Exported so hosting composition (and tests) can drive ticks explicitly
@@ -431,6 +441,10 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		"orgs_rebuild_required", atomic.LoadInt64(&stats.orgsRebuildRequired),
 		"orgs_backoff", atomic.LoadInt64(&stats.orgsBackoff),
 		"pending_rebuild_orgs_total", atomic.LoadInt64(&stats.orgsRebuildRequired),
+		// CHAOS-3882: how many organizations this tick found in
+		// checkpoint-vs-store divergence and drove an automatic recovery
+		// for -- see checkpointStoreDiverged's doc comment.
+		"orgs_divergence_recovered", atomic.LoadInt64(&stats.orgsDivergenceRecovered),
 	)
 }
 
@@ -484,6 +498,19 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 		return
 	}
 
+	// CHAOS-3882: never run ordinary projection against an organization
+	// whose durable checkpoint has outrun the graph backend's own state --
+	// the incident this ticket closes. Checked AFTER the rebuild-in-progress
+	// resume above (a marker already in flight is the higher-priority signal)
+	// and BEFORE the ordinary per-source loop below, exactly like that
+	// resume branch: skip ordinary projection this tick regardless of
+	// outcome and drive recovery through the SAME performRebuild sequence,
+	// under the SAME org lock this method already holds.
+	if c.checkpointStoreDiverged(ctx, orgID) {
+		c.recoverFromDivergence(ctx, orgID, stats)
+		return
+	}
+
 	evaluated, stale := false, false
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
@@ -501,6 +528,154 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	default:
 		stats.recordOK()
 	}
+}
+
+// divergenceBackoffKey is a synthetic "source" name for reusing the
+// coordinator's existing due()/recordBackoff() pair-scheduling gate
+// (designed for ordinary (org, source) ticks in runPair) to also throttle
+// CHAOS-3882 divergence-recovery attempts, one per organization. Prefixed
+// with a NUL byte so it can never collide with a real SourcePair.Name --
+// devhealthsource callers choose those freely, but never with an embedded
+// NUL (the same separator runPair's own key already relies on being unique).
+const divergenceBackoffKey = "\x00chaos3882-projection-liveness-divergence"
+
+// checkpointStoreDiverged is the CHAOS-3882 liveness check: it reports
+// whether ANY of orgID's configured sources shows checkpoint-vs-store
+// divergence -- the durable Postgres checkpoint recorded a successful
+// ApplyProjectionBatch for that source (BackendWatermark != ""), but the
+// graph backend's own durable sentinel for that (org, source) is now
+// CONFIRMED absent. This is exactly the CHAOS-3882 incident: a FalkorDB
+// container restart lost the projected graph -- and the projection-time
+// watermark node with it -- while the Postgres checkpoint, a wholly
+// separate durable store, stayed advanced. Nothing then replayed, and ACR
+// silently served resolution against an empty graph: an empty result set
+// reads as "no candidates found" (clean no-match/clarification behavior),
+// not as an outage.
+//
+// Cheap by construction: one Postgres checkpoint read and one single-node
+// graph read (ProjectionWatermark -- the exact same MATCH-by-key lookup
+// emitProjectionFreshness already performs for the CHAOS-3887 signal) per
+// configured source. Never a graph scan.
+//
+// Deliberately conservative about what counts as "confirmed absent": only
+// errors.Is(err, contextfabric.ErrProjectionWatermarkNotFound) -- the
+// backend's durable, deliberate "no such sentinel" answer, see
+// ProjectionBackend's doc comment -- counts. Any OTHER error (a transient
+// dependency outage, a timeout) reports "not diverged" for that source,
+// exactly like emitProjectionFreshness's own "unknown must never masquerade
+// as needs rebuild" discipline: a flaky network blip must never trigger
+// performRebuild's PurgeOrganization against organization data that is
+// actually still fine.
+//
+// A source whose checkpoint was never durably applied to the backend
+// (BackendWatermark == "", e.g. a never-projected organization, or one
+// already reset by a prior rebuild) is never divergent -- there is nothing
+// for the graph to have lost. This is what keeps this check silent on
+// TestCHAOS3887_NeverProjectedOrgReportsUnknownNotStale's exact fixture: a
+// backend watermark read failure alone, with no corroborating durable
+// checkpoint claim, is not evidence of anything.
+func (c *Coordinator) checkpointStoreDiverged(ctx context.Context, orgID string) bool {
+	for _, source := range c.sourceNames {
+		checkpoint, err := c.checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
+		if err != nil {
+			continue // cannot read the durable baseline; not evidence either way
+		}
+		if strings.TrimSpace(checkpoint.BackendWatermark) == "" {
+			continue // never durably applied here, or already reset -- nothing to lose
+		}
+		watermark, err := c.backend.ProjectionWatermark(ctx, orgID, source)
+		if err == nil && strings.TrimSpace(watermark.SourceVersion) != "" {
+			continue // the backend still has its sentinel; healthy
+		}
+		if err != nil && !errors.Is(err, contextfabric.ErrProjectionWatermarkNotFound) {
+			continue // unknown (dependency error), not a confirmed divergence
+		}
+		return true
+	}
+	return false
+}
+
+// LivenessCheck is the CHAOS-3882 readiness-path leg of the same liveness
+// signal Tick already checks at startup (Run's first loop iteration) and on
+// every poll interval: it lets cmd/acr-projector's /readyz probe (see
+// api.ReadinessCheck) surface checkpoint-vs-store divergence immediately,
+// rather than an operator only finding out from the tick logs. Read-only --
+// it never purges or resets anything itself; ordinary Tick scheduling
+// (recoverFromDivergence, under the org lock) remains the only place
+// recovery actually happens, so a readiness probe running concurrently with
+// a tick can never race a rebuild.
+//
+// Cheap the same way checkpointStoreDiverged is: bounded by the configured
+// organization allowlist, one Postgres read and one single-node graph read
+// per (org, source), never a graph scan. A deployment with a very large
+// allowlist should poll /readyz less often, not avoid this check -- the
+// alternative is the CHAOS-3882 incident itself: a healthy-looking probe
+// while resolution is silently served against an empty graph.
+func (c *Coordinator) LivenessCheck(ctx context.Context) error {
+	var diverged []string
+	for _, orgID := range c.orgIDs {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if c.checkpointStoreDiverged(ctx, orgID) {
+			diverged = append(diverged, orgIDHash(orgID))
+		}
+	}
+	if len(diverged) == 0 {
+		return nil
+	}
+	// Content-safe: org_id_hash values only, joined into the error text --
+	// never a raw organization identifier, matching every other CHAOS-3882
+	// signal's discipline.
+	return fmt.Errorf("projection checkpoint-store divergence pending recovery for %d organization(s): %s", len(diverged), strings.Join(diverged, ","))
+}
+
+// recoverFromDivergence drives the CHAOS-3882 recovery for an organization
+// checkpointStoreDiverged flagged. It reuses performRebuild -- the SAME
+// crash-resumable, idempotent purge-then-reset-checkpoints-then-invalidate-
+// reuse sequence an explicit `acr-projector rebuild --org` already runs --
+// rather than inventing a second, parallel recovery mechanism: a fresh
+// PurgeOrganization against a graph the backend already confirms is empty
+// is a documented no-op (PurgeOrganization's own doc comment), and resetting
+// every source's checkpoint is precisely "invalidate the checkpoint so the
+// normal replay machinery re-projects" -- the ticket's own framing.
+//
+// Never a rebuild loop: a successful performRebuild resets EVERY configured
+// source's checkpoint (resetAllCheckpoints), which clears BackendWatermark
+// back to "" for all of them -- so checkpointStoreDiverged reports false
+// again on the very next tick purely as a side effect of the fix, with no
+// separate "already recovered" bit to maintain. The divergenceBackoffKey gate
+// below exists for the OTHER case: a performRebuild attempt that itself
+// fails (e.g. the backend is genuinely down) must not be retried on every
+// poll tick with no backoff -- it reuses the same due()/recordBackoff()
+// pair-scheduling gate runPair already relies on for ordinary tick failures,
+// rather than adding a second backoff table.
+//
+// Every log line here is content-safe: org_id_hash and a bounded failure
+// class only, matching classifyOutcomeError's closed vocabulary -- never a
+// raw organization identifier or dependency error text.
+func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, stats *tickFreshnessStats) {
+	key := orgID + "\x00" + divergenceBackoffKey
+	if !c.due(key) {
+		stats.recordBackoff()
+		return
+	}
+	hash := orgIDHash(orgID)
+	// LOUD and unconditional (Error, not Debug/Info): this is an active
+	// incident signal -- the durable checkpoint says data was projected and
+	// the graph backend says otherwise -- not routine scheduling chatter.
+	c.logger.ErrorContext(ctx, "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic recovery instead of serving resolution against a silently empty or stale graph",
+		"org_id_hash", hash)
+	err := c.performRebuild(ctx, orgID)
+	c.recordBackoff(key, err)
+	stats.recordDivergenceRecovered()
+	if err != nil {
+		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed; will retry with backoff",
+			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
+		return
+	}
+	c.logger.WarnContext(ctx, "context_fabric: automatic projection-liveness recovery completed; every configured source's checkpoint was reset and replay will resume on the next tick",
+		"org_id_hash", hash)
 }
 
 // runPair runs one (org, source) tick and reports the CHAOS-3887 freshness

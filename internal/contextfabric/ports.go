@@ -51,6 +51,33 @@ var (
 	// replay, because "budget-exceeded but unresolved" is not safe to skip
 	// past either.
 	ErrQueryBudgetExceeded = errors.New("context fabric canonical source query exceeded its read budget")
+	// ErrProjectionWatermarkNotFound is the backend-neutral classification
+	// for "ProjectionBackend.ProjectionWatermark has no durable sentinel for
+	// this (org, source)" (CHAOS-3882) -- the same
+	// ErrInvestigationResultNotFound / ErrOrgModelConfigNotFound pattern:
+	// every ProjectionBackend implementation wraps its own vendor-specific
+	// not-found sentinel (e.g. falkorgraph.ErrNotFound) in this one so a
+	// backend-agnostic caller (projectionrun.Coordinator) can recognize a
+	// CONFIRMED absence without importing a specific backend package.
+	//
+	// This one sentinel deliberately covers two different histories a caller
+	// cannot and must not try to tell apart from the error alone: an
+	// (org, source) that was never durably projected, and one that WAS
+	// projected but whose backend has since lost that state (a purge, or --
+	// CHAOS-3882 -- a container restart against non-durable storage).
+	// Telling them apart is the CALLER's job, using its own durable state
+	// (projectionrun.Coordinator does this by comparing against the Postgres
+	// ProjectionCheckpoint's BackendWatermark, a wholly separate store from
+	// the graph this sentinel describes): only a caller that already expected
+	// a sentinel to exist may treat this error as evidence of drift.
+	//
+	// Any OTHER error ProjectionWatermark returns (a dependency timeout, a
+	// rate limit) must NOT satisfy errors.Is(err, ErrProjectionWatermarkNotFound)
+	// -- a transient failure is not a confirmed absence, and a caller that
+	// reacts to one as if it were risks a destructive action (e.g. a
+	// PurgeOrganization-based rebuild) triggered by a network blip rather
+	// than a real divergence.
+	ErrProjectionWatermarkNotFound = errors.New("context fabric: projection watermark not found")
 	// ErrUnsupportedTimeAxis is RETIRED by CHAOS-3781 and deliberately
 	// not replaced by an equivalent.
 	//
@@ -663,6 +690,14 @@ type ReuseModelIdentityResolver interface {
 // atomicity.
 type ProjectionBackend interface {
 	ApplyProjectionBatch(context.Context, ProjectionBatch) (ProjectionReceipt, error)
+	// ProjectionWatermark reads the durable per-(org, source) sentinel this
+	// backend wrote at projection time. Implementations MUST report a
+	// confirmed absence -- no such sentinel exists, whether never projected
+	// or since lost -- by returning an error satisfying
+	// errors.Is(err, ErrProjectionWatermarkNotFound) (CHAOS-3882); any other
+	// error must NOT satisfy that check, so a caller like
+	// projectionrun.Coordinator can distinguish "definitely absent" from
+	// "could not tell" without importing this backend's own package.
 	ProjectionWatermark(context.Context, string, string) (ProjectionWatermark, error)
 	PurgeOrganization(context.Context, string) error
 }
