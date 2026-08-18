@@ -76,9 +76,32 @@ func (a *Adapter) resolveActiveEpoch(ctx context.Context, orgID string) (int64, 
 	return epoch, nil
 }
 
+// stampResolvedKey fires cf_resolved_graph_key unconditionally, then checks
+// THIS PROCESS's own observed-key history for the SAME (org, epoch, role):
+// a different key than what was last observed here fires
+// cf_graph_key_divergence too (CHAOS-3898 S2a-2, design brief §2.0/v4.1
+// F2). This is deliberately an IN-MEMORY, single-process check -- it
+// catches a live GraphPrefix config change mid-process (a real hazard: a
+// bad rolling deploy, an operator editing an env file under a supervisor
+// that reloads it), never cross-process divergence between acr-api and
+// acr-projector, which the design brief explicitly declines to build
+// durable machinery against absent evidence it has ever occurred (§2.0's
+// "assert + instrument, NOT machinery" ruling). A process restart clears
+// this history, which is fine: the invariant it protects ("this process's
+// own key derivation is internally consistent") is re-established fresh on
+// every boot by AssertResolvedPrefix.
 func (a *Adapter) stampResolvedKey(ctx context.Context, orgID string, epoch int64, role contextfabric.GraphKeyRole, key string) {
-	if a.config.LifecycleTelemetry != nil {
-		a.config.LifecycleTelemetry.RecordResolvedGraphKey(ctx, orgID, epoch, role, key)
+	if a.config.LifecycleTelemetry == nil {
+		return
+	}
+	a.config.LifecycleTelemetry.RecordResolvedGraphKey(ctx, orgID, epoch, role, key)
+	observedKey := fmt.Sprintf("%s\x00%d\x00%s", orgID, epoch, role)
+	a.observedKeysMu.Lock()
+	previous, seen := a.observedKeys[observedKey]
+	a.observedKeys[observedKey] = key
+	a.observedKeysMu.Unlock()
+	if seen && previous != key {
+		a.config.LifecycleTelemetry.RecordGraphKeyDivergence(ctx, orgID, epoch, role)
 	}
 }
 
@@ -110,9 +133,7 @@ func (a *Adapter) DeleteEpochGraph(ctx context.Context, orgID string, epoch, act
 		return fmt.Errorf("falkorgraph: refusing to delete epoch %d -- it is organization %s's active epoch", epoch, orgID)
 	}
 	key := graphKeyForEpoch(a.config.GraphPrefix, orgID, epoch)
-	if a.config.LifecycleTelemetry != nil {
-		a.config.LifecycleTelemetry.RecordResolvedGraphKey(ctx, orgID, epoch, contextfabric.GraphKeyRoleRetireTarget, key)
-	}
+	a.stampResolvedKey(ctx, orgID, epoch, contextfabric.GraphKeyRoleRetireTarget, key)
 	err := a.api.deleteGraph(ctx, key)
 	a.bootstrapMu.Lock()
 	delete(a.bootstrapDone, key)

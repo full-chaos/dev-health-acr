@@ -85,6 +85,19 @@ type Adapter struct {
 
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
+
+	// observedKeysMu/observedKeys (CHAOS-3898 S2a-2, §2.0/§5b) back
+	// cf_graph_key_divergence's IN-PROCESS half: the last resolved key this
+	// process observed for each (org, epoch, role), so a LATER resolution
+	// for the identical (org, epoch, role) that yields a DIFFERENT string
+	// (e.g. a live GraphPrefix config change mid-process) is caught and
+	// reported. This does NOT catch cross-process divergence (two
+	// different acr-api/acr-projector processes disagreeing) -- no durable
+	// full-key persistence exists for that (design brief §2.0's deliberate
+	// choice); it is the honest, bounded scope this in-memory check can
+	// cover on its own. See stampResolvedKey's doc comment.
+	observedKeysMu sync.Mutex
+	observedKeys   map[string]string
 }
 
 // EmbedderOptions carries the optional vector-retrieval dependencies
@@ -274,7 +287,10 @@ func newWithAPI(config Config, client conn) (*Adapter, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	return &Adapter{api: client, config: config, now: time.Now, bootstrapDone: make(map[string]bool)}, nil
+	return &Adapter{
+		api: client, config: config, now: time.Now,
+		bootstrapDone: make(map[string]bool), observedKeys: make(map[string]string),
+	}, nil
 }
 
 var _ contextfabric.ProjectionBackend = (*Adapter)(nil)
