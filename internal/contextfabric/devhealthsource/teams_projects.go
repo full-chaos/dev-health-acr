@@ -256,6 +256,14 @@ func (s *TeamsProjectsSource) CurrentProjectionSourceVersion() string {
 	return TeamsProjectsSourceVersion
 }
 
+// Enabled implements contextfabric.ProjectionSourceEnablement (CHAOS-3898
+// S2a-2): reports the SAME enabled flag NextProjectionBatch already gates
+// on, so a build-completion classifier can name a disabled source
+// "disabled_at_freeze" rather than conflating it with a genuinely empty one.
+func (s *TeamsProjectsSource) Enabled() bool {
+	return s != nil && s.enabled
+}
+
 func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
 	if s == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: teams/projects source is not configured")

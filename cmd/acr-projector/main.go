@@ -18,14 +18,22 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
-const rootUsage = `Usage: acr-projector [serve|rebuild|version]
+const rootUsage = `Usage: acr-projector [serve|rebuild|rollback|version]
 
 Commands:
-  serve            run the Context Fabric projection worker and readiness server
-  rebuild --org ID purge one organization's projected graph state and reset
-                    its checkpoints; the next serve tick replays a full
-                    snapshot from scratch (rollback/disaster-recovery lever)
-  version           print build identity
+  serve             run the Context Fabric projection worker and readiness server
+  rebuild --org ID  build an organization's graph aside at a fresh epoch and
+                     reset checkpoints for that build (build-aside-and-swap,
+                     CHAOS-3898 S2a-2, when ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED
+                     is set) -- or purge the organization's projected graph
+                     state in place otherwise (legacy path). Either way, the
+                     next serve tick(s) replay a full snapshot from scratch.
+  rollback --org ID restore an organization's PREVIOUS active epoch during
+                     its post-flip grace window (CHAOS-3898 S2a-2; requires
+                     ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED) -- the
+                     disaster-recovery lever for a flip that should not have
+                     happened. Refused outside the grace window.
+  version            print build identity
 `
 
 func main() {
@@ -57,6 +65,8 @@ func run(args []string) error {
 		return serve(args)
 	case "rebuild":
 		return rebuild(args)
+	case "rollback":
+		return rollback(args)
 	default:
 		return fmt.Errorf("unknown command %q; use serve, rebuild, or version", command)
 	}
@@ -108,6 +118,53 @@ func rebuild(args []string) error {
 		return fmt.Errorf("rebuild organization %s: %w", *org, err)
 	}
 	_, err = fmt.Printf("rebuilt organization %s\n", *org)
+	return err
+}
+
+// rollback is the operator-facing entry point for CHAOS-3898 S2a-2's
+// rollback lever: restore an organization's PREVIOUS active epoch while it
+// is still within its post-flip grace window (design brief §3.1 step 4).
+// Requires ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED -- Coordinator.Rollback
+// itself refuses outright when Lifecycle is not configured.
+func rollback(args []string) error {
+	cfg, err := config.LoadProjector()
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+	flags := flag.NewFlagSet("acr-projector rollback", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	org := flags.String("org", "", "organization ID to roll back (required)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*org) == "" {
+		return errors.New("acr-projector rollback requires --org")
+	}
+	cfg.ProjectionEnabled = true
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	runtime, err := openRuntime(ctx, cfg, logger)
+	if err != nil {
+		return fmt.Errorf("open runtime: %w", err)
+	}
+	defer func() {
+		if closeErr := runtime.Close(); closeErr != nil {
+			logger.Error("error closing runtime", "failure_class", projectionrun.ClassifyFailure(closeErr))
+		}
+	}()
+	if runtime.Coordinator == nil {
+		return errors.New("acr-projector rollback requires Postgres, ClickHouse, and a configured Zep graph backend")
+	}
+	if err := runtime.Coordinator.Rollback(ctx, *org); err != nil {
+		return fmt.Errorf("rollback organization %s: %w", *org, err)
+	}
+	_, err = fmt.Printf("rolled back organization %s\n", *org)
 	return err
 }
 

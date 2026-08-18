@@ -751,6 +751,23 @@ type ProjectionSource interface {
 	NextProjectionBatch(context.Context, ProjectionCheckpoint) (ProjectionBatch, bool, error)
 }
 
+// ProjectionSourceEnablement is an OPTIONAL capability (CHAOS-3898 S2a-2,
+// design brief §3.3/item 5's BuildCompletionDisabledAtFreeze) a
+// ProjectionSource may implement to report whether it is currently
+// operator-disabled by configuration (e.g. TeamsProjectsSource's own
+// `enabled` field, ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED) --
+// distinct from a source that is enabled but genuinely has zero rows for an
+// organization. Without this, a build-completion classifier cannot tell
+// "disabled at freeze" apart from "empty" for a required source that always
+// reports available=false either way; both are terminal completion modes
+// (the flip gate does not care which), but only this capability lets the
+// §5b cf_build_source_progress signal name the difference precisely for an
+// operator. A source that does not implement this capability is never
+// treated as disabled -- only as possibly empty.
+type ProjectionSourceEnablement interface {
+	Enabled() bool
+}
+
 // ProjectionSourceVersion is an OPTIONAL capability (CHAOS-3887) a
 // ProjectionSource may implement to report its current producer
 // SourceVersion even when NextProjectionBatch found nothing to build a

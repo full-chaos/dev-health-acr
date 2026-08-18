@@ -3,6 +3,7 @@ package hosted
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -255,6 +257,32 @@ func defaultRawSignalObserver(override graphrank.RawSignalObserver, logger *slog
 	return graphrank.NewSlogRawSignalObserver(logger)
 }
 
+// buildGraphLifecycleResolver returns the CHAOS-3898 S2a-2 read-side
+// OrgEpochResolver, or nil when pglifecycle.EnvConfig.Enabled is false (the
+// default) -- see that type's own doc comment for why this master switch
+// exists and why acr-api and acr-projector MUST be configured with the
+// SAME value. db is postgresComponents.db, the one PostgreSQL pool this
+// package ever opens.
+func buildGraphLifecycleResolver(db *sql.DB, telemetry contextfabric.GraphLifecycleTelemetry) (contextfabric.OrgEpochResolver, error) {
+	envCfg, err := pglifecycle.ConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	if !envCfg.Enabled {
+		return nil, nil
+	}
+	store, err := pglifecycle.NewStore(db)
+	if err != nil {
+		return nil, err
+	}
+	store.Telemetry = telemetry
+	resolver, err := pglifecycle.NewResolver(store)
+	if err != nil {
+		return nil, err
+	}
+	return pglifecycle.NewCachedResolver(resolver, envCfg.Lease, pglifecycle.CachedResolverOptions{})
+}
+
 // buildContextFabricGraphReader composes the falkorgraph.Adapter (plus its
 // paired embed-retrieval identity, which callers of buildContextFabricInvestigator
 // still need downstream for EngineOptions.ReuseVersionAuthorities) --
@@ -272,7 +300,7 @@ func defaultRawSignalObserver(override graphrank.RawSignalObserver, logger *slog
 // replay harness's "arm A" / baseline: the OLD resolver behavior recovered
 // inside the NEW binary, by construction, because CHAOS-3884's entire
 // commit-path change sits behind this one nil-checked dependency.
-func buildContextFabricGraphReader(request buildRequest, clickhouse clickHouseComponents, wireIdentityUniverse bool) (contextfabric.GraphReader, string, error) {
+func buildContextFabricGraphReader(request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, wireIdentityUniverse bool) (contextfabric.GraphReader, string, error) {
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return nil, "", fmt.Errorf("load context fabric graph configuration: %w", err)
@@ -294,16 +322,28 @@ func buildContextFabricGraphReader(request buildRequest, clickhouse clickHouseCo
 	// invariant only cosmetically.
 	graphConfig.Telemetry = falkorGraphTelemetry(request.options.Logger)
 	// CHAOS-3898 S2a (design brief §2.0): startup/config assertion, and the
-	// §5b signal sink wired unconditionally -- see graphLifecycleTelemetry's
-	// own doc comment for why this lands now rather than with the
-	// follow-up conversion slice. graphConfig.EpochResolver stays unset:
-	// every call site's key resolution is unchanged, byte-identical to
-	// pre-CHAOS-3898 output, until a later slice wires a live
-	// pglifecycle.Resolver here.
+	// §5b signal sink wired unconditionally.
 	graphConfig.LifecycleTelemetry = graphLifecycleTelemetry(request.options.Logger)
 	if err := falkorgraph.AssertResolvedPrefix(request.options.Logger, graphConfig.LifecycleTelemetry, graphConfig.GraphPrefix); err != nil {
 		return nil, "", fmt.Errorf("context fabric graph key prefix: %w", err)
 	}
+	// CHAOS-3898 S2a-2 (design brief §3.1): non-nil ONLY when an operator
+	// has set pglifecycle.EnvEnabled -- see buildGraphLifecycleResolver's
+	// own doc comment. This is the READ side of the same KeyResolver
+	// acr-projector's write side must agree with: once ANY organization
+	// has actually flipped, investigation reads MUST resolve the new
+	// active epoch too, or they would keep reading the OLD epoch's key --
+	// which, once retired, no longer exists and would silently
+	// auto-recreate as an EMPTY graph (FalkorDB's own auto-create-on-read
+	// behavior, identity.go:99). Every production deployment stays
+	// byte-identical to pre-CHAOS-3898 output until this flag is
+	// explicitly set (and stays a correctness no-op even then, until some
+	// organization's first BeginBuild).
+	epochResolver, err := buildGraphLifecycleResolver(postgres.db, graphConfig.LifecycleTelemetry)
+	if err != nil {
+		return nil, "", fmt.Errorf("context fabric graph lifecycle resolver: %w", err)
+	}
+	graphConfig.EpochResolver = epochResolver
 	// CHAOS-3890: see defaultRawSignalObserver's own doc comment -- a nil
 	// Options.RawSignalObserver (every real deployment) now defaults to a
 	// debug-gated slog sink instead of staying nil forever; an explicit
@@ -368,7 +408,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil, nil, nil, nil
 	}
-	graphReader, embedRetrievalIdentity, err := buildContextFabricGraphReader(request, clickhouse, true)
+	graphReader, embedRetrievalIdentity, err := buildContextFabricGraphReader(request, postgres, clickhouse, true)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}

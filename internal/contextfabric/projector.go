@@ -29,6 +29,28 @@ type ProjectionRun struct {
 	BackendWatermark string
 	Applied          bool
 	AppliedAt        time.Time
+	// CompleteEnumeration (CHAOS-3898 S2a-2, design brief §3.3/item 5)
+	// carries the applied batch's own ContextFabricProjectionBatch.
+	// CompleteEnumeration flag -- previously computed by a source and then
+	// discarded at this boundary ("the enumeration flags ProjectionRun
+	// currently drops"). true only when Applied is also true and the
+	// source claims this batch enumerated everything through the current
+	// cursor; a build-completion classifier (projectionrun.Coordinator)
+	// uses it as the "paged_final" signal. A source that pages without
+	// ever claiming this on its last page is not penalized: exhaustion is
+	// independently detectable via Applied=false with a non-empty
+	// PreviousCursor (see BuildCompletionMode's doc comment) -- this field
+	// is a FASTER, more precise signal when a source reports it, never the
+	// only one.
+	CompleteEnumeration bool
+	// ItemsApplied (CHAOS-3898 S2a-2) is the sum of the backend receipt's
+	// per-kind applied counts (entities+edges+contents+episodes+tombstones)
+	// for this ONE tick's batch -- zero when Applied is false. A
+	// build-completion classifier (projectionrun.Coordinator) accumulates
+	// this across ticks into cf_build_source_progress's cumulative
+	// rows_projected count; nothing in RunOnce's own accept/refuse
+	// decision depends on it.
+	ItemsApplied int
 }
 
 func NewProjectionWorker(source ProjectionSource, backend ProjectionBackend, checkpoints ProjectionCheckpointStore, options ProjectionWorkerOptions) (*ProjectionWorker, error) {
@@ -139,6 +161,8 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	return ProjectionRun{
 		BatchID: batch.BatchID, Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: batch.NextCursor,
 		BackendWatermark: receipt.BackendWatermark, Applied: true, AppliedAt: receipt.AppliedAt,
+		CompleteEnumeration: batch.CompleteEnumeration,
+		ItemsApplied:        receipt.EntitiesApplied + receipt.EdgesApplied + receipt.ContentsApplied + receipt.EpisodesApplied + receipt.TombstonesApplied,
 	}, nil
 }
 
