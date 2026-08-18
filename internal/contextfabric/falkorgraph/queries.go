@@ -299,6 +299,7 @@ func (a *Adapter) fulltextSearchNodesForResolution(ctx context.Context, key, org
 		// The overwhelmingly common case: no lexicon phrase matched, so
 		// this call never runs a second query at all -- same one round
 		// trip as before this ticket.
+		a.recordLexiconExpansion(ctx, orgID, false, 0, 0, false)
 		return baseCandidates, baseTruncated, nil
 	}
 
@@ -362,7 +363,9 @@ func (a *Adapter) fulltextSearchNodesForResolution(ctx context.Context, key, org
 	}
 	result := baseCandidates
 	truncated := baseTruncated
-	for _, batch := range lexiconExpansionBatches(additions) {
+	batches := lexiconExpansionBatches(additions)
+	addedCandidates := 0
+	for _, batch := range batches {
 		fetchBudget := limit + len(seen)
 		query := lexiconExpansionQuery(batch.additions)
 		batchCandidates, batchTruncated, err := a.runFulltextQuery(ctx, key, orgID, query, fetchBudget, temporal, matchTerms, termCount, batch.kind)
@@ -391,8 +394,29 @@ func (a *Adapter) fulltextSearchNodesForResolution(ctx context.Context, key, org
 			result = append(result, c)
 			added++
 		}
+		addedCandidates += added
 	}
+	// CHAOS-3890: fired/batch_count/added_candidates/truncated_by_expansion
+	// were all computed above and previously discarded once this function
+	// returned -- reported here instead of at every intermediate return so
+	// exactly one event describes this call's WHOLE expansion outcome.
+	// truncatedByExpansion isolates expansion's OWN contribution to
+	// truncated: true only when THIS call's overall truncated flipped true
+	// despite the base query alone NOT having truncated -- i.e. expansion
+	// itself is the reason, not merely present alongside a base query that
+	// was already truncated on its own.
+	a.recordLexiconExpansion(ctx, orgID, true, len(batches), addedCandidates, truncated && !baseTruncated)
 	return result, truncated, nil
+}
+
+// recordLexiconExpansion reports one fulltextSearchNodesForResolution call's
+// CHAOS-3838 lexicon-expansion outcome to telemetry (CHAOS-3890) -- nil-safe,
+// same convention as recordVectorDegraded/recordVectorSuppressed (vector.go).
+func (a *Adapter) recordLexiconExpansion(ctx context.Context, orgID string, fired bool, batchCount, addedCandidates int, truncatedByExpansion bool) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	a.config.Telemetry.RecordLexiconExpansion(ctx, orgID, fired, batchCount, addedCandidates, truncatedByExpansion)
 }
 
 // runFulltextQuery issues ONE RediSearch fulltext query and converts its

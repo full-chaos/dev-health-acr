@@ -225,6 +225,25 @@ func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
 	return falkorgraph.SlogTelemetry{Logger: logger}
 }
 
+// defaultRawSignalObserver is CHAOS-3890's default for
+// graphConfig.RawSignalObserver: override, when non-nil, wins unchanged --
+// this is the CHAOS-3858 measurement-harness escape hatch (the generative
+// trial harness sets its own trialRawSignalCollector), and it must keep
+// taking priority exactly as before. A nil override (every real deployment,
+// per Options.RawSignalObserver's own doc comment) now falls through to
+// graphrank.NewSlogRawSignalObserver rather than staying nil -- the SAME
+// "wired unconditionally, gated by log level, no separate config knob"
+// convention graphConfig.ResolutionTracer below already uses. Factored out
+// to a named, directly-testable function for the same reason
+// falkorGraphTelemetry above is: asserting this wiring should not require a
+// graph backend configured or a live connection.
+func defaultRawSignalObserver(override graphrank.RawSignalObserver, logger *slog.Logger) graphrank.RawSignalObserver {
+	if override != nil {
+		return override
+	}
+	return graphrank.NewSlogRawSignalObserver(logger)
+}
+
 // buildContextFabricGraphReader composes the falkorgraph.Adapter (plus its
 // paired embed-retrieval identity, which callers of buildContextFabricInvestigator
 // still need downstream for EngineOptions.ReuseVersionAuthorities) --
@@ -263,9 +282,12 @@ func buildContextFabricGraphReader(request buildRequest, clickhouse clickHouseCo
 	// internal/contextfabric/AGENTS.md's "reported, never inferred"
 	// invariant only cosmetically.
 	graphConfig.Telemetry = falkorGraphTelemetry(request.options.Logger)
-	// CHAOS-3858 (measurement-only): nil for every real caller. See
-	// Options.RawSignalObserver's doc comment.
-	graphConfig.RawSignalObserver = request.options.RawSignalObserver
+	// CHAOS-3890: see defaultRawSignalObserver's own doc comment -- a nil
+	// Options.RawSignalObserver (every real deployment) now defaults to a
+	// debug-gated slog sink instead of staying nil forever; an explicit
+	// override (the generative-trial harness) still takes priority
+	// unchanged.
+	graphConfig.RawSignalObserver = defaultRawSignalObserver(request.options.RawSignalObserver, request.options.Logger)
 	// CHAOS-3884 (team-lead ruling, 2026-08-17): wired unconditionally,
 	// the SAME "always on, gated by log level not by a boolean toggle"
 	// convention Telemetry above already uses -- SlogResolutionTracer logs

@@ -793,6 +793,20 @@ func (a *Adapter) recordVectorSuppressed(ctx context.Context, orgID string) {
 	a.config.Telemetry.RecordVectorRetrievalSuppressed(ctx, orgID)
 }
 
+// recordVectorFence reports one AC-3778-7 fence check's reason (CHAOS-3890)
+// to telemetry -- nil-safe, same convention as recordVectorDegraded/
+// recordVectorSuppressed. Additive alongside recordVectorDegraded: a
+// resolutionFence.readable call that returns false still also causes its
+// own caller (hybridSearchNodes/questionVectorSearchNodes) to call
+// recordVectorDegraded exactly as before this ticket -- this reports the
+// SAME event with its reason, never a replacement for the existing signal.
+func (a *Adapter) recordVectorFence(ctx context.Context, orgID string, result VectorFenceResult, memoized bool) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	a.config.Telemetry.RecordVectorFence(ctx, orgID, result, memoized)
+}
+
 // recordVectorProjection reports one batch's vector outcome (codex round-3
 // F2). Called on EVERY embedding path -- success, clear, and skip -- so the
 // cleared count is a complete accounting rather than a best-effort one.
@@ -1103,17 +1117,31 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 type resolutionFence struct {
 	decided bool
 	enabled bool
+	// result (CHAOS-3890) is the memoized vectorFenceCheck reason alongside
+	// enabled -- see readable's own RecordVectorFence call for why this is
+	// reported on EVERY readable() call, not only the one that actually
+	// probed.
+	result VectorFenceResult
 }
 
 func (f *resolutionFence) readable(ctx context.Context, a *Adapter, key, orgID string) bool {
 	if f == nil {
 		// Defensive: a caller that did not supply a fence gets an
 		// unmemoized, still-correct verification rather than a silent pass.
-		return a.ensureVectorReadable(ctx, key, orgID)
+		enabled, result := a.vectorFenceCheck(ctx, key, orgID)
+		a.recordVectorFence(ctx, orgID, result, false)
+		return enabled
 	}
+	// memoized (CHAOS-3890) reports whether THIS call reused an
+	// already-decided verdict from an earlier term in the SAME resolution,
+	// captured BEFORE f.decided is possibly flipped true just below --
+	// exactly the distinction RecordVectorFence's own doc comment
+	// describes.
+	memoized := f.decided
 	if !f.decided {
-		f.enabled = a.ensureVectorReadable(ctx, key, orgID)
+		f.enabled, f.result = a.vectorFenceCheck(ctx, key, orgID)
 		f.decided = true
 	}
+	a.recordVectorFence(ctx, orgID, f.result, memoized)
 	return f.enabled
 }

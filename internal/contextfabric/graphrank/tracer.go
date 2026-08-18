@@ -3,6 +3,8 @@ package graphrank
 import (
 	"context"
 	"log/slog"
+
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
 // SlogResolutionTracer is the production ResolutionTracer (team-lead
@@ -65,4 +67,50 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		t.logger.DebugContext(ctx, "context fabric resolution trace: unknown stage",
 			"request_id", event.RequestID, "stage", event.Stage)
 	}
+}
+
+// SlogRawSignalObserver is CHAOS-3890's production RawSignalObserver: the
+// CHAOS-3858 capture (ObserveDeps.RawSignalObserver's doc comment) existed
+// as a measurement-only port that no production composition root ever set
+// -- "what similarity/margin actually decided this" never ran outside a
+// harness. This makes it run in prod, gated the SAME way
+// SlogResolutionTracer already is: unconditionally wired, silent at any
+// level an operator normally runs (Debug), and disclosed the moment they
+// raise it, with no separate config knob. Content-safe by construction --
+// it only ever reads CandidateNode's numeric raw-signal fields
+// (VectorSimilarity, LexicalMatchedTerms, LexicalTermCount) and the
+// mechanism enum, matching RawSignalObserver's own doc comment; it never
+// reads Name or Attributes, which is where any raw corpus text on a
+// CandidateNode would live.
+type SlogRawSignalObserver struct {
+	logger *slog.Logger
+}
+
+// NewSlogRawSignalObserver builds a SlogRawSignalObserver. A nil logger
+// falls back to slog.Default(), matching NewSlogResolutionTracer's
+// convention.
+func NewSlogRawSignalObserver(logger *slog.Logger) SlogRawSignalObserver {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return SlogRawSignalObserver{logger: logger}
+}
+
+func (o SlogRawSignalObserver) ObserveCandidate(ctx context.Context, subjectKey string, node CandidateNode) {
+	requestID, _ := observability.RequestIDFromContext(ctx)
+	attrs := []any{
+		"request_id", requestID,
+		"subject_key", subjectKey,
+		"mechanism", string(node.Mechanism),
+	}
+	if node.VectorSimilarity != nil {
+		attrs = append(attrs, "vector_similarity", *node.VectorSimilarity)
+	}
+	if node.LexicalMatchedTerms != nil {
+		attrs = append(attrs, "lexical_matched_terms", *node.LexicalMatchedTerms)
+	}
+	if node.LexicalTermCount != nil {
+		attrs = append(attrs, "lexical_term_count", *node.LexicalTermCount)
+	}
+	o.logger.DebugContext(ctx, "context fabric raw retrieval signal", attrs...)
 }

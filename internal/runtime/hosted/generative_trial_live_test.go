@@ -728,7 +728,7 @@ func (c *trialRawSignalCollector) snapshotAndReset() map[string]graphrank.Candid
 	return snapshot
 }
 
-func (c *trialRawSignalCollector) ObserveCandidate(subjectKey string, node graphrank.CandidateNode) {
+func (c *trialRawSignalCollector) ObserveCandidate(ctx context.Context, subjectKey string, node graphrank.CandidateNode) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.bySubject == nil {

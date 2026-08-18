@@ -418,6 +418,15 @@ func traceTermHash(term string) string {
 // RawSignalObserver is the CHAOS-3858 measurement-only capture port -- see
 // ResolveDeps.RawSignalObserver's doc comment for the "never before
 // authorization, never a production consumer" scope this is held to.
+//
+// CHAOS-3890: ObserveCandidate takes ctx (it did not before) solely so a
+// production implementation can correlate its own emission back to the
+// request via observability.RequestIDFromContext(ctx) -- the same
+// ambient, ctx-carried mechanism api/app.go's requestIDMiddleware already
+// attaches to every hosted request, rather than threading a new RequestID
+// parameter through this interface. This is additive to every existing
+// implementation's BEHAVIOR (a measurement harness that ignores ctx is
+// unaffected); only the signature changed.
 type RawSignalObserver interface {
 	// ObserveCandidate reports one accepted candidate's raw retrieval
 	// signal. subjectKey is SubjectKey(candidate.Subject) -- the same
@@ -428,7 +437,7 @@ type RawSignalObserver interface {
 	// for MatchVector, LexicalMatchedTerms/LexicalTermCount for
 	// MatchLexical) without this interface needing to grow a new method
 	// per mechanism.
-	ObserveCandidate(subjectKey string, node CandidateNode)
+	ObserveCandidate(ctx context.Context, subjectKey string, node CandidateNode)
 }
 
 // ResolveSubjects resolves the committed/candidate subjects for an
@@ -952,7 +961,7 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 		recordIdentityClaim(candidate, identity, identityTerms)
 		key := SubjectKey(candidate.Subject)
 		if deps.RawSignalObserver != nil {
-			deps.RawSignalObserver.ObserveCandidate(key, node)
+			deps.RawSignalObserver.ObserveCandidate(ctx, key, node)
 		}
 		// CHAOS-3778: MergeCandidates replaces a plain "keep the higher
 		// confidence" here. The higher-confidence finding still supplies

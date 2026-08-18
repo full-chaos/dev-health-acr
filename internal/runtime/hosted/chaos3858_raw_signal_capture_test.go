@@ -8,6 +8,7 @@ package hosted_test
 // per-case reset contract these tests pin.
 
 import (
+	"context"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -19,9 +20,9 @@ func intPtr(v int) *int           { return &v }
 
 func TestTrialRawSignalCollector_keepsHighestObservedVectorSimilarity(t *testing.T) {
 	c := &trialRawSignalCollector{}
-	c.ObserveCandidate("project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.4)})
-	c.ObserveCandidate("project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.9)})
-	c.ObserveCandidate("project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.2)})
+	c.ObserveCandidate(context.Background(), "project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.4)})
+	c.ObserveCandidate(context.Background(), "project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.9)})
+	c.ObserveCandidate(context.Background(), "project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.2)})
 
 	snapshot := c.snapshotAndReset()
 	got := snapshot["project\x00project_x"]
@@ -33,11 +34,11 @@ func TestTrialRawSignalCollector_keepsHighestObservedVectorSimilarity(t *testing
 func TestTrialRawSignalCollector_keepsHighestObservedLexicalRatio(t *testing.T) {
 	c := &trialRawSignalCollector{}
 	// 1/4 = 0.25
-	c.ObserveCandidate("project\x00project_y", graphrank.CandidateNode{LexicalMatchedTerms: intPtr(1), LexicalTermCount: intPtr(4)})
+	c.ObserveCandidate(context.Background(), "project\x00project_y", graphrank.CandidateNode{LexicalMatchedTerms: intPtr(1), LexicalTermCount: intPtr(4)})
 	// 3/4 = 0.75 -- higher ratio, must win even though matched count 3 > 1 is the only reason, not a tie
-	c.ObserveCandidate("project\x00project_y", graphrank.CandidateNode{LexicalMatchedTerms: intPtr(3), LexicalTermCount: intPtr(4)})
+	c.ObserveCandidate(context.Background(), "project\x00project_y", graphrank.CandidateNode{LexicalMatchedTerms: intPtr(3), LexicalTermCount: intPtr(4)})
 	// 1/2 = 0.5 -- lower ratio than 0.75, must not overwrite
-	c.ObserveCandidate("project\x00project_y", graphrank.CandidateNode{LexicalMatchedTerms: intPtr(1), LexicalTermCount: intPtr(2)})
+	c.ObserveCandidate(context.Background(), "project\x00project_y", graphrank.CandidateNode{LexicalMatchedTerms: intPtr(1), LexicalTermCount: intPtr(2)})
 
 	snapshot := c.snapshotAndReset()
 	got := snapshot["project\x00project_y"]
@@ -48,7 +49,7 @@ func TestTrialRawSignalCollector_keepsHighestObservedLexicalRatio(t *testing.T) 
 
 func TestTrialRawSignalCollector_resetClearsBetweenCases(t *testing.T) {
 	c := &trialRawSignalCollector{}
-	c.ObserveCandidate("project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.9)})
+	c.ObserveCandidate(context.Background(), "project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.9)})
 	c.reset()
 	if snapshot := c.snapshotAndReset(); len(snapshot) != 0 {
 		t.Fatalf("snapshotAndReset() after reset() = %#v, want empty -- case N's raw signal must never leak into case N+1", snapshot)
@@ -57,7 +58,7 @@ func TestTrialRawSignalCollector_resetClearsBetweenCases(t *testing.T) {
 
 func TestTrialRawSignalCollector_snapshotAndResetClearsState(t *testing.T) {
 	c := &trialRawSignalCollector{}
-	c.ObserveCandidate("project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.9)})
+	c.ObserveCandidate(context.Background(), "project\x00project_x", graphrank.CandidateNode{VectorSimilarity: floatPtr(0.9)})
 	first := c.snapshotAndReset()
 	if len(first) != 1 {
 		t.Fatalf("first snapshot = %#v, want exactly 1 entry", first)

@@ -24,7 +24,7 @@ type fakeRawSignalObserver struct {
 	observed []observedCandidate
 }
 
-func (f *fakeRawSignalObserver) ObserveCandidate(subjectKey string, node CandidateNode) {
+func (f *fakeRawSignalObserver) ObserveCandidate(ctx context.Context, subjectKey string, node CandidateNode) {
 	f.observed = append(f.observed, observedCandidate{subjectKey: subjectKey, node: node})
 }
 

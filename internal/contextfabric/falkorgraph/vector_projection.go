@@ -824,17 +824,59 @@ func (a *Adapter) verifyStoredEmbedderIdentity(ctx context.Context, key, orgID s
 //
 // Any error checking the fence DISABLES vector retrieval for this request
 // rather than enabling it. An unverifiable fence is not a passed fence.
+//
+// This is the plain-bool wrapper every pre-CHAOS-3890 caller (including
+// every existing test) already uses -- byte-identical behavior, unchanged
+// signature. See vectorFenceCheck for the same verdict WITH the reason
+// the fence discarded before this ticket; resolutionFence.readable is the
+// one production caller that reads it.
 func (a *Adapter) ensureVectorReadable(ctx context.Context, key, orgID string) bool {
+	enabled, _ := a.vectorFenceCheck(ctx, key, orgID)
+	return enabled
+}
+
+// vectorFenceCheck is ensureVectorReadable's own body (CHAOS-3890),
+// additionally reporting WHICH of the fence's checks produced a
+// non-passing verdict -- see VectorFenceResult's own doc comment for the
+// closed vocabulary and config.go's GraphTelemetry.RecordVectorFence for
+// where the reason is reported. Pure refactor of ensureVectorReadable's
+// pre-existing logic: no check added, removed, or reordered, so every
+// existing ensureVectorReadable test still exercises the identical
+// decision path through this function.
+//
+// The a.embedder==nil branch is unreachable from resolutionFence.readable
+// in production -- both of its call sites (hybridSearchNodes,
+// questionVectorSearchNodes) already check a.embedder==nil themselves and
+// return before ever calling fence.readable -- kept here only because
+// ensureVectorReadable's own pre-existing defensive check must stay
+// intact for its other (non-fence.readable) callers. VectorFenceIndexAbsent
+// is the closest-fit reason for it: "no embedder configured" and "no
+// vector index built" both mean the same thing to a caller deciding
+// whether to trust this bool -- there is no vector capability to check at
+// all -- and the ticket's reason vocabulary has no dedicated value for it.
+func (a *Adapter) vectorFenceCheck(ctx context.Context, key, orgID string) (bool, VectorFenceResult) {
 	if a.embedder == nil {
-		return false
+		return false, VectorFenceIndexAbsent
 	}
-	usable, err := a.vectorIndexUsable(ctx, key)
-	if err != nil || !usable {
-		return false
+	dimension, state, err := a.vectorIndexDimension(ctx, key)
+	if err != nil {
+		return false, VectorFenceQueryError
+	}
+	switch state {
+	case vectorIndexAbsent:
+		return false, VectorFenceIndexAbsent
+	case vectorIndexUnknown:
+		return false, VectorFenceIndexUnknown
+	}
+	if dimension != a.embedder.Identity().Dimension {
+		return false, VectorFenceDimMismatch
 	}
 	matches, err := a.verifyStoredEmbedderIdentity(ctx, key, orgID)
-	if err != nil || !matches {
-		return false
+	if err != nil {
+		return false, VectorFenceQueryError
 	}
-	return true
+	if !matches {
+		return false, VectorFenceIdentityMismatch
+	}
+	return true, VectorFenceOK
 }
