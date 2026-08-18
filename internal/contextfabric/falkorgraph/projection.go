@@ -473,14 +473,29 @@ func (a *Adapter) ProjectionWatermark(ctx context.Context, orgID, source string)
 	cypher := fmt.Sprintf("MATCH (w:%s {%s:$org, source:$source}) RETURN w", labelWatermark, propOrgID)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "source": source}, true)
 	if err != nil {
-		return contextfabric.ProjectionWatermark{}, safeDependencyError("read projection watermark", err)
+		classified := safeDependencyError("read projection watermark", err)
+		// The live path for "never projected" or "purged" (unlike the
+		// rows==0/nil-node cases below, which cover a graph that DOES exist
+		// but has no watermark node): GRAPH.RO_QUERY against a graph key
+		// that never existed, or was just deleted, fails the query itself
+		// with FalkorDB's "Invalid graph operation on empty key" --
+		// classifyFalkorError already maps that onto ErrNotFound, which
+		// safeDependencyError then re-wraps with this operation's prefix.
+		// Re-wrap AGAIN here with the CHAOS-3882 backend-neutral sentinel so
+		// this, the actual production not-found path, satisfies it too --
+		// not just the two defensive branches below that a live FalkorDB
+		// never actually takes.
+		if errors.Is(classified, ErrNotFound) {
+			return contextfabric.ProjectionWatermark{}, fmt.Errorf("%w: %w", classified, contextfabric.ErrProjectionWatermarkNotFound)
+		}
+		return contextfabric.ProjectionWatermark{}, classified
 	}
 	if len(rows) == 0 {
-		return contextfabric.ProjectionWatermark{}, ErrNotFound
+		return contextfabric.ProjectionWatermark{}, notFoundWatermarkErr()
 	}
 	w, ok := rows[0]["w"].(*node)
 	if !ok || w == nil {
-		return contextfabric.ProjectionWatermark{}, ErrNotFound
+		return contextfabric.ProjectionWatermark{}, notFoundWatermarkErr()
 	}
 	projectedAt, err := parseRFC3339(propStringValue(w.Properties["projected_at"]))
 	if err != nil {
@@ -491,6 +506,18 @@ func (a *Adapter) ProjectionWatermark(ctx context.Context, orgID, source string)
 		SourceVersion: propStringValue(w.Properties[propSourceVersion]), ProjectedAt: projectedAt,
 		BackendWatermark: propStringValue(w.Properties["backend_watermark"]),
 	}, nil
+}
+
+// notFoundWatermarkErr wraps BOTH this package's own ErrNotFound (the
+// existing contract adapter_live_integration_test.go's
+// TestLiveReadOnlyPathAfterPurgeReturnsNotFoundWithoutAutoCreating pins, and
+// cmd/acr-projector's readiness probe checks directly) and
+// contextfabric.ErrProjectionWatermarkNotFound (CHAOS-3882's backend-neutral
+// classification, ProjectionBackend's own doc comment) in one error, so
+// existing in-package callers and the new backend-agnostic one both see the
+// sentinel they check for.
+func notFoundWatermarkErr() error {
+	return fmt.Errorf("%w: %w", ErrNotFound, contextfabric.ErrProjectionWatermarkNotFound)
 }
 
 func (a *Adapter) PurgeOrganization(ctx context.Context, orgID string) error {

@@ -181,6 +181,18 @@ func (b *fakeBackend) ApplyProjectionBatch(ctx context.Context, batch contextfab
 	b.inFlight[batch.OrgID]--
 	if !fail {
 		b.applied = append(b.applied, batch)
+		// CHAOS-3882: mirror the real falkorgraph adapter's writeWatermark
+		// call inside ApplyProjectionBatch -- a successful apply durably
+		// records a graph-side sentinel, which is the OTHER half of the
+		// checkpoint-vs-store divergence check (coordinator.go's
+		// checkpointStoreDiverged compares this against the Postgres
+		// checkpoint's own BackendWatermark). Without this, the fake could
+		// never represent "a batch really did land in the backend" for a
+		// divergence test to later simulate losing.
+		b.watermarks[watermarkKey(batch.OrgID, batch.Source)] = contextfabric.ProjectionWatermark{
+			OrgID: batch.OrgID, Source: batch.Source, SourceVersion: batch.SourceVersion,
+			ProjectedAt: time.Now().UTC(), BackendWatermark: batch.NextCursor,
+		}
 	}
 	b.mu.Unlock()
 	if fail {

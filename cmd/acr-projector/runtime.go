@@ -152,6 +152,14 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		api.CheckFunc{CheckName: "postgres", Fn: func(ctx context.Context) error { return checkPostgresRuntime(ctx, db, runner) }},
 		api.CheckFunc{CheckName: "clickhouse", Fn: clickhouseClient.Ping},
 		api.CheckFunc{CheckName: "falkordb", Fn: falkorCheck},
+		// CHAOS-3882: the readiness-path leg of the checkpoint-vs-store
+		// divergence signal -- Tick's own recovery (see
+		// projectionrun.Coordinator.recoverFromDivergence) already self-heals
+		// within one poll interval, but a probe failing loudly in the
+		// meantime is exactly the "never silent" half of this ticket: an
+		// operator (or dashboard) sees degraded, not a quietly-empty graph
+		// serving clean-looking no-match answers.
+		api.CheckFunc{CheckName: "projection_liveness", Fn: coordinator.LivenessCheck},
 	}
 	return runtime, nil
 }

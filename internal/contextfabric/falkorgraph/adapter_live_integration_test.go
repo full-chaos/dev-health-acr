@@ -269,6 +269,13 @@ func TestLiveReadOnlyPathAfterPurgeReturnsNotFoundWithoutAutoCreating(t *testing
 	if !errors.Is(err, falkorgraph.ErrNotFound) {
 		t.Fatalf("watermark read for a never-projected org = %v, want ErrNotFound", err)
 	}
+	// CHAOS-3882: the same error must ALSO satisfy the backend-neutral
+	// classification projectionrun.Coordinator's checkpoint-vs-store
+	// divergence check relies on, so a backend-agnostic caller can recognize
+	// a confirmed absence without importing this package directly.
+	if !errors.Is(err, contextfabric.ErrProjectionWatermarkNotFound) {
+		t.Fatalf("watermark read for a never-projected org = %v, want it to also satisfy contextfabric.ErrProjectionWatermarkNotFound", err)
+	}
 
 	batch := liveBatch(orgID)
 	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
@@ -280,10 +287,16 @@ func TestLiveReadOnlyPathAfterPurgeReturnsNotFoundWithoutAutoCreating(t *testing
 
 	// Purged: a read-only lookup must report not-found, not a generic
 	// dependency error and not a silently-empty result from an
-	// auto-created graph.
+	// auto-created graph. This is the exact shape of the CHAOS-3882
+	// incident's second half: a batch WAS durably applied here (so a
+	// Postgres checkpoint recording that would carry a real
+	// BackendWatermark), and the backend's own state is now confirmed gone.
 	_, err = adapter.ProjectionWatermark(ctx, orgID, "live-test")
 	if !errors.Is(err, falkorgraph.ErrNotFound) {
 		t.Fatalf("watermark read after purge = %v, want ErrNotFound", err)
+	}
+	if !errors.Is(err, contextfabric.ErrProjectionWatermarkNotFound) {
+		t.Fatalf("watermark read after purge = %v, want it to also satisfy contextfabric.ErrProjectionWatermarkNotFound", err)
 	}
 }
 
