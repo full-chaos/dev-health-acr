@@ -143,11 +143,23 @@ type replayCaseOutcome struct {
 	// 2026-08-17): C1/C2, read from the durable graphrank.ResolutionTracer's
 	// own "alias_lookup" stage events -- see replayTraceCapture's own doc
 	// comment. Counts only, never row or term content.
-	IdentityUniverseCalls int              `json:"identity_universe_calls"`
-	IdentityMatchedRows   int              `json:"identity_matched_rows"`
-	Baseline              replayArmOutcome `json:"baseline"`
-	Wired                 replayArmOutcome `json:"wired"`
-	DiffClass             replayDiffClass  `json:"diff_class"`
+	IdentityUniverseCalls int `json:"identity_universe_calls"`
+	IdentityMatchedRows   int `json:"identity_matched_rows"`
+	// WiredSearchTruncated (CHAOS-3858 measurement-lane, pass-3, additive):
+	// the wired arm's own decision-stage graphrank.ResolutionTraceEvent.
+	// SearchTruncated (CHAOS-3897) for THIS case -- the literal, durable
+	// signal for whether the commit switch's `case searchTruncated` branch
+	// (resolution.go) preempted the LoneFloor/TopFloor confidence gates
+	// entirely, as opposed to the gates themselves running and declining to
+	// commit. Read via replayTraceCapture.decisionSearchTruncated(), same
+	// idiom as IdentityUniverseCalls/IdentityMatchedRows above. Baseline has
+	// no tracer wired (buildReplayGraphReader(..., false, nil) in this
+	// file's own TestChaos3884ReplayHarness), so this is wired-arm only, by
+	// construction -- there is no BaselineSearchTruncated to report.
+	WiredSearchTruncated bool             `json:"wired_search_truncated"`
+	Baseline             replayArmOutcome `json:"baseline"`
+	Wired                replayArmOutcome `json:"wired"`
+	DiffClass            replayDiffClass  `json:"diff_class"`
 }
 
 // replayReport is the whole run's artifact, written to ACR_TEST_REPLAY_OUT.
@@ -290,6 +302,24 @@ func (c *replayTraceCapture) aliasLookupReachability() (calls, matchedClaimants 
 		matchedClaimants += e.AliasLookupMatchedClaimants
 	}
 	return calls, matchedClaimants
+}
+
+// decisionSearchTruncated reads the wired arm's OWN "decision" stage event
+// for this case (CHAOS-3858 measurement-lane, pass-3) -- exactly one such
+// event per ResolveSubjects call (resolution.go's tracer.Trace switch always
+// fires once, for committed/ambiguous/no_commit), so the first (only) match
+// is authoritative. false (the zero value) if no decision event was
+// captured at all -- should not happen for a successful resolve, but this
+// mirrors aliasLookupReachability's own "absence reads as zero" convention
+// rather than panicking on an unexpected shape.
+func (c *replayTraceCapture) decisionSearchTruncated() bool {
+	for _, e := range c.events {
+		if e.Stage != "decision" {
+			continue
+		}
+		return e.SearchTruncated
+	}
+	return false
 }
 
 func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Client, wireIdentityUniverse bool, tracer graphrank.ResolutionTracer) (contextfabric.GraphReader, error) {
@@ -502,6 +532,10 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		// deps.AliasLookup, not inferred from a unit test. C2 is that
 		// event's own AliasLookupMatchedClaimants -- did it find a match.
 		outcome.IdentityUniverseCalls, outcome.IdentityMatchedRows = traceCapture.aliasLookupReachability()
+		// CHAOS-3858 measurement-lane, pass-3: the literal SearchTruncated
+		// bit off the wired arm's own decision-stage event (CHAOS-3897) --
+		// see WiredSearchTruncated's own doc comment.
+		outcome.WiredSearchTruncated = traceCapture.decisionSearchTruncated()
 
 		outcome.Baseline = buildReplayArmOutcome(baselineRes, baselineErr)
 		outcome.Wired = buildReplayArmOutcome(wiredRes, wiredErr)
