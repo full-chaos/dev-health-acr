@@ -32,6 +32,7 @@ import (
 	"time"
 
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -142,6 +143,24 @@ type Config struct {
 	// the CHAOS-3884 replay/trial harness (chaos3899_shadow_run_test.go)
 	// is the first and only caller, for measurement.
 	CensusFunc graphrank.CensusFunc
+	// EpochResolver (CHAOS-3898 S2a, design brief §3.1) is optional
+	// (nil-safe), same convention as IdentityUniverse/CensusFunc above: the
+	// composition root's pglifecycle.Resolver (or a bounded-lease
+	// pglifecycle.CachedResolver wrapping one), bound to a live
+	// GraphLifecycleStore. A nil value -- the default for every existing
+	// production composition root today -- means every one of this
+	// package's six graph-key call sites derives epoch 0's key exactly as
+	// it always has: byte-identical to pre-CHAOS-3898 behavior. Wiring
+	// this is what lets an organization actually serve from a non-zero
+	// epoch; S2a ships the resolver and the call-site plumbing with this
+	// field left unset everywhere in production, so no organization's
+	// resolved key changes as a result of this slice landing.
+	EpochResolver contextfabric.OrgEpochResolver
+	// LifecycleTelemetry (CHAOS-3898 S2a, §5b) is optional (nil-safe): the
+	// cf_resolved_graph_key / cf_graph_key_divergence signal sink. A nil
+	// value discards both signals, the same "optional dependency, absent
+	// means degrade" convention every sink on this Config already uses.
+	LifecycleTelemetry contextfabric.GraphLifecycleTelemetry
 }
 
 // GraphTelemetry is the graph adapter's operational signal sink.

@@ -31,8 +31,10 @@ import (
 // branch's own CHAOS-3884 work independently claimed version 17 as separate
 // features landed in parallel; CHAOS-3889 merged to main first, so this
 // branch's migration moved to the next free version rather than the other
-// way around).
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}
+// way around). 0019 and 0020 are CHAOS-3898 S2a's graph lifecycle row
+// (+ retire records + build source progress) and the projection checkpoint
+// re-key to (org, epoch, source), respectively.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

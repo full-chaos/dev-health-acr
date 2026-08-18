@@ -23,7 +23,14 @@ import (
 func isInternalSubject(contextfabric.SubjectRef) bool { return false }
 
 func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion) (contextfabric.SubjectResolution, error) {
-	key := graphKey(a.config.GraphPrefix, principal.OrgID)
+	// CHAOS-3898 S2a: resolves the org's ACTIVE epoch through the
+	// KeyResolver (design brief §3.1) -- a nil Config.EpochResolver
+	// (every production composition root today) falls back to epoch 0's
+	// key, byte-identical to pre-CHAOS-3898 behavior.
+	key, err := a.resolveReadKey(ctx, principal.OrgID, contextfabric.GraphKeyRoleInvestigationRead)
+	if err != nil {
+		return contextfabric.SubjectResolution{}, err
+	}
 	// One fence verification per resolution, not per term (codex round-2
 	// R2-1). Scoped to this call and never shared across requests.
 	fence := &resolutionFence{}
@@ -406,7 +413,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if err := ctx.Err(); err != nil {
 		return contextfabric.GraphContext{}, err
 	}
-	key := graphKey(a.config.GraphPrefix, principal.OrgID)
+	// CHAOS-3898 S2a: see ResolveSubjects' identical comment above.
+	key, err := a.resolveReadKey(ctx, principal.OrgID, contextfabric.GraphKeyRoleInvestigationRead)
+	if err != nil {
+		return contextfabric.GraphContext{}, err
+	}
 	scope := request.Request.RequestedScope
 	temporal := newTemporalFilter(request.Interpretation.TimeContext)
 

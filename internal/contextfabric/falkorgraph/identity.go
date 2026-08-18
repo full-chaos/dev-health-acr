@@ -56,6 +56,23 @@ func graphKey(prefix, orgID string) string {
 	return strings.TrimSpace(prefix) + "-" + hex.EncodeToString(digest[:16])
 }
 
+// graphKeyForEpoch is CHAOS-3898 S2a's per-org epoch key derivation (design
+// brief §3.1): epoch 0 is BYTE-IDENTICAL to graphKey's pre-CHAOS-3898
+// output -- the "epoch 0 == the legacy key, zero migration" guarantee --
+// and epoch N>=1 appends a "-eN" suffix. Injective in epoch for a fixed
+// (prefix, orgID): no two distinct epoch values ever produce the same
+// string, which is what lets EpochGraphDeleter's epoch != activeEpoch
+// integer comparison stand in for a string-key-inequality check (see
+// contextfabric.EpochGraphDeleter's doc comment) without exposing derived
+// key text outside this package.
+func graphKeyForEpoch(prefix, orgID string, epoch int64) string {
+	base := graphKey(prefix, orgID)
+	if epoch <= 0 {
+		return base
+	}
+	return fmt.Sprintf("%s-e%d", base, epoch)
+}
+
 // kindLabel converts a SubjectKind into a Cypher-safe PascalCase label
 // (e.g. "work_item" -> "WorkItem"), mirroring zepgraph.zepLabel's
 // convention so the same subject kind reads the same way in both backends'

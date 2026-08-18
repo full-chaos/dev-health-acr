@@ -19,10 +19,14 @@ import (
 // store's own Go API.
 func setCheckpointWatermark(t *testing.T, ctx context.Context, db *sql.DB, orgID, source, watermark string) {
 	t.Helper()
+	// epoch defaults to 0 (CHAOS-3898 S2a re-key, migration 0020) -- these
+	// tests exercise the pre-lifecycle, legacy-epoch reuse path, so the
+	// conflict target names epoch explicitly, matching the table's current
+	// primary key (org_id, epoch, source).
 	_, err := db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, cursor, source_version, backend_watermark, updated_at)
 VALUES ($1, $2, 'cursor', 'v1', $3, now())
-ON CONFLICT (org_id, source) DO UPDATE SET backend_watermark = EXCLUDED.backend_watermark, updated_at = now()`,
+ON CONFLICT (org_id, epoch, source) DO UPDATE SET backend_watermark = EXCLUDED.backend_watermark, updated_at = now()`,
 		orgID, source, watermark)
 	require.NoError(t, err)
 }

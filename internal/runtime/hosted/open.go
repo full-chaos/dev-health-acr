@@ -225,6 +225,17 @@ func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
 	return falkorgraph.SlogTelemetry{Logger: logger}
 }
 
+// graphLifecycleTelemetry builds the CHAOS-3898 S2a
+// contextfabric.GraphLifecycleTelemetry sink, same factoring reasoning as
+// falkorGraphTelemetry above. Wired unconditionally (design brief v4.1 F4's
+// instrument-before-flip sub-order): cf_resolved_graph_key already fires on
+// every graph call this process makes, at epoch 0, today -- proving the
+// signal pipeline live in production before any organization's first real
+// build/flip (a follow-up slice; Config.EpochResolver stays nil here).
+func graphLifecycleTelemetry(logger *slog.Logger) contextfabric.GraphLifecycleTelemetry {
+	return contextfabric.SlogGraphLifecycleTelemetry{Logger: logger}
+}
+
 // defaultRawSignalObserver is CHAOS-3890's default for
 // graphConfig.RawSignalObserver: override, when non-nil, wins unchanged --
 // this is the CHAOS-3858 measurement-harness escape hatch (the generative
@@ -282,6 +293,17 @@ func buildContextFabricGraphReader(request buildRequest, clickhouse clickHouseCo
 	// internal/contextfabric/AGENTS.md's "reported, never inferred"
 	// invariant only cosmetically.
 	graphConfig.Telemetry = falkorGraphTelemetry(request.options.Logger)
+	// CHAOS-3898 S2a (design brief §2.0): startup/config assertion, and the
+	// §5b signal sink wired unconditionally -- see graphLifecycleTelemetry's
+	// own doc comment for why this lands now rather than with the
+	// follow-up conversion slice. graphConfig.EpochResolver stays unset:
+	// every call site's key resolution is unchanged, byte-identical to
+	// pre-CHAOS-3898 output, until a later slice wires a live
+	// pglifecycle.Resolver here.
+	graphConfig.LifecycleTelemetry = graphLifecycleTelemetry(request.options.Logger)
+	if err := falkorgraph.AssertResolvedPrefix(request.options.Logger, graphConfig.LifecycleTelemetry, graphConfig.GraphPrefix); err != nil {
+		return nil, "", fmt.Errorf("context fabric graph key prefix: %w", err)
+	}
 	// CHAOS-3890: see defaultRawSignalObserver's own doc comment -- a nil
 	// Options.RawSignalObserver (every real deployment) now defaults to a
 	// debug-gated slog sink instead of staying nil forever; an explicit
