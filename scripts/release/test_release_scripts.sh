@@ -170,6 +170,16 @@ workflow_go_version() {
   for v in "${versions[@]}"; do
     test "$v" = "$first" || return 1
   done
+
+  # Every actions/setup-go step must carry its own pin. Counting pinned
+  # values alone would accept a workflow with more setup-go steps than
+  # go-version inputs: setup-go treats a missing go-version as "use whatever
+  # Go the runner ships", so that job would silently verify on a mutable
+  # toolchain while the other jobs and the release workflow stayed pinned.
+  local setup_go_steps
+  setup_go_steps="$(grep -c 'actions/setup-go@' "$1" || true)"
+  test "$setup_go_steps" -eq "${#versions[@]}" || return 1
+
   printf '%s\n' "$first"
 }
 
@@ -200,6 +210,17 @@ awk '
   { print }
 ' "$ci_workflow" > "$tmp/ci-two-different-go-versions.yml"
 if assert_go_version_pins "$tmp/ci-two-different-go-versions.yml" "$release_workflow"; then exit 1; fi
+
+# Dropping the go-version input from ONE setup-go step, leaving every other
+# pin intact, must still fail: setup-go without go-version falls back to the
+# runner's preinstalled Go, so that job would verify on a mutable toolchain
+# that no longer matches the release pin.
+awk '
+  /actions\/setup-go@/ { seen++ }
+  seen == 1 && /^[[:space:]]*go-version:/ && !dropped { dropped=1; next }
+  { print }
+' "$ci_workflow" > "$tmp/ci-one-unpinned-setup-go.yml"
+if assert_go_version_pins "$tmp/ci-one-unpinned-setup-go.yml" "$release_workflow"; then exit 1; fi
 
 grep -F 'workflow_dispatch:' "$release_workflow" >/dev/null
 grep -F 'branches: [main]' "$release_workflow" >/dev/null

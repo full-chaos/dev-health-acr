@@ -101,6 +101,13 @@ jobs:
         run: make fmt-check
       - name: Vet Go packages
         run: make vet
+      # Runs here rather than in the Go-less `scripts` job because only a real
+      # `go list ./...` can show the race matrix partitions the whole module.
+      # scripts/ci/test-workflow-contract.sh proves the matrix is well-formed;
+      # this proves it is total -- a race lane that silently tested fewer
+      # packages would still report success.
+      - name: Verify the race shards cover every package
+        run: scripts/ci/test-shard-closure.sh
       - name: Check known Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
 
@@ -125,8 +132,24 @@ jobs:
       - name: Install PostgreSQL client for the compose ACL integration test
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y postgresql-client
+          # The runner image already ships the PostgreSQL 16 client binaries;
+          # apt was only fetching the thin `postgresql-client` metapackage on
+          # top of them. Splitting one job into several multiplied that
+          # network call across every job that runs the suite, and a wedged
+          # Ubuntu mirror then stalls each of them (observed: 18+ minutes on
+          # `apt-get update` while every other lane finished). Use what is
+          # already installed, and only reach for apt when it genuinely is
+          # missing -- the step still fails, rather than skipping green, if
+          # the tools cannot be provided either way.
+          if command -v psql >/dev/null 2>&1 \
+            && command -v pg_isready >/dev/null 2>&1; then
+            psql --version
+            pg_isready --version
+            exit 0
+          fi
+          timeout 300 sudo apt-get update
+          timeout 300 sudo apt-get install --no-install-recommends -y \
+            postgresql-client
           psql --version
           pg_isready --version
       # The plain non-race run and the coverage run used to be two separate
@@ -202,8 +225,24 @@ jobs:
       - name: Install PostgreSQL client for the compose ACL integration test
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y postgresql-client
+          # The runner image already ships the PostgreSQL 16 client binaries;
+          # apt was only fetching the thin `postgresql-client` metapackage on
+          # top of them. Splitting one job into several multiplied that
+          # network call across every job that runs the suite, and a wedged
+          # Ubuntu mirror then stalls each of them (observed: 18+ minutes on
+          # `apt-get update` while every other lane finished). Use what is
+          # already installed, and only reach for apt when it genuinely is
+          # missing -- the step still fails, rather than skipping green, if
+          # the tools cannot be provided either way.
+          if command -v psql >/dev/null 2>&1 \
+            && command -v pg_isready >/dev/null 2>&1; then
+            psql --version
+            pg_isready --version
+            exit 0
+          fi
+          timeout 300 sudo apt-get update
+          timeout 300 sudo apt-get install --no-install-recommends -y \
+            postgresql-client
           psql --version
           pg_isready --version
       # The shuffle seed and the -timeout semantics are unchanged from the

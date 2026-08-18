@@ -196,6 +196,19 @@ check_race_shard_agreement() {
       "$shard_count" "${total:-<none>}" >&2
     return 1
   fi
+
+  # Counting entries is not enough: `shard: [1, 2, 3, 3]` has four entries and
+  # would satisfy a count check while running shard 3 twice and shard 4 never,
+  # silently dropping that shard's packages from the race suite with every job
+  # still green. Require the matrix to be exactly the set 1..total.
+  local expected actual
+  expected="$(seq 1 "$total" | LC_ALL=C sort)"
+  actual="$(printf '%s' "$shard_inside" | tr ',' '\n' | tr -d '[:blank:]' | grep -v '^$' | LC_ALL=C sort)"
+  if [ "$expected" != "$actual" ]; then
+    printf 'race matrix indices must be exactly 1..%s, got: %s\n' \
+      "$total" "$(printf '%s' "$shard_inside" | tr -d '[:space:]')" >&2
+    return 1
+  fi
 }
 
 run_all_checks() {
@@ -274,5 +287,18 @@ oci_split_from_scan="$tmpdir/oci-split-from-scan.yml"
 awk '/make container-oci$/ { next } { print }' "$workflow" > "$oci_split_from_scan"
 assert_check_fails 'removed "make container-oci" from the job that runs container-scan' \
   check_container_oci_scan_same_job "$oci_split_from_scan"
+
+# (h) duplicate a shard index: same entry count, but one shard runs twice and
+# another never runs, so its packages silently leave the race suite.
+duplicate_shard="$tmpdir/duplicate-shard.yml"
+sed 's/shard: \[1, 2, 3, 4\]/shard: [1, 2, 3, 3]/' "$workflow" > "$duplicate_shard"
+assert_check_fails 'duplicated a shard index, dropping another shard entirely' \
+  check_race_shard_agreement "$duplicate_shard"
+
+# (i) shard indices outside 1..total.
+out_of_range_shard="$tmpdir/out-of-range-shard.yml"
+sed 's/shard: \[1, 2, 3, 4\]/shard: [1, 2, 5, 9]/' "$workflow" > "$out_of_range_shard"
+assert_check_fails 'used shard indices outside 1..total' \
+  check_race_shard_agreement "$out_of_range_shard"
 
 printf 'PASS: all negative controls correctly failed their check\n'
