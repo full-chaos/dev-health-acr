@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
@@ -82,7 +83,39 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	}
 	runtime.closers = append(runtime.closers, clickhouseClient.Close)
 
-	backend, falkorCheck, err := openProjectionBackend(logger)
+	// CHAOS-3898 S2a-2 (design brief §3.1/§3.5): the build-aside-and-swap
+	// conversion's master switch -- see pglifecycle.EnvConfig's own doc
+	// comment. lifecycleEnvCfg.Enabled == false (the default) is what
+	// keeps this whole conversion byte-identical to pre-CHAOS-3898
+	// behavior across every field constructed below.
+	lifecycleEnvCfg, err := pglifecycle.ConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("context fabric graph lifecycle configuration: %w", err), runtime.Close())
+	}
+	lifecycleTelemetry := graphLifecycleTelemetry(logger)
+
+	var (
+		lifecycleStore *pglifecycle.Store
+		epochResolver  contextfabric.OrgEpochResolver
+	)
+	if lifecycleEnvCfg.Enabled {
+		lifecycleStore, err = pglifecycle.NewStore(db)
+		if err != nil {
+			return nil, errors.Join(err, runtime.Close())
+		}
+		lifecycleStore.Telemetry = lifecycleTelemetry
+		resolver, err := pglifecycle.NewResolver(lifecycleStore)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("context fabric graph lifecycle resolver: %w", err), runtime.Close())
+		}
+		cachedResolver, err := pglifecycle.NewCachedResolver(resolver, lifecycleEnvCfg.Lease, pglifecycle.CachedResolverOptions{})
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("context fabric graph lifecycle resolver: %w", err), runtime.Close())
+		}
+		epochResolver = cachedResolver
+	}
+
+	backend, falkorCheck, err := openProjectionBackend(logger, epochResolver, lifecycleTelemetry)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
@@ -98,6 +131,25 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	rebuildMarkers, err := pgprojection.NewRebuildMarkerStore(db)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
+	}
+
+	// CHAOS-3898 S2a-2: the retire executor needs the backend as an
+	// EpochGraphDeleter, which every production falkorgraph.Adapter
+	// satisfies (var _ contextfabric.EpochGraphDeleter = (*Adapter)(nil),
+	// falkorgraph/lifecycle.go) -- the type assertion only fails for a
+	// hypothetical future ProjectionBackend implementation that does not
+	// yet support epoch-scoped deletion, in which case retirement simply
+	// stays unwired (RetireScheduler nil) rather than failing startup.
+	var retireScheduler projectionrun.RetireScheduler
+	if lifecycleEnvCfg.Enabled {
+		if graphDeleter, ok := backend.(contextfabric.EpochGraphDeleter); ok {
+			retireScheduler = &pglifecycle.RetireExecutor{
+				Store: lifecycleStore, Graph: graphDeleter, Checkpoints: checkpoints,
+				Telemetry: lifecycleTelemetry, Lease: lifecycleEnvCfg.Lease, Deadline: lifecycleEnvCfg.RequestDeadline,
+			}
+		} else {
+			logger.WarnContext(ctx, "context fabric graph lifecycle enabled but the configured backend does not support epoch-scoped deletion; epoch retirement will not run")
+		}
 	}
 	episodeRows, err := storagepostgres.NewEpisodeStore(db)
 	if err != nil {
@@ -133,7 +185,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	}
 	teamsProjectsSource.WithLogger(logger)
 
-	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+	coordinatorConfig := projectionrun.Config{
 		OrgIDs:  cfg.OrgIDs,
 		Sources: projectionSources(clickhouseSource, episodesSource, teamsProjectsSource),
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Locker: locker,
@@ -143,7 +195,18 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		// that fails and holds its checkpoint is correct behavior, but only
 		// safe behavior if it is visible.
 		Observer: projectionrun.SlogObserver{Logger: logger},
-	})
+	}
+	if lifecycleEnvCfg.Enabled {
+		// CHAOS-3898 S2a-2 (design brief item 8's MANDATORY conversion):
+		// every rebuild and every CHAOS-3882 recovery now drives
+		// build-aside-and-swap instead of performRebuild's in-place purge.
+		coordinatorConfig.Lifecycle = lifecycleStore
+		coordinatorConfig.EpochCheckpoints = checkpoints.ForEpoch
+		coordinatorConfig.RetireScheduler = retireScheduler
+		coordinatorConfig.LifecycleTelemetry = lifecycleTelemetry
+		coordinatorConfig.GraceWindow = lifecycleEnvCfg.GraceWindow
+	}
+	coordinator, err := projectionrun.NewCoordinator(coordinatorConfig)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("build projection coordinator: %w", err), runtime.Close())
 	}
@@ -205,7 +268,11 @@ func graphLifecycleTelemetry(logger *slog.Logger) contextfabric.GraphLifecycleTe
 	return contextfabric.SlogGraphLifecycleTelemetry{Logger: logger}
 }
 
-func openProjectionBackend(logger *slog.Logger) (contextfabric.ProjectionBackend, func(context.Context) error, error) {
+// openProjectionBackend's epochResolver parameter (CHAOS-3898 S2a-2) is
+// nil unless pglifecycle.EnvConfig.Enabled -- see openRuntime's own
+// construction. A nil value degrades falkorConfig.EpochResolver to nil too,
+// byte-identical to pre-CHAOS-3898 behavior.
+func openProjectionBackend(logger *slog.Logger, epochResolver contextfabric.OrgEpochResolver, lifecycleTelemetry contextfabric.GraphLifecycleTelemetry) (contextfabric.ProjectionBackend, func(context.Context) error, error) {
 	if !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil
 	}
@@ -229,14 +296,21 @@ func openProjectionBackend(logger *slog.Logger) (contextfabric.ProjectionBackend
 	falkorConfig.Telemetry = falkorGraphTelemetry(logger)
 	// CHAOS-3898 S2a (design brief §2.0): startup/config assertion, and the
 	// §5b signal sink wired unconditionally -- see graphLifecycleTelemetry's
-	// own doc comment. falkorConfig.EpochResolver stays unset: this
-	// binary's projection writes stay at epoch 0, byte-identical to
-	// pre-CHAOS-3898 output, until a later slice wires a live
-	// pglifecycle.Resolver here.
-	falkorConfig.LifecycleTelemetry = graphLifecycleTelemetry(logger)
+	// own doc comment.
+	if lifecycleTelemetry != nil {
+		falkorConfig.LifecycleTelemetry = lifecycleTelemetry
+	} else {
+		falkorConfig.LifecycleTelemetry = graphLifecycleTelemetry(logger)
+	}
 	if err := falkorgraph.AssertResolvedPrefix(logger, falkorConfig.LifecycleTelemetry, falkorConfig.GraphPrefix); err != nil {
 		return nil, nil, fmt.Errorf("context fabric graph key prefix: %w", err)
 	}
+	// CHAOS-3898 S2a-2 (design brief §3.1): non-nil ONLY when an operator
+	// has set pglifecycle.EnvEnabled -- see openRuntime's construction.
+	// This is what actually lets a real build/flip move any organization's
+	// writes off epoch 0; every production deployment stays byte-identical
+	// to pre-CHAOS-3898 output until that flag is explicitly set.
+	falkorConfig.EpochResolver = epochResolver
 	// CHAOS-3778: the projector writes embeddings only when an embedder is
 	// configured. It must agree with the hosted reader (both use
 	// EmbedderFromEnv) -- writing vectors nothing queries is wasted work, and
