@@ -2,6 +2,8 @@ package graphrank
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"strings"
@@ -194,6 +196,223 @@ type ResolveDeps struct {
 	// signal against the remapped Confidence without touching any commit
 	// gate.
 	RawSignalObserver RawSignalObserver
+	// AliasLookup (CHAOS-3884, optional) is a COMPLETE, keyed identity-claimant
+	// read: given this resolution's own subject terms, return every subject
+	// (any isAliasLookupScopedKind kind -- slice 1: repository, project,
+	// team, see that registry's own doc comment for why work_item is
+	// deliberately excluded) whose canonical label OR alias/provider-alias
+	// set contains any of terms (normalized via NormalizeAliasTerm), keyed
+	// by which ORIGINAL term (as passed in, not normalized) it was found
+	// for. Unlike Search, this MUST NOT be a ranked/truncatable relevance
+	// search -- see the design doc's Option C for the completeness argument
+	// (a bounded full-population enumeration over the org's
+	// identity-bearing source data, matched in Go, existence-checked
+	// against the graph before ever being returned here). Every returned
+	// CandidateNode's Mechanism MUST be set to the key class that matched
+	// (MatchExact for a label hit, MatchAlias for a bare-name/native-key
+	// hit, MatchProviderKey for a provider-variant hit) -- NodeCandidate
+	// trusts this AS DECLARED for a lookup-sourced node rather than
+	// re-deriving it from attribute text.
+	//
+	// FromKeyedIdentityLookup MUST be true for every returned CandidateNode
+	// UNLESS this SAME call also had at least one claimant fail its own
+	// existence check (graph-missing) -- decision 1 (team-lead amendment,
+	// 2026-08-17, settled): when that happens, EVERY survivor of the call
+	// must have FromKeyedIdentityLookup false instead, not just complete
+	// (below). This is not optional hardening: identityCollision
+	// (resolution.go) counts the CANDIDATE set, not the table set
+	// completeness is proven over, so a claimant that silently vanished
+	// from that count would otherwise let a surviving sibling's
+	// confidence=1 identity-trust bump (NodeCandidate's identityTrusted,
+	// gated on FromKeyedIdentityLookup alone, independent of complete)
+	// clear LoneFloor/TopFloor/the CHAOS-3829 rescue on a claim this call
+	// never actually proved unique -- complete=false ALONE only ever
+	// disabled the one dedicated fast-path switch case, not those three
+	// other sites. See falkorgraph's own AliasLookup closure
+	// (reader.go) for the reference implementation of this rule.
+	//
+	// complete=false whenever this resolution's identity view could not be
+	// guaranteed complete: a per-call row budget was exceeded, the read
+	// timed out, a source-table claimant could not be confirmed present in
+	// the graph (existence-check failure folds into incompleteness HERE,
+	// rather than as a separately-threaded flag), or this resolution's time
+	// axis is non-current (temporal authority stays with the graph; a
+	// historical-axis question simply never gets this mechanism -- the
+	// implementation decides this via whatever temporal state it already
+	// captures for Search/SearchQuestion, exactly the same closure-capture
+	// shape those two use rather than a redundant parameter here). false is
+	// always the safe default -- it disables the dedicated identity fast
+	// path (ResolveFromMergedCandidatesWithGate), and -- ONLY when paired
+	// with the FromKeyedIdentityLookup rule above -- never silently commits
+	// on an unverified population via any other gate either. nil means
+	// "this backend does not implement it" -- ResolveSubjects treats that
+	// exactly like complete=false, same convention as SearchQuestion. A
+	// genuine backend FAULT (as opposed to a completeness gap) returns a
+	// non-nil err, aborting the whole resolution exactly like Search()'s
+	// own error handling.
+	AliasLookup func(ctx context.Context, orgID string, terms []string) (claimantsByTerm map[string][]CandidateNode, complete bool, err error)
+	// ResolutionTracer (CHAOS-3884, team-lead ruling 2026-08-17) is an
+	// optional, nil-by-default per-stage event emitter for the resolution
+	// CORE -- proof a resolution actually REACHED a mechanism/stage, not
+	// an inference from that mechanism's own unit tests passing in
+	// isolation. Same shape/pattern as RawSignalObserver: no production
+	// caller is required to set it, and a nil tracer is never invoked, so
+	// this has no effect on any resolution decision. See ResolutionTracer's
+	// own doc comment for the corpus-safety discipline every event field
+	// is held to.
+	ResolutionTracer ResolutionTracer
+}
+
+// ResolutionTracer receives ResolveSubjects' own per-stage trace events.
+// ONE method, like RawSignalObserver, so adding a new event FIELD later
+// never changes this interface's signature -- only ResolutionTraceEvent
+// grows.
+//
+// CORPUS-SAFETY (non-negotiable, built in from the first field, not a
+// later hardening pass): every field ResolutionTraceEvent carries is a
+// COUNT, ENUM, SUBJECT IDENTIFIER (kind+canonical_id -- the graph's own
+// stable id, already the shape trialCandidateMatchProvenance/corpus
+// provenance use elsewhere), CONFIDENCE NUMBER, or BOOL. NEVER raw term
+// text, NEVER question text, NEVER alias/label/attribute content. A
+// caller that needs to correlate two events about the SAME term without
+// exposing the term itself must hash it (TermHash below -- the identical
+// SHA-256 discipline the corpus's own provenance hash already uses), never
+// pass the term string. A resolution trace is the single most likely
+// corpus-leak vector this ticket could build; this rule has no exception.
+type ResolutionTracer interface {
+	Trace(event ResolutionTraceEvent)
+}
+
+// ResolutionTraceEvent is ONE stage event. Stage names which fields are
+// populated; every other field stays at its zero value, which is why this
+// is one struct rather than one type per stage -- adding a field here is
+// additive and never breaks an existing Trace implementation.
+type ResolutionTraceEvent struct {
+	// RequestID identifies which resolution this event belongs to --
+	// already on InvestigationRequest, zero new plumbing (per the ruling:
+	// "request.RequestID exists").
+	RequestID string
+	// Stage is a closed vocabulary: "search", "alias_lookup",
+	// "corroboration", "decision", "identity_gate", "identity_universe".
+	Stage string
+	// TermHash (search stage only): SHA-256 hex of the search term, never
+	// the term itself -- lets a reader correlate repeat events for the
+	// SAME term across a resolution without ever seeing what it was.
+	TermHash string
+	// SearchResultCount (search stage): the raw CandidateNode count
+	// Search() returned for this term, before authorization/dedup.
+	SearchResultCount int
+	// AliasLookupComplete/AliasLookupMatchedClaimants (alias_lookup
+	// stage): the completeness flag AliasLookup returned, and the TOTAL
+	// claimant count across every term (claimantsByTerm's total length)
+	// -- never broken down by term or alias content. THIS is the
+	// reachability answer: an alias_lookup-stage event firing at all
+	// proves AliasLookup was invoked (C1); AliasLookupMatchedClaimants>0
+	// proves it found a match (C2).
+	AliasLookupComplete         bool
+	AliasLookupMatchedClaimants int
+	// Subject (corroboration/decision stages): kind+canonical_id, the
+	// graph's own stable identifier -- never a label or matched term.
+	Subject contextfabric.SubjectRef
+	// BaseConfidence/FinalConfidence/DistinctMechanisms (corroboration
+	// stage): the pre- and post-CorroboratedConfidence values and the
+	// distinct mechanism count it computed from (mechanism.go:213 -- this
+	// is exactly where a 0.5 base either does or does not become a
+	// trusted 1.0).
+	BaseConfidence     float64
+	FinalConfidence    float64
+	DistinctMechanisms int
+	// Outcome/WinningMechanism (decision stage): "committed" / "ambiguous"
+	// / "no_commit". WinningMechanism is the strongest mechanism on the
+	// committed/considered candidate (empty for a no-candidate outcome).
+	Outcome          string
+	WinningMechanism string
+	// CommitGate (decision stage, Outcome=="committed" only; reviewer-3884
+	// design review, 2026-08-17): a closed vocabulary naming WHICH commit
+	// path actually fired -- "exact_index" | "identity_fast_path" |
+	// "lone_floor" | "top_of_two" | "vector_margin_rescue" -- empty for any
+	// non-committed outcome. WinningMechanism alone cannot answer "which
+	// GATE committed this": a MatchAlias candidate can commit via
+	// identity_fast_path OR lone_floor, both reporting the identical
+	// mechanism string, and that is exactly the distinction that makes the
+	// identityTrustUnproven-affected population (candidates the completeness
+	// fix blocks at lone_floor/top_of_two -- see IdentityTrustGateBlocked)
+	// countable from traces instead of merely inferred.
+	CommitGate string
+	// IdentityTrustGateBlocked (decision stage; codex xhigh review finding,
+	// CHAOS-3891, 2026-08-17; reviewer-3884 design sign-off same day): true
+	// when the top-ranked commit-eligible candidate was refused LoneFloor/
+	// TopFloor specifically because identityTrustUnproven fired for it
+	// (chaos3884_identity.go) -- an identity-trust bump this resolution's
+	// own aliasIdentityComplete could not vouch for as proven, so the
+	// ordinary strength gates deferred to ambiguous/clarify rather than
+	// commit on an unproven uniqueness claim. AliasLookupComplete is ALSO
+	// reused on this stage's event (same field, same meaning as on the
+	// alias_lookup-stage event -- it is the single aliasIdentityComplete
+	// value this whole resolution used) so a reader never has to
+	// reconstruct it by correlating a separate alias_lookup event: a
+	// truncation-driven non-commit is directly observable as one
+	// decision-stage event with Outcome=="ambiguous",
+	// AliasLookupComplete==false, IdentityTrustGateBlocked==true, rather
+	// than an invisible, unexplained ambiguous outcome.
+	//
+	// Evaluated only against commitIndex[0] (resolution.go) -- correct
+	// today because both the LoneFloor and TopFloor cases that consult
+	// identityTrustUnproven can only ever commit commitIndex[0] (reviewer-3884,
+	// 2026-08-17: worth flagging so a FUTURE gate that commits a different
+	// index does not silently get a stale value here while its own inline
+	// gate check stays correct -- that would read as a tracer bug, not a
+	// scope bug).
+	IdentityTrustGateBlocked bool
+	// IdentityUniverseComplete (identity_universe stage; chris ruling,
+	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
+	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
+	// aliasIdentityComplete -- true unless fetchIdentityKind hit
+	// identityUniverseRowBudget (20000) on at least one kind. This is the
+	// "turn the silent truncation into a counted, visible event" signal:
+	// an identity_universe-stage event firing at all proves the identity
+	// reader was invoked for this resolution; IdentityUniverseComplete==false
+	// is the source-table truncation itself, independent of whatever the
+	// graph-existence check (graphMissing) separately does or does not find
+	// -- the two are folded together downstream (aliasIdentityComplete) but
+	// are genuinely different failure modes, and this field is the only
+	// place the source-side one is visible on its own.
+	IdentityUniverseComplete bool
+	// FromKeyedIdentityLookup/EligibleKind/AliasMatched/ProviderMatched/
+	// GateFired (identity_gate stage ONLY -- team-lead ruling, 2026-08-17,
+	// guardrail 6): the ACTUAL confidence-gate INPUTS, emitted from WITHIN
+	// NodeCandidate itself (candidate.go), where these are real locals --
+	// never reconstructed downstream as a proxy. An earlier version of
+	// this event collapsed these into one "IdentityTrusted" bool computed
+	// in resolution.go from already-merged/corroborated values (base>=1 +
+	// an identity-class mechanism present); that proxy was WRONG in
+	// exactly the bug this ticket found live: pre-fix, FromKeyedIdentityLookup
+	// could be true while the gate still never fired (aliasMatched false
+	// against a stale graph attribute), and the proxy reported
+	// IdentityTrusted=false -- hiding the exact bug it existed to expose.
+	// Recording the real inputs instead makes the trace PROVE the fix:
+	// pre-fix a case reads {FromKeyedIdentityLookup:true, AliasMatched:false,
+	// GateFired:false, FinalConfidence:0.755}; post-fix
+	// {FromKeyedIdentityLookup:true, GateFired:true, FinalConfidence:1}.
+	// FinalConfidence (shared with the corroboration stage above) carries
+	// this event's own resulting confidence -- NodeCandidate's PRE-merge
+	// value, not corroboration's POST-merge one; the two stages are never
+	// emitted for the same call, so there is no ambiguity reading a report
+	// by Stage.
+	FromKeyedIdentityLookup bool
+	EligibleKind            bool
+	AliasMatched            bool
+	ProviderMatched         bool
+	GateFired               bool
+}
+
+// traceTermHash is the ONE place a search term is ever hashed for
+// ResolutionTraceEvent.TermHash -- SHA-256 hex, the identical discipline
+// the corpus's own provenance hash (CorpusSHA256) already uses. Never
+// called with anything else; never reversed or looked up anywhere.
+func traceTermHash(term string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(term))))
+	return hex.EncodeToString(sum[:])
 }
 
 // RawSignalObserver is the CHAOS-3858 measurement-only capture port -- see
@@ -259,7 +478,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// unlike CHAOS-3838's question-provenance marker below, this is
 		// genuine caller-supplied identity, and this whole branch already
 		// forces Confidence/MatchExact explicitly regardless.
-		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true)
+		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true, deps.ResolutionTracer, request.RequestID)
 		if !ok {
 			continue
 		}
@@ -411,6 +630,16 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// number that needs this paragraph's reasoning to validate after the
 	// fact.
 	vectorArmSimilarity := make(map[string]float64)
+	// identity/identityTerms (CHAOS-3884): the collision-detection side
+	// channel, built during EVERY merge below (per-term Search, AliasLookup,
+	// but NOT the question pass -- see that call site's own comment) so
+	// HIGH-5's counting reaches any isAliasLookupScopedKind candidate
+	// regardless of which path found it. Always initialized, even for a
+	// backend with no AliasLookup: counting still happens over ordinary
+	// Search() results (harmless -- aliasIdentityComplete stays false in
+	// that case, so nothing new can commit on the strength of it alone).
+	identity := identityClaimants{}
+	identityTerms := identityMatchTerms{}
 	for _, term := range terms {
 		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
 		if err != nil {
@@ -422,11 +651,57 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if degraded {
 			retrievalDegraded = true
 		}
+		if deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "search",
+				TermHash: traceTermHash(term), SearchResultCount: len(results),
+			})
+		}
 		// allowExactMatch=true: term here is genuine caller-derived search
 		// input (an interpreted subject term, or a requested-scope hint
 		// label -- see SubjectTerms), legitimately eligible to exact-match
 		// a subject's own label.
-		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity)
+		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms)
+	}
+	// aliasIdentityComplete (CHAOS-3884): built here, between the per-term
+	// Search loop and the question pass -- LOW-12: placing the merge BEFORE
+	// the question pass means capMatchedTermsAfterQuestionMerge (below)
+	// sees and correctly caps whatever MatchedTerms this merge ADDED, in
+	// the SAME single pass it already runs, rather than needing a second
+	// capping call. deps.AliasLookup nil means "this backend does not
+	// implement it" -- aliasIdentityComplete stays false, byte-identical
+	// to every pre-CHAOS-3884 backend.
+	aliasIdentityComplete := false
+	if deps.AliasLookup != nil {
+		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
+		if err != nil {
+			return contextfabric.SubjectResolution{}, err
+		}
+		aliasIdentityComplete = complete
+		if deps.ResolutionTracer != nil {
+			matched := 0
+			for _, nodes := range claimantsByTerm {
+				matched += len(nodes)
+			}
+			// THIS event firing at all is C1 (AliasLookup was invoked);
+			// AliasLookupMatchedClaimants>0 is C2 (it found a match) --
+			// team-lead's reachability question, read from the trace, not
+			// inferred from a passing unit test.
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "alias_lookup",
+				AliasLookupComplete: complete, AliasLookupMatchedClaimants: matched,
+			})
+		}
+		for term, nodes := range claimantsByTerm {
+			// allowExactMatch=true: these are the SAME genuine
+			// caller-derived terms the per-term Search loop above already
+			// used, never a synthetic marker. vectorArmSimilarity=nil:
+			// CHAOS-3829's carve-out is scoped to per-term Search-sourced
+			// vector evidence only (F3), the same exclusion the question
+			// pass already documents -- a keyed identity read is not a
+			// vector search and has nothing to contribute there.
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, nodes, candidatesBySubject, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+		}
 	}
 	// CHAOS-3838 (spec L11): the question-level pass runs AT MOST ONCE,
 	// AFTER every per-term pass above, never interleaved with it. Ordering
@@ -471,7 +746,13 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// CHAOS-3829 F3: nil, deliberately -- the question-level pass
 			// never contributes to (or competes for) the commit-path
 			// carve-out's margin. See mergeSearchResults' own doc comment.
-			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil)
+			// CHAOS-3884: identity/identityTerms also nil here -- moot in
+			// practice (allowExactMatch=false means NodeCandidate can never
+			// produce an identity mechanism from this call regardless), but
+			// nil mirrors vectorArmSimilarity's own "the question pass
+			// never contributes" convention rather than relying on that
+			// downstream guarantee alone.
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil, nil, nil)
 			// codex round-1 P1, second half: a candidate already at the
 			// 32-entry MatchedTerms cap from real per-term finds would
 			// overflow to 33 once the marker above unioned in. The marker
@@ -547,7 +828,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if gate == (CommitGatePolicy{}) {
 		gate = DefaultCommitGatePolicy()
 	}
-	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate)
+	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID)
 	resolution.RetrievalDegraded = retrievalDegraded
 	return resolution, nil
 }
@@ -639,7 +920,21 @@ func scopesUnrestricted(scopes []string) bool {
 // two mechanisms have merged into one SubjectCandidate, the vector arm's
 // own raw contribution is unrecoverable from it if a different mechanism
 // happened to win.
-func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64) int {
+// identity/identityTerms (CHAOS-3884) are the collision-detection side
+// channel -- see identityClaimants/identityMatchTerms' own doc comments
+// (chaos3884_identity.go) and recordIdentityClaim, which this function
+// calls on the FRESH, pre-MergeCandidates-union `candidate` value, exactly
+// mirroring vectorArmSimilarity's own "recorded from the per-call result,
+// independent of the eventual union" precedent -- but POST-authorization
+// (recordIdentityClaim only ever sees a candidate NodeCandidate already
+// accepted), the opposite side of vectorArmSimilarity's deliberately
+// pre-authorization placement (see recordIdentityClaim's own doc comment
+// for why: a hidden claimant must not be able to SUPPRESS a commit the
+// caller is authorized to see, the mirror-image hazard from
+// vectorArmSimilarity's own INFLATE-a-margin concern). Both nil is a valid,
+// common call shape (the question-pass call site) -- recordIdentityClaim
+// no-ops on nil, same convention as vectorArmSimilarity==nil above.
+func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64, identity identityClaimants, identityTerms identityMatchTerms) int {
 	traversalErrored := 0
 	for _, node := range results {
 		if vectorArmSimilarity != nil && node.Mechanism == contextfabric.MatchVector && node.VectorSimilarity != nil {
@@ -650,10 +945,11 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 				}
 			}
 		}
-		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, allowExactMatch)
+		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, allowExactMatch, deps.ResolutionTracer, request.RequestID)
 		if !ok {
 			continue
 		}
+		recordIdentityClaim(candidate, identity, identityTerms)
 		key := SubjectKey(candidate.Subject)
 		if deps.RawSignalObserver != nil {
 			deps.RawSignalObserver.ObserveCandidate(key, node)
@@ -684,6 +980,14 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 				observationBlocked[key] = true
 				traversedKey := SubjectKey(traversed.Subject)
 				observationParentKey[key] = traversedKey
+				// CHAOS-3884: a traversal-found parent's own 0.85 one-hop
+				// discount (TraverseObservationToSubject) means its
+				// Confidence can never equal 1, so it can never itself be
+				// identityIndex-eligible -- but it is still recorded here
+				// so a DIRECTLY-found candidate colliding with it on the
+				// same term is correctly flagged (identityCollision does
+				// not care HOW the second claimant was found).
+				recordIdentityClaim(traversed, identity, identityTerms)
 				// Same merge rule as the direct-hit path above: a parent
 				// that BOTH a direct search and a traversal proposed must
 				// keep both mechanisms, because that pairing is exactly

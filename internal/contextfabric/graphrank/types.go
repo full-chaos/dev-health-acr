@@ -97,6 +97,22 @@ type CandidateNode struct {
 	// these two fields cost nothing beyond being set.
 	LexicalMatchedTerms *int
 	LexicalTermCount    *int
+	// FromKeyedIdentityLookup (CHAOS-3884) is the STRUCTURAL provenance
+	// marker identity-mechanism trust gates on -- never the mechanism
+	// VALUE, never allowExactMatch alone (spot-check finding 4b/item 2).
+	// Only a genuinely complete, keyed identity read (a backend's
+	// AliasLookup-shaped dependency: a bounded full-population
+	// enumeration/keyed scan, not a ranked, truncatable relevance search)
+	// may set this true. An ordinary Search()/hybridSearchNodes result is
+	// NEVER entitled to set it, even when its own Mechanism happens to be
+	// MatchAlias/MatchProviderKey/MatchExact (e.g. a future producer that
+	// starts stamping those mechanisms on an OrdinAry lexical hit) --
+	// NodeCandidate's confidence=1 identity bump reads ONLY this field,
+	// so a mechanism value alone can never manufacture the completeness
+	// guarantee that bump asserts. False (the zero value) is always safe:
+	// it just means "this candidate keeps its ordinary, non-bumped
+	// confidence," never "this candidate is wrongly trusted."
+	FromKeyedIdentityLookup bool
 }
 
 // CandidateEdge is the same idea for a relationship/edge result.

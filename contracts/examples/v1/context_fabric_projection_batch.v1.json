@@ -8,6 +8,9 @@
       "aliases": [
         "AskDev"
       ],
+      "provider_aliases": [
+        "github:full-chaos/ask-dev"
+      ],
       "authorization": {
         "project_ids": [
           "project_ask_dev"

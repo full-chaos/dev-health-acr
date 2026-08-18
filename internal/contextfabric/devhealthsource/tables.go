@@ -152,6 +152,21 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 		if provider != "" {
 			entity.ProviderIDs = map[string]string{provider: id}
 		}
+		// CHAOS-3884 Part A: bare-name and provider-variant aliases, so a
+		// bare-name/provider-qualified query surfaces this repository in
+		// the clarification pool (retrievalHandles/repositorySearchText
+		// already fold entity.Aliases/ProviderAliases into the SAME
+		// indexed search text the canonical slug uses -- no falkorgraph
+		// search-path change needed for this half; only projection-time
+		// data was missing). distinctNonEmpty (teams_projects.go, same
+		// package) drops "" entries so an unqualified slug or an unset
+		// provider contributes nothing rather than a spurious empty alias.
+		if alias := repositoryBareNameAlias(slug); alias != "" {
+			entity.Aliases = distinctNonEmpty(alias)
+		}
+		if alias := repositoryProviderAlias(provider, slug); alias != "" {
+			entity.ProviderAliases = distinctNonEmpty(alias)
+		}
 		return []candidate{{observedAt: observedAt, sortKey: id, entity: &entity}}, nil
 	})
 }

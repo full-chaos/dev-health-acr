@@ -293,6 +293,8 @@ func TestContextFabricEntityProjectionRejectsSeparatorCharacterInAliases(t *test
 	}{
 		{"aliases", func(e *ContextFabricEntityProjection) { e.Aliases = []string{"Ask|Dev"} }},
 		{"previous_names", func(e *ContextFabricEntityProjection) { e.PreviousNames = []string{"Old|Name"} }},
+		// CHAOS-3884: provider_aliases follows the identical discipline.
+		{"provider_aliases", func(e *ContextFabricEntityProjection) { e.ProviderAliases = []string{"github:Ask|Dev"} }},
 	} {
 		t.Run(mutate.name, func(t *testing.T) {
 			batch := validContextFabricProjectionBatch()
@@ -317,6 +319,7 @@ func TestContextFabricSeparatorRejectionMatchesBetweenGoAndJSONSchema(t *testing
 		fn   func(*ContextFabricProjectionBatch)
 	}{
 		{"entity_alias", func(b *ContextFabricProjectionBatch) { b.Entities[0].Aliases = []string{"A|B"} }},
+		{"entity_provider_alias", func(b *ContextFabricProjectionBatch) { b.Entities[0].ProviderAliases = []string{"github:A|B"} }},
 		{"entity_previous_name", func(b *ContextFabricProjectionBatch) { b.Entities[0].PreviousNames = []string{"A|B"} }},
 		{"entity_authorization_repository_slug", func(b *ContextFabricProjectionBatch) {
 			b.Entities[0].Authorization.RepositorySlugs = []string{"team-a/repo|team-b/repo"}

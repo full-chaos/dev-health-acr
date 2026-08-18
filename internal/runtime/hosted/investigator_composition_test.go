@@ -277,6 +277,72 @@ func TestBuildContextFabricInvestigator_wiresTheClarificationSelectionSink(t *te
 	}
 }
 
+// TestBuildContextFabricInvestigator_wiresTheIdentityUniverse is CHAOS-3884
+// Option C's own inverse-mutation guard, the same shape as
+// TestBuildContextFabricInvestigator_wiresTheClarificationSelectionSink
+// immediately above: falkorgraph.Config.IdentityUniverse is nil-safe by
+// design (an unset closure just degrades to no identity fast path, never a
+// startup failure -- see its doc comment), which means forgetting to wire it
+// in open.go produces no error anywhere, only a silently-disabled fast
+// path. This drills into the REAL composition's *falkorgraph.Adapter and
+// asserts its config.IdentityUniverse closure is non-nil.
+func TestBuildContextFabricInvestigator_wiresTheIdentityUniverse(t *testing.T) {
+	configureGraph(t)
+	request, postgres, clickhouse := investigatorBuildRequest(t)
+
+	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	if err != nil {
+		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
+	}
+	engine, ok := investigator.(*contextfabric.Engine)
+	if !ok {
+		t.Fatalf("investigator is a %T, want *contextfabric.Engine", investigator)
+	}
+	engineValue := reflect.ValueOf(engine).Elem()
+	graphField := mustField(t, engineValue, "graph")
+	adapterValue := graphField.Elem()
+	if adapterValue.Kind() == reflect.Ptr {
+		adapterValue = adapterValue.Elem()
+	}
+	if adapterValue.Type() != reflect.TypeOf(falkorgraph.Adapter{}) {
+		t.Fatalf("engine.graph holds a %s, want *falkorgraph.Adapter", adapterValue.Type())
+	}
+	configValue := mustField(t, adapterValue, "config")
+	if field := mustField(t, configValue, "IdentityUniverse"); field.IsNil() {
+		t.Error("falkorgraph.Config.IdentityUniverse is nil; open.go's wiring silently disabled the CHAOS-3884 identity fast path")
+	}
+}
+
+// TestBuildContextFabricInvestigator_wiresTheResolutionTracer is the same
+// shape again for CHAOS-3884's ResolutionTracer (team-lead ruling,
+// 2026-08-17): a nil tracer here would silently disable every one of the
+// reachability events this ticket built specifically to catch a dead-path
+// composition regression -- exactly the failure mode a passing unit test
+// alone cannot rule out.
+func TestBuildContextFabricInvestigator_wiresTheResolutionTracer(t *testing.T) {
+	configureGraph(t)
+	request, postgres, clickhouse := investigatorBuildRequest(t)
+
+	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	if err != nil {
+		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
+	}
+	engine, ok := investigator.(*contextfabric.Engine)
+	if !ok {
+		t.Fatalf("investigator is a %T, want *contextfabric.Engine", investigator)
+	}
+	engineValue := reflect.ValueOf(engine).Elem()
+	graphField := mustField(t, engineValue, "graph")
+	adapterValue := graphField.Elem()
+	if adapterValue.Kind() == reflect.Ptr {
+		adapterValue = adapterValue.Elem()
+	}
+	configValue := mustField(t, adapterValue, "config")
+	if field := mustField(t, configValue, "ResolutionTracer"); field.IsNil() {
+		t.Error("falkorgraph.Config.ResolutionTracer is nil; open.go's wiring silently disabled the CHAOS-3884 resolution trace")
+	}
+}
+
 // mustField is reflect.Value.FieldByName, made safe against the exact trap
 // sol review caught (CHAOS-3862 round 2 verification, luna P2):
 // FieldByName on a struct that has no field of that name returns the zero

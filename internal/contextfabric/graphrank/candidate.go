@@ -30,7 +30,19 @@ import (
 // happens to equal. Every pre-existing caller (the exact-hint path, the
 // per-term hybrid-search path, and traversal reached from either) passes
 // true, preserving byte-identical behavior for genuine caller-typed terms.
-func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedScope, term string, node CandidateNode, isInternal func(contextfabric.SubjectRef) bool, allowExactMatch bool) (contextfabric.SubjectCandidate, bool) {
+// tracer/requestID (CHAOS-3884, team-lead ruling 2026-08-17, guardrail 6):
+// optional (nil-safe) -- when tracer is set, this function emits its OWN
+// "identity_gate" ResolutionTraceEvent carrying the REAL confidence-gate
+// inputs (FromKeyedIdentityLookup, eligible kind, aliasMatched,
+// providerMatched, whether the gate fired, the resulting confidence) for
+// every isAliasLookupScopedKind candidate -- the one place these are
+// genuine local variables, never reconstructed downstream from an
+// already-merged/corroborated SubjectCandidate. Scoped to
+// isAliasLookupScopedKind (the SAME gate the alias/provider detection
+// below already uses) so this never fires for the vast majority of
+// candidates (ci_pipeline_run, pull_request, ...) the identity mechanism
+// was never going to touch.
+func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedScope, term string, node CandidateNode, isInternal func(contextfabric.SubjectRef) bool, allowExactMatch bool, tracer ResolutionTracer, requestID string) (contextfabric.SubjectCandidate, bool) {
 	if !AuthorizedAttributes(principal, scope, node.Attributes) {
 		return contextfabric.SubjectCandidate{}, false
 	}
@@ -39,16 +51,108 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 		return contextfabric.SubjectCandidate{}, false
 	}
 	confidence := ResultConfidence(node.Relevance, node.Score)
-	matched := allowExactMatch && (strings.EqualFold(strings.TrimSpace(term), node.Name) || strings.EqualFold(strings.TrimSpace(term), subject.Label))
-	if matched {
+	trimmedTerm := strings.TrimSpace(term)
+	matched := allowExactMatch && (strings.EqualFold(trimmedTerm, node.Name) || strings.EqualFold(trimmedTerm, subject.Label))
+
+	// aliasMatched/providerMatched (CHAOS-3884): the SAME allowExactMatch
+	// discipline as the label check above (a synthetic, non-caller-typed
+	// term -- CHAOS-3838's questionProvenanceMarker -- must never win this
+	// either), plus one more gate: isAliasLookupScopedKind. Detection and
+	// MECHANISM TAGGING run for every scoped kind (repository, project,
+	// team, work_item) regardless of eligibility -- HIGH-5's fix -- so a
+	// team/work_item candidate found this way is still discoverable and
+	// COUNTABLE toward collision detection even though it can never itself
+	// win the identity fast path (see the confidence gate below, and
+	// resolution.go's identityCollision). Mutually exclusive with the
+	// label check (only tried when !matched): an exact label match keeps
+	// unconditional priority, unchanged from CHAOS-3810.
+	aliasMatched := false
+	providerMatched := false
+	if allowExactMatch && !matched && isAliasLookupScopedKind(subject.Kind) {
+		for _, alias := range AliasAttributes(node.Attributes) {
+			if strings.EqualFold(trimmedTerm, alias) {
+				aliasMatched = true
+				break
+			}
+		}
+		if !aliasMatched {
+			for _, alias := range ProviderAliasAttributes(node.Attributes) {
+				if strings.EqualFold(trimmedTerm, alias) {
+					providerMatched = true
+					break
+				}
+			}
+		}
+	}
+	// identityTrusted (CHAOS-3884 spot-check item 2, "provenance made
+	// structural"): the confidence=1 identity bump is gated on
+	// node.FromKeyedIdentityLookup -- an explicit, adapter-declared
+	// structural marker only a genuinely complete keyed identity read may
+	// set -- AND isAliasIdentityEligibleKind, AND allowExactMatch (a
+	// synthetic, non-caller-typed term -- CHAOS-3838's
+	// questionProvenanceMarker -- must never win ANY promotion, alias-based
+	// or identity-trust-based, just because it happens to equal some node's
+	// stored data; the SAME discipline the matched/aliasMatched checks
+	// above already carry explicitly). Never on the mechanism VALUE alone.
+	//
+	// Fix (team-lead ruling, 2026-08-17, live-reproduced projection-lag
+	// bug): identityTrusted ALONE now gates the bump, no longer additionally
+	// conjoined with (aliasMatched || providerMatched). The prior form --
+	// `(aliasMatched || providerMatched) && identityTrusted` -- silently
+	// RE-DERIVED the match against node.Attributes (the GRAPH's own,
+	// possibly STALE "aliases"/"provider_aliases" property, last written at
+	// whatever projection cycle ran before this ticket's alias logic
+	// existed) even for a claimant reader.go had ALREADY existence-checked
+	// and keyed-matched against FRESH ClickHouse data -- reintroducing
+	// exactly the projection-lag dependency (CHAOS-3882 class) Option C's
+	// keyed-lookup/existence-check split exists to eliminate. reader.go
+	// sets FromKeyedIdentityLookup=true in EXACTLY one place
+	// (falkorgraph/reader.go, inside the loop over graphrank.MatchIdentityRows'
+	// own returned matches, AFTER a successful nodeByKindID existence
+	// check) -- identityTrusted being true is ALREADY proof of a genuine
+	// identity-class match against fresh source data; re-deriving it from
+	// the graph's own (possibly stale) attributes only ever LOSES that
+	// proof, never adds to it.
+	//
+	// allowExactMatch is now an EXPLICIT conjunct here rather than an
+	// implicit one inherited transitively through aliasMatched/
+	// providerMatched (both themselves already gated on it, inside the
+	// `if allowExactMatch && !matched && ...` block above) -- dropping the
+	// (aliasMatched||providerMatched) conjunct would otherwise have
+	// silently dropped that inherited gate too, letting a synthetic
+	// question-pass marker win via identityTrusted alone
+	// (TestNodeCandidate_AllowExactMatchFalseAlsoDisablesAliasMatch pins
+	// this). Structurally moot in production today (reader.go's AliasLookup
+	// is only ever merged with allowExactMatch=true -- resolve.go never
+	// calls it from the question pass), kept explicit anyway rather than
+	// relying on that caller discipline never changing.
+	//
+	// aliasMatched/providerMatched are UNCHANGED everywhere else (mechanism
+	// tagging below, MatchReasons, the counting scope HIGH-5 established)
+	// -- this fix touches the confidence gate only.
+	identityTrusted := allowExactMatch && node.FromKeyedIdentityLookup && isAliasIdentityEligibleKind(subject.Kind)
+	if matched || identityTrusted {
 		confidence = 1
 	}
 	if confidence == 0 {
 		confidence = 0.5
 	}
+	if tracer != nil && isAliasLookupScopedKind(subject.Kind) {
+		tracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "identity_gate", Subject: subject,
+			FromKeyedIdentityLookup: node.FromKeyedIdentityLookup, EligibleKind: isAliasIdentityEligibleKind(subject.Kind),
+			AliasMatched: aliasMatched, ProviderMatched: providerMatched,
+			GateFired: matched || identityTrusted, FinalConfidence: confidence,
+		})
+	}
 	reason := "Hybrid graph search matched the subject label or indexed context."
-	if matched {
+	switch {
+	case matched:
 		reason = "Exact canonical subject label match."
+	case aliasMatched:
+		reason = "Repository/project alias matched."
+	case providerMatched:
+		reason = "Provider-qualified identifier matched."
 	}
 	// CHAOS-3778 / AC-3778-6: record the retrieval mechanism the adapter
 	// declared. An exact label/name match is recorded as MatchExact IN
@@ -58,10 +162,16 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 	// exactly. Recording both cannot demote the candidate -- an exact match
 	// carries confidence 1, and CorroboratedConfidence returns 1 unchanged for
 	// any base of 1 precisely so that being found a second way never costs an
-	// exact match its certainty.
+	// exact match its certainty. CHAOS-3884: MatchAlias/MatchProviderKey
+	// follow the identical "in addition to" discipline.
 	mechanisms := MergeMechanisms([]contextfabric.MatchMechanism{node.Mechanism})
-	if matched {
+	switch {
+	case matched:
 		mechanisms = MergeMechanisms(mechanisms, []contextfabric.MatchMechanism{contextfabric.MatchExact})
+	case aliasMatched:
+		mechanisms = MergeMechanisms(mechanisms, []contextfabric.MatchMechanism{contextfabric.MatchAlias})
+	case providerMatched:
+		mechanisms = MergeMechanisms(mechanisms, []contextfabric.MatchMechanism{contextfabric.MatchProviderKey})
 	}
 	return contextfabric.SubjectCandidate{
 		ReceiptID: DeterministicUUID("context-fabric-subject-receipt", node.UUID, strings.ToLower(term)),

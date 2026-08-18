@@ -29,6 +29,59 @@ func TestTicketKeyAlias(t *testing.T) {
 	}
 }
 
+// TestRepositoryBareNameAlias pins CHAOS-3884 Part A's bare-name derivation
+// rule: the last "/"-delimited segment of an org-qualified slug, "" for an
+// unqualified slug (no redundant self-alias) or a non-ASCII-alphabet
+// result (the identity_norm_v1 premise-monitoring exclusion).
+func TestRepositoryBareNameAlias(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		slug string
+		want string
+	}{
+		{name: "org-qualified slug", slug: "full-chaos/dev-health-acr", want: "dev-health-acr"},
+		{name: "gitlab dotted owner", slug: "full.chaos/dev-health-ops", want: "dev-health-ops"},
+		{name: "unqualified slug derives no redundant self-alias", slug: "dev-health-acr", want: ""},
+		{name: "empty slug derives no alias", slug: "", want: ""},
+		{name: "trailing slash derives no alias", slug: "full-chaos/", want: ""},
+		{name: "non-ASCII bare name is excluded (premise monitoring)", slug: "full-chaos/dév-health", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := repositoryBareNameAlias(tc.slug); got != tc.want {
+				t.Fatalf("repositoryBareNameAlias(%q) = %q, want %q", tc.slug, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRepositoryProviderAlias pins CHAOS-3884 Part A's provider-variant
+// derivation rule: "<provider>:<slug>", "" when provider is unset or the
+// composed value fails the ASCII-alphabet premise-monitoring gate.
+func TestRepositoryProviderAlias(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name           string
+		provider, slug string
+		want           string
+	}{
+		{name: "github", provider: "github", slug: "full-chaos/dev-health-acr", want: "github:full-chaos/dev-health-acr"},
+		{name: "gitlab", provider: "gitlab", slug: "full.chaos/dev-health-ops", want: "gitlab:full.chaos/dev-health-ops"},
+		{name: "unset provider derives no alias", provider: "", slug: "full-chaos/dev-health-acr", want: ""},
+		{name: "non-ASCII slug is excluded (premise monitoring)", provider: "github", slug: "full-chaos/dév-health", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := repositoryProviderAlias(tc.provider, tc.slug); got != tc.want {
+				t.Fatalf("repositoryProviderAlias(%q, %q) = %q, want %q", tc.provider, tc.slug, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestJoinedSortedListIsOrderInsensitive pins the §2 determinism rule: an
 // unordered source array must never produce two different texts for the
 // same row -- deduplicated, sorted, element-capped, per-element rune-capped.

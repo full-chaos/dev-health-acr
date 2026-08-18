@@ -571,3 +571,133 @@ func TestCandidatePoolMechanismComposition_keysAreClosedMechanismVocabularyOnly(
 		}
 	}
 }
+
+// --- CHAOS-3884: candidatePoolProvenance ---
+//
+// candidatePoolMechanismComposition (CHAOS-3858, above) deliberately never
+// carries kind -- TestCandidatePoolMechanismComposition_neverCarriesIdentity
+// forbids even the bare kind strings "project"/"work_item" from its wire
+// output. That is correct for an AGGREGATE, but it means the aggregate
+// cannot answer CHAOS-3884's measurement question: for the verbatim-repo-name
+// band, are repository-kind candidates present in the pool at all, and where
+// do they RANK relative to the observation-kind candidates above them?
+// candidatePoolProvenance is the separate, additive, per-candidate answer --
+// the full post-Phase-4 pool projected through the SAME privacy-canaried
+// trialCandidateMatchProvenance shape CommittedMatches/TopNonCommittedMatch
+// already use, so kind+canonical_id+mechanisms+confidence are visible per
+// candidate, IN RANK ORDER, without adding any new field or JSON tag to that
+// shared type (the existing structural canary,
+// TestTrialCandidateMatchProvenanceStructFields_onlyAllowedJSONTags, already
+// covers it).
+
+func TestCandidatePoolProvenance_nilWhenNoCandidates(t *testing.T) {
+	if got := candidatePoolProvenance(nil); got != nil {
+		t.Fatalf("candidatePoolProvenance(nil) = %+v, want nil", got)
+	}
+	if got := candidatePoolProvenance([]contractsv1.ContextFabricSubjectCandidate{}); got != nil {
+		t.Fatalf("candidatePoolProvenance(empty) = %+v, want nil", got)
+	}
+}
+
+// TestCandidatePoolProvenance_preservesPoolOrder pins that this function
+// never re-sorts or re-groups -- rank in the output must be EXACTLY rank in
+// the input, since the input's own order (graphrank.ResolveFromMergedCandidatesWithGate's
+// Phase 4 tiering: committed, then parent, then confidence descending) is
+// the very thing CHAOS-3884 needs to read off unmodified.
+func TestCandidatePoolProvenance_preservesPoolOrder(t *testing.T) {
+	candidates := []contractsv1.ContextFabricSubjectCandidate{
+		subjectCandidate("ci_pipeline_run", "run_1", 0.75, contractsv1.ContextFabricMatchLexical),
+		subjectCandidate("pull_request", "pr_2", 0.6, contractsv1.ContextFabricMatchVector),
+		subjectCandidate("repository", "repo_3", 0.5, contractsv1.ContextFabricMatchLexical),
+	}
+
+	got := candidatePoolProvenance(candidates)
+
+	if len(got) != 3 {
+		t.Fatalf("candidatePoolProvenance returned %d entries, want 3", len(got))
+	}
+	wantKinds := []string{"ci_pipeline_run", "pull_request", "repository"}
+	for i, wantKind := range wantKinds {
+		if got[i].Kind != wantKind {
+			t.Fatalf("candidatePoolProvenance[%d].Kind = %q, want %q (order not preserved: %+v)", i, got[i].Kind, wantKind, got)
+		}
+	}
+}
+
+// TestCandidatePoolProvenance_recordsKindPerCandidate is the positive
+// measurement assertion CHAOS-3884 exists to enable: a repository-kind
+// candidate sitting BELOW an observation-kind candidate in the pool must be
+// individually distinguishable by kind, mechanism, and confidence -- which
+// candidatePoolMechanismComposition's aggregate cannot provide.
+func TestCandidatePoolProvenance_recordsKindPerCandidate(t *testing.T) {
+	candidates := []contractsv1.ContextFabricSubjectCandidate{
+		subjectCandidate("ci_pipeline_run", "run_secret_id", 0.75, contractsv1.ContextFabricMatchLexical),
+		subjectCandidate("repository", "repo_secret_id", 0.55, contextfabricMatchAliasIfValid()...),
+	}
+
+	got := candidatePoolProvenance(candidates)
+
+	if len(got) != 2 {
+		t.Fatalf("candidatePoolProvenance returned %d entries, want 2", len(got))
+	}
+	if got[0].Kind != "ci_pipeline_run" || got[0].Confidence != 0.75 {
+		t.Fatalf("candidatePoolProvenance[0] = %+v, want kind=ci_pipeline_run confidence=0.75", got[0])
+	}
+	if got[1].Kind != "repository" || got[1].CanonicalID != "repo_secret_id" || got[1].Confidence != 0.55 {
+		t.Fatalf("candidatePoolProvenance[1] = %+v, want kind=repository canonical_id=repo_secret_id confidence=0.55", got[1])
+	}
+}
+
+// contextfabricMatchAliasIfValid isolates the MatchAlias mechanism literal
+// to one place in this test file: it is part of the closed
+// contractsv1.ContextFabricSubjectMatchMechanism enum already (declared,
+// never produced by any live retrieval path as of CHAOS-3884's own
+// description -- see mechanism.go's canonicalMechanismOrder), so a fixture
+// using it exercises the real enum value rather than a string literal that
+// would silently drift if the constant's name ever changed.
+func contextfabricMatchAliasIfValid() []contractsv1.ContextFabricSubjectMatchMechanism {
+	return []contractsv1.ContextFabricSubjectMatchMechanism{contractsv1.ContextFabricMatchAlias}
+}
+
+func TestCaseOutcome_candidatePoolIsAdditiveAndOptional(t *testing.T) {
+	legacy := `{"index":0,"is_control":false,"outcome":"correct","stage":"usable_answer","committed_count":1,"latency_ms":120}`
+	var decoded caseOutcome
+	if err := json.Unmarshal([]byte(legacy), &decoded); err != nil {
+		t.Fatalf("decode pre-CHAOS-3884 report shape: %v", err)
+	}
+	if decoded.CandidatePool != nil {
+		t.Fatalf("decoded CandidatePool = %+v, want nil for a legacy payload with no such key", decoded.CandidatePool)
+	}
+
+	blob, err := json.Marshal(caseOutcome{Index: 0, Outcome: "correct", Stage: "usable_answer", CommittedCount: 1, LatencyMS: 120})
+	if err != nil {
+		t.Fatalf("marshal zero-valued new field: %v", err)
+	}
+	if strings.Contains(string(blob), "candidate_pool\"") {
+		t.Fatalf("caseOutcome JSON = %s, want it to OMIT \"candidate_pool\" when unset (omitempty)", blob)
+	}
+}
+
+// TestCandidatePoolMechanismComposition_and_CandidatePoolProvenance_agreeOnCount
+// cross-checks that the two CHAOS-3884/CHAOS-3858 sibling views of the SAME
+// pool never disagree on how many candidates it holds -- the aggregate sums
+// its mechanism-set counts, the per-candidate list has one entry each; over
+// the same input they must total the same.
+func TestCandidatePoolMechanismComposition_and_CandidatePoolProvenance_agreeOnCount(t *testing.T) {
+	candidates := []contractsv1.ContextFabricSubjectCandidate{
+		subjectCandidate("repository", "repo_a", 0.55, contractsv1.ContextFabricMatchLexical),
+		subjectCandidate("pull_request", "pr_b", 0.6, contractsv1.ContextFabricMatchVector),
+		subjectCandidate("ci_pipeline_run", "run_c", 0.75, contractsv1.ContextFabricMatchLexical, contractsv1.ContextFabricMatchVector),
+	}
+
+	aggregate := candidatePoolMechanismComposition(candidates)
+	perCandidate := candidatePoolProvenance(candidates)
+
+	total := 0
+	for _, count := range aggregate {
+		total += count
+	}
+	if total != len(perCandidate) {
+		t.Fatalf("aggregate total = %d, per-candidate count = %d, want equal over the same pool", total, len(perCandidate))
+	}
+}

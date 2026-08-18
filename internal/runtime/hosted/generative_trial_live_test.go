@@ -842,6 +842,42 @@ func candidatePoolMechanismComposition(candidates []contractsv1.ContextFabricSub
 	return composition
 }
 
+// candidatePoolProvenance is CHAOS-3884's per-candidate, kind-carrying
+// counterpart to candidatePoolMechanismComposition above: the SAME full
+// post-Phase-4 candidate pool (result.SubjectResolution.Candidates), one
+// trialCandidateMatchProvenance entry per candidate, IN THE POOL'S OWN
+// ORDER -- never re-sorted or re-grouped here.
+//
+// candidatePoolMechanismComposition's aggregate deliberately never carries
+// kind (see its own doc comment and
+// TestCandidatePoolMechanismComposition_neverCarriesIdentity), which is
+// correct for a population-level view but cannot answer CHAOS-3884's
+// measurement question: for a given band of cases, are repository-kind
+// candidates present in the pool at all, and where do they RANK relative to
+// the observation-kind (ci_pipeline_run/pull_request/...) candidates above
+// them? Rank is exactly what graphrank.ResolveFromMergedCandidatesWithGate's
+// Phase 4 already decided (committed tier, then parent tier, then confidence
+// descending) and result.SubjectResolution.Candidates already carries in
+// that order -- this function's only job is to reuse the existing,
+// privacy-canaried candidateMatchProvenance projection (kind/canonical_id/
+// mechanisms/confidence only, never a label or search text -- see
+// trialCandidateMatchProvenance's own doc comment and the structural
+// canary TestTrialCandidateMatchProvenanceStructFields_onlyAllowedJSONTags)
+// per entry, without touching the order at all.
+//
+// nil for an empty pool, mirroring every sibling provenance function's own
+// "no data" convention (committedMatchProvenance, candidatePoolMechanismComposition).
+func candidatePoolProvenance(candidates []contractsv1.ContextFabricSubjectCandidate) []trialCandidateMatchProvenance {
+	if len(candidates) == 0 {
+		return nil
+	}
+	pool := make([]trialCandidateMatchProvenance, 0, len(candidates))
+	for _, cand := range candidates {
+		pool = append(pool, candidateMatchProvenance(cand))
+	}
+	return pool
+}
+
 // subjectRefKey/subjectCandidateKey give committed/candidate matching a
 // single comparable identity (kind+canonical_id), mirroring
 // graphrank.SubjectKey's own (kind, id) identity without importing an
@@ -1035,6 +1071,22 @@ type caseOutcome struct {
 	ClickHouseRawEventTables         []string `json:"clickhouse_raw_event_tables,omitempty"`
 	ClickHouseComputedArtifactTables []string `json:"clickhouse_computed_artifact_tables,omitempty"`
 	ClickHouseUnknownTables          []string `json:"clickhouse_unknown_tables,omitempty"`
+	// CandidatePool (CHAOS-3884, additive/optional -- same discipline as
+	// every field above): the FULL post-Phase-4, rank-ordered candidate pool
+	// (the same slice CandidateCount/TopCandidateConfidence/
+	// CandidatePoolMechanisms already read), one trialCandidateMatchProvenance
+	// entry per candidate in resolution order. Unlike CandidatePoolMechanisms
+	// (aggregate mechanism-set counts, no kind, no identity -- see that
+	// field's own privacy canary), this carries kind+canonical_id PER
+	// CANDIDATE, which is what CHAOS-3884 needs to answer "are
+	// repository-kind candidates present in the pool at all, and where do
+	// they rank relative to the observation-kind candidates above them" --
+	// a question the aggregate cannot answer. Bounded by the SAME
+	// per-request MaxSubjectCandidates cap CandidateCount already reflects
+	// (10 in this harness), so this can never grow unbounded. Absence must
+	// be read as "not recorded", never "empty pool" -- CandidateCount
+	// already carries that, same convention as CandidatePoolMechanisms.
+	CandidatePool []trialCandidateMatchProvenance `json:"candidate_pool,omitempty"`
 }
 
 func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, caseTimeout time.Duration, rawSignals *trialRawSignalCollector) caseOutcome {
@@ -1090,12 +1142,16 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 	outcome.CommittedMatches = committedMatchProvenance(result.SubjectResolution.Committed, result.SubjectResolution.Candidates)
 	outcome.TopNonCommittedMatch = topNonCommittedMatchProvenance(result.SubjectResolution.Committed, result.SubjectResolution.Candidates)
 	outcome.CandidatePoolMechanisms = candidatePoolMechanismComposition(result.SubjectResolution.Candidates)
+	outcome.CandidatePool = candidatePoolProvenance(result.SubjectResolution.Candidates)
 	if rawSignals != nil {
 		snapshot := rawSignals.snapshotAndReset()
 		for i := range outcome.CommittedMatches {
 			attachRawSignal(&outcome.CommittedMatches[i], snapshot)
 		}
 		attachRawSignal(outcome.TopNonCommittedMatch, snapshot)
+		for i := range outcome.CandidatePool {
+			attachRawSignal(&outcome.CandidatePool[i], snapshot)
+		}
 	}
 	outcome.AnswerLength = len(result.DeterministicAnswer)
 	outcome.ClaimedFacts = len(result.ClaimedFacts)

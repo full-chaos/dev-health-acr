@@ -393,6 +393,18 @@ type ReuseKey struct {
 	QueryVersion                string
 	CanonicalServiceVersion     string
 	ModelOutputSchemaVersion    string
+	// IdentityNormalizationVersion (CHAOS-3884) is graphrank's
+	// IdentityNormalizationVersion constant ("identity_norm_v1" for slice
+	// 1: TrimSpace+ToLower, no NFC -- see NormalizeAliasTerm's own doc
+	// comment for why deferring NFC is judged safe only BECAUSE this
+	// dimension exists). A conjunctive predicate exactly like the eleven
+	// above: a future tightening (e.g. adding NFC) changes what two
+	// differently-cased/differently-composed aliases normalize to, which
+	// changes the identity fast path's own commit decision -- a stored
+	// answer produced under the OLD normalization must not be silently
+	// replayed as if produced under the new one. Same NULL-never-matches
+	// fail-closed discipline as every other dimension here.
+	IdentityNormalizationVersion string
 }
 
 // ReuseRetrievalIdentity carries the deployment-CURRENT values of the two
@@ -449,6 +461,13 @@ type ReuseVersionAuthorities struct {
 	QueryVersion             string
 	CanonicalServiceVersion  string
 	ModelOutputSchemaVersion string
+	// IdentityNormalizationVersion (CHAOS-3884) is graphrank.
+	// IdentityNormalizationVersion -- see ReuseKey's own field doc comment
+	// for the full reasoning. Composed here (the deployment-current
+	// authorities bundle) rather than a fifth standalone struct, since it
+	// is the identical "one more version constant, same fail-closed
+	// discipline" shape as the three siblings above.
+	IdentityNormalizationVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse
