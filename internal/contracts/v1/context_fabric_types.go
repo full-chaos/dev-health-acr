@@ -1080,8 +1080,18 @@ type ContextFabricProjectionWatermark struct {
 }
 
 type ContextFabricProjectionCheckpoint struct {
-	OrgID            string    `json:"org_id"`
-	Source           string    `json:"source"`
+	OrgID  string `json:"org_id"`
+	Source string `json:"source"`
+	// Epoch is the CHAOS-3898 S2a per-epoch checkpoint dimension (design
+	// brief §3.4): which graph epoch this cursor describes. The zero value
+	// (0) is the legacy/pre-migration epoch -- every checkpoint written
+	// before this field existed, and every checkpoint an unmigrated caller
+	// writes today, is an epoch-0 checkpoint by construction, so this field
+	// requires no behavior change from any existing caller. Not part of any
+	// external wire contract (this type has no JSON Schema/OpenAPI/MCP
+	// surface); the json tag exists only for parity with its sibling
+	// fields.
+	Epoch            int64     `json:"epoch"`
 	Cursor           string    `json:"cursor"`
 	SourceVersion    string    `json:"source_version"`
 	BackendWatermark string    `json:"backend_watermark"`

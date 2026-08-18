@@ -49,7 +49,15 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 	if err := batch.Validate(); err != nil {
 		return contextfabric.ProjectionReceipt{}, fmt.Errorf("projection batch: %w", err)
 	}
-	key := graphKey(a.config.GraphPrefix, batch.OrgID)
+	// CHAOS-3898 S2a: resolves the BUILD target epoch while one is open
+	// for this org, else the ACTIVE epoch (design brief §3.1) -- a nil
+	// Config.EpochResolver (every production composition root today)
+	// falls back to epoch 0's key, byte-identical to pre-CHAOS-3898
+	// behavior.
+	key, err := a.resolveWriteKey(ctx, batch.OrgID)
+	if err != nil {
+		return contextfabric.ProjectionReceipt{}, err
+	}
 	if err := a.ensureOrgGraph(ctx, key); err != nil {
 		return contextfabric.ProjectionReceipt{}, err
 	}
@@ -469,7 +477,14 @@ func (a *Adapter) ProjectionWatermark(ctx context.Context, orgID, source string)
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(source) == "" {
 		return contextfabric.ProjectionWatermark{}, errors.New("organization and source are required")
 	}
-	key := graphKey(a.config.GraphPrefix, orgID)
+	// CHAOS-3898 S2a: reads the ACTIVE epoch's watermark -- "freshness
+	// telemetry and the reuse watermark snapshot read the ACTIVE epoch's
+	// set" (design brief §3.4). Stamped projection_write: this call
+	// inspects projection-pipeline state, not an investigation read.
+	key, err := a.resolveReadKey(ctx, orgID, contextfabric.GraphKeyRoleProjectionWrite)
+	if err != nil {
+		return contextfabric.ProjectionWatermark{}, err
+	}
 	cypher := fmt.Sprintf("MATCH (w:%s {%s:$org, source:$source}) RETURN w", labelWatermark, propOrgID)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "source": source}, true)
 	if err != nil {
@@ -520,6 +535,22 @@ func notFoundWatermarkErr() error {
 	return fmt.Errorf("%w: %w", ErrNotFound, contextfabric.ErrProjectionWatermarkNotFound)
 }
 
+// PurgeOrganization is DELIBERATELY NOT wired through the CHAOS-3898 S2a
+// KeyResolver: it still derives the legacy, unsuffixed key directly. This
+// method purges whatever graph is currently reachable at that key
+// unconditionally -- exactly the "unconditional GRAPH.DELETE" hazard the
+// design brief's §3.5 lifecycle machine exists to close (a SERVING graph
+// must never be purged by any path). Routing it through resolveReadKey
+// today, with no accompanying CAS/guard machinery gating the call, would
+// let a future EpochResolver wiring purge a currently-ACTIVE, already-
+// flipped organization's graph the instant that wiring lands -- worse than
+// today's unconditional-but-at-least-single-key behavior. The design
+// brief's item 8 (MANDATORY conversion of PurgeOrganization/performRebuild/
+// the CHAOS-3882 recovery path into lifecycle transitions -- a
+// begin_retire-based "retire every epoch for this org" instead of a bare
+// delete) is the follow-up slice that replaces this method's call sites
+// with the safe path; see this repository's CHAOS-3898 S2a PR description
+// for the explicit scope split.
 func (a *Adapter) PurgeOrganization(ctx context.Context, orgID string) error {
 	if strings.TrimSpace(orgID) == "" {
 		return errors.New("organization is required")
