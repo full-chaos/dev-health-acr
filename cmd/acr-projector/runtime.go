@@ -196,6 +196,15 @@ func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
 	return falkorgraph.SlogTelemetry{Logger: logger}
 }
 
+// graphLifecycleTelemetry mirrors falkorGraphTelemetry above for the
+// CHAOS-3898 S2a contextfabric.GraphLifecycleTelemetry sink -- see
+// internal/runtime/hosted/open.go's identically-named function for the
+// instrument-before-flip reasoning (design brief v4.1 F4) this binary
+// shares with the hosted API.
+func graphLifecycleTelemetry(logger *slog.Logger) contextfabric.GraphLifecycleTelemetry {
+	return contextfabric.SlogGraphLifecycleTelemetry{Logger: logger}
+}
+
 func openProjectionBackend(logger *slog.Logger) (contextfabric.ProjectionBackend, func(context.Context) error, error) {
 	if !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil
@@ -218,6 +227,16 @@ func openProjectionBackend(logger *slog.Logger) (contextfabric.ProjectionBackend
 	// internal/contextfabric/AGENTS.md's "reported, never inferred"
 	// invariant only cosmetically.
 	falkorConfig.Telemetry = falkorGraphTelemetry(logger)
+	// CHAOS-3898 S2a (design brief §2.0): startup/config assertion, and the
+	// §5b signal sink wired unconditionally -- see graphLifecycleTelemetry's
+	// own doc comment. falkorConfig.EpochResolver stays unset: this
+	// binary's projection writes stay at epoch 0, byte-identical to
+	// pre-CHAOS-3898 output, until a later slice wires a live
+	// pglifecycle.Resolver here.
+	falkorConfig.LifecycleTelemetry = graphLifecycleTelemetry(logger)
+	if err := falkorgraph.AssertResolvedPrefix(logger, falkorConfig.LifecycleTelemetry, falkorConfig.GraphPrefix); err != nil {
+		return nil, nil, fmt.Errorf("context fabric graph key prefix: %w", err)
+	}
 	// CHAOS-3778: the projector writes embeddings only when an embedder is
 	// configured. It must agree with the hosted reader (both use
 	// EmbedderFromEnv) -- writing vectors nothing queries is wasted work, and

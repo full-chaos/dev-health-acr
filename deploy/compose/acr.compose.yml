@@ -123,6 +123,16 @@ services:
       ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE: ${ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE:-}
       ACR_CONTEXT_FABRIC_FALKOR_TLS: ${ACR_CONTEXT_FABRIC_FALKOR_TLS:-false}
       ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: ${ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE:-true}
+      # CHAOS-3898 S2a (design brief §3.0/§6): this compose overlay
+      # previously omitted ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX entirely,
+      # unlike deploy/helm/acr's templates, which both source it from the
+      # single shared `.Values.contextFabric.falkor.graphPrefix` values
+      # key. Explicit here for the same reason: falkorgraph.ConfigFromEnv's
+      # implicit "acr-cf" default would otherwise work by accident, never
+      # exercising the KeyResolver's own prefix-assertion/resolution path
+      # a local operator setting this explicitly (or overriding it, e.g.
+      # to test prefix divergence deliberately) needs to see take effect.
+      ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX: ${ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX:-acr-cf}
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
     secrets: [acr_runtime_dsn, acr_clickhouse_dsn]

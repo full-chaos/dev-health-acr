@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 )
 
@@ -419,3 +420,83 @@ func (NoopGraphLifecycleTelemetry) RecordBuildSourceProgress(context.Context, st
 }
 
 var _ GraphLifecycleTelemetry = NoopGraphLifecycleTelemetry{}
+
+// SlogGraphLifecycleTelemetry is the production GraphLifecycleTelemetry:
+// structured operational logs through log/slog, mirroring
+// falkorgraph.SlogTelemetry's own conventions exactly (same package, same
+// "log the org_id, an internal identifier -- never text, never a
+// credential" posture; see that type's doc comment).
+//
+// Design brief v4.1 F4's instrument-before-flip deploy sub-order is why
+// this exists and is wired into every composition root NOW, in this
+// slice, even though nothing in S2a yet drives a real BeginBuild/Flip:
+// cf_resolved_graph_key already fires on every graph call today (stamped
+// at epoch 0 for every organization, since Config.EpochResolver stays nil
+// in every production composition root this slice ships) -- so the signal
+// pipeline is proven live and observable in production BEFORE the
+// follow-up slice wires the first organization's actual build/flip.
+type SlogGraphLifecycleTelemetry struct{ Logger *slog.Logger }
+
+func (t SlogGraphLifecycleTelemetry) logger() *slog.Logger {
+	if t.Logger != nil {
+		return t.Logger
+	}
+	return slog.Default()
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordResolvedGraphKey(_ context.Context, orgID string, epoch int64, role GraphKeyRole, key string) {
+	t.logger().Debug("context_fabric: resolved graph key", "org_id", orgID, "epoch", epoch, "role", string(role), "key", key)
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordGraphKeyDivergence(_ context.Context, orgID string, epoch int64, role GraphKeyRole) {
+	t.logger().Error("context_fabric: graph key divergence detected -- two different keys observed for the same (org, epoch, role)",
+		"org_id", orgID, "epoch", epoch, "role", string(role))
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordStartupPrefixAssertion(_ context.Context, ok bool) {
+	if ok {
+		t.logger().Debug("context_fabric: startup graph key prefix assertion passed")
+		return
+	}
+	t.logger().Error("context_fabric: startup graph key prefix assertion FAILED -- resolved prefix is empty")
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordEpochFlip(_ context.Context, orgID string, fromEpoch, toEpoch int64, buildDuration time.Duration, sourcesCompleted int) {
+	t.logger().Info("context_fabric: graph epoch flip",
+		"org_id", orgID, "from_epoch", fromEpoch, "to_epoch", toEpoch,
+		"build_duration_ms", buildDuration.Milliseconds(), "sources_completed", sourcesCompleted)
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordEpochRollback(_ context.Context, orgID string, fromEpoch, toEpoch int64, graceRemaining time.Duration) {
+	t.logger().Warn("context_fabric: graph epoch rollback",
+		"org_id", orgID, "from_epoch", fromEpoch, "to_epoch", toEpoch, "grace_remaining_ms", graceRemaining.Milliseconds())
+}
+
+// RecordEpochRetire logs at Warn for any refused_* verdict (the guard is
+// the race being caught, worth an operator's attention) and Info for ok
+// (routine, expected teardown).
+func (t SlogGraphLifecycleTelemetry) RecordEpochRetire(_ context.Context, orgID string, epoch int64, verdict RetireGuardVerdict, drainWait time.Duration) {
+	fields := []any{"org_id", orgID, "epoch", epoch, "verdict", string(verdict), "drain_wait_ms", drainWait.Milliseconds()}
+	if verdict == RetireGuardOK {
+		t.logger().Info("context_fabric: graph epoch retired", fields...)
+		return
+	}
+	t.logger().Warn("context_fabric: graph epoch retire guard refused", fields...)
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordLifecycleCASConflict(_ context.Context, orgID string, losing LifecycleTransition, observedStatus LifecycleStatus) {
+	t.logger().Info("context_fabric: lifecycle CAS conflict",
+		"org_id", orgID, "losing_transition", string(losing), "observed_status", string(observedStatus))
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordCheckpointEpochState(_ context.Context, orgID string, epoch int64, state CheckpointEpochState, cursorAge time.Duration) {
+	t.logger().Debug("context_fabric: checkpoint epoch state",
+		"org_id", orgID, "epoch", epoch, "state", string(state), "cursor_age_seconds", cursorAge.Seconds())
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordBuildSourceProgress(_ context.Context, orgID string, epoch int64, source string, mode BuildCompletionMode, rowsProjected int64) {
+	t.logger().Debug("context_fabric: build source progress",
+		"org_id", orgID, "epoch", epoch, "source", source, "completion_mode", string(mode), "rows_projected", rowsProjected)
+}
+
+var _ GraphLifecycleTelemetry = SlogGraphLifecycleTelemetry{}
