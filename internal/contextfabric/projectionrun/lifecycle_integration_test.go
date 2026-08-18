@@ -474,6 +474,49 @@ func TestCoordinator_EmitsCheckpointEpochStateForBuildingThenActive(t *testing.T
 	require.True(t, telemetry.has(contextfabric.CheckpointEpochActive, 1), "steady-state ticking after the flip must report the NEW active epoch, not epoch 0")
 }
 
+// TestLifecycleBuild_UsesTheFrozenRequiredSourcesNotLiveConfig pins the
+// self-review fix: runBuildTick iterates row.RequiredSources (frozen at
+// BeginBuild), not c.sourceNames (live config) -- a source configured
+// AFTER a build opens must not retroactively become required for it.
+func TestLifecycleBuild_UsesTheFrozenRequiredSourcesNotLiveConfig(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionRunTestDatabase(t, ctx)
+	lifecycle, err := pglifecycle.NewStore(db)
+	require.NoError(t, err)
+
+	// BeginBuild directly (bypassing Rebuild/the coordinator) with only
+	// "source-a" required -- simulating a build that started before
+	// "source-b" existed in configuration.
+	_, err = lifecycle.BeginBuild(ctx, "org-1", []string{"source-a"}, time.Now())
+	require.NoError(t, err)
+
+	checkpoints, err := pgprojection.NewCheckpointStore(db)
+	require.NoError(t, err)
+	backend := newFakeBackend()
+	sourceA := &lifecycleFakeSource{name: "source-a", pages: 1}
+	sourceB := &lifecycleFakeSource{name: "source-b", pages: 1} // configured, but NOT required for this already-open build
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-1"},
+		Sources: []projectionrun.SourcePair{
+			{Name: "source-a", Source: sourceA},
+			{Name: "source-b", Source: sourceB},
+		},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Lifecycle: lifecycle, EpochCheckpoints: checkpoints.ForEpoch,
+		GraceWindow: time.Hour, Concurrency: 4, Logger: discardLogger(),
+	})
+	require.NoError(t, err)
+
+	tickUntilStatus(t, ctx, coordinator, lifecycle, "org-1", contextfabric.LifecycleStatusGrace, 5)
+
+	progress, err := lifecycle.SourceProgress(ctx, "org-1", 1)
+	require.NoError(t, err)
+	require.Len(t, progress, 1, "only the FROZEN required source must have been ticked/recorded")
+	require.Equal(t, "source-a", progress[0].Source)
+	require.Zero(t, sourceB.callCount(), "a source configured after the build opened must never be ticked for it")
+}
+
 func TestNewCoordinatorRequiresEpochCheckpointsWhenLifecycleIsSet(t *testing.T) {
 	ctx := context.Background()
 	db := newProjectionRunTestDatabase(t, ctx)

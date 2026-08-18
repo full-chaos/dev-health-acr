@@ -800,14 +800,28 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 		byName[p.Source] = p
 	}
 
-	for _, source := range c.sourceNames {
+	// Iterates row.RequiredSources -- the set FROZEN at BeginBuild -- not
+	// c.sourceNames (today's live config). A source added to configuration
+	// after this build opened must not retroactively become required (it
+	// was never frozen into the flip gate); a source REMOVED from
+	// configuration while a build is open must still surface as a loud,
+	// permanently-pending gap rather than the build silently ticking
+	// c.sourceNames and never reaching it -- the exact "a source that
+	// cannot report exhaustion MUST fail the flip gate, never silently
+	// pass" rule (design brief §9 item 3) applies here too.
+	for _, source := range row.RequiredSources {
 		if ctx.Err() != nil {
 			return
 		}
 		if existing, ok := byName[source]; ok && existing.CompletionMode != contextfabric.BuildCompletionPending {
 			continue // already terminal for this build; nothing more to do
 		}
-		if enablement, ok := c.sources[source].(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
+		projectionSource, configured := c.sources[source]
+		if !configured {
+			c.logger.WarnContext(ctx, "required build source is no longer configured; flip will remain blocked until it is restored", "org_id", orgID, "source", source)
+			continue
+		}
+		if enablement, ok := projectionSource.(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
 			if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, targetEpoch, source, contextfabric.BuildCompletionDisabledAtFreeze, 0, c.now()); rerr != nil {
 				c.logger.WarnContext(ctx, "record disabled-at-freeze source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
 			}
