@@ -284,12 +284,25 @@ func (f *fileExchangeRuntime) InterpretQuestion(ctx context.Context, principal s
 		// this wrap.
 		return contextfabric.InterpretedQuestion{}, receipt, fmt.Errorf("%w: %w", contextfabric.ErrModelUnavailable, exchangeErr)
 	}
-	interpreted, parseErr := genkitruntime.ParseInterpretationOutput(raw, request.TimeContext)
+	// CHAOS-3900 W0: ParseInterpretationOutputWindow (not the older
+	// ParseInterpretationOutput) so this out-of-process responder's
+	// receipt carries the SAME sanitized window_class/window_confidence
+	// capture a real genkit call would -- see that function's own doc
+	// comment. Without this, the file-exchange transport (the ONLY
+	// transport the live trial/shadow harnesses use) silently dropped the
+	// window fields on the floor, and every shadow-harness class/
+	// divergence measurement over a live corpus run would have read as a
+	// constant "no window ever picked" regardless of what the model
+	// actually returned.
+	interpreted, window, parseErr := genkitruntime.ParseInterpretationOutputWindow(raw, request.TimeContext)
 	if parseErr != nil {
 		receipt.Outcome = "invalid_output"
 		return contextfabric.InterpretedQuestion{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, parseErr)
 	}
 	receipt.OutputDigest = contextfabric.DigestModelValue(raw)
+	receipt.WindowClass = window.Class
+	receipt.WindowConfidence = window.Confidence
+	receipt.WindowClassUnrecognized = window.ClassUnrecognized
 	// "pending_validation": RuntimeQuestionInterpreter.Interpret runs its
 	// own Validate()+classification next, exactly as it does for the real
 	// genkit runtime, and upgrades this to "success" itself.

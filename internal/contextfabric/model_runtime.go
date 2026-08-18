@@ -115,6 +115,19 @@ type ModelExecutionReceipt struct {
 	// never received one, is still a valid receipt with RequestID empty --
 	// Validate() below only bounds it when present, never requires it.
 	RequestID string `json:"request_id,omitempty"`
+	// WindowClass/WindowConfidence/WindowClassUnrecognized (CHAOS-3900 W0,
+	// SHADOW ONLY -- see chaos3900_window_vocab.go's package doc comment):
+	// the sanitized closed-vocabulary window classification an Interpret
+	// call produced, captured here rather than on InterpretedQuestion so
+	// this stays off the published wire contract for a slice that ships no
+	// consumer of it. Omitempty: every receipt built before this field
+	// existed, and every Operation=synthesize receipt (this classification
+	// exists only for interpretation), has it absent, not a present zero
+	// value -- the same asymmetry-avoidance ModelIdentity's own doc comment
+	// on this struct already explains.
+	WindowClass             WindowClass      `json:"window_class,omitempty"`
+	WindowConfidence        WindowConfidence `json:"window_confidence,omitempty"`
+	WindowClassUnrecognized bool             `json:"window_class_unrecognized,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {
@@ -142,6 +155,25 @@ func (r ModelExecutionReceipt) Validate() error {
 	}
 	if len(r.RequestID) > 256 {
 		return fmt.Errorf("model receipt request_id is invalid")
+	}
+	// CHAOS-3900 W0: the closed-vocabulary guarantee on WindowClass/
+	// WindowConfidence must live HERE, at the receipt's own persistence
+	// boundary (pgmodelreceipts.Store.RecordModelExecution calls Validate()
+	// before json.Marshal, store.go) -- not only inside
+	// genkitruntime.sanitizeWindowOutput, which is a property of today's
+	// ONE ModelRuntime implementation, not of ModelExecutionReceipt itself.
+	// Without this, a future ModelRuntime that assigns
+	// WindowClass(rawModelString) directly, skipping sanitization, could
+	// land question-derived free text in a durable artifact -- exactly
+	// the class of bound this repo's other closed-vocab receipt/contract
+	// fields are enforced against at their own persistence boundary, not
+	// merely by convention in the one caller that happens to sanitize
+	// today. Empty stays legal (genuinely "unset").
+	if r.WindowClass != "" && !ValidWindowClass(r.WindowClass) {
+		return fmt.Errorf("model receipt window_class is invalid")
+	}
+	if r.WindowConfidence != "" && !ValidWindowConfidence(r.WindowConfidence) {
+		return fmt.Errorf("model receipt window_confidence is invalid")
 	}
 	return nil
 }
