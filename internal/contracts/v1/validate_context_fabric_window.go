@@ -98,6 +98,23 @@ func (o ContextFabricWindowOption) Validate() error {
 	if err := window.validate(); err != nil {
 		return fmt.Errorf("window option bounds: %w", err)
 	}
+	// CHAOS-3900 W1 (codex review round 5): unlike a bare
+	// ContextFabricRequestedEvidenceWindow -- where a caller legitimately
+	// sends ONLY a RelativeID and the server computes bounds later -- a
+	// WindowOption's own contract is that Start/End are the FROZEN
+	// absolute bounds computed at OFFER time (see its own doc comment).
+	// window.validate() above is deliberately loose here (it exists for
+	// the wire-request shape, where bounds-absent-with-a-RelativeID is
+	// legal), so this option-specific rule is enforced separately: every
+	// non-all_time option MUST carry both bounds, or
+	// internal/contextfabric's own windowKeyComponentFrozen fallback
+	// (RelativeID alone, for the boundless all_time sentinel) would
+	// silently also apply to a malformed non-all_time option, reopening
+	// exactly the RelativeID-only reuse-key collision round 4 closed for
+	// the well-formed case.
+	if o.RelativeID != "" && o.RelativeID != ContextFabricRelativeWindowAllTime && (o.Start == nil || o.End == nil) {
+		return fmt.Errorf("window option with a non-all_time relative_id must carry frozen start and end bounds")
+	}
 	return nil
 }
 

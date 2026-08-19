@@ -272,7 +272,12 @@ const (
 // this request. Composed onto the axis key via composeTimeAxisKey, never
 // folded into TimeAxisKeyFor itself, so every OTHER caller of
 // TimeAxisKeyFor (tests, other packages) is unaffected.
-func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, windowKey string, binding ResolvedGraphBinding) (InvestigationResult, bool) {
+// windowKeyEncoding is the SAME encoding requestWindowCanonicalization.KeyEncoding
+// carries for windowKey -- threaded through so the recheck below can
+// re-derive a candidate's OWN key using this request's own TRUSTED,
+// in-process encoding choice, never the candidate's stored (untrusted)
+// Provenance. Meaningless when windowKey == "".
+func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, windowKey string, windowKeyEnc windowKeyEncoding, binding ResolvedGraphBinding) (InvestigationResult, bool) {
 	if e.reuseGate == nil {
 		return InvestigationResult{}, false
 	}
@@ -386,27 +391,30 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, false
 	}
-	// CHAOS-3900 W1 (codex review, round 2, strengthened round 3): a
+	// CHAOS-3900 W1 (codex review, rounds 2-5, consolidated round 5): a
 	// window-keyed lookup (windowKey != "") must never serve a candidate
 	// whose OWN stored content disagrees with what the window fragment in
-	// the key claims -- not merely "carries SOME window" (round 2's own
-	// check), but "carries THE SAME window the key named". Re-deriving
-	// windowKeyComponent from the candidate's own stored
-	// EffectiveEvidenceWindow and comparing it against windowKey byte-for-
-	// byte is what closes that: two DIFFERENT windows (e.g. trailing_30d
-	// vs trailing_90d) can never collide here even though both are
-	// non-nil. Every FRESH save this package's own write path produces
-	// already guarantees axis and window agree with the key it was saved
-	// under (canonicalizeEvidenceWindow only ever resolves a request-side
-	// Effective window against a current-axis request and always derives
-	// KeyComponent from that SAME Effective value; windowVetoResult's own
-	// window_axis_conflict veto keys its Save on the INTERPRETED context --
-	// never the window-fragment key -- whenever Interpret disagrees) -- but
-	// that guarantee is a property of window.go's write path, not of this
-	// Store. Any row this Store might ever hold for a reason this
-	// package's own write path did not itself produce (e.g. a differently-
-	// ruled binary, a direct write, an earlier deploy of code this fix has
-	// since corrected) is caught HERE instead of trusted blind, mirroring
+	// the key claims. Re-deriving the candidate's OWN key with THIS
+	// request's OWN TRUSTED, in-process windowKeyEnc (never inferred from
+	// the candidate's stored -- and therefore untrusted -- Provenance
+	// field; round 5's own finding on why that inference was unsound) and
+	// comparing it against windowKey byte-for-byte is what closes every
+	// prior round's gap: two DIFFERENT windows (e.g. trailing_30d vs
+	// trailing_90d), two DIFFERENT frozen intervals sharing one
+	// RelativeID, and a candidate whose Provenance disagrees with its own
+	// actual content can never collide here. Every FRESH save this
+	// package's own write path produces already guarantees axis and
+	// window agree with the key it was saved under (canonicalizeEvidenceWindow
+	// only ever resolves a request-side Effective window against a
+	// current-axis request and always derives KeyComponent from that SAME
+	// Effective value and encoding; windowVetoResult's own window_axis_conflict
+	// veto keys its Save on the INTERPRETED context -- never the window-
+	// fragment key -- whenever Interpret disagrees) -- but that guarantee
+	// is a property of window.go's write path, not of this Store. Any row
+	// this Store might ever hold for a reason this package's own write
+	// path did not itself produce (e.g. a differently-ruled binary, a
+	// direct write, an earlier deploy of code a fix has since corrected)
+	// is caught HERE instead of trusted blind, mirroring
 	// reuseAuthorizationStillHolds' own "prove it, don't assume it"
 	// discipline for subjects/evidence. Fails exactly like an ordinary
 	// no-candidate miss -- never an error, always falls through to a
@@ -416,20 +424,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 			return InvestigationResult{}, false
 		}
-		// CHAOS-3900 W1 (codex review, round 4): re-derive the candidate's
-		// OWN key using whichever encoding its OWN stored Provenance
-		// implies -- windowKeyComponentFrozen for a receipt-confirmed
-		// window (its commitment is the FROZEN bounds, not a re-derivable
-		// RelativeID; see that function's own doc comment), windowKeyComponent
-		// otherwise. This mirrors how THIS request's own windowKey was
-		// built (resolveWindowReceipts uses Frozen, deriveRequestedWindow
-		// uses the plain form) -- a lookup and its recheck must use the
-		// SAME encoding for the comparison to mean anything.
-		candidateKey := windowKeyComponent(*candidate.EffectiveEvidenceWindow)
-		if candidate.EffectiveEvidenceWindow.Provenance == WindowClarificationConfirmed {
-			candidateKey = windowKeyComponentFrozen(*candidate.EffectiveEvidenceWindow)
-		}
-		if candidateKey != windowKey {
+		if windowKeyComponent(*candidate.EffectiveEvidenceWindow, windowKeyEnc) != windowKey {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 			return InvestigationResult{}, false
 		}

@@ -379,7 +379,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// instant at different arrival times, and those answers legitimately
 	// differ. Keying on the wire value served a request meaning 12:00:30
 	// an answer that had meant 12:00:00.
-	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, binding); ok {
+	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding); ok {
 		return reused, nil
 	}
 

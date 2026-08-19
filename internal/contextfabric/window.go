@@ -220,6 +220,15 @@ type requestWindowCanonicalization struct {
 	// contributes a KeyComponent; see WindowInferenceVersion's own doc
 	// comment on ReuseKey for why that dimension exists instead.
 	KeyComponent string
+	// KeyEncoding is WHICH windowKeyEncoding computed KeyComponent --
+	// meaningless when KeyComponent == "". tryReuse threads this through to
+	// its own recheck (codex review, W1 round 5 consolidation) so the
+	// recheck can verify a candidate using the SAME trusted, in-process
+	// encoding THIS request's own lookup used, rather than inferring an
+	// encoding from the candidate's own stored (untrusted) Provenance --
+	// see windowKeyComponent's own doc comment for why that distinction is
+	// load-bearing.
+	KeyEncoding windowKeyEncoding
 	// Veto is non-empty when this request must short-circuit to a no_match
 	// terminal WITHOUT reuse, WITHOUT interpretation, and WITHOUT any
 	// window inference substituted (see windowVetoReason).
@@ -317,7 +326,11 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 		// key just because both happen to be tier=inferred_default -- that
 		// key collision is exactly what round 1's fix (KeyComponent="" for
 		// inferred_default here) produced, and what this revert closes.
-		KeyComponent:   windowKeyComponent(effective),
+		// windowKeyRederivable: this window's bounds are re-derived from
+		// RelativeID at every call (relativeWindowBounds, above), never a
+		// frozen commitment -- see windowKeyRederivable's own doc comment.
+		KeyComponent:   windowKeyComponent(effective, windowKeyRederivable),
+		KeyEncoding:    windowKeyRederivable,
 		BinderProposal: binderProposal,
 	}
 }
@@ -420,13 +433,14 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 	}
 	return requestWindowCanonicalization{
 		Effective: &effective,
-		// windowKeyComponentFrozen, NOT windowKeyComponent -- codex review
-		// finding (W1 round 4): a receipt confirms one specific, already-
-		// minted option's FROZEN bounds, not a re-derivable-from-RelativeID
-		// value; see that function's own doc comment for why two different
-		// prior offers named the same RelativeID must key differently
-		// unless their frozen bounds genuinely agree.
-		KeyComponent:   windowKeyComponentFrozen(effective),
+		// windowKeyFrozen, NOT windowKeyRederivable -- codex review finding
+		// (W1 round 4): a receipt confirms one specific, already-minted
+		// option's FROZEN bounds, not a re-derivable-from-RelativeID value;
+		// see windowKeyFrozen's own doc comment for why two different prior
+		// offers named the same RelativeID must key differently unless
+		// their frozen bounds genuinely agree.
+		KeyComponent:   windowKeyComponent(effective, windowKeyFrozen),
+		KeyEncoding:    windowKeyFrozen,
 		BinderProposal: binderProposal,
 	}
 }
@@ -546,53 +560,85 @@ func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effectiv
 	return WindowCanonicalizationNone
 }
 
-// windowKeyComponent renders effective's TimeAxisKeyFor fragment (design
-// brief §5.1's rel:/abs: namespaces): "rel:<id>" for a caller-confirmed
-// relative window (including the all_time sentinel, "rel:all_time",
-// distinct from no window component at all -- a confirmed all-time answer
-// and an unwindowed answer are different commitments and must not share a
-// reuse-key row), or "abs:<start_ns>:<end_ns>" for caller-supplied absolute
-// bounds. Injective by construction: every rel: row was computed from the
-// engine's own single now() derivation, and abs: carries the caller's exact
-// nanosecond bounds.
-// windowKeyComponent is for a window whose bounds are DETERMINISTICALLY
-// RE-DERIVABLE from RelativeID alone at any later moment (deriveRequestedWindow's
-// own RelativeID branch, and composeEffectiveWindow's inferred-default
-// path): "rel:<id>" deliberately DROPS the specific Start/End this call
-// happened to compute, mirroring reuseCurrentAxisKey's own "as of whenever
-// you answer this" precedent (answer_reuse.go) -- two "trailing_90d"
-// requests asked at different wall-clock moments mean the SAME thing and
-// must share a reuse key; the staleness window (condition 3/4) already
-// bounds how old a served answer may be. NEVER use this for a RECEIPT-
-// confirmed window -- see windowKeyComponentFrozen.
-func windowKeyComponent(effective contractsv1.ContextFabricEffectiveEvidenceWindow) string {
-	if effective.RelativeID != "" {
+// windowKeyEncoding is the discriminator EVERY window-key derivation call
+// site must supply EXPLICITLY (codex review, W1 round 5 consolidation,
+// replacing four bespoke per-source-path derivations across rounds 1-4
+// with this ONE canonical function). The discriminator always comes from
+// in-process, TRUSTED knowledge of which derivation path produced a
+// window -- at mint time, the call site simply knows; at tryReuse's own
+// recheck time, it is THIS SAME REQUEST's own requestWindowCanonicalization.KeyEncoding,
+// never inferred from a candidate's stored (and therefore, per the "prove
+// it, don't assume it" discipline every reuse recheck in this package
+// already follows, UNTRUSTED) Provenance field. This is the fix for the
+// round-5 finding that provenance-based dispatch could pick the wrong
+// encoding for a malformed or foreign-written row.
+type windowKeyEncoding int
+
+const (
+	// windowKeyRederivable: the window's bounds are DETERMINISTICALLY
+	// RE-DERIVABLE from RelativeID alone at any later moment
+	// (deriveRequestedWindow's own RelativeID branch; composeEffectiveWindow's
+	// inferred-default path, which contributes no key fragment at all --
+	// see WindowInferenceVersion's own doc comment for why that path needs
+	// no encoding here). The key DROPS the specific Start/End this call
+	// happened to compute and uses RelativeID alone, mirroring
+	// reuseCurrentAxisKey's own "as of whenever you answer this" precedent
+	// (answer_reuse.go): two "trailing_90d" requests asked at different
+	// wall-clock moments mean the SAME standing commitment and must share
+	// a reuse key -- safe because the staleness window (TRD §19.7.3
+	// condition 4), already enforced for EVERY reuse candidate regardless
+	// of window, is what bounds how much a "trailing_90d" window's actual
+	// bounds may have drifted between when a candidate was generated and
+	// when it is served.
+	windowKeyRederivable windowKeyEncoding = iota
+	// windowKeyFrozen: the window's bounds are ONE SPECIFIC, already-minted
+	// commitment (resolveWindowReceipts) that must NEVER be treated as
+	// interchangeable with a different commitment merely because both
+	// happen to share a RelativeID -- two different prior
+	// WindowClarification offers named "trailing_90d" but minted (and
+	// frozen) at different wall-clock moments freeze DIFFERENT absolute
+	// bounds and are different answers.
+	windowKeyFrozen
+)
+
+// windowKeyComponent is the ONE canonical window reuse-key fragment
+// derivation (design brief §5.1's rel:/abs: namespaces), covering every
+// window source through the SAME function rather than four independently-
+// maintained ones. Behavior:
+//
+//   - RelativeWindowAllTime: always "rel:all_time", regardless of encoding
+//     -- there are no bounds to freeze or drift, so no ambiguity exists to
+//     guard against either way. Distinct from no window component at all:
+//     a confirmed all-time answer and an unwindowed answer are different
+//     commitments and must not share a reuse-key row.
+//   - windowKeyRederivable with a RelativeID: "rel:<id>" (bounds dropped).
+//   - windowKeyFrozen, or windowKeyRederivable with NO RelativeID (an
+//     explicit caller-supplied absolute range carries no RelativeID to
+//     abbreviate by): "abs:<start_ns>:<end_ns>" when bounds are present,
+//     "" when they are not (a malformed/incomplete value contributes no
+//     fragment rather than a misleading one).
+//
+// Injectivity holds WITHIN each encoding's own equivalence: two
+// windowKeyFrozen (or bare-absolute) values produce the same fragment iff
+// their bounds are byte-identical; two windowKeyRederivable values with a
+// RelativeID produce the same fragment iff the RelativeID is identical (by
+// design -- see windowKeyRederivable's own doc comment for why collapsing
+// distinct-but-re-derivable bounds is the INTENDED behavior, not a gap).
+// Mixing encodings for the SAME underlying bounds is exactly what the
+// windowKeyEncoding parameter exists to prevent: a caller can never
+// accidentally derive the "rel:" abbreviation for a value this package
+// knows is actually frozen, because the encoding is passed explicitly by
+// callers who know which derivation path they are on, not inferred from
+// the value itself.
+func windowKeyComponent(effective contractsv1.ContextFabricEffectiveEvidenceWindow, encoding windowKeyEncoding) string {
+	if effective.RelativeID == RelativeWindowAllTime {
+		return "rel:all_time"
+	}
+	if encoding == windowKeyRederivable && effective.RelativeID != "" {
 		return "rel:" + string(effective.RelativeID)
 	}
 	if effective.Start == nil || effective.End == nil {
 		return ""
-	}
-	return "abs:" + formatUnixNano(*effective.Start) + ":" + formatUnixNano(*effective.End)
-}
-
-// windowKeyComponentFrozen is for a RECEIPT-CONFIRMED window
-// (resolveWindowReceipts) -- codex review finding (W1 round 4): unlike
-// windowKeyComponent's own "rel:<id>" abstraction, a receipt confirms one
-// SPECIFIC, already-minted WindowOption whose Start/End were frozen at
-// OFFER time, not re-derived from "now". Two different prior offers named
-// the identical RelativeID (e.g. two separate WindowClarifications, minted
-// at different wall-clock moments, both offering "trailing_90d") freeze
-// DIFFERENT absolute bounds and are DIFFERENT commitments -- serving one
-// receipt's answer for a redemption of the other would answer the wrong
-// interval. Keying on the frozen bounds themselves (falling back to
-// RelativeID only for the all_time sentinel, which has no bounds to
-// freeze and no ambiguity regardless of offer time) makes that
-// impossible: two options only ever share this key when their frozen
-// bounds are byte-identical, which is the ONLY case reusing between them
-// is actually correct.
-func windowKeyComponentFrozen(effective contractsv1.ContextFabricEffectiveEvidenceWindow) string {
-	if effective.Start == nil || effective.End == nil {
-		return "rel:" + string(effective.RelativeID)
 	}
 	return "abs:" + formatUnixNano(*effective.Start) + ":" + formatUnixNano(*effective.End)
 }

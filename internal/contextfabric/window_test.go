@@ -17,9 +17,10 @@ import (
 // TimeAxisKey -- exactly what an earlier, unconfirmed (or windowless)
 // question would have saved under. This test proves that a request
 // REDEEMING the winr_ receipt is looked up under a DIFFERENT key (its own
-// FROZEN bounds -- windowKeyComponentFrozen, W1 round 4 -- since a receipt
-// confirms one specific already-minted option, not a re-derivable-from-
-// RelativeID value), so the reuse gate's own "current" row can never be
+// FROZEN bounds -- windowKeyComponent(effective, windowKeyFrozen), W1
+// round 4/5 -- since a receipt confirms one specific already-minted
+// option, not a re-derivable-from-RelativeID value), so the reuse gate's
+// own "current" row can never be
 // served to it -- the receipt-resolution-BEFORE-reuse ordering
 // (canonicalizeEvidenceWindow, called before tryReuse in Investigate) is
 // what makes this true structurally, not by chance.
@@ -204,21 +205,29 @@ func TestWindowKeyComponentAndComposeTimeAxisKey(t *testing.T) {
 	t.Parallel()
 
 	relative := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Provenance: WindowQuestionStated}
-	if got, want := windowKeyComponent(relative), "rel:trailing_90d"; got != want {
-		t.Errorf("windowKeyComponent(relative) = %q, want %q", got, want)
+	if got, want := windowKeyComponent(relative, windowKeyRederivable), "rel:trailing_90d"; got != want {
+		t.Errorf("windowKeyComponent(relative, rederivable) = %q, want %q", got, want)
 	}
 
 	allTime := EffectiveEvidenceWindow{RelativeID: RelativeWindowAllTime, Provenance: WindowQuestionStated}
-	if got, want := windowKeyComponent(allTime), "rel:all_time"; got != want {
-		t.Errorf("windowKeyComponent(all_time) = %q, want %q -- a confirmed all-time answer must key distinctly from no window at all", got, want)
+	if got, want := windowKeyComponent(allTime, windowKeyRederivable), "rel:all_time"; got != want {
+		t.Errorf("windowKeyComponent(all_time, rederivable) = %q, want %q -- a confirmed all-time answer must key distinctly from no window at all", got, want)
+	}
+	if got, want := windowKeyComponent(allTime, windowKeyFrozen), "rel:all_time"; got != want {
+		t.Errorf("windowKeyComponent(all_time, frozen) = %q, want %q -- all_time is unambiguous regardless of encoding", got, want)
 	}
 
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 	absolute := EffectiveEvidenceWindow{Start: &start, End: &end, Provenance: WindowQuestionStated}
 	want := "abs:" + formatUnixNano(start) + ":" + formatUnixNano(end)
-	if got := windowKeyComponent(absolute); got != want {
-		t.Errorf("windowKeyComponent(absolute) = %q, want %q", got, want)
+	if got := windowKeyComponent(absolute, windowKeyRederivable); got != want {
+		t.Errorf("windowKeyComponent(absolute, rederivable) = %q, want %q -- no RelativeID to abbreviate by, so bounds are used regardless of encoding", got, want)
+	}
+
+	frozen := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Start: &start, End: &end, Provenance: WindowClarificationConfirmed}
+	if got := windowKeyComponent(frozen, windowKeyFrozen); got != want {
+		t.Errorf("windowKeyComponent(frozen) = %q, want %q -- a frozen window keys on its own bounds, never RelativeID alone", got, want)
 	}
 
 	// composeTimeAxisKey must leave the axis key BYTE-IDENTICAL when no
@@ -233,6 +242,84 @@ func TestWindowKeyComponentAndComposeTimeAxisKey(t *testing.T) {
 	if got, want := composeTimeAxisKey("current", "rel:trailing_90d"), "current+w:rel:trailing_90d"; got != want {
 		t.Errorf("composeTimeAxisKey(current, window) = %q, want %q", got, want)
 	}
+}
+
+// TestWindowKeyComponent_InjectiveWithinEachEncoding is the codex review
+// (W1 round 5) consolidation's own property test, per the team lead's
+// ruling: ONE canonical derivation, proven injective within the
+// equivalence each windowKeyEncoding defines.
+//
+//   - windowKeyFrozen (and the bare-absolute, no-RelativeID case of
+//     windowKeyRederivable): injective over BOUNDS -- identical bounds
+//     produce identical fragments regardless of RelativeID or Provenance;
+//     distinct bounds ALWAYS produce distinct fragments, cross-source (an
+//     explicit absolute request and a receipt confirming the identical
+//     interval key identically -- correctly, since they describe the same
+//     evidence).
+//   - windowKeyRederivable WITH a RelativeID: injective over RelativeID --
+//     distinct RelativeIDs always produce distinct fragments; the SAME
+//     RelativeID collapses regardless of its (ephemeral, now()-derived)
+//     bounds. This is INTENTIONAL, not a residual gap: see
+//     windowKeyRederivable's own doc comment for why a re-derivable
+//     window's reuse identity is its RelativeID, staleness-protected, not
+//     its instantaneous computed bounds -- the same "as of whenever you
+//     answer this" precedent reuseCurrentAxisKey already established for
+//     the plain current axis.
+//   - Different encodings of a window that DOES carry a RelativeID are
+//     deliberately NOT compared against each other here: windowKeyFrozen
+//     and windowKeyRederivable answer different questions ("what exact
+//     interval" vs "which standing relative window") by design, and every
+//     real call site passes a FIXED encoding for its own path -- there is
+//     no call site that could compare one against the other.
+func TestWindowKeyComponent_InjectiveWithinEachEncoding(t *testing.T) {
+	t.Parallel()
+
+	marchStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	marchEnd := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	juneStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	juneEnd := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+
+	t.Run("frozen: identical bounds match regardless of RelativeID or Provenance", func(t *testing.T) {
+		a := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Start: &marchStart, End: &marchEnd, Provenance: WindowClarificationConfirmed}
+		b := EffectiveEvidenceWindow{Start: &marchStart, End: &marchEnd, Provenance: WindowQuestionStated} // no RelativeID at all, different Provenance
+		if windowKeyComponent(a, windowKeyFrozen) != windowKeyComponent(b, windowKeyRederivable) {
+			t.Fatalf("identical bounds (%v, %v) keyed differently across a RelativeID-bearing frozen window and a bare absolute window: %q vs %q",
+				marchStart, marchEnd, windowKeyComponent(a, windowKeyFrozen), windowKeyComponent(b, windowKeyRederivable))
+		}
+	})
+
+	t.Run("frozen: distinct bounds never match, even with the SAME RelativeID", func(t *testing.T) {
+		a := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Start: &marchStart, End: &marchEnd, Provenance: WindowClarificationConfirmed}
+		b := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Start: &juneStart, End: &juneEnd, Provenance: WindowClarificationConfirmed}
+		if windowKeyComponent(a, windowKeyFrozen) == windowKeyComponent(b, windowKeyFrozen) {
+			t.Fatalf("two DIFFERENT frozen intervals sharing one RelativeID keyed IDENTICALLY: %q", windowKeyComponent(a, windowKeyFrozen))
+		}
+	})
+
+	t.Run("rederivable: same RelativeID matches regardless of its (ephemeral) bounds -- intentional", func(t *testing.T) {
+		a := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Start: &marchStart, End: &marchEnd, Provenance: WindowQuestionStated}
+		b := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Start: &juneStart, End: &juneEnd, Provenance: WindowQuestionStated}
+		if windowKeyComponent(a, windowKeyRederivable) != windowKeyComponent(b, windowKeyRederivable) {
+			t.Fatalf("two rederivable windows with the SAME RelativeID but different computed-at-different-times bounds keyed DIFFERENTLY (%q vs %q) -- this defeats relative-window reuse across time",
+				windowKeyComponent(a, windowKeyRederivable), windowKeyComponent(b, windowKeyRederivable))
+		}
+	})
+
+	t.Run("rederivable: distinct RelativeIDs never match", func(t *testing.T) {
+		a := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, Start: &marchStart, End: &marchEnd, Provenance: WindowQuestionStated}
+		b := EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Start: &marchStart, End: &marchEnd, Provenance: WindowQuestionStated}
+		if windowKeyComponent(a, windowKeyRederivable) == windowKeyComponent(b, windowKeyRederivable) {
+			t.Fatalf("trailing_30d and trailing_90d keyed IDENTICALLY: %q", windowKeyComponent(a, windowKeyRederivable))
+		}
+	})
+
+	t.Run("all_time is unambiguous under either encoding, regardless of Provenance", func(t *testing.T) {
+		confirmed := EffectiveEvidenceWindow{RelativeID: RelativeWindowAllTime, Provenance: WindowClarificationConfirmed}
+		stated := EffectiveEvidenceWindow{RelativeID: RelativeWindowAllTime, Provenance: WindowQuestionStated}
+		if windowKeyComponent(confirmed, windowKeyFrozen) != windowKeyComponent(stated, windowKeyRederivable) {
+			t.Fatalf("all_time keyed differently across encodings: %q vs %q", windowKeyComponent(confirmed, windowKeyFrozen), windowKeyComponent(stated, windowKeyRederivable))
+		}
+	})
 }
 
 // TestWindowExplicitProvenance pins the pivot brief's DP12(b) surface split:
@@ -703,10 +790,10 @@ func TestCHAOS3900_WindowKeyedReuseServesAMatchingCandidate(t *testing.T) {
 // is the codex review (W1 round 4) direct regression proof: two prior
 // WindowClarification options both named "trailing_90d" but minted (and
 // frozen) at different wall-clock moments must NOT collapse onto the same
-// reuse key -- windowKeyComponent's own "rel:<id>" abstraction is correct
-// for a re-derivable (non-receipt) window, but wrong for a receipt's own
-// FROZEN commitment; windowKeyComponentFrozen is what resolveWindowReceipts
-// must use instead.
+// reuse key -- windowKeyComponent's own windowKeyRederivable "rel:<id>"
+// abstraction is correct for a re-derivable (non-receipt) window, but
+// wrong for a receipt's own FROZEN commitment; resolveWindowReceipts uses
+// windowKeyFrozen instead.
 func TestCHAOS3900_TwoReceiptsSameRelativeIDDifferentFrozenBoundsKeyDifferently(t *testing.T) {
 	t.Parallel()
 
