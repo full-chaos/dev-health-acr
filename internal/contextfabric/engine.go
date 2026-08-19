@@ -341,7 +341,70 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return reused, nil
 	}
 
-	interpretation, err := e.interpreter.Interpret(ctx, principal, request)
+	// Prior-result receipts (PriorSubjectReceipts) name a subject already
+	// committed or proposed in an earlier InvestigationResult -- e.g. a
+	// conversational follow-up ("what about it") binding back to the
+	// subject a prior turn resolved. A receipt is a one-way identifier
+	// (ReceiptID), not itself a resolvable subject: only the Engine holds
+	// the InvestigationResultStore needed to look one up, so expansion
+	// happens here rather than inside GraphReader. The expanded request
+	// feeds the exact-hint path GraphReader already has (SubjectHint), so
+	// every resolved receipt is independently re-authorized before it can
+	// become a candidate -- a stale, foreign, or now-unauthorized receipt
+	// is skipped, never trusted outright, and never treated as an error.
+	//
+	// CHAOS-3898 P1-1 fix-forward (codex retroactive review of #151/#152,
+	// chris-verified): this resolution now runs BEFORE Interpret, not
+	// after. It used to run after Interpret, which meant Interpret's own
+	// input carried request.PriorSubjectReceipts VERBATIM -- every receipt
+	// the caller sent, including one this function's own §2.2 taint gate
+	// (below) would go on to strip for naming a stale graph epoch, or that
+	// never matched any candidate at all. A model interpreting a
+	// conversational reference ("it") against that unvalidated set could
+	// have its interpretation shaped by a receipt the engine was always
+	// going to treat as if it did not exist -- exactly the ingress-taint
+	// invariant Class A's design (§2.1: "ingress taint before Interpret")
+	// exists to hold everywhere, not just on the graph-reuse path. Moving
+	// this block up costs nothing: binding (the taint gate's own
+	// dependency) is resolved above, before tryReuse; nothing here reads
+	// `interpretation`. Interpret below now receives ONLY the receipts
+	// resolvePriorSubjectHints itself validated (priorValidatedReceipts).
+	graphRequest := request
+	var priorHints []SubjectHint
+	var priorValidatedReceipts []BoundSubjectReceipt
+	var priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch int
+	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
+		priorHints, priorValidatedReceipts, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
+		// The v1 contract bounds RequestedScope.SubjectHints at 50
+		// (ContextFabricRequestedScope.Validate). request.Validate()
+		// already proved the caller's own hints are within that bound,
+		// but Engine's own expansion must not push the combined total
+		// back out of it -- drop excess receipt-derived hints (never the
+		// caller's own explicit hints), and let the existing skip
+		// telemetry in recordPriorSubjectReceiptSkips below count the
+		// drop exactly like any other unresolved receipt. priorHints and
+		// priorValidatedReceipts stay index-aligned (both returned
+		// 1:1 from resolvePriorSubjectHints), so truncate them together.
+		const maxSubjectHints = 50
+		if available := maxSubjectHints - len(request.RequestedScope.SubjectHints); len(priorHints) > available {
+			if available < 0 {
+				available = 0
+			}
+			priorHints = priorHints[:available]
+			priorValidatedReceipts = priorValidatedReceipts[:available]
+		}
+		if len(priorHints) > 0 {
+			graphRequest.RequestedScope.SubjectHints = append(
+				append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), priorHints...,
+			)
+		}
+	}
+
+	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,
+	// never the raw request.PriorSubjectReceipts -- see the block above.
+	interpretRequest := request
+	interpretRequest.PriorSubjectReceipts = priorValidatedReceipts
+	interpretation, err := e.interpreter.Interpret(ctx, principal, interpretRequest)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageInterpretation, fmt.Errorf("interpret question: %w", err))
 	}
@@ -367,50 +430,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// asked, and the next interpreter implementation would reopen the
 	// hole. The engine owns what it can honestly answer.
 	//
-	// Placed before prior-receipt expansion and every capability call, so
-	// a rejected investigation does no graph or fact work at all.
+	// CHAOS-3898 P1-1 note: prior-receipt expansion no longer sits after
+	// this check (it moved above Interpret, see that block's own comment)
+	// -- an investigation this check goes on to REJECT still paid for
+	// resolvePriorSubjectHints' work (results-store reads, clarification
+	// capture) first. This is the required trade-off, not an oversight:
+	// Interpret's OWN input must never carry an ungated receipt, and
+	// Interpret necessarily runs before its output can be time-bounded.
+	// The prior "zero work before axis rejection" guarantee now holds for
+	// every capability call below this point, not for receipt resolution.
 	clampedInterpretedTime, err := resolveTimeContext(interpretation.TimeContext, e.now())
 	if err != nil {
 		return InvestigationResult{}, err
 	}
 	interpretation.TimeContext = clampedInterpretedTime
-	// Prior-result receipts (PriorSubjectReceipts) name a subject already
-	// committed or proposed in an earlier InvestigationResult -- e.g. a
-	// conversational follow-up ("what about it") binding back to the
-	// subject a prior turn resolved. A receipt is a one-way identifier
-	// (ReceiptID), not itself a resolvable subject: only the Engine holds
-	// the InvestigationResultStore needed to look one up, so expansion
-	// happens here rather than inside GraphReader. The expanded request
-	// feeds the exact-hint path GraphReader already has (SubjectHint), so
-	// every resolved receipt is independently re-authorized before it can
-	// become a candidate -- a stale, foreign, or now-unauthorized receipt
-	// is skipped, never trusted outright, and never treated as an error.
-	graphRequest := request
-	var priorHints []SubjectHint
-	var priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch int
-	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
-		// The v1 contract bounds RequestedScope.SubjectHints at 50
-		// (ContextFabricRequestedScope.Validate). request.Validate()
-		// already proved the caller's own hints are within that bound,
-		// but Engine's own expansion must not push the combined total
-		// back out of it -- drop excess receipt-derived hints (never the
-		// caller's own explicit hints), and let the existing skip
-		// telemetry in recordPriorSubjectReceiptSkips below count the
-		// drop exactly like any other unresolved receipt.
-		const maxSubjectHints = 50
-		if available := maxSubjectHints - len(request.RequestedScope.SubjectHints); len(priorHints) > available {
-			if available < 0 {
-				available = 0
-			}
-			priorHints = priorHints[:available]
-		}
-		if len(priorHints) > 0 {
-			graphRequest.RequestedScope.SubjectHints = append(
-				append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), priorHints...,
-			)
-		}
-	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
 	// investigation -- not later, at Save. A snapshot taken at Save time
@@ -631,19 +664,27 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // concern -- see AnswerReuseGate's doc comment for the identical
 // distinction drawn between "the caller's request" and "what the backend
 // independently proves").
-// Returns (hints, unloadable, noMatch, staleGraphEpoch) -- the latter three
-// (CHAOS-3888, extended by CHAOS-3898 §2.2) split what used to be one
-// implicit "receiptCount - len(hints)" gap into WHY each non-hint receipt
-// fell out: unloadable counts a receipt with a blank ResultID/ReceiptID or
-// whose prior InvestigationResult failed to load; staleGraphEpoch (§2.2)
-// counts a receipt whose prior result loaded but whose StoredInvestigationResult
-// carrier failed the ingress taint gate -- a DISTINCT reason from
-// unloadable, because the row itself loaded fine, it simply describes a
-// different graph epoch than this investigation is reading from; noMatch
-// counts a receipt whose prior result loaded, passed the taint gate, and
-// still named no matching candidate. recordPriorSubjectReceiptSkips (below)
-// computes the fourth reason, failed_reauth, from what happens to the
-// returned hints afterward.
+// Returns (hints, validated, unloadable, noMatch, staleGraphEpoch) -- the
+// latter three (CHAOS-3888, extended by CHAOS-3898 §2.2) split what used to
+// be one implicit "receiptCount - len(hints)" gap into WHY each non-hint
+// receipt fell out: unloadable counts a receipt with a blank
+// ResultID/ReceiptID or whose prior InvestigationResult failed to load;
+// staleGraphEpoch (§2.2) counts a receipt whose prior result loaded but
+// whose StoredInvestigationResult carrier failed the ingress taint gate --
+// a DISTINCT reason from unloadable, because the row itself loaded fine, it
+// simply describes a different graph epoch than this investigation is
+// reading from; noMatch counts a receipt whose prior result loaded, passed
+// the taint gate, and still named no matching candidate.
+// recordPriorSubjectReceiptSkips (below) computes the fourth reason,
+// failed_reauth, from what happens to the returned hints afterward.
+//
+// validated is the SUBSET of receipts (same order as hints, 1:1) that
+// actually matched a candidate -- CHAOS-3898 P1-1 fix-forward (codex
+// retroactive review of #151/#152): this investigation's own INTERPRETER
+// call must never see a receipt that has not yet passed this function's own
+// taint/match gate, so a caller resolving receipts pre-Interpret (the
+// required ordering below) needs the validated subset, not just derived
+// hints, to build Interpret's own input.
 //
 // binding is THIS investigation's own ResolvedGraphBinding (CHAOS-3898
 // §2.1/§2.2 ingress taint): before any field of a loaded prior result is
@@ -654,15 +695,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // under a graph epoch this investigation is not reading from must never
 // contribute a label or a hint, however innocuous re-using its identifier
 // alone might look.
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, int, int, int) {
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int, int, int) {
 	hints := make([]SubjectHint, 0, len(receipts))
+	validated := make([]BoundSubjectReceipt, 0, len(receipts))
 	loaded := make(map[string]InvestigationResult, len(receipts))
 	unloadable := 0
 	noMatch := 0
 	staleGraphEpoch := 0
 	for _, receipt := range receipts {
 		if ctx.Err() != nil {
-			return hints, unloadable, noMatch, staleGraphEpoch
+			return hints, validated, unloadable, noMatch, staleGraphEpoch
 		}
 		resultID := strings.TrimSpace(receipt.ResultID)
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
@@ -702,13 +744,14 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 				Kind: candidate.Subject.Kind, ID: candidate.Subject.CanonicalID,
 				Label: candidate.Subject.Label, Source: "prior_subject_receipt",
 			})
+			validated = append(validated, receipt)
 			break
 		}
 		if !matched {
 			noMatch++
 		}
 	}
-	return hints, unloadable, noMatch, staleGraphEpoch
+	return hints, validated, unloadable, noMatch, staleGraphEpoch
 }
 
 // captureClarificationSelection builds and hands off a

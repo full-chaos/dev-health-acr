@@ -683,6 +683,145 @@ func TestEngineClassifiesPriorSubjectReceiptWithNoMatchingCandidateAsNoMatch(t *
 	}
 }
 
+// mustEngineForPriorReceiptTestCapturingInterpret is
+// mustEngineForPriorReceiptTest's twin, except its interpreter records the
+// InvestigationRequest it actually received into *capturedReceipts --
+// CHAOS-3898 P1-1's own regression proof needs to see PriorSubjectReceipts
+// as Interpret itself received them, not as the caller originally sent
+// them.
+func mustEngineForPriorReceiptTestCapturingInterpret(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry, capturedReceipts *[]BoundSubjectReceipt) *Engine {
+	t.Helper()
+	interpretation := InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent},
+		FactRequirements: []FactRequirement{{Kind: FactStatus}},
+	}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
+			*capturedReceipts = request.PriorSubjectReceipts
+			return interpretation, nil
+		}),
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Ask Dev is on track.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
+				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Ask Dev is on track based on available context.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results: store, Telemetry: telemetry,
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() }, NewResultID: func() string { return "result_99999999" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine
+}
+
+// TestEngineNeverPassesAStaleGraphEpochReceiptToInterpret is CHAOS-3898
+// P1-1's direct regression proof (codex retroactive review of #151/#152,
+// chris-verified, fix-forward on this branch): a receipt whose GRAPH EPOCH
+// taint check would go on to strip it entirely must never reach the
+// QuestionInterpreter's own input first. Before the fix, Interpret ran
+// BEFORE resolvePriorSubjectHints (the taint gate), so genkitruntime's
+// InterpretQuestion (runtime.go) serialized request.PriorSubjectReceipts
+// VERBATIM into the model's input -- including a receipt this exact test's
+// sibling, TestEngineStripsPriorSubjectReceiptFromADifferentGraphEpoch,
+// proves the engine goes on to treat as if it never existed. Same fixture
+// shape as that test; this one asserts on Interpret's OWN received request
+// instead of GraphReader's.
+func TestEngineNeverPassesAStaleGraphEpochReceiptToInterpret(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	staleEpoch := int64(7)
+	store := &staticResultStore{
+		results:    map[string]InvestigationResult{"result_prior_1": priorResult},
+		graphEpoch: &staleEpoch,
+	}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	var capturedReceipts []BoundSubjectReceipt
+	engine := mustEngineForPriorReceiptTestCapturingInterpret(t, graph, store, telemetry, &capturedReceipts)
+
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(capturedReceipts) != 0 {
+		t.Fatalf("Interpret received PriorSubjectReceipts = %#v, want empty -- a stale-graph-epoch receipt must be stripped BEFORE Interpret, not just before GraphReader", capturedReceipts)
+	}
+}
+
+// TestEngineOnlyPassesValidatedReceiptsToInterpret is
+// TestEngineNeverPassesAStaleGraphEpochReceiptToInterpret's positive
+// control: a receipt that legitimately survives the taint/match gate DOES
+// still reach Interpret -- CHAOS-3898 P1-1's fix withholds only UNVALIDATED
+// receipts, never validated ones, so a conversational follow-up ("what
+// about it") still has real prior-subject context to resolve against.
+func TestEngineOnlyPassesValidatedReceiptsToInterpret(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_prior_1": priorResult}}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	var capturedReceipts []BoundSubjectReceipt
+	engine := mustEngineForPriorReceiptTestCapturingInterpret(t, graph, store, telemetry, &capturedReceipts)
+
+	want := BoundSubjectReceipt{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{want}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(capturedReceipts) != 1 || capturedReceipts[0] != want {
+		t.Fatalf("Interpret received PriorSubjectReceipts = %#v, want [%#v]", capturedReceipts, want)
+	}
+}
+
 // TestEngineCapsCombinedSubjectHintsAtContractBound is the probe for Codex
 // finding G4: a caller already at the v1 contract's RequestedScope bound of
 // 50 SubjectHints, combined with Engine appending up to 20 more
