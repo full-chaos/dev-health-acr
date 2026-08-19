@@ -38,6 +38,17 @@ import "sort"
 // is shadow/measurement-only (chaos3899_source_native_grammar.go's own
 // doc comment), so a stale alias list can only ever under- or over-count
 // a MEASUREMENT, never a production decision.
+//
+// STUB-NODE CAVEAT (codex xhigh review round 4, non-blocking nit): a
+// REFERENCED (not yet fully projected) graph node -- falkorgraph's own
+// subjectMergeAttrs called with entityOwned=nil, projection.go -- omits
+// the alias properties entirely, so a source claimant that exists ONLY as
+// such a stub still resolves via BindAnchor's own Kind/CanonicalID read
+// (unaffected by this fix) but resolveSourceNative's row-content scan
+// finds nothing for it. A further, PURELY ADDITIVE undercount on an
+// already best-effort shadow measurement -- never a production-decision
+// concern, and not pursued here (this ticket's own scope is a cheap
+// registry addition, not a stub-projection completeness fix).
 func claimantsFromCandidateNodes(nodes map[string][]CandidateNode) map[string][]IdentityMatch {
 	if nodes == nil {
 		return nil
