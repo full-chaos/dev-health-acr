@@ -147,13 +147,15 @@ func TestBridgeSatisfierToCanonicalID_UnregisteredKind(t *testing.T) {
 // check -- deliberately separate from censusFakeClient (chaos3899_census_test.go),
 // which targets the two-statement aggregate-first protocol's own SQL shape.
 type anchorCollisionFakeClient struct {
-	count uint64
-	err   error
-	calls int
+	count      uint64
+	err        error
+	calls      int
+	statements []string
 }
 
-func (c *anchorCollisionFakeClient) Query(_ context.Context, _ string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+func (c *anchorCollisionFakeClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	c.calls++
+	c.statements = append(c.statements, statement)
 	if c.err != nil {
 		return nil, c.err
 	}
@@ -248,6 +250,61 @@ func TestAnchorCollision_NilClientFailsClosed(t *testing.T) {
 	_, err := devhealthsource.AnchorCollision(context.Background(), nil, "org-1", contextfabric.SubjectProject, "project.v2:github:p-1")
 	if err == nil {
 		t.Fatal("AnchorCollision(nil client): want error, got nil")
+	}
+}
+
+// TestAnchorCollision_PinsEmptyResultForAggregationSetting is an
+// adversarial-review finding (confidence 82, fixed): AnchorCollision's
+// aggregate must carry the SAME empty_result_for_aggregation_by_empty_set=0
+// pin RunCensus's own aggregate statement carries
+// (chaos3899_census_test.go's own TestRunCensus statement-shape pin) -- on
+// a profile where this defaults to 1, an anchor naming a project id that
+// no longer exists (a deleted project, a stale bound anchor -- the
+// ordinary "genuinely zero rows match" case, not an error) would otherwise
+// turn into a spurious "statement returned no row" error instead of the
+// correct collision=false.
+func TestAnchorCollision_PinsEmptyResultForAggregationSetting(t *testing.T) {
+	t.Parallel()
+	client := &anchorCollisionFakeClient{count: 1}
+	if _, err := devhealthsource.AnchorCollision(context.Background(), client, "org-1", contextfabric.SubjectProject, "project.v2:github:p-1"); err != nil {
+		t.Fatalf("AnchorCollision error = %v", err)
+	}
+	if len(client.statements) != 1 {
+		t.Fatalf("AnchorCollision issued %d statements, want 1", len(client.statements))
+	}
+	if !strings.Contains(client.statements[0], "SETTINGS empty_result_for_aggregation_by_empty_set = 0") {
+		t.Fatalf("AnchorCollision statement missing the empty_result_for_aggregation_by_empty_set=0 setting pin: %s", client.statements[0])
+	}
+}
+
+// TestCensusKindRegistryEntries_EveryKindHasABridge is the completeness
+// pin an adversarial review flagged as missing (mirrors
+// TestKindHasAnchorFKMatchesCensusRegistry's own "registries must never
+// silently drift" discipline, chaos3899_census_registry_test.go): every
+// registered census kind must have a non-nil bridge, so a future kind
+// added to the registry without one fails this test rather than only
+// failing at BridgeSatisfierToCanonicalID call time in production.
+func TestCensusKindRegistryEntries_EveryKindHasABridge(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []graphrank.CensusKind{
+		contextfabric.SubjectPullRequest,
+		contextfabric.SubjectWorkItem,
+		contractsv1.ContextFabricSubjectCIRun,
+		contractsv1.ContextFabricSubjectPullRequestReview,
+	} {
+		if !graphrank.IsCensusKindRegistered(kind) {
+			t.Fatalf("test's own kind list is stale: %s is not IsCensusKindRegistered", kind)
+		}
+		// Three tail segments satisfies every kind's own wantSegments (the
+		// most demanding, pull_request_review, wants 3) without a
+		// malformed-key parse error masking the nil-bridge check this test
+		// targets -- BridgeSatisfierToCanonicalID checks bridgeCanonicalID
+		// for nil BEFORE ever calling it, so a nil bridge always surfaces
+		// "no registered census bridge" regardless of key shape; this
+		// three-segment key just keeps the non-nil-bridge path noise-free.
+		if _, _, err := devhealthsource.BridgeSatisfierToCanonicalID(kind, censusNaturalKey("org-1", "repo-1", "1", "extra")); err != nil && strings.Contains(err.Error(), "no registered census bridge") {
+			t.Fatalf("kind=%s has no registered census bridge", kind)
+		}
 	}
 }
 

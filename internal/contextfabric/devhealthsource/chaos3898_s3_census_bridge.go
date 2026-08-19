@@ -43,14 +43,15 @@ import (
 // to call.
 //
 // omitted mirrors identity.Derive's own "whole-row omit, never truncate"
-// contract (H6): true only for the four changed kinds (pull_request is
-// grandfathered and never omits, see bridgePullRequestSatisfier), and only
-// when the derived id would exceed identity.MaxNaturalKeyBytes -- a case
-// the D10 bound-omit ledger already tracks as "none live" today. err is
-// returned only for a malformed satisfierNaturalKey (wrong segment count)
-// or an unregistered kind -- both programmer errors, never a live-data
-// condition, since satisfierNaturalKey only ever comes from this package's
-// own RunCensus.
+// contract (H6): true only for the three .v2 census kinds (ci_pipeline_run,
+// work_item, pull_request_review -- pull_request is grandfathered and
+// never omits, see bridgePullRequestSatisfier), and only when the derived
+// id would exceed identity.MaxNaturalKeyBytes -- a case the D10 bound-omit
+// ledger already tracks as "none live" today. err is returned for a
+// malformed satisfierNaturalKey (wrong segment count), an unregistered
+// kind, or a registered kind with no bridge wired -- all three are
+// programmer errors, never a live-data condition, since
+// satisfierNaturalKey only ever comes from this package's own RunCensus.
 func BridgeSatisfierToCanonicalID(kind graphrank.CensusKind, satisfierNaturalKey string) (canonicalID string, omitted bool, err error) {
 	entry, ok := censusKindRegistryEntries[kind]
 	if !ok {
@@ -76,6 +77,16 @@ func BridgeSatisfierToCanonicalID(kind graphrank.CensusKind, satisfierNaturalKey
 // exactly wantSegments+1 pieces (org_id plus every wanted segment) --
 // callers must treat that as "cannot parse", never attempt a partial
 // bridge (the same fail-closed discipline identity.Segments already uses).
+//
+// NOTE (adversarial-review sub-threshold finding, not fixed here): the
+// leading org_id segment is assumed colon-free and is never itself
+// validated -- devhealthschema declares org_id as String, not a
+// type-enforced UUID, so a hypothetical colon-bearing org id would shift
+// every later segment left by one and silently derive a wrong-but-plausible
+// canonical id, the same failure class the tail-segment SplitN fix exists
+// to prevent, just at the other end. Every live org id observed is a UUID
+// (colon-free by construction); left as a disclosed, low-probability risk
+// rather than an added guard, to keep this hand-off slice small.
 func splitCensusNaturalKey(satisfierNaturalKey string, wantSegments int) (segments []string, ok bool) {
 	parts := strings.SplitN(satisfierNaturalKey, ":", wantSegments+1)
 	if len(parts) != wantSegments+1 {
@@ -178,7 +189,17 @@ func AnchorCollision(ctx context.Context, client contextpacket.ClickHouseQueryCl
 		return false, fmt.Errorf("devhealthsource: anchor collision check requires a ClickHouseQueryClient")
 	}
 	rawID := canonicalIDValue(anchorKind, anchorCanonicalID)
-	statement := "SELECT count() FROM projects FINAL WHERE org_id = {anchor_collision_org_id:String} AND id = {anchor_collision_project_id:String}"
+	// SETTINGS empty_result_for_aggregation_by_empty_set = 0 -- the SAME
+	// pin RunCensus's own aggregate statement carries (chaos3899_census.go)
+	// and for the identical reason: on a profile where this defaults to 1,
+	// ClickHouse can return ZERO rows for an aggregate whose WHERE matches
+	// nothing, which would turn the ordinary "this project id no longer
+	// exists" case (a deleted project, a stale anchor) into the
+	// `rows.Next()==false` error path below instead of the correct
+	// collision=false. Pinning it to 0 keeps this statement's "exactly one
+	// row, always" contract true unconditionally, matching every sibling
+	// single-scalar-row aggregate in this package.
+	statement := "SELECT count() FROM projects FINAL WHERE org_id = {anchor_collision_org_id:String} AND id = {anchor_collision_project_id:String} SETTINGS empty_result_for_aggregation_by_empty_set = 0"
 	bindings := []contextpacket.ClickHouseBinding{
 		{Name: "anchor_collision_org_id", Value: orgID},
 		{Name: "anchor_collision_project_id", Value: rawID},
