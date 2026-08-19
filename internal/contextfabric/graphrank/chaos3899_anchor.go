@@ -10,6 +10,45 @@ import "sort"
 // NodeSubject's own "ok=false means skip" convention; this never happens
 // for a well-formed AliasLookup implementation (every claimant it returns
 // is a real graph node), so it is a defensive skip, not an expected path.
+//
+// Aliases/ProviderAliases (CHAOS-3918 widening measurement, codex xhigh
+// review round 3, confirmed and fixed, 2026-08-19): this function used to
+// build IdentityRow with ONLY Kind/CanonicalID/Label populated --
+// BindAnchor never needed more (it only ever reads .Kind/.CanonicalID off
+// a matched row), but chaos3899_source_native_grammar.go's own
+// resolveSourceNative DOES need a row's real alias content to find a
+// claimant, and every IdentityRow this function ever produced left
+// .Aliases/.ProviderAliases at their nil zero value -- making
+// resolveSourceNative's row-content scan structurally unable to match
+// anything via those two fields (round-2's own map-key fix was locally
+// correct but fed a row that could never actually satisfy it). The fix:
+// AliasAttributes/ProviderAliasAttributes (subject.go) already read a
+// CandidateNode's own "aliases"/"provider_aliases" graph properties --
+// the SAME properties candidate.go's own aliasMatched/providerMatched
+// check already reads for the (non-shadow, already-shipped) identity
+// mechanism -- so this is REUSE of an existing, precedented read path,
+// not a new one: node.Attributes is already in memory, no new I/O.
+//
+// STALENESS CAVEAT (inherited, not introduced, by this fix -- see
+// candidate.go's own aliasMatched/providerMatched doc comment): a graph
+// node's own "aliases"/"provider_aliases" properties are projection-time
+// data and can lag the source-of-truth ClickHouse read by up to one
+// projection cycle. Acceptable here for the exact reason it already is
+// for candidate.go's non-shadow use: this ticket's own ENTIRE mechanism
+// is shadow/measurement-only (chaos3899_source_native_grammar.go's own
+// doc comment), so a stale alias list can only ever under- or over-count
+// a MEASUREMENT, never a production decision.
+//
+// STUB-NODE CAVEAT (codex xhigh review round 4, non-blocking nit): a
+// REFERENCED (not yet fully projected) graph node -- falkorgraph's own
+// subjectMergeAttrs called with entityOwned=nil, projection.go -- omits
+// the alias properties entirely, so a source claimant that exists ONLY as
+// such a stub still resolves via BindAnchor's own Kind/CanonicalID read
+// (unaffected by this fix) but resolveSourceNative's row-content scan
+// finds nothing for it. A further, PURELY ADDITIVE undercount on an
+// already best-effort shadow measurement -- never a production-decision
+// concern, and not pursued here (this ticket's own scope is a cheap
+// registry addition, not a stub-projection completeness fix).
 func claimantsFromCandidateNodes(nodes map[string][]CandidateNode) map[string][]IdentityMatch {
 	if nodes == nil {
 		return nil
@@ -23,7 +62,10 @@ func claimantsFromCandidateNodes(nodes map[string][]CandidateNode) map[string][]
 				continue
 			}
 			matches = append(matches, IdentityMatch{
-				Row:       IdentityRow{Kind: subject.Kind, CanonicalID: subject.CanonicalID, Label: subject.Label},
+				Row: IdentityRow{
+					Kind: subject.Kind, CanonicalID: subject.CanonicalID, Label: subject.Label,
+					Aliases: AliasAttributes(node.Attributes), ProviderAliases: ProviderAliasAttributes(node.Attributes),
+				},
 				Mechanism: node.Mechanism,
 			})
 		}

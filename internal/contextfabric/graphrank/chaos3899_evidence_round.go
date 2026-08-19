@@ -134,10 +134,21 @@ type KindAttestation struct {
 }
 
 // Attestation is the shadow round's own per-resolution artifact (brief
-// §1.4/§6). SHADOW ONLY in Slice A: never consumed by any commit-path
-// decision (scope discipline: "no production decision changes, no
-// commit-path edits") -- its sole purpose is measurement, via
-// ResolutionTracer's evidence_round/evidence_probe stage events.
+// §1.4/§6).
+//
+// STALENESS NOTE (codex xhigh review finding, CHAOS-3918, 2026-08-19):
+// this paragraph used to say "SHADOW ONLY: never consumed by any
+// commit-path decision" -- true through Slice A/B, but CHAOS-3896 Slice C
+// (merged to main mid-flight on this ticket) now LIVE-CONSUMES this exact
+// type via mergeCensusAttestedSatisfier/attestedSatisfier (resolve.go,
+// chaos3896_slice_c_evidence_census.go) for its evidence_census commit
+// gate -- see RunShadowEvidenceRound's own doc comment for the fuller
+// account. What stays true, and is the load-bearing guarantee for
+// CHAOS-3918's own widening: this struct gained ZERO new fields from that
+// ticket, so nothing it added is reachable from that (or any other)
+// consumer -- the widening's own result reaches ONLY ResolutionTracer's
+// evidence_source_native/evidence_source_native_probe stage events,
+// entirely outside this type.
 type Attestation struct {
 	RequestID string
 	Outcome   ShadowOutcome
@@ -199,9 +210,10 @@ type Attestation struct {
 // package's own signature stays stable as those contracts grow.
 type ShadowEvidenceRoundInput struct {
 	RequestID string
-	// Question is request.Question, verbatim -- consumed ONLY by
-	// BindHandles inside this call. Never stored on the returned
-	// Attestation, never traced (corpus-safety rule).
+	// Question is request.Question, verbatim -- consumed by BindHandles
+	// AND, as of CHAOS-3918's widening measurement, BindSourceNativeHandles
+	// inside this call. Never stored on the returned Attestation, never
+	// traced (corpus-safety rule).
 	Question string
 	OrgID    string
 	// PooledKinds is the resolution's own surviving-hypothesis kinds
@@ -248,13 +260,26 @@ func splitCensusKinds(kinds []CensusKind) (censused []CensusKind, nonCensusedSur
 
 // RunShadowEvidenceRound executes the FULL shadow round (design brief v5
 // §6 Slice A): typed-grammar D, unique-claimant anchor, per-kind
-// base-table source census, attestation -- but the returned Attestation is
-// NEVER consumed by any commit-path decision in this slice; the caller's
-// only obligation is to trace it (evidence_round/evidence_probe) and
-// discard it. tracer may be nil (matches every other optional
-// ResolveDeps-adjacent dependency's convention) -- a nil tracer still gets
-// a fully-computed Attestation back (useful for a direct unit test), it
-// simply never emits.
+// base-table source census, attestation.
+//
+// STALENESS NOTE (codex xhigh review finding, CHAOS-3918, 2026-08-19): the
+// paragraph above used to say the returned Attestation is "NEVER consumed
+// by any commit-path decision" -- true for Slice A alone, but CHAOS-3896
+// Slice C (merged to main as this ticket's own work was in flight) now
+// LIVE-CONSUMES this SAME Attestation via mergeCensusAttestedSatisfier/
+// attestedSatisfier (resolve.go) for its evidence_census commit gate. This
+// function's own decisive computation (the switch statement further down,
+// and every field on the Attestation it returns) is UNCHANGED by that --
+// Slice C added a consumer, not a producer-side behavior change. What
+// stays true, and is the load-bearing guarantee for THIS ticket's own
+// CHAOS-3918 widening (traceSourceNativeBinds, below): the Attestation
+// type gained ZERO new fields from CHAOS-3918, and traceSourceNativeBinds
+// is called for its trace side effect alone -- it returns nothing and
+// writes into no local variable this function's decisive switch statement
+// or attestedSatisfier() reads. tracer may be nil (matches every other
+// optional ResolveDeps-adjacent dependency's convention) -- a nil tracer
+// still gets a fully-computed Attestation back (useful for a direct unit
+// test), it simply never emits.
 //
 // Non-vacuity (brief §6/§7's own acceptance bar -- "prove the round
 // actually executed"): an evidence_round stage event fires on EVERY call
@@ -308,6 +333,22 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		// brief §1.3(5): NO source reads at all for a scoped caller.
 		return emit(Attestation{Outcome: ShadowWouldClarify, Reason: ReasonScopedVisibility})
 	}
+
+	// CHAOS-3899 WIDENING measurement (chris-ratified pre-registered shadow
+	// measurement, 2026-08-19): fired here, deliberately BEFORE the
+	// multi-handle/no-discriminators/census-kind-unregistered branches
+	// below and OUTSIDE every one of their return statements, so this
+	// measurement's own two trace stages (evidence_source_native/
+	// evidence_source_native_probe) are structurally incapable of altering
+	// -- or even being read by -- ANY of Outcome/Reason/DIdentity/Kinds/
+	// PreconditionUnproven/NonCensusedSurvivor below: no local variable
+	// this call produces is referenced by any of the decisive code that
+	// follows. See BindSourceNativeHandles' own doc comment
+	// (chaos3899_source_native_grammar.go) for the full shadow-only
+	// guarantee. No new source read: claimantsFromCandidateNodes(...) was
+	// already computed by resolve.go for the anchor role, before this
+	// function was ever called (ShadowEvidenceRoundInput.AliasClaimants).
+	traceSourceNativeBinds(tracer, input.RequestID, BindSourceNativeHandles(input.Question, input.AliasClaimants, input.AliasLookupComplete))
 
 	bound := BindHandles(input.Question)
 	if IsMultiHandle(bound) {
@@ -453,6 +494,45 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		base.Outcome = ShadowWouldClarify
 	}
 	return emit(base)
+}
+
+// traceSourceNativeBinds fires the CHAOS-3899 widening measurement's two
+// trace stages (chaos3899_source_native_grammar.go's own doc comment):
+// one aggregate "evidence_source_native" event (mirrors "evidence_round"'s
+// own non-vacuity proof -- fires unconditionally once the round reaches
+// past its axis/scope gates, regardless of what binds is), plus one
+// "evidence_source_native_probe" event per bind (mirrors "evidence_probe"'s
+// own "per-kind, never aggregated" cardinality, one level down to
+// "per grammar match"). A nil tracer is a no-op, identical to every other
+// emit path in this file. This function's ONLY effect is calling
+// tracer.Trace -- it returns nothing and touches no Attestation field, by
+// construction (see this function's own call site's doc comment for why
+// that placement is the structural shadow-only guarantee).
+func traceSourceNativeBinds(tracer ResolutionTracer, requestID string, binds []SourceNativeBind) {
+	if tracer == nil {
+		return
+	}
+	anyResolved := false
+	for _, b := range binds {
+		if b.Resolved {
+			anyResolved = true
+			break
+		}
+	}
+	tracer.Trace(ResolutionTraceEvent{
+		RequestID: requestID, Stage: "evidence_source_native",
+		ShadowSourceNativeMatchCount: len(binds), ShadowSourceNativeAnyResolved: anyResolved,
+	})
+	for _, b := range binds {
+		event := ResolutionTraceEvent{
+			RequestID: requestID, Stage: "evidence_source_native_probe",
+			ShadowSourceNativeGrammar: b.Grammar, ShadowSourceNativeResolved: b.Resolved,
+		}
+		if b.Resolved {
+			event.ShadowSourceNativeKind = b.Kind
+		}
+		tracer.Trace(event)
+	}
 }
 
 func appendUniqueCensusKind(kinds []CensusKind, kind CensusKind) []CensusKind {

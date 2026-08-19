@@ -198,6 +198,19 @@ type replayShadowCensusKind struct {
 	AnchorApplied   bool   `json:"anchor_applied"`
 }
 
+// replaySourceNativeBind is ONE source-native identifier grammar match
+// (CHAOS-3899 widening measurement, chris-ratified pre-registered shadow
+// measurement, 2026-08-19), read from one evidence_source_native_probe
+// stage event. Outcome-only: the registry entry's own fixed name (safe to
+// trace, never the matched literal) and whether it resolved to a unique
+// identity-universe claimant -- exactly the corpus-safety discipline
+// replayShadowCensusKind already follows.
+type replaySourceNativeBind struct {
+	Grammar  string `json:"grammar"`
+	Resolved bool   `json:"resolved"`
+	Kind     string `json:"kind,omitempty"`
+}
+
 // replayShadowOutcome is the wired arm's shadow-round Attestation for ONE
 // case, read from its own evidence_round stage event (RunShadowEvidenceRound's
 // emit closure, chaos3899_evidence_round.go) plus every evidence_probe
@@ -218,6 +231,23 @@ type replayShadowOutcome struct {
 	KindsCensused        int                      `json:"kinds_censused"`
 	DIdentityHash        string                   `json:"d_identity_hash,omitempty"`
 	CensusKinds          []replayShadowCensusKind `json:"census_kinds,omitempty"`
+	// SourceNativeRan/SourceNativeMatchCount/SourceNativeAnyResolved/
+	// SourceNativeBinds (CHAOS-3899 widening measurement, 2026-08-19): the
+	// pre-registered primary/secondary numbers read directly, per case --
+	// SourceNativeAnyResolved is the primary metric ("did this case gain
+	// >=1 NEW keyed bind"), SourceNativeBinds is the per-grammar breakdown
+	// (secondary) plus the claimant-lookup-failure count (a bind present
+	// with Resolved==false). SourceNativeRan mirrors Ran's own convention:
+	// true iff an evidence_source_native event was captured for this case
+	// (it fires at the exact same gate Ran's own evidence_round event
+	// does, so in practice SourceNativeRan == Ran for every case this
+	// harness scores -- kept separate rather than assumed, so a future
+	// divergence between the two gates is visible in the artifact rather
+	// than silently assumed away).
+	SourceNativeRan         bool                     `json:"source_native_ran"`
+	SourceNativeMatchCount  int                      `json:"source_native_match_count"`
+	SourceNativeAnyResolved bool                     `json:"source_native_any_resolved"`
+	SourceNativeBinds       []replaySourceNativeBind `json:"source_native_binds,omitempty"`
 }
 
 // replayReport is the whole run's artifact, written to ACR_TEST_REPLAY_OUT.
@@ -415,6 +445,30 @@ func (c *replayTraceCapture) shadowOutcome() replayShadowOutcome {
 			StatementCount: e.CensusStatementCount, RowsRead: e.CensusRowsRead,
 			HandleApplied: e.CensusHandleApplied, AnchorApplied: e.CensusAnchorApplied,
 		})
+	}
+	// CHAOS-3899 widening measurement (2026-08-19): evidence_source_native
+	// is the aggregate, non-vacuity-proving event (mirrors evidence_round's
+	// own "exactly one per resolution" guarantee -- traceSourceNativeBinds,
+	// chaos3899_evidence_round.go); evidence_source_native_probe fires once
+	// per grammar match, mirroring evidence_probe's own per-item cardinality.
+	for _, e := range c.events {
+		if e.Stage != "evidence_source_native" {
+			continue
+		}
+		out.SourceNativeRan = true
+		out.SourceNativeMatchCount = e.ShadowSourceNativeMatchCount
+		out.SourceNativeAnyResolved = e.ShadowSourceNativeAnyResolved
+		break // exactly one evidence_source_native event per resolution.
+	}
+	for _, e := range c.events {
+		if e.Stage != "evidence_source_native_probe" {
+			continue
+		}
+		bind := replaySourceNativeBind{Grammar: e.ShadowSourceNativeGrammar, Resolved: e.ShadowSourceNativeResolved}
+		if e.ShadowSourceNativeResolved {
+			bind.Kind = string(e.ShadowSourceNativeKind)
+		}
+		out.SourceNativeBinds = append(out.SourceNativeBinds, bind)
 	}
 	return out
 }
