@@ -163,6 +163,23 @@
     },
     "window_clarification": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/WindowClarification"
+    },
+    "structure_needs": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/StructureNeeds"
+    },
+    "confirmed_structure": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/ConfirmedStructureEntry"
+      },
+      "maxItems": 4
+    },
+    "structure_offer_snapshot": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/StructureOfferSnapshotEntry"
+      },
+      "maxItems": 80
     }
   },
   "required": [

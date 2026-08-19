@@ -1,0 +1,288 @@
+package v1
+
+// CHAOS-3900 P1 (pivot-intent design brief, DESIGN-FINAL, §1.1/§2.1). The
+// discriminator conjunction D = {kind, handle, anchor, window} (3896 §1.2)
+// is the intent frame the census needs; interpretation today supplies none
+// of it. StructureNeeds is the wire promotion of the same shape 3900 W1
+// already shipped for window: a refusal receipt becomes a disclosure --
+// typed, receipt-bound offers per missing frame member, so a caller (human
+// panel or agent) can supply structure instead of hitting a dead end. This
+// file adds the three NEW members (kind, anchor, handle); window rides
+// W1's ContextFabricWindowOption/ContextFabricWindowClarification
+// verbatim -- NOT a copy, per the brief's own instruction ("3900's type,
+// verbatim").
+//
+// SHADOW-FIRST (P1's own scope line): these types round-trip and validate
+// as of this changeset, but no surface (panel, MCP) yet reads or writes
+// them -- that is P2/P3, separate tickets. The engine computes and
+// persists StructureNeeds/ConfirmedStructure; nothing consumes them.
+
+// ContextFabricStructureNeedKind is the closed enum for which intent-frame
+// member is missing or ambiguous (design brief §2.1). CLASS-CONDITIONAL by
+// construction at the call site (§1.3's NEVER-ELICIT rule): an
+// aggregate/cohort-classed question can never construct a Missing entry
+// naming subject_handle or subject_anchor -- that discipline lives in the
+// engine derivation (internal/contextfabric), not here; this type only
+// states the closed vocabulary the wire may carry.
+type ContextFabricStructureNeedKind string
+
+const (
+	ContextFabricStructureNeedExpectedKind  ContextFabricStructureNeedKind = "expected_kind"
+	ContextFabricStructureNeedSubjectAnchor ContextFabricStructureNeedKind = "subject_anchor"
+	ContextFabricStructureNeedSubjectHandle ContextFabricStructureNeedKind = "subject_handle"
+	ContextFabricStructureNeedWindow        ContextFabricStructureNeedKind = "window"
+)
+
+var contextFabricStructureNeedKinds = [...]ContextFabricStructureNeedKind{
+	ContextFabricStructureNeedExpectedKind,
+	ContextFabricStructureNeedSubjectAnchor,
+	ContextFabricStructureNeedSubjectHandle,
+	ContextFabricStructureNeedWindow,
+}
+
+// ContextFabricStructureNeedKindCount is the closed vocabulary's size.
+const ContextFabricStructureNeedKindCount = len(contextFabricStructureNeedKinds)
+
+// ContextFabricStructureNeedKindVocabulary returns the closed vocabulary in
+// published order (kind, anchor, handle, window -- the §1.2 reading-1
+// elicitation-priority order). An array return, copied on every call, per
+// ContextFabricFactKindVocabulary's own precedent.
+func ContextFabricStructureNeedKindVocabulary() [ContextFabricStructureNeedKindCount]ContextFabricStructureNeedKind {
+	return contextFabricStructureNeedKinds
+}
+
+// ValidContextFabricStructureNeedKind reports whether value is a member of
+// the closed registry.
+func ValidContextFabricStructureNeedKind(value ContextFabricStructureNeedKind) bool {
+	for _, kind := range contextFabricStructureNeedKinds {
+		if value == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// ContextFabricStructureOfferSource is the closed vocabulary distinguishing
+// an engine-derived offer from a Bridge-proposed one (design brief §2.1,
+// §2.4). P1 (this changeset) never produces "prior" -- the Bridge doesn't
+// exist yet (P4/P5) -- but the field ships now so P5 is an additive
+// value-population change, not a wire-shape change.
+type ContextFabricStructureOfferSource string
+
+const (
+	ContextFabricStructureOfferEngine ContextFabricStructureOfferSource = "engine"
+	ContextFabricStructureOfferPrior  ContextFabricStructureOfferSource = "prior"
+)
+
+func ValidContextFabricStructureOfferSource(value ContextFabricStructureOfferSource) bool {
+	switch value {
+	case ContextFabricStructureOfferEngine, ContextFabricStructureOfferPrior:
+		return true
+	default:
+		return false
+	}
+}
+
+// ContextFabricKindOptionReceiptPrefix is the closed namespace prefix for
+// expected_kind offer receipts (design brief §2.1's receipt-namespace
+// table), following winr_'s exact precedent (ContextFabricWindowOptionReceiptPrefix).
+const ContextFabricKindOptionReceiptPrefix = "kindr_"
+
+// ContextFabricAnchorOptionReceiptPrefix is the closed namespace prefix for
+// subject_anchor offer receipts.
+const ContextFabricAnchorOptionReceiptPrefix = "ancr_"
+
+// ContextFabricHandleOptionReceiptPrefix is the closed namespace prefix for
+// subject_handle offer receipts (design brief v4/sol-r3 #2: handles get the
+// full symmetric receipt transport, by symmetry with kind/anchor/window).
+const ContextFabricHandleOptionReceiptPrefix = "handr_"
+
+// ContextFabricKindOption offers one census-kind choice, minted onto a
+// stored result so a later turn can confirm it via kindr_ receipt
+// redemption (design brief §2.1). Kind is a plain ContextFabricSubjectKind
+// member of the closed census-kind registry (internal/contextfabric owns
+// which members are registered for census purposes; this type only states
+// the wire shape).
+type ContextFabricKindOption struct {
+	ReceiptID      string                            `json:"receipt_id"`
+	OptionID       string                            `json:"option_id"`
+	Label          string                            `json:"label"`
+	Kind           ContextFabricSubjectKind          `json:"kind"`
+	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
+	PriorVersionID string                            `json:"prior_version_id,omitempty"`
+	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+}
+
+// ContextFabricAnchorOption offers one unique-claimant anchor candidate,
+// minted onto a stored result so a later turn can confirm it via ancr_
+// receipt redemption. ClaimantKey is the identity-registry v2 key (org-
+// scoped, opaque, no display text -- the 3859 sink discipline applied to
+// offers, per the brief's own instruction); it is what redemption
+// re-verifies uniqueness against, never CanonicalID alone (a canonical id
+// can outlive the claimant-uniqueness fact that made it offerable).
+type ContextFabricAnchorOption struct {
+	ReceiptID      string                            `json:"receipt_id"`
+	OptionID       string                            `json:"option_id"`
+	Label          string                            `json:"label"`
+	Kind           ContextFabricSubjectKind          `json:"kind"`
+	CanonicalID    string                            `json:"canonical_id"`
+	ClaimantKey    string                            `json:"claimant_key"`
+	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
+	PriorVersionID string                            `json:"prior_version_id,omitempty"`
+	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+}
+
+// ContextFabricHandleOption offers one grammar-valid handle candidate,
+// minted onto a stored result so a later turn can confirm it via handr_
+// receipt redemption (design brief v4/sol-r3 #2, the full symmetric
+// transport). PatternID names the closed handle-grammar registry pattern
+// (never regex text on the wire -- registry-pinned, matching
+// AcceptedGrammar's own discipline); SourceColumn names the keyed source
+// column redemption re-verifies existence against.
+type ContextFabricHandleOption struct {
+	ReceiptID      string                            `json:"receipt_id"`
+	OptionID       string                            `json:"option_id"`
+	Label          string                            `json:"label"`
+	Kind           ContextFabricSubjectKind          `json:"kind"`
+	PatternID      string                            `json:"pattern_id"`
+	Value          string                            `json:"value"`
+	SourceColumn   string                            `json:"source_column"`
+	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
+	PriorVersionID string                            `json:"prior_version_id,omitempty"`
+	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+}
+
+// ContextFabricAcceptedGrammar discloses one grammar the engine accepts for
+// explicit supply, so an agent (or a power user) can supply structure
+// directly next turn instead of picking from offers (design brief §2.1).
+// PatternID is a registry-pinned identifier, never regex text.
+type ContextFabricAcceptedGrammar struct {
+	Member    ContextFabricStructureNeedKind `json:"member"`
+	Kind      ContextFabricSubjectKind       `json:"kind,omitempty"`
+	PatternID string                         `json:"pattern_id"`
+}
+
+// ContextFabricStructureNeeds is the disclosure block: present whenever an
+// investigation round ends short of decisive (clarification_required,
+// ambiguous no_match, no_discriminators refusal), never dropped once
+// present (Limitations discipline, design brief §2.1's "never-truncated
+// pin"). relation_family and cohort_shape are UNREPRESENTABLE here by
+// design (§1.1 demotion) -- the wire enum has no members for them, so no
+// surface can offer or elicit either.
+type ContextFabricStructureNeeds struct {
+	// Missing is ordered by elicitation priority (kind before anchor
+	// before window -- §1.2 reading 1; handle sits alongside kind/window
+	// as an alternative decisive path, per the class's own frame).
+	Missing       []ContextFabricStructureNeedKind `json:"missing"`
+	KindOptions   []ContextFabricKindOption        `json:"kind_options,omitempty"`
+	AnchorOptions []ContextFabricAnchorOption      `json:"anchor_options,omitempty"`
+	HandleOptions []ContextFabricHandleOption      `json:"handle_options,omitempty"`
+	// WindowOptions reuses CHAOS-3900 W1's own type verbatim -- not a
+	// copy (design brief §2.1: "3900's type, verbatim").
+	WindowOptions    []ContextFabricWindowOption    `json:"window_options,omitempty"`
+	AcceptedGrammars []ContextFabricAcceptedGrammar `json:"accepted_grammars,omitempty"`
+}
+
+// ContextFabricStructureSource is the closed vocabulary for how a
+// ConfirmedStructureEntry's value entered (design brief §2.1's echo).
+// Distinct from ContextFabricWindowProvenance's near-identical values by
+// design: this field states the WIRE MECHANISM (receipt vs explicit field),
+// Provenance below states the resulting AUTHORITY TIER -- the two are
+// correlated but not identical (an explicit field is always
+// explicit_unattributed provenance on MCP, but is question_stated
+// provenance on the panel surface with the SAME source=explicit).
+type ContextFabricStructureSource string
+
+const (
+	ContextFabricStructureSourceReceipt              ContextFabricStructureSource = "receipt"
+	ContextFabricStructureSourceExplicit             ContextFabricStructureSource = "explicit"
+	ContextFabricStructureSourceExplicitUnattributed ContextFabricStructureSource = "explicit_unattributed"
+)
+
+func ValidContextFabricStructureSource(value ContextFabricStructureSource) bool {
+	switch value {
+	case ContextFabricStructureSourceReceipt, ContextFabricStructureSourceExplicit, ContextFabricStructureSourceExplicitUnattributed:
+		return true
+	default:
+		return false
+	}
+}
+
+// ContextFabricStructureProvenance is the closed authority-tier vocabulary
+// for a ConfirmedStructureEntry (design brief §2.0's authority table).
+// Deliberately a DISTINCT type from ContextFabricWindowProvenance despite
+// sharing the same three string values: window's own vocabulary and
+// structure's are independently owned closed enums (each may grow
+// independently without coupling the other), even though both currently
+// enumerate the identical §2.0 authority tiers.
+type ContextFabricStructureProvenance string
+
+const (
+	ContextFabricStructureInferredDefault        ContextFabricStructureProvenance = "inferred_default"
+	ContextFabricStructureQuestionStated         ContextFabricStructureProvenance = "question_stated"
+	ContextFabricStructureClarificationConfirmed ContextFabricStructureProvenance = "clarification_confirmed"
+)
+
+func ValidContextFabricStructureProvenance(value ContextFabricStructureProvenance) bool {
+	switch value {
+	case ContextFabricStructureInferredDefault, ContextFabricStructureQuestionStated, ContextFabricStructureClarificationConfirmed:
+		return true
+	default:
+		return false
+	}
+}
+
+// ContextFabricStructureDisposition is the closed vocabulary for what
+// happened to one carried structure member (design brief §2.1's silent-drop
+// closure -- "a veto the caller cannot see is the silent drop reborn").
+type ContextFabricStructureDisposition string
+
+const (
+	ContextFabricStructureDispositionApplied          ContextFabricStructureDisposition = "applied"
+	ContextFabricStructureDispositionVetoedUnresolved ContextFabricStructureDisposition = "vetoed_unresolved"
+	ContextFabricStructureDispositionVetoedConflict   ContextFabricStructureDisposition = "vetoed_conflict"
+	ContextFabricStructureDispositionVetoedStale      ContextFabricStructureDisposition = "vetoed_stale"
+)
+
+func ValidContextFabricStructureDisposition(value ContextFabricStructureDisposition) bool {
+	switch value {
+	case ContextFabricStructureDispositionApplied, ContextFabricStructureDispositionVetoedUnresolved,
+		ContextFabricStructureDispositionVetoedConflict, ContextFabricStructureDispositionVetoedStale:
+		return true
+	default:
+		return false
+	}
+}
+
+// ContextFabricConfirmedStructureEntry is the wire-visible disposition for
+// one carried structure member -- present whenever the request carried ANY
+// structure receipt or explicit structure field, one entry PER carried
+// member, INCLUDING vetoed ones (design brief §2.1's silent-drop closure).
+// Receipts are globally scoped by (PriorResultID, ReceiptID): a bare
+// receipt id is only unique within its issuing result.
+type ContextFabricConfirmedStructureEntry struct {
+	Member         ContextFabricStructureNeedKind    `json:"member"`
+	AppliedValue   string                            `json:"applied_value"`
+	Source         ContextFabricStructureSource      `json:"source"`
+	PriorResultID  string                            `json:"prior_result_id,omitempty"`
+	ReceiptID      string                            `json:"receipt_id,omitempty"`
+	OfferSource    ContextFabricStructureOfferSource `json:"offer_source,omitempty"`
+	PriorVersionID string                            `json:"prior_version_id,omitempty"`
+	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+	Provenance     ContextFabricStructureProvenance  `json:"provenance"`
+	Disposition    ContextFabricStructureDisposition `json:"disposition"`
+}
+
+// ContextFabricStructureOfferSnapshotEntry is one echoed offer inside a
+// decisive result's structure_offer_snapshot (design brief §2.1, the B5
+// gap: "a decisive result reached via confirmation lost the (offered,
+// selected) pair the Bridge needs"). Ids/ranks/enums only, same sink
+// discipline as every other offer -- never display text.
+type ContextFabricStructureOfferSnapshotEntry struct {
+	Member         ContextFabricStructureNeedKind    `json:"member"`
+	OfferID        string                            `json:"offer_id"`
+	Rank           int                               `json:"rank"`
+	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
+	PriorVersionID string                            `json:"prior_version_id,omitempty"`
+	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+}

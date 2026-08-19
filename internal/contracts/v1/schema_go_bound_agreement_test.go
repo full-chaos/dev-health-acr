@@ -163,6 +163,27 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// contextFabricWindowClarificationMaxOptions.
 		"common#$defs.WindowClarification.properties.options.maxItems": contextFabricWindowClarificationMaxOptions,
 		"common#$defs.WindowClarification.properties.options.minItems": 1,
+		// CHAOS-3900 P1: validate_context_fabric_structure.go's own
+		// bounds. Every StructureNeeds offer list shares
+		// contextFabricStructureNeedsMaxOptions; Missing is bounded by
+		// the closed frame-member vocabulary's own size on both ends
+		// (non-empty, at most one entry per member).
+		"common#$defs.StructureNeeds.properties.kind_options.maxItems":            contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeeds.properties.anchor_options.maxItems":          contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeeds.properties.handle_options.maxItems":          contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeeds.properties.window_options.maxItems":          contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeeds.properties.accepted_grammars.maxItems":       contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeeds.properties.missing.maxItems":                 ContextFabricStructureNeedKindCount,
+		"common#$defs.StructureNeeds.properties.missing.minItems":                 1,
+		"common#$defs.AnchorOption.properties.claimant_key.minLength":             1,
+		"common#$defs.AnchorOption.properties.claimant_key.maxLength":             256,
+		"common#$defs.HandleOption.properties.value.minLength":                    1,
+		"common#$defs.HandleOption.properties.value.maxLength":                    256,
+		"common#$defs.HandleOption.properties.source_column.minLength":            1,
+		"common#$defs.HandleOption.properties.source_column.maxLength":            128,
+		"common#$defs.ConfirmedStructureEntry.properties.applied_value.minLength": 1,
+		"common#$defs.ConfirmedStructureEntry.properties.applied_value.maxLength": 256,
+		"common#$defs.StructureOfferSnapshotEntry.properties.rank.minimum":        0,
 	}
 
 	discovered := schemaBounds(t, documents)

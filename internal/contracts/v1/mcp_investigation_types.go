@@ -215,6 +215,37 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.subject_resolution.candidates[].matched_terms[]",
 	"structured.subject_resolution.candidates[].subject.label",
 	"structured.subject_resolution.committed[].label",
+	// CHAOS-3900 P1: StructureNeeds offer labels get the SAME conservative
+	// treatment as window_clarification.options[].label above -- server-
+	// rendered today, but classified untrusted rather than widening the
+	// leaf-name-based "label" trust pattern globally.
+	"structured.structure_needs.kind_options[].label",
+	"structured.structure_needs.anchor_options[].label",
+	"structured.structure_needs.handle_options[].label",
+	// StructureNeeds.WindowOptions is the SAME ContextFabricWindowOption
+	// type at a NEW path (structure_needs.window_options[] rather than
+	// window_clarification.options[]) -- the walker discovers it
+	// separately, so it needs its own entry, same reasoning as
+	// window_clarification.options[].label above.
+	"structured.structure_needs.window_options[].label",
+	// HandleOption.Value is a literal SPAN extracted from question text
+	// (grammar-validated, but still an extracted substring, not a closed
+	// vocabulary member) -- untrusted, matching claimed_facts[].value.string's
+	// own treatment above.
+	"structured.structure_needs.handle_options[].value",
+	// HandleOption.SourceColumn names a keyed source column; classified
+	// conservatively untrusted, matching claimed_facts[].field's own
+	// treatment above (both are field/column-name-shaped strings this
+	// list already treats as retrieved/configured content, not a closed
+	// enum).
+	"structured.structure_needs.handle_options[].source_column",
+	// ConfirmedStructureEntry.AppliedValue is DESIGNED to be "the typed
+	// id/enum actually applied ... closed vocabulary or registry id,
+	// never free text" (pivot-intent design brief section 2.1), but
+	// Validate() only bounds its length -- it is not itself a closed enum
+	// at the Go type level, so it is classified conservatively untrusted
+	// rather than trusted by leaf name.
+	"structured.confirmed_structure[].applied_value",
 }
 
 // MCPInvestigateQuestionResponse wraps the bounded answer projection with a

@@ -43,6 +43,33 @@
       "maxItems": 20,
       "uniqueItems": true
     },
+    "prior_kind_receipts": {
+      "description": "CHAOS-3900 P1: kindr_-namespaced receipts naming a prior result's own StructureNeeds.kind_options entry. A NEW, parallel field, not an overload of prior_subject_receipts or prior_window_receipts -- the match target and effect both differ.",
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/KindBoundReceipt"
+      },
+      "maxItems": 20,
+      "uniqueItems": true
+    },
+    "prior_anchor_receipts": {
+      "description": "CHAOS-3900 P1: ancr_-namespaced receipts naming a prior result's own StructureNeeds.anchor_options entry.",
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/AnchorBoundReceipt"
+      },
+      "maxItems": 20,
+      "uniqueItems": true
+    },
+    "prior_handle_receipts": {
+      "description": "CHAOS-3900 P1: handr_-namespaced receipts naming a prior result's own StructureNeeds.handle_options entry.",
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/HandleBoundReceipt"
+      },
+      "maxItems": 20,
+      "uniqueItems": true
+    },
     "requested_scope": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/RequestedScope"
     },
