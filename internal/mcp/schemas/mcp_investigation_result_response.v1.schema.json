@@ -469,7 +469,8 @@
                 "episode",
                 "metric",
                 "pull_request_review",
-                "ci_pipeline_run"
+                "ci_pipeline_run",
+                "work_item_ref"
               ]
             },
             "canonical_id": {
@@ -509,7 +510,8 @@
                 "episode",
                 "metric",
                 "pull_request_review",
-                "ci_pipeline_run"
+                "ci_pipeline_run",
+                "work_item_ref"
               ]
             },
             "id": {
@@ -850,7 +852,8 @@
                 "episode",
                 "metric",
                 "pull_request_review",
-                "ci_pipeline_run"
+                "ci_pipeline_run",
+                "work_item_ref"
               ]
             },
             "members": {
@@ -1966,7 +1969,7 @@
             "relationship_id": {
               "type": "string",
               "minLength": 8,
-              "maxLength": 256
+              "maxLength": 600
             },
             "type": {
               "type": "string",
@@ -2281,7 +2284,7 @@
             "canonical_id": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 256
+              "maxLength": 600
             },
             "reason": {
               "type": "string",

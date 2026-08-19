@@ -100,6 +100,23 @@ const (
 	// values...require a new major version"; this is a widening).
 	ContextFabricSubjectPullRequestReview ContextFabricSubjectKind = "pull_request_review"
 	ContextFabricSubjectCIRun             ContextFabricSubjectKind = "ci_pipeline_run"
+	// ContextFabricSubjectWorkItemRef (CHAOS-3898 §1.5, P5) is a NON-
+	// AUTHORITATIVE stub subject kind for a work_item_dependency/
+	// work_item_hierarchy edge's target when the row's raw target id does
+	// not resolve to a real work_items row at projection time. It carries
+	// no authorization scope of its own, is never internal-node-excluded
+	// the way a document/episode observation is (it IS user-visible, as
+	// the honest "we don't know what this is yet" placeholder), and is
+	// never a fact-eligible or census-eligible subject -- see
+	// devhealthfacts' and the census registry's own kind allowlists,
+	// neither of which lists it. It heals deterministically: once the
+	// same raw target id resolves on a later sync, the producer emits the
+	// real edge AND tombstones the ref-form edge/node in the SAME batch
+	// (design brief §1.5, ProjectionTombstone). This is an additive v1
+	// enum value, same widening discipline as
+	// ContextFabricSubjectPullRequestReview/ContextFabricSubjectCIRun
+	// above.
+	ContextFabricSubjectWorkItemRef ContextFabricSubjectKind = "work_item_ref"
 )
 
 type ContextFabricResolutionState string
