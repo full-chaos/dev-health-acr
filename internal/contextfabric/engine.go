@@ -172,15 +172,20 @@ type EngineTelemetry interface {
 	// reason vocabulary: "unloadable" (the receipt's own ResultID/ReceiptID
 	// were blank, or the prior InvestigationResult failed to load),
 	// "no_match" (the prior result loaded but no candidate in it carried a
-	// matching ReceiptID), or "failed_reauth" (a hint WAS built from the
+	// matching ReceiptID), "failed_reauth" (a hint WAS built from the
 	// receipt but its subject did not survive this call's own graph
 	// resolution -- e.g. GraphReader's exact-hint authorization check
 	// rejected it, or the caller's own SubjectHints already filled the
-	// per-request hint budget). Called once per non-zero reason, so a
-	// cratered reuse of prior receipts is diagnosable (was the store down,
-	// or is authorization narrowing?) from telemetry alone, the same
-	// motivation RecordAnswerReuse's own miss-reason split already serves
-	// for answer reuse.
+	// per-request hint budget), or "stale_graph_epoch" (CHAOS-3898 §2.2/
+	// §5b cf_receipt_taint_strip: the prior result loaded but its stored
+	// StoredInvestigationResult.GraphEpoch differs from -- or is absent
+	// relative to -- this investigation's own ResolvedGraphBinding.Epoch,
+	// so it is stripped before any of its fields are read). Called once
+	// per non-zero reason, so a cratered reuse of prior receipts is
+	// diagnosable (was the store down, is authorization narrowing, or did
+	// a build/flip invalidate the prior turn's graph epoch?) from
+	// telemetry alone, the same motivation RecordAnswerReuse's own
+	// miss-reason split already serves for answer reuse.
 	RecordPriorSubjectReceiptSkipReason(ctx context.Context, principal storage.Principal, reason string, count int)
 	// RecordAnswerReuseServedRequestID (CHAOS-3888) reports, for every
 	// AnswerReuseHit outcome, the served (originally-stored) request id and
@@ -362,9 +367,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// is skipped, never trusted outright, and never treated as an error.
 	graphRequest := request
 	var priorHints []SubjectHint
-	var priorHintsUnloadable, priorHintsNoMatch int
+	var priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch int
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints, priorHintsUnloadable, priorHintsNoMatch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
+		priorHints, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
 		// The v1 contract bounds RequestedScope.SubjectHints at 50
 		// (ContextFabricRequestedScope.Validate). request.Validate()
 		// already proved the caller's own hints are within that bound,
@@ -437,7 +442,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	if len(request.PriorSubjectReceipts) > 0 {
-		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch)
+		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch)
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
@@ -605,15 +610,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // concern -- see AnswerReuseGate's doc comment for the identical
 // distinction drawn between "the caller's request" and "what the backend
 // independently proves").
-// Returns (hints, unloadable, noMatch) -- the latter two (CHAOS-3888) split
-// what used to be one implicit "receiptCount - len(hints)" gap into WHY each
-// non-hint receipt fell out: unloadable counts a receipt with a blank
-// ResultID/ReceiptID, whose prior InvestigationResult failed to load, OR
-// (CHAOS-3898 §2.2) whose loaded StoredInvestigationResult carrier failed the
-// ingress taint gate; noMatch counts a receipt whose prior result loaded,
-// passed the taint gate, and still named no matching candidate.
-// recordPriorSubjectReceiptSkips (below) computes the third reason,
-// failed_reauth, from what happens to the returned hints afterward.
+// Returns (hints, unloadable, noMatch, staleGraphEpoch) -- the latter three
+// (CHAOS-3888, extended by CHAOS-3898 §2.2) split what used to be one
+// implicit "receiptCount - len(hints)" gap into WHY each non-hint receipt
+// fell out: unloadable counts a receipt with a blank ResultID/ReceiptID or
+// whose prior InvestigationResult failed to load; staleGraphEpoch (§2.2)
+// counts a receipt whose prior result loaded but whose StoredInvestigationResult
+// carrier failed the ingress taint gate -- a DISTINCT reason from
+// unloadable, because the row itself loaded fine, it simply describes a
+// different graph epoch than this investigation is reading from; noMatch
+// counts a receipt whose prior result loaded, passed the taint gate, and
+// still named no matching candidate. recordPriorSubjectReceiptSkips (below)
+// computes the fourth reason, failed_reauth, from what happens to the
+// returned hints afterward.
 //
 // binding is THIS investigation's own ResolvedGraphBinding (CHAOS-3898
 // §2.1/§2.2 ingress taint): before any field of a loaded prior result is
@@ -624,14 +633,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // under a graph epoch this investigation is not reading from must never
 // contribute a label or a hint, however innocuous re-using its identifier
 // alone might look.
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, int, int) {
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, int, int, int) {
 	hints := make([]SubjectHint, 0, len(receipts))
 	loaded := make(map[string]InvestigationResult, len(receipts))
 	unloadable := 0
 	noMatch := 0
+	staleGraphEpoch := 0
 	for _, receipt := range receipts {
 		if ctx.Err() != nil {
-			return hints, unloadable, noMatch
+			return hints, unloadable, noMatch, staleGraphEpoch
 		}
 		resultID := strings.TrimSpace(receipt.ResultID)
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
@@ -649,9 +659,12 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			// CHAOS-3898 §2.2: the taint gate runs BEFORE any field of
 			// fetched.Result is read -- a carrier whose GraphEpoch is
 			// absent, or differs from this investigation's own binding,
-			// is stripped entirely, never partially trusted.
+			// is stripped entirely, never partially trusted. Counted as
+			// its OWN reason (cf_receipt_taint_strip, §5b), distinct from
+			// unloadable: the row loaded fine, it simply names a
+			// different graph epoch.
 			if fetched.GraphEpoch == nil || *fetched.GraphEpoch != binding.Epoch {
-				unloadable++
+				staleGraphEpoch++
 				continue
 			}
 			prior = fetched.Result
@@ -674,7 +687,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			noMatch++
 		}
 	}
-	return hints, unloadable, noMatch
+	return hints, unloadable, noMatch, staleGraphEpoch
 }
 
 // captureClarificationSelection builds and hands off a
@@ -741,14 +754,19 @@ func (e *Engine) captureClarificationSelection(ctx context.Context, principal st
 // client-supplied SubjectHint goes through. Either way Investigate itself
 // never errors or otherwise surfaces the skip, so this is the only
 // operator-visible signal.
-// unloadable and noMatch (CHAOS-3888) are resolvePriorSubjectHints' own two
-// skip-reason counts (see its doc comment); this function computes the
-// third, failed_reauth, from priorHints/resolution, and reports all three
-// through RecordPriorSubjectReceiptSkipReason IN ADDITION TO the existing,
+// unloadable, noMatch, and staleGraphEpoch (CHAOS-3888, extended by
+// CHAOS-3898 §2.2/§5b) are resolvePriorSubjectHints' own three skip-reason
+// counts (see its doc comment); this function computes the fourth,
+// failed_reauth, from priorHints/resolution, and reports all four through
+// RecordPriorSubjectReceiptSkipReason IN ADDITION TO the existing,
 // unchanged RecordPriorSubjectReceiptsSkipped aggregate below -- the
 // aggregate's own formula and call site are byte-identical to before this
-// ticket.
-func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution, unloadable, noMatch int) {
+// ticket. staleGraphEpoch is cf_receipt_taint_strip (§5b): a receipt whose
+// carrier named a different graph epoch than this investigation's own
+// binding, reported under its own reason so an operator can tell "the
+// prior turn's answer predates the current build/flip" apart from every
+// other skip cause.
+func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution, unloadable, noMatch, staleGraphEpoch int) {
 	if e.telemetry == nil {
 		return
 	}
@@ -770,14 +788,15 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 		e.telemetry.RecordPriorSubjectReceiptsSkipped(ctx, principal, skipped)
 	}
 	// CHAOS-3888: failed_reauth is everything skipped that resolvePriorSubjectHints
-	// itself did NOT already attribute to unloadable/no_match -- a hint that
-	// was built (or would have been, had the per-request SubjectHints budget
-	// not truncated it away, engine.go's own maxSubjectHints comment) but did
-	// not survive THIS call's graph resolution. Never negative: skipped is
-	// computed over priorHints (which resolvePriorSubjectHints' unloadable/
-	// noMatch counts already exclude), so skipped can only ever be >= the sum
-	// of the other two.
-	if failedReauth := skipped - unloadable - noMatch; failedReauth > 0 {
+	// itself did NOT already attribute to unloadable/no_match/stale_graph_epoch
+	// -- a hint that was built (or would have been, had the per-request
+	// SubjectHints budget not truncated it away, engine.go's own
+	// maxSubjectHints comment) but did not survive THIS call's graph
+	// resolution. Never negative: skipped is computed over priorHints
+	// (which resolvePriorSubjectHints' unloadable/noMatch/staleGraphEpoch
+	// counts already exclude), so skipped can only ever be >= the sum of
+	// the other three.
+	if failedReauth := skipped - unloadable - noMatch - staleGraphEpoch; failedReauth > 0 {
 		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "failed_reauth", failedReauth)
 	}
 	if unloadable > 0 {
@@ -785,6 +804,10 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 	}
 	if noMatch > 0 {
 		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "no_match", noMatch)
+	}
+	// CHAOS-3898 §5b cf_receipt_taint_strip.
+	if staleGraphEpoch > 0 {
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "stale_graph_epoch", staleGraphEpoch)
 	}
 }
 

@@ -184,6 +184,61 @@ func TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot(t *testing.T) {
 	require.False(t, ok, "expected a Save with no threaded snapshot to never be reusable")
 }
 
+// TestF5_FindReusableClassifiesGraphEpochMismatchDistinctlyFromNoCandidate
+// is the CHAOS-3898 v4.1 F5 regression: a row that matches every OTHER
+// reuse dimension but was saved under a different graph_epoch must report
+// ReuseMissStaleGraphEpoch, not the ordinary ReuseMissNoCandidate --
+// proving the metadata-only classifier (matchesExceptGraphEpoch) actually
+// distinguishes the two misses, which today's single payload-bearing
+// SELECT could never do.
+func TestF5_FindReusableClassifiesGraphEpochMismatchDistinctlyFromNoCandidate(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-graphepoch"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_graphepoch01", principal.OrgID, "Did the graph epoch change?")
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
+	require.NoError(t, err)
+	// Saved under graph_epoch 3 -- the ResolvedGraphBinding.Epoch Engine
+	// would have resolved for this investigation.
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities, 3))
+
+	// A lookup at the SAME graph_epoch (3) hits.
+	sameEpochKey := reuseKeyFor(result)
+	sameEpochKey.GraphEpoch = 3
+	found, ok, _, err := store.FindReusable(ctx, principal, sameEpochKey)
+	require.NoError(t, err)
+	require.True(t, ok, "expected a hit when the lookup's graph epoch matches the saved row's")
+	require.Equal(t, result.ResultID, found.ResultID)
+
+	// A lookup at a DIFFERENT graph_epoch (4) -- every other dimension
+	// identical -- misses, and the miss classifies as stale_graph_epoch
+	// specifically (a build/flip moved the active epoch since this row
+	// was saved), not the ordinary miss_no_candidate.
+	differentEpochKey := reuseKeyFor(result)
+	differentEpochKey.GraphEpoch = 4
+	_, ok, reason, err := store.FindReusable(ctx, principal, differentEpochKey)
+	require.NoError(t, err)
+	require.False(t, ok, "expected a miss when the lookup's graph epoch differs from the saved row's")
+	require.Equal(t, contextfabric.ReuseMissStaleGraphEpoch, reason)
+
+	// A genuinely absent candidate (a question that was never saved at
+	// all) must still classify as the ordinary miss_no_candidate -- proving
+	// the classifier distinguishes the two misses rather than always
+	// reporting stale_graph_epoch once ANY row exists for the organization.
+	neverSavedKey := reuseKeyFor(result)
+	neverSavedKey.QuestionHash = contextfabric.QuestionHash("a question nobody ever asked")
+	neverSavedKey.GraphEpoch = 3
+	_, ok, reason, err = store.FindReusable(ctx, principal, neverSavedKey)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, contextfabric.ReuseMissNoCandidate, reason)
+}
+
 // TestAC_3782_3_WatermarkAdvanceForcesFreshInvestigation binds AC-3782-3 at
 // the store level: advancing the projection watermark of a used source
 // forces FindReusable to miss, even though nothing else about the

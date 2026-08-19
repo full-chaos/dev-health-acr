@@ -402,6 +402,63 @@ func TestEngineSkipsUnresolvablePriorSubjectReceiptWithoutFailing(t *testing.T) 
 	}
 }
 
+// TestEngineStripsPriorSubjectReceiptFromADifferentGraphEpoch is the
+// CHAOS-3898 §2.2 ingress taint gate's direct proof: a receipt whose prior
+// result loaded successfully, and whose candidate WOULD otherwise match,
+// must still be stripped entirely -- no hint built, no label or id leaked
+// -- when its StoredInvestigationResult carrier's GraphEpoch differs from
+// this investigation's own ResolvedGraphBinding.Epoch, and the strip must
+// classify as "stale_graph_epoch" (cf_receipt_taint_strip, §5b), distinct
+// from every other skip reason.
+func TestEngineStripsPriorSubjectReceiptFromADifferentGraphEpoch(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	staleEpoch := int64(7)
+	store := &staticResultStore{
+		results:    map[string]InvestigationResult{"result_prior_1": priorResult},
+		graphEpoch: &staleEpoch,
+	}
+	// The graph reader's own ResolveInvestigationBinding (capturingGraphReader,
+	// fixed at Epoch 0) never matches the store's stale epoch 7 -- exactly
+	// the "a build/flip happened since the prior turn" scenario.
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v, want a graph-epoch-mismatched receipt to degrade safely, not fail", err)
+	}
+	// The taint gate must strip the receipt BEFORE any hint is built --
+	// nothing from the prior result's committed subject reaches GraphReader.
+	if len(graph.resolveRequests) != 1 || len(graph.resolveRequests[0].RequestedScope.SubjectHints) != 0 {
+		t.Fatalf("resolveRequests = %#v, want no hint added for a graph-epoch-mismatched receipt", graph.resolveRequests)
+	}
+	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
+		t.Fatalf("telemetry = %#v, want exactly one skip of count 1 recorded", telemetry.priorSubjectReceiptsSkipped)
+	}
+	if want := []priorSubjectReceiptSkipReasonRecord{{"stale_graph_epoch", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
+	}
+}
+
 // TestEngineDoesNotLeakOrErrorWhenPriorSubjectReceiptFailsGraphAuthorization
 // is the direct proof requested for the receipt path: a receipt that
 // resolves to a real prior subject, but whose subject does not survive
