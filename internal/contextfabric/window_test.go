@@ -303,3 +303,196 @@ func TestComposeEffectiveWindow_RequestWindowNeverOverridden(t *testing.T) {
 }
 
 func timePtr(t time.Time) *time.Time { return &t }
+
+// TestCHAOS3900_AxisConflict_InterpreterFlipVetoesInsteadOfSilentlyDropping
+// is the codex review (W1 round 1) HIGH-severity fix: a confirmed window
+// resolved against the REQUEST's own current axis must not silently vanish
+// (composeEffectiveWindow's own interpreted-axis gate) when Interpret goes
+// on to move the axis away from current -- it must veto as
+// window_axis_conflict, BEFORE ResolveSubjects/DiscoverContext/ReadFacts/
+// Synthesize ever run (the default mustReuseTestEngine stubs for all four
+// fail the test if reached, proving the short-circuit).
+func TestCHAOS3900_AxisConflict_InterpreterFlipVetoesInsteadOfSilentlyDropping(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_window_0002"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm0002", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	// mustReuseTestEngine's fixed clock is time.Unix(200, 0) -- asOf must
+	// stay at or before it, or resolveTimeContext's future-skew check
+	// rejects it before this test's own window-conflict check is reached.
+	asOf := time.Unix(100, 0).UTC()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return InvestigationResult{}, false, nil // miss: proceed to Interpret
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			// The model reads "as of last spring" out of the question and
+			// moves the axis to historical, despite the wire request's own
+			// axis=current.
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &asOf}}, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0002"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q (window_axis_conflict is always no_match)", result.Status, InvestigationNoMatch)
+	}
+	if result.EffectiveEvidenceWindow != nil {
+		t.Errorf("result.EffectiveEvidenceWindow = %+v, want nil on a window_axis_conflict veto", result.EffectiveEvidenceWindow)
+	}
+	// The veto result must report the REAL interpretation (historical axis),
+	// not a placeholder -- see windowVetoResult's own interpretation
+	// parameter doc comment.
+	if result.Interpretation.TimeContext.Axis != TemporalValidTime {
+		t.Errorf("result.Interpretation.TimeContext.Axis = %q, want %q (the real, post-Interpret axis)", result.Interpretation.TimeContext.Axis, TemporalValidTime)
+	}
+}
+
+// TestCHAOS3900_ReceiptAndExplicitBoundsDisagreement_VetoesAsConflict is the
+// codex review (W1 round 1) HIGH-severity windowsAgree fix: the wire
+// contract legally admits a RequestedEvidenceWindow carrying a RelativeID
+// TOGETHER WITH explicit bounds, so a caller could send a RelativeID that
+// matches the receipt while ALSO sending explicit bounds that contradict
+// it -- that must veto as a conflict, not silently pass because the
+// RelativeID half agreed.
+func TestCHAOS3900_ReceiptAndExplicitBoundsDisagreement_VetoesAsConflict(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_window_0003"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm0003", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("reuse gate must not be called on a window-veto request")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0003"}}
+	// Same RelativeID as the receipt (trailing_90d), but explicit bounds
+	// that flatly disagree with the receipt's own frozen Start/End -- a
+	// contradiction windowsAgree must catch even though the RelativeID
+	// half matches.
+	disagreeingStart := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	disagreeingEnd := time.Date(2020, 2, 1, 0, 0, 0, 0, time.UTC)
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{
+		RelativeID: RelativeWindowTrailing90D, Start: &disagreeingStart, End: &disagreeingEnd,
+	}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+}
+
+// TestCHAOS3900_NonCurrentAxisWithWindowReceipt_Vetoes is the codex review
+// (W1 round 1) HIGH-severity fix: a window receipt can never apply outside
+// the current axis, but the request contract does not forbid sending one
+// alongside a non-current TimeContext -- it must veto (never be silently
+// ignored, never reach the reuse gate or Interpret).
+func TestCHAOS3900_NonCurrentAxisWithWindowReceipt_Vetoes(t *testing.T) {
+	t.Parallel()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("reuse gate must not be called on a window-veto request")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	// mustReuseTestEngine's fixed clock is time.Unix(200, 0) -- see the
+	// matching comment in TestCHAOS3900_AxisConflict_... above.
+	asOf := time.Unix(100, 0).UTC()
+	request := validInvestigationRequest()
+	request.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &asOf}
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_window_0004", ReceiptID: "winr_confirm0004"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+}
+
+// TestCHAOS3900_MCPExplicitWindow_OmitsReuseKeyFragment is the codex review
+// (W1 round 1) MEDIUM-severity fix: an MCP bare explicit evidence_window is
+// tier=inferred_default under DP12(b), so it must NOT also contribute a
+// rel:/abs: reuse-key fragment -- that dimension is reserved for a DECISIVE
+// (question_stated/clarification_confirmed) window; an inferred-tier one
+// relies on WindowInferenceVersion instead.
+func TestCHAOS3900_MCPExplicitWindow_OmitsReuseKeyFragment(t *testing.T) {
+	t.Parallel()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
+
+	request := validInvestigationRequest()
+	request.Consumer = ConsumerInfo{Name: "acr-mcp", Version: "0.1.0", Surface: "mcp"}
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+
+	canon := engine.canonicalizeEvidenceWindow(context.Background(), reusePrincipal(), request)
+	if canon.Veto != windowVetoNone {
+		t.Fatalf("canonicalizeEvidenceWindow veto = %q, want none", canon.Veto)
+	}
+	if canon.Effective == nil {
+		t.Fatal("canonicalizeEvidenceWindow.Effective = nil, want a resolved inferred-tier window")
+	}
+	if canon.Effective.Provenance != WindowInferredDefault {
+		t.Errorf("Provenance = %q, want %q (DP12(b): MCP bare explicit window is never decisive)", canon.Effective.Provenance, WindowInferredDefault)
+	}
+	if canon.KeyComponent != "" {
+		t.Errorf("KeyComponent = %q, want \"\" -- an inferred-tier window must not contribute a rel:/abs: reuse-key fragment", canon.KeyComponent)
+	}
+}
+
+// TestCHAOS3900_NonMCPExplicitWindow_StillContributesReuseKeyFragment is the
+// companion positive case: a decisive (non-MCP, question_stated) explicit
+// window DOES contribute its rel:/abs: fragment, exactly as before -- the
+// MCP fix must not regress the ordinary web/workbench path.
+func TestCHAOS3900_NonMCPExplicitWindow_StillContributesReuseKeyFragment(t *testing.T) {
+	t.Parallel()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
+
+	request := validInvestigationRequest()
+	request.Consumer = ConsumerInfo{Name: "context-fabric-workbench", Version: "0.1.0", Surface: "workbench"}
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+
+	canon := engine.canonicalizeEvidenceWindow(context.Background(), reusePrincipal(), request)
+	if canon.Veto != windowVetoNone {
+		t.Fatalf("canonicalizeEvidenceWindow veto = %q, want none", canon.Veto)
+	}
+	if canon.Effective == nil || canon.Effective.Provenance != WindowQuestionStated {
+		t.Fatalf("Effective = %+v, want a question_stated window", canon.Effective)
+	}
+	if want := "rel:trailing_90d"; canon.KeyComponent != want {
+		t.Errorf("KeyComponent = %q, want %q", canon.KeyComponent, want)
+	}
+}

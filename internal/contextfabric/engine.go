@@ -358,7 +358,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// and persists the no_match terminal directly.
 	windowCanon := e.canonicalizeEvidenceWindow(ctx, principal, request)
 	if windowCanon.Veto != windowVetoNone {
-		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, binding)
+		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, binding)
 	}
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
@@ -499,6 +499,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, err
 	}
 	interpretation.TimeContext = clampedInterpretedTime
+	// CHAOS-3900 W1 (codex review finding, round 1): a question_stated/
+	// clarification_confirmed window was canonicalized above against the
+	// REQUEST's own current axis (canonicalizeEvidenceWindow only ever
+	// resolves windowCanon.Effective when request.TimeContext.Axis is
+	// current) -- but Interpret may still move the axis away from current
+	// ("what was the status last month" on an axis=current request). A
+	// window commitment survives that flip only by accident: without this
+	// check it is silently dropped (composeEffectiveWindow's own
+	// interpreted-axis gate) while the reuse/save key upstream still
+	// carries it, with no disclosed reason either way. Name the
+	// disagreement instead: no answer is synthesized under a window
+	// commitment interpretation no longer honors.
+	if windowCanon.Effective != nil && clampedInterpretedTime.Axis != TemporalCurrent {
+		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, binding)
+	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
 	// investigation -- not later, at Save. A snapshot taken at Save time

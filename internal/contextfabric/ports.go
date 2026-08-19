@@ -479,11 +479,22 @@ type ReuseKey struct {
 	// answer produced under the OLD rules must not be silently replayed
 	// under the new ones.
 	//
-	// Deliberately scoped to INFERRED windows only (design brief §5.1):
-	// a request-side STATED or CONFIRMED window is already a conjunctive
-	// dimension via TimeAxisKey's own rel:/abs: fragment (windowKeyComponent,
-	// window.go) -- see TimeAxisKeyFor's doc comment -- so binding this
-	// dimension to those rows too would be redundant, not merely harmless.
+	// This dimension is APPLIED UNCONDITIONALLY to every reuse-participating
+	// row, exactly like every sibling in this bundle -- it is NOT
+	// conditionally omitted for a stated/confirmed-window row (codex
+	// review, W1 round 1: an earlier draft of this comment claimed a
+	// scoping this implementation does not actually enforce). For a
+	// stated/confirmed row the dimension is REDUNDANT with TimeAxisKey's
+	// own rel:/abs: fragment (windowKeyComponent, window.go) -- see
+	// TimeAxisKeyFor's doc comment -- which already fully disambiguates
+	// it, so a deploy that only changes inference rules will also
+	// needlessly cold-cache stated/confirmed rows. That is an accepted,
+	// SAFE cost (over-invalidation, never a wrong answer or a false hit),
+	// identical in shape to every other conjunctive dimension's own
+	// fail-closed convention -- true per-row scoping (populating this
+	// field only when the window that actually rode the answer was
+	// inferred) would require a dynamic, per-Save value rather than one
+	// deployment-current constant, and is not implemented in W1.
 	WindowInferenceVersion string
 	// GraphEpoch (CHAOS-3898 §2.3) is this investigation's own
 	// ResolvedGraphBinding.Epoch -- a THIRTEENTH conjunctive dimension,

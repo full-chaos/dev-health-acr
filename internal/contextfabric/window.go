@@ -153,6 +153,19 @@ const (
 	// explicit evidence_window beyond ordinary clock skew. Agreeing bounds
 	// are fine (receipt provenance wins).
 	windowVetoConfirmationConflict windowVetoReason = "window_confirmation_conflict"
+	// windowVetoAxisConflict: a question_stated/clarification_confirmed
+	// window resolved at precedence step 1 (against the REQUEST's own
+	// current-axis TimeContext, the only axis a window can be canonicalized
+	// against), but Interpret went on to move the axis away from current.
+	// Checked POST-Interpret (Investigate, after clampedInterpretedTime is
+	// computed) -- codex review finding (W1 round 1): without this check, a
+	// model axis flip silently dropped the confirmed window from the
+	// answer (composeEffectiveWindow returns nil off the current-axis
+	// gate) while STILL saving/keying the result as if the window applied,
+	// with no disclosed reason for either. This veto makes the disagreement
+	// a NAMED terminal instead: no answer is synthesized under a window
+	// commitment interpretation itself no longer honors.
+	windowVetoAxisConflict windowVetoReason = "window_axis_conflict"
 )
 
 // windowBindingOutcome is the closed, counted vocabulary
@@ -244,17 +257,30 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 		e.telemetry.RecordWindowBinderOutcome(ctx, principal, binderProposal.Reason)
 	}
 
+	// PriorWindowReceipts is checked BEFORE the axis gate, deliberately: a
+	// receipt can never apply outside the current axis (window is
+	// representable ONLY on axis=current), but that is a reason for the
+	// receipt to VETO, not a reason to skip it. Codex review finding (W1
+	// round 1): the axis gate used to short-circuit BEFORE this check, so a
+	// non-current-axis request carrying an unresolvable/inapplicable
+	// receipt (the request contract does not forbid PriorWindowReceipts on
+	// a non-current axis, only EvidenceWindow) silently proceeded to
+	// interpretation and reuse as if no receipt had been sent -- exactly
+	// the "no answer of any kind is substituted" invariant this file's own
+	// package doc comment promises, broken on this one axis.
+	if len(request.PriorWindowReceipts) > 0 {
+		if request.TimeContext.Axis != TemporalCurrent {
+			return requestWindowCanonicalization{Veto: windowVetoConfirmationUnresolved, BinderProposal: binderProposal}
+		}
+		return e.resolveWindowReceipts(ctx, principal, request, binderProposal)
+	}
+
 	if request.TimeContext.Axis != TemporalCurrent {
 		// Window is representable ONLY on the current axis
 		// (ContextFabricTimeContext.Validate already refuses an explicit
-		// evidence_window here at the wire boundary) -- nothing to
-		// canonicalize regardless of any stray PriorWindowReceipts: there
-		// is no confirmable window slot on this axis to veto over.
+		// evidence_window here at the wire boundary) -- nothing further to
+		// canonicalize.
 		return requestWindowCanonicalization{BinderProposal: binderProposal}
-	}
-
-	if len(request.PriorWindowReceipts) > 0 {
-		return e.resolveWindowReceipts(ctx, principal, request, binderProposal)
 	}
 
 	if request.TimeContext.EvidenceWindow == nil {
@@ -265,10 +291,29 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 		return requestWindowCanonicalization{Veto: windowVetoConfirmationConflict, BinderProposal: binderProposal}
 	}
 	return requestWindowCanonicalization{
-		Effective:      &effective,
-		KeyComponent:   windowKeyComponent(effective),
+		Effective: &effective,
+		// Codex review finding (W1 round 1): the rel:/abs: key fragment is
+		// for a DECISIVE (question_stated/clarification_confirmed) window
+		// only -- see ReuseKey.WindowInferenceVersion's own doc comment
+		// ("case 1... don't need this guard"). An MCP bare explicit window
+		// is tier=inferred_default under DP12(b) (windowExplicitProvenance),
+		// so it must NOT also contribute a key fragment: that dimension is
+		// what WindowInferenceVersion exists to guard instead.
+		KeyComponent:   windowKeyComponentForProvenance(effective),
 		BinderProposal: binderProposal,
 	}
+}
+
+// windowKeyComponentForProvenance returns windowKeyComponent(effective) for
+// a DECISIVE provenance (question_stated/clarification_confirmed), and ""
+// for inferred_default -- see canonicalizeEvidenceWindow's own call site
+// comment for why an inferred-tier window must never contribute a rel:/abs:
+// reuse-key fragment.
+func windowKeyComponentForProvenance(effective contractsv1.ContextFabricEffectiveEvidenceWindow) string {
+	if effective.Provenance == WindowInferredDefault {
+		return ""
+	}
+	return windowKeyComponent(effective)
 }
 
 // deriveRequestedWindow canonicalizes a caller's explicit
@@ -375,13 +420,22 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 }
 
 // windowsAgree reports whether a receipt-confirmed effective window agrees
-// with a caller's own explicit request, beyond ordinary clock skew.
+// with a caller's own explicit request, beyond ordinary clock skew. BOTH a
+// carried RelativeID and carried explicit Start/End are checked when
+// present -- the wire contract legally admits a RequestedEvidenceWindow
+// carrying a RelativeID TOGETHER WITH explicit bounds (validate_context_fabric_window.go's
+// own shape rule only requires them to be internally ordered, never
+// mutually exclusive with RelativeID), so a caller could otherwise send a
+// RelativeID that happens to match the receipt while ALSO sending explicit
+// bounds that contradict it -- Codex review finding (W1 round 1): checking
+// RelativeID alone let that contradiction silently pass as "agree".
 func windowsAgree(effective contractsv1.ContextFabricEffectiveEvidenceWindow, requested contractsv1.ContextFabricRequestedEvidenceWindow) bool {
-	if requested.RelativeID != "" {
-		return requested.RelativeID == effective.RelativeID
+	if requested.RelativeID != "" && requested.RelativeID != effective.RelativeID {
+		return false
 	}
 	if requested.Start == nil || requested.End == nil {
-		// Nothing concrete to disagree with.
+		// Nothing concrete to disagree with beyond RelativeID, already
+		// checked above.
 		return true
 	}
 	if effective.Start == nil || effective.End == nil {
@@ -535,6 +589,7 @@ const windowVetoPlaceholderJudgment = "evidence window confirmation"
 var windowVetoLimitations = map[windowVetoReason]string{
 	windowVetoConfirmationUnresolved: "A referenced evidence-window confirmation could not be resolved, so no canonical facts were read. Retry with the same receipt, or re-ask with an explicit evidence window.",
 	windowVetoConfirmationConflict:   "The evidence-window confirmation conflicted with another window signal on this request, so no canonical facts were read. Resend a single, agreeing window confirmation.",
+	windowVetoAxisConflict:           "The confirmed evidence window no longer applies once the question was understood to be about a different time axis, so no canonical facts were read. Re-ask without a window confirmation, or confirm the window for a current-state question.",
 }
 
 func windowVetoLimitation(veto windowVetoReason) string {
@@ -545,61 +600,91 @@ func windowVetoLimitation(veto windowVetoReason) string {
 }
 
 func windowCanonicalizationOutcomeForVeto(veto windowVetoReason) WindowCanonicalizationOutcome {
-	if veto == windowVetoConfirmationConflict {
+	switch veto {
+	case windowVetoConfirmationConflict, windowVetoAxisConflict:
 		return WindowCanonicalizationVetoConflict
+	default:
+		return WindowCanonicalizationVetoUnresolved
 	}
-	return WindowCanonicalizationVetoUnresolved
 }
 
 // windowVetoResult composes the model-free, no_match result for a window
 // canonicalization veto (design brief's own closed-failure-table
-// discipline, applied to windows) -- reached BEFORE Interpret and BEFORE
-// any graph resolution, so there is no real interpretation, subject
-// resolution, or graph context to carry: every answer-bearing field is
-// empty by construction, mirroring terminalResult's own discipline for the
+// discipline, applied to windows) -- every answer-bearing field is empty by
+// construction, mirroring terminalResult's own discipline for the
 // subjectless-resolution case (unresolved.go).
+//
+// interpretation is nil for the PRE-Interpret vetoes (unresolved/conflict,
+// reached before Interpret ever ran -- a placeholder Interpretation is
+// synthesized, mirroring the request's own TimeContext) and non-nil for the
+// POST-Interpret windowVetoAxisConflict case, where a real interpretation
+// already exists and must be reported verbatim rather than replaced with a
+// placeholder.
 //
 // AllowClarification is NEVER consulted here (design brief W1 scope,
 // "AllowClarification=false per-terminal pins"): every window veto is
-// no_match, unconditionally -- there is nothing yet to offer a
-// clarification prompt ABOUT.
+// no_match, unconditionally.
 //
 // binding is the SAME ResolvedGraphBinding Investigate resolves before
 // this call (needed only to stamp Save's graphEpoch column honestly, since
 // binding resolution -- a graph read, never a model call -- has already
-// run by the time canonicalizeEvidenceWindow's own veto is known).
-func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, binding ResolvedGraphBinding) (InvestigationResult, error) {
+// run by the time any window veto is known, pre- or post-Interpret).
+func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, binding ResolvedGraphBinding) (InvestigationResult, error) {
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))
 	}
 	limitation := windowVetoLimitation(veto)
+	resolvedInterpretation := InterpretedQuestion{
+		Shape:             ShapeOpen,
+		RequestedJudgment: windowVetoPlaceholderJudgment,
+		TimeContext:       request.TimeContext,
+		FactRequirements:  []FactRequirement{},
+	}
+	// timeAxisKeySource is the TimeContext Save/lookup key symmetry is
+	// measured against -- the REQUEST context for a pre-Interpret veto
+	// (matching tryReuse's own pre-Interpret lookup key for this exact
+	// request), or the INTERPRETED context for the post-Interpret axis
+	// conflict (the request-side key was already proved, by construction,
+	// to be what a fresh tryReuse call for this identical request would
+	// compute -- see canonicalizeEvidenceWindow's own ordering comment).
+	timeAxisKeySource := request.TimeContext
+	if interpretation != nil {
+		resolvedInterpretation = *interpretation
+		timeAxisKeySource = interpretation.TimeContext
+	}
+	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
 	result := InvestigationResult{
-		SchemaVersion: InvestigationResultSchemaV1,
-		ResultID:      e.newResultID(),
-		RequestID:     request.RequestID,
-		GeneratedAt:   e.now().UTC(),
-		Status:        InvestigationNoMatch,
-		Question:      request.Question,
-		Reused:        false,
-		Interpretation: InterpretedQuestion{
-			Shape:             ShapeOpen,
-			RequestedJudgment: windowVetoPlaceholderJudgment,
-			TimeContext:       request.TimeContext,
-			FactRequirements:  []FactRequirement{},
-		},
-		SubjectResolution:   SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
-		DirectJudgment:      "",
-		CurrentState:        "",
-		StrongestPressures:  []string{},
-		Drivers:             []DriverJudgment{},
-		RemainingWork:       []Finding{},
-		ReadinessGaps:       []Finding{},
-		Paths:               []RelationshipPath{},
-		Conflicts:           []Finding{},
-		Limitations:         []string{limitation},
-		EvidenceRefIDs:      []string{},
-		ClaimedFacts:        []ClaimedFact{},
-		Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		SchemaVersion:      InvestigationResultSchemaV1,
+		ResultID:           e.newResultID(),
+		RequestID:          request.RequestID,
+		GeneratedAt:        e.now().UTC(),
+		Status:             InvestigationNoMatch,
+		Question:           request.Question,
+		Reused:             false,
+		Interpretation:     resolvedInterpretation,
+		SubjectResolution:  SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		DirectJudgment:     "",
+		CurrentState:       "",
+		StrongestPressures: []string{},
+		Drivers:            []DriverJudgment{},
+		RemainingWork:      []Finding{},
+		ReadinessGaps:      []Finding{},
+		Paths:              []RelationshipPath{},
+		Conflicts:          []Finding{},
+		Limitations:        []string{limitation},
+		EvidenceRefIDs:     []string{},
+		ClaimedFacts:       []ClaimedFact{},
+		Coverage:           emptyCoverage,
+		// CHAOS-3900 W1 fix (test failure surfaced this): a non-current
+		// axis result REQUIRES a Temporal label (ContextFabricInvestigationResult.Validate,
+		// AC-3781-2's own invariant) -- reachable here whenever the veto's
+		// own TimeContext (request-side for a pre-Interpret veto, or the
+		// real interpreted one for windowVetoAxisConflict) is non-current,
+		// e.g. TestCHAOS3900_NonCurrentAxisWithWindowReceipt_Vetoes and
+		// TestCHAOS3900_AxisConflict_InterpreterFlipVetoesInsteadOfSilentlyDropping.
+		// composeTemporalLabel already returns nil on the current axis, so
+		// this is a no-op for the ordinary current-axis veto case.
+		Temporal:            composeTemporalLabel(resolvedInterpretation, emptyCoverage, ""),
 		Versions:            e.terminalVersions(),
 		DeterministicAnswer: limitation,
 		Warnings:            []string{},
@@ -608,14 +693,11 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
-		// Keyed on the REQUEST context alone (no window key component --
-		// unresolved/conflicting receipts never earned one), matching
-		// tryReuse's OWN lookup key for this same request: a window veto
-		// is never itself a reusable answer (its own status is a refusal,
-		// not a judgment), but the key must still agree with what a lookup
-		// for this exact request would compute, for the same symmetry
-		// reason every other Save call site in this package documents.
-		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+		// Keyed on the SAME TimeContext tryReuse's own lookup for this
+		// exact request would have used (see timeAxisKeySource above) --
+		// never on a window key component: a window veto is never itself
+		// a reusable answer (its own status is a refusal, not a judgment).
+		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}
