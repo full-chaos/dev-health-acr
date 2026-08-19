@@ -472,6 +472,26 @@ var acrEnvIsolationAllowlist = map[string]bool{
 	"ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED": true, "ACR_CONTEXT_FABRIC_FALKOR_ADDR": true,
 	"ACR_CONTEXT_FABRIC_FALKOR_TLS": true, "ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE": true,
 	"ACR_CONTEXT_FABRIC_MODEL_PROVIDER": true, "ACR_CONTEXT_FABRIC_MODEL": true,
+	// ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED is DELIBERATELY absent
+	// from this allowlist (codex review finding, HIGH, on the FIRST
+	// version of this fix-forward -- corrected here): wireProductionEnv's
+	// own set() below only calls t.Setenv when
+	// ACR_TEST_TRIAL_GRAPH_LIFECYCLE_ENABLED is non-empty, so allowlisting
+	// the real name would have let an operator's UNRELATED ambient
+	// ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED export survive
+	// clearAmbientACREnv untouched whenever the new trial-prefixed var was
+	// left unset -- silently enabling epoch-1 reads (or worse,
+	// TestGenerativeTrialCorpus picking it up too, since that test shares
+	// this same wireProductionEnv/allowlist and never records
+	// ResolvedActiveEpoch/GraphLifecycleEnabled in its own provenance at
+	// all) with no record of it happening. This is EXACTLY the ambient-env
+	// leak class ACR_CONTEXT_FABRIC_MODEL_FALLBACK's own comment below
+	// already documents for the identical reason -- the first version of
+	// this comment incorrectly claimed an exemption from that reasoning;
+	// it does not have one. Leaving it OUT of the allowlist means
+	// clearAmbientACREnv unsets it unconditionally first, and set() is the
+	// ONLY path that can ever re-enable it, from the explicit
+	// ACR_TEST_TRIAL_ source alone.
 	// ACR_CONTEXT_FABRIC_MODEL_FALLBACK is DELIBERATELY absent from this
 	// allowlist (sol review F1): it is the one var this function sets
 	// CONDITIONALLY (only when ACR_TEST_TRIAL_MODEL_FALLBACK is
@@ -542,6 +562,16 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	set("ACR_CONTEXT_FABRIC_FALKOR_ADDR", requireEnv(t, "ACR_TEST_TRIAL_FALKOR_ADDR"))
 	set("ACR_CONTEXT_FABRIC_FALKOR_TLS", "false")
 	set("ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE", "true")
+	// CHAOS-3896 Slice B (team-lead-authorized "NEVER-AGAIN RIDER"
+	// fix-forward): clearAmbientACREnv wipes an operator's own
+	// ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED export before this
+	// function ever runs -- exactly the class of ambient-env bug this
+	// whole isolation discipline exists to prevent, which is precisely
+	// why "export the real var and hope" silently measured epoch 0 twice
+	// before this fix. The trial-prefixed source var survives the clear
+	// (ACR_TEST_TRIAL_ prefix exception, clearAmbientACREnv's own
+	// condition) and is explicit, not ambient.
+	set("ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED", os.Getenv("ACR_TEST_TRIAL_GRAPH_LIFECYCLE_ENABLED"))
 
 	if !modelOverridden {
 		set("ACR_CONTEXT_FABRIC_MODEL_PROVIDER", "openai")
@@ -1281,6 +1311,21 @@ type trialProvenance struct {
 	// aborting the arm. false (the default) for every run before this
 	// field existed and every run that does not set the env var.
 	ControlsContinue bool `json:"controls_continue"`
+	// ResolvedActiveEpoch/GraphLifecycleEnabled (CHAOS-3896 Slice B,
+	// team-lead-authorized "NEVER-AGAIN RIDER") are the run's own
+	// structural proof of which graph epoch it actually read -- an epoch
+	// claim without this is exactly the "measurement fails toward fine"
+	// class chris's rider closes: two earlier checkpoint artifacts
+	// believed they read epoch 1 with the lifecycle flag exported and
+	// actually read epoch 0 (falkorgraph.Config.EpochResolver was never
+	// wired). 0 with GraphLifecycleEnabled=false is every run before this
+	// field existed and every run that does not enable the flag --
+	// byte-identical, not a breaking change to this shared struct. Only
+	// chaos3884_replay_harness_test.go populates these two fields today;
+	// every other trial script's provenance leaves them at their zero
+	// values.
+	ResolvedActiveEpoch   int64 `json:"resolved_active_epoch"`
+	GraphLifecycleEnabled bool  `json:"graph_lifecycle_enabled"`
 	// CommitGate is CHAOS-3857's sweep-cell record: the raw string this
 	// run actually read for each of falkorgraph's four commit-gate env
 	// vars (CommitGatePolicy's three thresholds + the M override), empty

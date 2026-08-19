@@ -81,6 +81,23 @@ type CensusOutcome struct {
 	ClosureMismatch     bool
 	StatementCount      int
 	RowsRead            int
+	// SatisfierCanonicalID/SatisfierCanonicalIDs/SatisfierSetClosureMismatch
+	// (CHAOS-3896 Slice B) are devhealthsource.CensusResult's own
+	// SatisfierNaturalKey/SatisfierNaturalKeys/SatisfierSetClosureMismatch,
+	// ALREADY BRIDGED to graph canonical ids by CensusFunc's own
+	// implementation (devhealthsource.NewCensusFunc) before this struct is
+	// ever built -- graphrank cannot call the bridge itself (see this
+	// type's own doc comment on the import-cycle boundary), so a
+	// CensusFunc implementation that wants Slice B's presentation ordering
+	// to see anything MUST hand back already-resolved canonical ids here,
+	// never a raw natural key. Consumed ONLY by
+	// chaos3896_slice_b_presentation.go's survivors-first reorder --
+	// in-process only, deliberately NEVER copied into ResolutionTraceEvent
+	// by this file's own emit closure (see TestEmitNeverTracesSurvivorData,
+	// chaos3896_slice_b_presentation_test.go).
+	SatisfierCanonicalID        string
+	SatisfierCanonicalIDs       []string
+	SatisfierSetClosureMismatch bool
 }
 
 // CensusFunc is the shadow round's census execution dependency -- injected
@@ -106,6 +123,14 @@ type KindAttestation struct {
 	RowsRead        int
 	HandleApplied   bool
 	AnchorApplied   bool
+	// SatisfierCanonicalID/SatisfierCanonicalIDs/SatisfierSetClosureMismatch
+	// (CHAOS-3896 Slice B) mirror CensusOutcome's own fields of the same
+	// name -- see that type's doc comment. In-process only, deliberately
+	// NEVER traced (see this file's own emit closure and
+	// TestEmitNeverTracesSurvivorData).
+	SatisfierCanonicalID        string
+	SatisfierCanonicalIDs       []string
+	SatisfierSetClosureMismatch bool
 }
 
 // Attestation is the shadow round's own per-resolution artifact (brief
@@ -370,6 +395,15 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			ka.ClosureMismatch = outcome.ClosureMismatch
 			ka.StatementCount = outcome.StatementCount
 			ka.RowsRead = outcome.RowsRead
+			// CHAOS-3896 Slice B: carried through for the presentation-only
+			// reorder consumer; deliberately NOT read anywhere in this
+			// function's own decisive outcome computation below (mismatch/
+			// satisfierKinds/multiSatisfierKinds stay keyed off
+			// outcome.ClosureMismatch/outcome.Count exactly as before this
+			// slice).
+			ka.SatisfierCanonicalID = outcome.SatisfierCanonicalID
+			ka.SatisfierCanonicalIDs = outcome.SatisfierCanonicalIDs
+			ka.SatisfierSetClosureMismatch = outcome.SatisfierSetClosureMismatch
 			if outcome.ClosureMismatch {
 				mismatch = true
 			} else if outcome.Count == 1 {

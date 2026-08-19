@@ -256,7 +256,20 @@ func TestRunCensus_AggregateStatementPinsEmptyResultSetting(t *testing.T) {
 // TestRunCensus_MultiSatisfier_NoRowStatement pins that count>1 never
 // issues the row statement at all (brief §1.3(2): "count>1 -> clarify with
 // no row fetch").
-func TestRunCensus_MultiSatisfier_NoRowStatement(t *testing.T) {
+// TestRunCensus_MultiSatisfier_NoDecisiveRowStatement pins what survives of
+// this test's original name post-CHAOS-3896 Slice B: the DECISIVE row
+// statement (the one that could ever populate SatisfierNaturalKey/feed a
+// would_commit outcome) is still never issued at count>1 -- that half of
+// "no row statement at count>1" remains exactly true. What Slice B ADDS is
+// a SEPARATE, NON-DECISIVE row statement (the satisfier-SET enrichment
+// fetch, 2<=count<=CensusBudget) -- this fixture's fake client answers
+// every non-aggregate Query call with its own (empty, in this test)
+// rowKeys, so the fetch's own row count (0) disagrees with the aggregate's
+// (3), landing on SatisfierSetClosureMismatch -- see
+// TestRunCensus_SatisfierSetFetchedWhenCountInEnrichmentRange
+// (chaos3896_slice_b_census_test.go) for the happy path with a populated
+// set.
+func TestRunCensus_MultiSatisfier_NoDecisiveRowStatement(t *testing.T) {
 	t.Parallel()
 	client := &censusFakeClient{aggregateCount: 3, aggregateReadAt: time.Now().UTC()}
 	result, err := devhealthsource.RunCensus(context.Background(), client, "org-1", contextfabric.SubjectPullRequest, pullRequestPredicate(t))
@@ -266,11 +279,21 @@ func TestRunCensus_MultiSatisfier_NoRowStatement(t *testing.T) {
 	if result.Count != 3 || result.ClosureMismatch {
 		t.Fatalf("result = %#v, want Count=3 ClosureMismatch=false", result)
 	}
-	if result.StatementCount != 1 {
-		t.Fatalf("StatementCount = %d, want 1 (no row statement at count>1)", result.StatementCount)
+	if result.SatisfierNaturalKey != "" {
+		t.Fatalf("SatisfierNaturalKey = %q, want empty -- the DECISIVE row statement never runs at count>1", result.SatisfierNaturalKey)
 	}
-	if len(client.calls) != 1 {
-		t.Fatalf("issued %d statements, want exactly 1", len(client.calls))
+	// CHAOS-3896 Slice B: the enrichment fetch DOES now run (2<=3<=CensusBudget)
+	// -- this fixture's empty rowKeys means it disagrees with the aggregate's
+	// own count, so it lands on SatisfierSetClosureMismatch rather than a
+	// populated SatisfierNaturalKeys.
+	if result.StatementCount != 2 {
+		t.Fatalf("StatementCount = %d, want 2 (aggregate + the new non-decisive satisfier-SET enrichment fetch)", result.StatementCount)
+	}
+	if !result.SatisfierSetClosureMismatch {
+		t.Fatal("SatisfierSetClosureMismatch = false, want true (the fake client's empty rowKeys disagree with aggregateCount=3)")
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("issued %d statements, want exactly 2", len(client.calls))
 	}
 }
 

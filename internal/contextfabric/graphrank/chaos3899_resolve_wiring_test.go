@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,7 +13,19 @@ import (
 
 // TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution is
 // CHAOS-3899's own zero-behavior-change proof (design brief v5 §6 Slice A:
-// "decisions suppressed... production outcomes byte-identical"). It runs
+// "decisions suppressed... production outcomes byte-identical"), STILL
+// VALID after CHAOS-3896 Slice B: this scenario's single candidate means
+// SurvivorsFirstOrder has nothing to reorder (a 1-element list's order is
+// invariant) even though the fake CensusFunc reports Count==1 -- the
+// scenario purposely does NOT populate SatisfierCanonicalID (the field
+// only devhealthsource.NewCensusFunc's own bridging populates), so
+// classifyCandidate would land on verdictNeutral even with more
+// candidates. Slice B's OWN reorder proof lives in
+// TestResolveSubjects_SurvivorsFirstOrderReordersLiveThroughResolveSubjects
+// below; THIS test's job stays what it always was -- proving the round's
+// DECISIVE would_commit/would_no_match/would_clarify verdict never
+// contaminates resolution.Status/Committed, the one half of "zero
+// behavior change" that remains absolute post-Slice-B. It runs
 // the IDENTICAL stalled-resolution scenario twice -- once with
 // deps.CensusFunc nil (today's production wiring), once with a CensusFunc
 // that would answer would_commit (Count==1) if the shadow round's output
@@ -71,6 +84,124 @@ func TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution(t *testing.T)
 	decision := tracerWith.eventsForStage("evidence_round")[0]
 	if decision.ShadowOutcome != string(ShadowWouldCommit) {
 		t.Fatalf("shadow outcome = %q, want %q (proving the round genuinely reached a would-commit verdict it was still forbidden from acting on)", decision.ShadowOutcome, ShadowWouldCommit)
+	}
+}
+
+// TestResolveSubjects_SurvivorsFirstOrderReordersLiveThroughResolveSubjects
+// is CHAOS-3896 Slice B's own end-to-end wiring proof: a two-candidate
+// AMBIGUOUS, stalled, census-registered-kind resolution, with a CensusFunc
+// that (as devhealthsource.NewCensusFunc's own bridging would) reports a
+// SatisfierCanonicalID naming ONE of the two candidates -- proving the
+// reorder actually reaches resolution.Candidates AND resolution.ClarificationPrompt
+// through the real ResolveSubjects call path, not just SurvivorsFirstOrder
+// called in isolation (chaos3896_slice_b_presentation_test.go). Status and
+// Committed are asserted unchanged (still ambiguous, still nothing
+// committed) -- membership and decision are exactly as
+// ResolveFromMergedCandidatesWithGate produced; only order and prompt
+// text move.
+func TestResolveSubjects_SurvivorsFirstOrderReordersLiveThroughResolveSubjects(t *testing.T) {
+	t.Parallel()
+	// Two close-confidence PR candidates -- SubjectPullRequest IS a
+	// registered census kind (unlike TestResolveSubjectsMarksCloseCandidatesAmbiguousAndOffersClarification's
+	// own SubjectProject fixture, which is not).
+	loser := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:1", "PR #1", 0.75, "*")
+	winner := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:2", "PR #2", 0.70, "*")
+	backend := &fakeGraphBackend{
+		searchResults:   map[string][]CandidateNode{"Which PR": {loser, winner}},
+		searchTruncated: true, // required for the shadow round's own "stalled" gate
+	}
+	deps := backend.deps()
+	deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		// As devhealthsource.NewCensusFunc's own bridging would report: the
+		// census names PR #2 as the sole real satisfier.
+		return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierCanonicalID: "pull_request:repo-1:2"}, nil
+	}
+	// The question text must contain a handle the closed grammar registry
+	// recognizes (design brief §1.2's "PR 532"/"PR #532" pattern) -- without
+	// a bound handle (or a unique-claimant anchor, neither of which this
+	// fixture wires) the round refuses at D2(a) (no_discriminators) before
+	// ever reaching CensusFunc at all.
+	request := testRequest()
+	request.Question = "Why did PR #2 fail?"
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want none -- Slice B must never change the decision", resolution.Committed)
+	}
+	if len(resolution.Candidates) != 2 {
+		t.Fatalf("resolution.Candidates = %#v, want both candidates still present (membership unchanged)", resolution.Candidates)
+	}
+	if resolution.Candidates[0].Subject.CanonicalID != "pull_request:repo-1:2" {
+		t.Fatalf("resolution.Candidates[0] = %q, want the census-attested survivor (%q) first", resolution.Candidates[0].Subject.CanonicalID, "pull_request:repo-1:2")
+	}
+	if resolution.Candidates[1].Subject.CanonicalID != "pull_request:repo-1:1" {
+		t.Fatalf("resolution.Candidates[1] = %q, want the census-eliminated candidate (%q) last", resolution.Candidates[1].Subject.CanonicalID, "pull_request:repo-1:1")
+	}
+	if resolution.ClarificationPrompt == "" {
+		t.Fatal("resolution.ClarificationPrompt is empty for an ambiguous, clarification-allowed request")
+	}
+	if !strings.Contains(resolution.ClarificationPrompt, "PR #2") || strings.Index(resolution.ClarificationPrompt, "PR #2") > strings.Index(resolution.ClarificationPrompt, "PR #1") {
+		t.Fatalf("resolution.ClarificationPrompt = %q, want the survivor (PR #2) mentioned before the eliminated candidate (PR #1)", resolution.ClarificationPrompt)
+	}
+}
+
+// TestResolveSubjects_SurvivorsFirstOrderReordersLiveViaSatisfierSet is
+// TestResolveSubjects_SurvivorsFirstOrderReordersLiveThroughResolveSubjects's
+// own companion (codex review finding, addressed): that test's CensusFunc
+// only ever exercises the Count==1 witness path -- this one exercises the
+// NEW 2<=count<=CensusBudget satisfier-SET path end-to-end through
+// ResolveSubjects, not just at the SurvivorsFirstOrder/RunCensus unit
+// level. Three candidates; the census names two of them (via
+// SatisfierCanonicalIDs) as real, the third as census-eliminated.
+func TestResolveSubjects_SurvivorsFirstOrderReordersLiveViaSatisfierSet(t *testing.T) {
+	t.Parallel()
+	eliminated := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:3", "PR #3", 0.80, "*")
+	survivor1 := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:1", "PR #1", 0.75, "*")
+	survivor2 := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:2", "PR #2", 0.70, "*")
+	backend := &fakeGraphBackend{
+		searchResults:   map[string][]CandidateNode{"Which PR": {eliminated, survivor1, survivor2}},
+		searchTruncated: true,
+	}
+	deps := backend.deps()
+	deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		// As devhealthsource.NewCensusFunc's own bridging would report for
+		// a closure-verified 2<=count<=CensusBudget enrichment fetch: PR #1
+		// and PR #2 are real, PR #3 is not among the satisfiers.
+		return CensusOutcome{
+			Count: 2, CensusReadAt: time.Now().UTC(),
+			SatisfierCanonicalIDs: []string{"pull_request:repo-1:1", "pull_request:repo-1:2"},
+		}, nil
+	}
+	request := testRequest()
+	request.Question = "Why did PR #2 fail?"
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want none -- Slice B must never change the decision", resolution.Committed)
+	}
+	if len(resolution.Candidates) != 3 {
+		t.Fatalf("resolution.Candidates = %#v, want all three candidates still present (membership unchanged)", resolution.Candidates)
+	}
+	if resolution.Candidates[2].Subject.CanonicalID != "pull_request:repo-1:3" {
+		t.Fatalf("resolution.Candidates[2] = %q, want the census-eliminated candidate (PR #3) last", resolution.Candidates[2].Subject.CanonicalID)
+	}
+	survivors := map[string]bool{
+		resolution.Candidates[0].Subject.CanonicalID: true,
+		resolution.Candidates[1].Subject.CanonicalID: true,
+	}
+	if !survivors["pull_request:repo-1:1"] || !survivors["pull_request:repo-1:2"] {
+		t.Fatalf("resolution.Candidates[0:2] = %#v, want both satisfier-set survivors ahead of the eliminated candidate", resolution.Candidates[:2])
+	}
+	if resolution.ClarificationPrompt == "" {
+		t.Fatal("resolution.ClarificationPrompt is empty for an ambiguous, clarification-allowed request")
+	}
+	if strings.Index(resolution.ClarificationPrompt, "PR #3") < strings.Index(resolution.ClarificationPrompt, "PR #1") ||
+		strings.Index(resolution.ClarificationPrompt, "PR #3") < strings.Index(resolution.ClarificationPrompt, "PR #2") {
+		t.Fatalf("resolution.ClarificationPrompt = %q, want the eliminated candidate (PR #3) mentioned after both survivors", resolution.ClarificationPrompt)
 	}
 }
 
