@@ -361,6 +361,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, binding)
 	}
 
+	// CHAOS-3900 P1 (pivot-intent design brief §2.1): canonicalize
+	// structure receipts (kindr_/ancr_/handr_) BEFORE tryReuse too, same
+	// ordering discipline and the same reason as canonicalizeEvidenceWindow
+	// above -- resolving them here, before any reuse lookup, means a
+	// follow-up confirming structure via receipt can never be served a
+	// cached answer generated under unconfirmed inference instead.
+	structureCanon := e.canonicalizeStructure(ctx, principal, request)
+	if structureCanon.Veto != structureVetoNone {
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, binding)
+	}
+
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
 	// ordering is the entire mechanism behind AC-3782-1's zero-model-call
 	// guarantee for a reuse hit. tryReuse itself only ever returns
@@ -379,8 +390,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// instant at different arrival times, and those answers legitimately
 	// differ. Keying on the wire value served a request meaning 12:00:30
 	// an answer that had meant 12:00:00.
-	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding); ok {
-		return reused, nil
+	//
+	// CHAOS-3900 P1 (design brief §2.1/DP11): a non-empty confirmed-structure
+	// set BYPASSES the reuse lookup entirely -- v1 picks bypass over folding
+	// structure into ReuseKey (deferred until confirmation-turn volume
+	// justifies the optimization). This is also what makes the extended
+	// source-ineligibility rule (no structure-bearing result is ever a
+	// reuse SOURCE) sound from the consuming side too: a request that just
+	// confirmed structure never even attempts to read the cache a
+	// structure-bearing row might otherwise sit in.
+	if len(structureCanon.Confirmed) == 0 {
+		if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding); ok {
+			return reused, nil
+		}
 	}
 
 	// Prior-result receipts (PriorSubjectReceipts) name a subject already
@@ -594,7 +616,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon)
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon)
 	}
 
 	factRequest := CanonicalFactRequest{
@@ -703,6 +725,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}
+	// CHAOS-3900 P1: the confirmed_structure echo, composed unconditionally
+	// (empty/nil when this request carried no structure receipts) --
+	// mirrors EffectiveEvidenceWindow's own placement, right beside the
+	// window echo it is the structure-frame sibling of.
+	result.ConfirmedStructure = composeConfirmedStructure(structureCanon.Confirmed)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

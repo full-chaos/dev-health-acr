@@ -184,6 +184,7 @@ func (e *Engine) terminalResult(
 	subjectCandidatesAuthzDropped int,
 	binding ResolvedGraphBinding,
 	windowCanon requestWindowCanonicalization,
+	structureCanon requestStructureCanonicalization,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
@@ -281,9 +282,14 @@ func (e *Engine) terminalResult(
 		// identically regardless of whether a subject was ultimately
 		// committed.
 		EffectiveEvidenceWindow: composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, e.now()),
-		Versions:                e.terminalVersions(),
-		DeterministicAnswer:     answer,
-		Warnings:                []string{},
+		// CHAOS-3900 P1: a subjectless terminal still echoes any structure
+		// this request confirmed, exactly like the window echo beside it --
+		// a confirmed kind/anchor/handle narrowed what this round searched
+		// for even when it still ended without a committed subject.
+		ConfirmedStructure:  composeConfirmedStructure(structureCanon.Confirmed),
+		Versions:            e.terminalVersions(),
+		DeterministicAnswer: answer,
+		Warnings:            []string{},
 	}
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
