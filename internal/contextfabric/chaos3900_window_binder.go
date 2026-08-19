@@ -154,8 +154,21 @@ func hasWindowRole(question string, span BoundWindowSpan) bool {
 		}
 	}
 	after := question[span.SpanEnd:]
+	// isReuseTerminalPunctuation (answer_reuse.go), NOT a hand-rolled set --
+	// codex review finding (W1 round 4): QuestionHash's own CanonicalizeQuestion
+	// strips this EXACT closed set (including ';'/':', which a hand-rolled
+	// subset here previously omitted) before hashing, so two questions
+	// differing ONLY in which of these trailing marks they end with
+	// already hash IDENTICALLY. A binder role-check using a NARROWER set
+	// let those two hash-identical questions reach genuinely DIFFERENT
+	// binder outcomes (one clause-final-passes, the other doesn't) --
+	// which, for the inferred-default path (no reuse-key fragment of its
+	// own, guarded only by the single deployment-wide WindowInferenceVersion),
+	// meant a reuse hit could silently serve the OTHER phrasing's inferred
+	// window. Sharing the identical closed set with QuestionHash is what
+	// makes "same hash" and "same binder outcome" actually agree.
 	trailing := strings.TrimFunc(after, func(r rune) bool {
-		return unicode.IsSpace(r) || r == '.' || r == '?' || r == ',' || r == '!'
+		return unicode.IsSpace(r) || isReuseTerminalPunctuation(r)
 	})
 	if trailing == "" {
 		// Clause-final: only trailing whitespace/terminal punctuation

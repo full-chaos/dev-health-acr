@@ -416,7 +416,20 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 			return InvestigationResult{}, false
 		}
-		if windowKeyComponent(*candidate.EffectiveEvidenceWindow) != windowKey {
+		// CHAOS-3900 W1 (codex review, round 4): re-derive the candidate's
+		// OWN key using whichever encoding its OWN stored Provenance
+		// implies -- windowKeyComponentFrozen for a receipt-confirmed
+		// window (its commitment is the FROZEN bounds, not a re-derivable
+		// RelativeID; see that function's own doc comment), windowKeyComponent
+		// otherwise. This mirrors how THIS request's own windowKey was
+		// built (resolveWindowReceipts uses Frozen, deriveRequestedWindow
+		// uses the plain form) -- a lookup and its recheck must use the
+		// SAME encoding for the comparison to mean anything.
+		candidateKey := windowKeyComponent(*candidate.EffectiveEvidenceWindow)
+		if candidate.EffectiveEvidenceWindow.Provenance == WindowClarificationConfirmed {
+			candidateKey = windowKeyComponentFrozen(*candidate.EffectiveEvidenceWindow)
+		}
+		if candidateKey != windowKey {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 			return InvestigationResult{}, false
 		}

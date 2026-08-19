@@ -16,9 +16,11 @@ import (
 // trailing_90d. A SEPARATE row is already cached under the plain "current"
 // TimeAxisKey -- exactly what an earlier, unconfirmed (or windowless)
 // question would have saved under. This test proves that a request
-// REDEEMING the winr_ receipt is looked up under a DIFFERENT key
-// ("current+w:rel:trailing_90d"), so the reuse gate's own "current" row can
-// never be served to it -- the receipt-resolution-BEFORE-reuse ordering
+// REDEEMING the winr_ receipt is looked up under a DIFFERENT key (its own
+// FROZEN bounds -- windowKeyComponentFrozen, W1 round 4 -- since a receipt
+// confirms one specific already-minted option, not a re-derivable-from-
+// RelativeID value), so the reuse gate's own "current" row can never be
+// served to it -- the receipt-resolution-BEFORE-reuse ordering
 // (canonicalizeEvidenceWindow, called before tryReuse in Investigate) is
 // what makes this true structurally, not by chance.
 func TestCHAOS3900_OrderingPin_ConfirmedWindowNeverHitsPreConfirmationCacheRow(t *testing.T) {
@@ -76,8 +78,9 @@ func TestCHAOS3900_OrderingPin_ConfirmedWindowNeverHitsPreConfirmationCacheRow(t
 	if gateKeys[0] == "current" {
 		t.Fatalf("reuse lookup key = %q: a confirmed-window request keyed IDENTICALLY to the pre-confirmation row -- the ordering invariant is broken", gateKeys[0])
 	}
-	if gateKeys[0] != "current+w:rel:trailing_90d" {
-		t.Errorf("reuse lookup key = %q, want %q", gateKeys[0], "current+w:rel:trailing_90d")
+	wantKey := "current+w:abs:" + formatUnixNano(frozenStart) + ":" + formatUnixNano(frozenEnd)
+	if gateKeys[0] != wantKey {
+		t.Errorf("reuse lookup key = %q, want %q (the receipt's own FROZEN bounds, not a re-derivable rel:trailing_90d)", gateKeys[0], wantKey)
 	}
 	if result.Reused {
 		t.Fatalf("result.Reused = true: a confirmed-window request was served the pre-confirmation cache row %q", preConfirmationCandidate.ResultID)
@@ -693,5 +696,80 @@ func TestCHAOS3900_WindowKeyedReuseServesAMatchingCandidate(t *testing.T) {
 	}
 	if result.ResultID != candidate.ResultID {
 		t.Errorf("result.ResultID = %q, want the reused candidate %q", result.ResultID, candidate.ResultID)
+	}
+}
+
+// TestCHAOS3900_TwoReceiptsSameRelativeIDDifferentFrozenBoundsKeyDifferently
+// is the codex review (W1 round 4) direct regression proof: two prior
+// WindowClarification options both named "trailing_90d" but minted (and
+// frozen) at different wall-clock moments must NOT collapse onto the same
+// reuse key -- windowKeyComponent's own "rel:<id>" abstraction is correct
+// for a re-derivable (non-receipt) window, but wrong for a receipt's own
+// FROZEN commitment; windowKeyComponentFrozen is what resolveWindowReceipts
+// must use instead.
+func TestCHAOS3900_TwoReceiptsSameRelativeIDDifferentFrozenBoundsKeyDifferently(t *testing.T) {
+	t.Parallel()
+
+	marchStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	marchEnd := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	priorA := validInvestigationResult()
+	priorA.ResultID = "result_prior_window_A"
+	priorA.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirmA001", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &marchStart, End: &marchEnd},
+	}}
+
+	juneStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	juneEnd := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	priorB := validInvestigationResult()
+	priorB.ResultID = "result_prior_window_B"
+	priorB.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirmB001", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &juneStart, End: &juneEnd},
+	}}
+
+	store := &staticResultStore{results: map[string]InvestigationResult{
+		priorA.ResultID: priorA, priorB.ResultID: priorB,
+	}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	requestA := validInvestigationRequest()
+	requestA.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorA.ResultID, ReceiptID: "winr_confirmA001"}}
+	canonA := engine.canonicalizeEvidenceWindow(context.Background(), reusePrincipal(), requestA)
+
+	requestB := validInvestigationRequest()
+	requestB.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorB.ResultID, ReceiptID: "winr_confirmB001"}}
+	canonB := engine.canonicalizeEvidenceWindow(context.Background(), reusePrincipal(), requestB)
+
+	if canonA.Veto != windowVetoNone || canonB.Veto != windowVetoNone {
+		t.Fatalf("veto = (%q, %q), want none", canonA.Veto, canonB.Veto)
+	}
+	if canonA.KeyComponent == "" || canonB.KeyComponent == "" {
+		t.Fatalf("KeyComponent = (%q, %q), want both non-empty", canonA.KeyComponent, canonB.KeyComponent)
+	}
+	if canonA.KeyComponent == canonB.KeyComponent {
+		t.Fatalf("two DIFFERENT frozen trailing_90d offers (March vs June bounds) keyed IDENTICALLY (%q): redeeming one receipt could serve the other's confirmed interval", canonA.KeyComponent)
+	}
+}
+
+// TestCHAOS3900_BinderRoleCheckUsesTheSameTerminalPunctuationQuestionHashDoes
+// is the codex review (W1 round 4) regression proof: the binder's
+// clause-final check must strip the IDENTICAL closed punctuation set
+// QuestionHash's own CanonicalizeQuestion strips, or two questions that
+// hash IDENTICALLY (and so would share a plain, non-window-keyed reuse
+// row) could reach DIFFERENT binder outcomes.
+func TestCHAOS3900_BinderRoleCheckUsesTheSameTerminalPunctuationQuestionHashDoes(t *testing.T) {
+	t.Parallel()
+
+	bare := "what shipped last month"
+	semicolon := "what shipped last month;"
+	colon := "what shipped last month:"
+
+	if QuestionHash(bare) != QuestionHash(semicolon) || QuestionHash(bare) != QuestionHash(colon) {
+		t.Fatalf("QuestionHash disagrees across trailing punctuation variants -- CanonicalizeQuestion's own closed set no longer matches this test's assumption")
+	}
+	for _, question := range []string{bare, semicolon, colon} {
+		got := ProposeWindowFromSpans(question)
+		if got.Reason != WindowBindRoutedInferred {
+			t.Errorf("ProposeWindowFromSpans(%q) = %#v, want WindowBindRoutedInferred (must agree with the bare-phrasing outcome, since all three share one QuestionHash)", question, got)
+		}
 	}
 }

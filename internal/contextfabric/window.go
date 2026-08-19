@@ -419,8 +419,14 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 		}
 	}
 	return requestWindowCanonicalization{
-		Effective:      &effective,
-		KeyComponent:   windowKeyComponent(effective),
+		Effective: &effective,
+		// windowKeyComponentFrozen, NOT windowKeyComponent -- codex review
+		// finding (W1 round 4): a receipt confirms one specific, already-
+		// minted option's FROZEN bounds, not a re-derivable-from-RelativeID
+		// value; see that function's own doc comment for why two different
+		// prior offers named the same RelativeID must key differently
+		// unless their frozen bounds genuinely agree.
+		KeyComponent:   windowKeyComponentFrozen(effective),
 		BinderProposal: binderProposal,
 	}
 }
@@ -549,12 +555,44 @@ func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effectiv
 // bounds. Injective by construction: every rel: row was computed from the
 // engine's own single now() derivation, and abs: carries the caller's exact
 // nanosecond bounds.
+// windowKeyComponent is for a window whose bounds are DETERMINISTICALLY
+// RE-DERIVABLE from RelativeID alone at any later moment (deriveRequestedWindow's
+// own RelativeID branch, and composeEffectiveWindow's inferred-default
+// path): "rel:<id>" deliberately DROPS the specific Start/End this call
+// happened to compute, mirroring reuseCurrentAxisKey's own "as of whenever
+// you answer this" precedent (answer_reuse.go) -- two "trailing_90d"
+// requests asked at different wall-clock moments mean the SAME thing and
+// must share a reuse key; the staleness window (condition 3/4) already
+// bounds how old a served answer may be. NEVER use this for a RECEIPT-
+// confirmed window -- see windowKeyComponentFrozen.
 func windowKeyComponent(effective contractsv1.ContextFabricEffectiveEvidenceWindow) string {
 	if effective.RelativeID != "" {
 		return "rel:" + string(effective.RelativeID)
 	}
 	if effective.Start == nil || effective.End == nil {
 		return ""
+	}
+	return "abs:" + formatUnixNano(*effective.Start) + ":" + formatUnixNano(*effective.End)
+}
+
+// windowKeyComponentFrozen is for a RECEIPT-CONFIRMED window
+// (resolveWindowReceipts) -- codex review finding (W1 round 4): unlike
+// windowKeyComponent's own "rel:<id>" abstraction, a receipt confirms one
+// SPECIFIC, already-minted WindowOption whose Start/End were frozen at
+// OFFER time, not re-derived from "now". Two different prior offers named
+// the identical RelativeID (e.g. two separate WindowClarifications, minted
+// at different wall-clock moments, both offering "trailing_90d") freeze
+// DIFFERENT absolute bounds and are DIFFERENT commitments -- serving one
+// receipt's answer for a redemption of the other would answer the wrong
+// interval. Keying on the frozen bounds themselves (falling back to
+// RelativeID only for the all_time sentinel, which has no bounds to
+// freeze and no ambiguity regardless of offer time) makes that
+// impossible: two options only ever share this key when their frozen
+// bounds are byte-identical, which is the ONLY case reusing between them
+// is actually correct.
+func windowKeyComponentFrozen(effective contractsv1.ContextFabricEffectiveEvidenceWindow) string {
+	if effective.Start == nil || effective.End == nil {
+		return "rel:" + string(effective.RelativeID)
 	}
 	return "abs:" + formatUnixNano(*effective.Start) + ":" + formatUnixNano(*effective.End)
 }
