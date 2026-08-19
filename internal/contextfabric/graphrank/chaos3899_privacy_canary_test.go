@@ -32,14 +32,18 @@ func TestShadowEvidenceRound_PrivacyCanary(t *testing.T) {
 	// hold the exact same corpus-safety discipline the original 3-entry
 	// registry already does (CHAOS-3899 widening measurement, 2026-08-19).
 	question := fmt.Sprintf("why did PR 532 fail for %s and for source/%s?", chaos3899Secret, chaos3899Secret)
-	sourceSlug := "source/" + chaos3899Secret
+	// The claimant row's Aliases carries the secret as its OWN bare-name
+	// alias (repo_slug's lookupKey/resolveSourceNative reads row CONTENT,
+	// never the map key -- see chaos3899_source_native_grammar.go's own
+	// "REACHABILITY NOTE"), reached here through an UNRELATED map key, the
+	// same discipline TestBindSourceNativeHandles_ResolvesViaIdentityUniverse
+	// uses.
 	input := ShadowEvidenceRoundInput{
 		RequestID: "req-canary", OrgID: "org-1", Question: question,
 		CurrentAxis: true, UnscopedVisibility: true, AliasLookupComplete: true,
 		PooledKinds: []CensusKind{contextfabric.SubjectPullRequest},
 		AliasClaimants: map[string][]IdentityMatch{
-			chaos3899Secret: {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + chaos3899Secret}, Mechanism: contextfabric.MatchAlias}},
-			sourceSlug:      {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + sourceSlug}, Mechanism: contextfabric.MatchAlias}},
+			"unrelated-interpreter-term": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + chaos3899Secret, Aliases: []string{chaos3899Secret}}, Mechanism: contextfabric.MatchAlias}},
 		},
 		CensusFunc: func(_ context.Context, _ string, _ CensusKind, handleValue string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
 			if handleValue != "532" {

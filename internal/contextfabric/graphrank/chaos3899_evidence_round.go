@@ -134,10 +134,21 @@ type KindAttestation struct {
 }
 
 // Attestation is the shadow round's own per-resolution artifact (brief
-// §1.4/§6). SHADOW ONLY in Slice A: never consumed by any commit-path
-// decision (scope discipline: "no production decision changes, no
-// commit-path edits") -- its sole purpose is measurement, via
-// ResolutionTracer's evidence_round/evidence_probe stage events.
+// §1.4/§6).
+//
+// STALENESS NOTE (codex xhigh review finding, CHAOS-3918, 2026-08-19):
+// this paragraph used to say "SHADOW ONLY: never consumed by any
+// commit-path decision" -- true through Slice A/B, but CHAOS-3896 Slice C
+// (merged to main mid-flight on this ticket) now LIVE-CONSUMES this exact
+// type via mergeCensusAttestedSatisfier/attestedSatisfier (resolve.go,
+// chaos3896_slice_c_evidence_census.go) for its evidence_census commit
+// gate -- see RunShadowEvidenceRound's own doc comment for the fuller
+// account. What stays true, and is the load-bearing guarantee for
+// CHAOS-3918's own widening: this struct gained ZERO new fields from that
+// ticket, so nothing it added is reachable from that (or any other)
+// consumer -- the widening's own result reaches ONLY ResolutionTracer's
+// evidence_source_native/evidence_source_native_probe stage events,
+// entirely outside this type.
 type Attestation struct {
 	RequestID string
 	Outcome   ShadowOutcome
@@ -199,9 +210,10 @@ type Attestation struct {
 // package's own signature stays stable as those contracts grow.
 type ShadowEvidenceRoundInput struct {
 	RequestID string
-	// Question is request.Question, verbatim -- consumed ONLY by
-	// BindHandles inside this call. Never stored on the returned
-	// Attestation, never traced (corpus-safety rule).
+	// Question is request.Question, verbatim -- consumed by BindHandles
+	// AND, as of CHAOS-3918's widening measurement, BindSourceNativeHandles
+	// inside this call. Never stored on the returned Attestation, never
+	// traced (corpus-safety rule).
 	Question string
 	OrgID    string
 	// PooledKinds is the resolution's own surviving-hypothesis kinds

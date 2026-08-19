@@ -17,31 +17,55 @@ import (
 // kind, chaos3899_anchor.go's own doc comment). Rather than inventing new
 // census predicates for a kind the closed registry does not cover, this
 // widening reuses BindAnchor's OWN discipline verbatim (R4: "≥2 claimants
-// or an incomplete read -> no discriminator") against the SAME
-// claimantsByTerm map the anchor role already reads -- literally the
+// or an incomplete read -> no discriminator") against the SAME rows the
+// anchor role's own claimantsByTerm map already carries -- literally the
 // CHAOS-3884 identity-universe completeness+uniqueness read, just applied
-// to a grammar-extracted literal instead of a search-derived term.
+// to a grammar-extracted literal instead of a search-derived term (see
+// this file's own "REACHABILITY NOTE" for exactly how).
 //
-// ALIAS-SHAPE NOTE (codex xhigh review finding, confirmed and fixed,
-// 2026-08-19): claimantsByTerm's own keys are whatever the identity
-// universe's ALIAS strings look like (devhealthsource's
-// repositoryBareNameAlias/repositoryProviderAlias -- graphrank cannot
-// import that package, see CensusOutcome's own doc comment, so this file
-// duplicates the two transforms rather than sharing them), NOT whatever
-// shape a grammar happens to extract from prose. A repository's aliases
-// are the BARE name alone ("dev-health-acr") and, when a provider is
-// known, "<provider>:<org>/<repo>" ("github:full-chaos/dev-health-acr")
-// -- there is no "<org>/<repo>" (slash, no provider) alias at all. An
-// EARLIER version of this file looked up the raw extracted literal
-// verbatim and would therefore NEVER have resolved a provider_qualified_name
-// match (it extracted the URL shape "github.com/org/repo", which matches
-// no alias string byte-for-byte) and would only coincidentally have
-// resolved a repo_slug match (only if some alias happened to literally be
-// "org/repo", which the schema does not produce). Each entry below now
-// carries its own lookupKey transform, applied AFTER extraction/filtering
-// to produce the actual claimantsByTerm query key -- Term itself (the
-// traced-never provenance field) stays the raw, as-typed extracted
-// literal; only the LOOKUP changes.
+// ALIAS-SHAPE NOTE (codex xhigh review finding round 1, confirmed and
+// fixed, 2026-08-19): a repository's identity-universe alias strings
+// (devhealthsource's repositoryBareNameAlias/repositoryProviderAlias --
+// graphrank cannot import that package, see CensusOutcome's own doc
+// comment, so this file duplicates the two transforms rather than sharing
+// them) are the BARE name alone ("dev-health-acr") and, when a provider is
+// known, "<provider>:<org>/<repo>" ("github:full-chaos/dev-health-acr") --
+// there is no "<org>/<repo>" (slash, no provider) alias at all. Each entry
+// below carries its own lookupKey transform, applied AFTER extraction/
+// filtering, to produce the alias-shaped string actually worth searching
+// for -- Term itself (the traced-never provenance field) stays the raw,
+// as-typed extracted literal; only the SEARCH VALUE changes.
+//
+// REACHABILITY NOTE (codex xhigh review finding round 2, confirmed and
+// fixed, 2026-08-19): a round-1 fix looked the transformed alias up as a
+// MAP KEY against claimantsByTerm -- WRONG, because that map's keys are
+// the ORIGINAL, UN-normalized SubjectTerms the question interpreter itself
+// extracted (resolve.go's own aliasClaimantsByTerm), never an alias
+// string. MatchIdentityRows (chaos3884_identity_universe.go) keys its
+// result by "the ORIGINAL (as-passed, un-normalized) term", so
+// claimantsByTerm["dev-health-acr"] exists ONLY IF the interpreter
+// independently extracted the LITERAL STRING "dev-health-acr" as one of
+// its own SubjectTerms -- something this grammar's own regex match on the
+// raw question text has no bearing on and cannot assume. A map-key lookup
+// would therefore have UNDER-COUNTED (silently, never observably) even
+// when a real, resolvable claimant existed.
+//
+// The fix: every IdentityMatch claimantsByTerm's VALUES carry is a FULL
+// IdentityRow, including that row's OWN Aliases/ProviderAliases/Label
+// fields -- the SAME data MatchIdentityRows itself already matched
+// against, just not keyed the way this file needs. resolveSourceNative
+// (below) SCANS every row already present anywhere in claimantsByTerm's
+// values (deduplicated by canonical id, since one physical row can appear
+// under several different interpreter-extracted term keys) and checks
+// EACH row's own Label/Aliases/ProviderAliases against this entry's
+// lookupKey-transformed search value, using NormalizeAliasTerm --
+// mirroring matchedTermsForRow's own priority scan verbatim. This finds a
+// row REGARDLESS of which term the interpreter happened to extract for
+// it, as long as the row is discoverable in claimantsByTerm's value set
+// at all (i.e. SOME interpreter term matched it via SOME alias) -- a
+// strict superset of what a map-key lookup could ever find, still zero
+// new reads (every row scanned here was already fetched and matched by
+// the SAME AliasLookup call the anchor role already consumes).
 //
 // SHADOW-ONLY / MEASUREMENT-ONLY, structurally: BindSourceNativeHandles
 // performs NO live query of its own (claimantsByTerm is a map already
@@ -68,17 +92,19 @@ type SourceNativeBind struct {
 	// necessarily what was looked up against claimantsByTerm -- see
 	// lookupKey's own doc comment.
 	Term string
-	// Resolved is true iff Term's own LOOKUP KEY (Term itself, unless the
+	// Resolved is true iff Term's own SEARCH VALUE (Term itself, unless the
 	// matching registry entry's lookupKey transforms it -- e.g. a
-	// provider_qualified_name match's lookup key swaps its URL-style
+	// provider_qualified_name match's search value swaps its URL-style
 	// "github.com/" prefix for the identity universe's own "github:"
-	// alias prefix), looked up against claimantsByTerm, names EXACTLY ONE
-	// claimant under a COMPLETE read -- BindAnchor's own R4 discipline,
-	// unchanged. This IS the "keyed bind" the CHAOS-3899 pre-registration
-	// measures: a false Resolved with a non-empty Term is a syntactic
-	// grammar match that failed to resolve (claimant lookup failure) -- a
-	// false positive in the pre-registered sense, counted separately from
-	// a true keyed bind.
+	// alias prefix) names EXACTLY ONE claimant among every row already
+	// present in claimantsByTerm's values, under a COMPLETE read --
+	// BindAnchor's own R4 discipline, unchanged (see resolveSourceNative
+	// and this file's own "REACHABILITY NOTE" for why this is a row-content
+	// scan, not a map-key lookup). This IS the "keyed bind" the CHAOS-3899
+	// pre-registration measures: a false Resolved with a non-empty Term is
+	// a syntactic grammar match that failed to resolve (claimant lookup
+	// failure) -- a false positive in the pre-registered sense, counted
+	// separately from a true keyed bind.
 	Resolved bool
 	// Kind is the resolved claimant's own kind -- meaningful only when
 	// Resolved is true (zero value otherwise).
@@ -96,15 +122,15 @@ type sourceNativeGrammarEntry struct {
 	// match.
 	filter func(string) bool
 	// lookupKey, when non-nil, transforms the extracted (and filter-passed)
-	// literal into the identity universe's own alias-key shape before the
-	// claimantsByTerm lookup -- see this file's own "ALIAS-SHAPE NOTE" doc
-	// comment. nil means the raw extracted literal IS already the lookup
-	// key (branch/commit grammars -- the identity universe carries no
-	// alias for either shape today, so there is no transform to apply;
-	// the lookup simply misses, exactly like any other unresolved match).
-	// Returning "" means "do not attempt a lookup at all" (a defensive
-	// empty-map-key guard, never expected in practice given each
-	// transform's own preconditions).
+	// literal into the identity universe's own alias shape before
+	// resolveSourceNative searches for it -- see this file's own
+	// "ALIAS-SHAPE NOTE" and "REACHABILITY NOTE" doc comments. nil means
+	// the raw extracted literal IS already the search value (branch/commit
+	// grammars -- the identity universe carries no alias for either shape
+	// today, so there is no transform to apply; the search simply misses,
+	// exactly like any other unresolved match). Returning "" means "do not
+	// attempt a search at all" (a defensive guard, never expected in
+	// practice given each transform's own preconditions).
 	lookupKey func(string) string
 	// avoidOverlapWith names OTHER registry entries (by their own `name`,
 	// listed EARLIER in sourceNativeGrammarRegistry) whose matched spans
@@ -220,7 +246,8 @@ func providerAliasKey(s string) string {
 //     provider domain literal essentially never appears in ordinary
 //     prose, so this pattern needs no additional filter. lookupKey
 //     (providerAliasKey) normalizes to the identity universe's own
-//     "provider:org/repo" alias shape before the map lookup.
+//     "provider:org/repo" alias shape before resolveSourceNative searches
+//     for it.
 //   - repo_slug: two path segments joined by "/", each REQUIRED to start
 //     with a letter (never a digit) -- excludes a bare numeric fraction
 //     ("3/4 of the tests passed", "24/7 on-call") or a ratio/date-like
@@ -232,8 +259,9 @@ func providerAliasKey(s string) string {
 //     an earlier version matched the BOGUS "github.com/org" as its own
 //     repo_slug, one path segment short of the real org/repo pair).
 //     lookupKey (repoBareName) normalizes to the identity universe's own
-//     bare-name alias (the text after the LAST "/") before the lookup --
-//     there is no "org/repo"-shaped alias in the schema at all.
+//     bare-name alias (the text after the LAST "/") before
+//     resolveSourceNative searches for it -- there is no "org/repo"-shaped
+//     alias in the schema at all.
 //   - branch_name_keyword: keyword-anchored ("branch <name>"), the
 //     conservative case the CHAOS-3899 rider calls for -- an unanchored
 //     bare slug-shaped token would be indistinguishable from prose and
@@ -345,19 +373,81 @@ func BindSourceNativeHandles(question string, claimantsByTerm map[string][]Ident
 				continue
 			}
 			acceptedSpans[entry.name] = append(acceptedSpans[entry.name], [2]int{start, end})
-			lookup := term
+			searchValue := term
 			if entry.lookupKey != nil {
-				lookup = entry.lookupKey(term)
+				searchValue = entry.lookupKey(term)
 			}
 			bind := SourceNativeBind{Grammar: entry.name, Term: term}
-			if complete && lookup != "" {
-				if matches := claimantsByTerm[lookup]; len(matches) == 1 {
-					bind.Resolved = true
-					bind.Kind = matches[0].Row.Kind
-				}
+			if complete && searchValue != "" {
+				bind.Resolved, bind.Kind = resolveSourceNative(searchValue, claimantsByTerm)
 			}
 			out = append(out, bind)
 		}
 	}
 	return out
+}
+
+// sourceNativeCandidateKey is resolveSourceNative's own dedup/uniqueness
+// key -- identical shape to BindAnchor's own unexported candidateKey
+// (chaos3899_anchor.go), kept as a separate type since Go has no
+// package-private type reuse across files that would change this.
+type sourceNativeCandidateKey struct {
+	kind CensusKind
+	id   string
+}
+
+// resolveSourceNative implements this file's own "REACHABILITY NOTE": it
+// scans every IdentityRow already present ANYWHERE in claimantsByTerm's
+// values (not the map's keys) and checks each row's own Label/Aliases/
+// ProviderAliases against searchValue, using NormalizeAliasTerm --
+// mirroring matchedTermsForRow's (chaos3884_identity_universe.go) own
+// priority scan verbatim, just evaluated against ONE target string
+// instead of a whole term set. Requires R4 uniqueness across the WHOLE
+// scan (exactly one distinct (kind, canonical id) pair, mirroring
+// BindAnchor's own seen-map discipline) -- two DIFFERENT rows that both
+// happen to carry searchValue as an alias (should not occur in practice
+// for a well-formed identity universe, but not assumed away) refuse
+// exactly like an ambiguous anchor term does, never guess.
+func resolveSourceNative(searchValue string, claimantsByTerm map[string][]IdentityMatch) (resolved bool, kind CensusKind) {
+	target := NormalizeAliasTerm(searchValue)
+	if target == "" {
+		return false, ""
+	}
+	seen := map[sourceNativeCandidateKey]bool{}
+	for _, matches := range claimantsByTerm {
+		for _, m := range matches {
+			if rowHasAlias(m.Row, target) {
+				seen[sourceNativeCandidateKey{kind: m.Row.Kind, id: m.Row.CanonicalID}] = true
+			}
+		}
+	}
+	if len(seen) != 1 {
+		return false, ""
+	}
+	for k := range seen {
+		return true, k.kind
+	}
+	return false, "" // unreachable (len(seen)==1 above), satisfies the compiler
+}
+
+// rowHasAlias reports whether row's own Label, or any of its Aliases/
+// ProviderAliases, equals target under NormalizeAliasTerm -- target is
+// ALREADY normalized by the caller (resolveSourceNative); row's own
+// fields are normalized here, exactly mirroring matchedTermsForRow's own
+// per-field normalization.
+func rowHasAlias(row IdentityRow, target string) bool {
+	if NormalizeAliasTerm(row.Label) == target {
+		return true
+	}
+	for _, alias := range row.Aliases {
+		if NormalizeAliasTerm(alias) == target {
+			return true
+		}
+	}
+	for _, alias := range row.ProviderAliases {
+		if NormalizeAliasTerm(alias) == target {
+			return true
+		}
+	}
+	return false
 }

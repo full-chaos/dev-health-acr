@@ -115,32 +115,51 @@ func TestBindSourceNativeHandles_ProviderURLNeverMisSplitsIntoRepoSlug(t *testin
 	}
 }
 
+// repositoryClaimants is a small test helper: wraps one IdentityRow (with
+// its own Aliases/ProviderAliases already populated the way the identity
+// universe actually produces them) into a claimantsByTerm-shaped map,
+// keyed by an ARBITRARY, UNRELATED term string -- standing in for
+// "whatever SubjectTerm the question interpreter happened to extract that
+// independently matched this row via SOME alias" (codex xhigh review
+// finding round 2: resolveSourceNative must find a row via its own
+// CONTENT, never via the caller correlating a specific map key, so these
+// fixtures deliberately do NOT use the alias string as the map key --
+// using an unrelated key is what actually exercises the fix; using the
+// alias string as the key would only prove the OLD, wrong map-key-lookup
+// behavior still works by coincidence).
+func repositoryClaimants(canonicalID string, aliases, providerAliases []string) map[string][]IdentityMatch {
+	row := IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: canonicalID, Aliases: aliases, ProviderAliases: providerAliases}
+	return map[string][]IdentityMatch{
+		"unrelated-interpreter-term": {{Row: row, Mechanism: contextfabric.MatchAlias}},
+	}
+}
+
 // TestBindSourceNativeHandles_ResolvesViaIdentityUniverse pins the R4
 // completeness+uniqueness discipline this file reuses from BindAnchor,
-// AND the alias-shape lookupKey discipline (codex xhigh review finding,
-// confirmed and fixed): claimantsByTerm is keyed by the identity
-// universe's OWN alias shapes (bare repo name; "provider:org/repo"), never
-// by the raw "org/repo" or "github.com/org/repo" text a question actually
-// contains -- BindSourceNativeHandles must transform before looking up.
+// the alias-shape lookupKey discipline (codex xhigh review round 1: a
+// repository's real alias shapes are its bare name and
+// "provider:org/repo", never the raw "org/repo" or "github.com/org/repo"
+// text a question actually contains), AND the reachability discipline
+// (codex xhigh review round 2: resolution must find a claimant by
+// SCANNING every row's own alias content already present in
+// claimantsByTerm's VALUES, never by treating the transformed alias as a
+// MAP KEY -- claimantsByTerm's keys are the interpreter's own,
+// un-normalized SubjectTerms, which this grammar's regex match has no way
+// to predict or influence).
 func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 	t.Parallel()
 
 	t.Run("repo_slug_resolves_via_bare_name_alias", func(t *testing.T) {
 		t.Parallel()
 		question := "why did full-chaos/dev-health-acr fail to build?"
-		// The identity universe's OWN alias shape for a repository is its
-		// BARE name alone (devhealthsource's repositoryBareNameAlias) --
-		// never the full "org/repo" slug a question actually contains.
-		claimants := map[string][]IdentityMatch{
-			"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
-		}
+		claimants := repositoryClaimants("repository:1", []string{"dev-health-acr"}, nil)
 		bound := BindSourceNativeHandles(question, claimants, true)
 		found := false
 		for _, b := range bound {
 			if b.Grammar == "repo_slug" {
 				found = true
 				if b.Term != "full-chaos/dev-health-acr" {
-					t.Fatalf("repo_slug Term = %q, want the raw as-typed slug (Term must NOT be normalized -- only the lookup is)", b.Term)
+					t.Fatalf("repo_slug Term = %q, want the raw as-typed slug (Term must NOT be normalized -- only the search value is)", b.Term)
 				}
 				if !b.Resolved || b.Kind != contextfabric.SubjectRepository {
 					t.Fatalf("repo_slug bind = %#v, want Resolved=true Kind=repository", b)
@@ -155,13 +174,7 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 	t.Run("provider_qualified_name_resolves_via_provider_colon_alias", func(t *testing.T) {
 		t.Parallel()
 		question := "see github.com/full-chaos/dev-health-acr for details"
-		// The identity universe's OWN provider-qualified alias shape is
-		// "<provider>:<org>/<repo>" (devhealthsource's
-		// repositoryProviderAlias) -- never the URL shape "github.com/org/repo"
-		// a question actually contains.
-		claimants := map[string][]IdentityMatch{
-			"github:full-chaos/dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
-		}
+		claimants := repositoryClaimants("repository:1", nil, []string{"github:full-chaos/dev-health-acr"})
 		bound := BindSourceNativeHandles(question, claimants, true)
 		found := false
 		for _, b := range bound {
@@ -179,9 +192,7 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 
 	t.Run("gitlab_domain_normalizes_too", func(t *testing.T) {
 		t.Parallel()
-		claimants := map[string][]IdentityMatch{
-			"gitlab:acme/widgets": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:2"}, Mechanism: contextfabric.MatchAlias}},
-		}
+		claimants := repositoryClaimants("repository:2", nil, []string{"gitlab:acme/widgets"})
 		bound := BindSourceNativeHandles("check gitlab.com/acme/widgets please", claimants, true)
 		found := false
 		for _, b := range bound {
@@ -191,6 +202,29 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("gitlab.com provider match did not resolve via the gitlab: alias: %#v", bound)
+		}
+	})
+
+	t.Run("resolves_regardless_of_which_map_key_the_interpreter_used", func(t *testing.T) {
+		t.Parallel()
+		// The load-bearing case for the round-2 fix: the map key here is
+		// "totally-unrelated-term" (standing in for whatever term the
+		// interpreter actually extracted for some OTHER part of the
+		// question) -- resolution must still succeed because it scans the
+		// ROW's own Aliases, never the key that happens to reach it.
+		row := IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1", Aliases: []string{"dev-health-acr"}}
+		claimants := map[string][]IdentityMatch{
+			"totally-unrelated-term": {{Row: row, Mechanism: contextfabric.MatchAlias}},
+		}
+		bound := BindSourceNativeHandles("why did full-chaos/dev-health-acr fail to build?", claimants, true)
+		found := false
+		for _, b := range bound {
+			if b.Grammar == "repo_slug" && b.Resolved {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("repo_slug did not resolve via row content when reached through an unrelated map key: %#v", bound)
 		}
 	})
 
@@ -204,27 +238,38 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 		}
 	})
 
+	t.Run("no_matching_alias_stays_unresolved", func(t *testing.T) {
+		t.Parallel()
+		// A row IS present, but none of ITS OWN aliases match -- proves
+		// this is a genuine content check, not "any row present resolves".
+		claimants := repositoryClaimants("repository:9", []string{"some-other-repo"}, nil)
+		bound := BindSourceNativeHandles("why did full-chaos/dev-health-acr fail to build?", claimants, true)
+		for _, b := range bound {
+			if b.Grammar == "repo_slug" && b.Resolved {
+				t.Fatalf("repo_slug resolved against a row whose own aliases do not match: %#v", b)
+			}
+		}
+	})
+
 	t.Run("ambiguous_claimants_stay_unresolved", func(t *testing.T) {
 		t.Parallel()
+		// TWO DIFFERENT rows (different canonical ids) both carry the SAME
+		// bare-name alias -- R4 refuses on ambiguity rather than guessing.
 		claimants := map[string][]IdentityMatch{
-			"dev-health-acr": {
-				{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias},
-				{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:2"}, Mechanism: contextfabric.MatchAlias},
-			},
+			"term-a": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1", Aliases: []string{"dev-health-acr"}}, Mechanism: contextfabric.MatchAlias}},
+			"term-b": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:2", Aliases: []string{"dev-health-acr"}}, Mechanism: contextfabric.MatchAlias}},
 		}
 		bound := BindSourceNativeHandles("why did full-chaos/dev-health-acr fail to build?", claimants, true)
 		for _, b := range bound {
 			if b.Grammar == "repo_slug" && b.Resolved {
-				t.Fatalf("repo_slug resolved with 2 claimants present (R4 violated): %#v", b)
+				t.Fatalf("repo_slug resolved with 2 distinct claimant rows present (R4 violated): %#v", b)
 			}
 		}
 	})
 
 	t.Run("incomplete_read_stays_unresolved", func(t *testing.T) {
 		t.Parallel()
-		claimants := map[string][]IdentityMatch{
-			"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
-		}
+		claimants := repositoryClaimants("repository:1", []string{"dev-health-acr"}, nil)
 		bound := BindSourceNativeHandles("why did full-chaos/dev-health-acr fail to build?", claimants, false)
 		for _, b := range bound {
 			if b.Grammar == "repo_slug" && b.Resolved {
@@ -240,7 +285,7 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 // PRE-EXISTING computation -- which reads that same map independent of
 // question content -- is held constant across both calls) and differ ONLY
 // in whether the question text also contains a source-native grammar
-// match for an entry already in that map. Both must produce byte-identical
+// match for a row already in that map. Both must produce byte-identical
 // Outcome/Reason/DIdentity/PreconditionUnproven/NonCensusedSurvivor and an
 // IDENTICAL Kinds slice (not just length -- codex xhigh review finding:
 // comparing len(Kinds) alone could miss a content divergence within an
@@ -249,14 +294,7 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 // tracer, never via the returned Attestation's decisive fields.
 func TestRunShadowEvidenceRound_SourceNativeWideningNeverChangesDecisiveOutcome(t *testing.T) {
 	t.Parallel()
-	// Keyed by the identity universe's OWN bare-name alias shape (see
-	// TestBindSourceNativeHandles_ResolvesViaIdentityUniverse) -- this map
-	// is passed to BindAnchor UNCHANGED by this test, so BindAnchor's own
-	// R4 computation (which iterates every key regardless of question
-	// content) is held constant across both calls below.
-	claimants := map[string][]IdentityMatch{
-		"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
-	}
+	claimants := repositoryClaimants("repository:1", []string{"dev-health-acr"}, nil)
 
 	run := func(question string) Attestation {
 		census := withCensus(contextfabric.SubjectPullRequest, CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC()}, nil)
