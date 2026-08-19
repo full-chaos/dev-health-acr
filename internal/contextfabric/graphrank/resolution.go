@@ -558,7 +558,17 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			identityTrustGateBlocked = identityTrustUnproven(candidates[commitIndex[0]], aliasIdentityComplete)
 		}
 		switch {
-		case len(exactIndex) == 1:
+		// CHAOS-3917: exact alias != canonical identity -- an exact-label
+		// match alone must never suffice to commit when the identical
+		// literal term is ALSO claimed, by a DIFFERENT canonical subject,
+		// via the alias or provider-key identity class (case 45's own
+		// shape: a project's exact label and two repositories' aliases, all
+		// on the same term). identityCrossClassRivalClaimant is the new,
+		// unified claimant-uniqueness proof (chaos3917_identity_unification.go)
+		// -- a candidate with no rival recorded (the overwhelming common
+		// case, and every pre-existing exactIndex test) is completely
+		// unaffected, byte-identical to before this ticket.
+		case len(exactIndex) == 1 && !identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms):
 			committedIndex[exactIndex[0]] = true
 			candidates[exactIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[exactIndex[0]].Subject}
@@ -573,8 +583,14 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		// here because aliasIdentityComplete -- unlike searchTruncated --
 		// is a COMPLETE, keyed guarantee, not a ranked/truncatable one).
 		// identityCollision (MEDIUM-B/C) is the uniqueness check membership
-		// itself no longer performs.
-		case aliasIdentityComplete && len(identityIndex) == 1 && !identityCollision(SubjectKey(candidates[identityIndex[0]].Subject), identity, identityTerms):
+		// itself no longer performs. identityCrossClassRivalClaimant
+		// (CHAOS-3917) is this same fast path's own LABEL-class rival check
+		// -- Finding 1's precedence note above is now mutual: an exact-label
+		// winner no longer second-guesses an alias tie, and an alias winner
+		// no longer second-guesses an exact-label tie either.
+		case aliasIdentityComplete && len(identityIndex) == 1 &&
+			!identityCollision(SubjectKey(candidates[identityIndex[0]].Subject), identity, identityTerms) &&
+			!identityCrossClassRivalClaimant(SubjectKey(candidates[identityIndex[0]].Subject), identity, identityTerms):
 			committedIndex[identityIndex[0]] = true
 			candidates[identityIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[identityIndex[0]].Subject}
@@ -613,7 +629,12 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		// touches (no identity mechanism, or confidence==1 via exact-label
 		// match instead) is entirely unaffected, mirroring identityCollision's
 		// own untouched-candidate guarantee immediately to its left.
-		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && !identityCollision(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && !identityTrustUnproven(candidates[commitIndex[0]], aliasIdentityComplete) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
+		// identityCrossClassRivalClaimant (CHAOS-3917) applied here too --
+		// the SAME unified claimant-uniqueness proof exactIndex/identityIndex
+		// now require, applied uniformly to LoneFloor so a label/alias rival
+		// pair cannot slip through this gate merely because neither
+		// individually reached its own dedicated fast path.
+		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && !identityCollision(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && !identityTrustUnproven(candidates[commitIndex[0]], aliasIdentityComplete) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
 			committedIndex[commitIndex[0]] = true
 			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
@@ -639,7 +660,9 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// identityCollision applies to TopFloor's 1.0-vs-second gap
 			// independently of it -- see identityTrustUnproven's own doc
 			// comment (chaos3884_identity.go).
-			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && !identityCollision(SubjectKey(top.Subject), identity, identityTerms) && !identityTrustUnproven(top, aliasIdentityComplete) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
+			// identityCrossClassRivalClaimant (CHAOS-3917) applied here too, same
+			// rationale as LoneFloor above.
+			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && !identityCollision(SubjectKey(top.Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(top.Subject), identity, identityTerms) && !identityTrustUnproven(top, aliasIdentityComplete) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
 				committedIndex[commitIndex[0]] = true
 				candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
@@ -879,7 +902,9 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// the reason ambiguous is true). Adding the conjunct here would
 			// narrow a separately-ratified path on a premise it never
 			// rested on.
-			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok && !identityCollision(SubjectKey(candidates[index].Subject), identity, identityTerms) {
+			// identityCrossClassRivalClaimant (CHAOS-3917) applied here too, same
+			// rationale identityCollision's own comment just above already gives.
+			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok && !identityCollision(SubjectKey(candidates[index].Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(candidates[index].Subject), identity, identityTerms) {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
