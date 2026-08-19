@@ -2,6 +2,8 @@ package contextfabric
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -292,4 +294,102 @@ func composeConfirmedStructure(confirmed []confirmedStructureMember) []contracts
 		})
 	}
 	return entries
+}
+
+// structureReceiptPrefixForMember maps each closed StructureNeedKind
+// member to its own receipt namespace prefix (design brief §2.1's
+// receipt-namespace table, extended to window per the team-lead ruling
+// that minting be member-generic so W2's window offers ride this SAME
+// primitive rather than a second bespoke path).
+func structureReceiptPrefixForMember(member contractsv1.ContextFabricStructureNeedKind) string {
+	switch member {
+	case contractsv1.ContextFabricStructureNeedExpectedKind:
+		return contractsv1.ContextFabricKindOptionReceiptPrefix
+	case contractsv1.ContextFabricStructureNeedSubjectAnchor:
+		return contractsv1.ContextFabricAnchorOptionReceiptPrefix
+	case contractsv1.ContextFabricStructureNeedSubjectHandle:
+		return contractsv1.ContextFabricHandleOptionReceiptPrefix
+	case contractsv1.ContextFabricStructureNeedWindow:
+		return contractsv1.ContextFabricWindowOptionReceiptPrefix
+	default:
+		return ""
+	}
+}
+
+// mintStructureReceiptID and mintStructureOptionID derive DETERMINISTIC,
+// content-addressed ids for one structure offer (design brief §2.1's
+// typed, receipt-bound offers). Team-lead ruling (P1.C): member-generic
+// and deterministic from (result identity, member, option content) --
+// not random -- so a retry of the SAME investigation mints the SAME
+// offer ids (idempotent re-mint), a replay is stable, and two offers are
+// unique-within-result BY CONSTRUCTION: identical content for the same
+// member in the same result is, definitionally, the same offer, so
+// collapsing them onto one id is correct, never a collision to guard
+// against.
+//
+// content is the caller's own stable serialization of everything that
+// makes one offer distinct from a sibling in the SAME member's list
+// (e.g. for a KindOption, the kind alone; for an AnchorOption, kind +
+// canonical_id + claimant_key) -- see composeStructureOffers' own call
+// sites for the exact per-member content strings.
+//
+// member MUST be a member structureReceiptPrefixForMember recognizes;
+// callers within this package only ever pass a closed-vocabulary
+// constant, never a caller-supplied value, so an unrecognized member
+// here is a programming error, not a runtime input to guard defensively
+// -- the empty-prefix result is deliberately left un-namespaced rather
+// than panicking, so a future member added to the wire vocabulary without
+// a matching case here fails Validate() (missing/wrong namespace prefix)
+// instead of crashing the engine.
+func mintStructureReceiptID(member contractsv1.ContextFabricStructureNeedKind, resultID, content string) string {
+	prefix := structureReceiptPrefixForMember(member)
+	sum := sha256.Sum256([]byte(resultID + "\x00" + string(member) + "\x00" + content))
+	return prefix + hex.EncodeToString(sum[:])[:24]
+}
+
+func mintStructureOptionID(member contractsv1.ContextFabricStructureNeedKind, resultID, content string) string {
+	sum := sha256.Sum256([]byte("opt\x00" + resultID + "\x00" + string(member) + "\x00" + content))
+	return "opt_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// composeStructureNeeds fills in the deterministic receipt_id/option_id
+// for every offer StructureOfferMaterial carries -- ResultID was not yet
+// known when ResolveSubjects built the material's own CONTENT fields, so
+// minting waits until the result composing this disclosure has one (see
+// StructureOfferMaterial's own doc comment). nil whenever Missing is
+// empty (nothing to disclose -- mirrors composeEffectiveWindow's own
+// nil-means-nothing-in-play convention).
+func composeStructureNeeds(material StructureOfferMaterial, resultID string) *contractsv1.ContextFabricStructureNeeds {
+	if len(material.Missing) == 0 {
+		return nil
+	}
+	needs := &contractsv1.ContextFabricStructureNeeds{Missing: material.Missing}
+	if len(material.KindOptions) > 0 {
+		needs.KindOptions = make([]contractsv1.ContextFabricKindOption, 0, len(material.KindOptions))
+		for _, opt := range material.KindOptions {
+			content := string(opt.Kind)
+			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedExpectedKind, resultID, content)
+			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedExpectedKind, resultID, content)
+			needs.KindOptions = append(needs.KindOptions, opt)
+		}
+	}
+	if len(material.AnchorOptions) > 0 {
+		needs.AnchorOptions = make([]contractsv1.ContextFabricAnchorOption, 0, len(material.AnchorOptions))
+		for _, opt := range material.AnchorOptions {
+			content := string(opt.Kind) + "\x00" + opt.CanonicalID + "\x00" + opt.ClaimantKey
+			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
+			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
+			needs.AnchorOptions = append(needs.AnchorOptions, opt)
+		}
+	}
+	if len(material.HandleOptions) > 0 {
+		needs.HandleOptions = make([]contractsv1.ContextFabricHandleOption, 0, len(material.HandleOptions))
+		for _, opt := range material.HandleOptions {
+			content := string(opt.Kind) + "\x00" + opt.PatternID + "\x00" + opt.Value + "\x00" + opt.SourceColumn
+			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectHandle, resultID, content)
+			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectHandle, resultID, content)
+			needs.HandleOptions = append(needs.HandleOptions, opt)
+		}
+	}
+	return needs
 }

@@ -185,6 +185,7 @@ func (e *Engine) terminalResult(
 	binding ResolvedGraphBinding,
 	windowCanon requestWindowCanonicalization,
 	structureCanon requestStructureCanonicalization,
+	structureMaterial StructureOfferMaterial,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
@@ -240,9 +241,15 @@ func (e *Engine) terminalResult(
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
 	}
+	// Hoisted so composeStructureNeeds below can mint deterministic offer
+	// ids from the SAME ResultID this result is actually saved under
+	// (CHAOS-3900 P1.C) -- calling e.newResultID() a second time inside
+	// the literal would mint a result identity StructureNeeds' own
+	// receipts were never keyed against.
+	resultID := e.newResultID()
 	result := InvestigationResult{
 		SchemaVersion: InvestigationResultSchemaV1,
-		ResultID:      e.newResultID(),
+		ResultID:      resultID,
 		RequestID:     request.RequestID,
 		GeneratedAt:   e.now().UTC(),
 		Status:        status,
@@ -286,7 +293,14 @@ func (e *Engine) terminalResult(
 		// this request confirmed, exactly like the window echo beside it --
 		// a confirmed kind/anchor/handle narrowed what this round searched
 		// for even when it still ended without a committed subject.
-		ConfirmedStructure:  composeConfirmedStructure(structureCanon.Confirmed),
+		ConfirmedStructure: composeConfirmedStructure(structureCanon.Confirmed),
+		// CHAOS-3900 P1.C: the disclosure block itself -- present exactly
+		// on this subjectless-terminal path (design brief §2.1: "present
+		// whenever an investigation round ends short of decisive"),
+		// deliberately NOT composed on the main synthesized-answer path,
+		// matching the P1 acceptance criterion's own scope ("StructureNeeds
+		// present on every non-decisive terminal").
+		StructureNeeds:      composeStructureNeeds(structureMaterial, resultID),
 		Versions:            e.terminalVersions(),
 		DeterministicAnswer: answer,
 		Warnings:            []string{},

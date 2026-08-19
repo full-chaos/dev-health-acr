@@ -125,7 +125,7 @@ func TestResolveSubjects_ExactAliasMultiClaimantEndToEnd(t *testing.T) {
 		aliasLookupComplete:  true,
 	}
 
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}

@@ -61,7 +61,7 @@ func TestResolveSubjects_RawSignalObserverReportsRawVectorSimilarity(t *testing.
 	}
 	request, interpreted := testRequest(), testInterpreted("project x")
 
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 
@@ -92,7 +92,7 @@ func TestResolveSubjects_RawSignalObserverReportsRawLexicalCoverage(t *testing.T
 	}
 	request, interpreted := testRequest(), testInterpreted("project y")
 
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestResolveSubjects_RawSignalObserverNilIsNoop(t *testing.T) {
 	}
 	request, interpreted := testRequest(), testInterpreted("project z")
 
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v (nil observer must never cause a failure)", err)
 	}
@@ -147,7 +147,7 @@ func TestResolveSubjects_RawSignalObserverNeverCalledForRejectedCandidate(t *tes
 	}
 	request, interpreted := testRequest(), testInterpreted("internal")
 
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 

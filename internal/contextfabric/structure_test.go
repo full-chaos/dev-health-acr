@@ -196,3 +196,194 @@ func TestCHAOS3900_NoStructureReceipts_CanonicalizeStructureIsANoOp(t *testing.T
 		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
 	}
 }
+
+// TestMintStructureReceiptID_DeterministicAndUniqueWithinResult pins the
+// P1.C receipt-minting contract (team-lead ruling): deterministic from
+// (result identity, member, content) -- same inputs mint the SAME id
+// every time (idempotent re-mint on retry, stable under replay) -- and
+// distinct content for the same member/result mints a DIFFERENT id
+// (unique-within-result by construction).
+func TestMintStructureReceiptID_DeterministicAndUniqueWithinResult(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deterministic: identical inputs mint the identical id", func(t *testing.T) {
+		a := mintStructureReceiptID("expected_kind", "result_00000001", "pull_request")
+		b := mintStructureReceiptID("expected_kind", "result_00000001", "pull_request")
+		if a != b {
+			t.Errorf("mintStructureReceiptID() = %q then %q, want identical", a, b)
+		}
+	})
+	t.Run("distinct content, same member and result, mints a distinct id", func(t *testing.T) {
+		a := mintStructureReceiptID("expected_kind", "result_00000001", "pull_request")
+		b := mintStructureReceiptID("expected_kind", "result_00000001", "work_item")
+		if a == b {
+			t.Errorf("mintStructureReceiptID() = %q for both pull_request and work_item content, want distinct", a)
+		}
+	})
+	t.Run("distinct member, same result and content, mints a distinct id (different namespace)", func(t *testing.T) {
+		a := mintStructureReceiptID("expected_kind", "result_00000001", "x")
+		b := mintStructureReceiptID("subject_anchor", "result_00000001", "x")
+		if a == b {
+			t.Errorf("mintStructureReceiptID() = %q for both expected_kind and subject_anchor, want distinct", a)
+		}
+	})
+	t.Run("distinct result, same member and content, mints a distinct id", func(t *testing.T) {
+		a := mintStructureReceiptID("expected_kind", "result_00000001", "pull_request")
+		b := mintStructureReceiptID("expected_kind", "result_00000002", "pull_request")
+		if a == b {
+			t.Errorf("mintStructureReceiptID() = %q for both result_00000001 and result_00000002, want distinct", a)
+		}
+	})
+	t.Run("carries the member's own namespace prefix", func(t *testing.T) {
+		cases := map[StructureNeedKind]string{
+			"expected_kind":  "kindr_",
+			"subject_anchor": "ancr_",
+			"subject_handle": "handr_",
+			"window":         "winr_",
+		}
+		for member, prefix := range cases {
+			id := mintStructureReceiptID(member, "result_00000001", "content")
+			if len(id) < len(prefix) || id[:len(prefix)] != prefix {
+				t.Errorf("mintStructureReceiptID(%q, ...) = %q, want prefix %q", member, id, prefix)
+			}
+			// receipt_id bounds: min 8, max 256 (validate_context_fabric_window.go / structure.go).
+			if len(id) < 8 || len(id) > 256 {
+				t.Errorf("mintStructureReceiptID(%q, ...) = %q, length %d violates the [8,256] receipt_id bound", member, id, len(id))
+			}
+		}
+	})
+}
+
+func TestMintStructureOptionID_Deterministic(t *testing.T) {
+	t.Parallel()
+	a := mintStructureOptionID("expected_kind", "result_00000001", "pull_request")
+	b := mintStructureOptionID("expected_kind", "result_00000001", "pull_request")
+	if a != b {
+		t.Errorf("mintStructureOptionID() = %q then %q, want identical", a, b)
+	}
+	c := mintStructureOptionID("expected_kind", "result_00000001", "work_item")
+	if a == c {
+		t.Errorf("mintStructureOptionID() = %q for both pull_request and work_item content, want distinct", a)
+	}
+	// option_id bounds: min 1, max 256.
+	if len(a) < 1 || len(a) > 256 {
+		t.Errorf("mintStructureOptionID() = %q, length %d violates the [1,256] option_id bound", a, len(a))
+	}
+}
+
+// TestComposeStructureNeeds_EmptyMissingIsNil pins the nil-means-nothing-
+// in-play convention (mirrors composeEffectiveWindow's own nil rule).
+func TestComposeStructureNeeds_EmptyMissingIsNil(t *testing.T) {
+	t.Parallel()
+	needs := composeStructureNeeds(StructureOfferMaterial{}, "result_00000001")
+	if needs != nil {
+		t.Errorf("composeStructureNeeds(empty material) = %+v, want nil", needs)
+	}
+}
+
+// TestComposeStructureNeeds_MintsReceiptAndOptionIDs pins that
+// composeStructureNeeds actually fills in the ids StructureOfferMaterial
+// left unset, deterministically from the given resultID.
+func TestComposeStructureNeeds_MintsReceiptAndOptionIDs(t *testing.T) {
+	t.Parallel()
+	material := StructureOfferMaterial{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{Kind: SubjectPullRequest, Label: "a pull request", OfferSource: "engine"},
+			{Kind: SubjectWorkItem, Label: "a work item", OfferSource: "engine"},
+		},
+	}
+	needs := composeStructureNeeds(material, "result_00000001")
+	if needs == nil {
+		t.Fatal("composeStructureNeeds() = nil, want a non-nil block")
+	}
+	if len(needs.KindOptions) != 2 {
+		t.Fatalf("len(needs.KindOptions) = %d, want 2", len(needs.KindOptions))
+	}
+	seenReceipts := map[string]bool{}
+	seenOptions := map[string]bool{}
+	for _, opt := range needs.KindOptions {
+		if opt.ReceiptID == "" || opt.OptionID == "" {
+			t.Errorf("KindOption for %q has an unset ReceiptID/OptionID after composeStructureNeeds: (%q, %q)", opt.Kind, opt.ReceiptID, opt.OptionID)
+		}
+		if seenReceipts[opt.ReceiptID] {
+			t.Errorf("duplicate ReceiptID %q across sibling KindOptions", opt.ReceiptID)
+		}
+		seenReceipts[opt.ReceiptID] = true
+		if seenOptions[opt.OptionID] {
+			t.Errorf("duplicate OptionID %q across sibling KindOptions", opt.OptionID)
+		}
+		seenOptions[opt.OptionID] = true
+		if err := opt.Validate(); err != nil {
+			t.Errorf("minted KindOption fails Validate(): %v (%+v)", err, opt)
+		}
+	}
+	if err := needs.Validate(); err != nil {
+		t.Errorf("composeStructureNeeds() result fails Validate(): %v", err)
+	}
+}
+
+// TestComposeStructureNeeds_DeterministicAcrossCalls pins that composing
+// the SAME material against the SAME resultID twice mints byte-identical
+// ids -- the idempotent-re-mint-on-retry property the receipt-minting
+// primitive itself already proves, exercised here through the full
+// composition path.
+func TestComposeStructureNeeds_DeterministicAcrossCalls(t *testing.T) {
+	t.Parallel()
+	material := StructureOfferMaterial{
+		Missing:     []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{{Kind: SubjectPullRequest, Label: "a pull request", OfferSource: "engine"}},
+	}
+	a := composeStructureNeeds(material, "result_00000001")
+	b := composeStructureNeeds(material, "result_00000001")
+	if a.KindOptions[0].ReceiptID != b.KindOptions[0].ReceiptID || a.KindOptions[0].OptionID != b.KindOptions[0].OptionID {
+		t.Errorf("composeStructureNeeds() minted different ids on repeated calls with identical inputs: %+v vs %+v", a.KindOptions[0], b.KindOptions[0])
+	}
+}
+
+// TestCHAOS3900_StructureNeeds_ComposedOnSubjectlessTerminal is the P1.C
+// end-to-end wiring pin: a subjectless resolution carrying
+// StructureOfferMaterial reaches the served result's own StructureNeeds
+// field, fully minted (ReceiptID/OptionID set), through the real
+// Investigate() call chain -- not just composeStructureNeeds in
+// isolation.
+func TestCHAOS3900_StructureNeeds_ComposedOnSubjectlessTerminal(t *testing.T) {
+	t.Parallel()
+
+	material := StructureOfferMaterial{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{Kind: SubjectPullRequest, Label: "a pull request", OfferSource: "engine"},
+			{Kind: SubjectWorkItem, Label: "a work item", OfferSource: "engine"},
+		},
+	}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			material:   material,
+		},
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: &resultStoreStub{},
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.StructureNeeds == nil {
+		t.Fatal("result.StructureNeeds = nil, want the disclosure block composed from the resolved StructureOfferMaterial")
+	}
+	if len(result.StructureNeeds.KindOptions) != 2 {
+		t.Fatalf("len(result.StructureNeeds.KindOptions) = %d, want 2", len(result.StructureNeeds.KindOptions))
+	}
+	for _, opt := range result.StructureNeeds.KindOptions {
+		if opt.ReceiptID == "" || opt.OptionID == "" {
+			t.Errorf("served KindOption for %q has an unset ReceiptID/OptionID: %+v", opt.Kind, opt)
+		}
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("served result fails Validate(): %v", err)
+	}
+}

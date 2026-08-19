@@ -134,7 +134,7 @@ func TestLiveFalkorDBContextFabricLifecycle(t *testing.T) {
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{project.Label},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("(3) exact-hint ResolveSubjects() error = %v", err)
 	}
@@ -143,7 +143,7 @@ func TestLiveFalkorDBContextFabricLifecycle(t *testing.T) {
 	}
 	hybridRequest := request
 	hybridRequest.RequestedScope.SubjectHints = nil
-	hybridResolution, err := adapter.ResolveSubjects(ctx, principal, hybridRequest, interpreted, contextfabric.ResolvedGraphBinding{})
+	hybridResolution, _, err := adapter.ResolveSubjects(ctx, principal, hybridRequest, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("(3) hybrid ResolveSubjects() error = %v", err)
 	}
@@ -209,7 +209,7 @@ func TestLiveFalkorDBContextFabricLifecycle(t *testing.T) {
 	if _, err := adapter.ApplyProjectionBatch(ctx, otherBatch); err != nil {
 		t.Fatalf("(7) cross-org ApplyProjectionBatch() error = %v", err)
 	}
-	crossOrgResolution, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: otherOrgID}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	crossOrgResolution, _, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: otherOrgID}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("(7) cross-org ResolveSubjects() error = %v", err)
 	}
@@ -226,7 +226,7 @@ func TestLiveFalkorDBContextFabricLifecycle(t *testing.T) {
 	}
 
 	// (9)
-	survivingResolution, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: otherOrgID}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	survivingResolution, _, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: otherOrgID}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("(9) surviving-org ResolveSubjects() error = %v", err)
 	}
@@ -239,7 +239,7 @@ func TestLiveFalkorDBContextFabricLifecycle(t *testing.T) {
 	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
 		t.Fatalf("(10) ApplyProjectionBatch() after purge did not re-bootstrap: %v", err)
 	}
-	rebootstrapped, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	rebootstrapped, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("(10) ResolveSubjects() after re-bootstrap error = %v", err)
 	}

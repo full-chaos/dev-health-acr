@@ -45,7 +45,7 @@ func TestResolveSubjectsCommitsExactLabelMatchOnATruncatedSearch(t *testing.T) {
 		searchResults:   map[string][]CandidateNode{term: exactMatchSearchResults(term, 11)},
 		searchTruncated: true,
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestResolveSubjectsStaysAmbiguousWhenTwoCandidatesMatchTheTermExactly(t *te
 		searchResults:   map[string][]CandidateNode{term: nodes},
 		searchTruncated: true,
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -91,7 +91,7 @@ func TestResolveSubjectsStaysAmbiguousOnATruncatedSearchWithNoExactMatch(t *test
 		searchResults:   map[string][]CandidateNode{term: nodes},
 		searchTruncated: true,
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}

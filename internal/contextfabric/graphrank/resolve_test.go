@@ -157,7 +157,7 @@ func TestResolveSubjectsUsesExactCanonicalHintBeforeSemanticSearch(t *testing.T)
 	}}
 	request := testRequest()
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "workbench"}}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestResolveSubjectsExactHintPathRespectsMaxSubjectCandidates(t *testing.T) 
 	request := testRequest()
 	request.Options.MaxSubjectCandidates = 2
 	request.RequestedScope.SubjectHints = hints
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -204,7 +204,7 @@ func TestResolveSubjectsExactHintForUnauthorizedSubjectIsSkippedSilently(t *test
 	}}
 	request := testRequest()
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "prior_subject_receipt"}}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}, request, testInterpreted(), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}, request, testInterpreted(), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v, want a silent skip, not an error", err)
 	}
@@ -234,7 +234,7 @@ func TestResolveSubjectsExactHintTruncationRetainsCallerHintsOverReceiptDerivedO
 		{Kind: callerSubject.Kind, ID: callerSubject.CanonicalID, Label: callerSubject.Label, Source: "workbench"},
 		{Kind: receiptSubject.Kind, ID: receiptSubject.CanonicalID, Label: receiptSubject.Label, Source: "prior_subject_receipt"},
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -257,7 +257,7 @@ func TestResolveSubjectsMergesHybridSearchWhenOnlyReceiptDerivedHintResolves(t *
 	}
 	request := testRequest()
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: receiptSubject.Kind, ID: receiptSubject.CanonicalID, Label: receiptSubject.Label, Source: "prior_subject_receipt"}}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Project B"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Project B"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -281,7 +281,7 @@ func TestResolveSubjectsWrongSubjectControlNeverCommitsTheDecoy(t *testing.T) {
 	target := candidateNode(contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", 0.4, "*")
 	decoy := candidateNode(contextfabric.SubjectProject, "project_ask_dev_analytics", "Ask Dev Analytics", 0.6, "*")
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Ask Dev": {decoy, target}}}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -314,7 +314,7 @@ func TestResolveSubjectsAcceptsPrincipalWildcardRepositoryScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Ask Dev": {narrowlyScoped}}}
-			resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
+			resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
 			if err != nil {
 				t.Fatalf("ResolveSubjects() error = %v", err)
 			}
@@ -332,7 +332,7 @@ func TestResolveSubjectsAcceptsPrincipalWildcardRepositoryScope(t *testing.T) {
 func TestResolveSubjectsReturnsSafeNoMatchWithoutCandidates(t *testing.T) {
 	t.Parallel()
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Nothing Matches This"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Nothing Matches This"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -354,7 +354,7 @@ func TestResolveSubjectsReportsTraversalDegradationThroughTelemetry(t *testing.T
 			return contextfabric.SubjectCandidate{}, ObservationTraversalErrored
 		},
 	}
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("readiness review"), backend.deps()); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("readiness review"), backend.deps()); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 	if len(backend.traversalDegraded) != 1 || backend.traversalDegraded[0] != 1 {
@@ -377,7 +377,7 @@ func TestResolveSubjectsReportsSubjectCandidatesAuthzDroppedThroughTelemetry(t *
 		searchResults: map[string][]CandidateNode{"Ask Dev": {authorized, foreign}},
 	}
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
-	resolution, err := ResolveSubjects(context.Background(), principal, testRequest(), testInterpreted("Ask Dev"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), principal, testRequest(), testInterpreted("Ask Dev"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -403,7 +403,7 @@ func TestResolveSubjectsExactHintForUnauthorizedSubjectReportsAuthzDropped(t *te
 	}}
 	request := testRequest()
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "prior_subject_receipt"}}
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}, request, testInterpreted(), backend.deps()); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}, request, testInterpreted(), backend.deps()); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 	if len(backend.subjectCandidatesAuthzDropped) != 1 || backend.subjectCandidatesAuthzDropped[0] != 1 {
@@ -431,7 +431,7 @@ func TestResolveSubjectsExactHintPropagatesBackendError(t *testing.T) {
 	}
 	request := testRequest()
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "workbench"}}
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps); err == nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps); err == nil {
 		t.Fatal("ResolveSubjects() error = nil, want the ExactHint backend failure propagated")
 	}
 }
@@ -447,7 +447,7 @@ func TestResolveSubjects_SearchQuestionNilIsSkippedSilently(t *testing.T) {
 	t.Parallel()
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}}
 	request := testRequest() // carries a non-empty Question
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("ask dev"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("ask dev"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -468,7 +468,7 @@ func TestResolveSubjects_SearchQuestionRunsExactlyOncePerResolution(t *testing.T
 	}
 	request := testRequest()
 	interpreted := testInterpreted("alpha", "beta", "gamma")
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted, backend.deps()); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted, backend.deps()); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 	if len(backend.searchCalls) != 3 {
@@ -490,7 +490,7 @@ func TestResolveSubjects_SearchQuestionSkippedForBlankQuestion(t *testing.T) {
 	backend := &fakeGraphBackend{enableSearchQuestion: true}
 	request := testRequest()
 	request.Question = "   "
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps()); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps()); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 	if len(backend.searchQuestionCalls) != 0 {
@@ -514,7 +514,7 @@ func TestResolveSubjects_SearchQuestionFindsASubjectNoTermAlone(t *testing.T) {
 			request.Question: {candidateNode(onlyViaQuestion.Kind, onlyViaQuestion.CanonicalID, onlyViaQuestion.Label, 0.65, "*")},
 		},
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -534,7 +534,7 @@ func TestResolveSubjects_SearchQuestionDegradedFoldsIntoResolution(t *testing.T)
 		searchResults:          map[string][]CandidateNode{"alpha": {}},
 		searchQuestionDegraded: true,
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -565,7 +565,7 @@ func TestResolveSubjects_SearchQuestionTruncationBlocksAutoCommit(t *testing.T) 
 		searchQuestionResults:   map[string][]CandidateNode{request.Question: {node}},
 		searchQuestionTruncated: true,
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -588,7 +588,7 @@ func TestResolveSubjects_SearchQuestionPropagatesBackendError(t *testing.T) {
 		searchResults:        map[string][]CandidateNode{"alpha": {}},
 		searchQuestionErr:    errors.New("transient embed failure"),
 	}
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps()); err == nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps()); err == nil {
 		t.Fatal("ResolveSubjects() error = nil, want the SearchQuestion backend failure propagated")
 	}
 }
@@ -616,7 +616,7 @@ func TestResolveSubjects_SearchQuestionRunsAfterTermLoopForTieBreakDeterminism(t
 			request.Question: {questionNode},
 		},
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -673,7 +673,7 @@ func TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid(t *te
 			oversized: {candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.65, "*")},
 		},
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -717,7 +717,7 @@ func TestResolveSubjects_SearchQuestionDropsMarkerRatherThanRealTermsAtCap(t *te
 			request.Question: {candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.65, "*")},
 		},
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(terms...), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(terms...), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -800,7 +800,7 @@ func TestResolveSubjects_QuestionPathNeverExactMatchesEvenOnLiteralLabelEquality
 			request.Question: {node},
 		},
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -835,7 +835,7 @@ func TestResolveSubjects_TermPathStillExactMatchesLiteralEquality(t *testing.T) 
 	backend := &fakeGraphBackend{
 		searchResults: map[string][]CandidateNode{"Ask Dev": {node}},
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}

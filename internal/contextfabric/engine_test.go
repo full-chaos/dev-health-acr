@@ -22,14 +22,20 @@ func (f interpreterFunc) Interpret(ctx context.Context, principal storage.Princi
 type graphReaderStub struct {
 	resolution SubjectResolution
 	context    GraphContext
+	// material (CHAOS-3900 P1.C) is the StructureOfferMaterial
+	// ResolveSubjects returns alongside resolution -- zero value by
+	// default (every pre-P1.C caller of this stub gets an empty block,
+	// byte-identical to before this field existed), settable per test
+	// that specifically exercises structure-offer composition.
+	material StructureOfferMaterial
 }
 
 func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
-	return g.resolution, nil
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, StructureOfferMaterial, error) {
+	return g.resolution, g.material, nil
 }
 
 func (g graphReaderStub) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
@@ -137,9 +143,9 @@ func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, stor
 	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: g.bindingEpochs[index]}, nil
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
-	return g.resolution, nil
+	return g.resolution, StructureOfferMaterial{}, nil
 }
 
 func (g *capturingGraphReader) DiscoverContext(_ context.Context, _ storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
@@ -1288,12 +1294,12 @@ func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, stora
 	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
 }
 
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveCalls++
 	return SubjectResolution{
 		Candidates: []SubjectCandidate{},
 		Committed:  []SubjectRef{{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}},
-	}, nil
+	}, StructureOfferMaterial{}, nil
 }
 
 func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

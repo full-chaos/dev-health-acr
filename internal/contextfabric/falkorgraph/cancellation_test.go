@@ -32,7 +32,7 @@ func TestResolveSubjectsAndDiscoverContextRejectAlreadyCancelledContext(t *testi
 		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Ask Dev"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	if _, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: "org_1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}); !errors.Is(err, context.Canceled) {
+	if _, _, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: "org_1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ResolveSubjects() error = %v, want context.Canceled", err)
 	}
 

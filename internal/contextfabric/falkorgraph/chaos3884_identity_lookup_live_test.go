@@ -156,7 +156,7 @@ func TestLiveAliasIdentityFastPathCommitsAUniqueClaimant(t *testing.T) {
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"dev-health-acr"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -215,7 +215,7 @@ func TestLiveAliasIdentityCollisionNeverCommits(t *testing.T) {
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"chaos-ops"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -277,7 +277,7 @@ func TestLiveAliasIdentityGraphMissingClaimantIsExcludedAndReported(t *testing.T
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"ghost-repo"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -350,7 +350,7 @@ func TestLiveAliasIdentityUniverseCompletenessIsTracedThroughTheWiredComposition
 				Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"trace-" + tc.name},
 				TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 			}
-			if _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}); err != nil {
+			if _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}); err != nil {
 				t.Fatalf("ResolveSubjects() error = %v", err)
 			}
 

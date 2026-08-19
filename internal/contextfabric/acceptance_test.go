@@ -88,13 +88,13 @@ func (g *acceptanceGraphReader) ResolveInvestigationBinding(context.Context, sto
 	return ResolvedGraphBinding{GraphKey: "acceptance-fake-key", Epoch: 0}, nil
 }
 
-func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
+func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveCalls++
 	g.lastRequest = request
 	if g.err != nil {
-		return SubjectResolution{}, g.err
+		return SubjectResolution{}, StructureOfferMaterial{}, g.err
 	}
-	return g.resolution, nil
+	return g.resolution, StructureOfferMaterial{}, nil
 }
 
 func (g *acceptanceGraphReader) DiscoverContext(_ context.Context, _ storage.Principal, _ GraphDiscoveryRequest) (GraphContext, error) {

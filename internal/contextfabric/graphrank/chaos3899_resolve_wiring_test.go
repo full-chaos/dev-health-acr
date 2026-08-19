@@ -58,7 +58,7 @@ func TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution(t *testing.T)
 				return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "repo-1:532"}, nil
 			}
 		}
-		resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps)
+		resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps)
 		if err != nil {
 			t.Fatalf("ResolveSubjects() error = %v", err)
 		}
@@ -123,7 +123,7 @@ func TestResolveSubjects_SurvivorsFirstOrderReordersLiveThroughResolveSubjects(t
 	// ever reaching CensusFunc at all.
 	request := testRequest()
 	request.Question = "Why did PR #2 fail?"
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -176,7 +176,7 @@ func TestResolveSubjects_SurvivorsFirstOrderReordersLiveViaSatisfierSet(t *testi
 	}
 	request := testRequest()
 	request.Question = "Why did PR #2 fail?"
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -230,7 +230,7 @@ func TestResolveSubjects_ShadowEvidenceRoundUsesInterpretedAxisNotRequestAxis(t 
 	interpreted := testInterpreted("PR 532")
 	interpreted.TimeContext.Axis = contextfabric.TemporalValidTime // ...but the INTERPRETED axis (what the engine actually treats as authoritative) is historical.
 
-	if _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted, deps); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted, deps); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 	events := tracer.eventsForStage("evidence_round")
@@ -257,7 +257,7 @@ func TestResolveSubjects_ShadowEvidenceRoundPanicIsolation(t *testing.T) {
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v, want the panic to be isolated, not propagated as an error either", err)
 	}
@@ -286,7 +286,7 @@ func TestResolveSubjects_ShadowEvidenceRoundSkipsNonStalledResolutions(t *testin
 		censusCalls++
 		return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC()}, nil
 	}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), deps)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}

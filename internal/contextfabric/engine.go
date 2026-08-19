@@ -582,7 +582,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// comment for why a context value is the right carrier for this
 	// specific, telemetry-only signal.
 	resolveCtx, subjectCandidatesAuthzDropped := withSubjectCandidatesAuthzDroppedRecorder(ctx)
-	resolution, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding)
+	resolution, structureMaterial, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
@@ -616,7 +616,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon)
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial)
 	}
 
 	factRequest := CanonicalFactRequest{

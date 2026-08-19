@@ -507,7 +507,13 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		recheckRequest.RequestedScope.SubjectHints = hints
 	}
 
-	resolution, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding)
+	// CHAOS-3900 P1.C: this recheck only re-verifies SUBJECT authorization
+	// (the committed set below) -- it discards the structure-offer
+	// material ResolveSubjects also returns, deliberately: a reuse
+	// recheck never produces a NEW served result of its own (it either
+	// confirms the candidate or misses), so there is nothing to attach
+	// fresh offers to here.
+	resolution, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding)
 	if err != nil {
 		return false, AnswerReuseMissAuthorization
 	}

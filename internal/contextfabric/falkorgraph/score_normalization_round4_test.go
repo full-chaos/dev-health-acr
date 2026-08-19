@@ -63,7 +63,7 @@ func TestResolveSubjectsTruncatedExactLabelMatchAutoCommits(t *testing.T) {
 	request, interpreted := openQuestionRequest("Widget")
 	request.Options.MaxSubjectCandidates = 1
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -105,7 +105,7 @@ func TestResolveSubjectsTruncatedDuplicateExactLabelsStillClarify(t *testing.T) 
 	// makes the call report truncation.
 	request.Options.MaxSubjectCandidates = 2
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -159,7 +159,7 @@ func TestResolveSubjectsTruncatedThenMergedCandidateDoesNotAutoCommit(t *testing
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
