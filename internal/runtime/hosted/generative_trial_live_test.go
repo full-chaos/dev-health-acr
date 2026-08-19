@@ -472,17 +472,26 @@ var acrEnvIsolationAllowlist = map[string]bool{
 	"ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED": true, "ACR_CONTEXT_FABRIC_FALKOR_ADDR": true,
 	"ACR_CONTEXT_FABRIC_FALKOR_TLS": true, "ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE": true,
 	"ACR_CONTEXT_FABRIC_MODEL_PROVIDER": true, "ACR_CONTEXT_FABRIC_MODEL": true,
-	// ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED (CHAOS-3896 Slice B,
-	// team-lead-authorized "NEVER-AGAIN RIDER" fix-forward): wireProductionEnv
-	// below sets it CONDITIONALLY, the same "absent from this allowlist
-	// would be wrong" reasoning ACR_CONTEXT_FABRIC_MODEL_FALLBACK's own
-	// comment states -- EXCEPT this one genuinely IS unconditional (an
-	// empty ACR_TEST_TRIAL_GRAPH_LIFECYCLE_ENABLED maps to an empty
-	// string, and pglifecycle.ConfigFromEnv's own envBool treats an empty
-	// value identically to absent -- false, byte-identical to every run
-	// before this field existed), so it belongs here, not in that
-	// exclusion's company.
-	"ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED": true,
+	// ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED is DELIBERATELY absent
+	// from this allowlist (codex review finding, HIGH, on the FIRST
+	// version of this fix-forward -- corrected here): wireProductionEnv's
+	// own set() below only calls t.Setenv when
+	// ACR_TEST_TRIAL_GRAPH_LIFECYCLE_ENABLED is non-empty, so allowlisting
+	// the real name would have let an operator's UNRELATED ambient
+	// ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED export survive
+	// clearAmbientACREnv untouched whenever the new trial-prefixed var was
+	// left unset -- silently enabling epoch-1 reads (or worse,
+	// TestGenerativeTrialCorpus picking it up too, since that test shares
+	// this same wireProductionEnv/allowlist and never records
+	// ResolvedActiveEpoch/GraphLifecycleEnabled in its own provenance at
+	// all) with no record of it happening. This is EXACTLY the ambient-env
+	// leak class ACR_CONTEXT_FABRIC_MODEL_FALLBACK's own comment below
+	// already documents for the identical reason -- the first version of
+	// this comment incorrectly claimed an exemption from that reasoning;
+	// it does not have one. Leaving it OUT of the allowlist means
+	// clearAmbientACREnv unsets it unconditionally first, and set() is the
+	// ONLY path that can ever re-enable it, from the explicit
+	// ACR_TEST_TRIAL_ source alone.
 	// ACR_CONTEXT_FABRIC_MODEL_FALLBACK is DELIBERATELY absent from this
 	// allowlist (sol review F1): it is the one var this function sets
 	// CONDITIONALLY (only when ACR_TEST_TRIAL_MODEL_FALLBACK is

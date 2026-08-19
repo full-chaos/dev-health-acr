@@ -485,7 +485,8 @@ func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Clien
 // identically (defensive: a caller enabling the flag without also setting
 // ACR_TEST_TRIAL_POSTGRES_DSN gets a clear error, not a silent epoch-0
 // fallback that LOOKS like this bug all over again).
-func buildReplayEpochResolver(ctx context.Context, dsn string) (contextfabric.OrgEpochResolver, error) {
+func buildReplayEpochResolver(t *testing.T, ctx context.Context, dsn string) (contextfabric.OrgEpochResolver, error) {
+	t.Helper()
 	envCfg, err := pglifecycle.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return nil, err
@@ -500,6 +501,13 @@ func buildReplayEpochResolver(ctx context.Context, dsn string) (contextfabric.Or
 	if err != nil {
 		return nil, fmt.Errorf("buildReplayEpochResolver: open postgres: %w", err)
 	}
+	// codex review finding (LOW, addressed): this pool was never closed --
+	// harmless for this harness's own one-shot-per-process invocation
+	// (run-replay.sh), but a real leak class nonetheless. t.Cleanup ties
+	// it to this test's own lifetime, matching every other resource this
+	// file opens (e.g. the ClickHouse client's defer client.Close() at its
+	// own call site).
+	t.Cleanup(func() { _ = db.Close() })
 	store, err := pglifecycle.NewStore(db)
 	if err != nil {
 		return nil, err
@@ -594,7 +602,7 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	// "NEVER-AGAIN RIDER"): built ONCE, wired identically into both arms
 	// below. epochResolver is nil (byte-identical to every run before this
 	// slice) unless ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED is set.
-	epochResolver, err := buildReplayEpochResolver(ctx, os.Getenv("ACR_TEST_TRIAL_POSTGRES_DSN"))
+	epochResolver, err := buildReplayEpochResolver(t, ctx, os.Getenv("ACR_TEST_TRIAL_POSTGRES_DSN"))
 	if err != nil {
 		t.Fatalf("build epoch resolver: %v", err)
 	}
