@@ -34,17 +34,26 @@ import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 //     Confidence at the point of commit. evidenceStrength is a GATE
 //     function, not a scoring function.
 //
-// "raw-bases re-entry": base is the candidate's OWN Confidence as it stands
-// when this rescue runs -- ResolveFromMergedCandidatesWithGate's phase-2.5
-// pass already applied CorroboratedConfidence(mechanisms, base) to every
-// candidate once, and for every candidate this rescue can ever reach that
-// pass returned base UNCHANGED (design brief §0's own measured ground:
-// every current stall is single-mechanism, sitting in [0.50, ~0.755) --
-// a candidate that already cleared CorroboratedFloor via a real second
-// mechanism would have committed at lone_floor before ever reaching this
-// rescue). So reading candidate.Confidence here IS reading the raw,
-// pre-corroboration base, without this function needing its own separate
-// plumbing to recover it.
+// "raw-bases re-entry": base MUST be the candidate's TRUE pre-corroboration
+// confidence -- resolution.go's caller passes rawBase[key], captured
+// BEFORE ResolveFromMergedCandidatesWithGate's own phase-2.5 pass runs
+// CorroboratedConfidence(mechanisms, base) over every candidate (see
+// rawBase's own doc comment, resolution.go).
+//
+// codex xhigh review finding (confirmed, fixed): an EARLIER version of
+// this call site read candidates[index].Confidence directly -- which, for
+// a candidate carrying 2+ REAL mechanisms independent of any census
+// witness, is phase-2.5's OWN OUTPUT (already >= CorroboratedFloor), not
+// the raw base. searchTruncated can short-circuit the switch above BEFORE
+// the lone_floor case ever inspects such a candidate's confidence, so
+// design brief §0's "every current stall is single-mechanism" is a
+// property of the MEASURED corpus, never a structural guarantee this
+// function can lean on -- feeding an already-corroborated value back into
+// this SAME corroboration formula double-applies it, and can commit a
+// candidate whose TRUE raw base sits below LoneFloor. Passing the
+// caller-captured rawBase closes this: this function's own `base`
+// parameter is now always genuinely pre-corroboration, regardless of how
+// many real mechanisms the candidate independently carries.
 func evidenceStrength(base float64) float64 {
 	base = Clamp(base)
 	if base >= 1 {
@@ -91,8 +100,18 @@ func indexBySubjectKey(candidates []contextfabric.SubjectCandidate, key string) 
 // could not be bridged to a graph canonical id (CHAOS-3898's bridge
 // omitted it, or errored -- KindAttestation.SatisfierCanonicalID stays ""
 // in exactly that case, chaos3899_census_adapter.go's own NewCensusFunc).
+//
+// UnscopedVisibility is checked explicitly too (codex xhigh review finding,
+// LOW/defense-in-depth: no live bypass demonstrated -- RunShadowEvidenceRound
+// already refuses to run the census at all for a scoped caller,
+// Attestation{Outcome: ShadowWouldClarify, Reason: scoped_visibility}, brief
+// §1.3(5) -- "NO source reads at all"). Belt-and-suspenders: this function
+// is the ONE gate deciding whether an Attestation is trustworthy enough to
+// drive a keyed graph read and a real commit, so it asserts the invariant
+// itself rather than resting entirely on the round's own upstream refusal
+// never being bypassed by a future caller.
 func attestedSatisfier(attestation Attestation) (kind contextfabric.SubjectKind, canonicalID string, ok bool) {
-	if attestation.Outcome != ShadowWouldCommit {
+	if attestation.Outcome != ShadowWouldCommit || !attestation.UnscopedVisibility {
 		return "", "", false
 	}
 	satisfierKinds := 0

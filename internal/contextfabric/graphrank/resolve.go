@@ -1060,6 +1060,24 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 // (NodeCandidate -> MergeCandidates) -- the round still RECOVERS
 // truncated-away referents").
 //
+// censusCommitErrorReason (CHAOS-3896 Slice C, codex xhigh review finding,
+// confirmed) is mergeCensusAttestedSatisfier's OWN CensusCommitReason value
+// for a genuine deps.ExactHint backend fault -- deliberately DISTINCT from
+// ReasonGraphMissingSatisfier (design brief §4's closed vocabulary, which
+// names a CONFIRMED absence: "census named one satisfier, keyed graph read
+// found no node"). A transient backend error proves nothing about whether
+// the node exists; conflating the two made a production graph outage or
+// deadline operationally indistinguishable, in the trace, from a genuine
+// missing satisfier -- an operator triaging a spike in refused commits
+// could not tell "the source of record disagrees with the census" from
+// "the graph was unreachable". This is scoped to THIS trace field only
+// (not added to graphrank.DegradationReason, the round's own §4 vocabulary
+// RunShadowEvidenceRound produces -- that enum describes why the CENSUS
+// ROUND itself degraded, not this separate, Slice-C-only commit-attempt
+// event). The fail-closed BEHAVIOR is unchanged either way -- see this
+// function's own doc comment for why a backend error still never commits.
+const censusCommitErrorReason = "census_commit_error"
+
 // ok is false, fail-closed, for every other outcome -- each traced as a
 // dedicated evidence_census_commit event (never silent):
 //   - the round did not name exactly one bridged satisfier (attestedSatisfier
@@ -1070,17 +1088,32 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 //     phantom-commit scenario... is unconstructible: no graph census
 //     exists, and the one graph read fails closed on absence"), reason
 //     graph_missing_satisfier;
-//   - the node exists but NodeCandidate declines it (unauthorized, invalid,
-//     or an internal bookkeeping node) -- "unauthorized -> no commit (and
-//     no oracle: unscopedVisibility already holds on this path)", brief
-//     §1.4. No dedicated reason token exists for this case (§4's vocabulary
-//     has none), so CensusCommitReason stays empty; GraphExistenceOK=true
-//     alone distinguishes it from the graph_missing_satisfier case above.
+//   - deps.ExactHint itself errored -- reason censusCommitErrorReason
+//     (above), NOT graph_missing_satisfier: this is "could not confirm",
+//     not "confirmed absent";
+//   - the node exists but is not authorized/valid/non-internal for this
+//     principal+scope -- "unauthorized -> no commit (and no oracle:
+//     unscopedVisibility already holds on this path)", brief §1.4. No
+//     dedicated reason token exists for this case (§4's vocabulary has
+//     none), so CensusCommitReason stays empty; GraphExistenceOK=true
+//     alone distinguishes it from the two absence/error cases above.
 func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, attestation Attestation, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms) (string, bool) {
 	kind, canonicalID, found := attestedSatisfier(attestation)
 	if !found {
 		return "", false
 	}
+	subject := contextfabric.SubjectRef{Kind: kind, CanonicalID: canonicalID}
+	// graphReadCtx (codex xhigh review finding, confirmed): the keyed
+	// graph existence read gets its OWN bound from the SAME
+	// evidenceRoundDeadline the census round itself already uses
+	// (runShadowEvidenceRoundForResolution) -- design brief D4's round
+	// budget ("...+ 3s wall") otherwise covered only the census read, not
+	// this SECOND piece of I/O the round's own outcome now triggers. A
+	// slow/hanging ExactHint can therefore still not extend a real
+	// request's latency past this function's own bounded window, mirroring
+	// evidenceRoundDeadline's own doc comment exactly.
+	graphReadCtx, cancel := context.WithTimeout(ctx, evidenceRoundDeadline)
+	defer cancel()
 	// A genuine backend fault (err != nil) is deliberately folded into the
 	// SAME fail-closed "refuse to commit" outcome as a confirmed absence
 	// (exists == false), not propagated as a hard ResolveSubjects error:
@@ -1095,15 +1128,50 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// unchanged and still propagates its own error hard -- that path serves
 	// a caller-EXPLICIT hint, where silently discarding a real backend fault
 	// would hide it from the very request that asked for it; this path
-	// serves an INTERNAL rescue the caller never asked for by name.
-	subject := contextfabric.SubjectRef{Kind: kind, CanonicalID: canonicalID}
-	node, exists, err := deps.ExactHint(ctx, subject)
+	// serves an INTERNAL rescue the caller never asked for by name. The
+	// trace reason still distinguishes the two cases (censusCommitErrorReason
+	// above), even though the fail-closed commit behavior does not.
+	node, exists, err := deps.ExactHint(graphReadCtx, subject)
 	if err != nil || !exists {
+		reason := string(ReasonGraphMissingSatisfier)
+		if err != nil {
+			reason = censusCommitErrorReason
+		}
 		if deps.ResolutionTracer != nil {
 			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 				RequestID: request.RequestID, Stage: "evidence_census_commit",
 				Subject: subject, Outcome: "refused", GraphExistenceOK: false,
-				CensusCommitReason: string(ReasonGraphMissingSatisfier),
+				CensusCommitReason: reason,
+			})
+		}
+		return "", false
+	}
+	// accepted (codex xhigh review finding, confirmed): mirrors
+	// NodeCandidate's own gating conditions (candidate.go) EXACTLY, so this
+	// function knows -- BEFORE calling mergeSearchResults -- whether the
+	// census-derived node itself will actually be accepted, rather than
+	// inferring success from candidatesBySubject[key]'s mere presence
+	// afterward. That inference was wrong whenever the subject was ALREADY
+	// in the pool from ordinary search (the common case: census usually
+	// names an already-pooled, merely-ambiguous candidate) -- the key would
+	// stay present even if THIS node's own authorization/validity check
+	// failed, silently reporting "merged" for a graph read that brief §1.4
+	// requires to refuse ("unauthorized -> no commit"). Duplicated here
+	// rather than threading a new return value through mergeSearchResults
+	// (shared by three other call sites with a different, established
+	// contract) -- see NodeCandidate's own doc comment for the exact
+	// conditions being mirrored.
+	accepted := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
+	if accepted {
+		if nodeSubject, ok := NodeSubject(node); !ok || deps.IsInternal(nodeSubject) {
+			accepted = false
+		}
+	}
+	if !accepted {
+		if deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "evidence_census_commit",
+				Subject: subject, Outcome: "refused", GraphExistenceOK: true,
 			})
 		}
 		return "", false
@@ -1115,18 +1183,13 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// literal string). vectorArmSimilarity=nil: a census witness is not a
 	// vector search and has nothing to contribute to the CHAOS-3829
 	// carve-out's margin, the SAME exclusion the AliasLookup merge above
-	// already documents.
+	// already documents. The accepted check above GUARANTEES NodeCandidate
+	// (called again, internally, by mergeSearchResults) reaches the exact
+	// same accept decision on the SAME node/principal/scope inputs, so this
+	// call is never a second, independent authorization gate -- merely
+	// where the actual merge/insert into candidatesBySubject happens.
 	mergeSearchResults(ctx, principal, request, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms)
 	key := SubjectKey(subject)
-	if _, ok := candidatesBySubject[key]; !ok {
-		if deps.ResolutionTracer != nil {
-			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-				RequestID: request.RequestID, Stage: "evidence_census_commit",
-				Subject: subject, Outcome: "refused", GraphExistenceOK: true,
-			})
-		}
-		return "", false
-	}
 	if deps.ResolutionTracer != nil {
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "evidence_census_commit",

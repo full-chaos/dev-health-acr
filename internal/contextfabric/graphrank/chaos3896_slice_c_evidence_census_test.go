@@ -83,10 +83,25 @@ func TestAttestedSatisfier(t *testing.T) {
 		{
 			name: "decisive single bridged satisfier",
 			attestation: Attestation{
-				Outcome: ShadowWouldCommit,
-				Kinds:   []KindAttestation{{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, SatisfierCanonicalID: "pull_request:repo-1:532"}},
+				Outcome: ShadowWouldCommit, UnscopedVisibility: true,
+				Kinds: []KindAttestation{{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, SatisfierCanonicalID: "pull_request:repo-1:532"}},
 			},
 			wantOK: true, wantKind: contextfabric.SubjectPullRequest, wantID: "pull_request:repo-1:532",
+		},
+		{
+			// codex xhigh review finding (LOW, defense-in-depth): even an
+			// otherwise-decisive attestation must not qualify without
+			// UnscopedVisibility -- no live bypass exists today
+			// (RunShadowEvidenceRound already refuses to run the census at
+			// all for a scoped caller), but this function is the ONE gate
+			// deciding whether an Attestation drives a real commit, so it
+			// asserts the invariant itself.
+			name: "UnscopedVisibility=false refuses an otherwise-decisive attestation",
+			attestation: Attestation{
+				Outcome: ShadowWouldCommit, UnscopedVisibility: false,
+				Kinds: []KindAttestation{{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, SatisfierCanonicalID: "pull_request:repo-1:532"}},
+			},
+			wantOK: false,
 		},
 		{
 			name:        "would_clarify never qualifies",
@@ -215,6 +230,46 @@ func TestResolveFromMergedCandidatesWithGate_EvidenceCensus(t *testing.T) {
 		resolution := ResolveFromMergedCandidatesWithGate(candidates, map[string]string{}, map[string]bool{}, 10, true, true, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "", key)
 		if len(resolution.Committed) != 0 {
 			t.Fatalf("resolution.Committed = %#v, want none -- a vector-only base must never commit via evidence_census (AC-3778-3, pin retained)", resolution.Committed)
+		}
+	})
+
+	// codex xhigh review finding (HIGH, confirmed and fixed): a candidate
+	// that already carries 2 REAL mechanisms (independent of the census
+	// witness) gets corroborated to CorroboratedConfidence(0.50) ~= 0.755
+	// by phase 2.5 -- and can still reach this rescue if searchTruncated
+	// short-circuits the switch BEFORE the lone_floor case ever inspects
+	// that already-boosted confidence. evidenceStrength MUST be evaluated
+	// against the TRUE raw base (0.50 -> 0.755), never against phase 2.5's
+	// own output (0.755 -> ~0.773 if double-applied) -- this test picks a
+	// LoneFloor strictly between the two (0.76) so the two computations
+	// disagree on the OUTCOME, not just the number: the double-application
+	// bug would have committed here; the fix must refuse.
+	t.Run("evidence strength uses the RAW base, not phase 2.5's own corroborated output, for an already-multi-mechanism candidate", func(t *testing.T) {
+		t.Parallel()
+		candidates := map[string]contextfabric.SubjectCandidate{
+			key: {
+				Subject: subject, State: contextfabric.ResolutionProposed, Confidence: 0.50,
+				MatchReasons:    []string{"stalled"},
+				MatchMechanisms: []contextfabric.MatchMechanism{contextfabric.MatchLexical, contextfabric.MatchVector},
+			},
+		}
+		wantRawBase := 0.50
+		if got := evidenceStrength(wantRawBase); got != 0.755 {
+			t.Fatalf("sanity check: evidenceStrength(%v) = %v, want 0.755", wantRawBase, got)
+		}
+		phase25Output := CorroboratedConfidence(candidates[key].MatchMechanisms, wantRawBase)
+		if phase25Output <= wantRawBase {
+			t.Fatalf("sanity check: phase-2.5 output (%v) must exceed the raw base (%v) for this scenario to be meaningful", phase25Output, wantRawBase)
+		}
+		doubleApplied := evidenceStrength(phase25Output)
+		gate := DefaultCommitGatePolicy()
+		gate.LoneFloor = (0.755 + doubleApplied) / 2 // strictly between the two candidate answers
+		if gate.LoneFloor <= 0.755 || gate.LoneFloor >= doubleApplied {
+			t.Fatalf("test construction error: LoneFloor %v must sit strictly between 0.755 and %v", gate.LoneFloor, doubleApplied)
+		}
+		resolution := ResolveFromMergedCandidatesWithGate(candidates, map[string]string{}, map[string]bool{}, 10, true, true, nil, 0, false, 10, 20, true, gate, nil, nil, false, nil, "", key)
+		if len(resolution.Committed) != 0 {
+			t.Fatalf("resolution.Committed = %#v, want NONE: the raw base (0.50 -> evidenceStrength 0.755) sits below LoneFloor (%v), so evidence_census must refuse -- a non-empty Committed here means evidenceStrength was evaluated against the already-corroborated phase-2.5 output instead of the raw base", resolution.Committed, gate.LoneFloor)
 		}
 	})
 

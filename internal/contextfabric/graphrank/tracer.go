@@ -90,6 +90,24 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"census_protocol", event.CensusProtocol, "census_closure_mismatch", event.CensusClosureMismatch,
 			"census_statement_count", event.CensusStatementCount, "census_rows_read", event.CensusRowsRead,
 			"census_handle_applied", event.CensusHandleApplied, "census_anchor_applied", event.CensusAnchorApplied)
+	case "evidence_census_commit":
+		// CHAOS-3896 Slice C (codex xhigh review finding, confirmed and
+		// fixed: this case was missing entirely, so a LIVE
+		// graph_missing_satisfier refusal fell to the "unknown stage"
+		// branch below and silently dropped Subject/Outcome/
+		// GraphExistenceOK/CensusCommitReason -- unlike evidence_round/
+		// evidence_probe above, this stage is NOT shadow-only, so losing
+		// it here means losing the one loud signal design brief §1.4
+		// requires for this exact refusal class). Content-safe: Subject is
+		// kind+canonical_id (the graph's own stable identifier, the same
+		// shape every other stage already logs), CensusCommitReason is a
+		// closed-vocabulary DegradationReason string, never term/question
+		// text.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence census commit",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"outcome", event.Outcome, "graph_existence_ok", event.GraphExistenceOK,
+			"census_commit_reason", event.CensusCommitReason)
 	default:
 		t.logger.DebugContext(ctx, "context fabric resolution trace: unknown stage",
 			"request_id", event.RequestID, "stage", event.Stage)

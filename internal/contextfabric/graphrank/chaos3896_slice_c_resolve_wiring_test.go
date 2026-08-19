@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -201,4 +202,121 @@ func TestResolveSubjects_EvidenceCensusRecoversATruncatedAwayReferent(t *testing
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "pull_request:repo-1:532" {
 		t.Fatalf("resolution.Committed = %#v, want the recovered satisfier committed", resolution.Committed)
 	}
+}
+
+// TestMergeCensusAttestedSatisfier_DeclinedNodeNeverReportsSuccessEvenWhenTheKeyAlreadyExists
+// is a codex xhigh review regression pin (MEDIUM/LOW, confirmed and fixed):
+// an earlier version of mergeCensusAttestedSatisfier inferred success from
+// candidatesBySubject[key]'s mere PRESENCE after calling mergeSearchResults
+// -- wrong whenever the subject was ALREADY pooled (the common case: census
+// usually names an already-pooled, merely-ambiguous candidate) and the
+// census-derived node itself gets declined (unauthorized, invalid, or
+// internal) -- the pre-existing entry's presence would be misread as "this
+// census read succeeded". This test drives mergeCensusAttestedSatisfier
+// DIRECTLY (same package) with a pre-populated candidatesBySubject entry at
+// the attested key and an IsInternal predicate that declines the
+// census-read node specifically, and asserts BOTH that ok is false AND that
+// the pre-existing entry is left byte-identical (never silently
+// overwritten or treated as evidence of a successful merge).
+func TestMergeCensusAttestedSatisfier_DeclinedNodeNeverReportsSuccessEvenWhenTheKeyAlreadyExists(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:repo-1:532"}
+	key := SubjectKey(subject)
+	preexisting := contextfabric.SubjectCandidate{
+		Subject: subject, State: contextfabric.ResolutionProposed, Confidence: 0.9,
+		MatchReasons: []string{"already pooled from ordinary search"},
+	}
+	candidatesBySubject := map[string]contextfabric.SubjectCandidate{key: preexisting}
+
+	backend := &fakeGraphBackend{
+		exactHints: map[string]CandidateNode{
+			key: candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:532", "PR #532", 0.5, "*"),
+		},
+		// The census-read node is declined for a reason independent of
+		// authorization (mirrors NodeCandidate's own isInternal gate) --
+		// this must NOT be confused with the search-time acceptance that
+		// already put `preexisting` into the map.
+		isInternal: func(s contextfabric.SubjectRef) bool { return s.CanonicalID == "pull_request:repo-1:532" },
+	}
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+
+	attestation := Attestation{
+		Outcome: ShadowWouldCommit, UnscopedVisibility: true,
+		Kinds: []KindAttestation{{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, SatisfierCanonicalID: "pull_request:repo-1:532"}},
+	}
+	request := testRequest()
+
+	gotKey, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, candidatesBySubject, map[string]string{}, map[string]bool{}, nil, nil)
+	if ok || gotKey != "" {
+		t.Fatalf("mergeCensusAttestedSatisfier() = (%q, %v), want (\"\", false) for a declined node", gotKey, ok)
+	}
+	if got := candidatesBySubject[key]; got.Confidence != preexisting.Confidence || len(got.MatchReasons) != 1 || got.MatchReasons[0] != preexisting.MatchReasons[0] {
+		t.Fatalf("candidatesBySubject[%q] = %#v, want the pre-existing entry left UNTOUCHED (%#v)", key, got, preexisting)
+	}
+	events := tracer.eventsForStage("evidence_census_commit")
+	if len(events) != 1 || events[0].Outcome != "refused" || !events[0].GraphExistenceOK {
+		t.Fatalf("evidence_census_commit events = %#v, want exactly 1 refused/GraphExistenceOK=true event", events)
+	}
+}
+
+// TestMergeCensusAttestedSatisfier_DistinguishesBackendErrorFromConfirmedAbsence
+// is a codex xhigh review regression pin (MEDIUM, confirmed and fixed): a
+// genuine deps.ExactHint backend error and a confirmed "node does not
+// exist" both fail closed (never commit) but must NOT be reported under the
+// identical trace reason -- graph_missing_satisfier is a specific, CONFIRMED
+// absence claim (design brief §4/§1.4's own CHAOS-3884 graphMissing
+// precedent), and conflating it with "the read itself failed" would make a
+// production graph outage operationally indistinguishable from a genuine
+// missing node in the trace.
+func TestMergeCensusAttestedSatisfier_DistinguishesBackendErrorFromConfirmedAbsence(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:repo-1:532"}
+	attestation := Attestation{
+		Outcome: ShadowWouldCommit, UnscopedVisibility: true,
+		Kinds: []KindAttestation{{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, SatisfierCanonicalID: subject.CanonicalID}},
+	}
+	request := testRequest()
+
+	t.Run("confirmed absence", func(t *testing.T) {
+		t.Parallel()
+		backend := &fakeGraphBackend{} // exactHints empty -- ok=false, err=nil
+		deps := backend.deps()
+		tracer := &captureResolutionTracer{}
+		deps.ResolutionTracer = tracer
+		_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, map[string]contextfabric.SubjectCandidate{}, map[string]string{}, map[string]bool{}, nil, nil)
+		if ok {
+			t.Fatal("mergeCensusAttestedSatisfier() ok = true, want false")
+		}
+		events := tracer.eventsForStage("evidence_census_commit")
+		if len(events) != 1 || events[0].CensusCommitReason != string(ReasonGraphMissingSatisfier) {
+			t.Fatalf("evidence_census_commit events = %#v, want CensusCommitReason=%q", events, ReasonGraphMissingSatisfier)
+		}
+	})
+
+	t.Run("backend error", func(t *testing.T) {
+		t.Parallel()
+		deps := ResolveDeps{
+			ExactHint: func(context.Context, contextfabric.SubjectRef) (CandidateNode, bool, error) {
+				return CandidateNode{}, false, errors.New("simulated backend fault")
+			},
+		}
+		tracer := &captureResolutionTracer{}
+		deps.ResolutionTracer = tracer
+		_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, map[string]contextfabric.SubjectCandidate{}, map[string]string{}, map[string]bool{}, nil, nil)
+		if ok {
+			t.Fatal("mergeCensusAttestedSatisfier() ok = true, want false")
+		}
+		events := tracer.eventsForStage("evidence_census_commit")
+		if len(events) != 1 {
+			t.Fatalf("evidence_census_commit events = %#v, want exactly 1", events)
+		}
+		if events[0].CensusCommitReason != censusCommitErrorReason {
+			t.Fatalf("evidence_census_commit reason = %q, want %q (distinct from %q)", events[0].CensusCommitReason, censusCommitErrorReason, ReasonGraphMissingSatisfier)
+		}
+		if events[0].CensusCommitReason == string(ReasonGraphMissingSatisfier) {
+			t.Fatal("a backend error must never be reported under the SAME reason as a confirmed absence")
+		}
+	})
 }

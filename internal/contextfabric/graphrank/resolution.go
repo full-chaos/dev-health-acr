@@ -365,8 +365,30 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 	// Every candidate goes through it, not just the multi-mechanism ones: the
 	// function returns a single-mechanism base unchanged, so a uniform pass is
 	// both simpler and impossible to forget for a new candidate source.
+	//
+	// rawBase (CHAOS-3896 Slice C, codex xhigh review finding, confirmed):
+	// every candidate's OWN pre-corroboration Confidence, captured here by
+	// subject key, BEFORE this loop overwrites it. The evidence_census
+	// rescue below reads THIS map, never candidates[index].Confidence
+	// directly -- a candidate that already carries 2+ REAL mechanisms
+	// (independent of any census witness) gets corroborated to
+	// >=CorroboratedFloor by THIS SAME loop, and evidence_census's own
+	// evidenceStrength formula is only sound when applied to the TRUE raw,
+	// single-mechanism-equivalent base ("raw-bases re-entry", design brief
+	// §1.4) -- applying it to an ALREADY-corroborated value double-applies
+	// the corroboration arithmetic and can push a candidate that should
+	// have refused (raw base below LoneFloor under the brief's own formula)
+	// over the floor instead. This is reachable in production even though
+	// it never triggers on the shadow-measurement corpus (design brief §0:
+	// every currently-stalled candidate there is single-mechanism) --
+	// `searchTruncated` can short-circuit the switch below BEFORE the
+	// lone_floor case ever inspects a genuinely multi-mechanism candidate's
+	// confidence, leaving it reachable here with its raw base still
+	// un-committed.
+	rawBase := make(map[string]float64, len(candidates))
 	for index := range candidates {
 		base := candidates[index].Confidence
+		rawBase[SubjectKey(candidates[index].Subject)] = base
 		candidates[index].Confidence = CorroboratedConfidence(candidates[index].MatchMechanisms, base)
 		if tracer != nil {
 			// The identity-gate STORY (was FromKeyedIdentityLookup honored)
@@ -906,14 +928,18 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		// wire mechanism, no curve change, no candidate mutation, raw-bases
 		// re-entry, MaxMatchMechanisms frozen at 6 by assertion" (brief
 		// §1.4) -- see evidenceStrength's own doc comment
-		// (chaos3896_slice_c_evidence_census.go) for the exact formula and
-		// why every reachable candidate here already has base==its own raw,
-		// pre-corroboration confidence.
+		// (chaos3896_slice_c_evidence_census.go) for the exact formula.
+		// Reads rawBase[...], NOT candidates[index].Confidence (codex xhigh
+		// review finding, confirmed -- see rawBase's own doc comment above):
+		// the latter is this SAME call's phase-2.5 OUTPUT, already
+		// corroborated for any candidate carrying 2+ real mechanisms, and
+		// feeding that back into evidenceStrength's own corroboration
+		// formula would double-apply it.
 		if ambiguous && gateValid && evidenceCensusAttestedKey != "" && len(exactIndex) < 2 {
 			if index, ok := indexBySubjectKey(candidates, evidenceCensusAttestedKey); ok &&
 				!isVectorOnlyCandidate(candidates[index].MatchMechanisms) &&
 				!identityCollision(evidenceCensusAttestedKey, identity, identityTerms) &&
-				evidenceStrength(candidates[index].Confidence) >= gate.LoneFloor {
+				evidenceStrength(rawBase[evidenceCensusAttestedKey]) >= gate.LoneFloor {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
