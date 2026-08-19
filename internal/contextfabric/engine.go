@@ -398,16 +398,28 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// back out of it -- drop excess receipt-derived hints (never the
 		// caller's own explicit hints), and let the existing skip
 		// telemetry in recordPriorSubjectReceiptSkips below count the
-		// drop exactly like any other unresolved receipt. priorHints and
-		// priorValidatedReceipts stay index-aligned (both returned
-		// 1:1 from resolvePriorSubjectHints), so truncate them together.
+		// drop exactly like any other unresolved receipt.
+		//
+		// CHAOS-3898 P1-1 codex re-review finding (fixed here):
+		// priorValidatedReceipts is deliberately NOT truncated by this
+		// same cap. maxSubjectHints is a GRAPH-CONTRACT bound
+		// (ContextFabricRequestedScope.SubjectHints' own v1 limit) --
+		// Interpret's own input carries no such bound, and a validated
+		// receipt (one resolvePriorSubjectHints already proved passed the
+		// taint/match gate) dropped only because the caller's OWN
+		// explicit hints already filled the graph-side budget must still
+		// reach the interpreter: the model can still legitimately resolve
+		// "it" against it even though GraphReader will never see it as an
+		// exact hint. priorHints and priorValidatedReceipts are returned
+		// 1:1 index-aligned from resolvePriorSubjectHints, but diverge
+		// here on purpose -- each feeds a consumer with its own bound (or
+		// none).
 		const maxSubjectHints = 50
 		if available := maxSubjectHints - len(request.RequestedScope.SubjectHints); len(priorHints) > available {
 			if available < 0 {
 				available = 0
 			}
 			priorHints = priorHints[:available]
-			priorValidatedReceipts = priorValidatedReceipts[:available]
 		}
 		if len(priorHints) > 0 {
 			graphRequest.RequestedScope.SubjectHints = append(

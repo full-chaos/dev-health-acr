@@ -974,6 +974,59 @@ func TestEngineCapsCombinedSubjectHintsAtContractBound(t *testing.T) {
 	}
 }
 
+// TestEngineStillPassesAGraphBudgetCappedReceiptToInterpret is a codex
+// re-review finding on CHAOS-3898 P1-1 (fixed): TestEngineCapsCombinedSubjectHintsAtContractBound's
+// same 50-explicit-hints fixture, but proving the OTHER half of the fix --
+// a receipt the v1 RequestedScope.SubjectHints contract bound excludes
+// from GraphReader's own hints (maxSubjectHints, engine.go) must still
+// reach Interpret. That cap is a GRAPH-CONTRACT limit; Interpret's own
+// input carries no such bound, and the receipt already passed
+// resolvePriorSubjectHints' own taint/match validation -- dropping it from
+// Interpret too, just because the caller's own explicit hints already
+// filled the graph-side budget, would silently narrow what a
+// conversational follow-up ("it") can resolve against for no reason tied
+// to the interpreter at all.
+func TestEngineStillPassesAGraphBudgetCappedReceiptToInterpret(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_prior_1": priorResult}}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	var capturedReceipts []BoundSubjectReceipt
+	engine := mustEngineForPriorReceiptTestCapturingInterpret(t, graph, store, telemetry, &capturedReceipts)
+
+	request := validInvestigationRequest()
+	hints := make([]SubjectHint, 0, 50)
+	for i := 0; i < 50; i++ {
+		hints = append(hints, SubjectHint{Kind: SubjectProject, ID: fmt.Sprintf("project_caller_%d", i), Label: fmt.Sprintf("Caller Project %d", i), Source: "workbench"})
+	}
+	request.RequestedScope.SubjectHints = hints
+	want := BoundSubjectReceipt{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{want}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(capturedReceipts) != 1 || capturedReceipts[0] != want {
+		t.Fatalf("Interpret received PriorSubjectReceipts = %#v, want [%#v] -- the graph-hint budget cap must not also strip a validated receipt from Interpret's own input", capturedReceipts, want)
+	}
+}
+
 func factKinds(requirements []FactRequirement) []FactKind {
 	kinds := make([]FactKind, 0, len(requirements))
 	for _, requirement := range requirements {
