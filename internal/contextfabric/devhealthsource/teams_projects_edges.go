@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -53,35 +54,73 @@ func attributionProperties(source, confidence string) map[string]contractsv1.Con
 // through workItemAuthorization -- the CHAOS-3785 zero-UUID discipline. A
 // Linear-sourced work item carries repo_id = the zero UUID, which is
 // repo-less by design and must not be mistaken for an orphan.
-func queryWorkItemProjects(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "w.work_item_id"
-	statement := `SELECT w.work_item_id, w.project_id, toString(w.repo_id), ifNull(r.repo, ''), w.updated_at
+//
+// CHAOS-3898 (design brief §1.4): projects.id alone does not name a
+// provider, and project.v2's canonical id needs one. key_resolution_count
+// (count() OVER (PARTITION BY id), the SAME anchor_collision-detection
+// shape queryProjectTeams already uses for project_key) proves whether THIS
+// id resolves to exactly one provider within the organization; live,
+// queryProjects' own doc comment records zero such collisions across every
+// organization checked, so this is a defensive, currently-inert guard, not
+// a live behavior change. An ambiguous id is omitted (never guessed) and
+// counted in the SAME run-scoped ambiguity ledger queryProjectTeams
+// reports through logAmbiguousProjectKeys, via projectTeamsQuery's own
+// closure convention.
+func workItemProjectsQuery(omissions *ambiguityLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return queryWorkItemProjects(ctx, client, orgID, cursor, limit, omissions)
+	}
+}
+
+func queryWorkItemProjects(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
+	const rowKey = "concat(toString(w.repo_id), ':', w.work_item_id)"
+	statement := `SELECT w.work_item_id, w.project_id, toString(w.repo_id), ifNull(r.repo, ''), w.updated_at, p.provider, p.key_resolution_count
 FROM work_items AS w FINAL
-INNER JOIN (SELECT id FROM projects FINAL WHERE org_id = {org_id:String}) AS p ON p.id = w.project_id
+INNER JOIN (
+  SELECT id, provider, count() OVER (PARTITION BY id) AS key_resolution_count
+  FROM projects FINAL WHERE org_id = {org_id:String}
+) AS p ON p.id = w.project_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE w.org_id = {org_id:String} AND w.project_id != ''` + sincePredicate(cursor, "w.updated_at", rowKey) + orderBy("w.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var workItemID, projectID, repoID, repoSlug string
+		var workItemID, projectID, repoID, repoSlug, provider string
 		var observedAt time.Time
-		if err := r.Scan(&workItemID, &projectID, &repoID, &repoSlug, &observedAt); err != nil {
+		var keyResolutionCount uint64
+		if err := r.Scan(&workItemID, &projectID, &repoID, &repoSlug, &observedAt, &provider, &keyResolutionCount); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		rowSortKey := repoID + ":" + workItemID
+		if keyResolutionCount > 1 {
+			omissions.add(provider, projectID)
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
+		workItemCanonicalID, workItemOmitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if workItemOmitted || projectOmitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: "relationship:work_item_project:" + workItemID + ":" + projectID,
+			RelationshipID: "relationship:work_item_project:" + repoID + ":" + workItemID + ":" + provider + ":" + projectID,
 			Type:           contractsv1.ContextFabricRelationshipBelongsToProject,
-			From:           contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + workItemID, Label: workItemID},
-			To:             contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID(projectID), Label: projectID},
+			From:           contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: workItemID},
+			To:             contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID, Label: projectID},
 			// A plain canonical column on work_items, not an Ops-computed
 			// attribution -- unlike the two producers below.
 			Derivation:      contractsv1.ContextFabricDerivationCanonicalStructured,
 			EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization:   workItemAuthorization(repoID, repoSlug),
-			EvidenceRefIDs:  []string{"acr:v1:work-item:" + workItemID},
+			EvidenceRefIDs:  []string{"acr:v1:work-item:" + repoID + ":" + workItemID},
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: workItemID, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
 }
 
@@ -112,7 +151,7 @@ WHERE w.org_id = {org_id:String} AND w.project_id != ''` + sincePredicate(cursor
 // column's 5089 rows are the zero UUID (CHAOS-3785's trap), so scoping on it
 // would be meaningless.
 func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "a.work_item_id"
+	const rowKey = "concat(toString(w.repo_id), ':', a.work_item_id)"
 	statement := `SELECT a.work_item_id, ifNull(a.team_id, ''), toString(a.source), toString(a.confidence), toString(w.repo_id), ifNull(r.repo, ''), a.computed_at
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
@@ -126,20 +165,28 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		rowSortKey := repoID + ":" + workItemID
+		workItemCanonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if omitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID:  "relationship:work_item_team:" + workItemID + ":" + teamID,
+			RelationshipID:  "relationship:work_item_team:" + repoID + ":" + workItemID + ":" + teamID,
 			Type:            contractsv1.ContextFabricRelationshipOwnedByTeam,
-			From:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + workItemID, Label: workItemID},
+			From:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: workItemID},
 			To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: teamCanonicalID(teamID), Label: teamID},
 			Properties:      attributionProperties(source, confidence),
 			Derivation:      contractsv1.ContextFabricDerivationRuleInferred,
 			EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
 			Authorization:   workItemAuthorization(repoID, repoSlug),
-			EvidenceRefIDs:  []string{"acr:v1:work-item-team:" + workItemID + ":" + teamID},
+			EvidenceRefIDs:  []string{"acr:v1:work-item-team:" + repoID + ":" + workItemID + ":" + teamID},
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: workItemID, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
 }
 
@@ -288,10 +335,17 @@ WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + or
 			omissions.add(provider, projectKey)
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
+		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if projectOmitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: "relationship:project_team:" + projectID + ":" + teamID + ":" + source,
+			RelationshipID: "relationship:project_team:" + provider + ":" + projectID + ":" + teamID + ":" + source,
 			Type:           contractsv1.ContextFabricRelationshipOwnedByTeam,
-			From:           contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID(projectID), Label: projectID},
+			From:           contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID, Label: projectID},
 			To:             contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: teamCanonicalID(teamID), Label: teamID},
 			Properties:     attributionProperties(source, ""),
 			// Same reasoning as queryWorkItemTeams: an ownership row's source
@@ -300,7 +354,7 @@ WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + or
 			Derivation:      contractsv1.ContextFabricDerivationRuleInferred,
 			EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
 			Authorization:   contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{projectID}, TeamIDs: []string{teamID}},
-			EvidenceRefIDs:  []string{"acr:v1:project-team:" + projectID + ":" + teamID},
+			EvidenceRefIDs:  []string{"acr:v1:project-team:" + provider + ":" + projectID + ":" + teamID},
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}

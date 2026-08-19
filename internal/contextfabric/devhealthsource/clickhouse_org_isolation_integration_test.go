@@ -178,7 +178,7 @@ func TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization(t *test
 
 	foundEntity := false
 	for _, entity := range batch.Entities {
-		if entity.Subject.CanonicalID != "work_item:WI-1" {
+		if entity.Subject.CanonicalID != "work_item.v2:"+collidingRepoID+":WI-1" {
 			continue
 		}
 		foundEntity = true
@@ -192,7 +192,7 @@ func TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization(t *test
 
 	foundRelationship := false
 	for _, relationship := range batch.Relationships {
-		if relationship.From.CanonicalID != "work_item:WI-1" || relationship.Type != "BELONGS_TO_REPOSITORY" {
+		if relationship.From.CanonicalID != "work_item.v2:"+collidingRepoID+":WI-1" || relationship.Type != "BELONGS_TO_REPOSITORY" {
 			continue
 		}
 		foundRelationship = true
@@ -213,7 +213,7 @@ func TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization(t *test
 	// repo_id+number too).
 	foundReview := false
 	for _, entity := range batch.Entities {
-		if entity.Subject.CanonicalID != "pull_request_review:review-1" {
+		if entity.Subject.CanonicalID != "pull_request_review.v2:"+collidingRepoID+":1042:review-1" {
 			continue
 		}
 		foundReview = true
@@ -227,7 +227,7 @@ func TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization(t *test
 
 	foundRun := false
 	for _, entity := range batch.Entities {
-		if entity.Subject.CanonicalID != "ci_pipeline_run:run-1" {
+		if entity.Subject.CanonicalID != "ci_pipeline_run.v2:"+collidingRepoID+":run-1" {
 			continue
 		}
 		foundRun = true
@@ -341,7 +341,7 @@ func TestClickHouseProjectionSourceRelaxedRepoJoinStaysOrganizationScoped(t *tes
 		}
 	}
 
-	linear1, ok := entitiesByID["work_item:LINEAR-1"]
+	linear1, ok := entitiesByID["work_item.v2:"+zeroRepositoryUUID+":LINEAR-1"]
 	if !ok {
 		t.Fatalf("expected org-a's Linear-shaped work item LINEAR-1 to be projected (this is the CHAOS-3785 zero-row defect): entities=%+v", batch.Entities)
 	}
@@ -358,7 +358,7 @@ func TestClickHouseProjectionSourceRelaxedRepoJoinStaysOrganizationScoped(t *tes
 		t.Fatalf("LINEAR-1 authorization = %+v, want exactly [\"acr-context-fabric:no-repository\"]", linear1.Authorization)
 	}
 
-	repo1, ok := entitiesByID["work_item:REPO-1"]
+	repo1, ok := entitiesByID["work_item.v2:"+collidingRepoID+":REPO-1"]
 	if !ok {
 		t.Fatalf("expected org-a's repo-backed work item REPO-1 to be projected: entities=%+v", batch.Entities)
 	}
@@ -368,7 +368,7 @@ func TestClickHouseProjectionSourceRelaxedRepoJoinStaysOrganizationScoped(t *tes
 
 	foundBlocks, foundPartOf := false, false
 	for _, relationship := range batch.Relationships {
-		if relationship.From.CanonicalID != "work_item:LINEAR-1" || relationship.To.CanonicalID != "work_item:LINEAR-2" {
+		if relationship.From.CanonicalID != "work_item.v2:"+zeroRepositoryUUID+":LINEAR-1" || relationship.To.CanonicalID != "work_item.v2:"+zeroRepositoryUUID+":LINEAR-2" {
 			continue
 		}
 		switch relationship.Type {
@@ -389,12 +389,12 @@ func TestClickHouseProjectionSourceRelaxedRepoJoinStaysOrganizationScoped(t *tes
 	}
 
 	for _, relationship := range batch.Relationships {
-		if relationship.From.CanonicalID == "work_item:REPO-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
+		if relationship.From.CanonicalID == "work_item.v2:"+collidingRepoID+":REPO-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
 			if relationship.To.Label != "org-a/service" {
 				t.Fatalf("REPO-1's BELONGS_TO_REPOSITORY target = %+v, want org-a's repository, not org-b's", relationship.To)
 			}
 		}
-		if relationship.From.CanonicalID == "work_item:LINEAR-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
+		if relationship.From.CanonicalID == "work_item.v2:"+zeroRepositoryUUID+":LINEAR-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
 			t.Fatalf("LINEAR-1 has no real repository, so it must never carry a BELONGS_TO_REPOSITORY edge: %+v", relationship)
 		}
 	}
@@ -471,12 +471,12 @@ func TestClickHouseProjectionSourceFiltersSelfReferentialParentID(t *testing.T) 
 			continue
 		}
 		switch relationship.From.CanonicalID {
-		case "work_item:CHILD-1":
+		case "work_item.v2:" + repoID + ":CHILD-1":
 			foundLegitimate = true
-			if relationship.To.CanonicalID != "work_item:PARENT-1" {
-				t.Fatalf("PART_OF target for CHILD-1 = %q, want work_item:PARENT-1", relationship.To.CanonicalID)
+			if relationship.To.CanonicalID != "work_item.v2:"+repoID+":PARENT-1" {
+				t.Fatalf("PART_OF target for CHILD-1 = %q, want work_item.v2:%s:PARENT-1", relationship.To.CanonicalID, repoID)
 			}
-		case "work_item:POISON-1":
+		case "work_item.v2:" + repoID + ":POISON-1":
 			foundPoison = true
 		}
 	}

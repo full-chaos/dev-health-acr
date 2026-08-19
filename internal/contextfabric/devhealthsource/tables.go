@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -185,12 +186,18 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 // this deployment's repos.repo is a non-Nullable String, so an unmatched
 // LEFT JOIN already yields ” by default, but every other optional column
 // in this file guards the same way.
+// queryWorkItems mints work_item.v2:<repo_id>:<enc(work_item_id)> (design
+// brief D-4/§1.3: the work_item exemption is withdrawn -- repo_id is used
+// VERBATIM including the zero-UUID sentinel a Linear-sourced row carries,
+// because that value IS the row's own natural-key value, not an absence to
+// special-case). The pagination rowKey (D-6) carries the same qualifier.
 func queryWorkItems(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	const rowKey = "concat(toString(w.repo_id), ':', w.work_item_id)"
 	statement := `SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, ''), ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at,
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
        ifNull(w.type, ''), ifNull(w.native_team_key, ''), ifNull(w.project_name, ''), w.labels
 FROM work_items AS w FINAL LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.work_item_id") + orderBy("w.updated_at", "w.work_item_id")
+WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", rowKey) + orderBy("w.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var workItemID, repoID, repoSlug, title, status, url string
 		var itemType, teamKey, projectName string
@@ -202,6 +209,14 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		canonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		rowSortKey := repoID + ":" + workItemID
+		if omitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		// A work item is valid from creation until it completed or
 		// closed, whichever the source recorded; an open item has no end.
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
@@ -209,7 +224,7 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 		if strings.TrimSpace(label) == "" {
 			label = workItemID
 		}
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + workItemID, Label: label}
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: canonicalID, Label: label}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
 		if status != "" {
 			properties["status"] = stringScalar(status)
@@ -222,9 +237,10 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 		setStringProperty(properties, "native_team_key", teamKey, 0)
 		setStringProperty(properties, "project_name", projectName, 0)
 		setStringProperty(properties, "labels", joinedSortedList(labels, 10, 40, ", "), 0)
+		evidenceRefID := "acr:v1:work-item:" + repoID + ":" + workItemID
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: workItemAuthorization(repoID, repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:work-item:" + workItemID}, ObservedAt: observedAt,
+			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		// CHAOS-3833 (spec §2, review R2): the ticket-key alias derived
@@ -235,12 +251,12 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 			entity.Aliases = []string{alias}
 		}
 		_ = url
-		candidates := []candidate{{observedAt: observedAt, sortKey: workItemID, entity: &entity}}
+		candidates := []candidate{{observedAt: observedAt, sortKey: rowSortKey, entity: &entity}}
 		// repoSlug is '' exactly when the LEFT JOIN found no repos match --
 		// there is no real repository entity to point a BELONGS_TO_REPOSITORY
 		// edge at, so this row emits an entity candidate only.
 		if repoSlug != "" {
-			candidates = append(candidates, belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:work-item:"+workItemID, workItemID, validFrom, validTo))
+			candidates = append(candidates, belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo))
 		}
 		return candidates, nil
 	})
@@ -311,13 +327,18 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 	})
 }
 
+// queryDeployments mints deployment.v2:<repo_id>:<enc(deployment_id)>
+// (design brief D-3, §1.2), the same cross-repo-collision fix as
+// queryCIRuns above, applied to an audit-found defect rather than a
+// live-verified collision.
 func queryDeployments(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const timestampExpr = "coalesce(d.deployed_at, d.started_at, d.last_synced)"
+	const rowKey = "concat(toString(d.repo_id), ':', d.deployment_id)"
 	statement := `SELECT toString(d.repo_id), r.repo, d.deployment_id, ifNull(d.status, ''), ifNull(d.environment, ''), ` + timestampExpr + `,
        ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
        ifNull(d.release_ref, '')
 FROM deployments AS d FINAL INNER JOIN repos AS r FINAL ON r.id = d.repo_id AND r.org_id = d.org_id
-WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "d.deployment_id") + orderBy(timestampExpr, "d.deployment_id")
+WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey) + orderBy(timestampExpr, rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoID, repoSlug, deploymentID, status, environment string
 		var releaseRef string
@@ -327,6 +348,14 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "d.dep
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		canonicalID, omitted, err := identity.Derive(identity.KindDeployment, []string{repoID, deploymentID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		rowSortKey := repoID + ":" + deploymentID
+		if omitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		// A deployment is valid while it is running; one still in flight
 		// has no recorded end.
 		validFrom, validTo := optionalTime(hasStarted, startedAt), optionalTime(hasFinished, finishedAt)
@@ -334,7 +363,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "d.dep
 		if environment != "" {
 			label = environment + " deployment"
 		}
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectDeployment, CanonicalID: "deployment:" + deploymentID, Label: label}
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectDeployment, CanonicalID: canonicalID, Label: label}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
 		if status != "" {
 			properties["status"] = stringScalar(status)
@@ -346,14 +375,15 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "d.dep
 		// fields. status is 0% populated live -- nothing to add there.
 		setStringProperty(properties, "release_ref", releaseRef, 0)
 		setStringProperty(properties, "repo", repoSlug, 0)
+		evidenceRefID := "acr:v1:deployment:" + repoID + ":" + deploymentID
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:deployment:" + deploymentID}, ObservedAt: observedAt,
+			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
-			{observedAt: observedAt, sortKey: deploymentID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:deployment:"+deploymentID, deploymentID, validFrom, validTo),
+			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
+			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo),
 		}, nil
 	})
 }
@@ -447,57 +477,82 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 // and those are correctly not this producer's concern. Only the repos join
 // (resolving the source work item's optional repo attributes) relaxes to
 // LEFT, for the same zero-UUID reason queryWorkItems does.
+// queryWorkItemDependencies mints work_item.v2 endpoint references (design
+// brief D-4/§1.3). This producer does NOT yet implement §1.5's
+// work_item_ref stub kind for an unresolved target (a distinct, contract-first
+// addition -- a new SubjectKind requires JSON-schema/OpenAPI/golden-fixture
+// changes across internal/contracts/v1, out of THIS slice's scope; see
+// design brief §6 S2/S3 split and the CHAOS-3898 S2 PR description for the
+// explicit split). Until that lands, a row whose target does not resolve to
+// a real work_items row is OMITTED rather than projected with a dangling
+// endpoint reference (the target join stays LEFT for validity purposes --
+// see the doc comment below -- but no longer for identity purposes): a
+// missing edge is an honest gap the follow-up closes with a stub node and a
+// tombstone-healing rewrite; a dangling reference to a work_item.v2 node
+// that will never exist would be silently, permanently wrong. This is the
+// SAME "omit, never guess or dangle" discipline queryProjectTeams already
+// applies to an ambiguous project key.
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const relationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
-	const rowKey = "concat(d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
+	const rowKey = "concat(toString(w.repo_id), ':', d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
 	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced,
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
-       ` + nullableTimestamp("t.created_at") + `, ` + nullableTimestamp("coalesce(t.completed_at, t.closed_at)") + `
+       ` + nullableTimestamp("t.created_at") + `, ` + nullableTimestamp("coalesce(t.completed_at, t.closed_at)") + `, toString(t.repo_id)
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
 LEFT JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowKey) + orderBy("d.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var sourceID, targetID, relationshipType, repoID, repoSlug string
+		var sourceID, targetID, relationshipType, repoID, repoSlug, targetRepoID string
 		var observedAt, sourceCreatedAt, sourceEndedAt, targetCreatedAt, targetEndedAt time.Time
 		var sourceHasEnded, targetHasCreated, targetHasEnded uint8
 		if err := r.Scan(&sourceID, &targetID, &relationshipType, &repoID, &repoSlug, &observedAt,
 			&sourceCreatedAt, &sourceHasEnded, &sourceEndedAt,
-			&targetHasCreated, &targetCreatedAt, &targetHasEnded, &targetEndedAt); err != nil {
+			&targetHasCreated, &targetCreatedAt, &targetHasEnded, &targetEndedAt, &targetRepoID); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		rowSortKey := repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType
+		// The target join is LEFT: a target_work_item_id is not
+		// guaranteed to name a work item at all (see this function's doc
+		// comment on cross-system PR references). targetHasCreated is
+		// exactly "did the target resolve" -- see this function's own top
+		// doc comment for why an unresolved target is omitted (not
+		// dangling-referenced) until the work_item_ref follow-up lands.
+		if targetHasCreated == 0 {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
+		sourceCanonicalID, sourceOmitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, sourceID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		targetCanonicalID, targetOmitted, err := identity.Derive(identity.KindWorkItem, []string{targetRepoID, targetID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if sourceOmitted || targetOmitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		// work_item_dependencies carries only last_synced -- no interval
 		// of its own -- so the edge's window is its endpoints'
-		// intersection (CHAOS-3781 round-1 F5).
-		//
-		// The target join is LEFT, not INNER, and that asymmetry is
-		// deliberate: a target_work_item_id is not guaranteed to name a
-		// work item at all (see this function's doc comment on
-		// cross-system PR references), so an INNER join would silently
-		// stop projecting those edges entirely. When the target does not
-		// resolve, its bounds come back absent and edgeValidity falls
-		// back to the source's window alone -- the honest answer, since
-		// nothing in the row says when the target existed.
-		//
-		// F5 fixed the earlier source-only version, which asserted the
-		// edge was valid while the target did not yet exist, and made
-		// the window depend on which endpoint happened to be joined
-		// rather than on the data.
+		// intersection (CHAOS-3781 round-1 F5). F5 fixed the earlier
+		// source-only version, which asserted the edge was valid while
+		// the target did not yet exist, and made the window depend on
+		// which endpoint happened to be joined rather than on the data.
 		validFrom, validTo := edgeValidity(
 			requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt),
 			optionalTime(targetHasCreated, targetCreatedAt), optionalTime(targetHasEnded, targetEndedAt))
-		relationshipID := "relationship:work_item_dependency:" + sourceID + ":" + targetID + ":" + relationshipType
+		relationshipID := "relationship:work_item_dependency:" + repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
-			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + sourceID, Label: sourceID},
-			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + targetID, Label: targetID},
+			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: sourceID},
+			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: targetCanonicalID, Label: targetID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + sourceID + ":" + targetID + ":" + relationshipType},
+			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: sourceID + ":" + targetID + ":" + relationshipType, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
 }
 
@@ -533,39 +588,51 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 // repos join relaxes to LEFT, for the same zero-UUID reason queryWorkItems
 // does -- a Linear-sourced child work item's repo_id is the zero UUID.
 func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "c.work_item_id"
+	const rowKey = "concat(toString(c.repo_id), ':', c.work_item_id)"
 	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
        c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
-       p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `
+       p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `, toString(p.repo_id)
 FROM work_items AS c FINAL
 INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
 WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.updated_at", rowKey) + orderBy("c.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var childID, parentID, repoID, repoSlug string
+		var childID, parentID, repoID, repoSlug, parentRepoID string
 		var observedAt, childCreatedAt, childEndedAt, parentCreatedAt, parentEndedAt time.Time
 		var childHasEnded, parentHasEnded uint8
 		if err := r.Scan(&childID, &parentID, &repoID, &repoSlug, &observedAt,
-			&childCreatedAt, &childHasEnded, &childEndedAt, &parentCreatedAt, &parentHasEnded, &parentEndedAt); err != nil {
+			&childCreatedAt, &childHasEnded, &childEndedAt, &parentCreatedAt, &parentHasEnded, &parentEndedAt, &parentRepoID); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		rowSortKey := repoID + ":" + childID
+		childCanonicalID, childOmitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, childID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		parentCanonicalID, parentOmitted, err := identity.Derive(identity.KindWorkItem, []string{parentRepoID, parentID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if childOmitted || parentOmitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		// Both endpoints are joined here, so the PART_OF edge gets the
 		// true intersection of the two work items' windows: a child is
 		// part of its parent only while both exist.
 		validFrom, validTo := edgeValidity(
 			requiredTime(childCreatedAt), optionalTime(childHasEnded, childEndedAt),
 			requiredTime(parentCreatedAt), optionalTime(parentHasEnded, parentEndedAt))
-		relationshipID := "relationship:work_item_hierarchy:" + childID + ":" + parentID
+		relationshipID := "relationship:work_item_hierarchy:" + repoID + ":" + childID + ":" + parentID
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipPartOf,
-			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + childID, Label: childID},
-			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + parentID, Label: parentID},
+			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: childCanonicalID, Label: childID},
+			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: parentCanonicalID, Label: parentID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + childID + ":" + parentID},
+			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + repoID + ":" + childID + ":" + parentID},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: childID, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
 }
 
@@ -601,19 +668,19 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at,
        ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
-       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `
+       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `, toString(e.repo_id)
 FROM work_graph_deployment_incident_edges AS e FINAL
 INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
 LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id AND d.repo_id = e.repo_id
 LEFT JOIN operational_incidents AS i FINAL ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
 WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.observed_at", "e.edge_id") + orderBy("e.observed_at", "e.edge_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var edgeID, deploymentID, incidentID, repoSlug string
+		var edgeID, deploymentID, incidentID, repoSlug, repoID string
 		var observedAt, deployStartedAt, deployFinishedAt, incidentStartedAt, incidentEndedAt time.Time
 		var hasDeployStart, hasDeployEnd, hasIncidentStart, hasIncidentEnd uint8
 		if err := r.Scan(&edgeID, &deploymentID, &incidentID, &repoSlug, &observedAt,
 			&hasDeployStart, &deployStartedAt, &hasDeployEnd, &deployFinishedAt,
-			&hasIncidentStart, &incidentStartedAt, &hasIncidentEnd, &incidentEndedAt); err != nil {
+			&hasIncidentStart, &incidentStartedAt, &hasIncidentEnd, &incidentEndedAt, &repoID); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -623,9 +690,23 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			optionalTime(hasDeployStart, deployStartedAt), optionalTime(hasDeployEnd, deployFinishedAt),
 			optionalTime(hasIncidentStart, incidentStartedAt), optionalTime(hasIncidentEnd, incidentEndedAt))
 		relationshipID := "relationship:deployment_incident:" + edgeID
+		// CHAOS-3898: the deployment endpoint now references
+		// deployment.v2:<repo_id>:<enc(deployment_id)> (the SAME canonical
+		// id queryDeployments mints for this row's own deployment, since
+		// e.repo_id = e's already-qualified join to d.repo_id above proves
+		// this edge's deployment_id belongs to THIS repo) -- a dangling
+		// endpoint reference would otherwise point at a node that no
+		// longer exists once deployment's canonical id format changes.
+		deploymentCanonicalID, omitted, err := identity.Derive(identity.KindDeployment, []string{repoID, deploymentID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if omitted {
+			return []candidate{progressCandidate(observedAt, edgeID)}, nil
+		}
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: "CORRELATED_WITH_INCIDENT",
-			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectDeployment, CanonicalID: "deployment:" + deploymentID, Label: deploymentID},
+			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectDeployment, CanonicalID: deploymentCanonicalID, Label: deploymentID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: "incident:" + incidentID, Label: incidentID},
 			Derivation: contractsv1.ContextFabricDerivationRuleInferred, EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:deployment-incident:" + edgeID},
@@ -655,7 +736,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 // org_id equality, no exceptions" class rule, and the full join inventory
 // there.
 func queryPullRequestReviews(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "r.review_id"
+	const rowKey = "concat(toString(r.repo_id), ':', toString(r.number), ':', r.review_id)"
 	statement := `SELECT r.review_id, toString(r.repo_id), r.number, ifNull(r.state, ''), r.submitted_at, repo.repo,
        p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `,
        ifNull(p.title, '')
@@ -673,11 +754,19 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 		}
 		number := int64(rawNumber)
 		observedAt = observedAt.UTC()
+		numberStr := fmt.Sprint(number)
+		canonicalID, omitted, err := identity.Derive(identity.KindPullRequestReview, []string{repoID, numberStr, reviewID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		rowSortKey := repoID + ":" + numberStr + ":" + reviewID
+		if omitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		// A review is a point event: it becomes true when it is
 		// submitted and is never retracted, so its window is open-ended
 		// from submitted_at. observedAt IS submitted_at for this query.
 		validFrom, validTo := requiredTime(observedAt), (*time.Time)(nil)
-		canonicalID := "pull_request_review:" + reviewID
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID, Label: fmt.Sprintf("PR #%d review", number)}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
 		if state != "" {
@@ -691,9 +780,10 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 		properties["number"] = intScalar(number)
 		setStringProperty(properties, "pr_title", pullRequestTitle, 0)
 		setStringProperty(properties, "repo", repoSlug, 0)
+		evidenceRefID := "acr:v1:review:" + repoID + ":" + reviewID
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:review:" + reviewID}, ObservedAt: observedAt,
+			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		pullRequestID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
@@ -709,19 +799,27 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 			From:       subject,
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestID, Label: pullRequestID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:review:" + reviewID},
+			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{evidenceRefID},
 			ObservedAt: observedAt, ValidFrom: edgeValidFrom, ValidTo: edgeValidTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
-			{observedAt: observedAt, sortKey: reviewID, entity: &entity},
-			{observedAt: observedAt, sortKey: reviewID, relationship: &relationship},
+			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
+			{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship},
 		}, nil
 	})
 }
 
+// queryCIRuns mints ci_pipeline_run.v2:<repo_id>:<enc(run_id)> (design brief
+// D-1, §1.2), fixing the cross-repo collision a bare run_id canonical id
+// carried: two different repos' CI runs sharing the same raw run_id used to
+// collapse onto one canonical id (last-write-wins payload AND
+// authorization). The pagination rowKey (D-6) carries the same repo_id
+// qualifier for the identical reason, one level down: two different repos'
+// rows sharing a run_id also tied at the SQL keyset-pagination tiebreaker,
+// which could silently skip one of them at a page boundary.
 func queryCIRuns(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const timestampExpr = "coalesce(c.finished_at, c.started_at)"
-	const rowKey = "c.run_id"
+	const rowKey = "concat(toString(c.repo_id), ':', c.run_id)"
 	statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `,
        c.started_at, ` + nullableTimestamp("c.finished_at") + `,
        ifNull(c.pipeline_name, '')
@@ -736,10 +834,18 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		canonicalID, omitted, err := identity.Derive(identity.KindCIPipelineRun, []string{repoID, runID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		rowSortKey := repoID + ":" + runID
+		if omitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		// A CI run is valid while it is executing; a run still in
 		// progress has no recorded end.
 		validFrom, validTo := requiredTime(startedAt), optionalTime(hasFinished, finishedAt)
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "ci_pipeline_run:" + runID, Label: "CI " + runID}
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: canonicalID, Label: "CI " + runID}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
 		if status != "" {
 			properties["status"] = stringScalar(status)
@@ -754,12 +860,12 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey
 		setStringProperty(properties, "repo", repoSlug, 0)
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:ci:" + runID}, ObservedAt: observedAt,
+			EvidenceRefIDs: []string{"acr:v1:ci:" + repoID + ":" + runID}, ObservedAt: observedAt,
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
-			{observedAt: observedAt, sortKey: runID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:ci:"+runID, runID, validFrom, validTo),
+			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:ci:"+repoID+":"+runID, rowSortKey, validFrom, validTo),
 		}, nil
 	})
 }

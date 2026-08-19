@@ -8,9 +8,6 @@
       "aliases": [
         "AskDev"
       ],
-      "provider_aliases": [
-        "github:full-chaos/ask-dev"
-      ],
       "authorization": {
         "project_ids": [
           "project_ask_dev"
@@ -28,6 +25,9 @@
           "string": "in_progress"
         }
       },
+      "provider_aliases": [
+        "github:full-chaos/ask-dev"
+      ],
       "provider_ids": {
         "linear_project_id": "linear_project_123"
       },
@@ -263,6 +263,66 @@
     },
     {
       "authorization": {
+        "repository_slugs": [
+          "acr-context-fabric:no-repository"
+        ]
+      },
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "evidence_ref_ids": [
+        "acr:v1:work-item:00000000-0000-0000-0000-000000000000:linear:CHAOS-3802"
+      ],
+      "from": {
+        "canonical_id": "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-3802",
+        "kind": "work_item",
+        "label": "linear:CHAOS-3802"
+      },
+      "observed_at": "2026-08-13T19:00:02.504Z",
+      "relationship_id": "relationship:work_item_project:00000000-0000-0000-0000-000000000000:linear:CHAOS-3802:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",
+      "source_version": "devhealthsource.teams_projects.v2",
+      "to": {
+        "canonical_id": "project.v2:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",
+        "kind": "project",
+        "label": "631fcb5f-c3e9-49ff-b17c-07877aaac9b7"
+      },
+      "type": "BELONGS_TO_PROJECT"
+    },
+    {
+      "authorization": {
+        "repository_slugs": [
+          "acr-context-fabric:no-repository"
+        ]
+      },
+      "derivation": "rule_inferred",
+      "epistemic_status": "source_asserted",
+      "evidence_ref_ids": [
+        "acr:v1:work-item-team:00000000-0000-0000-0000-000000000000:linear:CHAOS-3802:CHAOS"
+      ],
+      "from": {
+        "canonical_id": "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-3802",
+        "kind": "work_item",
+        "label": "linear:CHAOS-3802"
+      },
+      "observed_at": "2026-08-13T19:00:02.504Z",
+      "properties": {
+        "attribution_confidence": {
+          "string": "high"
+        },
+        "attribution_source": {
+          "string": "native_team"
+        }
+      },
+      "relationship_id": "relationship:work_item_team:00000000-0000-0000-0000-000000000000:linear:CHAOS-3802:CHAOS",
+      "source_version": "devhealthsource.teams_projects.v2",
+      "to": {
+        "canonical_id": "team:CHAOS",
+        "kind": "team",
+        "label": "CHAOS"
+      },
+      "type": "OWNED_BY_TEAM"
+    },
+    {
+      "authorization": {
         "project_ids": [
           "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891"
         ],
@@ -273,10 +333,10 @@
       "derivation": "rule_inferred",
       "epistemic_status": "source_asserted",
       "evidence_ref_ids": [
-        "acr:v1:project-team:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos"
+        "acr:v1:project-team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos"
       ],
       "from": {
-        "canonical_id": "project:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891",
+        "canonical_id": "project.v2:github:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891",
         "kind": "project",
         "label": "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891"
       },
@@ -286,7 +346,7 @@
           "string": "native"
         }
       },
-      "relationship_id": "relationship:project_team:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
+      "relationship_id": "relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
       "source_version": "devhealthsource.teams_projects.v2",
       "to": {
         "canonical_id": "team:gl:full.chaos",
@@ -305,10 +365,10 @@
       "derivation": "rule_inferred",
       "epistemic_status": "source_asserted",
       "evidence_ref_ids": [
-        "acr:v1:work-item-team:gl:42:gl:full.chaos"
+        "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos"
       ],
       "from": {
-        "canonical_id": "work_item:gl:42",
+        "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:gl%3A42",
         "kind": "work_item",
         "label": "gl:42"
       },
@@ -321,72 +381,12 @@
           "string": "project_ownership"
         }
       },
-      "relationship_id": "relationship:work_item_team:gl:42:gl:full.chaos",
+      "relationship_id": "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos",
       "source_version": "devhealthsource.teams_projects.v2",
       "to": {
         "canonical_id": "team:gl:full.chaos",
         "kind": "team",
         "label": "gl:full.chaos"
-      },
-      "type": "OWNED_BY_TEAM"
-    },
-    {
-      "authorization": {
-        "repository_slugs": [
-          "acr-context-fabric:no-repository"
-        ]
-      },
-      "derivation": "canonical_structured",
-      "epistemic_status": "observed",
-      "evidence_ref_ids": [
-        "acr:v1:work-item:linear:CHAOS-3802"
-      ],
-      "from": {
-        "canonical_id": "work_item:linear:CHAOS-3802",
-        "kind": "work_item",
-        "label": "linear:CHAOS-3802"
-      },
-      "observed_at": "2026-08-13T19:00:02.504Z",
-      "relationship_id": "relationship:work_item_project:linear:CHAOS-3802:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",
-      "source_version": "devhealthsource.teams_projects.v2",
-      "to": {
-        "canonical_id": "project:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",
-        "kind": "project",
-        "label": "631fcb5f-c3e9-49ff-b17c-07877aaac9b7"
-      },
-      "type": "BELONGS_TO_PROJECT"
-    },
-    {
-      "authorization": {
-        "repository_slugs": [
-          "acr-context-fabric:no-repository"
-        ]
-      },
-      "derivation": "rule_inferred",
-      "epistemic_status": "source_asserted",
-      "evidence_ref_ids": [
-        "acr:v1:work-item-team:linear:CHAOS-3802:CHAOS"
-      ],
-      "from": {
-        "canonical_id": "work_item:linear:CHAOS-3802",
-        "kind": "work_item",
-        "label": "linear:CHAOS-3802"
-      },
-      "observed_at": "2026-08-13T19:00:02.504Z",
-      "properties": {
-        "attribution_confidence": {
-          "string": "high"
-        },
-        "attribution_source": {
-          "string": "native_team"
-        }
-      },
-      "relationship_id": "relationship:work_item_team:linear:CHAOS-3802:CHAOS",
-      "source_version": "devhealthsource.teams_projects.v2",
-      "to": {
-        "canonical_id": "team:CHAOS",
-        "kind": "team",
-        "label": "CHAOS"
       },
       "type": "OWNED_BY_TEAM"
     }

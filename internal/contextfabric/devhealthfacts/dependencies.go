@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -45,22 +46,30 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
+	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// blockerRelationshipType is an internal Go constant, not a caller
 	// supplied value, so it is safe to inline as a SQL string literal here
 	// rather than a bound parameter.
-	statement := withRowLimit(`SELECT d.source_work_item_id, d.target_work_item_id
+	//
+	// work_item_dependencies carries no repo_id of its own (mirroring
+	// devhealthsource/tables.go's queryWorkItemDependencies), so the INNER
+	// JOIN to work_items resolves the target's repo_id -- the same repo_id
+	// component v2Index decoded out of the subject's own canonical id --
+	// letting the WHERE clause scope on the composite key rather than the
+	// bare (cross-repo-collidable) target_work_item_id alone.
+	statement := withRowLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id)
 FROM work_item_dependencies AS d FINAL
-WHERE d.org_id = {org_id:String} AND d.target_work_item_id IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'`)
+INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var sourceID, targetID string
-		if err := row.Scan(&sourceID, &targetID); err != nil {
+		var sourceID, targetID, targetRepoID string
+		if err := row.Scan(&sourceID, &targetID, &targetRepoID); err != nil {
 			return err
 		}
-		subject, ok := bySubject[targetID]
+		subject, ok := bySubject[targetRepoID+":"+targetID]
 		if !ok {
 			return nil
 		}
@@ -102,19 +111,23 @@ func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal stor
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
+	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := withRowLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, '')
+	// See BlockersProvider's doc comment on the same JOIN: work_item_dependencies
+	// has no repo_id of its own, so the source's repo_id is resolved via
+	// work_items the same way devhealthsource's own producer does.
+	statement := withRowLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(s.repo_id)
 FROM work_item_dependencies AS d FINAL
-WHERE d.org_id = {org_id:String} AND d.source_work_item_id IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '` + blockerRelationshipType + `'`)
+INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '` + blockerRelationshipType + `'`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var sourceID, targetID, relationshipType string
-		if err := row.Scan(&sourceID, &targetID, &relationshipType); err != nil {
+		var sourceID, targetID, relationshipType, sourceRepoID string
+		if err := row.Scan(&sourceID, &targetID, &relationshipType, &sourceRepoID); err != nil {
 			return err
 		}
-		subject, ok := bySubject[sourceID]
+		subject, ok := bySubject[sourceRepoID+":"+sourceID]
 		if !ok {
 			return nil
 		}

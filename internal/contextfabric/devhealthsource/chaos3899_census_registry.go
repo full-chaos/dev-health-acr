@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -62,12 +63,32 @@ type censusKindRegistryEntry struct {
 	anchorColumns map[contextfabric.SubjectKind]string
 }
 
-// canonicalIDValue strips a graphrank canonical id's "<kind>:" prefix
-// (tables.go/teams_projects.go's own convention -- "repository:"+id,
-// projectCanonicalID, teamCanonicalID all share this shape) to recover the
-// RAW source id an anchor predicate compares against a base table's own FK
-// column.
-func canonicalIDValue(canonicalID string) string {
+// canonicalIDValue recovers the RAW source id an anchor predicate compares
+// against a base table's own FK column, given the anchor SUBJECT KIND the
+// canonical id belongs to.
+//
+// Most anchor kinds (SubjectRepository, today's only other anchor kind in
+// this registry) still use the pre-CHAOS-3898 "<kind>:"+id convention
+// (tables.go/teams_projects.go's repositoryCanonicalID etc.), so the plain
+// strings.Cut on the FIRST ':' still recovers the id correctly there.
+//
+// CHAOS-3898's changed kinds do NOT: identity.Lookup(string(anchorKind))
+// reports whether anchorKind is one of the five, and for those,
+// identity.Segments decodes the FULL "<kind>.v2:"+segments id and returns
+// its LAST segment -- e.g. project.v2:<provider>:<id> -> <id>, matching
+// work_items.project_id, which (this registry's own comment above records)
+// "carries no provider". A naive single-Cut on the first ':' would instead
+// return "<provider>:<id>" for a v2 project id -- a value that can never
+// equal w.project_id, which is exactly the false would_no_match class this
+// package's own doc comments forbid (a silent, permanent miss, not an
+// error). Falling through to the legacy Cut when identity.Segments can't
+// parse the id (a kind whose id hasn't been migrated yet, or a malformed
+// value) keeps this function total, matching Cut's own "no separator
+// found" fallback.
+func canonicalIDValue(anchorKind contextfabric.SubjectKind, canonicalID string) string {
+	if segments, ok := identity.Segments(string(anchorKind), canonicalID); ok && len(segments) > 0 {
+		return segments[len(segments)-1]
+	}
 	_, raw, found := strings.Cut(canonicalID, ":")
 	if !found {
 		return canonicalID
@@ -254,7 +275,7 @@ func BuildCensusDiscriminator(kind graphrank.CensusKind, handleValue string, han
 			return CensusPredicate{}, fmt.Errorf("devhealthsource: joined_column_discriminator -- %s has no base-table FK column for anchor kind %s", kind, anchorKind)
 		}
 		fragments = append(fragments, fmt.Sprintf("toString(%s) = {census_anchor_id:String}", column))
-		bindings = append(bindings, contextpacket.ClickHouseBinding{Name: "census_anchor_id", Value: canonicalIDValue(anchorCanonicalID)})
+		bindings = append(bindings, contextpacket.ClickHouseBinding{Name: "census_anchor_id", Value: canonicalIDValue(anchorKind, anchorCanonicalID)})
 	}
 	if len(fragments) == 0 {
 		return CensusPredicate{}, fmt.Errorf("devhealthsource: no discriminator bound for %s census", kind)

@@ -45,20 +45,20 @@ import (
 func subOwnershipCollapseDoesNotMergeAcrossProviders(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 
 	batch := fixture.project(t, ctx)
-	for _, forbidden := range []struct{ project, team string }{
-		{"PROJ-GITHUB", "TEAM-GITLAB"},
-		{"PROJ-GITLAB", "TEAM-GITHUB"},
+	for _, forbidden := range []struct{ provider, project, team string }{
+		{"github", "PROJ-GITHUB", "TEAM-GITLAB"},
+		{"gitlab", "PROJ-GITLAB", "TEAM-GITHUB"},
 	} {
-		id := "relationship:project_team:" + forbidden.project + ":" + forbidden.team + ":native"
+		id := "relationship:project_team:" + forbidden.provider + ":" + forbidden.project + ":" + forbidden.team + ":native"
 		if hasRelationship(batch, id) {
 			t.Errorf("fabricated a cross-provider ownership edge %q -- the two providers' assertions were merged on a shared project_key", id)
 		}
 	}
-	for _, wanted := range []struct{ project, team string }{
-		{"PROJ-GITHUB", "TEAM-GITHUB"},
-		{"PROJ-GITLAB", "TEAM-GITLAB"},
+	for _, wanted := range []struct{ provider, project, team string }{
+		{"github", "PROJ-GITHUB", "TEAM-GITHUB"},
+		{"gitlab", "PROJ-GITLAB", "TEAM-GITLAB"},
 	} {
-		id := "relationship:project_team:" + wanted.project + ":" + wanted.team + ":native"
+		id := "relationship:project_team:" + wanted.provider + ":" + wanted.project + ":" + wanted.team + ":native"
 		if !hasRelationship(batch, id) {
 			t.Errorf("lost the genuine same-provider ownership edge %q while scoping by provider", id)
 		}
@@ -83,7 +83,7 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 
 	batch := fixture.project(t, ctx)
 
-	closedLate := relationshipByID(t, batch, "relationship:project_team:PROJ-CLOSED:TEAM-GITHUB:native")
+	closedLate := relationshipByID(t, batch, "relationship:project_team:github:PROJ-CLOSED:TEAM-GITHUB:native")
 	if closedLate.ValidTo == nil {
 		t.Fatal("PROJ-CLOSED: the latest assertion closed the ownership, so the edge must carry an end")
 	}
@@ -92,7 +92,7 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 			closedLate.ValidTo, ownershipLatestClose, ownershipStaleFarFutureClose)
 	}
 
-	stillOpen := relationshipByID(t, batch, "relationship:project_team:PROJ-OPEN:TEAM-GITHUB:native")
+	stillOpen := relationshipByID(t, batch, "relationship:project_team:github:PROJ-OPEN:TEAM-GITHUB:native")
 	if stillOpen.ValidTo != nil {
 		t.Errorf("PROJ-OPEN: ValidTo = %v, want nil -- the latest assertion left the window open, and a NULL valid_to must not be skipped in favour of an older closed row", stillOpen.ValidTo)
 	}
@@ -273,7 +273,7 @@ func subAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T, ctx cont
 
 	batch := fixture.project(t, ctx)
 	for _, projectID := range []string{"PROJ-AMBIG-A", "PROJ-AMBIG-B"} {
-		id := "relationship:project_team:" + projectID + ":TEAM-GITHUB:native"
+		id := "relationship:project_team:github:" + projectID + ":TEAM-GITHUB:native"
 		if hasRelationship(batch, id) {
 			t.Errorf("emitted %q from an ambiguous project_key -- two projects share (github, AMBIG-KEY), so which one the source meant is unknowable and neither may be guessed", id)
 		}
@@ -281,8 +281,8 @@ func subAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T, ctx cont
 	// The unambiguous edges must survive: omission is per-key, never a
 	// whole-batch refusal.
 	for _, id := range []string{
-		"relationship:project_team:PROJ-GITHUB:TEAM-GITHUB:native",
-		"relationship:project_team:PROJ-OPEN:TEAM-GITHUB:native",
+		"relationship:project_team:github:PROJ-GITHUB:TEAM-GITHUB:native",
+		"relationship:project_team:github:PROJ-OPEN:TEAM-GITHUB:native",
 	} {
 		if !hasRelationship(batch, id) {
 			t.Errorf("lost the unambiguous edge %q -- one ambiguous key must not suppress the rest", id)
@@ -308,7 +308,7 @@ func subAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T, ctx cont
 func subAmbiguousRowsDoNotStallPagination(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	fixture.seedAmbiguousBlockThenValidEdge(t, ctx)
 
-	const wantEdge = "relationship:project_team:PROJ-BEYOND:TEAM-GITHUB:native"
+	const wantEdge = "relationship:project_team:github:PROJ-BEYOND:TEAM-GITHUB:native"
 	cursor := ""
 	found := false
 	for page := 0; page < 40; page++ {
@@ -409,7 +409,7 @@ func subTiedOwnershipAssertionsResolveDeterministically(t *testing.T, ctx contex
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-open', 'TIE-KEY', 'native', ?, NULL, ?)`,
 		fixture.orgID, ownershipFirstSeen, at)
 
-	const tieEdge = "relationship:project_team:PROJ-TIE:TEAM-GITHUB:native"
+	const tieEdge = "relationship:project_team:github:PROJ-TIE:TEAM-GITHUB:native"
 	for run := 0; run < 8; run++ {
 		edge := relationshipByID(t, fixture.project(t, ctx), tieEdge)
 		if edge.ValidTo != nil {
@@ -453,14 +453,14 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 		fixture.orgID, "PROJ-THIS-ORG", ownershipFirstSeen, at)
 
 	batch := fixture.project(t, ctx)
-	const wantEdge = "relationship:project_team:PROJ-THIS-ORG:TEAM-GITHUB:native"
+	const wantEdge = "relationship:project_team:github:PROJ-THIS-ORG:TEAM-GITHUB:native"
 	if !hasRelationship(batch, wantEdge) {
 		t.Fatalf("%q was omitted -- the ambiguity window counted another organization's project, so a single unambiguous project looked like two", wantEdge)
 	}
 	// The other organization's rows must not leak into this projection at all.
 	for _, forbidden := range []string{
-		"relationship:project_team:PROJ-OTHER-ORG:TEAM-OTHER-ORG:native",
-		"relationship:project_team:PROJ-OTHER-ORG:TEAM-GITHUB:native",
+		"relationship:project_team:github:PROJ-OTHER-ORG:TEAM-OTHER-ORG:native",
+		"relationship:project_team:github:PROJ-OTHER-ORG:TEAM-GITHUB:native",
 	} {
 		if hasRelationship(batch, forbidden) {
 			t.Errorf("projected %q -- another organization's ownership crossed the tenant boundary", forbidden)
@@ -540,7 +540,7 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 	// the source is exhausted by construction rather than because a signal
 	// said so -- and every tick after exhaustion is a cheap no-op.
 	const (
-		wantEdge   = "relationship:project_team:PROJ-PAST-BOUND:TEAM-GITHUB:native"
+		wantEdge   = "relationship:project_team:github:PROJ-PAST-BOUND:TEAM-GITHUB:native"
 		totalTicks = 120
 		quietTail  = 10
 	)

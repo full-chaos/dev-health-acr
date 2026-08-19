@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -30,7 +31,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, "deployment:")
+	ids, bySubject := v2Index(query.Subjects, identity.KindDeployment)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-3781 Tier B: same shape as a CI run -- a deployment's final
 	// status is only true once it finished. environment is an immutable
@@ -40,17 +41,17 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		statusExpression = "if(d.finished_at IS NOT NULL AND d.finished_at <= " + timeBound.asOfExpression() +
 			", ifNull(d.status, ''), 'in_progress')"
 	}
-	statement := withRowLimit(`SELECT d.deployment_id, ` + statusExpression + `, ifNull(d.environment, '')
+	statement := withRowLimit(`SELECT d.deployment_id, ` + statusExpression + `, ifNull(d.environment, ''), toString(d.repo_id)
 FROM deployments AS d FINAL
-WHERE d.org_id = {org_id:String} AND d.deployment_id IN {ids:Array(String)}` + timeBound.existencePredicate("coalesce(d.started_at, d.deployed_at)"))
+WHERE d.org_id = {org_id:String} AND concat(toString(d.repo_id), ':', d.deployment_id) IN {ids:Array(String)}` + timeBound.existencePredicate("coalesce(d.started_at, d.deployed_at)"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var deploymentID, status, environment string
-		if err := row.Scan(&deploymentID, &status, &environment); err != nil {
+		var deploymentID, status, environment, repoID string
+		if err := row.Scan(&deploymentID, &status, &environment, &repoID); err != nil {
 			return err
 		}
-		subject, ok := bySubject[deploymentID]
+		subject, ok := bySubject[repoID+":"+deploymentID]
 		if !ok {
 			return nil
 		}
@@ -60,7 +61,7 @@ WHERE d.org_id = {org_id:String} AND d.deployment_id IN {ids:Array(String)}` + t
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactDeployments, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("deployment", deploymentID)},
+			EvidenceRefIDs: []string{evidenceRefID("deployment", repoID+":"+deploymentID)},
 		})
 		return nil
 	}, timeBound.bindings()...)

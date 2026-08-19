@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -69,7 +70,7 @@ func teamsProjectsTables(omissions *ambiguityLedger) []entityTable {
 	return []entityTable{
 		{name: "teams", query: queryTeams},
 		{name: "projects", query: queryProjects},
-		{name: "work_items_projects", query: queryWorkItemProjects},
+		{name: "work_items_projects", query: workItemProjectsQuery(omissions)},
 		{name: "work_item_team_attributions", query: queryWorkItemTeams},
 		{name: "team_project_ownership", query: projectTeamsQuery(omissions)},
 	}
@@ -397,7 +398,12 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 // look projected while being unjoinable to every work item referencing its
 // real id.
 func queryProjects(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "id"
+	// CHAOS-3898 D-5: repo_id-shaped precedent -- provider qualifies the
+	// pagination rowKey too, so a hypothetical future cross-provider id
+	// collision (none live today, per this function's own doc comment)
+	// cannot tie at the SQL keyset-pagination tiebreaker the way D-6
+	// documents for the other four kinds.
+	const rowKey = "concat(provider, ':', id)"
 	statement := `SELECT id, name, ifNull(project_key, ''), provider, state, url, is_active, updated_at
 FROM projects FINAL
 WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) + orderBy("updated_at", rowKey)
@@ -413,11 +419,19 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 		if err != nil {
 			return nil, err
 		}
+		canonicalID, omitted, err := identity.Derive(identity.KindProject, []string{provider, id}, nil)
+		if err != nil {
+			return nil, err
+		}
+		rowSortKey := provider + ":" + id
+		if omitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		label := name
 		if label == "" {
 			label = id
 		}
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID(id), Label: label}
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: canonicalID, Label: label}
 		properties := map[string]contractsv1.ContextFabricScalarValue{"is_active": boolScalar(isActive != 0)}
 		if state != "" {
 			properties["state"] = stringScalar(state)
@@ -431,12 +445,12 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 			ProviderIDs:    providerID(provider, id),
 			Properties:     properties,
 			Authorization:  authorization,
-			EvidenceRefIDs: []string{"acr:v1:project:" + id},
+			EvidenceRefIDs: []string{"acr:v1:project:" + provider + ":" + id},
 			ObservedAt:     observedAt,
 			SourceVersion:  TeamsProjectsSourceVersion,
 		}
 		applyActiveValidity(&entity, isActive, observedAt)
-		return []candidate{{observedAt: observedAt, sortKey: id, entity: &entity}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, entity: &entity}}, nil
 	})
 }
 
@@ -477,11 +491,6 @@ func projectAuthorizationScope(projectID string) (contractsv1.ContextFabricAutho
 	}
 	return contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{projectID}}, nil
 }
-
-// projectCanonicalID follows teamCanonicalID's convention. No prefix
-// precedent existed for projects (nothing reads project-scoped facts), so
-// this establishes one.
-func projectCanonicalID(projectID string) string { return "project:" + projectID }
 
 // applyActiveValidity states an owned entity's validity window explicitly in
 // both directions -- the CHAOS-3785 R3-1 discipline. falkorgraph's OWNED

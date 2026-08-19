@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -71,19 +72,19 @@ WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`)
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
-	workItemIDs, workItemBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), "work_item:")
+	workItemIDs, workItemBySubject := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
 	if len(workItemIDs) > 0 {
-		statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.title, '')
+		statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`)
 		rowCount := 0
 		scanErr := p.facts.query(ctx, statement, orgID, workItemIDs, func(row contextpacket.ClickHouseRowScanner) error {
 			rowCount++
-			var id, title string
-			if err := row.Scan(&id, &title); err != nil {
+			var id, title, repoID string
+			if err := row.Scan(&id, &title, &repoID); err != nil {
 				return err
 			}
-			subject, ok := workItemBySubject[id]
+			subject, ok := workItemBySubject[repoID+":"+id]
 			if !ok {
 				return nil
 			}
@@ -93,7 +94,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
 					"id":    contextfabric.StringFactValue(id),
 					"title": stringOrNull(title),
 				},
-				EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
+				EvidenceRefIDs: []string{evidenceRefID("work-item", repoID+":"+id)},
 			})
 			return nil
 		})
@@ -167,11 +168,11 @@ WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`)
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
-	workItemIDs, workItemBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), "work_item:")
+	workItemIDs, workItemBySubject := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
 	if len(workItemIDs) > 0 {
 		statement := withRowLimit(`SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, '')
 FROM work_items AS w FINAL INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`)
 		rowCount := 0
 		scanErr := p.facts.query(ctx, statement, orgID, workItemIDs, func(row contextpacket.ClickHouseRowScanner) error {
 			rowCount++
@@ -179,7 +180,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
 			if err := row.Scan(&id, &repoID, &repoSlug); err != nil {
 				return err
 			}
-			subject, ok := workItemBySubject[id]
+			subject, ok := workItemBySubject[repoID+":"+id]
 			if !ok {
 				return nil
 			}
@@ -189,7 +190,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
 					"repository_id":   contextfabric.StringFactValue(repoID),
 					"repository_name": stringOrNull(repoSlug),
 				},
-				EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
+				EvidenceRefIDs: []string{evidenceRefID("work-item", repoID+":"+id)},
 			})
 			return nil
 		})

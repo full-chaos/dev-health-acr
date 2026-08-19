@@ -89,15 +89,34 @@ func TestPullRequestNumberPredicate(t *testing.T) {
 
 func TestCanonicalIDValue(t *testing.T) {
 	t.Parallel()
-	cases := map[string]string{
-		"repository:abc-123": "abc-123",
-		"project:p-1":        "p-1",
-		"team:t-1":           "t-1",
-		"no-colon":           "no-colon",
+	cases := []struct {
+		kind contextfabric.SubjectKind
+		in   string
+		want string
+	}{
+		// SubjectRepository's id shape is untouched by CHAOS-3898, so the
+		// legacy single-Cut fallback still applies.
+		{contextfabric.SubjectRepository, "repository:abc-123", "abc-123"},
+		{contextfabric.SubjectRepository, "no-colon", "no-colon"},
+		// A kind with no identity.Registry entry at all (team) also falls
+		// through to the legacy Cut, unaffected either way.
+		{"team", "team:t-1", "t-1"},
+		// CHAOS-3898 regression: project's canonical id gained a repo_id-
+		// shaped extra segment ("project.v2:<provider>:<id>"). A naive
+		// single-Cut on the first ':' would return "<provider>:<id>" here
+		// -- which can never equal work_items.project_id (this file's own
+		// registry comment: "carries no provider") -- so this is exactly
+		// the false would_no_match class the census package forbids.
+		// identity.Segments must be used instead, to recover just <id>.
+		{contextfabric.SubjectProject, "project.v2:github:p-1", "p-1"},
+		// A not-yet-migrated (pre-flip) project id has no identity.Segments
+		// match and must still fall through to the legacy Cut -- the same
+		// total-function guarantee strings.Cut alone always provided.
+		{contextfabric.SubjectProject, "project:p-1", "p-1"},
 	}
-	for in, want := range cases {
-		if got := canonicalIDValue(in); got != want {
-			t.Fatalf("canonicalIDValue(%q) = %q, want %q", in, got, want)
+	for _, tc := range cases {
+		if got := canonicalIDValue(tc.kind, tc.in); got != tc.want {
+			t.Fatalf("canonicalIDValue(%q, %q) = %q, want %q", tc.kind, tc.in, got, tc.want)
 		}
 	}
 }

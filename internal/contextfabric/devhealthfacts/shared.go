@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -177,6 +178,50 @@ func subjectIndex(subjects []contextfabric.SubjectRef, prefix string) (ids []str
 		}
 		bySubject[raw] = subject
 		ids = append(ids, raw)
+	}
+	return ids, bySubject
+}
+
+// v2Index recovers this package's ClickHouse lookup key for a CHAOS-3898
+// changed kind (identity.KindWorkItem, identity.KindCIPipelineRun,
+// identity.KindDeployment, identity.KindPullRequestReview -- identity.
+// KindProject is unused here; this package has no project reader) out of a
+// "<kind>.v2:<repo_id>:...:<raw_id>" canonical id, via identity.Segments
+// (the exact decode inverse of the identity.Derive call that minted it).
+//
+// Before CHAOS-3898, subjectIndex's plain TrimPrefix recovered the bare
+// source-row id (e.g. "work_item:WIDGET-101" -> "WIDGET-101") because that
+// bare id WAS the whole natural key these providers' ClickHouse queries
+// filtered on. Once repo_id becomes a real segment of the id, the bare row
+// id alone is no longer collision-safe across repos in the same org -- the
+// exact defect design brief D-1..D-5 close at the graph-projection
+// producers (internal/contextfabric/devhealthsource). v2Index closes the
+// same class here: it returns repo_id and the raw id JOINED with ':' (a
+// plain, unescaped composite -- these are Go-side map keys this package's
+// own SQL also builds with concat(toString(repo_id), ':', ...), never a
+// value that leaves this process, so no codec is needed on the join
+// itself, only on recovering each segment FROM the canonical id). Callers
+// scope their WHERE clause on the same composite so a row only matches the
+// subject that actually named it.
+//
+// A subject whose CanonicalID doesn't parse as kind's "<kind>.v2:" form is
+// skipped, not errored, matching subjectIndex's "omit rather than guess"
+// contract for a malformed id.
+func v2Index(subjects []contextfabric.SubjectRef, kind string) (ids []string, bySubject map[string]contextfabric.SubjectRef) {
+	bySubject = make(map[string]contextfabric.SubjectRef, len(subjects))
+	for _, subject := range subjects {
+		segments, ok := identity.Segments(kind, subject.CanonicalID)
+		if !ok || len(segments) < 2 {
+			continue
+		}
+		repoID := segments[0]
+		rawID := segments[len(segments)-1]
+		if repoID == "" || rawID == "" {
+			continue
+		}
+		key := repoID + ":" + rawID
+		bySubject[key] = subject
+		ids = append(ids, key)
 	}
 	return ids, bySubject
 }
