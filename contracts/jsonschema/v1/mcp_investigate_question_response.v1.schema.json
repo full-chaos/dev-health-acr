@@ -1026,19 +1026,6 @@
               "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/RelativeWindowID"
             }
           },
-          "anyOf": [
-            {
-              "required": [
-                "relative_id"
-              ]
-            },
-            {
-              "required": [
-                "start",
-                "end"
-              ]
-            }
-          ],
           "if": {
             "properties": {
               "relative_id": {
@@ -1064,6 +1051,44 @@
                 }
               ]
             }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "relative_id"
+              ]
+            },
+            {
+              "required": [
+                "start",
+                "end"
+              ]
+            }
+          ],
+          "not": {
+            "description": "CHAOS-3900 W1 (codex round 7): the anyOf above proves AT LEAST ONE of relative_id/start+end is present, but does not by itself forbid a partial bound alongside a relative_id (e.g. relative_id+start with no end) -- that shape satisfies the anyOf's first branch regardless of how incomplete the bounds are. This guard closes exactly that gap: whichever of start/end is present, the other must be too, matching validate_context_fabric_window.go's validate() line 49 (\"requires an ordered start and end\") for every non-all_time shape, independent of whether relative_id is also present.",
+            "anyOf": [
+              {
+                "required": [
+                  "start"
+                ],
+                "not": {
+                  "required": [
+                    "end"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "end"
+                ],
+                "not": {
+                  "required": [
+                    "start"
+                  ]
+                }
+              }
+            ]
           }
         },
         "RelativeWindowID": {
@@ -1473,7 +1498,32 @@
                 "end"
               ]
             }
-          ]
+          ],
+          "not": {
+            "description": "CHAOS-3900 W1 (codex round 7): the anyOf above proves AT LEAST ONE of relative_id/start+end is present, but does not by itself forbid a partial bound alongside a relative_id (e.g. relative_id+start with no end) -- that shape satisfies the anyOf's first branch regardless of how incomplete the bounds are. This guard closes exactly that gap: whichever of start/end is present, the other must be too, matching validate_context_fabric_window.go's validate() line 49 (\"requires an ordered start and end\") for every non-all_time shape, independent of whether relative_id is also present.",
+            "anyOf": [
+              {
+                "required": [
+                  "start"
+                ],
+                "not": {
+                  "required": [
+                    "end"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "end"
+                ],
+                "not": {
+                  "required": [
+                    "start"
+                  ]
+                }
+              }
+            ]
+          }
         },
         "EffectiveEvidenceWindow": {
           "description": "CHAOS-3900 W1: the window an answer actually speaks for once canonicalization has run. Server-computed; never accepted from the wire.",
@@ -1557,7 +1607,32 @@
                 "end"
               ]
             }
-          ]
+          ],
+          "not": {
+            "description": "CHAOS-3900 W1 (codex round 7): mirrors RequestedEvidenceWindow's own completeness guard -- the anyOf above proves at least one of relative_id/start+end is present but does not forbid a partial bound alongside a relative_id. See RequestedEvidenceWindow's identical clause for the full explanation.",
+            "anyOf": [
+              {
+                "required": [
+                  "start"
+                ],
+                "not": {
+                  "required": [
+                    "end"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "end"
+                ],
+                "not": {
+                  "required": [
+                    "start"
+                  ]
+                }
+              }
+            ]
+          }
         },
         "RelativeWindowID": {
           "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
@@ -1607,27 +1682,100 @@
             "option_id",
             "label"
           ],
-          "if": {
-            "properties": {
-              "relative_id": {
-                "not": {
-                  "const": "all_time"
-                }
+          "allOf": [
+            {
+              "description": "CHAOS-3900 W1: a non-all_time relative_id's bounds are the FROZEN offer-time computation, so both must be present -- mirrors window.validate() lines 33-52's non-all_time branch (via WindowOption.Validate's own additional relative_id-non-all_time-requires-bounds check, validate_context_fabric_window.go:115-117).",
+              "if": {
+                "properties": {
+                  "relative_id": {
+                    "not": {
+                      "const": "all_time"
+                    }
+                  }
+                },
+                "required": [
+                  "relative_id"
+                ]
+              },
+              "then": {
+                "required": [
+                  "start",
+                  "end"
+                ]
               }
             },
-            "required": [
-              "relative_id"
-            ]
-          },
-          "then": {
-            "required": [
-              "start",
-              "end"
+            {
+              "description": "CHAOS-3900 W1 (codex round 7): all_time forbids any bound -- mirrors window.validate() lines 37-40, which the original if/then above never encoded because its own 'if' matches only the non-all_time direction. Deliberately does NOT also fire when relative_id is absent: an option with no relative_id and BOTH bounds present is a legal explicit-bounds-only shape (window.validate() lines 43-52), which this clause must not forbid.",
+              "if": {
+                "properties": {
+                  "relative_id": {
+                    "const": "all_time"
+                  }
+                },
+                "required": [
+                  "relative_id"
+                ]
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "start"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "end"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "anyOf": [
+            {
+              "description": "CHAOS-3900 W1 (codex round 7): baseline presence -- an option with neither relative_id nor any bound satisfies neither if/then above (both require relative_id to fire) and so previously passed schema validation despite window.validate() lines 43-47 rejecting it ('requires a relative_id or explicit bounds').",
+              "required": [
+                "relative_id"
+              ]
+            },
+            {
+              "required": [
+                "start",
+                "end"
+              ]
+            }
+          ],
+          "not": {
+            "description": "CHAOS-3900 W1 (codex round 7): completeness guard, identical to RequestedEvidenceWindow's own -- the anyOf above is satisfied by a relative_id present alongside only ONE bound (it does not check the bound pair for completeness), which window.validate() line 49 rejects regardless of relative_id. Forbids exactly-one-of-start/end unconditionally.",
+            "anyOf": [
+              {
+                "required": [
+                  "start"
+                ],
+                "not": {
+                  "required": [
+                    "end"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "end"
+                ],
+                "not": {
+                  "required": [
+                    "start"
+                  ]
+                }
+              }
             ]
           }
         },
         "WindowClarification": {
-          "description": "CHAOS-3900 W1: every window option a stored result offered.",
+          "description": "CHAOS-3900 W1: every window option a stored result offered. RESIDUAL, SERVER-SIDE-ONLY INVARIANT (codex round 7): options.uniqueItems below rejects two options that are structurally identical in EVERY field, but standard JSON Schema (draft 2020-12) has no keyword to express uniqueness on a DERIVED SUBSET of fields -- so two options differing only in, say, label but sharing the same receipt_id or option_id pass this schema even though ContextFabricWindowClarification.Validate (validate_context_fabric_window.go, the design brief's own 'm5' invariant) rejects them. That per-field uniqueness is enforced by Go alone; it is not expressible here.",
           "type": "object",
           "additionalProperties": false,
           "properties": {

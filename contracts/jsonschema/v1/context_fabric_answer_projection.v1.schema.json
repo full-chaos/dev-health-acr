@@ -950,19 +950,6 @@
           "$ref": "#/$defs/RelativeWindowID"
         }
       },
-      "anyOf": [
-        {
-          "required": [
-            "relative_id"
-          ]
-        },
-        {
-          "required": [
-            "start",
-            "end"
-          ]
-        }
-      ],
       "if": {
         "properties": {
           "relative_id": {
@@ -988,6 +975,44 @@
             }
           ]
         }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "relative_id"
+          ]
+        },
+        {
+          "required": [
+            "start",
+            "end"
+          ]
+        }
+      ],
+      "not": {
+        "description": "CHAOS-3900 W1 (codex round 7): the anyOf above proves AT LEAST ONE of relative_id/start+end is present, but does not by itself forbid a partial bound alongside a relative_id (e.g. relative_id+start with no end) -- that shape satisfies the anyOf's first branch regardless of how incomplete the bounds are. This guard closes exactly that gap: whichever of start/end is present, the other must be too, matching validate_context_fabric_window.go's validate() line 49 (\"requires an ordered start and end\") for every non-all_time shape, independent of whether relative_id is also present.",
+        "anyOf": [
+          {
+            "required": [
+              "start"
+            ],
+            "not": {
+              "required": [
+                "end"
+              ]
+            }
+          },
+          {
+            "required": [
+              "end"
+            ],
+            "not": {
+              "required": [
+                "start"
+              ]
+            }
+          }
+        ]
       }
     },
     "RelativeWindowID": {
