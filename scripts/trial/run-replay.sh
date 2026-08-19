@@ -14,21 +14,30 @@
 # responder to notice and wipe its own private CODEX_HOME) -- only the go
 # test target and output env var differ.
 #
-# CHAOS-3899: ACR_TEST_REPLAY_OUT is now a default-if-unset (":=" ), not an
+# CHAOS-3899: ACR_TEST_REPLAY_OUT is a default-if-unset (":=" ), not an
 # unconditional export -- an operator running the CHAOS-3899 shadow-round
-# acceptance pass sets it explicitly (a DIFFERENT artifact path, per
-# design brief v5 §6) before invoking this script; every existing caller
-# that does not set it gets the exact same default path as before,
-# byte-identical. ACR_TEST_TRIAL_SHADOW_CENSUS=false (also optional, read
-# directly by the go test) opts back out to a zero-shadow-overhead run of
-# the ORIGINAL CHAOS-3884 replay if ever needed again.
+# acceptance pass (or any other run) can still set it explicitly to a
+# specific, deliberately chosen artifact path.
+# ACR_TEST_TRIAL_SHADOW_CENSUS=false (also optional, read directly by the
+# go test) opts back out to a zero-shadow-overhead run of the ORIGINAL
+# CHAOS-3884 replay if ever needed again.
+#
+# CHAOS-3896 Slice C rider (team-lead, real incident): the default used to
+# be a single FIXED filename shared by every unlabeled invocation
+# (gen-trial-chaos3884_full50_replay.json) -- a later run silently
+# overwrote an earlier one's artifact, destroying the evidence behind an
+# already-cited acceptance number. The default now embeds this run's own
+# UTC start timestamp, so two ordinary invocations can never collide by
+# accident; the go test itself (chaos3884_replay_harness_test.go) also now
+# refuses outright to overwrite ANY existing file at ACR_TEST_REPLAY_OUT,
+# including an explicit override that happens to collide.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 LIMIT="${1:-}"
 
 trial_wire_common_env
-: "${ACR_TEST_REPLAY_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay.json}"
+: "${ACR_TEST_REPLAY_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay-$(date -u +%Y%m%dT%H%M%SZ).json}"
 export ACR_TEST_REPLAY_OUT
 export ACR_TEST_TRIAL_ARM="replay"
 if [[ -n "$LIMIT" ]]; then
