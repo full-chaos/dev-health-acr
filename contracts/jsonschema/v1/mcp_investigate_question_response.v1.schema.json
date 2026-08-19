@@ -1026,6 +1026,19 @@
               "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/RelativeWindowID"
             }
           },
+          "anyOf": [
+            {
+              "required": [
+                "relative_id"
+              ]
+            },
+            {
+              "required": [
+                "start",
+                "end"
+              ]
+            }
+          ],
           "if": {
             "properties": {
               "relative_id": {
@@ -1447,7 +1460,20 @@
                 }
               ]
             }
-          }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "relative_id"
+              ]
+            },
+            {
+              "required": [
+                "start",
+                "end"
+              ]
+            }
+          ]
         },
         "EffectiveEvidenceWindow": {
           "description": "CHAOS-3900 W1: the window an answer actually speaks for once canonicalization has run. Server-computed; never accepted from the wire.",
@@ -1492,6 +1518,45 @@
           },
           "required": [
             "provenance"
+          ],
+          "if": {
+            "properties": {
+              "relative_id": {
+                "const": "all_time"
+              }
+            },
+            "required": [
+              "relative_id"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "start"
+                  ]
+                },
+                {
+                  "required": [
+                    "end"
+                  ]
+                }
+              ]
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "relative_id"
+              ]
+            },
+            {
+              "required": [
+                "start",
+                "end"
+              ]
+            }
           ]
         },
         "RelativeWindowID": {
@@ -1541,7 +1606,25 @@
             "receipt_id",
             "option_id",
             "label"
-          ]
+          ],
+          "if": {
+            "properties": {
+              "relative_id": {
+                "not": {
+                  "const": "all_time"
+                }
+              }
+            },
+            "required": [
+              "relative_id"
+            ]
+          },
+          "then": {
+            "required": [
+              "start",
+              "end"
+            ]
+          }
         },
         "WindowClarification": {
           "description": "CHAOS-3900 W1: every window option a stored result offered.",
@@ -1764,6 +1847,28 @@
               "type": "string",
               "minLength": 8,
               "maxLength": 256
+            }
+          },
+          "required": [
+            "result_id",
+            "receipt_id"
+          ]
+        },
+        "WindowBoundReceipt": {
+          "description": "CHAOS-3900 W1: same shape as BoundSubjectReceipt, but receipt_id is additionally constrained to the closed winr_ namespace (design brief section 5, pivot brief section 2's closed kindr_/ancr_/handr_/winr_ set) -- a separate type, not a reuse of BoundSubjectReceipt, so the schema itself rejects a subject-namespaced id in prior_window_receipts the same way validate_context_fabric_request.go does.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "result_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            },
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256,
+              "pattern": "^winr_"
             }
           },
           "required": [

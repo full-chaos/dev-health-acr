@@ -950,6 +950,19 @@
           "$ref": "#/$defs/RelativeWindowID"
         }
       },
+      "anyOf": [
+        {
+          "required": [
+            "relative_id"
+          ]
+        },
+        {
+          "required": [
+            "start",
+            "end"
+          ]
+        }
+      ],
       "if": {
         "properties": {
           "relative_id": {

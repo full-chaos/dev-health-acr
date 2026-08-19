@@ -38,7 +38,7 @@
       "description": "CHAOS-3900 W1: winr_-namespaced receipts naming a prior result's own WindowClarification option. A NEW, parallel field to prior_subject_receipts, not an overload of it -- the match target and effect both differ.",
       "type": "array",
       "items": {
-        "$ref": "context_fabric_common.v1.schema.json#/$defs/BoundSubjectReceipt"
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/WindowBoundReceipt"
       },
       "maxItems": 20,
       "uniqueItems": true
