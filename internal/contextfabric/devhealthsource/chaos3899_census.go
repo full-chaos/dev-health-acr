@@ -68,6 +68,36 @@ type CensusResult struct {
 	// not a faked placeholder number.
 	StatementCount int
 	RowsRead       int
+	// SatisfierNaturalKeys (CHAOS-3896 Slice B) is the NON-DECISIVE
+	// satisfier-SET enrichment fetch's own result: the identity column
+	// values of every row matching D, fetched under CensusBudget's own
+	// LIMIT {B}+1 bound, populated ONLY when 2<=Count<=CensusBudget AND
+	// the fetch's own row count agreed with the aggregate statement's
+	// count (the SAME closure discipline the decisive Count==1 path
+	// already applies, extended to the multi-row case per chris's
+	// ruling: "attested against the SAME count the aggregate witnessed").
+	// nil in every other case -- Count==0, Count==1 (the decisive
+	// SatisfierNaturalKey field covers that), Count>CensusBudget (the
+	// fetch never runs -- an over-budget kind gets no enrichment,
+	// design brief's own cost-contract discipline), or
+	// SatisfierSetClosureMismatch (below).
+	//
+	// This is NEVER read by RunShadowEvidenceRound's decisive
+	// would_commit/would_no_match/would_clarify switch (graphrank) --
+	// presentation-only, consumed solely by CHAOS-3896 Slice B's
+	// survivors-first reorder.
+	SatisfierNaturalKeys []string
+	// SatisfierSetClosureMismatch (CHAOS-3896 Slice B) is true when the
+	// non-decisive satisfier-SET fetch ran (2<=Count<=CensusBudget) but
+	// its own row count did NOT equal the aggregate statement's count --
+	// the SAME "a race can only demote, never mint" discipline as
+	// ClosureMismatch above, but scoped to the enrichment fetch alone: it
+	// demotes ONLY the presentation-ordering use of this kind (Slice B
+	// treats it as neutral, never eliminates on it) and has NO effect on
+	// this census's own Count/ClosureMismatch or on any decisive outcome
+	// -- a deliberately separate field so the two closure disciplines can
+	// never be conflated by a caller reading the wrong one.
+	SatisfierSetClosureMismatch bool
 }
 
 // RunCensus executes design brief v5 §1.3(2)'s aggregate-first, fail-closed
@@ -111,6 +141,34 @@ func RunCensus(ctx context.Context, client contextpacket.ClickHouseQueryClient, 
 	}
 	result := CensusResult{Kind: kind, Count: count, CensusReadAt: readAt, StatementCount: 1}
 	if count != 1 {
+		// CHAOS-3896 Slice B: the non-decisive satisfier-SET enrichment
+		// fetch, ONLY for 2<=count<=CensusBudget (brief §1.3(2)) -- an
+		// empty census (count==0) or an over-budget one (count>CensusBudget)
+		// gets no enrichment, unchanged from before this slice.
+		if count >= 2 && count <= CensusBudget {
+			setStatement := fmt.Sprintf(
+				"SELECT %s FROM %s AS %s FINAL WHERE %s = {census_org_id:String} AND %s LIMIT %d",
+				entry.identityColumn, entry.table, entry.alias, entry.orgColumn, predicate.SQL, CensusBudget+1,
+			)
+			keys, err := runCensusRow(ctx, client, setStatement, bindings)
+			if err != nil {
+				return CensusResult{}, err
+			}
+			result.StatementCount++
+			result.RowsRead += len(keys)
+			// Closure discipline (chris's ruling): the fetched set is
+			// trusted ONLY when its own row count agrees with the
+			// aggregate's -- the same "a race can only demote" rule the
+			// decisive Count==1 path already applies. len(keys)>CensusBudget
+			// is the LIMIT{B}+1 overflow sentinel (more rows exist than the
+			// aggregate's own count claimed, or than the budget allows) and
+			// also demotes.
+			if len(keys) == count && len(keys) <= CensusBudget {
+				result.SatisfierNaturalKeys = keys
+			} else {
+				result.SatisfierSetClosureMismatch = true
+			}
+		}
 		return result, nil
 	}
 

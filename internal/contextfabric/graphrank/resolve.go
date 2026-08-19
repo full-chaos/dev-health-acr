@@ -955,18 +955,34 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID)
 	resolution.RetrievalDegraded = retrievalDegraded
-	// CHAOS-3899 (design brief v5 §6 Slice A, SHADOW ONLY): run the full
-	// evidence round for measurement, strictly AFTER resolution is already
-	// final -- nothing below this line may observe or mutate `resolution`,
-	// which is the whole zero-behavior-change proof (TestResolveSubjects_
-	// ShadowEvidenceRoundNeverChangesResolution pins this). Gated on
-	// deps.CensusFunc != nil (nil is the default -- zero cost, zero effect
-	// for every existing caller, the same convention every other optional
-	// ResolveDeps dependency uses) AND "stalled" (§0's own definition:
-	// nothing committed and searchTruncated) -- the brief's own cost note
-	// ("per stalled resolution... committed resolutions pay nothing").
+	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round
+	// for measurement, strictly AFTER resolution's own COMMIT-GATE decision
+	// is already final -- CHAOS-3896 Slice B (below) may reorder
+	// resolution.Candidates and rebuild resolution.ClarificationPrompt from
+	// the round's own Attestation, but resolution.Status/Committed and
+	// which candidates are IN the list are exactly as
+	// ResolveFromMergedCandidatesWithGate decided, never touched by
+	// anything past this point (TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolutionDecision
+	// pins the decision half; TestResolveSubjects_SurvivorsFirstReorderNeverChangesMembership
+	// pins the Slice B half). Gated on deps.CensusFunc != nil (nil is the
+	// default -- zero cost, zero effect for every existing caller, the same
+	// convention every other optional ResolveDeps dependency uses) AND
+	// "stalled" (§0's own definition: nothing committed and searchTruncated)
+	// -- the brief's own cost note ("per stalled resolution... committed
+	// resolutions pay nothing").
 	if deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
-		runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps)
+		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps)
+		// CHAOS-3896 Slice B: presentation only -- SurvivorsFirstOrder's own
+		// doc comment is the contract (same membership, same length, order
+		// only). Rebuilding ClarificationPrompt from the SAME (now
+		// reordered) candidates preserves the existing "prompt built from
+		// the retained candidate set" invariant (codex round-4 finding 1,
+		// resolution.go) -- the prompt and resolution.Candidates never
+		// diverge, only their SHARED order changes.
+		resolution.Candidates = SurvivorsFirstOrder(resolution.Candidates, attestation)
+		if resolution.ClarificationPrompt != "" {
+			resolution.ClarificationPrompt = ClarificationPrompt(resolution.Candidates)
+		}
 	}
 	return resolution, nil
 }
@@ -981,12 +997,17 @@ const evidenceRoundDeadline = 3 * time.Second
 
 // runShadowEvidenceRoundForResolution assembles ShadowEvidenceRoundInput
 // from values ResolveSubjects already computed (CHAOS-3899) and runs the
-// shadow round purely for its trace side effect -- the returned Attestation
-// is discarded here on purpose; RunShadowEvidenceRound's own emit closure
-// is the ONLY place its content reaches anything observable
-// (deps.ResolutionTracer), and a nil tracer makes even that a no-op. This
-// keeps the call site in ResolveSubjects a single, auditable line with no
-// return value to (mis-)use.
+// shadow round. RunShadowEvidenceRound's own emit closure is still the ONLY
+// place the round's content reaches anything OBSERVABLE
+// (deps.ResolutionTracer), and a nil tracer makes even that a no-op --
+// unchanged from Slice A. CHAOS-3896 Slice B changes what happens to the
+// RETURN value: previously discarded ("shadow" -- traced, never consumed),
+// now returned to the caller for SurvivorsFirstOrder's own presentation-only
+// reorder. This function's own recover()'s fallback (a panic here yields the
+// zero Attestation, empty Kinds) is deliberately still SAFE for that new
+// consumer: SurvivorsFirstOrder treats a kind with no KindAttestation entry
+// as verdictNeutral, so a recovered panic can only ever suppress reordering,
+// never cause a wrong one.
 //
 // TWO hardening properties (adversarial review findings), both required
 // for "zero production behavior change" to be STRUCTURAL rather than
@@ -1010,13 +1031,19 @@ const evidenceRoundDeadline = 3 * time.Second
 // (possibly current) context skip D7's historical-axis-skip refusal and
 // run a current-state census against a historical question, silently on
 // the wrong axis.
-func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps) {
+func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps) (attestation Attestation) {
 	defer func() {
-		if r := recover(); r != nil && deps.ResolutionTracer != nil {
-			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-				RequestID: request.RequestID, Stage: "evidence_round",
-				ShadowOutcome: string(ShadowWouldClarify), ShadowReason: string(ReasonProbeError),
-			})
+		if r := recover(); r != nil {
+			if deps.ResolutionTracer != nil {
+				deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "evidence_round",
+					ShadowOutcome: string(ShadowWouldClarify), ShadowReason: string(ReasonProbeError),
+				})
+			}
+			// attestation stays its zero value -- see this function's own
+			// doc comment on why that is a safe fallback for
+			// SurvivorsFirstOrder specifically.
+			attestation = Attestation{}
 		}
 	}()
 	roundCtx, cancel := context.WithTimeout(ctx, evidenceRoundDeadline)
@@ -1025,12 +1052,13 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 	for _, candidate := range resolution.Candidates {
 		pooledKinds = append(pooledKinds, candidate.Subject.Kind)
 	}
-	RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
+	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
 		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
 		PooledKinds: pooledKinds, CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
 	}, deps.ResolutionTracer)
+	return attestation
 }
 
 // scopesUnrestricted is CHAOS-3829 codex r8 O1's (accepted, CRITICAL

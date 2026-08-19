@@ -30,10 +30,42 @@ func NewCensusFunc(client contextpacket.ClickHouseQueryClient) graphrank.CensusF
 		if err != nil {
 			return graphrank.CensusOutcome{}, err
 		}
-		return graphrank.CensusOutcome{
+		outcome := graphrank.CensusOutcome{
 			Count: result.Count, CensusReadAt: result.CensusReadAt, SatisfierNaturalKey: result.SatisfierNaturalKey,
 			ClosureMismatch: result.ClosureMismatch, StatementCount: result.StatementCount, RowsRead: result.RowsRead,
-		}, nil
+			SatisfierSetClosureMismatch: result.SatisfierSetClosureMismatch,
+		}
+		// CHAOS-3896 Slice B: bridge the census's own raw natural-key
+		// satisfier(s) to graph canonical ids HERE -- devhealthsource is the
+		// only side of the graphrank/devhealthsource boundary that can call
+		// BridgeSatisfierToCanonicalID (graphrank cannot import
+		// devhealthsource; see BridgeSatisfierToCanonicalID's own doc
+		// comment), so CensusOutcome carries ALREADY-BRIDGED ids, never a
+		// raw natural key graphrank would have no way to resolve itself.
+		//
+		// A bridge failure/omission is silently dropped, never propagated as
+		// an error: identity.Derive's own H6 whole-row-omit guard means a
+		// natural key too long to bridge could also never have been minted
+		// as a graph node in the first place (the SAME omission rule applies
+		// on the projection side) -- so an unbridgeable satisfier can never
+		// legitimately match a pooled candidate's own canonical id anyway;
+		// dropping it from the trusted set is correct, not a loss of
+		// coverage.
+		if result.Count == 1 && !result.ClosureMismatch && result.SatisfierNaturalKey != "" {
+			if canonicalID, omitted, bridgeErr := BridgeSatisfierToCanonicalID(kind, result.SatisfierNaturalKey); bridgeErr == nil && !omitted {
+				outcome.SatisfierCanonicalID = canonicalID
+			}
+		}
+		if len(result.SatisfierNaturalKeys) > 0 {
+			ids := make([]string, 0, len(result.SatisfierNaturalKeys))
+			for _, naturalKey := range result.SatisfierNaturalKeys {
+				if canonicalID, omitted, bridgeErr := BridgeSatisfierToCanonicalID(kind, naturalKey); bridgeErr == nil && !omitted {
+					ids = append(ids, canonicalID)
+				}
+			}
+			outcome.SatisfierCanonicalIDs = ids
+		}
+		return outcome, nil
 	}
 }
 
