@@ -80,13 +80,14 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// added 0014, CHAOS-3862 added 0015, CHAOS-3859 added 0016, CHAOS-3889
 	// added 0017, CHAOS-3884 added 0018 (renumbered from 0017 during
 	// the rebase onto origin/main -- see runner_integration_test.go's own
-	// comment for why), CHAOS-3898 S2a added 0019 and 0020, and CHAOS-3898
-	// S2 (§2.3 graph_epoch reuse-key dimension) added 0021, so the embedded
-	// set is now 21 files. A future migration must bump this literal too --
-	// see expectedMigrationVersions in migrations/postgres/
+	// comment for why), CHAOS-3898 S2a added 0019 and 0020, CHAOS-3898
+	// S2 (§2.3 graph_epoch reuse-key dimension) added 0021, and CHAOS-3900
+	// W1 (window_inference_version reuse-key dimension) added 0022, so the
+	// embedded set is now 22 files. A future migration must bump this
+	// literal too -- see expectedMigrationVersions in migrations/postgres/
 	// runner_integration_test.go for the same convention, held in one
 	// place there.
-	require.Equal(t, "applied 21 migrations\n", first.String())
+	require.Equal(t, "applied 22 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }
