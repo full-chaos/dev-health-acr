@@ -3,10 +3,12 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -14,21 +16,29 @@ func repoSubject(id string) contextfabric.SubjectRef {
 	return contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + id, Label: id}
 }
 
-func workItemSubject(id string) contextfabric.SubjectRef {
-	return contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:" + id, Label: id}
+// workItemSubject mints a CHAOS-3898 "work_item.v2:<repo_id>:<id>" subject
+// via identity.Derive itself, rather than hand-building the string -- so
+// this test package can never drift from the same codec devhealthsource's
+// producers and devhealthfacts' v2Index use.
+func workItemSubject(repoID, id string) contextfabric.SubjectRef {
+	canonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, id}, nil)
+	if err != nil || omitted {
+		panic(fmt.Sprintf("workItemSubject(%q, %q): identity.Derive failed: omitted=%v err=%v", repoID, id, omitted, err))
+	}
+	return contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: canonicalID, Label: id}
 }
 
 func TestIdentityProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", "synthetic"}}},
-		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "Investigate checkout flake"}}},
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "Investigate checkout flake", "repo-1"}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIdentity)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactIdentity,
-		Subjects: []contextfabric.SubjectRef{repoSubject("repo-1"), workItemSubject("WIDGET-101")},
+		Subjects: []contextfabric.SubjectRef{repoSubject("repo-1"), workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -51,7 +61,7 @@ func TestIdentityProviderHappyPath(t *testing.T) {
 			if fact.Fields["name"].String == nil || *fact.Fields["name"].String != "example-org/widget-service" {
 				t.Fatalf("repo identity fields = %#v", fact.Fields)
 			}
-		case "work_item:WIDGET-101":
+		case "work_item.v2:repo-1:WIDGET-101":
 			if fact.Fields["title"].String == nil || *fact.Fields["title"].String != "Investigate checkout flake" {
 				t.Fatalf("work item identity fields = %#v", fact.Fields)
 			}
@@ -134,7 +144,7 @@ func TestMembershipProviderWorkItemReportsRepository(t *testing.T) {
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactMembership,
-		Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)

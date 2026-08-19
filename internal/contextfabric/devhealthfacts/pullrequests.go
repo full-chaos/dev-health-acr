@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -134,29 +135,29 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, "pull_request_review:")
+	ids, bySubject := v2Index(query.Subjects, identity.KindPullRequestReview)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-3781 Tier B: a review is an immutable point event -- its state
 	// is decided when it is submitted and is never revised -- so the only
 	// temporal question is whether it had been submitted yet.
-	statement := withRowLimit(`SELECT r.review_id, ifNull(r.state, '')
+	statement := withRowLimit(`SELECT r.review_id, ifNull(r.state, ''), toString(r.repo_id)
 FROM git_pull_request_reviews AS r FINAL
-WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}` + timeBound.existencePredicate("r.submitted_at"))
+WHERE r.org_id = {org_id:String} AND concat(toString(r.repo_id), ':', r.review_id) IN {ids:Array(String)}` + timeBound.existencePredicate("r.submitted_at"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var reviewID, state string
-		if err := row.Scan(&reviewID, &state); err != nil {
+		var reviewID, state, repoID string
+		if err := row.Scan(&reviewID, &state, &repoID); err != nil {
 			return err
 		}
-		subject, ok := bySubject[reviewID]
+		subject, ok := bySubject[repoID+":"+reviewID]
 		if !ok {
 			return nil
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReviews, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"state": stringOrNull(state)},
-			EvidenceRefIDs: []string{evidenceRefID("review", reviewID)},
+			EvidenceRefIDs: []string{evidenceRefID("review", repoID+":"+reviewID)},
 		})
 		return nil
 	}, timeBound.bindings()...)

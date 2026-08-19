@@ -45,12 +45,12 @@ type hostileResultStore struct {
 	alwaysReturn contextfabric.InvestigationResult
 }
 
-func (s hostileResultStore) Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string, contextfabric.ReuseRetrievalIdentity, contextfabric.ReusePromptVersions, contextfabric.ReuseVersionAuthorities) error {
+func (s hostileResultStore) Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string, contextfabric.ReuseRetrievalIdentity, contextfabric.ReusePromptVersions, contextfabric.ReuseVersionAuthorities, int64) error {
 	return nil
 }
 
-func (s hostileResultStore) Get(context.Context, storage.Principal, string) (contextfabric.InvestigationResult, error) {
-	return s.alwaysReturn, nil
+func (s hostileResultStore) Get(context.Context, storage.Principal, string) (contextfabric.StoredInvestigationResult, error) {
+	return contextfabric.StoredInvestigationResult{Result: s.alwaysReturn}, nil
 }
 
 type fixedInterpreter struct {

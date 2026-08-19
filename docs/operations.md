@@ -498,6 +498,23 @@ gate, prefix selector) must roll out in two phases:
    node-side identity stamp independently fails vectors closed to lexical
    until the prescribed `acr-projector rebuild --org` runs per organization.
 
+**Graph-epoch binding (CHAOS-3898 §2.1/§2.3).** Every reuse-participating row
+additionally persists the organization's active graph-lifecycle epoch
+(migration `0021`, `graph_epoch`) — the epoch `contextfabric.
+ResolvedGraphBinding` resolved once, before the graph reads that produced the
+row, via the same per-org build-aside-and-swap pointer `acr-projector`'s
+lifecycle machinery serves reads from (`OrgEpochResolver`, `docs/design/`
+`context-fabric-*` lifecycle design). This is a THIRD, structurally distinct
+dimension from the staleness-window/rebuild-invalidation-epoch pair above: it
+does not require operator action or a two-phase rollout, because it moves
+automatically and only as a real consequence of a per-org build/flip
+(§3.1) — never as a deploy-time configuration change the way embed-text
+semantics or retrieval policy do. A pre-`0021` row holds NULL and never
+matches (same fail-closed convention as every other reuse column). Every
+organization defaults to epoch 0 (the legacy, unsuffixed graph key) until
+its first migration to the build-aside-and-swap pointer, so this dimension
+is inert for the whole fleet until that lands.
+
 ### Vector and semantic retrieval (CHAOS-3778)
 
 Vector retrieval is **opt-in and off by default**. It is enabled by setting a

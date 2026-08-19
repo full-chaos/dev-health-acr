@@ -103,8 +103,8 @@ func TestInvestigateConvertsAmbiguousResolutionToClarificationRequired(t *testin
 	if err != nil {
 		t.Fatalf("results.Get() error = %v, want the clarification result persisted for the follow-up turn", err)
 	}
-	if len(stored.SubjectResolution.Candidates) != 2 || stored.SubjectResolution.Candidates[0].ReceiptID != "receipt_ambiguous_a1" {
-		t.Fatalf("stored candidates = %#v, want the receipt-bound candidates retrievable", stored.SubjectResolution.Candidates)
+	if len(stored.Result.SubjectResolution.Candidates) != 2 || stored.Result.SubjectResolution.Candidates[0].ReceiptID != "receipt_ambiguous_a1" {
+		t.Fatalf("stored candidates = %#v, want the receipt-bound candidates retrievable", stored.Result.SubjectResolution.Candidates)
 	}
 }
 

@@ -23,7 +23,11 @@ type graphReaderStub struct {
 	context    GraphContext
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error) {
+func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
+}
+
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
 	return g.resolution, nil
 }
 
@@ -49,15 +53,15 @@ type resultStoreStub struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities) error {
+func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
 	s.saved = result
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
 	return nil
 }
 
-func (s *resultStoreStub) Get(context.Context, storage.Principal, string) (InvestigationResult, error) {
-	return InvestigationResult{}, nil
+func (s *resultStoreStub) Get(context.Context, storage.Principal, string) (StoredInvestigationResult, error) {
+	return StoredInvestigationResult{}, nil
 }
 
 // staticResultStore is a resultStoreStub with a keyed Get, for exercising
@@ -66,22 +70,35 @@ type staticResultStore struct {
 	results map[string]InvestigationResult
 	gotIDs  []string
 	getErr  error
+	// graphEpoch (CHAOS-3898 §2.4), when non-nil, is the GraphEpoch every
+	// Get response carries. Defaults to 0 when left nil at construction --
+	// see the zero-value fallback in Get below -- matching every
+	// GraphReader test fake's own default ResolveInvestigationBinding
+	// epoch, so existing prior-subject-receipt tests keep passing the
+	// CHAOS-3898 §2.2 ingress taint gate unchanged. A test exercising the
+	// taint strip itself sets this to a different value explicitly.
+	graphEpoch *int64
 }
 
-func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities) error {
+func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64) error {
 	return nil
 }
 
-func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID string) (InvestigationResult, error) {
+func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID string) (StoredInvestigationResult, error) {
 	s.gotIDs = append(s.gotIDs, resultID)
 	if s.getErr != nil {
-		return InvestigationResult{}, s.getErr
+		return StoredInvestigationResult{}, s.getErr
 	}
 	result, ok := s.results[resultID]
 	if !ok {
-		return InvestigationResult{}, errors.New("investigation result not found")
+		return StoredInvestigationResult{}, errors.New("investigation result not found")
 	}
-	return result, nil
+	epoch := s.graphEpoch
+	if epoch == nil {
+		zero := int64(0)
+		epoch = &zero
+	}
+	return StoredInvestigationResult{Result: result, GraphEpoch: epoch}, nil
 }
 
 // capturingGraphReader records every request ResolveSubjects/DiscoverContext
@@ -95,7 +112,11 @@ type capturingGraphReader struct {
 	discoverHints   [][]SubjectHint
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion) (SubjectResolution, error) {
+func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: 0}, nil
+}
+
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
 	return g.resolution, nil
 }
@@ -377,6 +398,63 @@ func TestEngineSkipsUnresolvablePriorSubjectReceiptWithoutFailing(t *testing.T) 
 	// "unloadable", never "no_match" or "failed_reauth" -- see
 	// resolvePriorSubjectHints' own doc comment for the three-reason split.
 	if want := []priorSubjectReceiptSkipReasonRecord{{"unloadable", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
+	}
+}
+
+// TestEngineStripsPriorSubjectReceiptFromADifferentGraphEpoch is the
+// CHAOS-3898 §2.2 ingress taint gate's direct proof: a receipt whose prior
+// result loaded successfully, and whose candidate WOULD otherwise match,
+// must still be stripped entirely -- no hint built, no label or id leaked
+// -- when its StoredInvestigationResult carrier's GraphEpoch differs from
+// this investigation's own ResolvedGraphBinding.Epoch, and the strip must
+// classify as "stale_graph_epoch" (cf_receipt_taint_strip, §5b), distinct
+// from every other skip reason.
+func TestEngineStripsPriorSubjectReceiptFromADifferentGraphEpoch(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	staleEpoch := int64(7)
+	store := &staticResultStore{
+		results:    map[string]InvestigationResult{"result_prior_1": priorResult},
+		graphEpoch: &staleEpoch,
+	}
+	// The graph reader's own ResolveInvestigationBinding (capturingGraphReader,
+	// fixed at Epoch 0) never matches the store's stale epoch 7 -- exactly
+	// the "a build/flip happened since the prior turn" scenario.
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v, want a graph-epoch-mismatched receipt to degrade safely, not fail", err)
+	}
+	// The taint gate must strip the receipt BEFORE any hint is built --
+	// nothing from the prior result's committed subject reaches GraphReader.
+	if len(graph.resolveRequests) != 1 || len(graph.resolveRequests[0].RequestedScope.SubjectHints) != 0 {
+		t.Fatalf("resolveRequests = %#v, want no hint added for a graph-epoch-mismatched receipt", graph.resolveRequests)
+	}
+	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
+		t.Fatalf("telemetry = %#v, want exactly one skip of count 1 recorded", telemetry.priorSubjectReceiptsSkipped)
+	}
+	if want := []priorSubjectReceiptSkipReasonRecord{{"stale_graph_epoch", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
 	}
 }
@@ -787,7 +865,11 @@ type countingGraphReader struct {
 // reaching either. Committing nothing here used to reach the fact read
 // anyway -- precisely the defect CHAOS-3810 removed -- so a double that
 // commits nothing can no longer express "the engine did the work".
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error) {
+func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
+}
+
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
 	g.resolveCalls++
 	return SubjectResolution{
 		Candidates: []SubjectCandidate{},

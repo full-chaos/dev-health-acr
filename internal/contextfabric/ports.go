@@ -121,8 +121,20 @@ type QuestionInterpreter interface {
 // GraphReader owns subject/cohort discovery and bounded relationship context.
 // Implementations may use any selected graph/index backend behind this
 // interface; consumers never receive graph-native queries or identifiers.
+//
+// ResolveInvestigationBinding (CHAOS-3898 §2.1) resolves the organization's
+// CURRENT ResolvedGraphBinding -- the full derived graph key and the epoch
+// it names. Engine calls this EXACTLY ONCE per investigation, at request
+// start, before either of the two calls below and before tryReuse -- see
+// ResolvedGraphBinding's own doc comment for why re-resolving independently
+// at each call site (the pre-CHAOS-3898 behavior) is a real race once a
+// build/flip can move the active epoch mid-request. Both ResolveSubjects and
+// DiscoverContext then take that SAME binding explicitly, rather than
+// resolving their own -- a caller who forgets to resolve or thread it fails
+// to compile.
 type GraphReader interface {
-	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error)
+	ResolveInvestigationBinding(ctx context.Context, principal storage.Principal) (ResolvedGraphBinding, error)
+	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
 }
 
@@ -130,6 +142,10 @@ type GraphDiscoveryRequest struct {
 	Request        InvestigationRequest `json:"request"`
 	Interpretation InterpretedQuestion  `json:"interpretation"`
 	Resolution     SubjectResolution    `json:"resolution"`
+	// Binding (CHAOS-3898 §2.1) is the SAME ResolvedGraphBinding this
+	// investigation's ResolveSubjects call already used -- never
+	// independently re-resolved. See GraphReader's doc comment.
+	Binding ResolvedGraphBinding `json:"-"`
 }
 
 // CanonicalFactReader is the typed, read-only boundary back to canonical Dev
@@ -229,8 +245,28 @@ type InvestigationResultStore interface {
 	// class-close: three MORE deployment-current version authorities
 	// (query shape, canonical fact registry, model-output schema) --
 	// same explicit-parameter discipline, same reason, same migration.
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities) error
-	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
+	//
+	// The trailing int64 is graphEpoch (CHAOS-3898 §2.1): the SAME
+	// ResolvedGraphBinding.Epoch Engine's own graph reads for this result
+	// actually used, threaded explicitly so a stored row can never carry an
+	// epoch other than the one its graph reads used. Unlike the reuse
+	// snapshot/epoch pair above, this is never nil-able at the call site --
+	// GraphReader.ResolveInvestigationBinding is a REQUIRED call Engine
+	// makes before any graph read can happen at all, so a fresh result
+	// always has a real (possibly 0, the legacy graph) epoch to stamp.
+	// Implementations persist it as an additive NULLABLE column regardless
+	// (pre-migration rows, and rows from a Store with reuse disabled
+	// entirely, read back NULL) -- the same NULL-never-matches fail-closed
+	// convention as every sibling reuse dimension.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64) error
+	// Get returns the CHAOS-3898 §2.4 metadata-bearing
+	// StoredInvestigationResult carrier, not a bare InvestigationResult --
+	// see that type's own doc comment for why persistence metadata (here,
+	// GraphEpoch) must live on the carrier rather than be lost between
+	// storage and the ingress taint gate. The org-scoping binding
+	// precondition documented above applies identically to the carrier's
+	// wrapped Result.
+	Get(context.Context, storage.Principal, string) (StoredInvestigationResult, error)
 }
 
 // SourceWatermarkSnapshot is the CHAOS-3782 answer-reuse watermark
@@ -432,6 +468,20 @@ type ReuseKey struct {
 	// replayed as if produced under the new one. Same NULL-never-matches
 	// fail-closed discipline as every other dimension here.
 	IdentityNormalizationVersion string
+	// GraphEpoch (CHAOS-3898 §2.3) is this investigation's own
+	// ResolvedGraphBinding.Epoch -- a THIRTEENTH conjunctive dimension,
+	// structurally distinct from every version-string dimension above: a
+	// stored candidate matches only if it was generated under the SAME
+	// active graph epoch this lookup is running under. Unlike
+	// RebuildEpoch/invalidation_epoch (a coarse "has this org been rebuilt
+	// since" fence bumped only by an explicit invalidation), GraphEpoch
+	// moves on every ordinary build/flip -- see ResolvedGraphBinding's own
+	// doc comment for why the two must never be conflated. A row saved
+	// under a different (or NULL, pre-migration) epoch never matches; see
+	// FindReusable's own doc comment for the METADATA-ONLY classifier that
+	// distinguishes that specific miss (ReuseMissStaleGraphEpoch) from an
+	// ordinary no-candidate miss.
+	GraphEpoch int64
 }
 
 // ReuseRetrievalIdentity carries the deployment-CURRENT values of the two
@@ -514,8 +564,17 @@ type ReuseVersionAuthorities struct {
 // this returns. ok=false is an ordinary cache miss (no matching row, or a
 // matching row failed 3/4), never an error: a caller must always be able
 // to fall back to running a fresh investigation.
+//
+// The returned ReuseMissReason (CHAOS-3898 v4.1 F5) is meaningful only when
+// ok=false: ReuseMissNoCandidate is the ordinary miss; ReuseMissStaleGraphEpoch
+// means a row matched every OTHER dimension but was generated under a
+// different graph_epoch, proof a build/flip -- not staleness -- is why it
+// does not apply. Implementations MUST classify this without ever
+// selecting or returning payload bytes (or any stored label/id field) on
+// the classification path -- metadata columns only (design brief §5's
+// SQL-predicate pin).
 type AnswerReuseGate interface {
-	FindReusable(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error)
+	FindReusable(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, ReuseMissReason, error)
 }
 
 // ReuseInvalidator is notified when an organization's projected graph

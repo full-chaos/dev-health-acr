@@ -135,7 +135,7 @@ func saveWithReuseSnapshot(t *testing.T, ctx context.Context, store *pginvestiga
 	require.NoError(t, err)
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities, 0))
 }
 
 // TestFindReusable_HappyPathRoundTrip proves the baseline: a result saved
@@ -153,7 +153,7 @@ func TestFindReusable_HappyPathRoundTrip(t *testing.T) {
 	result := reusableResult("result_reuse_happy01", principal.OrgID, "Is the auth migration on track?")
 	saveWithReuseSnapshot(t, ctx, store, principal, result)
 
-	found, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	found, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected a reusable candidate")
 	require.Equal(t, result.ResultID, found.ResultID)
@@ -177,11 +177,66 @@ func TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot(t *testing.T) {
 	// Deliberately NOT using saveWithReuseSnapshot -- plain Save with a
 	// nil reuse snapshot and a nil epoch, exactly what a Save call from a
 	// caller that doesn't know about answer reuse would pass.
-	require.NoError(t, store.Save(ctx, principal, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities))
+	require.NoError(t, store.Save(ctx, principal, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities, 0))
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected a Save with no threaded snapshot to never be reusable")
+}
+
+// TestF5_FindReusableClassifiesGraphEpochMismatchDistinctlyFromNoCandidate
+// is the CHAOS-3898 v4.1 F5 regression: a row that matches every OTHER
+// reuse dimension but was saved under a different graph_epoch must report
+// ReuseMissStaleGraphEpoch, not the ordinary ReuseMissNoCandidate --
+// proving the metadata-only classifier (matchesExceptGraphEpoch) actually
+// distinguishes the two misses, which today's single payload-bearing
+// SELECT could never do.
+func TestF5_FindReusableClassifiesGraphEpochMismatchDistinctlyFromNoCandidate(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-graphepoch"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_graphepoch01", principal.OrgID, "Did the graph epoch change?")
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
+	require.NoError(t, err)
+	// Saved under graph_epoch 3 -- the ResolvedGraphBinding.Epoch Engine
+	// would have resolved for this investigation.
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities, 3))
+
+	// A lookup at the SAME graph_epoch (3) hits.
+	sameEpochKey := reuseKeyFor(result)
+	sameEpochKey.GraphEpoch = 3
+	found, ok, _, err := store.FindReusable(ctx, principal, sameEpochKey)
+	require.NoError(t, err)
+	require.True(t, ok, "expected a hit when the lookup's graph epoch matches the saved row's")
+	require.Equal(t, result.ResultID, found.ResultID)
+
+	// A lookup at a DIFFERENT graph_epoch (4) -- every other dimension
+	// identical -- misses, and the miss classifies as stale_graph_epoch
+	// specifically (a build/flip moved the active epoch since this row
+	// was saved), not the ordinary miss_no_candidate.
+	differentEpochKey := reuseKeyFor(result)
+	differentEpochKey.GraphEpoch = 4
+	_, ok, reason, err := store.FindReusable(ctx, principal, differentEpochKey)
+	require.NoError(t, err)
+	require.False(t, ok, "expected a miss when the lookup's graph epoch differs from the saved row's")
+	require.Equal(t, contextfabric.ReuseMissStaleGraphEpoch, reason)
+
+	// A genuinely absent candidate (a question that was never saved at
+	// all) must still classify as the ordinary miss_no_candidate -- proving
+	// the classifier distinguishes the two misses rather than always
+	// reporting stale_graph_epoch once ANY row exists for the organization.
+	neverSavedKey := reuseKeyFor(result)
+	neverSavedKey.QuestionHash = contextfabric.QuestionHash("a question nobody ever asked")
+	neverSavedKey.GraphEpoch = 3
+	_, ok, reason, err = store.FindReusable(ctx, principal, neverSavedKey)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, contextfabric.ReuseMissNoCandidate, reason)
 }
 
 // TestAC_3782_3_WatermarkAdvanceForcesFreshInvestigation binds AC-3782-3 at
@@ -198,13 +253,13 @@ func TestAC_3782_3_WatermarkAdvanceForcesFreshInvestigation(t *testing.T) {
 	result := reusableResult("result_reuse_watermark01", principal.OrgID, "What is blocking the release?")
 	saveWithReuseSnapshot(t, ctx, store, principal, result)
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected a reusable candidate before the watermark advances")
 
 	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-2")
 
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected no reusable candidate once the source watermark advanced")
 }
@@ -227,7 +282,7 @@ func TestAC_3782_3_NewSourceAppearingAlsoForcesFresh(t *testing.T) {
 
 	setCheckpointWatermark(t, ctx, db, principal.OrgID, "github", "wm-1")
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected no reusable candidate once a new source appeared")
 }
@@ -250,7 +305,7 @@ func TestAC_3782_3_ReplacedSourceWithEmptyWatermarkForcesFresh(t *testing.T) {
 	result := reusableResult("result_reuse_replaced01", principal.OrgID, "Is the replaced source still tracked?")
 	saveWithReuseSnapshot(t, ctx, store, principal, result)
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "sanity: unchanged empty-string watermark must still match")
 
@@ -259,7 +314,7 @@ func TestAC_3782_3_ReplacedSourceWithEmptyWatermarkForcesFresh(t *testing.T) {
 	deleteCheckpoint(t, ctx, db, principal.OrgID, "linear")
 	setCheckpointWatermark(t, ctx, db, principal.OrgID, "github", "")
 
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected a replaced source (even with an empty watermark on both sides) to force a mismatch")
 }
@@ -279,13 +334,13 @@ func TestAC_3782_4_RebuildInvalidationForcesFreshInvestigation(t *testing.T) {
 	result := reusableResult("result_reuse_rebuild01", principal.OrgID, "What is the current status?")
 	saveWithReuseSnapshot(t, ctx, store, principal, result)
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected a reusable candidate before the rebuild invalidation")
 
 	require.NoError(t, store.InvalidateOrganizationReuse(ctx, principal.OrgID))
 
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected no reusable candidate once the organization's rebuild invalidation was recorded")
 }
@@ -309,11 +364,11 @@ func TestAC_3782_4_RebuildInvalidationIsOrganizationScoped(t *testing.T) {
 
 	require.NoError(t, store.InvalidateOrganizationReuse(ctx, rebuiltOrg.OrgID))
 
-	_, ok, err := store.FindReusable(ctx, rebuiltOrg, reuseKeyFor(rebuiltResult))
+	_, ok, _, err := store.FindReusable(ctx, rebuiltOrg, reuseKeyFor(rebuiltResult))
 	require.NoError(t, err)
 	require.False(t, ok, "expected the rebuilt organization's result to be invalidated")
 
-	_, ok, err = store.FindReusable(ctx, otherOrg, reuseKeyFor(otherResult))
+	_, ok, _, err = store.FindReusable(ctx, otherOrg, reuseKeyFor(otherResult))
 	require.NoError(t, err)
 	require.True(t, ok, "expected the other organization's result to remain reusable")
 }
@@ -337,26 +392,26 @@ func TestAC_3782_7_VersionMismatchNeverReused(t *testing.T) {
 	t.Run("contract_version", func(t *testing.T) {
 		key := baseline
 		key.ContractVersion = "context_fabric_investigation_result.v2"
-		_, ok, err := store.FindReusable(ctx, principal, key)
+		_, ok, _, err := store.FindReusable(ctx, principal, key)
 		require.NoError(t, err)
 		require.False(t, ok)
 	})
 	t.Run("projection_version", func(t *testing.T) {
 		key := baseline
 		key.ProjectionVersion = "projection-v2"
-		_, ok, err := store.FindReusable(ctx, principal, key)
+		_, ok, _, err := store.FindReusable(ctx, principal, key)
 		require.NoError(t, err)
 		require.False(t, ok)
 	})
 	t.Run("model_identity", func(t *testing.T) {
 		key := baseline
 		key.ModelIdentities = []string{"openai-compatible/gpt-5-mini"}
-		_, ok, err := store.FindReusable(ctx, principal, key)
+		_, ok, _, err := store.FindReusable(ctx, principal, key)
 		require.NoError(t, err)
 		require.False(t, ok)
 	})
 	t.Run("unchanged_key_still_matches", func(t *testing.T) {
-		_, ok, err := store.FindReusable(ctx, principal, baseline)
+		_, ok, _, err := store.FindReusable(ctx, principal, baseline)
 		require.NoError(t, err)
 		require.True(t, ok, "sanity: the unmodified key must still match")
 	})
@@ -381,7 +436,7 @@ func TestChaos3786_FindReusableMatchesAnyIdentityInTheCurrentChain(t *testing.T)
 	key := reuseKeyFor(result)
 	key.ModelIdentities = []string{"openai/gpt-5-nano", "openai/gpt-5-fallback"}
 
-	found, ok, err := store.FindReusable(ctx, principal, key)
+	found, ok, _, err := store.FindReusable(ctx, principal, key)
 	require.NoError(t, err)
 	require.True(t, ok, "expected the fallback-produced result to be reusable while the fallback is still in the current chain")
 	require.Equal(t, result.ResultID, found.ResultID)
@@ -408,7 +463,7 @@ func TestChaos3786_FindReusableMissesWhenChainNoLongerNamesTheStoredIdentity(t *
 	// Primary unchanged; the org reconfigured its fallback model.
 	key.ModelIdentities = []string{"openai/gpt-5-nano", "openai/gpt-5-fallback-new"}
 
-	_, ok, err := store.FindReusable(ctx, principal, key)
+	_, ok, _, err := store.FindReusable(ctx, principal, key)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a miss: the stored result's producing model is no longer in the current chain")
 }
@@ -440,7 +495,7 @@ func TestChaos3786_InvalidateOrganizationReuseCatchesWhatChainMembershipCannot(t
 
 	// Before any config change: chain membership hits, exactly like
 	// TestChaos3786_FindReusableMatchesAnyIdentityInTheCurrentChain.
-	_, ok, err := store.FindReusable(ctx, principal, key)
+	_, ok, _, err := store.FindReusable(ctx, principal, key)
 	require.NoError(t, err)
 	require.True(t, ok, "sanity: the candidate must be reusable before any invalidation")
 
@@ -453,7 +508,7 @@ func TestChaos3786_InvalidateOrganizationReuseCatchesWhatChainMembershipCannot(t
 	// The SAME key -- chain membership alone would still match, since
 	// neither identity string moved -- must now miss: the epoch bump is
 	// what actually invalidates it, not a chain change.
-	_, ok, err = store.FindReusable(ctx, principal, key)
+	_, ok, _, err = store.FindReusable(ctx, principal, key)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a miss: InvalidateOrganizationReuse must quarantine the candidate even though its identity is still in the chain")
 }
@@ -479,7 +534,7 @@ func TestFindReusable_OutsideStalenessWindowIsAMiss(t *testing.T) {
 	result := reusableResult("result_reuse_stale01", principal.OrgID, "How is the migration going?")
 	saveWithReuseSnapshot(t, ctx, store, principal, result)
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected the candidate to already be outside a near-zero staleness window")
 }
@@ -525,7 +580,7 @@ func TestF6_StalenessWindowUsesCreatedAtNotAppSuppliedGeneratedAt(t *testing.T) 
 		result.GeneratedAt = time.Now().UTC().Add(-48 * time.Hour) // app clock claims "two days ago" -- well outside a 1h window
 		saveWithReuseSnapshot(t, ctx, store, principal, result)
 
-		_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+		_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 		require.NoError(t, err)
 		require.True(t, ok, "expected created_at (real save time), not the stale app-supplied generated_at, to govern the staleness window")
 	})
@@ -543,7 +598,7 @@ func TestF6_StalenessWindowUsesCreatedAtNotAppSuppliedGeneratedAt(t *testing.T) 
 		result.GeneratedAt = time.Now().UTC().Add(24 * time.Hour) // app clock claims "tomorrow" -- would look eternally fresh under generated_at
 		saveWithReuseSnapshot(t, ctx, store, principal, result)
 
-		_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+		_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 		require.NoError(t, err)
 		require.False(t, ok, "expected created_at (real save time), not the future-dated app-supplied generated_at, to govern the staleness window")
 	})
@@ -563,7 +618,7 @@ func TestFindReusable_DoesNotCrossOrganizations(t *testing.T) {
 	result := reusableResult("result_reuse_scoped01", owner.OrgID, "What is the status?")
 	saveWithReuseSnapshot(t, ctx, store, owner, result)
 
-	_, ok, err := store.FindReusable(ctx, other, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, other, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected no cross-organization reuse")
 }
@@ -629,9 +684,9 @@ func TestAC_3782_4_RebuildBetweenSnapshotAndSaveIsCaughtByEpochNotTimestamp(t *t
 	// exactly what a timestamp-only check would have called "fresh" --
 	// but carries the STALE epoch captured before the rebuild.
 	result := reusableResult("result_reuse_epoch_race01", principal.OrgID, "Did the mid-flight rebuild get caught?")
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities, 0))
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected the epoch fence to catch a rebuild that landed between snapshot capture and Save, even though created_at > invalidated_at")
 }
@@ -654,7 +709,7 @@ func TestAC_3782_4_InvestigationStartedAfterRebuildIsReusable(t *testing.T) {
 	result := reusableResult("result_reuse_epoch_postrebuild01", principal.OrgID, "Is a post-rebuild investigation still reusable?")
 	saveWithReuseSnapshot(t, ctx, store, principal, result)
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected an investigation snapshotted AFTER the rebuild to remain reusable")
 }
@@ -676,9 +731,9 @@ func TestFindReusable_NilEpochAtSaveIsNeverReusable(t *testing.T) {
 	require.NoError(t, err)
 
 	result := reusableResult("result_reuse_epoch_nil01", principal.OrgID, "Was the no-epoch save left unreusable?")
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities, 0))
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected a Save with a watermark snapshot but no epoch to never be reusable")
 }
@@ -755,9 +810,9 @@ func TestSave_EmptyModelIdentityPersistsAsNeverReusable(t *testing.T) {
 
 	result := reusableResult("result_reuse_no_model_id01", principal.OrgID, "Was the empty model identity save left unreusable?")
 	result.Versions.ModelIdentity = ""
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities, 0))
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected a Save with an empty model identity to never be reusable")
 }
@@ -783,13 +838,13 @@ func TestFindReusable_EmbedRetrievalIdentityIsConjunctive(t *testing.T) {
 	// post-deploy binary computes after a composition-tag flip.
 	changed := reuseKeyFor(result)
 	changed.EmbedRetrievalIdentity = "openai/text-embedding-3-large#t2:r2000:b1:pnone"
-	_, ok, err := store.FindReusable(ctx, principal, changed)
+	_, ok, _, err := store.FindReusable(ctx, principal, changed)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a changed embed retrieval identity to miss conjunctively")
 
 	// And the unchanged identity still hits -- the dimension
 	// discriminates, it does not blanket-disable.
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected the identical embed retrieval identity to still match")
 }
@@ -810,7 +865,7 @@ func TestFindReusable_RetrievalPolicyVersionIsConjunctive(t *testing.T) {
 
 	changed := reuseKeyFor(result)
 	changed.RetrievalPolicyVersion = "rp2"
-	_, ok, err := store.FindReusable(ctx, principal, changed)
+	_, ok, _, err := store.FindReusable(ctx, principal, changed)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a changed retrieval policy version to miss conjunctively")
 }
@@ -838,7 +893,7 @@ UPDATE acr.context_fabric_investigation_results
  WHERE result_id = $1`, result.ResultID)
 	require.NoError(t, err)
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected a pre-0014-shaped row (NULL retrieval columns) to never match the conjunctive predicates")
 }
@@ -859,13 +914,13 @@ func TestFindReusable_EmptyRetrievalKeyFieldsMissWithoutQuerying(t *testing.T) {
 
 	missing := reuseKeyFor(result)
 	missing.EmbedRetrievalIdentity = ""
-	_, ok, err := store.FindReusable(ctx, principal, missing)
+	_, ok, _, err := store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty embed retrieval identity in the key to miss")
 
 	missing = reuseKeyFor(result)
 	missing.RetrievalPolicyVersion = ""
-	_, ok, err = store.FindReusable(ctx, principal, missing)
+	_, ok, _, err = store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty retrieval policy version in the key to miss")
 }
@@ -893,13 +948,13 @@ func TestFindReusable_InterpretationPromptVersionIsConjunctive(t *testing.T) {
 	// post-deploy binary (v6->v7) computes.
 	changed := reuseKeyFor(result)
 	changed.InterpretationPromptVersion = "context-fabric-interpretation.v6"
-	_, ok, err := store.FindReusable(ctx, principal, changed)
+	_, ok, _, err := store.FindReusable(ctx, principal, changed)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a changed interpretation prompt version to miss conjunctively")
 
 	// And the unchanged version still hits -- the dimension discriminates,
 	// it does not blanket-disable.
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected the identical interpretation prompt version to still match")
 }
@@ -921,11 +976,11 @@ func TestFindReusable_SynthesisPromptVersionIsConjunctive(t *testing.T) {
 
 	changed := reuseKeyFor(result)
 	changed.SynthesisPromptVersion = "context-fabric-synthesis.v8"
-	_, ok, err := store.FindReusable(ctx, principal, changed)
+	_, ok, _, err := store.FindReusable(ctx, principal, changed)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a changed synthesis prompt version to miss conjunctively")
 
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected the identical synthesis prompt version to still match")
 }
@@ -953,7 +1008,7 @@ UPDATE acr.context_fabric_investigation_results
  WHERE result_id = $1`, result.ResultID)
 	require.NoError(t, err)
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected a pre-0015-shaped row (NULL prompt-version columns) to never match the conjunctive predicates")
 }
@@ -975,13 +1030,13 @@ func TestFindReusable_EmptyPromptVersionKeyFieldsMissWithoutQuerying(t *testing.
 
 	missing := reuseKeyFor(result)
 	missing.InterpretationPromptVersion = ""
-	_, ok, err := store.FindReusable(ctx, principal, missing)
+	_, ok, _, err := store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty interpretation prompt version in the key to miss")
 
 	missing = reuseKeyFor(result)
 	missing.SynthesisPromptVersion = ""
-	_, ok, err = store.FindReusable(ctx, principal, missing)
+	_, ok, _, err = store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty synthesis prompt version in the key to miss")
 }
@@ -1002,11 +1057,11 @@ func TestFindReusable_QueryVersionIsConjunctive(t *testing.T) {
 
 	changed := reuseKeyFor(result)
 	changed.QueryVersion = "devhealthfacts.clickhouse.v2"
-	_, ok, err := store.FindReusable(ctx, principal, changed)
+	_, ok, _, err := store.FindReusable(ctx, principal, changed)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a changed query version to miss conjunctively")
 
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected the identical query version to still match")
 }
@@ -1025,11 +1080,11 @@ func TestFindReusable_CanonicalServiceVersionIsConjunctive(t *testing.T) {
 
 	changed := reuseKeyFor(result)
 	changed.CanonicalServiceVersion = "context-fabric-facts.v2"
-	_, ok, err := store.FindReusable(ctx, principal, changed)
+	_, ok, _, err := store.FindReusable(ctx, principal, changed)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a changed canonical service version to miss conjunctively")
 
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected the identical canonical service version to still match")
 }
@@ -1052,11 +1107,11 @@ func TestFindReusable_ModelOutputSchemaVersionIsConjunctive(t *testing.T) {
 
 	changed := reuseKeyFor(result)
 	changed.ModelOutputSchemaVersion = "context-fabric-model-output.v2"
-	_, ok, err := store.FindReusable(ctx, principal, changed)
+	_, ok, _, err := store.FindReusable(ctx, principal, changed)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a changed model-output schema version to miss conjunctively")
 
-	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected the identical model-output schema version to still match")
 }
@@ -1081,7 +1136,7 @@ UPDATE acr.context_fabric_investigation_results
  WHERE result_id = $1`, result.ResultID)
 	require.NoError(t, err)
 
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected a pre-0015-shaped row (NULL version-authority columns) to never match the conjunctive predicates")
 }
@@ -1102,19 +1157,19 @@ func TestFindReusable_EmptyVersionAuthorityKeyFieldsMissWithoutQuerying(t *testi
 
 	missing := reuseKeyFor(result)
 	missing.QueryVersion = ""
-	_, ok, err := store.FindReusable(ctx, principal, missing)
+	_, ok, _, err := store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty query version in the key to miss")
 
 	missing = reuseKeyFor(result)
 	missing.CanonicalServiceVersion = ""
-	_, ok, err = store.FindReusable(ctx, principal, missing)
+	_, ok, _, err = store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty canonical service version in the key to miss")
 
 	missing = reuseKeyFor(result)
 	missing.ModelOutputSchemaVersion = ""
-	_, ok, err = store.FindReusable(ctx, principal, missing)
+	_, ok, _, err = store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty model-output schema version in the key to miss")
 }

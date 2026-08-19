@@ -1,6 +1,9 @@
 package identity
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Kind constants for the five changed kinds the design brief fixes (§1.2).
 // D-8 (episode split identity) is a separate ticket (CHAOS-3901) and is not
@@ -60,6 +63,48 @@ func Lookup(kind string) (Registration, bool) {
 		}
 	}
 	return Registration{}, false
+}
+
+// Segments inverts Derive: given a full canonical id, it reports whether id
+// is in kind's "<kind>.v2:" form and, if so, the decoded natural-key
+// segment VALUES in the same Columns order Derive was given them.
+//
+// This exists for readers downstream of the graph projection (today:
+// internal/contextfabric/devhealthfacts) that need to recover the raw
+// source-row key components out of a `.v2:` id to re-scope their own
+// queries -- the same composite key Derive joined, decoded back apart.
+// JoinSegments' encoding guarantees every ':' in the joined remainder is a
+// segment separator (a raw ':' in an input value is always escaped to
+// "%3A" first), so splitting on ':' before decoding is safe and lossless.
+//
+// ok is false, and values is nil, whenever id does not carry kind's
+// "<kind>.v2:" prefix (a pre-migration id, a different kind, or a
+// malformed value) or the decoded segment count does not match the
+// registration -- callers must treat that as "cannot parse", not attempt a
+// partial recovery.
+func Segments(kind, id string) (values []string, ok bool) {
+	reg, ok := Lookup(kind)
+	if !ok {
+		return nil, false
+	}
+	prefix := kind + ".v2:"
+	remainder := strings.TrimPrefix(id, prefix)
+	if remainder == "" || remainder == id {
+		return nil, false
+	}
+	encoded := strings.Split(remainder, ":")
+	if len(encoded) != len(reg.Columns) {
+		return nil, false
+	}
+	values = make([]string, len(encoded))
+	for i, segment := range encoded {
+		decoded, err := DecodeSegment(segment)
+		if err != nil {
+			return nil, false
+		}
+		values[i] = decoded
+	}
+	return values, true
 }
 
 // Derive computes the `<kind>.v2:` canonical id (design brief §1.1) from

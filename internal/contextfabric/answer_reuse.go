@@ -243,6 +243,12 @@ const (
 	// freshly discovered evidence set (or the recheck itself could not
 	// be completed).
 	AnswerReuseMissEvidenceContainment AnswerReuseOutcome = "miss_evidence_containment"
+	// AnswerReuseMissStaleGraphEpoch (CHAOS-3898 v4.1 F5): FindReusable
+	// found a row matching every OTHER reuse dimension, but it was
+	// generated under a different graph_epoch than this investigation's
+	// own ResolvedGraphBinding -- a build/flip, not staleness, invalidated
+	// it. See ReuseMissReason's doc comment.
+	AnswerReuseMissStaleGraphEpoch AnswerReuseOutcome = "stale_graph_epoch"
 )
 
 // tryReuse implements CHAOS-3782 (TRD §19.7). It is called from
@@ -254,7 +260,13 @@ const (
 // condition-6 authorization recheck here) -- Investigate always falls
 // through to a fresh investigation in that case; ok=false is never an
 // error.
-func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext) (InvestigationResult, bool) {
+// binding is the CHAOS-3898 §2.1 ResolvedGraphBinding Investigate resolved
+// ONCE, immediately before this call -- see ResolvedGraphBinding's own doc
+// comment. It feeds ReuseKey.GraphEpoch below (§2.3) and is threaded
+// unchanged into reuseAuthorizationStillHolds' own recheck graph calls, so
+// a reuse hit and the fresh investigation it would otherwise have run are
+// always evaluated against the SAME graph.
+func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, binding ResolvedGraphBinding) (InvestigationResult, bool) {
 	if e.reuseGate == nil {
 		return InvestigationResult{}, false
 	}
@@ -347,16 +359,24 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		QueryVersion:                 e.reuseVersionAuthorities.QueryVersion,
 		CanonicalServiceVersion:      e.reuseVersionAuthorities.CanonicalServiceVersion,
 		ModelOutputSchemaVersion:     e.reuseVersionAuthorities.ModelOutputSchemaVersion,
+		// CHAOS-3898 §2.3: the SAME binding Investigate resolved before
+		// this call. A stored candidate matches only if it was generated
+		// under this exact active graph epoch.
+		GraphEpoch: binding.Epoch,
 	}
-	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
+	candidate, ok, missReason, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {
-		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+		outcome := AnswerReuseMissNoCandidate
+		if missReason == ReuseMissStaleGraphEpoch {
+			outcome = AnswerReuseMissStaleGraphEpoch
+		}
+		e.recordReuseOutcome(ctx, principal, outcome)
 		return InvestigationResult{}, false
 	}
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, false
 	}
-	if holds, missReason := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate); !holds {
+	if holds, missReason := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding); !holds {
 		e.recordReuseOutcome(ctx, principal, missReason)
 		return InvestigationResult{}, false
 	}
@@ -413,7 +433,13 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 // the candidate cites; if authorization narrowed since the candidate was
 // generated, DiscoverContext silently omits what is no longer visible,
 // and the containment check below correctly fails closed.
-func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult) (bool, AnswerReuseOutcome) {
+// binding is the CHAOS-3898 §2.1 ResolvedGraphBinding tryReuse resolved
+// once, before FindReusable. Both graph calls below MUST run against this
+// SAME binding, never a freshly re-resolved one -- the serving decision
+// (would this candidate be served) and the graph these calls read from must
+// agree, or a recheck could pass against an epoch the candidate itself was
+// never generated under.
+func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult, binding ResolvedGraphBinding) (bool, AnswerReuseOutcome) {
 	subjects := reuseSubjectsToRecheck(candidate)
 	if len(subjects) > maxReuseSubjectRecheckCount {
 		return false, AnswerReuseMissAuthorization
@@ -428,7 +454,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		recheckRequest.RequestedScope.SubjectHints = hints
 	}
 
-	resolution, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation)
+	resolution, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding)
 	if err != nil {
 		return false, AnswerReuseMissAuthorization
 	}
@@ -447,7 +473,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		return true, AnswerReuseHit
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
-		Request: recheckRequest, Interpretation: candidate.Interpretation, Resolution: resolution,
+		Request: recheckRequest, Interpretation: candidate.Interpretation, Resolution: resolution, Binding: binding,
 	})
 	if err != nil {
 		return false, AnswerReuseMissEvidenceContainment

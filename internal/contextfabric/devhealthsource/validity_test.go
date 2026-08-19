@@ -124,14 +124,14 @@ func TestProducersEmitClosedValidityWindows(t *testing.T) {
 	}
 	batch := projectOneBatch(t, tables)
 
-	for _, subject := range []string{"work_item:WIDGET-101", "pull_request:repo-1:1042", "incident:incident-1"} {
+	for _, subject := range []string{"work_item.v2:repo-1:WIDGET-101", "pull_request:repo-1:1042", "incident:incident-1"} {
 		entity := entityByCanonicalID(t, batch, subject)
 		requireWindow(t, subject, entity.ValidFrom, entity.ValidTo, &created, &ended)
 	}
 
 	// The BELONGS_TO_REPOSITORY edge inherits the member's window: a
 	// membership stops being valid exactly when the member does.
-	edge := relationshipByID(t, batch, "relationship:belongs_to_repository:work_item:WIDGET-101")
+	edge := relationshipByID(t, batch, "relationship:belongs_to_repository:work_item.v2:repo-1:WIDGET-101")
 	requireWindow(t, "belongs_to_repository", edge.ValidFrom, edge.ValidTo, &created, &ended)
 }
 
@@ -160,7 +160,7 @@ func TestProducersLeaveOpenIntervalsUnbounded(t *testing.T) {
 		{"run-1", "repo-1", "main", "running", "example-org/widget-service", at, created, uint8(0), zeroTime, ""}}})
 	batch := projectOneBatch(t, tables)
 
-	for _, subject := range []string{"work_item:WIDGET-101", "ci_pipeline_run:run-1"} {
+	for _, subject := range []string{"work_item.v2:repo-1:WIDGET-101", "ci_pipeline_run.v2:repo-1:run-1"} {
 		entity := entityByCanonicalID(t, batch, subject)
 		requireWindow(t, subject, entity.ValidFrom, entity.ValidTo, &created, nil)
 	}
@@ -187,10 +187,10 @@ func TestHierarchyEdgeIntersectsBothEndpointWindows(t *testing.T) {
 	// baseTables, so it is added here rather than overridden.
 	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
-			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded}}})
+			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1"}}})
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:WIDGET-101:WIDGET-050")
+	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:repo-1:WIDGET-101:WIDGET-050")
 	requireWindow(t, "part_of", edge.ValidFrom, edge.ValidTo, &childCreated, &childEnded)
 }
 
@@ -210,10 +210,10 @@ func TestHierarchyEdgeStaysOpenWhenBothEndpointsAreOpen(t *testing.T) {
 	}
 	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
-			childCreated, uint8(0), zeroTime, parentCreated, uint8(0), zeroTime}}})
+			childCreated, uint8(0), zeroTime, parentCreated, uint8(0), zeroTime, "repo-1"}}})
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:WIDGET-101:WIDGET-050")
+	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:repo-1:WIDGET-101:WIDGET-050")
 	requireWindow(t, "part_of", edge.ValidFrom, edge.ValidTo, &childCreated, nil)
 }
 
@@ -257,22 +257,32 @@ func TestF5_DependencyEdgeIntersectsBothEndpoints(t *testing.T) {
 	for index, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
-				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded}}
+				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded, "repo-1"}}
 			continue
 		}
 		tables[index].rows = nil
 	}
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_dependency:WIDGET-101:WIDGET-099:blocks")
+	edge := relationshipByID(t, batch, "relationship:work_item_dependency:repo-1:WIDGET-101:WIDGET-099:blocks")
 	requireWindow(t, "dependency", edge.ValidFrom, edge.ValidTo, &targetCreated, &targetEnded)
 }
 
-// TestF5_DependencyEdgeFallsBackToTheSourceWhenTheTargetIsNotAWorkItem:
-// target_work_item_id is not guaranteed to name a work item (it can carry
-// a cross-system PR reference), so the join is LEFT. An unresolved target
-// contributes no bound rather than dropping the edge entirely.
-func TestF5_DependencyEdgeFallsBackToTheSourceWhenTheTargetIsNotAWorkItem(t *testing.T) {
+// TestF5_DependencyEdgeOmitsAnUnresolvedTarget: target_work_item_id is not
+// guaranteed to name a work item (it can carry a cross-system PR
+// reference), so the join is LEFT. CHAOS-3898 (design brief §1.3/§1.5):
+// once work_item's canonical id is repo-scoped (work_item.v2:<repo>:<id>),
+// an unresolved target has no repo_id to derive one FROM at all -- there is
+// no safe id to mint. Rather than dangling-reference the pre-CHAOS-3898
+// unqualified "work_item:<id>" shape (which would reintroduce exactly the
+// cross-repo collision class this ticket closes) the row is OMITTED,
+// consuming its page budget via a progress candidate so pagination still
+// advances -- never silently dropped, and never fabricated. The
+// work_item_ref non-authoritative stub kind (design brief §1.5) that heals
+// this deterministically on re-sync is out of this slice's scope (a new
+// contract-first SubjectKind); see this PR's own description for the
+// explicit follow-up.
+func TestF5_DependencyEdgeOmitsAnUnresolvedTarget(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	sourceCreated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -282,15 +292,18 @@ func TestF5_DependencyEdgeFallsBackToTheSourceWhenTheTargetIsNotAWorkItem(t *tes
 		if table.match == "FROM work_item_dependencies AS d" {
 			// uint8(0) on both target flags: the LEFT JOIN found nothing.
 			tables[index].rows = [][]any{{"WIDGET-101", "ghpr:owner/repo#7", "blocks", "repo-1", "example-org/widget-service", at,
-				sourceCreated, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime}}
+				sourceCreated, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, ""}}
 			continue
 		}
 		tables[index].rows = nil
 	}
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_dependency:WIDGET-101:ghpr:owner/repo#7:blocks")
-	requireWindow(t, "dependency", edge.ValidFrom, edge.ValidTo, &sourceCreated, nil)
+	for _, relationship := range batch.Relationships {
+		if relationship.Type == "work_item_dependency" || relationship.From.CanonicalID == "work_item.v2:repo-1:WIDGET-101" {
+			t.Fatalf("an unresolved dependency target must be omitted, not dangling-referenced; got %+v", relationship)
+		}
+	}
 }
 
 // TestF4_DeploymentIncidentEdgeDerivesItsWindowFromBothEndpoints is
@@ -313,7 +326,7 @@ func TestF4_DeploymentIncidentEdgeDerivesItsWindowFromBothEndpoints(t *testing.T
 		if table.match == "FROM work_graph_deployment_incident_edges AS e" {
 			tables[index].rows = [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at,
 				uint8(1), deployStarted, uint8(1), deployFinished,
-				uint8(1), incidentStarted, uint8(1), incidentResolved}}
+				uint8(1), incidentStarted, uint8(1), incidentResolved, "repo-1"}}
 			continue
 		}
 		tables[index].rows = nil
@@ -336,7 +349,7 @@ func TestF4_DeploymentIncidentEdgeStaysUnboundedWhenEndpointsDoNotResolve(t *tes
 	for index, table := range tables {
 		if table.match == "FROM work_graph_deployment_incident_edges AS e" {
 			tables[index].rows = [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at,
-				uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime}}
+				uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "repo-1"}}
 			continue
 		}
 		tables[index].rows = nil
@@ -403,10 +416,10 @@ func TestPostMergeReviewEdgeCollapsesToADegenerateWindow(t *testing.T) {
 	// The review itself is untouched: a submitted review is never
 	// retracted, so its own window stays open-ended from submitted_at.
 	// Only the ASSOCIATION collapses.
-	entity := entityByCanonicalID(t, batch, "pull_request_review:review-1")
+	entity := entityByCanonicalID(t, batch, "pull_request_review.v2:repo-1:1042:review-1")
 	requireWindow(t, "pull_request_review", entity.ValidFrom, entity.ValidTo, &submitted, nil)
 
-	edge := relationshipByID(t, batch, "relationship:belongs_to_pull_request:pull_request_review:review-1")
+	edge := relationshipByID(t, batch, "relationship:belongs_to_pull_request:pull_request_review.v2:repo-1:1042:review-1")
 	requireWindow(t, "belongs_to_pull_request", edge.ValidFrom, edge.ValidTo, &submitted, &submitted)
 }
 
@@ -429,14 +442,14 @@ func TestDisjointDependencyEdgeCollapsesToADegenerateWindow(t *testing.T) {
 	for index, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
-				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded}}
+				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded, "repo-1"}}
 			continue
 		}
 		tables[index].rows = nil
 	}
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_dependency:WIDGET-101:WIDGET-099:blocks")
+	edge := relationshipByID(t, batch, "relationship:work_item_dependency:repo-1:WIDGET-101:WIDGET-099:blocks")
 	requireWindow(t, "dependency", edge.ValidFrom, edge.ValidTo, &targetCreated, &targetCreated)
 }
 
@@ -572,9 +585,9 @@ func TestDisjointHierarchyEdgeCollapsesToADegenerateWindow(t *testing.T) {
 	}
 	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
-			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded}}})
+			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1"}}})
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:WIDGET-101:WIDGET-050")
+	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:repo-1:WIDGET-101:WIDGET-050")
 	requireWindow(t, "part_of", edge.ValidFrom, edge.ValidTo, &parentCreated, &parentCreated)
 }

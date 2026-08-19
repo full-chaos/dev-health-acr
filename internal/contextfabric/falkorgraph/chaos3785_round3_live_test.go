@@ -131,7 +131,17 @@ func TestLiveReferencedStubsCarryNoValidityWindowAtAll(t *testing.T) {
 		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_f3_0001", OrgID: orgID, Source: "live-test",
 		SourceVersion: "v1", Cursor: "", NextCursor: "cursor-1", GeneratedAt: observed,
 		Episodes: []contextfabric.EpisodeProjection{{
-			EpisodeID: "episode_f3_000000001", Subject: target, Goal: "Investigate", Outcome: "resolved", Summary: "did the thing",
+			// CHAOS-3901: EpisodeID is the FULL canonical id, not a bare
+			// row id -- the same contract devhealthsource/episodes.go's
+			// episodeCandidate already follows (it stamps EpisodeID with
+			// its own "episode:"+id, never a bare value). Before the
+			// CHAOS-3901 fix, falkorgraph's projectEpisode re-prefixed
+			// EpisodeID a second time, so a bare id here happened to land
+			// on the same doubled string projectEpisode produced for a
+			// real (already-prefixed) production EpisodeID -- masking the
+			// mismatch this test exists to catch, rather than exercising
+			// it.
+			EpisodeID: "episode:episode_f3_000000001", Subject: target, Goal: "Investigate", Outcome: "resolved", Summary: "did the thing",
 			Authorization: scope, EvidenceRefIDs: []string{"evidence_f3_episode"},
 			StartedAt: observed, EndedAt: observed.Add(time.Hour), SourceVersion: "v1",
 		}},
@@ -157,6 +167,8 @@ func TestLiveReferencedStubsCarryNoValidityWindowAtAll(t *testing.T) {
 
 	// The EPISODE node itself still carries the window -- the fix removes
 	// it from the stub, not from the record that genuinely has one.
+	// CHAOS-3901: single-prefixed, matching the EpisodeID above and
+	// projectEpisode's fixed owned-node id (no second "episode:" applied).
 	episodeNode, err := adapter.nodeByKindID(ctx, key, orgID, string(contextfabric.SubjectEpisode), "episode:episode_f3_000000001", temporalFilter{})
 	if err != nil {
 		t.Fatalf("nodeByKindID() episode error = %v", err)

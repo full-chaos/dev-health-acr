@@ -87,16 +87,27 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		repoID, orgID, "acme/service", "github")
 	seed("work_items", `INSERT INTO work_items (work_item_id, org_id, repo_id, status, title, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		"WI-1", orgID, repoID, "done", "Parity work item", at)
+	// WI-2 is the work_item_dependencies row's target below -- BlockersProvider's
+	// v2Index-backed WHERE now resolves the target's repo_id via an INNER JOIN
+	// to work_items (dependencies.go), so WI-2 must exist there too, or that
+	// join alone (not this test's own typing) would return zero rows and the
+	// parity check's Scan callback would never run for FactBlockers.
+	seed("work_items", `INSERT INTO work_items (work_item_id, org_id, repo_id, status, title, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"WI-2", orgID, repoID, "open", "Parity blocked work item", at)
 	// uint32, matching the declared column -- an int64 here would be
 	// rejected by the driver on insert, which is the point.
 	seed("git_pull_requests", `INSERT INTO git_pull_requests (repo_id, org_id, number, state, created_at) VALUES (?, ?, ?, ?, ?)`,
 		repoID, orgID, uint32(4242), "merged", at)
-	seed("git_pull_request_reviews", `INSERT INTO git_pull_request_reviews (review_id, org_id, state, submitted_at) VALUES (?, ?, ?, ?)`,
-		"review-parity", orgID, "approved", at)
-	seed("ci_pipeline_runs", `INSERT INTO ci_pipeline_runs (run_id, org_id, status, started_at) VALUES (?, ?, ?, ?)`,
-		"run-parity", orgID, "success", at)
-	seed("deployments", `INSERT INTO deployments (deployment_id, org_id, status, environment, started_at) VALUES (?, ?, ?, ?, ?)`,
-		"deploy-parity", orgID, "success", "production", at)
+	// repo_id is now seeded on these three rows (it was not before CHAOS-3898):
+	// ReviewsProvider/ContinuousIntegrationProvider/DeploymentsProvider all
+	// scope their WHERE clause on a repo_id-qualified composite key now
+	// (v2Index, shared.go), matching the subject's own decoded repo_id below.
+	seed("git_pull_request_reviews", `INSERT INTO git_pull_request_reviews (review_id, org_id, repo_id, state, submitted_at) VALUES (?, ?, ?, ?, ?)`,
+		"review-parity", orgID, repoID, "approved", at)
+	seed("ci_pipeline_runs", `INSERT INTO ci_pipeline_runs (run_id, org_id, repo_id, status, started_at) VALUES (?, ?, ?, ?, ?)`,
+		"run-parity", orgID, repoID, "success", at)
+	seed("deployments", `INSERT INTO deployments (deployment_id, org_id, repo_id, status, environment, started_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"deploy-parity", orgID, repoID, "success", "production", at)
 	seed("operational_incidents", `INSERT INTO operational_incidents (id, org_id, normalized_status, normalized_severity, is_deleted, started_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		"incident-parity", orgID, "resolved", "low", uint8(0), at)
 	seed("work_item_dependencies", `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, org_id, relationship_type) VALUES (?, ?, ?, ?)`,
@@ -123,15 +134,15 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 	subjects := map[contextfabric.FactKind]contextfabric.SubjectRef{
 		contextfabric.FactIdentity:                repoSubject(repoID),
 		contextfabric.FactMembership:              repoSubject(repoID),
-		contextfabric.FactStatus:                  workItemSubject("WI-1"),
-		contextfabric.FactWork:                    workItemSubject("WI-1"),
-		contextfabric.FactActualCompletion:        workItemSubject("WI-1"),
-		contextfabric.FactBlockers:                workItemSubject("WI-2"),
-		contextfabric.FactRequiredChildren:        workItemSubject("WI-1"),
+		contextfabric.FactStatus:                  workItemSubject(repoID, "WI-1"),
+		contextfabric.FactWork:                    workItemSubject(repoID, "WI-1"),
+		contextfabric.FactActualCompletion:        workItemSubject(repoID, "WI-1"),
+		contextfabric.FactBlockers:                workItemSubject(repoID, "WI-2"),
+		contextfabric.FactRequiredChildren:        workItemSubject(repoID, "WI-1"),
 		contextfabric.FactPullRequests:            pullRequestSubject(repoID, "4242"),
-		contextfabric.FactReviews:                 reviewSubject("review-parity"),
-		contextfabric.FactContinuousIntegration:   ciRunSubject("run-parity"),
-		contextfabric.FactDeployments:             deploymentSubject("deploy-parity"),
+		contextfabric.FactReviews:                 reviewSubject(repoID, "review-parity"),
+		contextfabric.FactContinuousIntegration:   ciRunSubject(repoID, "run-parity"),
+		contextfabric.FactDeployments:             deploymentSubject(repoID, "deploy-parity"),
 		contextfabric.FactIncidents:               incidentSubject("incident-parity"),
 		contextfabric.FactMetrics:                 repoSubject(repoID),
 		contextfabric.FactHealth:                  repoSubject(repoID),
@@ -268,7 +279,7 @@ func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
 		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactStatus,
-		Subjects: []contextfabric.SubjectRef{workItemSubject("WI-FINAL")},
+		Subjects: []contextfabric.SubjectRef{workItemSubject(repoID, "WI-FINAL")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)

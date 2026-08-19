@@ -333,7 +333,7 @@ func TestResolveSubjects_CommitPathCarveOutFiresThroughTheRealAdapterWiring(t *t
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledForScopedPrincipal(t *te
 	// candidates form exactly as in the unscoped test, so any refusal here
 	// is specifically the M1 guard, not authorization filtering.
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/repo-x"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestResolveSubjects_CommitPathCarveOutFiresForWildcardScopedPrincipal(t *te
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledForOwnerWildcardPrincipa
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/*"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledForRequestNarrowedScope(
 		},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -626,7 +626,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWhenMaxResultsCapNarrows
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth", "identity"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -700,7 +700,7 @@ func TestResolveSubjects_CommitPathCarveOutFiresWithTwoTermsAtCapTwo(t *testing.
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth", "identity"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -741,7 +741,7 @@ func TestResolveSubjects_CommitPathCarveOutStaysDisabledWithoutCalibration(t *te
 		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 	}
 	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"auth"}}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}

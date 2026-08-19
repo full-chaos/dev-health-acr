@@ -15,12 +15,12 @@ import (
 func TestBlockersProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-099", "WIDGET-101"}}},
+		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-099", "WIDGET-101", "repo-1"}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -29,7 +29,7 @@ func TestBlockersProviderHappyPath(t *testing.T) {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Subject.CanonicalID != "work_item:WIDGET-101" {
+	if fact.Subject.CanonicalID != "work_item.v2:repo-1:WIDGET-101" {
 		t.Fatalf("fact subject = %+v", fact.Subject)
 	}
 	if fact.Fields["blocked_by_work_item_id"].String == nil || *fact.Fields["blocked_by_work_item_id"].String != "WIDGET-099" {
@@ -43,7 +43,7 @@ func TestBlockersProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -59,7 +59,7 @@ func TestBlockersProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	var failure *contextfabric.FactReadFailure
 	if !errors.As(err, &failure) || failure.State != contextfabric.SourceUnavailable {
@@ -73,7 +73,7 @@ func TestBlockersProviderOrgScoped(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-7"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -81,7 +81,7 @@ func TestBlockersProviderOrgScoped(t *testing.T) {
 	if got := client.orgIDBinding(); got != "org-7" {
 		t.Fatalf("org_id binding = %q", got)
 	}
-	if got := client.idsBinding(); len(got) != 1 || got[0] != "WIDGET-101" {
+	if got := client.idsBinding(); len(got) != 1 || got[0] != "repo-1:WIDGET-101" {
 		t.Fatalf("ids binding = %#v, want exactly the requested subject", got)
 	}
 }
@@ -89,12 +89,12 @@ func TestBlockersProviderOrgScoped(t *testing.T) {
 func TestRequiredChildrenProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-101", "WIDGET-200", "related_to"}}},
+		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-101", "WIDGET-200", "related_to", "repo-1"}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -117,7 +117,7 @@ func TestRequiredChildrenProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -133,7 +133,7 @@ func TestRequiredChildrenProviderQueryErrorReturnsFactReadFailure(t *testing.T) 
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	var failure *contextfabric.FactReadFailure
 	if !errors.As(err, &failure) || failure.State != contextfabric.SourceUnavailable {
@@ -153,7 +153,7 @@ const maxFactRowsPerQueryForTest = 200
 func blockerRows(n int) [][]any {
 	rows := make([][]any, n)
 	for i := 0; i < n; i++ {
-		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101"}
+		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "repo-1"}
 	}
 	return rows
 }
@@ -166,7 +166,7 @@ func TestBlockersProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -190,7 +190,7 @@ func TestBlockersProviderNotTruncatedBelowLimit(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)

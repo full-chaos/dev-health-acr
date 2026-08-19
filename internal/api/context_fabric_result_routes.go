@@ -75,11 +75,17 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		// Organization scoping is the store's binding precondition (see
 		// contextfabric.InvestigationResultStore). The principal comes
 		// from authentication, never from the path or a payload.
-		result, err := results.Get(r.Context(), principal, resultID)
+		// CHAOS-3898 §2.4: Get now returns the metadata-bearing
+		// StoredInvestigationResult carrier; this route serves only the
+		// canonical/projected result, so it unwraps to .Result immediately
+		// -- persistence metadata (GraphEpoch) is not part of the public
+		// response contract.
+		stored, err := results.Get(r.Context(), principal, resultID)
 		if err != nil {
 			a.writeInvestigationResultError(w, r, principal, err)
 			return
 		}
+		result := stored.Result
 		// The consumer projection is served from THIS route, through the
 		// same answerprojection.Project the MCP tool calls (CHAOS-3746
 		// codex round-1 F2). Before this, the API only ever returned the

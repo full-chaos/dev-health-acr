@@ -3,10 +3,12 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -16,8 +18,18 @@ func pullRequestSubject(repoID string, number string) contextfabric.SubjectRef {
 	return contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: id, Label: id}
 }
 
-func reviewSubject(reviewID string) contextfabric.SubjectRef {
-	return contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: "pull_request_review:" + reviewID, Label: reviewID}
+// reviewSubject mints a CHAOS-3898 "pull_request_review.v2:<repo_id>:<number>:<review_id>"
+// subject via identity.Derive, mirroring workItemSubject's rationale
+// (identity_test.go). The pull request number is fixed at "1" -- v2Index
+// (shared.go) only ever recovers the FIRST segment (repo_id) and the LAST
+// segment (review_id) for this kind's devhealthfacts lookups, so the
+// number segment's exact value is inert here.
+func reviewSubject(repoID, reviewID string) contextfabric.SubjectRef {
+	canonicalID, omitted, err := identity.Derive(identity.KindPullRequestReview, []string{repoID, "1", reviewID}, nil)
+	if err != nil || omitted {
+		panic(fmt.Sprintf("reviewSubject(%q, %q): identity.Derive failed: omitted=%v err=%v", repoID, reviewID, omitted, err))
+	}
+	return contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID, Label: reviewID}
 }
 
 func TestPullRequestsProviderHappyPath(t *testing.T) {
@@ -95,12 +107,12 @@ func TestPullRequestsProviderOrgScoped(t *testing.T) {
 func TestReviewsProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved"}}},
+		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1"}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReviews)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("review-1")},
+		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-1")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -116,7 +128,7 @@ func TestReviewsProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReviews)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("review-404")},
+		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-404")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -132,7 +144,7 @@ func TestReviewsProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReviews)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("review-1")},
+		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-1")},
 	})
 	var failure *contextfabric.FactReadFailure
 	if !errors.As(err, &failure) || failure.State != contextfabric.SourceUnavailable {

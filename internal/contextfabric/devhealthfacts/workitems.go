@@ -5,11 +5,10 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
-
-const workItemPrefix = "work_item:"
 
 // StatusProvider implements contextfabric.FactProvider for FactStatus from
 // work_items.status -- the same column devhealthsource/tables.go's
@@ -32,26 +31,26 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
+	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.status, '')
+	statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.status, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var id, status string
-		if err := row.Scan(&id, &status); err != nil {
+		var id, status, repoID string
+		if err := row.Scan(&id, &status, &repoID); err != nil {
 			return err
 		}
-		subject, ok := bySubject[id]
+		subject, ok := bySubject[repoID+":"+id]
 		if !ok {
 			return nil
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"status": stringOrNull(status)},
-			EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
+			EvidenceRefIDs: []string{evidenceRefID("work-item", repoID+":"+id)},
 		})
 		return nil
 	})
@@ -82,26 +81,26 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
+	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.title, '')
+	statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var id, title string
-		if err := row.Scan(&id, &title); err != nil {
+		var id, title, repoID string
+		if err := row.Scan(&id, &title, &repoID); err != nil {
 			return err
 		}
-		subject, ok := bySubject[id]
+		subject, ok := bySubject[repoID+":"+id]
 		if !ok {
 			return nil
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWork, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"title": stringOrNull(title)},
-			EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
+			EvidenceRefIDs: []string{evidenceRefID("work-item", repoID+":"+id)},
 		})
 		return nil
 	})
@@ -144,7 +143,7 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
+	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// isNotNull/ifNull avoid ever scanning a bare Nullable(DateTime64) column
 	// into Go, matching devhealthsource/tables.go's convention of only ever
@@ -159,19 +158,19 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	if timeBound.active {
 		completedExpression = "toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= " + timeBound.asOfExpression() + ")"
 	}
-	statement := withRowLimit(`SELECT w.work_item_id, ` + completedExpression + `, ifNull(w.completed_at, toDateTime64(0, 6, 'UTC'))
+	statement := withRowLimit(`SELECT w.work_item_id, ` + completedExpression + `, ifNull(w.completed_at, toDateTime64(0, 6, 'UTC')), toString(w.repo_id)
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}` + timeBound.existencePredicate("w.created_at"))
+WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}` + timeBound.existencePredicate("w.created_at"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var id string
+		var id, repoID string
 		var isCompleted uint8
 		var completedAt time.Time
-		if err := row.Scan(&id, &isCompleted, &completedAt); err != nil {
+		if err := row.Scan(&id, &isCompleted, &completedAt, &repoID); err != nil {
 			return err
 		}
-		subject, ok := bySubject[id]
+		subject, ok := bySubject[repoID+":"+id]
 		if !ok {
 			return nil
 		}
@@ -181,7 +180,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}` + ti
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactActualCompletion, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
+			EvidenceRefIDs: []string{evidenceRefID("work-item", repoID+":"+id)},
 		})
 		return nil
 	}, timeBound.bindings()...)

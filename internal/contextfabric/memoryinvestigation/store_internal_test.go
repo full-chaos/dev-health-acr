@@ -57,15 +57,15 @@ func TestGetReturnsStoredResultThatPassesValidation(t *testing.T) {
 	store := NewStore()
 	valid := paritytest.ValidResult("result-id-valid", "is the rollout healthy?")
 
-	if err := store.Save(context.Background(), principal, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}); err != nil {
+	if err := store.Save(context.Background(), principal, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	got, err := store.Get(context.Background(), principal, valid.ResultID)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want a valid stored result to be returned", err)
 	}
-	if got.ResultID != valid.ResultID {
-		t.Fatalf("Get() result_id = %q, want %q", got.ResultID, valid.ResultID)
+	if got.Result.ResultID != valid.ResultID {
+		t.Fatalf("Get() result_id = %q, want %q", got.Result.ResultID, valid.ResultID)
 	}
 }
 

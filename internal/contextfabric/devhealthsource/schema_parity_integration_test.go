@@ -142,15 +142,15 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		// expected to project to. Keyed BY table on purpose, and it mirrors no
 		// column type, engine or sort key -- it is an assertion about output.
 		"repos":                                "repository:" + repoID,
-		"work_items":                           "work_item:WI-CHILD",
+		"work_items":                           "work_item.v2:" + repoID + ":WI-CHILD",
 		"git_pull_requests":                    "pull_request:" + repoID + ":4242",
-		"deployments":                          "deployment:deploy-parity-1",
+		"deployments":                          "deployment.v2:" + repoID + ":deploy-parity-1",
 		"operational_incidents":                "incident:incident-parity-1",
-		"work_item_dependencies":               "relationship:work_item_dependency:WI-CHILD:WI-PARENT:blocks",
-		"work_items_hierarchy":                 "relationship:work_item_hierarchy:WI-CHILD:WI-PARENT",
+		"work_item_dependencies":               "relationship:work_item_dependency:" + repoID + ":WI-CHILD:WI-PARENT:blocks",
+		"work_items_hierarchy":                 "relationship:work_item_hierarchy:" + repoID + ":WI-CHILD:WI-PARENT",
 		"work_graph_deployment_incident_edges": "relationship:deployment_incident:edge-parity-1",
-		"git_pull_request_reviews":             "pull_request_review:review-parity-1",
-		"ci_pipeline_runs":                     "ci_pipeline_run:run-parity-1",
+		"git_pull_request_reviews":             "pull_request_review.v2:" + repoID + ":4242:review-parity-1",
+		"ci_pipeline_runs":                     "ci_pipeline_run.v2:" + repoID + ":run-parity-1",
 	}
 
 	seen := map[string]bool{}
@@ -194,7 +194,7 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		}
 	}
 
-	assertTeamsProjectsSchemaParity(t, ctx, query, orgID, projectID, teamID)
+	assertTeamsProjectsSchemaParity(t, ctx, query, orgID, repoID, projectID, teamID)
 }
 
 // assertTeamsProjectsSchemaParity is CHAOS-3802's half of the same guarantee,
@@ -206,7 +206,7 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 // teams.updated_at's DateTime64(6) with no timezone qualifier compared
 // against a DateTime64(6,'UTC') bind parameter. A Scan mismatch in any of
 // those is the CHAOS-3789 class of bug, invisible to every fake-backed test.
-func assertTeamsProjectsSchemaParity(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID, projectID, teamID string) {
+func assertTeamsProjectsSchemaParity(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID, repoID, projectID, teamID string) {
 	t.Helper()
 	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
 	if err != nil {
@@ -225,10 +225,10 @@ func assertTeamsProjectsSchemaParity(t *testing.T, ctx context.Context, query co
 		// expected to project to. Keyed BY table on purpose, and it mirrors no
 		// column type, engine or sort key -- it is an assertion about output.
 		"teams":                       "team:" + teamID,
-		"projects":                    "project:" + projectID,
-		"work_items_projects":         "relationship:work_item_project:WI-CHILD:" + projectID,
-		"work_item_team_attributions": "relationship:work_item_team:WI-CHILD:" + teamID,
-		"team_project_ownership":      "relationship:project_team:" + projectID + ":" + teamID + ":native",
+		"projects":                    "project.v2:github:" + projectID,
+		"work_items_projects":         "relationship:work_item_project:" + repoID + ":WI-CHILD:github:" + projectID,
+		"work_item_team_attributions": "relationship:work_item_team:" + repoID + ":WI-CHILD:" + teamID,
+		"team_project_ownership":      "relationship:project_team:github:" + projectID + ":" + teamID + ":native",
 	}
 	seen := map[string]bool{}
 	for _, entity := range batch.Entities {

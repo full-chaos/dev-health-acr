@@ -149,14 +149,14 @@ func TestTeamSearchTextCarriesTheLexicalHandlesAUserWouldType(t *testing.T) {
 func TestProjectSubjectsProjectAtTheWorkItemJoinIdentity(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedTeamsProjectsClient())
-	composite := entityByCanonicalID(t, batch, "project:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891")
+	composite := entityByCanonicalID(t, batch, "project.v2:gitlab:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891")
 	if composite.Subject.Kind != contractsv1.ContextFabricSubjectProject {
 		t.Fatalf("project entity kind = %q, want %q", composite.Subject.Kind, contractsv1.ContextFabricSubjectProject)
 	}
 	if got := composite.Authorization.ProjectIDs; len(got) != 1 || got[0] != "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891" {
 		t.Fatalf("project authorization ProjectIDs = %v, want the raw projects.id", got)
 	}
-	bare := entityByCanonicalID(t, batch, "project:631fcb5f-c3e9-49ff-b17c-07877aaac9b7")
+	bare := entityByCanonicalID(t, batch, "project.v2:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7")
 	if bare.Subject.Label != "Chaos Draw" {
 		t.Fatalf("project label = %q, want the projects.name value %q", bare.Subject.Label, "Chaos Draw")
 	}
@@ -177,7 +177,7 @@ func TestProjectSubjectsProjectAtTheWorkItemJoinIdentity(t *testing.T) {
 func TestActiveTeamProjectRowsAssertAWindowFreeValidity(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedTeamsProjectsClient())
-	for _, canonicalID := range []string{"team:CHAOS", "project:631fcb5f-c3e9-49ff-b17c-07877aaac9b7"} {
+	for _, canonicalID := range []string{"team:CHAOS", "project.v2:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7"} {
 		entity := entityByCanonicalID(t, batch, canonicalID)
 		if entity.ValidFrom != nil || entity.ValidTo != nil {
 			t.Fatalf("%s: active row must project a window-free validity, got from=%v to=%v", canonicalID, entity.ValidFrom, entity.ValidTo)
@@ -202,7 +202,7 @@ func TestInactiveRowsCloseTheirValidityWindowInsteadOfTombstoning(t *testing.T) 
 	if len(batch.Tombstones) != 0 {
 		t.Fatalf("an inactive project must not be tombstoned, got %+v", batch.Tombstones)
 	}
-	entity := entityByCanonicalID(t, batch, "project:c040b7df-5488-4ddc-adf2-858bcf45ae0b")
+	entity := entityByCanonicalID(t, batch, "project.v2:linear:c040b7df-5488-4ddc-adf2-858bcf45ae0b")
 	if entity.ValidTo == nil || !entity.ValidTo.Equal(retiredAt) {
 		t.Fatalf("inactive project ValidTo = %v, want updated_at %v", entity.ValidTo, retiredAt)
 	}
@@ -315,8 +315,12 @@ func TestTeamsProjectsFullSnapshotClaimsCompleteEnumeration(t *testing.T) {
 	}
 }
 
-func workItemProjectRow(workItemID, projectID, repoID, repoSlug string, updatedAt time.Time) []any {
-	return []any{workItemID, projectID, repoID, repoSlug, updatedAt}
+// workItemProjectRow mirrors queryWorkItemProjects' SELECT list exactly,
+// trailing provider + key_resolution_count included (CHAOS-3898 D-5: the
+// SAME per-(provider) uniqueness guard queryProjectTeams already uses,
+// applied here since the edge's To endpoint is now project.v2:<provider>:<id>).
+func workItemProjectRow(workItemID, projectID, repoID, repoSlug string, updatedAt time.Time, provider string) []any {
+	return []any{workItemID, projectID, repoID, repoSlug, updatedAt, provider, uint64(1)}
 }
 
 func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug string, computedAt time.Time) []any {
@@ -342,7 +346,7 @@ func liveShapedEdgeClient() *fakeClient {
 	client := liveShapedTeamsProjectsClient()
 	client.tables = append(client.tables,
 		fakeTable{match: "FROM work_items AS w FINAL", rows: [][]any{
-			workItemProjectRow("linear:CHAOS-3802", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", zeroRepositoryUUID, "", at),
+			workItemProjectRow("linear:CHAOS-3802", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", zeroRepositoryUUID, "", at, "linear"),
 		}},
 		fakeTable{match: "FROM work_item_team_attributions AS a FINAL", rows: [][]any{
 			workItemTeamRow("linear:CHAOS-3802", "CHAOS", "native_team", "high", zeroRepositoryUUID, "", at),
@@ -367,11 +371,11 @@ const zeroRepositoryUUID = "00000000-0000-0000-0000-000000000000"
 func TestWorkItemProjectEdgeUsesTheCanonicalStructuredColumn(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	edge := relationshipByID(t, batch, "relationship:work_item_project:linear:CHAOS-3802:631fcb5f-c3e9-49ff-b17c-07877aaac9b7")
+	edge := relationshipByID(t, batch, "relationship:work_item_project:"+zeroRepositoryUUID+":linear:CHAOS-3802:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7")
 	if edge.Type != contractsv1.ContextFabricRelationshipBelongsToProject {
 		t.Fatalf("edge type = %q, want BELONGS_TO_PROJECT", edge.Type)
 	}
-	if edge.To.CanonicalID != "project:631fcb5f-c3e9-49ff-b17c-07877aaac9b7" || edge.To.Kind != contractsv1.ContextFabricSubjectProject {
+	if edge.To.CanonicalID != "project.v2:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7" || edge.To.Kind != contractsv1.ContextFabricSubjectProject {
 		t.Fatalf("edge To = %+v, want the projected project subject identity", edge.To)
 	}
 	// A direct canonical column, unlike the two attribution-derived edges.
@@ -390,8 +394,8 @@ func TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
 	for _, id := range []string{
-		"relationship:work_item_team:gl:42:gl:full.chaos",
-		"relationship:project_team:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
+		"relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos",
+		"relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
 	} {
 		edge := relationshipByID(t, batch, id)
 		if edge.Derivation == contractsv1.ContextFabricDerivationCanonicalStructured {
@@ -404,7 +408,7 @@ func TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth(t *testing.T) {
 			t.Fatalf("%s: the attribution's own source enum must ride along, got %+v", id, edge.Properties)
 		}
 	}
-	confidence := relationshipByID(t, batch, "relationship:work_item_team:gl:42:gl:full.chaos").Properties["attribution_confidence"]
+	confidence := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos").Properties["attribution_confidence"]
 	if confidence.String == nil || *confidence.String != "medium" {
 		t.Fatalf("work-item attribution confidence = %+v, want medium", confidence)
 	}
@@ -419,11 +423,11 @@ func TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth(t *testing.T) {
 func TestWorkItemTeamEdgeScopesOnTheWorkItemsOwnRepository(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	linear := relationshipByID(t, batch, "relationship:work_item_team:linear:CHAOS-3802:CHAOS")
+	linear := relationshipByID(t, batch, "relationship:work_item_team:"+zeroRepositoryUUID+":linear:CHAOS-3802:CHAOS")
 	if got := linear.Authorization.RepositorySlugs; len(got) != 1 || got[0] != "acr-context-fabric:no-repository" {
 		t.Fatalf("repo-less-by-design work item scoped as %v, want the no-repository sentinel (not the orphan one)", got)
 	}
-	gitlab := relationshipByID(t, batch, "relationship:work_item_team:gl:42:gl:full.chaos")
+	gitlab := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
 	if got := gitlab.Authorization.RepositorySlugs; len(got) != 1 || got[0] != "full.chaos/dev-health-ops" {
 		t.Fatalf("work item with a real repository scoped as %v, want its repo slug", got)
 	}
@@ -438,7 +442,7 @@ func TestWorkItemTeamEdgeScopesOnTheWorkItemsOwnRepository(t *testing.T) {
 func TestProjectTeamEdgeStatesAnOpenOwnershipWindow(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	edge := relationshipByID(t, batch, "relationship:project_team:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native")
+	edge := relationshipByID(t, batch, "relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native")
 	if edge.ValidFrom == nil {
 		t.Fatal("a collapsed ownership edge must state when ownership began")
 	}
@@ -465,7 +469,7 @@ func TestClosedOwnershipWindowEndsTheEdge(t *testing.T) {
 			projectTeamRow("project-x", "team-y", "manual", began, 0, ended, ended),
 		}},
 	}}
-	edge := relationshipByID(t, teamsProjectsBatch(t, client), "relationship:project_team:project-x:team-y:manual")
+	edge := relationshipByID(t, teamsProjectsBatch(t, client), "relationship:project_team:github:project-x:team-y:manual")
 	if edge.ValidTo == nil || !edge.ValidTo.Equal(ended) {
 		t.Fatalf("ValidTo = %v, want the latest closed window %v", edge.ValidTo, ended)
 	}

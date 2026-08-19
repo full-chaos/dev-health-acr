@@ -199,8 +199,8 @@ func baseTables(at time.Time) []fakeTable {
 		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", uint32(1042), "Typed session tokens", "open", at, at, uint8(0), zeroTime, "feat/chaos-1042-typed-session-tokens", "Rotate session tokens through typed issuance."}}},
 		{match: "FROM deployments AS d", rows: [][]any{{"repo-1", "example-org/widget-service", "deploy-1", "success", "production", at, uint8(1), at, uint8(0), zeroTime, "v0.1.1"}}},
 		{match: "FROM operational_incidents AS i", rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime, ""}}},
-		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime}}},
-		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at, uint8(1), at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime}}},
+		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"}}},
+		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at, uint8(1), at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"}}},
 	}
 }
 
@@ -244,9 +244,9 @@ func TestQueryWorkItemsDistinguishesRepolessFromOrphanedAuthorization(t *testing
 	}
 
 	want := map[string][]string{
-		"work_item:WIDGET-101":    {"example-org/widget-service"},
-		"work_item:WIDGET-LINEAR": {"acr-context-fabric:no-repository"},
-		"work_item:WIDGET-ORPHAN": {"acr-context-fabric:orphaned-repository"},
+		"work_item.v2:repo-1:WIDGET-101":                                  {"example-org/widget-service"},
+		"work_item.v2:00000000-0000-0000-0000-000000000000:WIDGET-LINEAR": {"acr-context-fabric:no-repository"},
+		"work_item.v2:99999999-9999-9999-9999-999999999999:WIDGET-ORPHAN": {"acr-context-fabric:orphaned-repository"},
 	}
 	found := map[string]bool{}
 	for _, entity := range batch.Entities {
@@ -269,7 +269,7 @@ func TestQueryWorkItemsDistinguishesRepolessFromOrphanedAuthorization(t *testing
 	// Linear-shaped work item -- it must never carry a BELONGS_TO_REPOSITORY
 	// edge (there is no repository entity to point one at).
 	for _, relationship := range batch.Relationships {
-		if relationship.From.CanonicalID == "work_item:WIDGET-ORPHAN" && relationship.Type == "BELONGS_TO_REPOSITORY" {
+		if relationship.From.CanonicalID == "work_item.v2:99999999-9999-9999-9999-999999999999:WIDGET-ORPHAN" && relationship.Type == "BELONGS_TO_REPOSITORY" {
 			t.Fatalf("WIDGET-ORPHAN unexpectedly carries a BELONGS_TO_REPOSITORY edge: %+v", relationship)
 		}
 	}
@@ -302,8 +302,8 @@ func TestNextProjectionBatchLogsOrphanedWorkItemCount(t *testing.T) {
 			// orphaned work item, not two, proving the count is over
 			// DISTINCT work-item IDs, not raw candidates.
 			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
-				{"WIDGET-ORPHAN", "WIDGET-101", "blocks", orphanRepoID, "", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"},
+				{"WIDGET-ORPHAN", "WIDGET-101", "blocks", orphanRepoID, "", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"},
 			}}
 		}
 	}
@@ -389,12 +389,12 @@ func TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns(t *testin
 	foundRun, foundRunRelationship := false, false
 	for _, entity := range batch.Entities {
 		switch entity.Subject.CanonicalID {
-		case "pull_request_review:review-1":
+		case "pull_request_review.v2:repo-1:1042:review-1":
 			foundReview = true
 			if entity.Subject.Kind != contractsv1.ContextFabricSubjectPullRequestReview {
 				t.Fatalf("review entity kind = %q", entity.Subject.Kind)
 			}
-		case "ci_pipeline_run:run-1":
+		case "ci_pipeline_run.v2:repo-1:run-1":
 			foundRun = true
 			if entity.Subject.Kind != contractsv1.ContextFabricSubjectCIRun {
 				t.Fatalf("CI run entity kind = %q", entity.Subject.Kind)
@@ -402,13 +402,13 @@ func TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns(t *testin
 		}
 	}
 	for _, relationship := range batch.Relationships {
-		if relationship.From.CanonicalID == "pull_request_review:review-1" && relationship.Type == "BELONGS_TO_PULL_REQUEST" {
+		if relationship.From.CanonicalID == "pull_request_review.v2:repo-1:1042:review-1" && relationship.Type == "BELONGS_TO_PULL_REQUEST" {
 			foundReviewRelationship = true
 			if relationship.To.CanonicalID != "pull_request:repo-1:1042" {
 				t.Fatalf("review relationship target = %q", relationship.To.CanonicalID)
 			}
 		}
-		if relationship.From.CanonicalID == "ci_pipeline_run:run-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
+		if relationship.From.CanonicalID == "ci_pipeline_run.v2:repo-1:run-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
 			foundRunRelationship = true
 		}
 	}
@@ -466,10 +466,10 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 			// NULL relationship_type -- already collapsed to a non-null
 			// string by the real SQL's ifNull before Go ever scans it.
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
-				{"WIDGET-101", "WIDGET-098", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
-				{"WIDGET-101", "WIDGET-097", "duplicates", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
-				{"WIDGET-101", "WIDGET-096", "related_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"},
+				{"WIDGET-101", "WIDGET-098", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"},
+				{"WIDGET-101", "WIDGET-097", "duplicates", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"},
+				{"WIDGET-101", "WIDGET-096", "related_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"},
 			}}
 		}
 	}
@@ -479,7 +479,7 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 		// alias -- distinct from baseTables' "FROM work_items AS w"
 		// (queryWorkItems' entity query), so this does not collide with
 		// it in fakeClient's substring match.
-		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, at, uint8(0), zeroTime}}},
+		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, at, uint8(0), zeroTime, "repo-1"}}},
 	)
 }
 
@@ -507,10 +507,10 @@ func TestClickHouseProjectionSourceProjectsEveryClosedVocabularyRelationshipType
 	}
 
 	wantDependencyTargets := map[string]contractsv1.ContextFabricRelationshipType{
-		"work_item:WIDGET-099": contractsv1.ContextFabricRelationshipBlocks,
-		"work_item:WIDGET-098": contractsv1.ContextFabricRelationshipRelatesTo,
-		"work_item:WIDGET-097": contractsv1.ContextFabricRelationshipDuplicates,
-		"work_item:WIDGET-096": contractsv1.ContextFabricRelationshipRelatedTo,
+		"work_item.v2:repo-1:WIDGET-099": contractsv1.ContextFabricRelationshipBlocks,
+		"work_item.v2:repo-1:WIDGET-098": contractsv1.ContextFabricRelationshipRelatesTo,
+		"work_item.v2:repo-1:WIDGET-097": contractsv1.ContextFabricRelationshipDuplicates,
+		"work_item.v2:repo-1:WIDGET-096": contractsv1.ContextFabricRelationshipRelatedTo,
 	}
 	seenTypes := map[contractsv1.ContextFabricRelationshipType]bool{}
 	partOfFound := false
@@ -535,13 +535,13 @@ func TestClickHouseProjectionSourceProjectsEveryClosedVocabularyRelationshipType
 			t.Fatalf("relationship %s has no source version: %+v", relationship.RelationshipID, relationship)
 		}
 
-		if relationship.From.CanonicalID != "work_item:WIDGET-101" {
+		if relationship.From.CanonicalID != "work_item.v2:repo-1:WIDGET-101" {
 			continue
 		}
 		if relationship.Type == contractsv1.ContextFabricRelationshipPartOf {
 			partOfFound = true
-			if relationship.To.CanonicalID != "work_item:WIDGET-050" {
-				t.Fatalf("PART_OF target = %q, want work_item:WIDGET-050", relationship.To.CanonicalID)
+			if relationship.To.CanonicalID != "work_item.v2:repo-1:WIDGET-050" {
+				t.Fatalf("PART_OF target = %q, want work_item.v2:repo-1:WIDGET-050", relationship.To.CanonicalID)
 			}
 			continue
 		}
@@ -656,8 +656,8 @@ func TestClickHouseProjectionSourceKeepsBothEdgesForASourceTargetPairWithTwoRela
 	for i, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-050", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
-				{"WIDGET-101", "WIDGET-050", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-050", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"},
+				{"WIDGET-101", "WIDGET-050", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1"},
 			}}
 		}
 	}
@@ -680,7 +680,7 @@ func TestClickHouseProjectionSourceKeepsBothEdgesForASourceTargetPairWithTwoRela
 	var blocksFound, relatesToFound bool
 	seenIDs := map[string]int{}
 	for _, relationship := range batch.Relationships {
-		if relationship.From.CanonicalID != "work_item:WIDGET-101" || relationship.To.CanonicalID != "work_item:WIDGET-050" {
+		if relationship.From.CanonicalID != "work_item.v2:repo-1:WIDGET-101" || relationship.To.CanonicalID != "work_item.v2:repo-1:WIDGET-050" {
 			continue
 		}
 		seenIDs[relationship.RelationshipID]++
@@ -914,12 +914,12 @@ func TestClickHouseProjectionSourcePagedBatchNeverSplitsARowsCandidatesAcrossAPa
 	}
 	foundWorkItemEntity, foundRelationship := false, false
 	for _, entity := range batch.Entities {
-		if entity.Subject.CanonicalID == "work_item:WIDGET-1" {
+		if entity.Subject.CanonicalID == "work_item.v2:repo-000:WIDGET-1" {
 			foundWorkItemEntity = true
 		}
 	}
 	for _, relationship := range batch.Relationships {
-		if relationship.From.CanonicalID == "work_item:WIDGET-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
+		if relationship.From.CanonicalID == "work_item.v2:repo-000:WIDGET-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
 			foundRelationship = true
 		}
 	}
@@ -1061,7 +1061,15 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 // instead of the work item's own identifier. A test against the repos
 // table alone would NOT catch that regression, because repos was the one
 // table the old bug happened to get right.
-func workItemCursorOf(row []any) (time.Time, string) { return row[6].(time.Time), row[0].(string) }
+// CHAOS-3898 D-6: queryWorkItems' real rowKey is now
+// concat(toString(w.repo_id), ':', w.work_item_id) (repo-qualified, closing
+// the cross-repo pagination tie this producer's own doc comment names) --
+// this fake tiebreaker must match it exactly, or the fake's sincePredicate
+// emulation compares a repo-qualified cursor value against a bare
+// work_item_id and never finds an equal/greater row again.
+func workItemCursorOf(row []any) (time.Time, string) {
+	return row[6].(time.Time), row[1].(string) + ":" + row[0].(string)
+}
 
 // TestClickHouseProjectionSourceKeysetPaginationSurvivesTiedTimestamps is
 // CHAOS-3753 codex finding C5's regression test: bulk syncs commonly land

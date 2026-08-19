@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -36,7 +37,7 @@ func TestAdapterResolveSubjects_RawSignalObserverReceivesRawLexicalCoverage(t *t
 	adapter.config.RawSignalObserver = observer
 	request, interpreted := openQuestionRequest("incident outage payment gateway")
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -72,7 +73,7 @@ func TestAdapterResolveSubjects_NilRawSignalObserverIsDefault(t *testing.T) {
 	adapter := newFakeAdapter(t, fake)
 	request, interpreted := openQuestionRequest("incident outage payment gateway")
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v (nil observer must never cause a failure)", err)
 	}

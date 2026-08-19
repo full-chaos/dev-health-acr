@@ -3,26 +3,35 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func deploymentSubject(id string) contextfabric.SubjectRef {
-	return contextfabric.SubjectRef{Kind: contextfabric.SubjectDeployment, CanonicalID: "deployment:" + id, Label: id}
+// deploymentSubject mints a CHAOS-3898 "deployment.v2:<repo_id>:<id>"
+// subject via identity.Derive, mirroring workItemSubject's rationale
+// (identity_test.go).
+func deploymentSubject(repoID, id string) contextfabric.SubjectRef {
+	canonicalID, omitted, err := identity.Derive(identity.KindDeployment, []string{repoID, id}, nil)
+	if err != nil || omitted {
+		panic(fmt.Sprintf("deploymentSubject(%q, %q): identity.Derive failed: omitted=%v err=%v", repoID, id, omitted, err))
+	}
+	return contextfabric.SubjectRef{Kind: contextfabric.SubjectDeployment, CanonicalID: canonicalID, Label: id}
 }
 
 func TestDeploymentsProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM deployments", rows: [][]any{{"deploy-1", "success", "production"}}},
+		{match: "FROM deployments", rows: [][]any{{"deploy-1", "success", "production", "repo-1"}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactDeployments)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("deploy-1")},
+		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("repo-1", "deploy-1")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -45,7 +54,7 @@ func TestDeploymentsProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactDeployments)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("deploy-404")},
+		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("repo-1", "deploy-404")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -61,7 +70,7 @@ func TestDeploymentsProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactDeployments)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("deploy-1")},
+		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("repo-1", "deploy-1")},
 	})
 	var failure *contextfabric.FactReadFailure
 	if !errors.As(err, &failure) || failure.State != contextfabric.SourceUnavailable {
@@ -75,7 +84,7 @@ func TestDeploymentsProviderOrgScoped(t *testing.T) {
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactDeployments)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-6"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("deploy-1")},
+		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("repo-1", "deploy-1")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -83,7 +92,7 @@ func TestDeploymentsProviderOrgScoped(t *testing.T) {
 	if got := client.orgIDBinding(); got != "org-6" {
 		t.Fatalf("org_id binding = %q", got)
 	}
-	if got := client.idsBinding(); len(got) != 1 || got[0] != "deploy-1" {
+	if got := client.idsBinding(); len(got) != 1 || got[0] != "repo-1:deploy-1" {
 		t.Fatalf("ids binding = %#v, want exactly the requested subject", got)
 	}
 }

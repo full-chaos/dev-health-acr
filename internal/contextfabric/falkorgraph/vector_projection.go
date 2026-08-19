@@ -154,7 +154,13 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, incl
 		add(contextfabric.SubjectDocument, "content:"+content.ContentID, contentSearchText(content))
 	}
 	for _, episode := range batch.Episodes {
-		add(contextfabric.SubjectEpisode, "episode:"+episode.EpisodeID, episodeSearchText(episode))
+		// CHAOS-3901: episode.EpisodeID (devhealthsource/episodes.go's
+		// episodeCandidate) already carries the full "episode:<uuid>"
+		// canonical id -- see projection.go's projectEpisode doc comment
+		// for the full mismatch this re-prefixing caused (an embed target
+		// keyed by the doubled id could never match the owned node the
+		// fixed projectEpisode now writes under the single-prefixed id).
+		add(contextfabric.SubjectEpisode, episode.EpisodeID, episodeSearchText(episode))
 	}
 	targets := make([]embedTarget, 0, len(byKey))
 	for _, target := range byKey {

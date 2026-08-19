@@ -395,11 +395,38 @@ func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode
 	// (round-1 F3). A work item does not stop being valid because an
 	// episode about it ended. The episode node itself keeps the window,
 	// below.
+	// CHAOS-3901: episode.EpisodeID (devhealthsource/episodes.go's
+	// episodeCandidate) is ALREADY the full "episode:<uuid>" canonical id
+	// -- the exact same value episode.Subject.CanonicalID carries, since
+	// both are built from the same canonicalID local there. Re-prefixing
+	// it here ("episode:"+episode.EpisodeID) doubled the prefix into
+	// "episode:episode:<uuid>" for this producer's OWNED node, while the
+	// STUB reference (episode.Subject, used verbatim below and by every
+	// other entity that points AT an episode) stayed single-prefixed --
+	// two different canonical ids for the same episode, so a MERGE meant
+	// to unify stub and owned instead created two nodes, and an exact
+	// canonical-id lookup for one silently missed the other.
 	subjectAttrs := subjectMergeAttrs(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, nil, nil, episode.SourceVersion, nil, a.config.IncludeEmbedBodies)
-	episodeSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectEpisode, CanonicalID: "episode:" + episode.EpisodeID, Label: episode.EpisodeID}
+	// CHAOS-3901 (continued): episodeLabel mirrors
+	// devhealthsource/episodes.go's episodeCandidate truncation exactly
+	// (goal, capped at 500 bytes via the same len()+slice idiom) -- the
+	// same value episode.Subject.Label
+	// already carries in the ordinary (self-referencing Subject) case.
+	// This matters now that a and b can be the SAME node: when they are,
+	// Cypher applies subjectAttrs' SET first and episodeAttrs' SET
+	// second, so episodeAttrs' propLabel is the one that survives. Using
+	// episode.EpisodeID there (the raw canonical id, not a human label)
+	// used to be masked by a/b being two distinct nodes pre-fix; once
+	// merged, it silently replaced a meaningful label with the id string
+	// on every read.
+	episodeLabel := episode.Goal
+	if len(episodeLabel) > 500 {
+		episodeLabel = episodeLabel[:500]
+	}
+	episodeSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectEpisode, CanonicalID: episode.EpisodeID, Label: episodeLabel}
 	summary := episodeSearchText(episode)
 	episodeAttrs := map[string]interface{}{
-		propLabel: episode.EpisodeID, propAuthzRepos: authorizationValue(episode.Authorization.RepositorySlugs),
+		propLabel: episodeLabel, propAuthzRepos: authorizationValue(episode.Authorization.RepositorySlugs),
 		propAuthzProjects: authorizationValue(episode.Authorization.ProjectIDs), propAuthzTeams: authorizationValue(episode.Authorization.TeamIDs),
 		propEvidenceRefs: graphrank.UniqueSorted(episode.EvidenceRefIDs), propSourceVersion: episode.SourceVersion,
 		propObservedAt: episode.EndedAt.UTC().Format(time.RFC3339Nano), propObservedAtNs: nsTimestamp(episode.EndedAt),
@@ -420,7 +447,7 @@ func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode
 		propAuthzRepos: authorizationValue(episode.Authorization.RepositorySlugs), propAuthzProjects: authorizationValue(episode.Authorization.ProjectIDs),
 		propAuthzTeams: authorizationValue(episode.Authorization.TeamIDs),
 	}
-	params := map[string]interface{}{"rid": "episode:" + episode.EpisodeID, "subjectAttrs": subjectAttrs, "episodeAttrs": episodeAttrs, "edgeAttrs": edgeAttrs}
+	params := map[string]interface{}{"rid": episode.EpisodeID, "subjectAttrs": subjectAttrs, "episodeAttrs": episodeAttrs, "edgeAttrs": edgeAttrs}
 	mergeMaps(params, subjectMergeParams("a", episode.Subject, orgID))
 	mergeMaps(params, subjectMergeParams("b", episodeSubject, orgID))
 	_, err := a.api.query(ctx, key, cypher, params, false)
@@ -452,7 +479,14 @@ func (a *Adapter) applyTombstone(ctx context.Context, key, orgID string, tombsto
 	case "document", "content":
 		kind, canonicalID = string(contextfabric.SubjectDocument), "content:"+tombstone.CanonicalID
 	case "episode":
-		kind, canonicalID = string(contextfabric.SubjectEpisode), "episode:"+tombstone.CanonicalID
+		// CHAOS-3901: episodes.go's episodeCandidate already stamps
+		// tombstone.CanonicalID with the full "episode:<uuid>" id (the
+		// same canonicalID it gives the owned node and the stub subject)
+		// -- re-prefixing it here would target a node that was never
+		// created (see projectEpisode's doc comment for the matching
+		// owned-node half of this fix), so the tombstone would silently
+		// match zero rows against a live episode node.
+		kind, canonicalID = string(contextfabric.SubjectEpisode), tombstone.CanonicalID
 	default:
 		kind, canonicalID = tombstone.Kind, tombstone.CanonicalID
 	}

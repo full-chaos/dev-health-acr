@@ -22,12 +22,38 @@ import (
 // first place; there is nothing here to filter.
 func isInternalSubject(contextfabric.SubjectRef) bool { return false }
 
-func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion) (contextfabric.SubjectResolution, error) {
-	// CHAOS-3898 S2a: resolves the org's ACTIVE epoch through the
-	// KeyResolver (design brief §3.1) -- a nil Config.EpochResolver
-	// (every production composition root today) falls back to epoch 0's
-	// key, byte-identical to pre-CHAOS-3898 behavior.
-	key, err := a.resolveReadKey(ctx, principal.OrgID, contextfabric.GraphKeyRoleInvestigationRead)
+// ResolveInvestigationBinding implements contextfabric.GraphReader (CHAOS-3898
+// §2.1). It resolves the org's CURRENT ResolvedGraphBinding exactly the way
+// resolveReadKey always has (KeyResolver, design brief §3.1; a nil
+// Config.EpochResolver -- every production composition root today -- falls
+// back to epoch 0's key, byte-identical to pre-CHAOS-3898 behavior) and
+// stamps the SAME cf_resolved_graph_key/cf_graph_key_divergence telemetry
+// resolveReadKey always has. The difference is WHO calls it: Engine now
+// calls this once, itself, before either graph method below, and passes the
+// result back in -- ResolveSubjects/DiscoverContext no longer resolve their
+// own key.
+func (a *Adapter) ResolveInvestigationBinding(ctx context.Context, principal storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
+	if strings.TrimSpace(principal.OrgID) == "" {
+		return contextfabric.ResolvedGraphBinding{}, errors.New("authenticated organization is required")
+	}
+	epoch, err := a.resolveActiveEpoch(ctx, principal.OrgID)
+	if err != nil {
+		return contextfabric.ResolvedGraphBinding{}, err
+	}
+	key := graphKeyForEpoch(a.config.GraphPrefix, principal.OrgID, epoch)
+	a.stampResolvedKey(ctx, principal.OrgID, epoch, contextfabric.GraphKeyRoleInvestigationRead, key)
+	return contextfabric.ResolvedGraphBinding{GraphKey: key, Epoch: epoch}, nil
+}
+
+func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding) (contextfabric.SubjectResolution, error) {
+	// CHAOS-3898 §2.1: the binding was already resolved ONCE by Engine, via
+	// ResolveInvestigationBinding above, before this call -- never
+	// re-resolved here. See ResolvedGraphBinding's own doc comment for the
+	// race that independent per-call resolution (this method's pre-S2
+	// behavior) left open. effectiveKey's fallback exists only for a
+	// direct/test caller that bypasses Engine and supplies a zero-value
+	// binding -- see that method's own doc comment.
+	key, err := a.effectiveKey(ctx, principal.OrgID, binding)
 	if err != nil {
 		return contextfabric.SubjectResolution{}, err
 	}
@@ -413,8 +439,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if err := ctx.Err(); err != nil {
 		return contextfabric.GraphContext{}, err
 	}
-	// CHAOS-3898 S2a: see ResolveSubjects' identical comment above.
-	key, err := a.resolveReadKey(ctx, principal.OrgID, contextfabric.GraphKeyRoleInvestigationRead)
+	// CHAOS-3898 §2.1: see ResolveSubjects' identical comment above -- the
+	// SAME binding Engine resolved once and threaded through
+	// request.Binding, never re-resolved here (effectiveKey's fallback is
+	// for a direct/test caller only).
+	key, err := a.effectiveKey(ctx, principal.OrgID, request.Binding)
 	if err != nil {
 		return contextfabric.GraphContext{}, err
 	}
