@@ -340,3 +340,56 @@ func TestRunShadowEvidenceRound_SourceNativeWideningNeverChangesDecisiveOutcome(
 		}
 	}
 }
+
+// TestBindSourceNativeHandles_ResolvesThroughRealProductionPath is the
+// codex xhigh review round-3 finding pinned end-to-end (confirmed and
+// fixed, 2026-08-19): every OTHER resolution test in this file builds its
+// claimantsByTerm fixture directly as map[string][]IdentityMatch, seeding
+// IdentityRow.Aliases/ProviderAliases by hand -- which proved
+// resolveSourceNative's own scan logic correct but never exercised
+// whether a REAL production AliasLookup result (map[string][]CandidateNode,
+// graph nodes with "aliases"/"provider_aliases" ATTRIBUTES, converted via
+// claimantsFromCandidateNodes -- resolve.go:1327, the actual
+// ShadowEvidenceRoundInput.AliasClaimants call site) would ever produce a
+// row resolveSourceNative could find at all. Round 3 found it would NOT
+// have (claimantsFromCandidateNodes dropped the alias attributes
+// entirely) -- this test starts from a CandidateNode, exactly as
+// AliasLookup would return one, and proves the fix closes the gap through
+// the SAME conversion function production actually calls.
+func TestBindSourceNativeHandles_ResolvesThroughRealProductionPath(t *testing.T) {
+	t.Parallel()
+	node := CandidateNode{
+		Attributes: map[string]interface{}{
+			"subject_kind": "repository", "canonical_id": "repository:r-1", "label": "dev-health-acr",
+			"aliases":          []string{"dev-health-acr"},
+			"provider_aliases": []string{"github:full-chaos/dev-health-acr"},
+		},
+		Mechanism: contextfabric.MatchAlias,
+	}
+	// The map key ("some-interpreter-term") is deliberately unrelated to
+	// either alias, mirroring how an interpreter's own SubjectTerm would
+	// key this exact same claimant in production.
+	claimantsByTerm := claimantsFromCandidateNodes(map[string][]CandidateNode{"some-interpreter-term": {node}})
+
+	repoSlugBound := BindSourceNativeHandles("why did full-chaos/dev-health-acr fail to build?", claimantsByTerm, true)
+	foundRepoSlug := false
+	for _, b := range repoSlugBound {
+		if b.Grammar == "repo_slug" && b.Resolved {
+			foundRepoSlug = true
+		}
+	}
+	if !foundRepoSlug {
+		t.Fatalf("repo_slug did not resolve through the real production conversion path: %#v", repoSlugBound)
+	}
+
+	providerBound := BindSourceNativeHandles("see github.com/full-chaos/dev-health-acr for details", claimantsByTerm, true)
+	foundProvider := false
+	for _, b := range providerBound {
+		if b.Grammar == "provider_qualified_name" && b.Resolved {
+			foundProvider = true
+		}
+	}
+	if !foundProvider {
+		t.Fatalf("provider_qualified_name did not resolve through the real production conversion path: %#v", providerBound)
+	}
+}

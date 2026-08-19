@@ -87,3 +87,54 @@ func TestClaimantsFromCandidateNodes(t *testing.T) {
 		t.Fatalf("matches[0] = %#v", matches[0])
 	}
 }
+
+// TestClaimantsFromCandidateNodes_PopulatesAliases pins the codex xhigh
+// review round-3 finding (confirmed and fixed, 2026-08-19): every
+// IdentityRow this function builds used to leave Aliases/ProviderAliases
+// at their nil zero value, making chaos3899_source_native_grammar.go's own
+// resolveSourceNative structurally unable to ever match a row via those
+// fields in the REAL production path (ShadowEvidenceRoundInput.AliasClaimants
+// is built from exactly this function's own output, resolve.go:1327).
+// AliasAttributes/ProviderAliasAttributes (subject.go) already read a
+// node's "aliases"/"provider_aliases" graph properties for the existing,
+// non-shadow identity mechanism (candidate.go) -- this function must now
+// read the SAME two properties off the SAME already-in-memory
+// node.Attributes map.
+func TestClaimantsFromCandidateNodes_PopulatesAliases(t *testing.T) {
+	t.Parallel()
+	node := CandidateNode{Attributes: map[string]interface{}{
+		"subject_kind": "repository", "canonical_id": "repository:r-1", "label": "dev-health-acr",
+		"aliases":          []string{"dev-health-acr"},
+		"provider_aliases": []string{"github:full-chaos/dev-health-acr"},
+	}, Mechanism: contextfabric.MatchAlias}
+	out := claimantsFromCandidateNodes(map[string][]CandidateNode{"acr": {node}})
+	matches, ok := out["acr"]
+	if !ok || len(matches) != 1 {
+		t.Fatalf("claimantsFromCandidateNodes = %#v", out)
+	}
+	row := matches[0].Row
+	if len(row.Aliases) != 1 || row.Aliases[0] != "dev-health-acr" {
+		t.Fatalf("row.Aliases = %#v, want [dev-health-acr]", row.Aliases)
+	}
+	if len(row.ProviderAliases) != 1 || row.ProviderAliases[0] != "github:full-chaos/dev-health-acr" {
+		t.Fatalf("row.ProviderAliases = %#v, want [github:full-chaos/dev-health-acr]", row.ProviderAliases)
+	}
+}
+
+// TestClaimantsFromCandidateNodes_MissingAliasAttributesStayEmpty pins the
+// nil-safe fallback: a node with no "aliases"/"provider_aliases"
+// attribute at all (an older projection cycle, or a kind that never
+// carries them) produces an IdentityRow with nil Aliases/ProviderAliases,
+// never a panic -- AliasAttributes/ProviderAliasAttributes' own
+// "attribute absent -> nil" convention, unchanged.
+func TestClaimantsFromCandidateNodes_MissingAliasAttributesStayEmpty(t *testing.T) {
+	t.Parallel()
+	node := CandidateNode{Attributes: map[string]interface{}{
+		"subject_kind": "repository", "canonical_id": "repository:r-1", "label": "dev-health-acr",
+	}, Mechanism: contextfabric.MatchAlias}
+	out := claimantsFromCandidateNodes(map[string][]CandidateNode{"acr": {node}})
+	row := out["acr"][0].Row
+	if row.Aliases != nil || row.ProviderAliases != nil {
+		t.Fatalf("row = %#v, want nil Aliases/ProviderAliases when the node carries neither attribute", row)
+	}
+}
