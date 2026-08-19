@@ -442,13 +442,19 @@ func TestCHAOS3900_NonCurrentAxisWithWindowReceipt_Vetoes(t *testing.T) {
 	}
 }
 
-// TestCHAOS3900_MCPExplicitWindow_OmitsReuseKeyFragment is the codex review
-// (W1 round 1) MEDIUM-severity fix: an MCP bare explicit evidence_window is
-// tier=inferred_default under DP12(b), so it must NOT also contribute a
-// rel:/abs: reuse-key fragment -- that dimension is reserved for a DECISIVE
-// (question_stated/clarification_confirmed) window; an inferred-tier one
-// relies on WindowInferenceVersion instead.
-func TestCHAOS3900_MCPExplicitWindow_OmitsReuseKeyFragment(t *testing.T) {
+// TestCHAOS3900_MCPExplicitWindow_StillContributesReuseKeyFragment is the
+// codex review (W1 round 3) fix, correcting round 1's own fix #5: an MCP
+// bare explicit evidence_window is tier=inferred_default under DP12(b) (no
+// DECISIVE authority), but it is still a CALLER-SUPPLIED, arbitrary value
+// (independent of the question text) and so still MUST contribute its own
+// rel:/abs: reuse-key fragment -- omitting it (round 1's mistake) let two
+// MCP requests for the identical question but DIFFERENT explicit windows
+// (e.g. trailing_30d vs trailing_90d) collapse onto the same "current" key.
+// The tier distinction governs decisive AUTHORITY only (§3/W4, not
+// implemented in W1), never reuse-key VALUE IDENTITY -- see
+// canonicalizeEvidenceWindow's own call site comment for the full
+// reasoning.
+func TestCHAOS3900_MCPExplicitWindow_StillContributesReuseKeyFragment(t *testing.T) {
 	t.Parallel()
 
 	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
@@ -467,8 +473,35 @@ func TestCHAOS3900_MCPExplicitWindow_OmitsReuseKeyFragment(t *testing.T) {
 	if canon.Effective.Provenance != WindowInferredDefault {
 		t.Errorf("Provenance = %q, want %q (DP12(b): MCP bare explicit window is never decisive)", canon.Effective.Provenance, WindowInferredDefault)
 	}
-	if canon.KeyComponent != "" {
-		t.Errorf("KeyComponent = %q, want \"\" -- an inferred-tier window must not contribute a rel:/abs: reuse-key fragment", canon.KeyComponent)
+	if want := "rel:trailing_90d"; canon.KeyComponent != want {
+		t.Errorf("KeyComponent = %q, want %q -- a caller-supplied window value must key by its own identity regardless of decisive tier", canon.KeyComponent, want)
+	}
+}
+
+// TestCHAOS3900_MCPExplicitWindow_DifferentValuesKeyDifferently is the
+// direct regression proof for the bug round 1's fix #5 introduced: two MCP
+// requests naming DIFFERENT explicit windows must never share a reuse key.
+func TestCHAOS3900_MCPExplicitWindow_DifferentValuesKeyDifferently(t *testing.T) {
+	t.Parallel()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
+	mcp := ConsumerInfo{Name: "acr-mcp", Version: "0.1.0", Surface: "mcp"}
+
+	request30 := validInvestigationRequest()
+	request30.Consumer = mcp
+	request30.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
+	canon30 := engine.canonicalizeEvidenceWindow(context.Background(), reusePrincipal(), request30)
+
+	request90 := validInvestigationRequest()
+	request90.Consumer = mcp
+	request90.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+	canon90 := engine.canonicalizeEvidenceWindow(context.Background(), reusePrincipal(), request90)
+
+	if canon30.KeyComponent == "" || canon90.KeyComponent == "" {
+		t.Fatalf("KeyComponent = (%q, %q), want both non-empty", canon30.KeyComponent, canon90.KeyComponent)
+	}
+	if canon30.KeyComponent == canon90.KeyComponent {
+		t.Fatalf("trailing_30d and trailing_90d MCP requests keyed IDENTICALLY (%q): a caller asking for one window could be served the other's cached answer", canon30.KeyComponent)
 	}
 }
 
@@ -562,5 +595,103 @@ func TestCHAOS3900_WindowKeyedReuseRejectsCandidateWithDisagreeingAxis(t *testin
 	}
 	if result.ResultID != freshTestResultID {
 		t.Errorf("result.ResultID = %q, want the fresh result %q", result.ResultID, freshTestResultID)
+	}
+}
+
+// TestCHAOS3900_WindowKeyedReuseRejectsCandidateWithMismatchedWindowValue is
+// the codex review (W1 round 3) strengthening of the round-2 recheck: a
+// candidate carrying a NON-NIL, current-axis EffectiveEvidenceWindow still
+// must be rejected when its OWN value (trailing_30d) does not match what
+// the lookup's own key (rel:trailing_90d) named -- round 2's check alone
+// (non-nil-ness only) would have let this one through.
+func TestCHAOS3900_WindowKeyedReuseRejectsCandidateWithMismatchedWindowValue(t *testing.T) {
+	t.Parallel()
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+
+	mismatchedCandidate := validInvestigationResult()
+	mismatchedCandidate.ResultID = "result_mismatched_cached"
+	mismatchedCandidate.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}
+	mismatchedCandidate.Interpretation.TimeContext = TimeContext{Axis: TemporalCurrent}
+	// Valid, non-nil, current-axis window -- but the WRONG one: the lookup
+	// below asks for trailing_90d.
+	mismatchedCandidate.EffectiveEvidenceWindow = &EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, Provenance: WindowQuestionStated}
+
+	var gateKeys []string
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+			gateKeys = append(gateKeys, key.TimeAxisKey)
+			return mismatchedCandidate, true, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(gateKeys) != 1 || gateKeys[0] != "current+w:rel:trailing_90d" {
+		t.Fatalf("reuse gate keys = %v, want exactly one call keyed \"current+w:rel:trailing_90d\"", gateKeys)
+	}
+	if result.Reused {
+		t.Fatal("result.Reused = true: a trailing_90d lookup was served a candidate whose own stored window was trailing_30d")
+	}
+	if result.ResultID != freshTestResultID {
+		t.Errorf("result.ResultID = %q, want the fresh result %q", result.ResultID, freshTestResultID)
+	}
+}
+
+// TestCHAOS3900_WindowKeyedReuseServesAMatchingCandidate is the positive
+// counterpart the rejection tests above need: a candidate whose stored
+// axis/window genuinely AGREE with the lookup's own key must still be
+// served as an ordinary reuse hit -- the new defense-in-depth checks in
+// tryReuse must not turn window-keyed reuse into a permanent miss.
+func TestCHAOS3900_WindowKeyedReuseServesAMatchingCandidate(t *testing.T) {
+	t.Parallel()
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	_, candidate := reusableCandidate()
+	candidate.Interpretation.TimeContext = TimeContext{Axis: TemporalCurrent}
+	candidate.EffectiveEvidenceWindow = &EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Provenance: WindowQuestionStated}
+
+	var gateKeys []string
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+			gateKeys = append(gateKeys, key.TimeAxisKey)
+			return candidate, true, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(gateKeys) != 1 || gateKeys[0] != "current+w:rel:trailing_90d" {
+		t.Fatalf("reuse gate keys = %v, want exactly one call keyed \"current+w:rel:trailing_90d\"", gateKeys)
+	}
+	if !result.Reused {
+		t.Fatal("result.Reused = false, want true: a genuinely matching window candidate must still be servable as a hit")
+	}
+	if result.ResultID != candidate.ResultID {
+		t.Errorf("result.ResultID = %q, want the reused candidate %q", result.ResultID, candidate.ResultID)
 	}
 }

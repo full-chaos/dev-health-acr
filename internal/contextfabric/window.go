@@ -292,28 +292,34 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 	}
 	return requestWindowCanonicalization{
 		Effective: &effective,
-		// Codex review finding (W1 round 1): the rel:/abs: key fragment is
-		// for a DECISIVE (question_stated/clarification_confirmed) window
-		// only -- see ReuseKey.WindowInferenceVersion's own doc comment
-		// ("case 1... don't need this guard"). An MCP bare explicit window
-		// is tier=inferred_default under DP12(b) (windowExplicitProvenance),
-		// so it must NOT also contribute a key fragment: that dimension is
-		// what WindowInferenceVersion exists to guard instead.
-		KeyComponent:   windowKeyComponentForProvenance(effective),
+		// ALWAYS keyed, regardless of Provenance tier -- codex review
+		// finding (W1 round 3), correcting round 1's own fix #5, which had
+		// this backwards. Round 1 reasoned "inferred tier -> no key
+		// fragment, WindowInferenceVersion guards it instead" and applied
+		// that uniformly to every inferred-tier window; that conflates two
+		// different things DP12(b)'s tier concept does NOT conflate:
+		// AUTHORITY (does this value get to drive a commit decision --
+		// orthogonal to reuse) versus VALUE IDENTITY (does this value need
+		// to be part of the cache key -- exactly what reuse cares about).
+		// WindowInferenceVersion is a single DEPLOYMENT-WIDE constant: it
+		// only guards the class-table/binder's OWN deterministic-from-the-
+		// question inference (composeEffectiveWindow's post-Interpret step
+		// 2, reached only when NO request-side window resolved at all) --
+		// consistent with how a reuse hit already trusts a cached
+		// interpretation's own Shape/etc. without re-deriving it (CHAOS-3782's
+		// own established tradeoff). A window resolved HERE, at precedence
+		// step 1, is never that: it is always a CALLER-SUPPLIED value
+		// (explicit field or receipt), arbitrary and independent of the
+		// question text, whether or not MCP's own tier rule (DP12(b))
+		// grants it decisive authority. Two MCP requests for the identical
+		// question but DIFFERENT explicit windows (e.g. trailing_30d vs
+		// trailing_90d) must never collapse onto the same "current" reuse
+		// key just because both happen to be tier=inferred_default -- that
+		// key collision is exactly what round 1's fix (KeyComponent="" for
+		// inferred_default here) produced, and what this revert closes.
+		KeyComponent:   windowKeyComponent(effective),
 		BinderProposal: binderProposal,
 	}
-}
-
-// windowKeyComponentForProvenance returns windowKeyComponent(effective) for
-// a DECISIVE provenance (question_stated/clarification_confirmed), and ""
-// for inferred_default -- see canonicalizeEvidenceWindow's own call site
-// comment for why an inferred-tier window must never contribute a rel:/abs:
-// reuse-key fragment.
-func windowKeyComponentForProvenance(effective contractsv1.ContextFabricEffectiveEvidenceWindow) string {
-	if effective.Provenance == WindowInferredDefault {
-		return ""
-	}
-	return windowKeyComponent(effective)
 }
 
 // deriveRequestedWindow canonicalizes a caller's explicit
