@@ -1969,7 +1969,7 @@
             "relationship_id": {
               "type": "string",
               "minLength": 8,
-              "maxLength": 600
+              "maxLength": 256
             },
             "type": {
               "type": "string",
@@ -2284,7 +2284,7 @@
             "canonical_id": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 600
+              "maxLength": 256
             },
             "reason": {
               "type": "string",
