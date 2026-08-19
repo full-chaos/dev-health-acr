@@ -49,6 +49,10 @@ const (
 	SubjectDecision     = contractsv1.ContextFabricSubjectDecision
 	SubjectEpisode      = contractsv1.ContextFabricSubjectEpisode
 	SubjectMetric       = contractsv1.ContextFabricSubjectMetric
+	// SubjectWorkItemRef (CHAOS-3898 §1.5) is the non-authoritative stub
+	// kind for an unresolved work_item dependency/hierarchy target -- see
+	// ContextFabricSubjectWorkItemRef's own doc comment.
+	SubjectWorkItemRef = contractsv1.ContextFabricSubjectWorkItemRef
 )
 
 type ResolutionState = contractsv1.ContextFabricResolutionState
