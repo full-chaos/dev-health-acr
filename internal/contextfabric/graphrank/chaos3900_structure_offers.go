@@ -198,3 +198,54 @@ func kindInsensitivityProof(ctx context.Context, orgID string, preNarrowingKinds
 		return kindInsensitivitySensitive
 	}
 }
+
+// HandleVerificationReason is the closed vocabulary VerifyHandle reports
+// (CHAOS-3900 P1.E).
+type HandleVerificationReason string
+
+const (
+	HandleVerificationValid             HandleVerificationReason = "valid"
+	HandleVerificationGrammarMismatch   HandleVerificationReason = "grammar_mismatch"
+	HandleVerificationNotFound          HandleVerificationReason = "not_found"
+	HandleVerificationCensusUnavailable HandleVerificationReason = "census_unavailable"
+)
+
+// VerifyHandle is design brief §2.1's own handr_ redemption-time
+// re-verification: "redemption re-validates the value against the
+// registry grammar AND re-runs the keyed source-row existence check."
+// Beside BindHandles/CensusFunc, its own derive-side siblings -- never
+// widening either signature (team-lead ruling).
+//
+// Grammar first (cheap, no I/O): a stored value that no longer matches its
+// own claimed pattern_id is rejected without ever reaching the census.
+//
+// Existence second, over the SAME CensusFunc the shadow evidence round
+// already calls, with handleBound=true and anchorBound=false (existence
+// of the handle value alone, no anchor constraint). DELIBERATELY carries
+// NO epoch/binding parameter (team-lead ruling): base tables are the
+// EPOCH-INDEPENDENT source of record -- CHAOS-3896's own ratified design
+// moved decisive proofs off the (epoch-versioned) graph and onto them
+// specifically so a census read never needs a pinned graph key. Do not
+// add one; a future maintainer "fixing" this by threading a
+// ResolvedGraphBinding in would be re-coupling this read to the wrong
+// epoch model.
+//
+// (storedValue, org) in -> valid/invalid + reason out, question-free and
+// independently unit-testable, matching the same contract shape
+// kindInsensitivityProof above already establishes for D.
+func VerifyHandle(ctx context.Context, orgID string, kind CensusKind, patternID, value string, census CensusFunc) (bool, HandleVerificationReason) {
+	if !ValidateHandleGrammar(kind, patternID, value) {
+		return false, HandleVerificationGrammarMismatch
+	}
+	if census == nil {
+		return false, HandleVerificationCensusUnavailable
+	}
+	outcome, err := census(ctx, orgID, kind, value, true, "", "", false)
+	if err != nil {
+		return false, HandleVerificationCensusUnavailable
+	}
+	if outcome.Count == 0 {
+		return false, HandleVerificationNotFound
+	}
+	return true, HandleVerificationValid
+}

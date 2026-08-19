@@ -125,6 +125,18 @@ type EngineDependencies struct {
 	// ever captured, exactly as if the feature did not exist -- capture
 	// is strictly additive and never changes Investigate's own behavior.
 	ClarificationSelectionSink ClarificationSelectionSink
+	// HandleVerifier is CHAOS-3900 P1.E's redemption-time re-verification
+	// dependency for handr_ structure receipts (design brief §2.1). UNLIKE
+	// every other optional dependency on this struct, leaving this nil
+	// does NOT degrade to "the feature did not exist": canonicalizeStructure's
+	// handle reverify hook (structure.go) fails CLOSED when
+	// Engine.handleVerifier is nil, vetoing any request that presents a
+	// handr_ receipt. This is deliberate -- see HandleVerifier's own doc
+	// comment for why an unwired verifier applying a stored value anyway
+	// would be a false sense of safety. A deployment that never mints
+	// handle offers (P1.C' not yet built) never exercises this path
+	// regardless, so leaving it nil is safe ONLY until handle offers exist.
+	HandleVerifier HandleVerifier
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -268,6 +280,7 @@ type Engine struct {
 	reusePromptVersions        ReusePromptVersions
 	reuseVersionAuthorities    ReuseVersionAuthorities
 	clarificationSelectionSink ClarificationSelectionSink
+	handleVerifier             HandleVerifier
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -293,6 +306,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
+		handleVerifier:             dependencies.HandleVerifier,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:  options.ReuseRetrievalIdentity,
 		reusePromptVersions:     options.ReusePromptVersions,

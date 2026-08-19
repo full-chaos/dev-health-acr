@@ -97,6 +97,15 @@ type handleGrammarEntry struct {
 	kind       CensusKind
 	pattern    *regexp.Regexp
 	valueGroup int // 0 = whole match is the value; N>0 = capture group N
+	// valuePattern (CHAOS-3900 P1.E) matches the CAPTURED VALUE alone --
+	// e.g. \d+ for a bare PR number, with no surrounding "PR #" context --
+	// distinct from pattern, which matches the value IN its original
+	// question-text CONTEXT (literal keyword + \b boundaries).
+	// ValidateHandleGrammar (redemption-time re-validation) only ever has
+	// the bare stored value, never the original question text, so it
+	// needs this narrower, context-free shape rather than re-running
+	// pattern against a value it was never anchored to match alone.
+	valuePattern *regexp.Regexp
 }
 
 // handleGrammarRegistry is the CLOSED handle->kind registry (design brief
@@ -147,9 +156,34 @@ type handleGrammarEntry struct {
 //     provider-specific run-id shape) is a registry addition, not a
 //     redesign.
 var handleGrammarRegistry = []handleGrammarEntry{
-	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\bPR\s*#?\s*(\d+)\b`), valueGroup: 1},
-	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS-\d+\b`), valueGroup: 0},
-	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+run|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1},
+	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\bPR\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`)},
+	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS-\d+\b`), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`)},
+	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+run|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`)},
+}
+
+// ValidateHandleGrammar (CHAOS-3900 P1.E) re-validates a STORED handle
+// VALUE against its own named pattern -- redemption-time re-verification's
+// counterpart to BindHandles' derive-side extraction (design brief §2.1:
+// "redemption re-validates the value against the registry grammar"). Never
+// widens BindHandles' own signature (team-lead ruling): a parallel
+// function, beside it, in the same file, sharing only the registry data.
+//
+// Matches against valuePattern, NOT pattern: pattern is anchored to the
+// value's ORIGINAL QUESTION-TEXT CONTEXT (a literal keyword + word
+// boundaries), which a bare stored value was never meant to satisfy alone
+// -- e.g. pull_request_number's pattern requires a "PR" literal prefix,
+// but its OWN captured value is just digits ("532"). kind and patternID
+// together select ONE registry entry (kind alone is not enough: a future
+// entry could share the disjoint-token-shape kind with another, though the
+// current 3-entry registry does not); an id/kind pair matching no entry is
+// invalid, not silently permissive.
+func ValidateHandleGrammar(kind CensusKind, patternID string, value string) bool {
+	for _, entry := range handleGrammarRegistry {
+		if entry.kind == kind && entry.name == patternID {
+			return entry.valuePattern.MatchString(value)
+		}
+	}
+	return false
 }
 
 // BindHandles applies the closed handle grammar to question (verbatim

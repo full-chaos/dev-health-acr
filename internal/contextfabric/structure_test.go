@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -194,6 +195,115 @@ func TestCHAOS3900_NoStructureReceipts_CanonicalizeStructureIsANoOp(t *testing.T
 	}
 	if len(canon.Confirmed) != 0 {
 		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+}
+
+// handleReceiptTestSetup builds a prior result carrying one HandleOption
+// offer and a request naming its receipt -- shared fixture for the three
+// TestCHAOS3900_HandleReceiptReverification* tests below.
+func handleReceiptTestSetup() (priorResult InvestigationResult, request InvestigationRequest) {
+	priorResult = validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0003"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_handle"},
+		HandleOptions: []HandleOption{
+			{
+				ReceiptID: "handr_confirm0001", OptionID: "opt_handle", Label: "PR #532",
+				Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532",
+				OfferSource: "engine",
+			},
+		},
+	}
+	request = validInvestigationRequest()
+	request.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "handr_confirm0001"}}
+	return priorResult, request
+}
+
+// TestCHAOS3900_HandleReceiptReverification_NilVerifierVetoes pins P1.E's
+// fail-CLOSED default (HandleVerifier's own doc comment): an unwired
+// Engine.handleVerifier is NOT "trust the stored offer" the way a nil
+// ClarificationSelectionSink degrades to "capture nothing" -- applying an
+// un-reverified handle value would be a false sense of safety. A deployment
+// that never wires HandleVerifier and never mints handle offers (P1.C' not
+// yet built) never exercises this path; this test proves what happens the
+// moment it does.
+func TestCHAOS3900_HandleReceiptReverification_NilVerifierVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := handleReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+}
+
+// TestCHAOS3900_HandleReceiptReverification_VerifierRejectsVetoes proves a
+// wired HandleVerifier that reports the stored value invalid (grammar
+// mismatch, source row gone, whatever the reason) vetoes the whole request
+// exactly like an unresolved receipt -- no partial application, no
+// inference substituted (design brief §2.5 rows 2/3, same atomic-veto
+// discipline every other structure veto in this file upholds).
+func TestCHAOS3900_HandleReceiptReverification_VerifierRejectsVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := handleReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	calls := 0
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		HandleVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason) {
+			calls++
+			if orgID != reusePrincipal().OrgID || kind != SubjectPullRequest || patternID != "pull_request_number" || value != "532" {
+				t.Errorf("HandleVerifier called with (org=%q, kind=%q, pattern=%q, value=%q), want the stored offer's own content", orgID, kind, patternID, value)
+			}
+			return false, HandleVerificationNotFound
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+	if calls != 1 {
+		t.Errorf("HandleVerifier called %d times, want 1", calls)
+	}
+}
+
+// TestCHAOS3900_HandleReceiptReverification_VerifierAcceptsConfirms is this
+// test's positive twin: a wired HandleVerifier that reports the stored
+// value still valid lets the receipt confirm normally, mirroring the kind
+// receipt's own OrderingPin test (TestCHAOS3900_StructureOrderingPin_ConfirmedKindNeverHitsReuseGate).
+func TestCHAOS3900_HandleReceiptReverification_VerifierAcceptsConfirms(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := handleReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		HandleVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason) {
+			return true, HandleVerificationValid
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoNone {
+		t.Errorf("canon.Veto = %q, want structureVetoNone", canon.Veto)
+	}
+	if len(canon.Confirmed) != 1 {
+		t.Fatalf("len(canon.Confirmed) = %d, want 1", len(canon.Confirmed))
+	}
+	entry := canon.Confirmed[0]
+	if entry.Member != "subject_handle" || entry.AppliedValue != "532" {
+		t.Errorf("canon.Confirmed[0] = %+v, want member=subject_handle applied_value=532", entry)
 	}
 }
 

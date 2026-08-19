@@ -83,6 +83,39 @@ type requestStructureCanonicalization struct {
 	Veto structureVetoReason
 }
 
+// HandleVerificationReason is the closed vocabulary Engine's handle
+// re-verification dependency reports (CHAOS-3900 P1.E). Mirrors
+// graphrank.HandleVerificationReason's own four members exactly --
+// contextfabric cannot import graphrank (the package-graph constraint this
+// whole epic works around throughout P1), so this is the package-local
+// dependency-injection copy, the same pattern ConfirmedExpectedKind (ports.go)
+// already establishes for P1.D.
+type HandleVerificationReason string
+
+const (
+	HandleVerificationValid             HandleVerificationReason = "valid"
+	HandleVerificationGrammarMismatch   HandleVerificationReason = "grammar_mismatch"
+	HandleVerificationNotFound          HandleVerificationReason = "not_found"
+	HandleVerificationCensusUnavailable HandleVerificationReason = "census_unavailable"
+)
+
+// HandleVerifier is canonicalizeStructure's own redemption-time
+// re-verification dependency for the subject_handle member (design brief
+// §2.1: "redemption re-validates the value against the registry grammar
+// AND re-runs the keyed source-row existence check"). (org, kind,
+// pattern_id, value) in -> valid/invalid + reason out, question-free --
+// the same contract shape team-lead's E guidance established for every
+// re-verification primitive in this slice.
+//
+// The production implementation (internal/runtime/hosted/open.go) adapts
+// graphrank.VerifyHandle over the SAME CensusFunc the shadow evidence
+// round already uses (devhealthsource.NewCensusFunc) -- see that
+// function's own doc comment for why it deliberately carries no epoch
+// parameter. A nil HandleVerifier is NOT "trust the stored offer": see
+// canonicalizeStructure's own reverify wiring below for why an unwired
+// verifier fails closed instead.
+type HandleVerifier func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason)
+
 // structureReceiptMember describes one of the three P1.B receipt
 // namespaces uniformly, so canonicalizeStructure resolves all three
 // through ONE loop rather than three hand-copies -- the same DRY
@@ -92,6 +125,18 @@ type structureReceiptMember struct {
 	member          contractsv1.ContextFabricStructureNeedKind
 	receipts        []contractsv1.ContextFabricBoundSubjectReceipt
 	appliedValueFor func(stored InvestigationResult, receiptID string) (value string, offerSource contractsv1.ContextFabricStructureOfferSource, priorVersionID, priorEntryID string, ok bool)
+	// reverify (P1.E) is canonicalizeStructure's own redemption-time
+	// re-verification hook, additional to appliedValueFor's stored-offer
+	// lookup above. nil means the stored offer's content is trusted as
+	// persisted, exactly as every member behaved before P1.E (this file's
+	// own SCOPE NOTE) -- currently true for expected_kind (no live
+	// tampering vector: the confirmed kind only narrows a pool, it never
+	// stands in for a fact) and subject_anchor (re-verification is
+	// design-blocked pending a team-lead ruling on whether AnchorOption
+	// needs a matched-term field -- see the P1.E report this session
+	// filed). subject_handle sets this to a non-nil closure over
+	// Engine.handleVerifier.
+	reverify func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool
 }
 
 // canonicalizeStructure is design brief §2.1's own entry point, called from
@@ -156,6 +201,29 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				}
 				return "", "", "", "", false
 			},
+			// reverify (P1.E): a handr_ redemption re-validates the stored
+			// value's grammar AND re-runs the keyed source-row existence
+			// check (design brief §2.1) -- a value that was offerable when
+			// it was disclosed is NOT assumed still valid at redemption
+			// time. e.handleVerifier == nil fails CLOSED, not open: an
+			// unwired verifier means this deployment cannot uphold the
+			// re-verification the design brief requires, and applying the
+			// stored value anyway would be a false sense of safety, not a
+			// weaker-but-honest check (the same reasoning that blocked
+			// anchor re-verification from silently degrading to a
+			// canonical-id-only check).
+			reverify: func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool {
+				if e.handleVerifier == nil || stored.StructureNeeds == nil {
+					return false
+				}
+				for _, opt := range stored.StructureNeeds.HandleOptions {
+					if opt.ReceiptID == receiptID {
+						ok, _ := e.handleVerifier(ctx, principal.OrgID, opt.Kind, opt.PatternID, opt.Value)
+						return ok
+					}
+				}
+				return false
+			},
 		},
 	}
 
@@ -179,6 +247,9 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		}
 		value, offerSource, priorVersionID, priorEntryID, ok := m.appliedValueFor(stored.Result, receiptID)
 		if !ok {
+			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
+		}
+		if m.reverify != nil && !m.reverify(ctx, principal, stored.Result, receiptID) {
 			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
 		}
 		confirmed = append(confirmed, confirmedStructureMember{

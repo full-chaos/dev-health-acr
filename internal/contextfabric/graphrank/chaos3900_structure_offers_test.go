@@ -301,3 +301,78 @@ func TestResolveSubjects_NilConfirmedKindIsByteIdenticalToPreP1D(t *testing.T) {
 		t.Errorf("resolution.Candidates = %#v, want BOTH kinds present (nil confirmedKind must not narrow anything)", resolution.Candidates)
 	}
 }
+
+func TestValidateHandleGrammar(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		kind      contractsv1.ContextFabricSubjectKind
+		patternID string
+		value     string
+		want      bool
+	}{
+		{"pull request number, bare digits, valid", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "532", true},
+		{"pull request number, with PR context, invalid (value must be bare)", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "PR 532", false},
+		{"pull request number, non-numeric, invalid", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "abc", false},
+		{"work item ticket key, valid", contractsv1.ContextFabricSubjectWorkItem, "work_item_ticket_key", "CHAOS-3896", true},
+		{"work item ticket key, missing prefix, invalid", contractsv1.ContextFabricSubjectWorkItem, "work_item_ticket_key", "3896", false},
+		{"ci run id, valid", contractsv1.ContextFabricSubjectCIRun, "ci_run_id", "18234567", true},
+		{"ci run id, too short, invalid", contractsv1.ContextFabricSubjectCIRun, "ci_run_id", "123", false},
+		{"kind and pattern_id mismatched, invalid", contractsv1.ContextFabricSubjectPullRequest, "work_item_ticket_key", "CHAOS-3896", false},
+		{"unknown pattern_id, invalid", contractsv1.ContextFabricSubjectPullRequest, "bogus_pattern", "532", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ValidateHandleGrammar(tc.kind, tc.patternID, tc.value)
+			if got != tc.want {
+				t.Errorf("ValidateHandleGrammar(%q, %q, %q) = %v, want %v", tc.kind, tc.patternID, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyHandle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("grammar mismatch short-circuits before any census call", func(t *testing.T) {
+		called := false
+		census := CensusFunc(func(context.Context, string, CensusKind, string, bool, contractsv1.ContextFabricSubjectKind, string, bool) (CensusOutcome, error) {
+			called = true
+			return CensusOutcome{Count: 1}, nil
+		})
+		valid, reason := VerifyHandle(context.Background(), "org_1", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "not-a-number", census)
+		if valid || reason != HandleVerificationGrammarMismatch {
+			t.Errorf("VerifyHandle() = (%v, %q), want (false, %q)", valid, reason, HandleVerificationGrammarMismatch)
+		}
+		if called {
+			t.Error("census was called despite a grammar mismatch -- existence check must never run on an already-invalid value")
+		}
+	})
+	t.Run("grammar valid, census confirms existence", func(t *testing.T) {
+		census := fakeCensusFn(map[CensusKind]int{contractsv1.ContextFabricSubjectPullRequest: 1}, nil)
+		valid, reason := VerifyHandle(context.Background(), "org_1", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "532", census)
+		if !valid || reason != HandleVerificationValid {
+			t.Errorf("VerifyHandle() = (%v, %q), want (true, %q)", valid, reason, HandleVerificationValid)
+		}
+	})
+	t.Run("grammar valid, census finds nothing", func(t *testing.T) {
+		census := fakeCensusFn(map[CensusKind]int{contractsv1.ContextFabricSubjectPullRequest: 0}, nil)
+		valid, reason := VerifyHandle(context.Background(), "org_1", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "532", census)
+		if valid || reason != HandleVerificationNotFound {
+			t.Errorf("VerifyHandle() = (%v, %q), want (false, %q)", valid, reason, HandleVerificationNotFound)
+		}
+	})
+	t.Run("census unavailable (nil) fails safe", func(t *testing.T) {
+		valid, reason := VerifyHandle(context.Background(), "org_1", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "532", nil)
+		if valid || reason != HandleVerificationCensusUnavailable {
+			t.Errorf("VerifyHandle() = (%v, %q), want (false, %q)", valid, reason, HandleVerificationCensusUnavailable)
+		}
+	})
+	t.Run("census error fails safe, not open", func(t *testing.T) {
+		census := fakeCensusFn(nil, errors.New("boom"))
+		valid, reason := VerifyHandle(context.Background(), "org_1", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "532", census)
+		if valid || reason != HandleVerificationCensusUnavailable {
+			t.Errorf("VerifyHandle() = (%v, %q), want (false, %q)", valid, reason, HandleVerificationCensusUnavailable)
+		}
+	})
+}
