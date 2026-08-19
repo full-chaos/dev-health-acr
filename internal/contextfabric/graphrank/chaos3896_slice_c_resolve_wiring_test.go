@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -319,4 +320,64 @@ func TestMergeCensusAttestedSatisfier_DistinguishesBackendErrorFromConfirmedAbse
 			t.Fatal("a backend error must never be reported under the SAME reason as a confirmed absence")
 		}
 	})
+}
+
+// TestMergeCensusAttestedSatisfier_CapsMatchedTermsAtTheExact32Boundary is
+// an independent codex xhigh review regression pin (HIGH, confirmed and
+// fixed): a candidate already holding exactly matchedTermsCap (32) real,
+// distinct MatchedTerms overflows to 33 once mergeSearchResults unions in
+// censusProvenanceMarker -- and, on the code this test would have caught,
+// contractsv1.SubjectCandidate.Validate() would then reject the WHOLE
+// investigation result at engine.go's result.Validate() call, converting a
+// VALID census recovery into a hard validation failure instead of a
+// successful commit. Fixed by re-applying capMatchedTermsAfterMerge (with
+// censusProvenanceMarker) after the census merge, mirroring the identical
+// discipline the question-level pass has always applied for its own
+// synthetic marker.
+func TestMergeCensusAttestedSatisfier_CapsMatchedTermsAtTheExact32Boundary(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:repo-1:532"}
+	key := SubjectKey(subject)
+	realTerms := make([]string, matchedTermsCap)
+	for i := range realTerms {
+		realTerms[i] = fmt.Sprintf("real-term-%02d", i)
+	}
+	candidatesBySubject := map[string]contextfabric.SubjectCandidate{
+		key: {
+			Subject: subject, State: contextfabric.ResolutionProposed, Confidence: 0.5,
+			MatchedTerms: append([]string(nil), realTerms...), MatchReasons: []string{"stalled"},
+		},
+	}
+	backend := &fakeGraphBackend{
+		exactHints: map[string]CandidateNode{
+			key: candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:532", "PR #532", 0.5, "*"),
+		},
+	}
+	deps := backend.deps()
+	attestation := Attestation{
+		Outcome: ShadowWouldCommit, UnscopedVisibility: true,
+		Kinds: []KindAttestation{{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, SatisfierCanonicalID: subject.CanonicalID}},
+	}
+	request := testRequest()
+
+	_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, candidatesBySubject, map[string]string{}, map[string]bool{}, nil, nil)
+	if !ok {
+		t.Fatal("mergeCensusAttestedSatisfier() ok = false, want true")
+	}
+	got := candidatesBySubject[key]
+	if len(got.MatchedTerms) > matchedTermsCap {
+		t.Fatalf("MatchedTerms count = %d, want <= %d (contractsv1's own bound, validate_context_fabric_result.go) -- a candidate already at the cap must not overflow once the census witness unions in, or the whole investigation result fails contract validation", len(got.MatchedTerms), matchedTermsCap)
+	}
+	for _, want := range realTerms {
+		found := false
+		for _, term := range got.MatchedTerms {
+			if term == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("real term %q was dropped from MatchedTerms -- only the synthetic census marker may give way to restore the cap", want)
+		}
+	}
 }

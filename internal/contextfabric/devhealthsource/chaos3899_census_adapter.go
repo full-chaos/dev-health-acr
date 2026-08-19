@@ -10,16 +10,20 @@ import (
 )
 
 // NewCensusFunc adapts BuildCensusDiscriminator+RunCensus to
-// graphrank.CensusFunc -- the shape ResolveDeps.CensusFunc (CHAOS-3899,
-// shadow-only) expects. A composition root that wants to run the shadow
-// round for real (a measurement harness, or eventually a gated production
-// wiring) passes NewCensusFunc(client) over the SAME ClickHouseQueryClient
-// this package's ordinary producers already use.
+// graphrank.CensusFunc -- the shape ResolveDeps.CensusFunc expects. A
+// composition root that wants to run the census round passes
+// NewCensusFunc(client) over the SAME ClickHouseQueryClient this package's
+// ordinary producers already use.
 //
-// SCOPE NOTE: this ticket does not itself wire NewCensusFunc into any
-// composition root (production's open.go, or the existing CHAOS-3884
-// replay harness) -- see the PR description for why that wiring is
-// deliberately left as a follow-up rather than bundled here.
+// WIRED IN PRODUCTION (CHAOS-3896 Slice C, independent codex xhigh review
+// finding: this doc comment had drifted stale, fixed here): production's
+// composition root (internal/runtime/hosted/open.go's
+// buildContextFabricGraphReader) wires NewCensusFunc into
+// falkorgraph.Config.CensusFunc, gated alongside wireIdentityUniverse --
+// see that call site's own doc comment for why the two are gated together.
+// The CHAOS-3884 replay harness (chaos3884_replay_harness_test.go) wires
+// this independently, through its own separate composition
+// (buildReplayGraphReader), not through open.go.
 func NewCensusFunc(client contextpacket.ClickHouseQueryClient) graphrank.CensusFunc {
 	return func(ctx context.Context, orgID string, kind graphrank.CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool) (graphrank.CensusOutcome, error) {
 		predicate, err := BuildCensusDiscriminator(kind, handleValue, handleBound, anchorKind, anchorCanonicalID, anchorBound)

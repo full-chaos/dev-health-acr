@@ -129,19 +129,25 @@ type Config struct {
 	// own doc comments for the event vocabulary and the corpus-safety
 	// discipline every event field is held to.
 	ResolutionTracer graphrank.ResolutionTracer
-	// CensusFunc (CHAOS-3899, SHADOW ONLY -- design brief v5 §6 Slice A) is
-	// optional (nil-safe), same convention as RawSignalObserver/
-	// ResolutionTracer above: the composition root's closure over
-	// devhealthsource.NewCensusFunc and its own ClickHouse client, bound to
-	// everything except ctx. A nil value (the default for every existing
-	// production composition root) means graphrank.ResolveDeps.CensusFunc
-	// stays nil too, so RunShadowEvidenceRound is never even called --
-	// byte-identical to every pre-CHAOS-3899 backend. Kept as a plain
-	// closure rather than a devhealthsource-typed dependency for the exact
-	// same reason IdentityUniverse is (this package never imports
-	// devhealthsource). No production composition root sets this today;
-	// the CHAOS-3884 replay/trial harness (chaos3899_shadow_run_test.go)
-	// is the first and only caller, for measurement.
+	// CensusFunc (CHAOS-3899; CONSUMED LIVE in the commit decision as of
+	// CHAOS-3896 Slice C, design brief v6 §1.4) is optional (nil-safe),
+	// same convention as RawSignalObserver/ResolutionTracer above: the
+	// composition root's closure over devhealthsource.NewCensusFunc and its
+	// own ClickHouse client, bound to everything except ctx. A nil value
+	// means graphrank.ResolveDeps.CensusFunc stays nil too, so
+	// RunShadowEvidenceRound is never even called -- byte-identical to
+	// every pre-CHAOS-3899 backend. Kept as a plain closure rather than a
+	// devhealthsource-typed dependency for the exact same reason
+	// IdentityUniverse is (this package never imports devhealthsource).
+	//
+	// WIRED IN PRODUCTION (independent codex xhigh review finding: this doc
+	// comment had drifted stale after Slice C's own open.go wiring landed,
+	// fixed here): production's composition root
+	// (internal/runtime/hosted/open.go's buildContextFabricGraphReader)
+	// sets this, gated alongside IdentityUniverse -- see that call site's
+	// own doc comment. The CHAOS-3884 replay/trial harness
+	// (chaos3884_replay_harness_test.go) also wires this, independently,
+	// through its own separate composition (buildReplayGraphReader).
 	CensusFunc graphrank.CensusFunc
 	// EpochResolver (CHAOS-3898 S2a, design brief §3.1) is optional
 	// (nil-safe), same convention as IdentityUniverse/CensusFunc above: the

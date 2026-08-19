@@ -27,17 +27,22 @@
 # (gen-trial-chaos3884_full50_replay.json) -- a later run silently
 # overwrote an earlier one's artifact, destroying the evidence behind an
 # already-cited acceptance number. The default now embeds this run's own
-# UTC start timestamp, so two ordinary invocations can never collide by
-# accident; the go test itself (chaos3884_replay_harness_test.go) also now
-# refuses outright to overwrite ANY existing file at ACR_TEST_REPLAY_OUT,
-# including an explicit override that happens to collide.
+# UTC start timestamp PLUS this shell's own PID (independent codex xhigh
+# review finding, confirmed and fixed: a timestamp alone still collides for
+# two invocations started in the SAME second -- the go test itself
+# (chaos3884_replay_harness_test.go) refuses outright to overwrite ANY
+# existing file at ACR_TEST_REPLAY_OUT, so a same-second collision failed
+# loud rather than silently overwriting, but the exchange-dir collision
+# below (RunID/request-file collision, not this artifact) still made one of
+# the two runs time out instead), so two ordinary invocations -- even
+# started in the same second -- can never collide by accident.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 LIMIT="${1:-}"
 
 trial_wire_common_env
-: "${ACR_TEST_REPLAY_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay-$(date -u +%Y%m%dT%H%M%SZ).json}"
+: "${ACR_TEST_REPLAY_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay-$(date -u +%Y%m%dT%H%M%SZ)-$$.json}"
 export ACR_TEST_REPLAY_OUT
 export ACR_TEST_TRIAL_ARM="replay"
 if [[ -n "$LIMIT" ]]; then
@@ -54,7 +59,13 @@ fi
 # from git rather than trusted to an operator-supplied value.
 export ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
 
-exdir="$repo_root/.trial-exchange-replay-$(date -u +%Y%m%dT%H%M%SZ)"
+# $$ (independent codex xhigh review finding, confirmed and fixed): a
+# timestamp alone still collides for two invocations started in the SAME
+# second -- both would share this exchange dir, both start their own
+# request sequence numbering at 000001, and the responder's session-nonce
+# matching would pair a request from one run with a stale/foreign response
+# from the other, timing one of the two runs out rather than failing loud.
+exdir="$repo_root/.trial-exchange-replay-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 mkdir -p "$exdir/requests" "$exdir/responses"
 export ACR_TEST_TRIAL_EXCHANGE_DIR="$exdir"
 export ACR_TEST_TRIAL_EXCHANGE_TIMEOUT="${ACR_TRIAL_EXCHANGE_TIMEOUT:-10m}"

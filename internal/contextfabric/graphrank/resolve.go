@@ -53,32 +53,46 @@ const censusProvenanceMarker = "[census witness]"
 // referenced, and which test cross-checks it against the real Validate().
 const matchedTermsCap = 32
 
-// capMatchedTermsAfterQuestionMerge enforces matchedTermsCap on every
-// candidate the question-level pass touched (codex round-1 P1, fix A,
-// second half). A candidate already carrying matchedTermsCap real,
-// user-meaningful extracted terms overflows by exactly one once
-// questionProvenanceMarker unions in; the marker -- synthetic, not
-// something a caller typed -- is the entry dropped to restore the bound,
-// never a real term.
+// capMatchedTermsAfterMerge enforces matchedTermsCap on every candidate,
+// dropping ONLY entries equal to marker -- a synthetic provenance literal
+// never something a caller typed -- to restore the bound (codex round-1 P1,
+// fix A, second half, generalized -- CHAOS-3896 Slice C codex xhigh review
+// finding, confirmed and fixed). A candidate already carrying
+// matchedTermsCap real, user-meaningful extracted terms overflows by
+// exactly one once a synthetic marker unions in; the marker is the entry
+// dropped to restore the bound, never a real term.
 //
-// Walks the WHOLE map rather than tracking which keys the question pass
-// touched: cheap at resolution scale (at most a few dozen candidates), and
-// simpler than threading a touched-set through mergeSearchResults for a
-// property that is a pure function of each candidate's own final
-// MatchedTerms. A candidate that already exceeded the cap from real terms
-// ALONE (a pre-existing, this-ticket-unrelated gap: mergeSearchResults'
-// shared per-term path has never capped MatchedTerms) is left as-is here --
-// this function's job is only to keep a PREVIOUSLY-valid candidate valid
-// after the question marker unions in, not to retrofit a bound onto
-// per-term merging this ticket did not touch.
-func capMatchedTermsAfterQuestionMerge(candidatesBySubject map[string]contextfabric.SubjectCandidate) {
+// Walks the WHOLE map rather than tracking which keys the merge touched:
+// cheap at resolution scale (at most a few dozen candidates), and simpler
+// than threading a touched-set through mergeSearchResults for a property
+// that is a pure function of each candidate's own final MatchedTerms. A
+// candidate that already exceeded the cap from real terms ALONE (a
+// pre-existing, unrelated gap: mergeSearchResults' shared per-term path has
+// never capped MatchedTerms) is left as-is here -- this function's job is
+// only to keep a PREVIOUSLY-valid candidate valid after a synthetic marker
+// unions in, not to retrofit a bound onto per-term merging this ticket did
+// not touch.
+//
+// TWO callers, TWO distinct markers (codex xhigh review finding, CHAOS-3896
+// Slice C, confirmed and fixed): questionProvenanceMarker after the
+// question-level pass (unchanged, below), and censusProvenanceMarker after
+// mergeCensusAttestedSatisfier's own merge
+// (mergeCensusAttestedSatisfier, further down this file) -- an EARLIER
+// version of this ticket added the census merge without ever re-capping
+// for ITS OWN synthetic marker, so a candidate already sitting at exactly
+// matchedTermsCap real terms overflowed to 33 once the census witness
+// unioned in, and contractsv1's SubjectCandidate.Validate()
+// (validate_context_fabric_result.go) rejected the WHOLE investigation
+// result at engine.go's result.Validate() call -- a valid census recovery
+// converted into a hard validation failure instead of a successful commit.
+func capMatchedTermsAfterMerge(candidatesBySubject map[string]contextfabric.SubjectCandidate, marker string) {
 	for key, candidate := range candidatesBySubject {
 		if len(candidate.MatchedTerms) <= matchedTermsCap {
 			continue
 		}
 		trimmed := make([]string, 0, len(candidate.MatchedTerms))
 		for _, term := range candidate.MatchedTerms {
-			if term == questionProvenanceMarker {
+			if term == marker {
 				continue
 			}
 			trimmed = append(trimmed, term)
@@ -800,11 +814,12 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	// aliasIdentityComplete (CHAOS-3884): built here, between the per-term
 	// Search loop and the question pass -- LOW-12: placing the merge BEFORE
-	// the question pass means capMatchedTermsAfterQuestionMerge (below)
-	// sees and correctly caps whatever MatchedTerms this merge ADDED, in
-	// the SAME single pass it already runs, rather than needing a second
-	// capping call. deps.AliasLookup nil means "this backend does not
-	// implement it" -- aliasIdentityComplete stays false, byte-identical
+	// the question pass means capMatchedTermsAfterMerge (below, called with
+	// questionProvenanceMarker) sees and correctly caps whatever
+	// MatchedTerms this merge ADDED, in the SAME single pass it already
+	// runs, rather than needing a second capping call. deps.AliasLookup nil
+	// means "this backend does not implement it" -- aliasIdentityComplete
+	// stays false, byte-identical
 	// to every pre-CHAOS-3884 backend.
 	aliasIdentityComplete := false
 	// aliasClaimantsByTerm (CHAOS-3899, shadow-only) is deps.AliasLookup's
@@ -906,7 +921,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// -- synthetic provenance, not something a caller typed -- is
 			// exactly the one entry that must give way; every real,
 			// user-meaningful extracted term survives.
-			capMatchedTermsAfterQuestionMerge(candidatesBySubject)
+			capMatchedTermsAfterMerge(candidatesBySubject, questionProvenanceMarker)
 		}
 	}
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
@@ -1189,6 +1204,14 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// call is never a second, independent authorization gate -- merely
 	// where the actual merge/insert into candidatesBySubject happens.
 	mergeSearchResults(ctx, principal, request, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms)
+	// codex xhigh review finding (HIGH, confirmed and fixed): a candidate
+	// already sitting at exactly matchedTermsCap real terms overflows to
+	// matchedTermsCap+1 once censusProvenanceMarker unions in above --
+	// without this call, contractsv1.SubjectCandidate.Validate() rejected
+	// the WHOLE investigation result at engine.go's result.Validate() call,
+	// converting a valid census recovery into a hard validation failure.
+	// See capMatchedTermsAfterMerge's own doc comment for the full account.
+	capMatchedTermsAfterMerge(candidatesBySubject, censusProvenanceMarker)
 	key := SubjectKey(subject)
 	if deps.ResolutionTracer != nil {
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
