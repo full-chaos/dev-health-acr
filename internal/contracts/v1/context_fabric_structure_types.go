@@ -115,18 +115,23 @@ type ContextFabricKindOption struct {
 
 // ContextFabricAnchorOption offers one unique-claimant anchor candidate,
 // minted onto a stored result so a later turn can confirm it via ancr_
-// receipt redemption. ClaimantKey is the identity-registry v2 key (org-
-// scoped, opaque, no display text -- the 3859 sink discipline applied to
-// offers, per the brief's own instruction); it is what redemption
-// re-verifies uniqueness against, never CanonicalID alone (a canonical id
-// can outlive the claimant-uniqueness fact that made it offerable).
+// receipt redemption.
+//
+// CHANGE LOG (P1.E scoping): this type originally also carried
+// ClaimantKey, asserted as "the identity-registry v2 key... what
+// redemption re-verifies uniqueness against" -- P1.E's own scoping found
+// that mechanism does not exist anywhere in the identity-universe code
+// (BindAnchor/IdentityMatch prove uniqueness on a plain (Kind,CanonicalID)
+// pair, nothing opaque or key-shaped): an asserted mechanism without a
+// producer. Removed rather than left aspirational; (Kind, CanonicalID) is
+// the real identity redemption re-verifies against -- see
+// verifyAnchorClaimantUnique (internal/contextfabric/structure.go).
 type ContextFabricAnchorOption struct {
 	ReceiptID      string                            `json:"receipt_id"`
 	OptionID       string                            `json:"option_id"`
 	Label          string                            `json:"label"`
 	Kind           ContextFabricSubjectKind          `json:"kind"`
 	CanonicalID    string                            `json:"canonical_id"`
-	ClaimantKey    string                            `json:"claimant_key"`
 	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
 	PriorVersionID string                            `json:"prior_version_id,omitempty"`
 	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`

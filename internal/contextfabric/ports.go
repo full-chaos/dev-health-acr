@@ -193,8 +193,8 @@ type ConfirmedExpectedKind struct {
 // persisted type.
 //
 // The KindOptions/AnchorOptions/HandleOptions below are PARTIALLY built:
-// every content field (Kind, Label, CanonicalID, ClaimantKey, PatternID,
-// Value, SourceColumn, OfferSource) is set, but ReceiptID and OptionID
+// every content field (Kind, Label, CanonicalID, PatternID, Value,
+// SourceColumn, OfferSource) is set, but ReceiptID and OptionID
 // are left zero-valued -- minting them requires the result's own
 // ResultID (mintStructureReceiptID's own "result identity" input, per
 // the team-lead's deterministic-minting ruling), which does not exist

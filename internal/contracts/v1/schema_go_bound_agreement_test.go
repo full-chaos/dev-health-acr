@@ -175,8 +175,6 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.StructureNeeds.properties.accepted_grammars.maxItems":       contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeeds.properties.missing.maxItems":                 ContextFabricStructureNeedKindCount,
 		"common#$defs.StructureNeeds.properties.missing.minItems":                 1,
-		"common#$defs.AnchorOption.properties.claimant_key.minLength":             1,
-		"common#$defs.AnchorOption.properties.claimant_key.maxLength":             256,
 		"common#$defs.HandleOption.properties.value.minLength":                    1,
 		"common#$defs.HandleOption.properties.value.maxLength":                    256,
 		"common#$defs.HandleOption.properties.source_column.minLength":            1,

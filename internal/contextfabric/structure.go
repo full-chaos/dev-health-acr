@@ -376,7 +376,7 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 	if len(material.AnchorOptions) > 0 {
 		needs.AnchorOptions = make([]contractsv1.ContextFabricAnchorOption, 0, len(material.AnchorOptions))
 		for _, opt := range material.AnchorOptions {
-			content := string(opt.Kind) + "\x00" + opt.CanonicalID + "\x00" + opt.ClaimantKey
+			content := string(opt.Kind) + "\x00" + opt.CanonicalID
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
 			needs.AnchorOptions = append(needs.AnchorOptions, opt)

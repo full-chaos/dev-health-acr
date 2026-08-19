@@ -314,7 +314,7 @@
       }
     },
     "RelativeWindowID": {
-      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
+      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
       "type": "string",
       "enum": [
         "trailing_30d",
@@ -855,7 +855,7 @@
       ]
     },
     "AnchorOption": {
-      "description": "CHAOS-3900 P1: one server-offered unique-claimant anchor candidate, minted onto a stored result so a later turn can confirm it via ancr_ receipt redemption. claimant_key is the identity-registry v2 key (org-scoped, opaque, no display text).",
+      "description": "CHAOS-3900 P1: one server-offered unique-claimant anchor candidate, minted onto a stored result so a later turn can confirm it via ancr_ receipt redemption. Re-verification identity is (kind, canonical_id) -- see internal/contextfabric's verifyAnchorClaimantUnique.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -883,11 +883,6 @@
           "minLength": 1,
           "maxLength": 256
         },
-        "claimant_key": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
         "offer_source": {
           "$ref": "#/$defs/StructureOfferSource"
         },
@@ -908,7 +903,6 @@
         "label",
         "kind",
         "canonical_id",
-        "claimant_key",
         "offer_source"
       ]
     },

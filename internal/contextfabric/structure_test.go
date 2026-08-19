@@ -120,7 +120,7 @@ func TestCHAOS3900_StructureReceiptNamingWrongOfferListVetoes(t *testing.T) {
 	priorResult.StructureNeeds = &StructureNeeds{
 		Missing: []StructureNeedKind{"subject_anchor"},
 		AnchorOptions: []AnchorOption{
-			{ReceiptID: "ancr_confirm0001", OptionID: "opt_repo", Label: "the repo", Kind: SubjectRepository, CanonicalID: "repository_ask_dev", ClaimantKey: "claimant_1", OfferSource: "engine"},
+			{ReceiptID: "ancr_confirm0001", OptionID: "opt_repo", Label: "the repo", Kind: SubjectRepository, CanonicalID: "repository_ask_dev", OfferSource: "engine"},
 		},
 	}
 	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}

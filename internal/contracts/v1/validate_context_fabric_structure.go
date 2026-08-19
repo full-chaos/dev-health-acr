@@ -104,8 +104,8 @@ func (o ContextFabricAnchorOption) Validate() error {
 	if !validContextFabricSubjectKind(o.Kind) {
 		return fmt.Errorf("anchor option kind is invalid")
 	}
-	if !stringLengthBetween(o.CanonicalID, 1, 256) || !stringLengthBetween(o.ClaimantKey, 1, 256) {
-		return fmt.Errorf("anchor option canonical_id or claimant_key violates v1 bounds")
+	if !stringLengthBetween(o.CanonicalID, 1, 256) {
+		return fmt.Errorf("anchor option canonical_id violates v1 bounds")
 	}
 	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
 		return fmt.Errorf("anchor option offer_source is invalid")
