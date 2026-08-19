@@ -248,13 +248,26 @@ func splitCensusKinds(kinds []CensusKind) (censused []CensusKind, nonCensusedSur
 
 // RunShadowEvidenceRound executes the FULL shadow round (design brief v5
 // §6 Slice A): typed-grammar D, unique-claimant anchor, per-kind
-// base-table source census, attestation -- but the returned Attestation is
-// NEVER consumed by any commit-path decision in this slice; the caller's
-// only obligation is to trace it (evidence_round/evidence_probe) and
-// discard it. tracer may be nil (matches every other optional
-// ResolveDeps-adjacent dependency's convention) -- a nil tracer still gets
-// a fully-computed Attestation back (useful for a direct unit test), it
-// simply never emits.
+// base-table source census, attestation.
+//
+// STALENESS NOTE (codex xhigh review finding, CHAOS-3918, 2026-08-19): the
+// paragraph above used to say the returned Attestation is "NEVER consumed
+// by any commit-path decision" -- true for Slice A alone, but CHAOS-3896
+// Slice C (merged to main as this ticket's own work was in flight) now
+// LIVE-CONSUMES this SAME Attestation via mergeCensusAttestedSatisfier/
+// attestedSatisfier (resolve.go) for its evidence_census commit gate. This
+// function's own decisive computation (the switch statement further down,
+// and every field on the Attestation it returns) is UNCHANGED by that --
+// Slice C added a consumer, not a producer-side behavior change. What
+// stays true, and is the load-bearing guarantee for THIS ticket's own
+// CHAOS-3918 widening (traceSourceNativeBinds, below): the Attestation
+// type gained ZERO new fields from CHAOS-3918, and traceSourceNativeBinds
+// is called for its trace side effect alone -- it returns nothing and
+// writes into no local variable this function's decisive switch statement
+// or attestedSatisfier() reads. tracer may be nil (matches every other
+// optional ResolveDeps-adjacent dependency's convention) -- a nil tracer
+// still gets a fully-computed Attestation back (useful for a direct unit
+// test), it simply never emits.
 //
 // Non-vacuity (brief §6/§7's own acceptance bar -- "prove the round
 // actually executed"): an evidence_round stage event fires on EVERY call

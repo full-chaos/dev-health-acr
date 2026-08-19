@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,6 +25,9 @@ func TestBindSourceNativeHandles_ProseIsNotSwallowed(t *testing.T) {
 		{"large_plain_integer", "the byte count was 1234567 for that request"},
 		{"bare_word_slash_word_no_letters", "1/2 of the reviewers approved"},
 		{"ordinary_branching_sentence", "we should branch out into new markets"},
+		{"branch_date_reference", "what shipped on branch 2026-08-19"},
+		{"hex_speak_word_deadbeef", "the constant was deadbeef in that header"},
+		{"hex_speak_word_cafebabe", "the magic number cafebabe showed up in the dump"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,25 +85,63 @@ func TestBindSourceNativeHandles_CommitSHANeverAllDecimal(t *testing.T) {
 	}
 }
 
+// TestBindSourceNativeHandles_ProviderURLNeverMisSplitsIntoRepoSlug pins
+// the codex xhigh review finding (confirmed and fixed): a
+// "github.com/org/repo" URL span must be reported ONCE, as a
+// provider_qualified_name match, never ALSO (or instead) as a bogus,
+// one-segment-short repo_slug match like "github.com/org" -- repo_slug's
+// own avoidOverlapWith entry is what prevents this.
+func TestBindSourceNativeHandles_ProviderURLNeverMisSplitsIntoRepoSlug(t *testing.T) {
+	t.Parallel()
+	bound := BindSourceNativeHandles("see github.com/full-chaos/dev-health-acr for details", nil, true)
+	var sawProvider, sawRepoSlug bool
+	for _, b := range bound {
+		switch b.Grammar {
+		case "provider_qualified_name":
+			sawProvider = true
+			if b.Term != "github.com/full-chaos/dev-health-acr" {
+				t.Fatalf("provider_qualified_name term = %q, want the full URL span", b.Term)
+			}
+		case "repo_slug":
+			sawRepoSlug = true
+			t.Errorf("repo_slug ALSO matched inside the provider URL span: %#v -- want it suppressed by avoidOverlapWith", b)
+		}
+	}
+	if !sawProvider {
+		t.Fatalf("no provider_qualified_name match found in %#v", bound)
+	}
+	if sawRepoSlug {
+		t.Fatalf("repo_slug matched inside a provider_qualified_name span")
+	}
+}
+
 // TestBindSourceNativeHandles_ResolvesViaIdentityUniverse pins the R4
-// completeness+uniqueness discipline this file reuses from BindAnchor:
-// exactly one claimant + complete read -> Resolved; anything else ->
-// unresolved (a syntactic-match-only "false positive" in the
-// pre-registration's own sense).
+// completeness+uniqueness discipline this file reuses from BindAnchor,
+// AND the alias-shape lookupKey discipline (codex xhigh review finding,
+// confirmed and fixed): claimantsByTerm is keyed by the identity
+// universe's OWN alias shapes (bare repo name; "provider:org/repo"), never
+// by the raw "org/repo" or "github.com/org/repo" text a question actually
+// contains -- BindSourceNativeHandles must transform before looking up.
 func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 	t.Parallel()
-	question := "why did full-chaos/dev-health-acr fail to build?"
 
-	t.Run("unique_claimant_resolves", func(t *testing.T) {
+	t.Run("repo_slug_resolves_via_bare_name_alias", func(t *testing.T) {
 		t.Parallel()
+		question := "why did full-chaos/dev-health-acr fail to build?"
+		// The identity universe's OWN alias shape for a repository is its
+		// BARE name alone (devhealthsource's repositoryBareNameAlias) --
+		// never the full "org/repo" slug a question actually contains.
 		claimants := map[string][]IdentityMatch{
-			"full-chaos/dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
+			"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
 		}
 		bound := BindSourceNativeHandles(question, claimants, true)
 		found := false
 		for _, b := range bound {
 			if b.Grammar == "repo_slug" {
 				found = true
+				if b.Term != "full-chaos/dev-health-acr" {
+					t.Fatalf("repo_slug Term = %q, want the raw as-typed slug (Term must NOT be normalized -- only the lookup is)", b.Term)
+				}
 				if !b.Resolved || b.Kind != contextfabric.SubjectRepository {
 					t.Fatalf("repo_slug bind = %#v, want Resolved=true Kind=repository", b)
 				}
@@ -110,9 +152,51 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 		}
 	})
 
+	t.Run("provider_qualified_name_resolves_via_provider_colon_alias", func(t *testing.T) {
+		t.Parallel()
+		question := "see github.com/full-chaos/dev-health-acr for details"
+		// The identity universe's OWN provider-qualified alias shape is
+		// "<provider>:<org>/<repo>" (devhealthsource's
+		// repositoryProviderAlias) -- never the URL shape "github.com/org/repo"
+		// a question actually contains.
+		claimants := map[string][]IdentityMatch{
+			"github:full-chaos/dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
+		}
+		bound := BindSourceNativeHandles(question, claimants, true)
+		found := false
+		for _, b := range bound {
+			if b.Grammar == "provider_qualified_name" {
+				found = true
+				if !b.Resolved || b.Kind != contextfabric.SubjectRepository {
+					t.Fatalf("provider_qualified_name bind = %#v, want Resolved=true Kind=repository", b)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("no provider_qualified_name bind found in %#v", bound)
+		}
+	})
+
+	t.Run("gitlab_domain_normalizes_too", func(t *testing.T) {
+		t.Parallel()
+		claimants := map[string][]IdentityMatch{
+			"gitlab:acme/widgets": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:2"}, Mechanism: contextfabric.MatchAlias}},
+		}
+		bound := BindSourceNativeHandles("check gitlab.com/acme/widgets please", claimants, true)
+		found := false
+		for _, b := range bound {
+			if b.Grammar == "provider_qualified_name" && b.Resolved {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("gitlab.com provider match did not resolve via the gitlab: alias: %#v", bound)
+		}
+	})
+
 	t.Run("no_claimant_stays_unresolved", func(t *testing.T) {
 		t.Parallel()
-		bound := BindSourceNativeHandles(question, map[string][]IdentityMatch{}, true)
+		bound := BindSourceNativeHandles("why did full-chaos/dev-health-acr fail to build?", map[string][]IdentityMatch{}, true)
 		for _, b := range bound {
 			if b.Grammar == "repo_slug" && b.Resolved {
 				t.Fatalf("repo_slug resolved with no claimant present: %#v", b)
@@ -123,12 +207,12 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 	t.Run("ambiguous_claimants_stay_unresolved", func(t *testing.T) {
 		t.Parallel()
 		claimants := map[string][]IdentityMatch{
-			"full-chaos/dev-health-acr": {
+			"dev-health-acr": {
 				{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias},
 				{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:2"}, Mechanism: contextfabric.MatchAlias},
 			},
 		}
-		bound := BindSourceNativeHandles(question, claimants, true)
+		bound := BindSourceNativeHandles("why did full-chaos/dev-health-acr fail to build?", claimants, true)
 		for _, b := range bound {
 			if b.Grammar == "repo_slug" && b.Resolved {
 				t.Fatalf("repo_slug resolved with 2 claimants present (R4 violated): %#v", b)
@@ -139,9 +223,9 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 	t.Run("incomplete_read_stays_unresolved", func(t *testing.T) {
 		t.Parallel()
 		claimants := map[string][]IdentityMatch{
-			"full-chaos/dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
+			"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
 		}
-		bound := BindSourceNativeHandles(question, claimants, false)
+		bound := BindSourceNativeHandles("why did full-chaos/dev-health-acr fail to build?", claimants, false)
 		for _, b := range bound {
 			if b.Grammar == "repo_slug" && b.Resolved {
 				t.Fatalf("repo_slug resolved on an INCOMPLETE read (R4 violated): %#v", b)
@@ -157,14 +241,21 @@ func TestBindSourceNativeHandles_ResolvesViaIdentityUniverse(t *testing.T) {
 // question content -- is held constant across both calls) and differ ONLY
 // in whether the question text also contains a source-native grammar
 // match for an entry already in that map. Both must produce byte-identical
-// Outcome/Reason/DIdentity/PreconditionUnproven/NonCensusedSurvivor/Kinds
-// -- the widening measurement (evidence_source_native/
+// Outcome/Reason/DIdentity/PreconditionUnproven/NonCensusedSurvivor and an
+// IDENTICAL Kinds slice (not just length -- codex xhigh review finding:
+// comparing len(Kinds) alone could miss a content divergence within an
+// unchanged-length slice) -- the widening measurement (evidence_source_native/
 // evidence_source_native_probe trace events) is observable ONLY via the
 // tracer, never via the returned Attestation's decisive fields.
 func TestRunShadowEvidenceRound_SourceNativeWideningNeverChangesDecisiveOutcome(t *testing.T) {
 	t.Parallel()
+	// Keyed by the identity universe's OWN bare-name alias shape (see
+	// TestBindSourceNativeHandles_ResolvesViaIdentityUniverse) -- this map
+	// is passed to BindAnchor UNCHANGED by this test, so BindAnchor's own
+	// R4 computation (which iterates every key regardless of question
+	// content) is held constant across both calls below.
 	claimants := map[string][]IdentityMatch{
-		"full-chaos/dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
+		"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:1"}, Mechanism: contextfabric.MatchAlias}},
 	}
 
 	run := func(question string) Attestation {
@@ -180,9 +271,9 @@ func TestRunShadowEvidenceRound_SourceNativeWideningNeverChangesDecisiveOutcome(
 	without := run("why did PR 532 fail in CI?")
 	with := run("why did full-chaos/dev-health-acr and PR 532 fail in CI?")
 
-	// Sanity: the source-native grammar DID fire differently between the
-	// two questions (otherwise this test would vacuously pass without
-	// exercising the widening at all).
+	// Sanity: the source-native grammar DID fire (and resolve) differently
+	// between the two questions (otherwise this test would vacuously pass
+	// without exercising the widening at all).
 	withoutBinds := BindSourceNativeHandles("why did PR 532 fail in CI?", claimants, true)
 	withBinds := BindSourceNativeHandles("why did full-chaos/dev-health-acr and PR 532 fail in CI?", claimants, true)
 	if len(withoutBinds) != 0 || len(withBinds) == 0 || !withBinds[0].Resolved {
@@ -190,8 +281,24 @@ func TestRunShadowEvidenceRound_SourceNativeWideningNeverChangesDecisiveOutcome(
 	}
 
 	if without.Outcome != with.Outcome || without.Reason != with.Reason || without.DIdentity != with.DIdentity ||
-		without.PreconditionUnproven != with.PreconditionUnproven || without.NonCensusedSurvivor != with.NonCensusedSurvivor ||
-		len(without.Kinds) != len(with.Kinds) {
+		without.PreconditionUnproven != with.PreconditionUnproven || without.NonCensusedSurvivor != with.NonCensusedSurvivor {
 		t.Fatalf("source-native widening changed the decisive Attestation: without=%#v with=%#v", without, with)
+	}
+	if len(without.Kinds) != len(with.Kinds) {
+		t.Fatalf("source-native widening changed Kinds length: without=%#v with=%#v", without.Kinds, with.Kinds)
+	}
+	for i := range without.Kinds {
+		// CensusReadAt is real wall-clock time (time.Now().UTC(), stamped
+		// independently by each of the two run() calls above) -- excluded
+		// from this comparison deliberately, not because it is allowed to
+		// diverge for a reason THIS test cares about, but because it is
+		// EXPECTED to diverge between any two calls regardless of the
+		// widening, and comparing it here would make this test flaky
+		// rather than more precise. Every other field is compared.
+		a, b := without.Kinds[i], with.Kinds[i]
+		a.CensusReadAt, b.CensusReadAt = time.Time{}, time.Time{}
+		if !reflect.DeepEqual(a, b) {
+			t.Fatalf("source-native widening changed Kinds[%d] content: without=%#v with=%#v", i, without.Kinds[i], with.Kinds[i])
+		}
 	}
 }

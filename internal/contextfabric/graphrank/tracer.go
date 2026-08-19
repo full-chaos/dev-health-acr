@@ -108,6 +108,28 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"outcome", event.Outcome, "graph_existence_ok", event.GraphExistenceOK,
 			"census_commit_reason", event.CensusCommitReason)
+	case "evidence_source_native":
+		// CHAOS-3918 (chris-ratified pre-registered shadow measurement,
+		// 2026-08-19; codex xhigh review finding, confirmed and fixed:
+		// this case was missing entirely, so the widening measurement's
+		// whole payload fell to the "unknown stage" branch below and was
+		// silently discarded in production -- the same defect class
+		// evidence_census_commit above was already fixed for). Content-safe:
+		// both fields are a count and a bool.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence source native (shadow widening)",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"source_native_match_count", event.ShadowSourceNativeMatchCount,
+			"source_native_any_resolved", event.ShadowSourceNativeAnyResolved)
+	case "evidence_source_native_probe":
+		// CHAOS-3918: ONE per-match receipt, mirrors evidence_probe's own
+		// "per-kind, never aggregated" cardinality one level down to "per
+		// grammar match". Content-safe: Grammar is the registry entry's own
+		// fixed name (never the matched literal), Kind is a closed enum.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence source native probe (shadow widening)",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"source_native_grammar", event.ShadowSourceNativeGrammar,
+			"source_native_resolved", event.ShadowSourceNativeResolved,
+			"source_native_kind", string(event.ShadowSourceNativeKind))
 	default:
 		t.logger.DebugContext(ctx, "context fabric resolution trace: unknown stage",
 			"request_id", event.RequestID, "stage", event.Stage)
