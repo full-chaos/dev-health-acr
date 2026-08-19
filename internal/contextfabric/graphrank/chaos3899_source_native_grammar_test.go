@@ -85,6 +85,64 @@ func TestBindSourceNativeHandles_CommitSHANeverAllDecimal(t *testing.T) {
 	}
 }
 
+// TestBindSourceNativeHandles_ProviderDomainRequiresRealHostBoundary pins
+// the CodeQL go/regex/missing-regexp-anchor finding (confirmed and fixed,
+// 2026-08-19): provider_qualified_name's pattern must never match
+// "github.com"/"gitlab.com" when that literal is actually a SUFFIX or
+// SUBDOMAIN of a DIFFERENT, unrelated hostname -- a plain \b anchor
+// (Go RE2's word/non-word transition) is insufficient, since "-" and "."
+// are both non-word characters and so both satisfy \b immediately before
+// "github"/"gitlab" even though neither is a valid host-name boundary.
+func TestBindSourceNativeHandles_ProviderDomainRequiresRealHostBoundary(t *testing.T) {
+	t.Parallel()
+	hostileCases := []struct {
+		name     string
+		question string
+	}{
+		{"hyphenated_prefix_host", "see evil-github.com/org/repo for details"},
+		{"subdomain_host", "see sub.github.com/org/repo for details"},
+		{"no_separator_prefix_host", "see xgithub.com/org/repo for details"},
+		{"hyphenated_gitlab_prefix_host", "see evil-gitlab.com/org/repo for details"},
+	}
+	for _, tc := range hostileCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			bound := BindSourceNativeHandles(tc.question, nil, true)
+			for _, b := range bound {
+				if b.Grammar == "provider_qualified_name" {
+					t.Fatalf("provider_qualified_name matched %q inside a hostile/unrelated host -- want the real github.com/gitlab.com boundary enforced, got bind %#v", tc.question, b)
+				}
+			}
+		})
+	}
+
+	// Sanity: the legitimate cases -- start-of-string and preceded by
+	// ordinary prose (a space) -- must still match, proving this is a
+	// boundary fix, not an over-correction that breaks the real case.
+	legitCases := []struct {
+		name     string
+		question string
+	}{
+		{"start_of_string", "github.com/full-chaos/dev-health-acr is the repo"},
+		{"preceded_by_space", "see github.com/full-chaos/dev-health-acr for details"},
+	}
+	for _, tc := range legitCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			bound := BindSourceNativeHandles(tc.question, nil, true)
+			found := false
+			for _, b := range bound {
+				if b.Grammar == "provider_qualified_name" && b.Term == "github.com/full-chaos/dev-health-acr" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("provider_qualified_name did not match the legitimate case %q: %#v", tc.question, bound)
+			}
+		})
+	}
+}
+
 // TestBindSourceNativeHandles_ProviderURLNeverMisSplitsIntoRepoSlug pins
 // the codex xhigh review finding (confirmed and fixed): a
 // "github.com/org/repo" URL span must be reported ONCE, as a

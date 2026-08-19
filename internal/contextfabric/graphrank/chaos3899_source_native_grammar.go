@@ -205,6 +205,28 @@ func repoBareName(s string) string {
 	return s[idx+1:]
 }
 
+// providerQualifiedNamePattern matches an explicit provider-domain prefix
+// (github.com/ or gitlab.com/) followed by an org/repo slug, ANCHORED so
+// the domain token cannot appear as a suffix or subdomain of a DIFFERENT,
+// unrelated host (CodeQL go/regex/missing-regexp-anchor, confirmed and
+// fixed, 2026-08-19): the previous pattern anchored only with \b, which
+// Go RE2 treats as "a word/non-word transition" -- "-" is a non-word
+// character, so "evil-github.com/org/repo" satisfied \b immediately
+// before "github" (transitioning from "-" to "g") and matched the
+// EMBEDDED "github.com/org/repo" as if it were the real github.com, even
+// though the actual host is "evil-github.com". Group 1
+// (?:^|[^A-Za-z0-9._-]) requires the character immediately before the
+// domain token to be EITHER the start of the string OR something that
+// cannot itself be part of a hostname/subdomain -- "evil-github.com" and
+// "sub.github.com" both fail this (the character before "github" is "-"
+// or "." respectively, both valid hostname characters), while "see
+// github.com/org/repo" and a string-initial "github.com/org/repo" both
+// succeed (a space, or start-of-string, is not a valid hostname
+// character). Group 2 is the actual match value -- valueGroup below
+// points at it, never at the whole match (which would include the guard
+// character).
+var providerQualifiedNamePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9._-])((?:github\.com|gitlab\.com)/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)`)
+
 // providerAliasKey transforms a provider_qualified_name match's own
 // URL-shaped extracted literal ("github.com/org/repo", the shape a
 // question actually uses) into the identity universe's own
@@ -289,8 +311,8 @@ func providerAliasKey(s string) string {
 var sourceNativeGrammarRegistry = []sourceNativeGrammarEntry{
 	{
 		name:       "provider_qualified_name",
-		pattern:    regexp.MustCompile(`(?i)\b(?:github\.com|gitlab\.com)/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\b`),
-		valueGroup: 0,
+		pattern:    providerQualifiedNamePattern,
+		valueGroup: 1,
 		lookupKey:  providerAliasKey,
 	},
 	{

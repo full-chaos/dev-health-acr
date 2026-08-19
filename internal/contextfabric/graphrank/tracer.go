@@ -3,9 +3,30 @@ package graphrank
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
+
+// sanitizeLogString strips ASCII control characters -- notably \n and \r,
+// the classic log-forging vector: an unescaped newline inside a logged
+// value can make attacker-influenced text masquerade as a separate,
+// fabricated log line -- from s before it reaches a logging sink (CodeQL
+// go/log-injection, CHAOS-3918, 2026-08-19). Belt-and-suspenders on top of
+// log/slog's own TextHandler/JSONHandler value quoting (Go's stdlib
+// already escapes control characters inside a structured attribute value
+// for both handlers -- so this specific forging vector is not actually
+// exploitable through this type's DebugContext calls today), applied
+// because a static analyzer has no way to credit that runtime behavior.
+// \t is kept (harmless inside one log line, more readable than dropped).
+func sanitizeLogString(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || (r < 0x20 && r != '\t') {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // SlogResolutionTracer is the production ResolutionTracer (team-lead
 // ruling, 2026-08-17): every stage event becomes one structured log line,
@@ -115,19 +136,28 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// whole payload fell to the "unknown stage" branch below and was
 		// silently discarded in production -- the same defect class
 		// evidence_census_commit above was already fixed for). Content-safe:
-		// both fields are a count and a bool.
+		// both non-request-id/stage fields are a count and a bool.
+		// request_id/stage pass through sanitizeLogString -- see its own
+		// doc comment (CodeQL go/log-injection).
 		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence source native (shadow widening)",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
 			"source_native_match_count", event.ShadowSourceNativeMatchCount,
 			"source_native_any_resolved", event.ShadowSourceNativeAnyResolved)
 	case "evidence_source_native_probe":
 		// CHAOS-3918: ONE per-match receipt, mirrors evidence_probe's own
 		// "per-kind, never aggregated" cardinality one level down to "per
 		// grammar match". Content-safe: Grammar is the registry entry's own
-		// fixed name (never the matched literal), Kind is a closed enum.
+		// fixed name (never the matched literal -- sourceNativeGrammarRegistry's
+		// own doc comment; the ONLY place this field is ever assigned is
+		// `Grammar: entry.name`, chaos3899_source_native_grammar.go, always
+		// one of 5 fixed constants), Kind is a closed enum. Every
+		// string-typed field here (including request_id/stage) still passes
+		// through sanitizeLogString -- see its own doc comment (CodeQL
+		// go/log-injection): a static analyzer cannot credit "this string
+		// is registry-constant by construction" the way a human review can.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence source native probe (shadow widening)",
-			"request_id", event.RequestID, "stage", event.Stage,
-			"source_native_grammar", event.ShadowSourceNativeGrammar,
+			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+			"source_native_grammar", sanitizeLogString(event.ShadowSourceNativeGrammar),
 			"source_native_resolved", event.ShadowSourceNativeResolved,
 			"source_native_kind", string(event.ShadowSourceNativeKind))
 	default:
