@@ -191,7 +191,7 @@ func TestHierarchyEdgeIntersectsBothEndpointWindows(t *testing.T) {
 			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1"}}})
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:repo-1:WIDGET-101:WIDGET-050")
+	edge := relationshipByID(t, batch, workItemHierarchyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-050"))
 	requireWindow(t, "part_of", edge.ValidFrom, edge.ValidTo, &childCreated, &childEnded)
 }
 
@@ -214,7 +214,7 @@ func TestHierarchyEdgeStaysOpenWhenBothEndpointsAreOpen(t *testing.T) {
 			childCreated, uint8(0), zeroTime, parentCreated, uint8(0), zeroTime, "repo-1"}}})
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:repo-1:WIDGET-101:WIDGET-050")
+	edge := relationshipByID(t, batch, workItemHierarchyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-050"))
 	requireWindow(t, "part_of", edge.ValidFrom, edge.ValidTo, &childCreated, nil)
 }
 
@@ -283,6 +283,24 @@ func workItemDependencyRelationshipID(t *testing.T, sourceRepoID, sourceID, targ
 		t.Fatalf("identity.Derive(target) failed: omitted=%v err=%v", omitted, err)
 	}
 	return identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, source, target, relationshipType)
+}
+
+// workItemHierarchyRelationshipID computes the CHAOS-3898 §1.5
+// relationship.v2 id a PART_OF hierarchy edge derives (P1-2 fix-forward:
+// queryWorkItemHierarchy was left on the old endpoint-independent scheme
+// until this slice), so tests can look one up without hardcoding the
+// digest scheme's output.
+func workItemHierarchyRelationshipID(t *testing.T, childRepoID, childID, parentRepoID, parentID string) string {
+	t.Helper()
+	child, omitted, err := identity.Derive(identity.KindWorkItem, []string{childRepoID, childID}, nil)
+	if err != nil || omitted {
+		t.Fatalf("identity.Derive(child) failed: omitted=%v err=%v", omitted, err)
+	}
+	parent, omitted, err := identity.Derive(identity.KindWorkItem, []string{parentRepoID, parentID}, nil)
+	if err != nil || omitted {
+		t.Fatalf("identity.Derive(parent) failed: omitted=%v err=%v", omitted, err)
+	}
+	return identity.DeriveRelationship(identity.RelationshipFamilyWorkItemHierarchy, child, parent, string(contractsv1.ContextFabricRelationshipPartOf))
 }
 
 // TestF5_DependencyEdgeStubsAnUnresolvedTarget: target_work_item_id is not
@@ -679,6 +697,6 @@ func TestDisjointHierarchyEdgeCollapsesToADegenerateWindow(t *testing.T) {
 			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1"}}})
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:repo-1:WIDGET-101:WIDGET-050")
+	edge := relationshipByID(t, batch, workItemHierarchyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-050"))
 	requireWindow(t, "part_of", edge.ValidFrom, edge.ValidTo, &parentCreated, &parentCreated)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // The production column snapshot this file used to hold inline now lives
@@ -152,6 +153,12 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		t.Fatalf("identity.Derive(parent) failed: omitted=%v err=%v", omitted, err)
 	}
 	workItemDependencyRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, workItemChildID, workItemParentID, "blocks")
+	// CHAOS-3898 §1.5 P1-2 fix-forward: work_items_hierarchy's relationship
+	// id is the SAME digest scheme, converted from the old
+	// endpoint-independent string this fixture used to hardcode --
+	// queryWorkItemHierarchy's own PART_OF type, same endpoint canonical
+	// ids computed above.
+	workItemHierarchyRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemHierarchy, workItemChildID, workItemParentID, string(contractsv1.ContextFabricRelationshipPartOf))
 
 	wantCanonicalID := map[string]string{
 		// devhealthschema:not-a-production-replica this maps each table to the canonical ID its row is
@@ -163,7 +170,7 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		"deployments":                          "deployment.v2:" + repoID + ":deploy-parity-1",
 		"operational_incidents":                "incident:incident-parity-1",
 		"work_item_dependencies":               workItemDependencyRelationshipID,
-		"work_items_hierarchy":                 "relationship:work_item_hierarchy:" + repoID + ":WI-CHILD:WI-PARENT",
+		"work_items_hierarchy":                 workItemHierarchyRelationshipID,
 		"work_graph_deployment_incident_edges": "relationship:deployment_incident:edge-parity-1",
 		"git_pull_request_reviews":             "pull_request_review.v2:" + repoID + ":4242:review-parity-1",
 		"ci_pipeline_runs":                     "ci_pipeline_run.v2:" + repoID + ":run-parity-1",

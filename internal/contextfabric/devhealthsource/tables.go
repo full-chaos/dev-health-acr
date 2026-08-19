@@ -722,7 +722,16 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 		validFrom, validTo := edgeValidity(
 			requiredTime(childCreatedAt), optionalTime(childHasEnded, childEndedAt),
 			requiredTime(parentCreatedAt), optionalTime(parentHasEnded, parentEndedAt))
-		relationshipID := "relationship:work_item_hierarchy:" + repoID + ":" + childID + ":" + parentID
+		// CHAOS-3898 §1.5 P1-2 fix-forward (codex retroactive review of
+		// #151/#152, chris-verified): this producer was left on the OLD
+		// endpoint-independent id scheme when S2b converted
+		// queryWorkItemDependencies -- RelationshipFamilyWorkItemHierarchy
+		// was defined (identity/relationship.go) but never actually
+		// consumed anywhere. Unlike the dependency edge, hierarchy's INNER
+		// JOIN to the parent guarantees BOTH endpoints are always resolved
+		// real work_item.v2 nodes here (no unresolved-ref stub case), so
+		// this needs only the id-scheme conversion, no tombstone healing.
+		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemHierarchy, childCanonicalID, parentCanonicalID, string(contractsv1.ContextFabricRelationshipPartOf))
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipPartOf,
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: childCanonicalID, Label: childID},
