@@ -32,11 +32,41 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 		if err := receipt.Validate(); err != nil {
 			return fmt.Errorf("prior_subject_receipts: %w", err)
 		}
+		if hasWindowReceiptPrefix(receipt.ReceiptID) {
+			// CHAOS-3900 W1 / pivot brief §2.5 row 1: a winr_-namespaced id
+			// belongs to PriorWindowReceipts, never PriorSubjectReceipts --
+			// fail loudly here rather than let it fall through to subject
+			// matching, where it could never match anything and would
+			// silently degrade instead of surfacing as malformed.
+			return fmt.Errorf("prior_subject_receipts: receipt_id must not carry the %q namespace prefix", ContextFabricWindowOptionReceiptPrefix)
+		}
 		key := receipt.ResultID + "\x00" + receipt.ReceiptID
 		if _, exists := seenReceipts[key]; exists {
 			return fmt.Errorf("prior_subject_receipts must be unique")
 		}
 		seenReceipts[key] = struct{}{}
+	}
+	if len(r.PriorWindowReceipts) > 20 {
+		return fmt.Errorf("prior_window_receipts exceed v1 bounds")
+	}
+	seenWindowReceipts := make(map[string]struct{}, len(r.PriorWindowReceipts))
+	for _, receipt := range r.PriorWindowReceipts {
+		if err := receipt.Validate(); err != nil {
+			return fmt.Errorf("prior_window_receipts: %w", err)
+		}
+		// CHAOS-3900 W1 (design brief §5 "m4"): every PriorWindowReceipts
+		// entry MUST carry the winr_ prefix -- a typed check atop the
+		// length bounds ContextFabricBoundSubjectReceipt.Validate already
+		// enforces. A non-winr_ id here is 400 at validation, never a
+		// silent fallthrough to subject matching (pivot brief §2.5 row 1).
+		if !hasWindowReceiptPrefix(receipt.ReceiptID) {
+			return fmt.Errorf("prior_window_receipts: receipt_id must carry the %q namespace prefix", ContextFabricWindowOptionReceiptPrefix)
+		}
+		key := receipt.ResultID + "\x00" + receipt.ReceiptID
+		if _, exists := seenWindowReceipts[key]; exists {
+			return fmt.Errorf("prior_window_receipts must be unique")
+		}
+		seenWindowReceipts[key] = struct{}{}
 	}
 	if err := r.RequestedScope.Validate(); err != nil {
 		return fmt.Errorf("requested_scope: %w", err)
@@ -160,6 +190,21 @@ func (t ContextFabricTimeContext) Validate() error {
 		}
 	default:
 		return fmt.Errorf("time axis is invalid")
+	}
+	// CHAOS-3900 W1 (design brief §1.2): an evidence window is representable
+	// ONLY on the current axis -- every other axis's own bounds already ARE
+	// the window that axis answers for, so a window alongside one is a
+	// named invariant violation (ErrEvidenceWindowAxisInvalid), never a
+	// silent drop. Checked as the LAST step, after the axis-shape switch
+	// above, so a malformed axis itself is reported through the more
+	// specific "time axis is invalid" error rather than this one.
+	if t.EvidenceWindow != nil {
+		if t.Axis != ContextFabricTemporalCurrent {
+			return fmt.Errorf("%w: axis %q", ErrEvidenceWindowAxisInvalid, t.Axis)
+		}
+		if err := t.EvidenceWindow.validate(); err != nil {
+			return fmt.Errorf("evidence_window: %w", err)
+		}
 	}
 	return nil
 }

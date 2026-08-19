@@ -176,6 +176,12 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if questionHash.Valid && versionAuthorities.IdentityNormalizationVersion != "" {
 		identityNormalizationVersion = sql.NullString{String: versionAuthorities.IdentityNormalizationVersion, Valid: true}
 	}
+	// CHAOS-3900 W1: same gate, one more version authority (contextfabric's
+	// own window class/default-table/binder rules).
+	var windowInferenceVersion sql.NullString
+	if questionHash.Valid && versionAuthorities.WindowInferenceVersion != "" {
+		windowInferenceVersion = sql.NullString{String: versionAuthorities.WindowInferenceVersion, Valid: true}
+	}
 	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
 	// EFFECTIVE request context, matching exactly what FindReusable will
 	// key with. It is NOT re-derived from result.Interpretation here -- an
@@ -208,13 +214,14 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 
 	insertResult, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 ON CONFLICT (result_id) DO NOTHING`,
 		resultID, orgID, payload, result.GeneratedAt,
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
-		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn)
+		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn,
+		windowInferenceVersion)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -607,6 +614,14 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// migration 0021, same NULL-never-matches shape -- a pre-migration row
 	// (or one saved by a composition whose GraphReader never resolved a
 	// binding) holds NULL and can never satisfy it.
+	//
+	// CHAOS-3900 W1: window_inference_version = $17 is a SIXTH conjunctive
+	// predicate, migration 0022, same NULL-never-matches shape -- see
+	// ReuseKey.WindowInferenceVersion's own field doc comment for what it
+	// binds. Like IdentityNormalizationVersion, compared as a plain
+	// parameter (not sql.NullString): an unset key.WindowInferenceVersion
+	// ("") can never equal a stored value (Save always persists either a
+	// real string or SQL NULL, never '').
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -625,6 +640,7 @@ WHERE org_id = $1
   AND model_output_schema_version = $14
   AND identity_normalization_version = $15
   AND graph_epoch = $16
+  AND window_inference_version = $17
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -641,7 +657,8 @@ ORDER BY created_at DESC, result_id DESC
 LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
-		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch)
+		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch,
+		key.WindowInferenceVersion)
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -718,6 +735,7 @@ SELECT EXISTS (
       AND canonical_service_version = $13
       AND model_output_schema_version = $14
       AND identity_normalization_version = $15
+      AND window_inference_version = $16
       AND source_watermarks IS NOT NULL
       AND invalidation_epoch IS NOT NULL
       AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -728,6 +746,7 @@ SELECT EXISTS (
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion,
+		key.WindowInferenceVersion,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("classify reuse miss: %w", sanitizeError(err))

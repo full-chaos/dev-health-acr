@@ -60,6 +60,10 @@ var auditedLimitationWrites = map[string]limitationAudit{
 		sameShapedTotal: 1,
 		reason:          "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
 	},
+	"windowVetoResult#composite literal []string{limitation}#0": {
+		sameShapedTotal: 1,
+		reason:          "the SEED, not an addition: a one-element list holding the single fixed window-veto disclosure windowVetoLimitation chose (CHAOS-3900 W1) -- identical shape and reasoning to terminalResult's own seed write above. Nothing is ever appended to this list afterward: a window-veto result is composed once and saved, never passed through a further limitation appender",
+	},
 }
 
 // boundedLimitationPrimitive owns the cap. It is the only function allowed

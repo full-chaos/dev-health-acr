@@ -557,6 +557,15 @@ func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) e
 	if q.ClarificationNeeded && strings.TrimSpace(q.ClarificationReason) == "" {
 		return fmt.Errorf("clarification_needed requires a reason")
 	}
+	// CHAOS-3900 W1: the empty value is legitimate ("the model made no
+	// pick" -- see ContextFabricWindowClass's own doc comment), so only a
+	// NON-empty, out-of-vocabulary value is rejected.
+	if q.WindowClass != "" && !ValidContextFabricWindowClass(q.WindowClass) {
+		return fmt.Errorf("window_class is invalid")
+	}
+	if q.WindowConfidence != "" && !ValidContextFabricWindowConfidence(q.WindowConfidence) {
+		return fmt.Errorf("window_confidence is invalid")
+	}
 	return nil
 }
 
@@ -734,6 +743,22 @@ func (r ContextFabricInvestigationResult) validate(bounds contextFabricBounds) e
 		// Refuse it at the contract boundary rather than let a
 		// composition bug ship a silently unlabeled historical answer.
 		return fmt.Errorf("temporal: a non-current time axis requires a temporal label")
+	}
+	// CHAOS-3900 W1: EffectiveEvidenceWindow is legal only when a window
+	// could genuinely be in play -- the current axis, mirroring
+	// EvidenceWindow's own axis-legality rule on the wire request.
+	if r.EffectiveEvidenceWindow != nil {
+		if r.Interpretation.TimeContext.Axis != ContextFabricTemporalCurrent {
+			return fmt.Errorf("%w: axis %q", ErrEvidenceWindowAxisInvalid, r.Interpretation.TimeContext.Axis)
+		}
+		if err := r.EffectiveEvidenceWindow.validate(); err != nil {
+			return fmt.Errorf("effective_evidence_window: %w", err)
+		}
+	}
+	if r.WindowClarification != nil {
+		if err := r.WindowClarification.Validate(); err != nil {
+			return fmt.Errorf("window_clarification: %w", err)
+		}
 	}
 	return nil
 }

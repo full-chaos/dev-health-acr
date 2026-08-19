@@ -233,6 +233,20 @@ type EngineTelemetry interface {
 	// simply skips this one signal) -- it must never affect Save's own
 	// success or the epoch actually stamped on the result.
 	RecordBindingEpochDelta(ctx context.Context, principal storage.Principal, flipped bool, delta int64)
+	// RecordWindowBinderOutcome (CHAOS-3900 W1) reports the proposal-only
+	// temporal-expression binder's own closed outcome for one Investigate
+	// call's question text -- see WindowBindReason's doc comment for the
+	// four-value vocabulary (no_span/temporal_span_unbound/
+	// temporal_span_ambiguous/binder_span_routed_inferred). Called
+	// unconditionally, once per call to canonicalizeEvidenceWindow, so a
+	// zero binder-routed rate is as visible as a nonzero one.
+	RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, reason WindowBindReason)
+	// RecordWindowCanonicalization (CHAOS-3900 W1) reports design brief
+	// §1.2's own window-canonicalization outcome for one Investigate call
+	// -- see WindowCanonicalizationOutcome's doc comment for the closed
+	// vocabulary. Called once per call, from Investigate, after
+	// canonicalizeEvidenceWindow/composeEffectiveWindow both run.
+	RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -334,6 +348,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve graph binding: %w", err))
 	}
 
+	// CHAOS-3900 W1: canonicalize the REQUEST-side evidence window --
+	// receipt resolution and validation -- BEFORE tryReuse, so a resolved
+	// window_stated/clarification_confirmed window is part of the reuse key
+	// a lookup below actually forms with (see canonicalizeEvidenceWindow's
+	// own doc comment for the ordering bug this prevents). A non-empty Veto
+	// means the request must short-circuit HERE: no reuse lookup, no
+	// interpretation, no inference substituted -- windowVetoResult composes
+	// and persists the no_match terminal directly.
+	windowCanon := e.canonicalizeEvidenceWindow(ctx, principal, request)
+	if windowCanon.Veto != windowVetoNone {
+		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, binding)
+	}
+
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
 	// ordering is the entire mechanism behind AC-3782-1's zero-model-call
 	// guarantee for a reuse hit. tryReuse itself only ever returns
@@ -352,7 +379,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// instant at different arrival times, and those answers legitimately
 	// differ. Keying on the wire value served a request meaning 12:00:30
 	// an answer that had meant 12:00:00.
-	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, binding); ok {
+	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, binding); ok {
 		return reused, nil
 	}
 
@@ -552,7 +579,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding)
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon)
 	}
 
 	factRequest := CanonicalFactRequest{
@@ -651,6 +678,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	temporallyLimited, temporalDisplaced := appendTemporalLimitations(result.Limitations, interpretation)
 	result.Limitations = temporallyLimited
 	result.LimitationsDisplaced += temporalDisplaced
+	// CHAOS-3900 W1: composeEffectiveWindow decides precedence steps 2-3
+	// (design brief §1.2) now that Interpret has run -- windowCanon.Effective
+	// (step 1, a confirmed/stated window) always wins unchanged when set;
+	// otherwise this is the ONLY point an INFERRED default can be decided,
+	// since it needs the interpreted Shape and the model's own window
+	// class/confidence pick.
+	result.EffectiveEvidenceWindow = composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, e.now())
+	if e.telemetry != nil {
+		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
+	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
@@ -666,7 +703,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)

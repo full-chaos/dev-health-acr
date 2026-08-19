@@ -266,7 +266,13 @@ const (
 // unchanged into reuseAuthorizationStillHolds' own recheck graph calls, so
 // a reuse hit and the fresh investigation it would otherwise have run are
 // always evaluated against the SAME graph.
-func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, binding ResolvedGraphBinding) (InvestigationResult, bool) {
+// windowKey is CHAOS-3900 W1's own request-side window canonicalization
+// key fragment (requestWindowCanonicalization.KeyComponent, window.go) --
+// "" when no question_stated/clarification_confirmed window is in play for
+// this request. Composed onto the axis key via composeTimeAxisKey, never
+// folded into TimeAxisKeyFor itself, so every OTHER caller of
+// TimeAxisKeyFor (tests, other packages) is unaffected.
+func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, windowKey string, binding ResolvedGraphBinding) (InvestigationResult, bool) {
 	if e.reuseGate == nil {
 		return InvestigationResult{}, false
 	}
@@ -322,7 +328,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	// Interpretation is still proved to match before anything is served:
 	// condition 6 re-resolves every subject against the candidate's own
 	// stored Interpretation.
-	timeAxisKey := TimeAxisKeyFor(effectiveTimeContext)
+	timeAxisKey := composeTimeAxisKey(TimeAxisKeyFor(effectiveTimeContext), windowKey)
 	if timeAxisKey == "" {
 		// A historical context missing its own required bounds. Fail
 		// closed rather than key it as anything -- see TimeAxisKeyFor.
@@ -356,9 +362,13 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// (identity-term normalization -- see ReuseKey's own field doc
 		// comment).
 		IdentityNormalizationVersion: e.reuseVersionAuthorities.IdentityNormalizationVersion,
-		QueryVersion:                 e.reuseVersionAuthorities.QueryVersion,
-		CanonicalServiceVersion:      e.reuseVersionAuthorities.CanonicalServiceVersion,
-		ModelOutputSchemaVersion:     e.reuseVersionAuthorities.ModelOutputSchemaVersion,
+		// CHAOS-3900 W1: a FOURTEENTH conjunctive dimension, same mirrored
+		// discipline -- see ReuseKey.WindowInferenceVersion's own field doc
+		// comment.
+		WindowInferenceVersion:   e.reuseVersionAuthorities.WindowInferenceVersion,
+		QueryVersion:             e.reuseVersionAuthorities.QueryVersion,
+		CanonicalServiceVersion:  e.reuseVersionAuthorities.CanonicalServiceVersion,
+		ModelOutputSchemaVersion: e.reuseVersionAuthorities.ModelOutputSchemaVersion,
 		// CHAOS-3898 §2.3: the SAME binding Investigate resolved before
 		// this call. A stored candidate matches only if it was generated
 		// under this exact active graph epoch.

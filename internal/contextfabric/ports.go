@@ -468,6 +468,23 @@ type ReuseKey struct {
 	// replayed as if produced under the new one. Same NULL-never-matches
 	// fail-closed discipline as every other dimension here.
 	IdentityNormalizationVersion string
+	// WindowInferenceVersion (CHAOS-3900 W1) is a FOURTEENTH conjunctive
+	// dimension, same NULL-never-matches fail-closed shape as
+	// IdentityNormalizationVersion immediately above -- the precedent this
+	// one follows exactly. It binds reuse to the window class vocabulary,
+	// the class-to-default table (windowDefaultPolicy, window.go), and the
+	// binder's own post-pass rules: a future tightening of any of those
+	// changes what INFERRED window an otherwise-identical question would
+	// receive, which changes what the answer actually covers, so a stored
+	// answer produced under the OLD rules must not be silently replayed
+	// under the new ones.
+	//
+	// Deliberately scoped to INFERRED windows only (design brief §5.1):
+	// a request-side STATED or CONFIRMED window is already a conjunctive
+	// dimension via TimeAxisKey's own rel:/abs: fragment (windowKeyComponent,
+	// window.go) -- see TimeAxisKeyFor's doc comment -- so binding this
+	// dimension to those rows too would be redundant, not merely harmless.
+	WindowInferenceVersion string
 	// GraphEpoch (CHAOS-3898 §2.3) is this investigation's own
 	// ResolvedGraphBinding.Epoch -- a THIRTEENTH conjunctive dimension,
 	// structurally distinct from every version-string dimension above: a
@@ -545,6 +562,11 @@ type ReuseVersionAuthorities struct {
 	// is the identical "one more version constant, same fail-closed
 	// discipline" shape as the three siblings above.
 	IdentityNormalizationVersion string
+	// WindowInferenceVersion (CHAOS-3900 W1) is ONE MORE version constant,
+	// same shape again -- see ReuseKey.WindowInferenceVersion's own field
+	// doc comment for what it binds and why it is scoped to inferred
+	// windows only.
+	WindowInferenceVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

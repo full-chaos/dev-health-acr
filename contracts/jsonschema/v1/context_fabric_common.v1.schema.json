@@ -27,6 +27,10 @@
         "end": {
           "type": "string",
           "format": "date-time"
+        },
+        "evidence_window": {
+          "description": "CHAOS-3900 W1: legal ONLY when axis is current -- every other axis's own as_of/start/end already IS the window that axis answers for.",
+          "$ref": "#/$defs/RequestedEvidenceWindow"
         }
       },
       "required": [
@@ -82,6 +86,11 @@
                 "required": [
                   "end"
                 ]
+              },
+              {
+                "required": [
+                  "evidence_window"
+                ]
               }
             ]
           }
@@ -97,11 +106,177 @@
             "end"
           ],
           "not": {
-            "required": [
-              "as_of"
+            "anyOf": [
+              {
+                "required": [
+                  "as_of"
+                ]
+              },
+              {
+                "required": [
+                  "evidence_window"
+                ]
+              }
             ]
           }
         }
+      ]
+    },
+    "RequestedEvidenceWindow": {
+      "description": "CHAOS-3900 W1: the caller's own evidence-window intent. Structurally cannot carry provenance/class/confidence -- those are server-computed. RelativeID all_time requires start/end to both be absent; every other shape requires both.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "relative_id": {
+          "$ref": "#/$defs/RelativeWindowID"
+        }
+      },
+      "if": {
+        "properties": {
+          "relative_id": {
+            "const": "all_time"
+          }
+        },
+        "required": [
+          "relative_id"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "start"
+              ]
+            },
+            {
+              "required": [
+                "end"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "EffectiveEvidenceWindow": {
+      "description": "CHAOS-3900 W1: the window an answer actually speaks for once canonicalization has run. Server-computed; never accepted from the wire.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "relative_id": {
+          "$ref": "#/$defs/RelativeWindowID"
+        },
+        "window_class": {
+          "type": "string",
+          "enum": [
+            "trend_assessment",
+            "recent_activity_lookup",
+            "state_snapshot",
+            "explicit_window"
+          ]
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "inferred_default",
+            "question_stated",
+            "clarification_confirmed"
+          ]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "low"
+          ]
+        }
+      },
+      "required": [
+        "provenance"
+      ]
+    },
+    "RelativeWindowID": {
+      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
+      "type": "string",
+      "enum": [
+        "trailing_30d",
+        "trailing_90d",
+        "trailing_365d",
+        "all_time"
+      ]
+    },
+    "WindowOption": {
+      "description": "CHAOS-3900 W1: one server-offered window choice, minted onto a stored result so a later turn can confirm it via winr_ receipt redemption. Start/end are the FROZEN absolute bounds computed at offer time.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^winr_"
+        },
+        "option_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "relative_id": {
+          "$ref": "#/$defs/RelativeWindowID"
+        },
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "option_id",
+        "label"
+      ]
+    },
+    "WindowClarification": {
+      "description": "CHAOS-3900 W1: every window option a stored result offered.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowOption"
+          },
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "options"
       ]
     },
     "TemporalLabel": {
@@ -1398,6 +1573,23 @@
         "clarification_reason": {
           "type": "string",
           "maxLength": 2000
+        },
+        "window_class": {
+          "description": "CHAOS-3900 W1: the model's own sanitized, closed-vocabulary evidence-window classification pick. Absent means the model made no pick.",
+          "type": "string",
+          "enum": [
+            "trend_assessment",
+            "recent_activity_lookup",
+            "state_snapshot",
+            "explicit_window"
+          ]
+        },
+        "window_confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "low"
+          ]
         }
       },
       "required": [

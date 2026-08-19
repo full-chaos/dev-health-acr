@@ -1,23 +1,20 @@
-package graphrank
+package contextfabric
 
-import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
-
-// CHAOS-3900 W0 (design brief ../.remember/chaos3900-design-brief.md (relative to the dev-health/acr repo root) v5.2,
-// §2/§2.1): the deterministic engine-side classification post-pass, SHADOW
-// ONLY (see chaos3900_window_vocab.go's own doc comment in package
-// contextfabric for the full scoping rationale). Lives in package
-// graphrank -- not contextfabric, where the engine itself lives -- for the
-// same reason chaos3899_evidence_round.go/chaos3899_handle_grammar.go do:
-// graphrank already imports contextfabric (the reverse would be an import
-// cycle), so this is the layer that can consult BOTH the interpreted
-// question's own fields AND, for the companion binder
-// (chaos3900_window_binder.go), the closed grammar-registry discipline
-// this package already established for CHAOS-3896/3899's handle grammar.
+// CHAOS-3900 window classification post-pass (design brief v5.2, §2/§2.1).
 //
-// Nothing in this file is invoked from internal/contextfabric/engine.go or
-// resolve.go; it is exercised only by the W0 shadow harness
-// (internal/runtime/hosted/chaos3900_w0_window_shadow_test.go). No
-// production decision changes because of it.
+// W0 shipped this as a SHADOW-ONLY file in package graphrank (not
+// contextfabric, where the engine itself lives): graphrank already imports
+// contextfabric, so at the time nothing here was invoked from engine.go, and
+// putting it in graphrank kept it beside the companion binder's shared
+// grammar-registry discipline (CHAOS-3896/3899's handle grammar).
+//
+// W1 makes canonicalizeEvidenceWindow (window.go) a REAL pre-tryReuse engine
+// step that must call this post-pass directly -- which package graphrank's
+// existing "graphrank imports contextfabric" direction would turn into an
+// import cycle. This file therefore moved INTO package contextfabric
+// unchanged in behavior; graphrank.ClassifyWindow/DefaultRelativeID (if any
+// external caller still names them) no longer exist -- callers use
+// contextfabric.ClassifyWindow/DefaultRelativeID directly.
 
 // WindowClassSource names whether a WindowClassOutcome's Class came from
 // the model's own pick or the deterministic fallback table (design brief
@@ -38,8 +35,8 @@ const (
 // WindowClassOutcome is the SHADOW-ONLY engine post-pass verdict for one
 // interpreted question.
 type WindowClassOutcome struct {
-	Class      contextfabric.WindowClass
-	Confidence contextfabric.WindowConfidence
+	Class      WindowClass
+	Confidence WindowConfidence
 	Source     WindowClassSource
 	// Downgraded is true iff the model asserted a class that conflicted
 	// with the structural signals and this post-pass overrode it with the
@@ -77,20 +74,20 @@ type WindowClassOutcome struct {
 // axis=range... NEVER a model assertion"), never a legitimate MODEL pick
 // -- it is always treated as incompatible here, which routes it through
 // the same downgrade-to-fallback path as any other structural mismatch.
-func classStructurallyCompatible(class contextfabric.WindowClass, interpreted contextfabric.InterpretedQuestion) bool {
+func classStructurallyCompatible(class WindowClass, interpreted InterpretedQuestion) bool {
 	switch class {
-	case contextfabric.WindowClassTrendAssessment:
+	case WindowClassTrendAssessment:
 		switch interpreted.Shape {
-		case contextfabric.ShapeDiscoveredCohort,
-			contextfabric.ShapeExplicitCohort,
-			contextfabric.ShapeOpen:
+		case ShapeDiscoveredCohort,
+			ShapeExplicitCohort,
+			ShapeOpen:
 			return true
 		default:
 			return false
 		}
-	case contextfabric.WindowClassRecentActivityLookup:
-		return interpreted.Shape == contextfabric.ShapeSingleSubject
-	case contextfabric.WindowClassStateSnapshot:
+	case WindowClassRecentActivityLookup:
+		return interpreted.Shape == ShapeSingleSubject
+	case WindowClassStateSnapshot:
 		return true
 	default:
 		return false
@@ -104,12 +101,12 @@ func classStructurallyCompatible(class contextfabric.WindowClass, interpreted co
 // the SAME reason classStructurallyCompatible drops it above -- see that
 // function's doc comment); anything else -> no class at all (ok=false),
 // never a guess.
-func fallbackClass(interpreted contextfabric.InterpretedQuestion) (contextfabric.WindowClass, bool) {
+func fallbackClass(interpreted InterpretedQuestion) (WindowClass, bool) {
 	switch interpreted.Shape {
-	case contextfabric.ShapeDiscoveredCohort:
-		return contextfabric.WindowClassTrendAssessment, true
-	case contextfabric.ShapeSingleSubject:
-		return contextfabric.WindowClassRecentActivityLookup, true
+	case ShapeDiscoveredCohort:
+		return WindowClassTrendAssessment, true
+	case ShapeSingleSubject:
+		return WindowClassRecentActivityLookup, true
 	default:
 		return "", false
 	}
@@ -119,29 +116,29 @@ func fallbackClass(interpreted contextfabric.InterpretedQuestion) (contextfabric
 // and the model's own (already-sanitized, closed-vocabulary-or-empty)
 // class/confidence pick, produce the outcome the class-to-default table
 // (DefaultRelativeID, below) consumes. modelClass must already be sanitized
-// (contextfabric.SanitizeWindowClass) -- this function trusts "" as
+// (SanitizeWindowClass) -- this function trusts "" as
 // genuinely unset and any non-empty value as a vocabulary member; it does
 // not re-validate.
-func ClassifyWindow(interpreted contextfabric.InterpretedQuestion, modelClass contextfabric.WindowClass, modelConfidence contextfabric.WindowConfidence) WindowClassOutcome {
+func ClassifyWindow(interpreted InterpretedQuestion, modelClass WindowClass, modelConfidence WindowConfidence) WindowClassOutcome {
 	if modelClass == "" {
 		return classifyFallback(interpreted, false)
 	}
-	if modelClass == contextfabric.WindowClassExplicitWindow || !classStructurallyCompatible(modelClass, interpreted) {
+	if modelClass == WindowClassExplicitWindow || !classStructurallyCompatible(modelClass, interpreted) {
 		return classifyFallback(interpreted, true)
 	}
 	confidence := modelConfidence
 	if confidence == "" {
-		confidence = contextfabric.WindowConfidenceLow
+		confidence = WindowConfidenceLow
 	}
 	return WindowClassOutcome{Class: modelClass, Confidence: confidence, Source: WindowClassSourceModel}
 }
 
-func classifyFallback(interpreted contextfabric.InterpretedQuestion, downgraded bool) WindowClassOutcome {
+func classifyFallback(interpreted InterpretedQuestion, downgraded bool) WindowClassOutcome {
 	class, ok := fallbackClass(interpreted)
 	if !ok {
-		return WindowClassOutcome{Source: WindowClassSourceNone, Confidence: contextfabric.WindowConfidenceLow, Downgraded: downgraded}
+		return WindowClassOutcome{Source: WindowClassSourceNone, Confidence: WindowConfidenceLow, Downgraded: downgraded}
 	}
-	return WindowClassOutcome{Class: class, Confidence: contextfabric.WindowConfidenceLow, Source: WindowClassSourceFallback, Downgraded: downgraded}
+	return WindowClassOutcome{Class: class, Confidence: WindowConfidenceLow, Source: WindowClassSourceFallback, Downgraded: downgraded}
 }
 
 // WindowDefaultPolicy names ONE of the two DW0 candidate default widths
@@ -153,19 +150,19 @@ func classifyFallback(interpreted contextfabric.InterpretedQuestion, downgraded 
 // width into ClassifyWindow itself. Neither ships as a live default in W0.
 type WindowDefaultPolicy struct {
 	Name                 string
-	TrendAssessment      contextfabric.RelativeWindowID
-	RecentActivityLookup contextfabric.RelativeWindowID
+	TrendAssessment      RelativeWindowID
+	RecentActivityLookup RelativeWindowID
 }
 
 var (
 	// WindowDefaultPolicy90D is the DW0-preferred candidate (chris:
 	// "quarter-to-year... quarter is the tighter cardinality lever").
 	WindowDefaultPolicy90D = WindowDefaultPolicy{
-		Name: "90d", TrendAssessment: contextfabric.RelativeWindowTrailing90D, RecentActivityLookup: contextfabric.RelativeWindowTrailing30D,
+		Name: "90d", TrendAssessment: RelativeWindowTrailing90D, RecentActivityLookup: RelativeWindowTrailing30D,
 	}
 	// WindowDefaultPolicy365D is the DW0 wider fallback candidate.
 	WindowDefaultPolicy365D = WindowDefaultPolicy{
-		Name: "365d", TrendAssessment: contextfabric.RelativeWindowTrailing365D, RecentActivityLookup: contextfabric.RelativeWindowTrailing90D,
+		Name: "365d", TrendAssessment: RelativeWindowTrailing365D, RecentActivityLookup: RelativeWindowTrailing90D,
 	}
 )
 
@@ -173,11 +170,11 @@ var (
 // outcome. state_snapshot and WindowClassSourceNone both legitimately have
 // NO default (§2.1: "NO window" / "refuse to guess") -- ok=false, never a
 // zero RelativeWindowID standing in for absence.
-func DefaultRelativeID(outcome WindowClassOutcome, policy WindowDefaultPolicy) (contextfabric.RelativeWindowID, bool) {
+func DefaultRelativeID(outcome WindowClassOutcome, policy WindowDefaultPolicy) (RelativeWindowID, bool) {
 	switch outcome.Class {
-	case contextfabric.WindowClassTrendAssessment:
+	case WindowClassTrendAssessment:
 		return policy.TrendAssessment, true
-	case contextfabric.WindowClassRecentActivityLookup:
+	case WindowClassRecentActivityLookup:
 		return policy.RecentActivityLookup, true
 	default:
 		return "", false

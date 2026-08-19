@@ -616,6 +616,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// graphrank's own NormalizeAliasTerm definition. Wired
 			// unconditionally, same reasoning as its three siblings.
 			IdentityNormalizationVersion: graphrank.IdentityNormalizationVersion,
+			// CHAOS-3900 W1: one more deployment-current version authority --
+			// contextfabric's own window class/default-table/binder rules.
+			// Wired unconditionally, same reasoning as its four siblings.
+			WindowInferenceVersion: contextfabric.WindowInferenceVersion,
 		},
 	})
 	if err != nil {

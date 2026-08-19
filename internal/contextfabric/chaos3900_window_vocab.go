@@ -1,99 +1,65 @@
 package contextfabric
 
-import "strings"
+import (
+	"strings"
 
-// CHAOS-3900 W0 (design brief ../.remember/chaos3900-design-brief.md (relative to the dev-health/acr repo root) v5.2,
-// §2.1/§5.1): the closed, shadow-only window-classification vocabulary.
-//
-// SHADOW ONLY: nothing in this file is consulted by any serving-path
-// decision. WindowClass/WindowConfidence/RelativeWindowID exist purely so
-// the interpretation layer can CAPTURE a classification for measurement
-// (traced via ModelExecutionReceipt and read back by the D2(b)/W0 shadow
-// harness, internal/runtime/hosted/chaos3900_w0_window_shadow_test.go) --
-// no engine code branches on these values, no answer, census, or reuse
-// decision changes because of them (W0 acceptance criterion: scorecard
-// byte-identical). W1+ is where any of this would gain real authority, per
-// the brief's own slice table (§8).
-//
-// These types live in package contextfabric (NOT internal/contracts/v1)
-// deliberately: ContextFabricInterpretedQuestion is a published wire type
-// (contracts/jsonschema, contracts/openapi), and W0 is explicitly
-// measurement-only with zero wire-contract surface -- adding a field there
-// would trigger the CONTRACT-FIRST rule (AGENTS.md) for a slice that ships
-// no consumer of it yet. Carrying the sanitized classification on
-// ModelExecutionReceipt instead (internal/contextfabric/model_runtime.go)
-// stays fully internal: the receipt is persisted as an opaque JSON blob
-// (internal/contextfabric/pgmodelreceipts/store.go: `json.Marshal(receipt)`
-// into a single column), so additive omitempty fields here need no
-// migration and are invisible to every existing reader.
-
-// WindowClass is the closed, growable slice-1 class vocabulary (design
-// brief §2.1's "class" column). The model proposes one of these four
-// values (or none); the engine-side post-pass (graphrank.ClassifyWindow)
-// validates the proposal against structural signals and owns the
-// class-to-default table -- the model's only latitude is this one enum
-// pick, never a timestamp (§2, closing paragraph).
-type WindowClass string
-
-const (
-	WindowClassTrendAssessment      WindowClass = "trend_assessment"
-	WindowClassRecentActivityLookup WindowClass = "recent_activity_lookup"
-	WindowClassStateSnapshot        WindowClass = "state_snapshot"
-	WindowClassExplicitWindow       WindowClass = "explicit_window"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// windowClasses is the backing array for WindowClassVocabulary/ValidWindowClass
-// -- the three-part "unexported array + copy-returning accessor + closed
-// membership check" pattern ContextFabricFactKindVocabulary/validFactKind
-// already establishes in contracts/v1 (context_fabric_types.go).
-var windowClasses = [...]WindowClass{
-	WindowClassTrendAssessment,
-	WindowClassRecentActivityLookup,
-	WindowClassStateSnapshot,
-	WindowClassExplicitWindow,
-}
+// CHAOS-3900 window vocabulary. W0 (design brief v5.2 §2.1/§5.1) shipped
+// WindowClass/WindowConfidence/RelativeWindowID as SHADOW-ONLY types
+// defined directly in this package, with deliberately ZERO wire-contract
+// surface -- see this file's own git history for W0's full rationale
+// ("nothing in this file is consulted by any serving-path decision").
+//
+// W1 promotes them: canonicalizeEvidenceWindow (window.go) now makes a real
+// decision from a window classification, and ContextFabricInterpretedQuestion/
+// ContextFabricInvestigationResult now carry window fields on the wire
+// (internal/contracts/v1/context_fabric_window_types.go). The three types
+// below are therefore now ALIASES to their contracts/v1 counterparts --
+// the SAME "type X = contractsv1.ContextFabricX" pattern model.go already
+// uses for every other wire-backed domain concept -- so every W0 call site
+// (graphrank.ClassifyWindow, genkitruntime's sanitizeWindowOutput, the W0
+// shadow harness) keeps compiling and behaving identically, unaware that
+// the underlying type gained a wire contract.
+
+// WindowClass is contractsv1.ContextFabricWindowClass.
+type WindowClass = contractsv1.ContextFabricWindowClass
+
+const (
+	WindowClassTrendAssessment      = contractsv1.ContextFabricWindowClassTrendAssessment
+	WindowClassRecentActivityLookup = contractsv1.ContextFabricWindowClassRecentActivityLookup
+	WindowClassStateSnapshot        = contractsv1.ContextFabricWindowClassStateSnapshot
+	WindowClassExplicitWindow       = contractsv1.ContextFabricWindowClassExplicitWindow
+)
 
 // WindowClassCount is the closed vocabulary's size.
-const WindowClassCount = len(windowClasses)
+const WindowClassCount = contractsv1.ContextFabricWindowClassCount
 
 // WindowClassVocabulary returns the closed window-class vocabulary in a
-// fixed, published order. An array return (not a slice) so a caller cannot
-// mutate the package's own backing storage through the returned value --
-// see ContextFabricFactKindVocabulary's own doc comment for why that
-// distinction matters.
+// fixed, published order.
 func WindowClassVocabulary() [WindowClassCount]WindowClass {
-	return windowClasses
+	return contractsv1.ContextFabricWindowClassVocabulary()
 }
 
 // ValidWindowClass reports whether value is a member of the closed
 // vocabulary. The EMPTY value is deliberately NOT valid here -- callers
 // that treat "unset" as legal handle that case explicitly (e.g.
-// SanitizeWindowClass below), mirroring how a genuinely optional closed-
-// vocab field is validated elsewhere in this codebase (the field's zero
-// value is a distinct "absent" state from any member).
+// SanitizeWindowClass below).
 func ValidWindowClass(value WindowClass) bool {
-	for _, class := range windowClasses {
-		if value == class {
-			return true
-		}
-	}
-	return false
+	return contractsv1.ValidContextFabricWindowClass(value)
 }
 
-// WindowConfidence is the closed "blasé detection" vocabulary (design
-// brief §2.1's `window_confidence` field): "high" is the model's own
-// assertion; "low" covers everything the deterministic post-pass
-// downgrades to (fallback-derived class, class/shape mismatch, multi-class
-// ambiguity) as well as a model-asserted low.
-type WindowConfidence string
+// WindowConfidence is contractsv1.ContextFabricWindowConfidence.
+type WindowConfidence = contractsv1.ContextFabricWindowConfidence
 
 const (
-	WindowConfidenceHigh WindowConfidence = "high"
-	WindowConfidenceLow  WindowConfidence = "low"
+	WindowConfidenceHigh = contractsv1.ContextFabricWindowConfidenceHigh
+	WindowConfidenceLow  = contractsv1.ContextFabricWindowConfidenceLow
 )
 
 func ValidWindowConfidence(value WindowConfidence) bool {
-	return value == WindowConfidenceHigh || value == WindowConfidenceLow
+	return contractsv1.ValidContextFabricWindowConfidence(value)
 }
 
 // SanitizeWindowClass implements the F5 "sanitize-before-validate" control
@@ -131,17 +97,34 @@ func SanitizeWindowConfidence(raw string) WindowConfidence {
 	return candidate
 }
 
-// RelativeWindowID is the closed, server-owned relative-window identifier
-// registry (design brief §5.1) -- the SAME notion the eventual reuse-key
-// `w:rel:<relative_id>` namespace and the W0 class-to-default table both
-// name. W0 never computes absolute bounds from these outside the shadow
-// harness (no `e.now()`-derived engine step exists yet); the D2(b) rerun
-// derives trailing bounds itself, once, per case (§7).
-type RelativeWindowID string
+// RelativeWindowID is contractsv1.ContextFabricRelativeWindowID -- the
+// closed, server-owned relative-window identifier registry (design brief
+// §5.1). W1's canonicalizeEvidenceWindow (window.go) is the first caller to
+// derive ABSOLUTE bounds from these outside a shadow/measurement harness,
+// always from the engine's own e.now(), never from a caller-supplied
+// instant.
+type RelativeWindowID = contractsv1.ContextFabricRelativeWindowID
 
 const (
-	RelativeWindowTrailing30D  RelativeWindowID = "trailing_30d"
-	RelativeWindowTrailing90D  RelativeWindowID = "trailing_90d"
-	RelativeWindowTrailing365D RelativeWindowID = "trailing_365d"
-	RelativeWindowAllTime      RelativeWindowID = "all_time"
+	RelativeWindowTrailing30D  = contractsv1.ContextFabricRelativeWindowTrailing30D
+	RelativeWindowTrailing90D  = contractsv1.ContextFabricRelativeWindowTrailing90D
+	RelativeWindowTrailing365D = contractsv1.ContextFabricRelativeWindowTrailing365D
+	RelativeWindowAllTime      = contractsv1.ContextFabricRelativeWindowAllTime
+)
+
+// ValidRelativeWindowID reports whether value is a member of the closed
+// registry.
+func ValidRelativeWindowID(value RelativeWindowID) bool {
+	return contractsv1.ValidContextFabricRelativeWindowID(value)
+}
+
+// WindowProvenance is contractsv1.ContextFabricWindowProvenance (CHAOS-3900
+// W1, new in this slice -- W0 had no provenance concept since nothing it
+// computed ever reached a served answer).
+type WindowProvenance = contractsv1.ContextFabricWindowProvenance
+
+const (
+	WindowInferredDefault        = contractsv1.ContextFabricWindowInferredDefault
+	WindowQuestionStated         = contractsv1.ContextFabricWindowQuestionStated
+	WindowClarificationConfirmed = contractsv1.ContextFabricWindowClarificationConfirmed
 )

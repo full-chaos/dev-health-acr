@@ -152,6 +152,13 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"result#properties.question.maxLength":                      8000,
 		"common#$defs.SubjectRef.properties.label.maxLength":        512,
 		"common#$defs.SubjectRef.properties.canonical_id.maxLength": 256,
+		// CHAOS-3900 W1: ContextFabricWindowClarification.Validate's own
+		// bounds (validate_context_fabric_window.go) -- options is
+		// required non-empty (minItems 1, "window clarification options
+		// violate v1 bounds" on len==0) and capped at
+		// contextFabricWindowClarificationMaxOptions.
+		"common#$defs.WindowClarification.properties.options.maxItems": contextFabricWindowClarificationMaxOptions,
+		"common#$defs.WindowClarification.properties.options.minItems": 1,
 	}
 
 	discovered := schemaBounds(t, documents)

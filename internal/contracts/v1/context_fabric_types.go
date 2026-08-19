@@ -516,10 +516,20 @@ type ContextFabricInvestigationRequest struct {
 	Question             string                             `json:"question"`
 	Conversation         []ContextFabricConversationTurn    `json:"conversation,omitempty"`
 	PriorSubjectReceipts []ContextFabricBoundSubjectReceipt `json:"prior_subject_receipts,omitempty"`
-	RequestedScope       ContextFabricRequestedScope        `json:"requested_scope,omitempty"`
-	TimeContext          ContextFabricTimeContext           `json:"time_context"`
-	Options              ContextFabricInvestigationOptions  `json:"options"`
-	Consumer             ContextFabricConsumerInfo          `json:"consumer"`
+	// PriorWindowReceipts (CHAOS-3900 W1) names winr_-prefixed receipts
+	// from an earlier stored result's own ContextFabricWindowClarification
+	// -- a NEW, PARALLEL field to PriorSubjectReceipts rather than an
+	// overload of it: a window receipt's match target (a stored
+	// WindowOption, not a SubjectCandidate) and its effect (confirms an
+	// evidence window, never binds a subject) are both different, so
+	// conflating the two fields would let a namespace mismatch silently
+	// fall through to the wrong matcher instead of failing loudly at
+	// validation (see Validate's winr_-prefix check).
+	PriorWindowReceipts []ContextFabricBoundSubjectReceipt `json:"prior_window_receipts,omitempty"`
+	RequestedScope      ContextFabricRequestedScope        `json:"requested_scope,omitempty"`
+	TimeContext         ContextFabricTimeContext           `json:"time_context"`
+	Options             ContextFabricInvestigationOptions  `json:"options"`
+	Consumer            ContextFabricConsumerInfo          `json:"consumer"`
 }
 
 type ContextFabricConversationTurn struct {
@@ -553,6 +563,12 @@ type ContextFabricTimeContext struct {
 	AsOf  *time.Time                `json:"as_of,omitempty"`
 	Start *time.Time                `json:"start,omitempty"`
 	End   *time.Time                `json:"end,omitempty"`
+	// EvidenceWindow (CHAOS-3900 W1) is the caller's requested evidence
+	// window -- legal ONLY on the current axis (see Validate); a window on
+	// any other axis is a named invariant violation, never a silent drop,
+	// because a non-current axis's own Start/End/AsOf already IS the
+	// window that axis answers for.
+	EvidenceWindow *ContextFabricRequestedEvidenceWindow `json:"evidence_window,omitempty"`
 }
 
 // ContextFabricTemporalGrain names the coarsest source grain that
@@ -900,6 +916,17 @@ type ContextFabricInterpretedQuestion struct {
 	FactRequirements    []ContextFabricFactRequirement  `json:"fact_requirements"`
 	ClarificationNeeded bool                            `json:"clarification_needed"`
 	ClarificationReason string                          `json:"clarification_reason,omitempty"`
+	// WindowClass/WindowConfidence (CHAOS-3900 W1, promoted from the W0
+	// shadow-only receipt-only capture -- see chaos3900_window_vocab.go)
+	// is the model's own sanitized, closed-vocabulary evidence-window
+	// classification pick. This is the ONLY latitude a model has over an
+	// evidence window: never a timestamp, never a duration. Additive
+	// optional in v1: every interpretation produced before CHAOS-3900 W1
+	// lacks these, and an absent value is a legitimate "the model made no
+	// pick" state the engine's post-pass (graphrank.ClassifyWindow) falls
+	// back from, never an error.
+	WindowClass      ContextFabricWindowClass      `json:"window_class,omitempty"`
+	WindowConfidence ContextFabricWindowConfidence `json:"window_confidence,omitempty"`
 }
 
 type ContextFabricFactRequirement struct {
@@ -967,6 +994,19 @@ type ContextFabricInvestigationResult struct {
 	// keeps every pre-CHAOS-3781 result byte-identical: an additive
 	// optional field stays inside v1 per the contract-first rule.
 	Temporal *ContextFabricTemporalLabel `json:"temporal,omitempty"`
+	// EffectiveEvidenceWindow (CHAOS-3900 W1) is the evidence window this
+	// answer actually speaks for, once canonicalization has run -- nil
+	// when no window is in play for this investigation (a non-current
+	// axis, or a resolved class that carries no window at all, e.g.
+	// state_snapshot). Additive optional field, same contract-first
+	// discipline as Temporal: absent on every result generated before
+	// this field existed.
+	EffectiveEvidenceWindow *ContextFabricEffectiveEvidenceWindow `json:"effective_evidence_window,omitempty"`
+	// WindowClarification (CHAOS-3900 W1) carries every window option this
+	// result offered, when it offered any -- see
+	// ContextFabricWindowClarification's own doc comment for why it lives
+	// on the canonical result rather than projection-only.
+	WindowClarification *ContextFabricWindowClarification `json:"window_clarification,omitempty"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public

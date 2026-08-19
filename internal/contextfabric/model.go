@@ -179,6 +179,13 @@ type SubjectHint = contractsv1.ContextFabricSubjectHint
 type TimeContext = contractsv1.ContextFabricTimeContext
 type TemporalLabel = contractsv1.ContextFabricTemporalLabel
 type TemporalGrain = contractsv1.ContextFabricTemporalGrain
+
+// CHAOS-3900 W1: the evidence-window wire shapes, same alias convention as
+// every sibling type in this file.
+type RequestedEvidenceWindow = contractsv1.ContextFabricRequestedEvidenceWindow
+type EffectiveEvidenceWindow = contractsv1.ContextFabricEffectiveEvidenceWindow
+type WindowOption = contractsv1.ContextFabricWindowOption
+type WindowClarification = contractsv1.ContextFabricWindowClarification
 type InvestigationOptions = contractsv1.ContextFabricInvestigationOptions
 type ConsumerInfo = contractsv1.ContextFabricConsumerInfo
 type SubjectRef = contractsv1.ContextFabricSubjectRef

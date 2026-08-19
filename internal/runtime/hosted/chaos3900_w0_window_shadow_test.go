@@ -6,10 +6,10 @@ package hosted_test
 // chaos3899_d2b_cardinality_test.go, which this file extends rather than
 // modifies (that harness ships as part of CHAOS-3899 and stays untouched):
 // this file makes NO commit decision and calls no production decision
-// path with its own window classification -- graphrank.ClassifyWindow,
-// graphrank.DefaultRelativeID, and graphrank.ProposeWindowFromSpans are
+// path with its own window classification -- contextfabric.ClassifyWindow,
+// contextfabric.DefaultRelativeID, and contextfabric.ProposeWindowFromSpans are
 // exercised ONLY by this measurement harness, never by
-// internal/contextfabric/engine.go or graphrank.ResolveSubjects. It
+// internal/contextfabric/engine.go or contextfabric.ResolveSubjects. It
 // recomputes the SAME independent baseline/wired diff tally D2(b) does,
 // for the SAME reason: "scorecard byte-identical" (W0's own acceptance
 // criterion) must be verifiable from THIS run's own artifact, never merely
@@ -52,7 +52,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -148,8 +147,8 @@ type w0Report struct {
 // w0DefaultRelativeString applies policy and renders "" (never a bare
 // unset RelativeWindowID) when the class carries no default -- keeps the
 // JSON field genuinely omitempty-shaped rather than a present empty enum.
-func w0DefaultRelativeString(outcome graphrank.WindowClassOutcome, policy graphrank.WindowDefaultPolicy) string {
-	if id, ok := graphrank.DefaultRelativeID(outcome, policy); ok {
+func w0DefaultRelativeString(outcome contextfabric.WindowClassOutcome, policy contextfabric.WindowDefaultPolicy) string {
+	if id, ok := contextfabric.DefaultRelativeID(outcome, policy); ok {
 		return string(id)
 	}
 	return ""
@@ -333,17 +332,17 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 			m.ModelWindowConfidence = string(primaryReceipt.WindowConfidence)
 			report.ClassifiedCases++
 
-			classOutcome := graphrank.ClassifyWindow(primary, primaryReceipt.WindowClass, primaryReceipt.WindowConfidence)
+			classOutcome := contextfabric.ClassifyWindow(primary, primaryReceipt.WindowClass, primaryReceipt.WindowConfidence)
 			m.FinalWindowClass = string(classOutcome.Class)
 			m.ClassSource = string(classOutcome.Source)
 			m.FinalWindowConfidence = string(classOutcome.Confidence)
 			m.ClassDowngraded = classOutcome.Downgraded
-			m.RelativeID90D = w0DefaultRelativeString(classOutcome, graphrank.WindowDefaultPolicy90D)
-			m.RelativeID365D = w0DefaultRelativeString(classOutcome, graphrank.WindowDefaultPolicy365D)
+			m.RelativeID90D = w0DefaultRelativeString(classOutcome, contextfabric.WindowDefaultPolicy90D)
+			m.RelativeID365D = w0DefaultRelativeString(classOutcome, contextfabric.WindowDefaultPolicy365D)
 			report.ClassDistribution[classDistKey(m.FinalWindowClass)]++
 			report.ClassSourceDistribution[m.ClassSource]++
 
-			bindOutcome := graphrank.ProposeWindowFromSpans(tc.Question)
+			bindOutcome := contextfabric.ProposeWindowFromSpans(tc.Question)
 			m.BinderReason = string(bindOutcome.Reason)
 			m.BinderSpansBound = bindOutcome.SpansBound
 			m.BinderRelativeID = string(bindOutcome.RelativeID)
@@ -467,12 +466,12 @@ func classDistKey(class string) string {
 
 func TestW0DefaultRelativeString(t *testing.T) {
 	t.Parallel()
-	trend := graphrank.WindowClassOutcome{Class: contextfabric.WindowClassTrendAssessment, Source: graphrank.WindowClassSourceModel}
-	if got := w0DefaultRelativeString(trend, graphrank.WindowDefaultPolicy90D); got != "trailing_90d" {
+	trend := contextfabric.WindowClassOutcome{Class: contextfabric.WindowClassTrendAssessment, Source: contextfabric.WindowClassSourceModel}
+	if got := w0DefaultRelativeString(trend, contextfabric.WindowDefaultPolicy90D); got != "trailing_90d" {
 		t.Fatalf("w0DefaultRelativeString(trend, 90d) = %q, want trailing_90d", got)
 	}
-	none := graphrank.WindowClassOutcome{Source: graphrank.WindowClassSourceNone}
-	if got := w0DefaultRelativeString(none, graphrank.WindowDefaultPolicy90D); got != "" {
+	none := contextfabric.WindowClassOutcome{Source: contextfabric.WindowClassSourceNone}
+	if got := w0DefaultRelativeString(none, contextfabric.WindowDefaultPolicy90D); got != "" {
 		t.Fatalf("w0DefaultRelativeString(none) = %q, want empty", got)
 	}
 }

@@ -121,3 +121,23 @@ func (t SlogEngineTelemetry) RecordBindingEpochDelta(ctx context.Context, princi
 	}
 	t.logger.DebugContext(ctx, "context fabric investigation's graph epoch unchanged between binding resolution and save", args...)
 }
+
+// RecordWindowBinderOutcome logs at Info: the closed WindowBindReason
+// vocabulary is diagnostic (how often does the proposal-only temporal
+// binder route a question), never itself a sign anything is wrong.
+func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, reason WindowBindReason) {
+	args := append([]any{"org_id", principal.OrgID, "reason", string(reason)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric window binder outcome", args...)
+}
+
+// RecordWindowCanonicalization logs at Info: the closed
+// WindowCanonicalizationOutcome vocabulary lets an operator tell how often
+// investigations carry a stated/confirmed/inferred/no window apart from how
+// often a window confirmation is vetoed -- the latter (veto_unresolved/
+// veto_conflict) is worth watching, but is reported through the same
+// closed-enum stream as every other outcome, exactly like
+// RecordAnswerReuse's own miss-reason split.
+func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
+}

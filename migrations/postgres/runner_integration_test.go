@@ -35,7 +35,9 @@ import (
 // (+ retire records + build source progress) and the projection checkpoint
 // re-key to (org, epoch, source), respectively. 0021 is CHAOS-3898 S2's
 // §2.3 graph_epoch reuse-key dimension on context_fabric_investigation_results.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+// 0022 is CHAOS-3900 W1's window_inference_version reuse-key dimension on
+// the same table.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
