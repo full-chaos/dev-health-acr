@@ -14,21 +14,35 @@
 # responder to notice and wipe its own private CODEX_HOME) -- only the go
 # test target and output env var differ.
 #
-# CHAOS-3899: ACR_TEST_REPLAY_OUT is now a default-if-unset (":=" ), not an
+# CHAOS-3899: ACR_TEST_REPLAY_OUT is a default-if-unset (":=" ), not an
 # unconditional export -- an operator running the CHAOS-3899 shadow-round
-# acceptance pass sets it explicitly (a DIFFERENT artifact path, per
-# design brief v5 §6) before invoking this script; every existing caller
-# that does not set it gets the exact same default path as before,
-# byte-identical. ACR_TEST_TRIAL_SHADOW_CENSUS=false (also optional, read
-# directly by the go test) opts back out to a zero-shadow-overhead run of
-# the ORIGINAL CHAOS-3884 replay if ever needed again.
+# acceptance pass (or any other run) can still set it explicitly to a
+# specific, deliberately chosen artifact path.
+# ACR_TEST_TRIAL_SHADOW_CENSUS=false (also optional, read directly by the
+# go test) opts back out to a zero-shadow-overhead run of the ORIGINAL
+# CHAOS-3884 replay if ever needed again.
+#
+# CHAOS-3896 Slice C rider (team-lead, real incident): the default used to
+# be a single FIXED filename shared by every unlabeled invocation
+# (gen-trial-chaos3884_full50_replay.json) -- a later run silently
+# overwrote an earlier one's artifact, destroying the evidence behind an
+# already-cited acceptance number. The default now embeds this run's own
+# UTC start timestamp PLUS this shell's own PID (independent codex xhigh
+# review finding, confirmed and fixed: a timestamp alone still collides for
+# two invocations started in the SAME second -- the go test itself
+# (chaos3884_replay_harness_test.go) refuses outright to overwrite ANY
+# existing file at ACR_TEST_REPLAY_OUT, so a same-second collision failed
+# loud rather than silently overwriting, but the exchange-dir collision
+# below (RunID/request-file collision, not this artifact) still made one of
+# the two runs time out instead), so two ordinary invocations -- even
+# started in the same second -- can never collide by accident.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 LIMIT="${1:-}"
 
 trial_wire_common_env
-: "${ACR_TEST_REPLAY_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay.json}"
+: "${ACR_TEST_REPLAY_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay-$(date -u +%Y%m%dT%H%M%SZ)-$$.json}"
 export ACR_TEST_REPLAY_OUT
 export ACR_TEST_TRIAL_ARM="replay"
 if [[ -n "$LIMIT" ]]; then
@@ -45,7 +59,13 @@ fi
 # from git rather than trusted to an operator-supplied value.
 export ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
 
-exdir="$repo_root/.trial-exchange-replay-$(date -u +%Y%m%dT%H%M%SZ)"
+# $$ (independent codex xhigh review finding, confirmed and fixed): a
+# timestamp alone still collides for two invocations started in the SAME
+# second -- both would share this exchange dir, both start their own
+# request sequence numbering at 000001, and the responder's session-nonce
+# matching would pair a request from one run with a stale/foreign response
+# from the other, timing one of the two runs out rather than failing loud.
+exdir="$repo_root/.trial-exchange-replay-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 mkdir -p "$exdir/requests" "$exdir/responses"
 export ACR_TEST_TRIAL_EXCHANGE_DIR="$exdir"
 export ACR_TEST_TRIAL_EXCHANGE_TIMEOUT="${ACR_TRIAL_EXCHANGE_TIMEOUT:-10m}"

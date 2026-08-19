@@ -24,7 +24,7 @@ func TestResolveFromMergedCandidatesWithGate_TracerObservesSearchTruncated(t *te
 	identity, terms := identitySideChannels(repo)
 	tracer := &captureResolutionTracer{}
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, true /* searchTruncated */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: keep identity_fast_path from preempting the searchTruncated branch */, tracer, "req-truncated")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, true /* searchTruncated */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: keep identity_fast_path from preempting the searchTruncated branch */, tracer, "req-truncated", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want nothing committed -- searchTruncated preempts every commit gate", resolution.Committed)
@@ -55,7 +55,7 @@ func TestResolveFromMergedCandidatesWithGate_TracerSearchTruncatedFalseWhenUntru
 	lone := noiseCandidate("ci1", 0.9)
 	tracer := &captureResolutionTracer{}
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(lone), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-untruncated")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(lone), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-untruncated", "")
 
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "ci1" {
 		t.Fatalf("resolution.Committed = %#v, want ci1 committed via LoneFloor", resolution.Committed)

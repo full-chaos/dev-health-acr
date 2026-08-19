@@ -63,6 +63,7 @@ package hosted_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -546,6 +547,24 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	}
 	orgID := requireEnv(t, "ACR_TEST_TRIAL_ORG")
 	outPath := requireEnv(t, "ACR_TEST_REPLAY_OUT")
+	// CHAOS-3896 Slice C rider (team-lead, in response to a real incident:
+	// the shared default ACR_TEST_REPLAY_OUT name in run-replay.sh let one
+	// run's artifact silently destroy a prior, already-referenced run's
+	// artifact -- the "5 correct/1 wrong/44 unchanged" epoch-1 evidence
+	// this ticket's own acceptance report was meant to cite). Checked
+	// FIRST, before any live call runs (corpus verification, embedder
+	// setup, the multi-hour resolve loop) -- failing fast here costs
+	// nothing; failing at the final os.WriteFile below would have already
+	// burned the whole run before discovering the destination was unsafe.
+	// run-replay.sh's own default now embeds a timestamp so ordinary usage
+	// never hits this at all; this check is the defense-in-depth backstop
+	// for any caller (a hand-invoked `go test`, a differently-shaped
+	// wrapper script) that still sets a fixed, reused path.
+	if _, err := os.Stat(outPath); err == nil {
+		t.Fatalf("ACR_TEST_REPLAY_OUT=%s already exists -- refusing to silently overwrite existing acceptance evidence. Pass a run-unique path (a timestamp, a case label) instead of reusing one.", outPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat ACR_TEST_REPLAY_OUT=%s: %v", outPath, err)
+	}
 	runStartedAt := time.Now().UTC().Format(time.RFC3339)
 
 	// Subscription-only, no metered key, ever (standing rule for this
@@ -778,8 +797,23 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal replay report: %v", err)
 	}
-	if err := os.WriteFile(outPath, raw, 0o600); err != nil {
-		t.Fatalf("write replay report: %v", err)
+	// O_EXCL, not a plain os.WriteFile (which truncates/overwrites
+	// unconditionally): closes the TOCTOU gap between this function's own
+	// early os.Stat check (above) and this write -- a second run started
+	// against the SAME path in between would otherwise still silently win
+	// this write. See the early check's own comment for the incident this
+	// guards against.
+	f, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("create replay report at %s: %v (refusing to overwrite an existing artifact)", outPath, err)
+	}
+	_, writeErr := f.Write(raw)
+	closeErr := f.Close()
+	if writeErr != nil {
+		t.Fatalf("write replay report: %v", writeErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close replay report: %v", closeErr)
 	}
 	t.Logf("replay report written to %s: %d cases, tally=%v", outPath, report.CasesRun, report.DiffTally)
 }

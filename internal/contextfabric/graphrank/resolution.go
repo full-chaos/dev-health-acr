@@ -247,7 +247,7 @@ func isVectorOnlyCandidate(mechanisms []contextfabric.MatchMechanism) bool {
 // ResolveFromMergedCandidatesWithGate's doc comment for the full
 // algorithm description.
 func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool) contextfabric.SubjectResolution {
-	return ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, DefaultCommitGatePolicy(), nil, nil, false, nil, "")
+	return ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, DefaultCommitGatePolicy(), nil, nil, false, nil, "", "")
 }
 
 // ResolveFromMergedCandidatesWithGate implements the class fix for Codex
@@ -330,7 +330,26 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // byte-identical -- aliasIdentityComplete=false there is the SAME nil/false
 // default it always was, and identityTrustUnproven returns false
 // unconditionally for a candidate with no identity mechanism at all.
-func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string) contextfabric.SubjectResolution {
+// evidenceCensusAttestedKey (CHAOS-3896 Slice C, design brief v6 §1.4/R5)
+// is SubjectKey(subject) for the ONE satisfier a source census named --
+// empty for every caller that has not run a census (every pre-Slice-C call
+// site, and every call ResolveFromMergedCandidates' own wrapper makes),
+// which disables the rescue below entirely and leaves this function
+// byte-identical to before this ticket. A non-empty value is meaningful
+// ONLY when candidatesBySubject already contains that key: resolve.go
+// (this package's one production caller) sets it exclusively on a SECOND,
+// re-decision call made after it has already, itself: run the source
+// census (RunShadowEvidenceRound's Attestation, Outcome==ShadowWouldCommit
+// -- censusComplete, exactly one satisfier, no non-censused-kind survivor),
+// proved that satisfier exists as a keyed GRAPH node (design brief's
+// graph_missing_satisfier fail-closed pin -- absent node means this stays
+// empty, never mints a phantom key), and merged the node into `candidates`
+// through the SAME NodeCandidate/MergeCandidates path every ordinary
+// search result uses. This function does no I/O of its own -- exactly the
+// existing vectorArmSimilarity/identity precedent (both are also I/O-derived
+// side channels a caller gathers BEFORE calling in) -- it only ever reads
+// this key back out of a candidate set the caller already enriched.
+func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -346,8 +365,30 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 	// Every candidate goes through it, not just the multi-mechanism ones: the
 	// function returns a single-mechanism base unchanged, so a uniform pass is
 	// both simpler and impossible to forget for a new candidate source.
+	//
+	// rawBase (CHAOS-3896 Slice C, codex xhigh review finding, confirmed):
+	// every candidate's OWN pre-corroboration Confidence, captured here by
+	// subject key, BEFORE this loop overwrites it. The evidence_census
+	// rescue below reads THIS map, never candidates[index].Confidence
+	// directly -- a candidate that already carries 2+ REAL mechanisms
+	// (independent of any census witness) gets corroborated to
+	// >=CorroboratedFloor by THIS SAME loop, and evidence_census's own
+	// evidenceStrength formula is only sound when applied to the TRUE raw,
+	// single-mechanism-equivalent base ("raw-bases re-entry", design brief
+	// §1.4) -- applying it to an ALREADY-corroborated value double-applies
+	// the corroboration arithmetic and can push a candidate that should
+	// have refused (raw base below LoneFloor under the brief's own formula)
+	// over the floor instead. This is reachable in production even though
+	// it never triggers on the shadow-measurement corpus (design brief §0:
+	// every currently-stalled candidate there is single-mechanism) --
+	// `searchTruncated` can short-circuit the switch below BEFORE the
+	// lone_floor case ever inspects a genuinely multi-mechanism candidate's
+	// confidence, leaving it reachable here with its raw base still
+	// un-committed.
+	rawBase := make(map[string]float64, len(candidates))
 	for index := range candidates {
 		base := candidates[index].Confidence
+		rawBase[SubjectKey(candidates[index].Subject)] = base
 		candidates[index].Confidence = CorroboratedConfidence(candidates[index].MatchMechanisms, base)
 		if tracer != nil {
 			// The identity-gate STORY (was FromKeyedIdentityLookup honored)
@@ -844,6 +885,66 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
 				ambiguous = false
 				commitGate = "vector_margin_rescue"
+			}
+		}
+		// CHAOS-3896 Slice C (design brief v6 §1.4, R5's amendment): the
+		// evidence_census commit path -- a FURTHER alternate commit path for
+		// the SAME ambiguity, fired only when the confidence-threshold gates
+		// above AND the CHAOS-3829 rescue above have both already run to
+		// completion and left `ambiguous` true. evidenceCensusAttestedKey=""
+		// (every existing caller) makes this entire block dead, at zero
+		// cost, exactly like every other optional rescue precondition this
+		// function already gates on.
+		//
+		// gateValid: the SAME conjunct lone_floor/top_of_two/vector_margin_rescue
+		// already require -- an invalid gate must disable every commit path,
+		// this one included (resolution.go's own precedent, extended
+		// verbatim per the brief's own text: "gateValid joins the conjunct
+		// exactly as lone_floor/top_of_two and the rescue already require").
+		//
+		// len(exactIndex) < 2: the SAME G2 rationale vector_margin_rescue's
+		// own comment states in full -- a duplicate exact-label collision is
+		// irreducibly ambiguous by CHAOS-3810's own design, and a census
+		// witness answers a different question ("does source data attest a
+		// satisfier") than which of two identically-labeled subjects a
+		// caller's literal term meant; it must not arbitrate that collision.
+		//
+		// isVectorOnlyCandidate: AC-3778-3's pin, RETAINED per the brief's
+		// own text ("non-contradiction never commits a vector-only base
+		// (pin retained)") -- the census witness corroborates whatever
+		// mechanism the attested candidate already carries, but a
+		// vector-only candidate must stay excluded from BOTH confidence
+		// gates AND this rescue, by mechanism identity, exactly like the
+		// two gates above.
+		//
+		// identityCollision: unchanged from every other commit path above --
+		// a known rival claimant on the SAME (key class, term) makes even a
+		// positive keyed witness the wrong arbiter of WHICH claimant the
+		// caller meant.
+		//
+		// evidenceStrength(...) >= gate.LoneFloor: "the ratified
+		// corroborated-band arithmetic computed locally over the raw base
+		// plus one attested source witness (0.50 -> 0.755 >= LoneFloor); no
+		// wire mechanism, no curve change, no candidate mutation, raw-bases
+		// re-entry, MaxMatchMechanisms frozen at 6 by assertion" (brief
+		// §1.4) -- see evidenceStrength's own doc comment
+		// (chaos3896_slice_c_evidence_census.go) for the exact formula.
+		// Reads rawBase[...], NOT candidates[index].Confidence (codex xhigh
+		// review finding, confirmed -- see rawBase's own doc comment above):
+		// the latter is this SAME call's phase-2.5 OUTPUT, already
+		// corroborated for any candidate carrying 2+ real mechanisms, and
+		// feeding that back into evidenceStrength's own corroboration
+		// formula would double-apply it.
+		if ambiguous && gateValid && evidenceCensusAttestedKey != "" && len(exactIndex) < 2 {
+			if index, ok := indexBySubjectKey(candidates, evidenceCensusAttestedKey); ok &&
+				!isVectorOnlyCandidate(candidates[index].MatchMechanisms) &&
+				!identityCollision(evidenceCensusAttestedKey, identity, identityTerms) &&
+				evidenceStrength(rawBase[evidenceCensusAttestedKey]) >= gate.LoneFloor {
+				committedIndex[index] = true
+				candidates[index].State = contextfabric.ResolutionCommitted
+				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
+				ambiguous = false
+				commitGate = "evidence_census"
 			}
 		}
 	}
