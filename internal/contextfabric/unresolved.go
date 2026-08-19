@@ -292,6 +292,7 @@ func (e *Engine) terminalResult(
 		if err := e.results.Save(ctx, principal, result, watermark, epoch, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
+		e.recordBindingEpochDelta(ctx, principal, binding)
 	}
 	return result, nil
 }

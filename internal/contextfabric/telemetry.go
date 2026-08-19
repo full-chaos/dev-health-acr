@@ -100,3 +100,17 @@ func (t SlogEngineTelemetry) RecordAnswerReuseServedRequestID(ctx context.Contex
 	args := append([]any{"org_id", principal.OrgID, "served_request_id", servedRequestID, "request_id_mismatch", requestIDMismatch}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse served a stored result's own request id", args...)
 }
+
+// RecordBindingEpochDelta is CHAOS-3898 §5b's flip_during_investigation/
+// cf_binding_epoch_delta pair -- see EngineTelemetry's own doc comment.
+// flipped=false (the ordinary case: no build/flip happened mid-investigation)
+// logs at Debug; flipped=true logs at Info -- worth an operator's attention
+// (grace-window/cache-lease tuning data), never itself an error condition.
+func (t SlogEngineTelemetry) RecordBindingEpochDelta(ctx context.Context, principal storage.Principal, flipped bool, delta int64) {
+	args := append([]any{"org_id", principal.OrgID, "flip_during_investigation", flipped, "binding_epoch_delta", delta}, requestIDLogAttrs(ctx)...)
+	if flipped {
+		t.logger.InfoContext(ctx, "context fabric investigation's graph epoch moved between binding resolution and save", args...)
+		return
+	}
+	t.logger.DebugContext(ctx, "context fabric investigation's graph epoch unchanged between binding resolution and save", args...)
+}

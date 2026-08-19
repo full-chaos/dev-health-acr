@@ -198,6 +198,26 @@ type EngineTelemetry interface {
 	// documented behavior, but easy to misdiagnose as a bug from the
 	// outside without a telemetry signal that names it explicitly.
 	RecordAnswerReuseServedRequestID(ctx context.Context, principal storage.Principal, servedRequestID string, requestIDMismatch bool)
+	// RecordBindingEpochDelta is the CHAOS-3898 §5b flip_during_investigation/
+	// cf_binding_epoch_delta pair: at Save, Engine re-resolves the
+	// organization's CURRENT active graph epoch (a second,
+	// telemetry-only call to GraphReader.ResolveInvestigationBinding --
+	// never the binding actually used for this investigation's own graph
+	// reads or Save's own stamped epoch, which stay the ORIGINAL binding
+	// resolved at request start) and compares it against
+	// ResolvedGraphBinding.Epoch, the value this investigation's graph
+	// reads actually used. flipped is true when they differ -- a
+	// build/flip happened between this investigation's request-start
+	// binding resolution and its Save -- and delta is the signed
+	// difference (current minus original; 0 when flipped is false).
+	// Called unconditionally, once per Save, flipped or not, so
+	// zero-vs-nonzero settles "how often does this really happen" by
+	// counter rather than by guesswork (the same 3897-pattern motivation
+	// §5b's own header names): grace-window and cache-lease (L) tuning on
+	// data, not assumption. The re-resolution itself fails OPEN (an error
+	// simply skips this one signal) -- it must never affect Save's own
+	// success or the epoch actually stamped on the result.
+	RecordBindingEpochDelta(ctx context.Context, principal storage.Principal, flipped bool, delta int64)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -587,6 +607,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
+		e.recordBindingEpochDelta(ctx, principal, binding)
 	}
 	return result, nil
 }
@@ -809,6 +830,30 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 	if staleGraphEpoch > 0 {
 		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "stale_graph_epoch", staleGraphEpoch)
 	}
+}
+
+// recordBindingEpochDelta is the CHAOS-3898 §5b flip_during_investigation/
+// cf_binding_epoch_delta signal (see EngineTelemetry.RecordBindingEpochDelta's
+// own doc comment for the full contract). original is the ResolvedGraphBinding
+// this investigation's own graph reads and Save actually used -- captured
+// once, at request start, and NEVER re-resolved for correctness anywhere
+// else in this package. This function's own re-resolution exists SOLELY to
+// produce the telemetry comparison; its result is read nowhere but here.
+//
+// Fails open: a nil telemetry sink or a failed re-resolution both simply
+// skip the signal. Called AFTER Save has already succeeded (both call
+// sites), so this can never affect whether a result is persisted or what
+// epoch it is stamped with.
+func (e *Engine) recordBindingEpochDelta(ctx context.Context, principal storage.Principal, original ResolvedGraphBinding) {
+	if e.telemetry == nil {
+		return
+	}
+	current, err := e.graph.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		return
+	}
+	delta := current.Epoch - original.Epoch
+	e.telemetry.RecordBindingEpochDelta(ctx, principal, delta != 0, delta)
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {
