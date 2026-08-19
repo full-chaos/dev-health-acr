@@ -116,6 +116,37 @@ const (
 // verifier fails closed instead.
 type HandleVerifier func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason)
 
+// AnchorVerificationReason is the closed vocabulary Engine's anchor
+// re-verification dependency reports (CHAOS-3900 P1.E, team-lead ruling).
+// Package-local copy of graphrank.AnchorVerificationReason, same reason
+// HandleVerificationReason above is one -- contextfabric cannot import
+// graphrank.
+type AnchorVerificationReason string
+
+const (
+	AnchorVerificationValid                 AnchorVerificationReason = "valid"
+	AnchorVerificationClaimContested        AnchorVerificationReason = "anchor_claim_contested"
+	AnchorVerificationClaimLost             AnchorVerificationReason = "anchor_claim_lost"
+	AnchorVerificationIncompleteEnumeration AnchorVerificationReason = "incomplete_enumeration"
+)
+
+// AnchorVerifier is canonicalizeStructure's own redemption-time
+// re-verification dependency for the subject_anchor member (design brief
+// §2.1, team-lead ruling on the matched_term_hash contract change):
+// (org, kind, canonical_id, matched_term_hash) in -> valid/invalid + reason
+// out, question-free -- re-reads the identity universe hash-side and
+// re-proves EXACTLY ONE row still carries the matched term AND that row's
+// (kind, canonical_id) still equals the stored pair.
+//
+// The production implementation (internal/runtime/hosted/open.go) adapts
+// graphrank.VerifyAnchorClaimantUnique over the SAME identity-universe read
+// devhealthsource.IdentityUniverse already provides. A nil AnchorVerifier
+// is NOT "trust the stored offer": see canonicalizeStructure's own
+// reverify wiring below -- same fail-closed default as HandleVerifier,
+// same reasoning (applying an un-reverified anchor claim would be a false
+// sense of safety).
+type AnchorVerifier func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason)
+
 // structureReceiptMember describes one of the three P1.B receipt
 // namespaces uniformly, so canonicalizeStructure resolves all three
 // through ONE loop rather than three hand-copies -- the same DRY
@@ -129,13 +160,11 @@ type structureReceiptMember struct {
 	// re-verification hook, additional to appliedValueFor's stored-offer
 	// lookup above. nil means the stored offer's content is trusted as
 	// persisted, exactly as every member behaved before P1.E (this file's
-	// own SCOPE NOTE) -- currently true for expected_kind (no live
+	// own SCOPE NOTE) -- still true for expected_kind only (no live
 	// tampering vector: the confirmed kind only narrows a pool, it never
-	// stands in for a fact) and subject_anchor (re-verification is
-	// design-blocked pending a team-lead ruling on whether AnchorOption
-	// needs a matched-term field -- see the P1.E report this session
-	// filed). subject_handle sets this to a non-nil closure over
-	// Engine.handleVerifier.
+	// stands in for a fact). subject_anchor and subject_handle both set
+	// this to a non-nil closure over Engine.anchorVerifier/handleVerifier
+	// respectively.
 	reverify func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool
 }
 
@@ -185,6 +214,27 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 					}
 				}
 				return "", "", "", "", false
+			},
+			// reverify (P1.E, team-lead ruling on the matched_term_hash
+			// contract change): an ancr_ redemption re-proves the offer's
+			// per-TERM claimant uniqueness still holds -- (kind,
+			// canonical_id) alone cannot detect a rival gaining the SAME
+			// alias after this anchor was offered (the CHAOS-3917 class),
+			// so the stored offer's own matched_term_hash is re-checked
+			// hash-side against a fresh identity-universe read.
+			// e.anchorVerifier == nil fails CLOSED, not open -- identical
+			// reasoning to the handle member's own reverify above.
+			reverify: func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool {
+				if e.anchorVerifier == nil || stored.StructureNeeds == nil {
+					return false
+				}
+				for _, opt := range stored.StructureNeeds.AnchorOptions {
+					if opt.ReceiptID == receiptID {
+						ok, _ := e.anchorVerifier(ctx, principal.OrgID, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
+						return ok
+					}
+				}
+				return false
 			},
 		},
 		{
@@ -447,7 +497,13 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 	if len(material.AnchorOptions) > 0 {
 		needs.AnchorOptions = make([]contractsv1.ContextFabricAnchorOption, 0, len(material.AnchorOptions))
 		for _, opt := range material.AnchorOptions {
-			content := string(opt.Kind) + "\x00" + opt.CanonicalID
+			// CHAOS-3900 P1.E (team-lead ruling): matched_term_hash is part
+			// of what makes this offer distinct from a sibling in the same
+			// list (two anchors sharing a (kind, canonical_id) but minted
+			// from different matched terms are different offers), so it
+			// belongs in the deterministic receipt-id/option-id content
+			// exactly like every other content field here.
+			content := string(opt.Kind) + "\x00" + opt.CanonicalID + "\x00" + opt.MatchedTermHash
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
 			needs.AnchorOptions = append(needs.AnchorOptions, opt)

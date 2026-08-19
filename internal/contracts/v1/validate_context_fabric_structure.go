@@ -107,6 +107,9 @@ func (o ContextFabricAnchorOption) Validate() error {
 	if !stringLengthBetween(o.CanonicalID, 1, 256) {
 		return fmt.Errorf("anchor option canonical_id violates v1 bounds")
 	}
+	if !stringLengthBetween(o.MatchedTermHash, 24, 24) {
+		return fmt.Errorf("anchor option matched_term_hash must be a 24-character digest")
+	}
 	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
 		return fmt.Errorf("anchor option offer_source is invalid")
 	}

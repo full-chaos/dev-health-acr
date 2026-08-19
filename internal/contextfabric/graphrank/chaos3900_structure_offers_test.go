@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -373,6 +374,132 @@ func TestVerifyHandle(t *testing.T) {
 		valid, reason := VerifyHandle(context.Background(), "org_1", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "532", census)
 		if valid || reason != HandleVerificationCensusUnavailable {
 			t.Errorf("VerifyHandle() = (%v, %q), want (false, %q)", valid, reason, HandleVerificationCensusUnavailable)
+		}
+	})
+}
+
+func identityRow(kind contractsv1.ContextFabricSubjectKind, id, label string, aliases ...string) IdentityRow {
+	return IdentityRow{Kind: kind, CanonicalID: id, Label: label, Aliases: aliases}
+}
+
+func fakeIdentityUniverseFn(rows []IdentityRow, complete bool, err error) IdentityUniverseFunc {
+	return func(context.Context, string) ([]IdentityRow, time.Time, bool, error) {
+		return rows, time.Time{}, complete, err
+	}
+}
+
+// TestHashAliasTerm pins HashAliasTerm's own contract: deterministic,
+// case/whitespace-insensitive (it hashes the NORMALIZED term, exactly what
+// NormalizeAliasTerm produces), and a fixed 24-character digest -- the same
+// length mintStructureReceiptID/mintStructureOptionID already use.
+func TestHashAliasTerm(t *testing.T) {
+	t.Parallel()
+
+	a := HashAliasTerm("widget-service")
+	b := HashAliasTerm("  Widget-Service  ")
+	if a != b {
+		t.Errorf("HashAliasTerm(%q) = %q, HashAliasTerm(%q) = %q, want equal: both normalize to the same term", "widget-service", a, "  Widget-Service  ", b)
+	}
+	if len(a) != 24 {
+		t.Errorf("len(HashAliasTerm(...)) = %d, want 24", len(a))
+	}
+	if c := HashAliasTerm("a-different-term"); c == a {
+		t.Errorf("HashAliasTerm(%q) = %q, want different from HashAliasTerm(%q) = %q", "a-different-term", c, "widget-service", a)
+	}
+}
+
+// TestNormalizationParity_MatchIdentityRowsAndHashAliasTermAgree is the
+// team-lead-mandated normalization-parity pin: MatchIdentityRows (the
+// derive-side match) and HashAliasTerm (the verify-side hash) must reach
+// the SAME verdict on the same (row, term) input -- a row MatchIdentityRows
+// says matches a term must ALSO be a row identityRowCarriesTermHash finds
+// via HashAliasTerm(term). If the two sides ever normalized differently,
+// this is the test that would catch it; without it, the check "fails
+// toward fine" (silently never contests anything) rather than loud.
+func TestNormalizationParity_MatchIdentityRowsAndHashAliasTermAgree(t *testing.T) {
+	t.Parallel()
+
+	row := identityRow(contractsv1.ContextFabricSubjectRepository, "repo_1", "Widget Service", "  WIDGET-service  ", "widget_svc")
+	for _, term := range []string{"widget service", "WIDGET SERVICE", "  Widget-Service  ", "widget_svc"} {
+		matches := MatchIdentityRows([]IdentityRow{row}, []string{term})
+		derivedMatch := len(matches[term]) == 1
+		hashMatch := identityRowCarriesTermHash(row, HashAliasTerm(term))
+		if derivedMatch != hashMatch {
+			t.Errorf("term %q: MatchIdentityRows found a match = %v, identityRowCarriesTermHash found a match = %v -- the two sides disagree", term, derivedMatch, hashMatch)
+		}
+	}
+}
+
+// TestVerifyAnchorClaimantUnique_CaseFortyFiveTwinRepoShape is the
+// team-lead-mandated case-45-shaped regression (CHAOS-3917's own corpus
+// case, reused here for narrative continuity with
+// TestResolveFromMergedCandidatesWithGate_ExactLabelNeverCommitsOverACollidingAliasClaimant):
+// an anchor offer minted while "widget-service" uniquely names repoA must
+// re-verify VALID before a rival claims the same alias, and CONTESTED
+// (never silently still-valid, never a different wrong verdict) the moment
+// a second repo (repoB) gains the identical alias.
+func TestVerifyAnchorClaimantUnique_CaseFortyFiveTwinRepoShape(t *testing.T) {
+	t.Parallel()
+	const term = "widget-service"
+	hash := HashAliasTerm(term)
+	repoA := identityRow(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA", term)
+	repoB := identityRow(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB", term)
+
+	t.Run("unique claimant re-verifies valid", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
+		valid, reason := VerifyAnchorClaimantUnique(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if !valid || reason != AnchorVerificationValid {
+			t.Errorf("VerifyAnchorClaimantUnique() = (%v, %q), want (true, %q)", valid, reason, AnchorVerificationValid)
+		}
+	})
+	t.Run("a rival gaining the SAME alias contests the claim", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA, repoB}, true, nil)
+		valid, reason := VerifyAnchorClaimantUnique(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationClaimContested {
+			t.Errorf("VerifyAnchorClaimantUnique() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimContested)
+		}
+	})
+}
+
+func TestVerifyAnchorClaimantUnique(t *testing.T) {
+	t.Parallel()
+	const term = "widget-service"
+	hash := HashAliasTerm(term)
+	repoA := identityRow(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA", term)
+
+	t.Run("claim lost: no row carries the hash any longer", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn(nil, true, nil)
+		valid, reason := VerifyAnchorClaimantUnique(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationClaimLost {
+			t.Errorf("VerifyAnchorClaimantUnique() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
+		}
+	})
+	t.Run("claim lost: the unique claimant is now a DIFFERENT canonical id", func(t *testing.T) {
+		renamed := identityRow(contractsv1.ContextFabricSubjectRepository, "repoZ", "repoZ", term)
+		universe := fakeIdentityUniverseFn([]IdentityRow{renamed}, true, nil)
+		valid, reason := VerifyAnchorClaimantUnique(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationClaimLost {
+			t.Errorf("VerifyAnchorClaimantUnique() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
+		}
+	})
+	t.Run("incomplete enumeration fails closed, not open", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, false, nil)
+		valid, reason := VerifyAnchorClaimantUnique(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationIncompleteEnumeration {
+			t.Errorf("VerifyAnchorClaimantUnique() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
+		}
+	})
+	t.Run("identity universe error fails closed, not open", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn(nil, true, errors.New("boom"))
+		valid, reason := VerifyAnchorClaimantUnique(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationIncompleteEnumeration {
+			t.Errorf("VerifyAnchorClaimantUnique() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
+		}
+	})
+	t.Run("nil identity universe dependency fails closed, not open", func(t *testing.T) {
+		valid, reason := VerifyAnchorClaimantUnique(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, nil)
+		if valid || reason != AnchorVerificationIncompleteEnumeration {
+			t.Errorf("VerifyAnchorClaimantUnique() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
 		}
 	})
 }

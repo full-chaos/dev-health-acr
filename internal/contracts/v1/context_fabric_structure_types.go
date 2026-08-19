@@ -126,15 +126,31 @@ type ContextFabricKindOption struct {
 // producer. Removed rather than left aspirational; (Kind, CanonicalID) is
 // the real identity redemption re-verifies against -- see
 // verifyAnchorClaimantUnique (internal/contextfabric/structure.go).
+//
+// CHANGE LOG (P1.E, follow-up): a second scoping pass found that
+// (Kind, CanonicalID) alone cannot re-prove the PROPERTY that made this
+// anchor uniquely offerable in the first place -- AliasLookup's own
+// uniqueness is inherently per matched TEXT TERM, not per canonical id
+// (graphrank.MatchIdentityRows), so a canonical-id-only re-check could not
+// detect a rival claimant gaining the SAME term (the CHAOS-3917 class) and
+// would have been a false sense of safety, not a weaker-but-honest check.
+// MatchedTermHash restores the per-term claimant association the ratified
+// 3917 design (doc #5 shape) always specified -- ClaimantKey above was the
+// aspirational, wrong-shaped version of exactly this field. It carries the
+// SHA-256 digest of the NORMALIZED matched term (graphrank.NormalizeAliasTerm),
+// hex-truncated per this repo's digest idiom -- deliberately never the raw
+// term itself: the term is question-derived text and this is a durable,
+// server-minted offer (the repo's standing term-identity-via-hash rule).
 type ContextFabricAnchorOption struct {
-	ReceiptID      string                            `json:"receipt_id"`
-	OptionID       string                            `json:"option_id"`
-	Label          string                            `json:"label"`
-	Kind           ContextFabricSubjectKind          `json:"kind"`
-	CanonicalID    string                            `json:"canonical_id"`
-	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
-	PriorVersionID string                            `json:"prior_version_id,omitempty"`
-	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+	ReceiptID       string                            `json:"receipt_id"`
+	OptionID        string                            `json:"option_id"`
+	Label           string                            `json:"label"`
+	Kind            ContextFabricSubjectKind          `json:"kind"`
+	CanonicalID     string                            `json:"canonical_id"`
+	MatchedTermHash string                            `json:"matched_term_hash"`
+	OfferSource     ContextFabricStructureOfferSource `json:"offer_source"`
+	PriorVersionID  string                            `json:"prior_version_id,omitempty"`
+	PriorEntryID    string                            `json:"prior_entry_id,omitempty"`
 }
 
 // ContextFabricHandleOption offers one grammar-valid handle candidate,

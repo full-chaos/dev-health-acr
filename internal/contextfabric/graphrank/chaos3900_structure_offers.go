@@ -2,6 +2,9 @@ package graphrank
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -248,4 +251,118 @@ func VerifyHandle(ctx context.Context, orgID string, kind CensusKind, patternID,
 		return false, HandleVerificationNotFound
 	}
 	return true, HandleVerificationValid
+}
+
+// HashAliasTerm is the ONE place a matched term is turned into
+// ContextFabricAnchorOption.MatchedTermHash's own wire value (CHAOS-3900
+// P1.E, team-lead ruling): SHA-256 of the term normalized through
+// NormalizeAliasTerm -- the SAME function MatchIdentityRows already
+// applies to both sides of every identity match, so a hash computed here
+// is provably comparable to a hash computed at derive time, not a
+// lookalike normalization that could silently diverge. hex-truncated to
+// 24 characters, the same digest length mintStructureReceiptID/
+// mintStructureOptionID already use (internal/contextfabric/structure.go)
+// -- this repo's own digest idiom. Deliberately one-way: the raw term is
+// question-derived text and must never persist on a durable, server-minted
+// offer (standing rule: term identity via hash, never the term itself).
+func HashAliasTerm(term string) string {
+	sum := sha256.Sum256([]byte(NormalizeAliasTerm(term)))
+	return hex.EncodeToString(sum[:])[:24]
+}
+
+// AnchorVerificationReason is the closed vocabulary VerifyAnchorClaimantUnique
+// reports (CHAOS-3900 P1.E).
+type AnchorVerificationReason string
+
+const (
+	AnchorVerificationValid AnchorVerificationReason = "valid"
+	// AnchorVerificationClaimContested: MORE THAN ONE identity-universe row
+	// now carries an alias hashing to the stored matched_term_hash -- a
+	// rival claimant gained the SAME term after this anchor was offered
+	// (the live CHAOS-3917 class this field exists to catch).
+	AnchorVerificationClaimContested AnchorVerificationReason = "anchor_claim_contested"
+	// AnchorVerificationClaimLost: either NO row carries the hash any
+	// longer (the claim's own source row/alias was removed or renamed), or
+	// exactly one row does but its (Kind, CanonicalID) no longer matches
+	// what was stored -- the claim moved out from under the offer.
+	AnchorVerificationClaimLost AnchorVerificationReason = "anchor_claim_lost"
+	// AnchorVerificationIncompleteEnumeration: the identity-universe read
+	// itself was truncated or errored -- design brief 3917's own rule:
+	// NO uniqueness proof on an incomplete enumeration. Fail closed, never
+	// assume the unseen rows would not have contested the claim.
+	AnchorVerificationIncompleteEnumeration AnchorVerificationReason = "incomplete_enumeration"
+)
+
+// IdentityUniverseFunc mirrors falkorgraph.Config.IdentityUniverse's own
+// shape exactly (CHAOS-3884 Option C) -- the SAME complete, per-organization
+// identity-universe read VerifyAnchorClaimantUnique re-runs at redemption
+// time, never a second, potentially-divergent read path. complete==false
+// (a truncated backend read) is handled identically to err!=nil: both fail
+// AnchorVerificationIncompleteEnumeration, per that reason's own doc
+// comment.
+type IdentityUniverseFunc func(ctx context.Context, orgID string) (rows []IdentityRow, observedAt time.Time, complete bool, err error)
+
+// VerifyAnchorClaimantUnique is design brief §2.1's own ancr_ redemption-time
+// re-verification (CHAOS-3900 P1.E, team-lead ruling): re-reads the
+// identity universe, hashes each row's Label/Aliases/ProviderAliases
+// through the SAME HashAliasTerm this offer's own matched_term_hash was
+// minted with, and counts rows carrying ANY alias whose hash equals it.
+// Valid iff EXACTLY ONE row matches AND its (Kind, CanonicalID) equals the
+// stored pair -- re-proving the per-TERM claimant association
+// AliasLookup's own uniqueness is scoped to (MatchIdentityRows), not a
+// canonical-id-only check (P1.E's own earlier finding: a canonical-id-only
+// re-check cannot detect a rival gaining the SAME term, and would have
+// been a false sense of safety).
+//
+// Deliberately works HASH-side only: the raw term never needs to exist
+// here, matching the field it re-verifies.
+func VerifyAnchorClaimantUnique(ctx context.Context, orgID string, kind contextfabric.SubjectKind, canonicalID, matchedTermHash string, identityUniverse IdentityUniverseFunc) (bool, AnchorVerificationReason) {
+	if identityUniverse == nil {
+		return false, AnchorVerificationIncompleteEnumeration
+	}
+	rows, _, complete, err := identityUniverse(ctx, orgID)
+	if err != nil || !complete {
+		return false, AnchorVerificationIncompleteEnumeration
+	}
+	var matches []IdentityRow
+	for _, row := range rows {
+		if identityRowCarriesTermHash(row, matchedTermHash) {
+			matches = append(matches, row)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return false, AnchorVerificationClaimLost
+	case 1:
+		if matches[0].Kind == kind && matches[0].CanonicalID == canonicalID {
+			return true, AnchorVerificationValid
+		}
+		return false, AnchorVerificationClaimLost
+	default:
+		return false, AnchorVerificationClaimContested
+	}
+}
+
+// identityRowCarriesTermHash reports whether ANY of row's Label/Aliases/
+// ProviderAliases normalizes and hashes to termHash -- mirrors
+// matchedTermsForRow's own three-class scan (chaos3884_identity_universe.go),
+// including its empty-normalized-term guard: an empty Label/alias never
+// participates in matching there, and must not participate in hashing
+// here either, or an attacker-uncontrollable empty term could collide with
+// a row that simply has no label set.
+func identityRowCarriesTermHash(row IdentityRow, termHash string) bool {
+	if label := NormalizeAliasTerm(row.Label); label != "" && HashAliasTerm(label) == termHash {
+		return true
+	}
+	for _, alias := range row.Aliases {
+		if a := NormalizeAliasTerm(alias); a != "" && HashAliasTerm(a) == termHash {
+			return true
+		}
+	}
+	for _, alias := range row.ProviderAliases {
+		if a := NormalizeAliasTerm(alias); a != "" && HashAliasTerm(a) == termHash {
+			return true
+		}
+	}
+	return false
 }

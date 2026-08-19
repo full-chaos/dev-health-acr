@@ -38,7 +38,8 @@ func TestContextFabricAnchorOption_Validate(t *testing.T) {
 	base := ContextFabricAnchorOption{
 		ReceiptID: "ancr_confirm00001", OptionID: "opt_repo", Label: "the ask-dev repository",
 		Kind: ContextFabricSubjectRepository, CanonicalID: "repository_ask_dev",
-		OfferSource: ContextFabricStructureOfferEngine,
+		MatchedTermHash: "matchedtermhash000000012",
+		OfferSource:     ContextFabricStructureOfferEngine,
 	}
 	cases := []struct {
 		name    string
@@ -48,6 +49,8 @@ func TestContextFabricAnchorOption_Validate(t *testing.T) {
 		{"well formed", func(o *ContextFabricAnchorOption) {}, false},
 		{"missing namespace prefix", func(o *ContextFabricAnchorOption) { o.ReceiptID = "kindr_confirm00001" }, true},
 		{"empty canonical_id", func(o *ContextFabricAnchorOption) { o.CanonicalID = "" }, true},
+		{"empty matched_term_hash", func(o *ContextFabricAnchorOption) { o.MatchedTermHash = "" }, true},
+		{"wrong-length matched_term_hash", func(o *ContextFabricAnchorOption) { o.MatchedTermHash = "tooshort" }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -100,7 +103,7 @@ func TestContextFabricStructureNeeds_RoundTrip(t *testing.T) {
 			{ReceiptID: "kindr_confirm00001", OptionID: "opt_pr", Label: "a pull request", Kind: ContextFabricSubjectPullRequest, OfferSource: ContextFabricStructureOfferEngine},
 		},
 		AnchorOptions: []ContextFabricAnchorOption{
-			{ReceiptID: "ancr_confirm00001", OptionID: "opt_repo", Label: "the ask-dev repository", Kind: ContextFabricSubjectRepository, CanonicalID: "repository_ask_dev", OfferSource: ContextFabricStructureOfferEngine},
+			{ReceiptID: "ancr_confirm00001", OptionID: "opt_repo", Label: "the ask-dev repository", Kind: ContextFabricSubjectRepository, CanonicalID: "repository_ask_dev", MatchedTermHash: "matchedtermhash000000012", OfferSource: ContextFabricStructureOfferEngine},
 		},
 		HandleOptions: []ContextFabricHandleOption{
 			{ReceiptID: "handr_confirm00001", OptionID: "opt_pr123", Label: "PR #123", Kind: ContextFabricSubjectPullRequest, PatternID: "pr_number", Value: "123", SourceColumn: "pull_requests.number", OfferSource: ContextFabricStructureOfferEngine},
@@ -155,7 +158,7 @@ func TestContextFabricStructureNeeds_Validate(t *testing.T) {
 			Missing:     []ContextFabricStructureNeedKind{ContextFabricStructureNeedExpectedKind},
 			KindOptions: []ContextFabricKindOption{validKind},
 			AnchorOptions: []ContextFabricAnchorOption{
-				{ReceiptID: validKind.ReceiptID, OptionID: "opt_other", Label: "x", Kind: ContextFabricSubjectRepository, CanonicalID: "c", OfferSource: ContextFabricStructureOfferEngine},
+				{ReceiptID: validKind.ReceiptID, OptionID: "opt_other", Label: "x", Kind: ContextFabricSubjectRepository, CanonicalID: "c", MatchedTermHash: "matchedtermhash000000012", OfferSource: ContextFabricStructureOfferEngine},
 			},
 		}
 		if err := n.Validate(); err == nil {

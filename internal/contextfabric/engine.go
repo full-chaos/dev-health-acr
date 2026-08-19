@@ -137,6 +137,11 @@ type EngineDependencies struct {
 	// handle offers (P1.C' not yet built) never exercises this path
 	// regardless, so leaving it nil is safe ONLY until handle offers exist.
 	HandleVerifier HandleVerifier
+	// AnchorVerifier is CHAOS-3900 P1.E's redemption-time re-verification
+	// dependency for ancr_ structure receipts -- same fail-CLOSED-when-nil
+	// contract as HandleVerifier above, see AnchorVerifier's own doc
+	// comment (structure.go).
+	AnchorVerifier AnchorVerifier
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -281,6 +286,7 @@ type Engine struct {
 	reuseVersionAuthorities    ReuseVersionAuthorities
 	clarificationSelectionSink ClarificationSelectionSink
 	handleVerifier             HandleVerifier
+	anchorVerifier             AnchorVerifier
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -307,6 +313,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
 		handleVerifier:             dependencies.HandleVerifier,
+		anchorVerifier:             dependencies.AnchorVerifier,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:  options.ReuseRetrievalIdentity,
 		reusePromptVersions:     options.ReusePromptVersions,

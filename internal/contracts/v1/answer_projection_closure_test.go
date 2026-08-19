@@ -217,7 +217,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		expectedPaths int
 	}{
 		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 73},
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 212},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 213},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -307,7 +307,11 @@ func trustedBecauseClosed(path string) bool {
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",
 		"finding_id", "path_id", "canonical_id", "turn_id", "schema_version",
 		"evidence_ref_ids", "claimed_fact_ids", "path_ids", "content_digest",
-		"snapshot_hash", "watermark":
+		"snapshot_hash", "watermark",
+		// CHAOS-3900 P1.E: matched_term_hash is a SHA-256 digest of a
+		// normalized term (ContextFabricAnchorOption's own doc comment) --
+		// a fixed-length, service-minted hash, never model or source prose.
+		"matched_term_hash":
 		return true
 	// Service-issued identifier vocabularies: ACR chooses these, not a
 	// model and not a retrieved document. "source" names a configured

@@ -1163,7 +1163,7 @@
           ]
         },
         "AnchorOption": {
-          "description": "CHAOS-3900 P1: one server-offered unique-claimant anchor candidate, minted onto a stored result so a later turn can confirm it via ancr_ receipt redemption. Re-verification identity is (kind, canonical_id) -- see internal/contextfabric's verifyAnchorClaimantUnique.",
+          "description": "CHAOS-3900 P1: one server-offered unique-claimant anchor candidate, minted onto a stored result so a later turn can confirm it via ancr_ receipt redemption. Re-verification identity is (kind, canonical_id, matched_term_hash) -- see internal/contextfabric's verifyAnchorClaimantUnique. matched_term_hash is the SHA-256 digest of the normalized matched term, never the raw term.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -1191,6 +1191,11 @@
               "minLength": 1,
               "maxLength": 256
             },
+            "matched_term_hash": {
+              "type": "string",
+              "minLength": 24,
+              "maxLength": 24
+            },
             "offer_source": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSource"
             },
@@ -1211,6 +1216,7 @@
             "label",
             "kind",
             "canonical_id",
+            "matched_term_hash",
             "offer_source"
           ]
         },

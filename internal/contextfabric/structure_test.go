@@ -198,6 +198,110 @@ func TestCHAOS3900_NoStructureReceipts_CanonicalizeStructureIsANoOp(t *testing.T
 	}
 }
 
+// anchorReceiptTestSetup builds a prior result carrying one AnchorOption
+// offer and a request naming its receipt -- mirrors handleReceiptTestSetup
+// below, shared fixture for the three TestCHAOS3900_AnchorReceiptReverification*
+// tests.
+func anchorReceiptTestSetup() (priorResult InvestigationResult, request InvestigationRequest) {
+	priorResult = validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0004"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_anchor"},
+		AnchorOptions: []AnchorOption{
+			{
+				ReceiptID: "ancr_confirm0001", OptionID: "opt_anchor", Label: "the widget-service repository",
+				Kind: SubjectRepository, CanonicalID: "repository_widget_service",
+				MatchedTermHash: "matchedtermhash000000012",
+				OfferSource:     "engine",
+			},
+		},
+	}
+	request = validInvestigationRequest()
+	request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "ancr_confirm0001"}}
+	return priorResult, request
+}
+
+// TestCHAOS3900_AnchorReceiptReverification_NilVerifierVetoes mirrors
+// TestCHAOS3900_HandleReceiptReverification_NilVerifierVetoes exactly:
+// AnchorVerifier's own fail-CLOSED default (applying an un-reverified
+// anchor claim would be a false sense of safety, not a weaker-but-honest
+// check).
+func TestCHAOS3900_AnchorReceiptReverification_NilVerifierVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := anchorReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+}
+
+// TestCHAOS3900_AnchorReceiptReverification_VerifierRejectsVetoes proves a
+// wired AnchorVerifier reporting the claim contested/lost vetoes the whole
+// request atomically, same discipline as every other structure veto in
+// this file.
+func TestCHAOS3900_AnchorReceiptReverification_VerifierRejectsVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := anchorReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	calls := 0
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		AnchorVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason) {
+			calls++
+			if orgID != reusePrincipal().OrgID || kind != SubjectRepository || canonicalID != "repository_widget_service" || matchedTermHash != "matchedtermhash000000012" {
+				t.Errorf("AnchorVerifier called with (org=%q, kind=%q, canonical_id=%q, matched_term_hash=%q), want the stored offer's own content", orgID, kind, canonicalID, matchedTermHash)
+			}
+			return false, AnchorVerificationClaimContested
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+	if calls != 1 {
+		t.Errorf("AnchorVerifier called %d times, want 1", calls)
+	}
+}
+
+// TestCHAOS3900_AnchorReceiptReverification_VerifierAcceptsConfirms is this
+// test's positive twin.
+func TestCHAOS3900_AnchorReceiptReverification_VerifierAcceptsConfirms(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := anchorReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		AnchorVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason) {
+			return true, AnchorVerificationValid
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoNone {
+		t.Errorf("canon.Veto = %q, want structureVetoNone", canon.Veto)
+	}
+	if len(canon.Confirmed) != 1 {
+		t.Fatalf("len(canon.Confirmed) = %d, want 1", len(canon.Confirmed))
+	}
+	entry := canon.Confirmed[0]
+	if entry.Member != "subject_anchor" || entry.AppliedValue != "repository_widget_service" {
+		t.Errorf("canon.Confirmed[0] = %+v, want member=subject_anchor applied_value=repository_widget_service", entry)
+	}
+}
+
 // handleReceiptTestSetup builds a prior result carrying one HandleOption
 // offer and a request naming its receipt -- shared fixture for the three
 // TestCHAOS3900_HandleReceiptReverification* tests below.
