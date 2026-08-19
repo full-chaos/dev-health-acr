@@ -38,6 +38,15 @@ import (
 // uniqueness guarantee this package enforces.
 const questionProvenanceMarker = "[full question]"
 
+// censusProvenanceMarker (CHAOS-3896 Slice C) is mergeCensusAttestedSatisfier's
+// own synthetic MatchedTerms/ReceiptID provenance for a satisfier merged in
+// from the source census's keyed graph-existence read -- the SAME
+// "bracket-wrapped, never plausibly caller-typed" discipline
+// questionProvenanceMarker documents, distinguished from it so a reader
+// correlating MatchedTerms can tell a question-pass find from a
+// census-recovered one.
+const censusProvenanceMarker = "[census witness]"
+
 // matchedTermsCap mirrors contractsv1's own unexported MatchedTerms entry
 // count bound (matchedTerms:32, contextFabricWriteBounds) -- see
 // questionProvenanceMarker's doc comment for why it is mirrored rather than
@@ -323,7 +332,8 @@ type ResolutionTraceEvent struct {
 	RequestID string
 	// Stage is a closed vocabulary: "search", "alias_lookup",
 	// "corroboration", "decision", "identity_gate", "identity_universe",
-	// "evidence_round", "evidence_probe" (CHAOS-3899).
+	// "evidence_round", "evidence_probe" (CHAOS-3899), "evidence_census_commit"
+	// (CHAOS-3896 Slice C).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -486,6 +496,23 @@ type ResolutionTraceEvent struct {
 	CensusRowsRead        int
 	CensusHandleApplied   bool
 	CensusAnchorApplied   bool
+	// GraphExistenceOK/CensusCommitReason (evidence_census_commit stage
+	// ONLY, CHAOS-3896 Slice C, design brief v6 §1.4/§5): the keyed graph
+	// existence read's own outcome for the ONE satisfier a decisive census
+	// named -- Outcome (shared with corroboration/decision) is "merged"
+	// (found, authorized, added to the candidate pool) or "refused"
+	// (GraphExistenceOK=false: no node, graph_missing_satisfier;
+	// GraphExistenceOK=true but still refused: found yet NodeCandidate
+	// declined it -- unauthorized, invalid, or internal). CensusCommitReason
+	// carries the closed-vocabulary DegradationReason (§4) ONLY for the
+	// graph_missing_satisfier case; empty otherwise -- an authorization
+	// decline has no dedicated reason token (brief §1.4: "unauthorized ->
+	// no commit (and no oracle...)"), so leaving it empty is not a gap.
+	// Whether the SUBSEQUENT re-decision call actually committed is a
+	// SEPARATE, already-existing decision-stage event (CommitGate=="evidence_census")
+	// -- this event only ever describes the graph read half.
+	GraphExistenceOK   bool
+	CensusCommitReason string
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -953,7 +980,16 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if gate == (CommitGatePolicy{}) {
 		gate = DefaultCommitGatePolicy()
 	}
-	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID)
+	// gateValid (CHAOS-3896 Slice C): computed here too, mirroring
+	// ResolveFromMergedCandidatesWithGate's OWN internal gateValid --
+	// resolve.go needs its own copy to decide whether the census's graph
+	// read (real I/O, real cost) is even worth attempting, since an invalid
+	// gate disables evidence_census inside that function regardless (see
+	// this function's second call site below). gate.Validate() is a cheap,
+	// pure check; computing it twice is simpler and safer than threading
+	// resolution.go's private copy back out through a return value.
+	gateValid := gate.Validate() == nil
+	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
 	resolution.RetrievalDegraded = retrievalDegraded
 	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round
 	// for measurement, strictly AFTER resolution's own COMMIT-GATE decision
@@ -972,19 +1008,117 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// resolutions pay nothing").
 	if deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps)
+		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
+		// is now CONSUMED in the commit decision, not merely traced. When it
+		// named exactly one satisfier (attestedSatisfier), prove that
+		// satisfier exists as a keyed GRAPH node (fail-closed on absence --
+		// graph_missing_satisfier) and merge it into the SAME candidate pool
+		// ordinary search already built (mergeCensusAttestedSatisfier), then
+		// re-run the commit decision with that evidence available to the
+		// evidence_census rescue (resolution.go). gateValid gates this
+		// exactly like every other commit path -- an invalid gate must
+		// disable evidence_census too, and skipping the (real I/O, real
+		// cost) graph read entirely when the gate is invalid is strictly
+		// better than paying for a read whose result the gate would refuse
+		// to use regardless.
+		if gateValid {
+			if attestedKey, merged := mergeCensusAttestedSatisfier(ctx, principal, request, deps, attestation, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms); merged {
+				resolution = ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey)
+				resolution.RetrievalDegraded = retrievalDegraded
+			}
+		}
 		// CHAOS-3896 Slice B: presentation only -- SurvivorsFirstOrder's own
 		// doc comment is the contract (same membership, same length, order
 		// only). Rebuilding ClarificationPrompt from the SAME (now
 		// reordered) candidates preserves the existing "prompt built from
 		// the retained candidate set" invariant (codex round-4 finding 1,
 		// resolution.go) -- the prompt and resolution.Candidates never
-		// diverge, only their SHARED order changes.
+		// diverge, only their SHARED order changes. Runs regardless of
+		// whether Slice C just committed: SurvivorsFirstOrder never touches
+		// resolution.Committed/Status (its own doc comment), so reordering
+		// the candidate list around an already-committed subject is
+		// harmless and keeps this call site's shape unconditional.
 		resolution.Candidates = SurvivorsFirstOrder(resolution.Candidates, attestation)
 		if resolution.ClarificationPrompt != "" {
 			resolution.ClarificationPrompt = ClarificationPrompt(resolution.Candidates)
 		}
 	}
 	return resolution, nil
+}
+
+// mergeCensusAttestedSatisfier implements design brief v6 §1.4's commit
+// precondition: "censusComplete && |satisfiers| == 1 names one source row
+// S. Committing requires S as a GRAPH node (payload, authorization)." ok is
+// true only when a keyed, single-node graph read found S and NodeCandidate
+// accepted it (authorized, valid, non-internal) -- the returned key is then
+// SubjectKey(S) and candidatesBySubject already contains it, merged through
+// the SAME mergeSearchResults path every ordinary search result uses (so a
+// satisfier the search ALSO already found gets its mechanisms unioned via
+// MergeCandidates rather than overwritten; one the search never returned at
+// all is added fresh -- brief: "A satisfier the truncated search never
+// returned is merged as an ordinary candidate from its graph node
+// (NodeCandidate -> MergeCandidates) -- the round still RECOVERS
+// truncated-away referents").
+//
+// ok is false, fail-closed, for every other outcome -- each traced as a
+// dedicated evidence_census_commit event (never silent):
+//   - the round did not name exactly one bridged satisfier (attestedSatisfier
+//     itself untraced here -- it is a pure read of data RunShadowEvidenceRound
+//     already traced via its own evidence_round/evidence_probe events);
+//   - the keyed graph read (deps.ExactHint) found no node -- projection lag
+//     or a tombstone, the CHAOS-3884 graphMissing precedent (R2: "the
+//     phantom-commit scenario... is unconstructible: no graph census
+//     exists, and the one graph read fails closed on absence"), reason
+//     graph_missing_satisfier;
+//   - the node exists but NodeCandidate declines it (unauthorized, invalid,
+//     or an internal bookkeeping node) -- "unauthorized -> no commit (and
+//     no oracle: unscopedVisibility already holds on this path)", brief
+//     §1.4. No dedicated reason token exists for this case (§4's vocabulary
+//     has none), so CensusCommitReason stays empty; GraphExistenceOK=true
+//     alone distinguishes it from the graph_missing_satisfier case above.
+func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, attestation Attestation, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms) (string, bool) {
+	kind, canonicalID, found := attestedSatisfier(attestation)
+	if !found {
+		return "", false
+	}
+	subject := contextfabric.SubjectRef{Kind: kind, CanonicalID: canonicalID}
+	node, exists, err := deps.ExactHint(ctx, subject)
+	if err != nil || !exists {
+		if deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "evidence_census_commit",
+				Subject: subject, Outcome: "refused", GraphExistenceOK: false,
+				CensusCommitReason: string(ReasonGraphMissingSatisfier),
+			})
+		}
+		return "", false
+	}
+	// censusProvenanceMarker: a synthetic, non-caller-typed provenance
+	// label -- allowExactMatch=false for the SAME reason
+	// questionProvenanceMarker's own call site documents (must never win an
+	// exact-match promotion just because some subject happens to share the
+	// literal string). vectorArmSimilarity=nil: a census witness is not a
+	// vector search and has nothing to contribute to the CHAOS-3829
+	// carve-out's margin, the SAME exclusion the AliasLookup merge above
+	// already documents.
+	mergeSearchResults(ctx, principal, request, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms)
+	key := SubjectKey(subject)
+	if _, ok := candidatesBySubject[key]; !ok {
+		if deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "evidence_census_commit",
+				Subject: subject, Outcome: "refused", GraphExistenceOK: true,
+			})
+		}
+		return "", false
+	}
+	if deps.ResolutionTracer != nil {
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "evidence_census_commit",
+			Subject: subject, Outcome: "merged", GraphExistenceOK: true,
+		})
+	}
+	return key, true
 }
 
 // evidenceRoundDeadline is design brief v5 D4's own round budget ("...+ 3s

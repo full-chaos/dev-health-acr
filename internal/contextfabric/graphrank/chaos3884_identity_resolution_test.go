@@ -76,7 +76,7 @@ func TestResolveFromMergedCandidatesWithGate_UniqueIdentityCommitsAlone(t *testi
 	repo := repoAliasCandidate("r1", "chaos-ops")
 	identity, terms := identitySideChannels(repo)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true, nil, "")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true, nil, "", "")
 
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
 		t.Fatalf("resolution.Committed = %#v, want r1 committed via the identity fast path", resolution.Committed)
@@ -92,7 +92,7 @@ func TestResolveFromMergedCandidatesWithGate_TwoClaimantsNeverCommit(t *testing.
 	team := teamAliasCandidate("t1", "chaos")
 	identity, terms := identitySideChannels(repo, team)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, team), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true, nil, "")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, team), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true, nil, "", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING committed -- a genuine collision must clarify, never silently pick", resolution.Committed)
@@ -114,7 +114,7 @@ func TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaIden
 	repo := repoAliasCandidate("r1", "chaos-ops")
 	identity, terms := identitySideChannels(repo)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, true /* searchTruncated */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete */, nil, "")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, true /* searchTruncated */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete */, nil, "", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want nothing committed when aliasIdentityComplete=false", resolution.Committed)
@@ -144,7 +144,7 @@ func TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaLone
 	repo := repoAliasCandidate("r1", "chaos-ops")
 	identity, terms := identitySideChannels(repo) // sole claimant: identityCollision alone says false
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false: LoneFloor IS reached */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: incomplete read */, nil, "")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false: LoneFloor IS reached */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: incomplete read */, nil, "", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING committed -- an incomplete identity read must block LoneFloor even for a candidate identityCollision alone cannot flag", resolution.Committed)
@@ -165,7 +165,7 @@ func TestResolveFromMergedCandidatesWithGate_IncompleteLookupNeverCommitsViaTopF
 	other := noiseCandidate("ci1", 0.6) // no identity mechanism, never claims repo's term
 	identity, terms := identitySideChannels(repo)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, other), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: incomplete read */, nil, "")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, other), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: incomplete read */, nil, "", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING committed -- an incomplete identity read must block TopFloor too", resolution.Committed)
@@ -187,7 +187,7 @@ func TestResolveFromMergedCandidatesWithGate_TracerObservesTruncationBlockingLon
 	identity, terms := identitySideChannels(repo)
 	tracer := &captureResolutionTracer{}
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false */, tracer, "req-1")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false */, tracer, "req-1", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want nothing committed", resolution.Committed)
@@ -220,7 +220,7 @@ func TestResolveFromMergedCandidatesWithGate_TracerCommitGateNamesWhichPathCommi
 		identity, terms := identitySideChannels(repo)
 		tracer := &captureResolutionTracer{}
 
-		resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true /* aliasIdentityComplete=true: fast path eligible */, tracer, "req-fast")
+		resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, true /* aliasIdentityComplete=true: fast path eligible */, tracer, "req-fast", "")
 
 		if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
 			t.Fatalf("resolution.Committed = %#v, want r1 committed via the identity fast path", resolution.Committed)
@@ -239,7 +239,7 @@ func TestResolveFromMergedCandidatesWithGate_TracerCommitGateNamesWhichPathCommi
 		lone := noiseCandidate("ci1", 0.9)
 		tracer := &captureResolutionTracer{}
 
-		resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(lone), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-lone")
+		resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(lone), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-lone", "")
 
 		if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "ci1" {
 			t.Fatalf("resolution.Committed = %#v, want ci1 committed via LoneFloor", resolution.Committed)
@@ -263,7 +263,7 @@ func TestResolveFromMergedCandidatesWithGate_TracerDoesNotFlagOrdinaryAmbiguity(
 	second := noiseCandidate("ci2", 0.85) // gap < TopGap: ordinary ambiguity, no identity mechanism involved
 	tracer := &captureResolutionTracer{}
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(top, second), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-2")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(top, second), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-2", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want nothing committed (gap below TopGap)", resolution.Committed)
@@ -304,7 +304,7 @@ func TestResolveFromMergedCandidatesWithGate_IdentityCollisionBlocksLoneFloor(t 
 	// aliasIdentityComplete is left false) is what blocks LoneFloor.
 	identity, terms := identitySideChannels(repo, team)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false: the confidence gates ARE reached */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: fast path never even considered */, nil, "")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo), map[string]string{}, map[string]bool{}, 10, true, false /* searchTruncated=false: the confidence gates ARE reached */, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false /* aliasIdentityComplete=false: fast path never even considered */, nil, "", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING -- identityCollision must block LoneFloor even though repo is alone in commitIndex with confidence=1", resolution.Committed)
@@ -322,7 +322,7 @@ func TestResolveFromMergedCandidatesWithGate_IdentityCollisionBlocksTopFloor(t *
 	other := noiseCandidate("ci1", 0.6)
 	identity, terms := identitySideChannels(repo, team)
 
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, other), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false, nil, "")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(repo, other), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, terms, false, nil, "", "")
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING -- identityCollision must block the top-of-two gate too", resolution.Committed)
@@ -345,7 +345,7 @@ func TestResolveFromMergedCandidatesWithGate_IdentityCollisionNeverTouchesOrdina
 		State: contextfabric.ResolutionProposed, Confidence: 0.5, MatchedTerms: []string{"Ask Dev"},
 		MatchReasons: []string{"x"}, MatchMechanisms: []contextfabric.MatchMechanism{contextfabric.MatchLexical},
 	}
-	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(top, second), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "")
+	resolution := ResolveFromMergedCandidatesWithGate(identityBySubject(top, second), map[string]string{}, map[string]bool{}, 10, true, false, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "", "")
 
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "p1" {
 		t.Fatalf("resolution.Committed = %#v, want p1 committed via the ordinary top-of-two gate, unaffected by nil identity side channels", resolution.Committed)

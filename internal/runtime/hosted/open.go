@@ -368,6 +368,19 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 		graphConfig.IdentityUniverse = func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
 			return devhealthsource.IdentityUniverse(ctx, clickhouse.queryClient, orgID)
 		}
+		// CHAOS-3896 Slice C (design brief v6 §1.3/§1.4): the source census
+		// -- shares the SAME live ClickHouse query client IdentityUniverse
+		// above already uses, rather than opening a second connection.
+		// Nil-safe by construction (graphrank.ResolveDeps.CensusFunc's own
+		// doc comment: nil means the round never runs, at zero cost, for
+		// every caller that leaves this unset) -- gated alongside
+		// IdentityUniverse, not unconditionally, because the census round's
+		// own anchor binding (BindAnchor) consumes the SAME AliasLookup
+		// completeness signal IdentityUniverse feeds (reader.go); leaving
+		// both off together keeps the replay harness's wireIdentityUniverse=false
+		// "arm A" baseline a clean, fully pre-CHAOS-3884/3896/3899 comparison,
+		// exactly as this function's own doc comment describes that arm.
+		graphConfig.CensusFunc = devhealthsource.NewCensusFunc(clickhouse.queryClient)
 	}
 	// CHAOS-3778: vector retrieval is optional. An unconfigured embedder
 	// leaves the lexical retrieval path exactly as it was.
