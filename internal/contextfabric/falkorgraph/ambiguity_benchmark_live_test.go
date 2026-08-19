@@ -202,9 +202,9 @@ func runCorpus(ctx context.Context, t *testing.T, adapter *Adapter, principal st
 		// step; see the ambiguityCase.SubjectTerms field doc for what it does
 		// when a corpus has not supplied extracted terms.
 		interpreted := contextfabric.InterpretedQuestion{SubjectTerms: testCase.effectiveSubjectTerms()}
-		resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+		resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 		if err != nil {
-			t.Fatalf("ResolveSubjects(%q): %v", testCase.Question, err)
+			t.Fatalf("ResolveSubjects(%q, nil): %v", testCase.Question, err)
 		}
 		isControl := testCase.ExpectID == ""
 		switch {

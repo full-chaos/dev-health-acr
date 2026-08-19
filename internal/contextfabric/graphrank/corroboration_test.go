@@ -364,7 +364,7 @@ func TestF4_ResolveSubjectsReportsRetrievalDegradationOnTheResolution(t *testing
 		searchDegraded: true,
 	}
 	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(),
-		contextfabric.InterpretedQuestion{SubjectTerms: []string{"the auth work"}}, backend.deps())
+		contextfabric.InterpretedQuestion{SubjectTerms: []string{"the auth work"}}, backend.deps(), nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestF4_DegradationDoesNotBlockAnAutoCommitTheWayTruncationDoes(t *testing.T
 func TestF4_HealthySearchReportsNoDegradation(t *testing.T) {
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}}
 	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(),
-		contextfabric.InterpretedQuestion{SubjectTerms: []string{"anything"}}, backend.deps())
+		contextfabric.InterpretedQuestion{SubjectTerms: []string{"anything"}}, backend.deps(), nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects: %v", err)
 	}

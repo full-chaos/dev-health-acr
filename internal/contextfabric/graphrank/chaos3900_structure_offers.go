@@ -1,6 +1,8 @@
 package graphrank
 
 import (
+	"context"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -101,5 +103,98 @@ func kindOfferLabel(kind contractsv1.ContextFabricSubjectKind) string {
 		// Unreachable given structureOfferKinds' own closed membership --
 		// kindOfferMaterial never calls this with a kind outside that map.
 		return string(kind)
+	}
+}
+
+// filterCandidatesByConfirmedKind (CHAOS-3900 P1.D) narrows
+// candidatesBySubject to ONLY the confirmed kind, when one is present --
+// design brief §2.1: "the confirmed kind becomes the census scope (drops
+// non-confirmed kinds from the hypothesis set)."
+//
+// A nil confirmed returns candidatesBySubject UNCHANGED -- the overwhelming
+// common case (no kindr_ receipt confirmed), and what keeps an ordinary
+// request's pool composition provably byte-identical to the pre-P1.D code
+// path (TestFilterCandidatesByConfirmedKind_NilIsNoOp pins this).
+//
+// Deliberately typed on *contextfabric.ConfirmedExpectedKind, not a bare
+// contextfabric.SubjectKind -- see that type's own doc comment
+// (internal/contextfabric/ports.go) for why this is the §2.0
+// kind-insensitivity rule's own enforcement mechanism, not merely a
+// convenience wrapper: only canonicalizeStructure's receipt-confirmation
+// path can construct one.
+func filterCandidatesByConfirmedKind(candidatesBySubject map[string]contextfabric.SubjectCandidate, confirmed *contextfabric.ConfirmedExpectedKind) map[string]contextfabric.SubjectCandidate {
+	if confirmed == nil {
+		return candidatesBySubject
+	}
+	filtered := make(map[string]contextfabric.SubjectCandidate, len(candidatesBySubject))
+	for key, candidate := range candidatesBySubject {
+		if candidate.Subject.Kind == confirmed.Kind {
+			filtered[key] = candidate
+		}
+	}
+	return filtered
+}
+
+// kindInsensitivityOutcome is the closed vocabulary CHAOS-3900 P1.D's
+// insensitivity proof reports (design brief §2.0/§4's kind_sensitive_outcome
+// degradation reason, split into its three concrete verdicts here).
+type kindInsensitivityOutcome string
+
+const (
+	// kindInsensitivityCommitSound: the all-kinds census found EXACTLY
+	// one satisfier across every pre-narrowing hypothesis kind -- a
+	// decisive commit is sound regardless of which kind an inferred
+	// narrowing picked.
+	kindInsensitivityCommitSound kindInsensitivityOutcome = "commit_sound"
+	// kindInsensitivityNoMatchSound: the all-kinds census found ZERO
+	// satisfiers -- a literal no_match is sound regardless of narrowing.
+	kindInsensitivityNoMatchSound kindInsensitivityOutcome = "no_match_sound"
+	// kindInsensitivitySensitive: any other combination (>1 satisfier,
+	// a census error, or a pre-narrowing kind outside the closed
+	// registry -- the registry-miss poison rule) -- an inferred
+	// narrowing's decisive outcome is NOT provably sound; the design
+	// brief's own rule demotes this to clarify.
+	kindInsensitivitySensitive kindInsensitivityOutcome = "kind_sensitive_outcome"
+)
+
+// kindInsensitivityProof is design brief §2.0's own all-kinds census
+// proof, implementing both its stated implementation pins: (a) runs over
+// preNarrowingKinds -- the PRE-narrowing hypothesis kind-set, which the
+// caller must capture BEFORE any narrowing was applied, never the
+// already-narrowed set; (b) a pre-narrowing kind outside the closed
+// census registry poisons the round (reuses splitCensusKinds' own
+// registry-miss split -- the identical primitive
+// chaos3899_evidence_round.go already established for this exact shape).
+//
+// STANDALONE, PURE (besides the injected CensusFunc), and UNIT-TESTED --
+// but DELIBERATELY UNWIRED into any decisive-path gate today (P1.D
+// scoping, confirmed by repo-wide grep: no inferred-tier or
+// explicit-unattributed kind-narrowing mechanism exists anywhere in this
+// codebase yet, so there is no live branch for such a gate to guard).
+// Wiring this into an actual decisive-path check is a HARD PRECONDITION
+// of introducing any such kind source (tracked on CHAOS-3927 and the
+// P3/P5 commissioning checklists) -- see ConfirmedExpectedKind's own doc
+// comment (internal/contextfabric/ports.go) for the type-level half of
+// this same guard.
+func kindInsensitivityProof(ctx context.Context, orgID string, preNarrowingKinds []CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool, census CensusFunc) kindInsensitivityOutcome {
+	censused, nonCensusedSurvivor := splitCensusKinds(preNarrowingKinds)
+	if nonCensusedSurvivor || census == nil || len(censused) == 0 {
+		return kindInsensitivitySensitive
+	}
+	total := 0
+	for _, kind := range censused {
+		outcome, err := census(ctx, orgID, kind, handleValue, handleBound, anchorKind, anchorCanonicalID, anchorBound)
+		if err != nil {
+			return kindInsensitivitySensitive
+		}
+		total += outcome.Count
+	}
+	switch total {
+	case 0:
+		return kindInsensitivityNoMatchSound
+	case 1:
+		return kindInsensitivityCommitSound
+	default:
+		return kindInsensitivitySensitive
 	}
 }

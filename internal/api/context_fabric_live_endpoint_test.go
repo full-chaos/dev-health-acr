@@ -240,7 +240,7 @@ func (g liveGraphReader) ResolveInvestigationBinding(context.Context, storage.Pr
 	return contextfabric.ResolvedGraphBinding{GraphKey: "live-key", Epoch: 0}, nil
 }
 
-func (g liveGraphReader) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+func (g liveGraphReader) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	return contextfabric.SubjectResolution{
 		Candidates: []contextfabric.SubjectCandidate{},
 		Committed:  []contextfabric.SubjectRef{g.project},

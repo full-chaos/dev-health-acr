@@ -77,9 +77,9 @@ func TestCHAOS3810LiveCorpusDoesNotFallThroughToAnUnclassifiedFailure(t *testing
 	// Diagnostics first: the resolution alone, so the log records what the
 	// live corpus actually produced (this is the state the blocker's
 	// diagnosis describes).
-	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	t.Logf("live resolution for %q: committed=%d candidates=%d prompt=%q",
 		term, len(resolution.Committed), len(resolution.Candidates), resolution.ClarificationPrompt)

@@ -45,7 +45,7 @@ func (a *Adapter) ResolveInvestigationBinding(ctx context.Context, principal sto
 	return contextfabric.ResolvedGraphBinding{GraphKey: key, Epoch: epoch}, nil
 }
 
-func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	// CHAOS-3898 §2.1: the binding was already resolved ONCE by Engine, via
 	// ResolveInvestigationBinding above, before this call -- never
 	// re-resolved here. See ResolvedGraphBinding's own doc comment for the
@@ -429,7 +429,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			return claimantsByTerm, complete && graphMissing == 0, nil
 		}
 	}
-	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)
+	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind)
 }
 
 func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {

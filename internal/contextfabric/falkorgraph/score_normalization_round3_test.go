@@ -71,12 +71,12 @@ func TestResolveSubjectsTruncatedFullCoveragePairDoesNotAutoCommit(t *testing.T)
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
-		t.Fatalf("ResolveSubjects() committed %#v from a LIMIT-truncated survivor of two equally-strong full-coverage candidates -- want no auto-commit (Codex R2-1: a truncated 'lone' result must not read as unopposed)", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v from a LIMIT-truncated survivor of two equally-strong full-coverage candidates -- want no auto-commit (Codex R2-1: a truncated 'lone' result must not read as unopposed)", resolution.Committed)
 	}
 }
 
@@ -102,12 +102,12 @@ func TestResolveSubjectsUntruncatedFullCoverageLoneHitStillAutoCommits(t *testin
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "candidate_a" {
-		t.Fatalf("ResolveSubjects() committed %#v, want the genuinely-unopposed, full-coverage lone hit auto-committed (truncation detection must not false-positive when nothing was actually truncated)", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v, want the genuinely-unopposed, full-coverage lone hit auto-committed (truncation detection must not false-positive when nothing was actually truncated)", resolution.Committed)
 	}
 }
 

@@ -34,7 +34,7 @@ func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Pr
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, StructureOfferMaterial, error) {
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
 	return g.resolution, g.material, nil
 }
 
@@ -143,7 +143,7 @@ func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, stor
 	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: g.bindingEpochs[index]}, nil
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, StructureOfferMaterial, error) {
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
 	return g.resolution, StructureOfferMaterial{}, nil
 }
@@ -1294,7 +1294,7 @@ func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, stora
 	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
 }
 
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, StructureOfferMaterial, error) {
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveCalls++
 	return SubjectResolution{
 		Candidates: []SubjectCandidate{},

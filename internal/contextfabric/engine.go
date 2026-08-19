@@ -582,7 +582,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// comment for why a context value is the right carrier for this
 	// specific, telemetry-only signal.
 	resolveCtx, subjectCandidatesAuthzDropped := withSubjectCandidatesAuthzDroppedRecorder(ctx)
-	resolution, structureMaterial, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding)
+	// CHAOS-3900 P1.D: threads structureCanon's own resolved expected_kind
+	// confirmation (nil for every request that carried none -- the common
+	// case) so ResolveSubjects can narrow its pool to it. See
+	// ConfirmedExpectedKind's own doc comment for why this is a dedicated
+	// type and why that matters.
+	resolution, structureMaterial, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed))
 	if err != nil {
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}

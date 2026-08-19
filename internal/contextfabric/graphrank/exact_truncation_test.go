@@ -45,9 +45,9 @@ func TestResolveSubjectsCommitsExactLabelMatchOnATruncatedSearch(t *testing.T) {
 		searchResults:   map[string][]CandidateNode{term: exactMatchSearchResults(term, 11)},
 		searchTruncated: true,
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].Label != term {
 		t.Fatalf("resolution.Committed = %#v, want the single exact label match committed despite truncation", resolution.Committed)
@@ -68,9 +68,9 @@ func TestResolveSubjectsStaysAmbiguousWhenTwoCandidatesMatchTheTermExactly(t *te
 		searchResults:   map[string][]CandidateNode{term: nodes},
 		searchTruncated: true,
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want none when two subjects share the exact label", resolution.Committed)
@@ -91,9 +91,9 @@ func TestResolveSubjectsStaysAmbiguousOnATruncatedSearchWithNoExactMatch(t *test
 		searchResults:   map[string][]CandidateNode{term: nodes},
 		searchTruncated: true,
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want none: a truncated set with no exact match must fail toward ambiguity", resolution.Committed)

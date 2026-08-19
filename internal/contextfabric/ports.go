@@ -135,8 +135,42 @@ type QuestionInterpreter interface {
 // to compile.
 type GraphReader interface {
 	ResolveInvestigationBinding(ctx context.Context, principal storage.Principal) (ResolvedGraphBinding, error)
-	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, StructureOfferMaterial, error)
+	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
+}
+
+// ConfirmedExpectedKind (CHAOS-3900 P1.D, pivot-intent design brief §2.1)
+// is a caller-CONFIRMED kindr_ receipt's own resolved value, threaded
+// into ResolveSubjects so it can narrow its own candidate pool to this
+// kind alone ("the confirmed kind becomes the census scope... A
+// RECEIPT-confirmed kind is caller authority and may do this... without
+// the extra proof").
+//
+// DELIBERATELY a dedicated type, not a bare ContextFabricSubjectKind
+// (design ruling, P1.D's own tripwire): this is HOW the §2.0
+// kind-insensitivity rule stays enforced by construction rather than by
+// discipline. §2.0 requires that any kind narrowing NOT sourced from a
+// confirmed receipt (an inferred_default proposal, an echo-derived
+// value, a future Bridge prior) additionally prove all-kinds
+// insensitivity before a decisive outcome may rely on it -- but no such
+// inferred-tier kind source exists anywhere in this codebase yet (P1.D
+// scoping confirmed this by grep: zero hits). Rather than wire an
+// insensitivity-proof GATE with no live branch to guard (untestable
+// protection, worse than no protection -- a false sense of coverage),
+// this type itself is the guard: graphrank's pool filter
+// (filterCandidatesByConfirmedKind) accepts ONLY this type, which only
+// canonicalizeStructure's own receipt-confirmation path can construct.
+// A future inferred/explicit kind source cannot narrow the pool through
+// this same function without EITHER routing through confirmation
+// (unlikely to be what such a feature wants) OR a reviewer visibly
+// widening this type or adding a second, parallel filter -- and
+// kindInsensitivityProof (structure.go) is the standalone, unit-tested,
+// UNWIRED primitive that MUST be wired into whichever narrowing path
+// that new source takes before it may drive a decisive outcome (also
+// recorded as a precondition on CHAOS-3927 and the P3/P5 commissioning
+// checklists -- process enforcement backing this type-level one).
+type ConfirmedExpectedKind struct {
+	Kind contractsv1.ContextFabricSubjectKind
 }
 
 // StructureOfferMaterial is CHAOS-3900 P1.C's own return channel: the

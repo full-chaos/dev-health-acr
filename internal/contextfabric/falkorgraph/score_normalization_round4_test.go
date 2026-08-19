@@ -63,12 +63,12 @@ func TestResolveSubjectsTruncatedExactLabelMatchAutoCommits(t *testing.T) {
 	request, interpreted := openQuestionRequest("Widget")
 	request.Options.MaxSubjectCandidates = 1
 
-	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "widget_subject" {
-		t.Fatalf("ResolveSubjects() committed %#v -- the unique exact label match must auto-commit even though the search truncated (CHAOS-3810)", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v -- the unique exact label match must auto-commit even though the search truncated (CHAOS-3810)", resolution.Committed)
 	}
 	var widgetCandidate *contextfabric.SubjectCandidate
 	for i := range resolution.Candidates {
@@ -78,7 +78,7 @@ func TestResolveSubjectsTruncatedExactLabelMatchAutoCommits(t *testing.T) {
 		}
 	}
 	if widgetCandidate == nil {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want the committed widget_subject present in the candidate list too", resolution.Candidates)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want the committed widget_subject present in the candidate list too", resolution.Candidates)
 	}
 	if widgetCandidate.Confidence != 1 {
 		t.Fatalf("widget_subject confidence = %v, want exactly 1 (NodeCandidate's exact label-match override)", widgetCandidate.Confidence)
@@ -105,18 +105,18 @@ func TestResolveSubjectsTruncatedDuplicateExactLabelsStillClarify(t *testing.T) 
 	// makes the call report truncation.
 	request.Options.MaxSubjectCandidates = 2
 
-	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
-		t.Fatalf("ResolveSubjects() committed %#v -- two subjects sharing the exact label must clarify, not commit", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v -- two subjects sharing the exact label must clarify, not commit", resolution.Committed)
 	}
 	if resolution.ClarificationPrompt == "" {
-		t.Fatal("ResolveSubjects() produced no clarification prompt for two identically-labelled subjects")
+		t.Fatal("ResolveSubjects(nil) produced no clarification prompt for two identically-labelled subjects")
 	}
 	if len(resolution.Candidates) != 2 {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want both identically-labelled subjects retained", resolution.Candidates)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want both identically-labelled subjects retained", resolution.Candidates)
 	}
 }
 
@@ -159,12 +159,12 @@ func TestResolveSubjectsTruncatedThenMergedCandidateDoesNotAutoCommit(t *testing
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
-		t.Fatalf("ResolveSubjects() committed %#v -- a subject whose higher-confidence entry came from an UNtruncated call must not auto-commit when a DIFFERENT call in the SAME resolution was truncated (Codex round-3 review, escape path b: truncation is a property of the resolution, not of one candidate's score)", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v -- a subject whose higher-confidence entry came from an UNtruncated call must not auto-commit when a DIFFERENT call in the SAME resolution was truncated (Codex round-3 review, escape path b: truncation is a property of the resolution, not of one candidate's score)", resolution.Committed)
 	}
 	// Positive assertion (Codex round-4 review): "nothing committed" alone
 	// passes vacuously if the merge never actually happened (e.g. a fake
@@ -179,14 +179,14 @@ func TestResolveSubjectsTruncatedThenMergedCandidateDoesNotAutoCommit(t *testing
 	var mergedCandidate *contextfabric.SubjectCandidate
 	for i := range resolution.Candidates {
 		if resolution.Candidates[i].Subject.CanonicalID == "other_subject" {
-			t.Fatalf("ResolveSubjects() candidates = %#v, want other_subject (dropped by the LIMIT trim) absent, not merely un-committed", resolution.Candidates)
+			t.Fatalf("ResolveSubjects(nil) candidates = %#v, want other_subject (dropped by the LIMIT trim) absent, not merely un-committed", resolution.Candidates)
 		}
 		if resolution.Candidates[i].Subject.CanonicalID == "merged_subject" {
 			mergedCandidate = &resolution.Candidates[i]
 		}
 	}
 	if mergedCandidate == nil {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want merged_subject present -- \"nothing committed\" must not pass vacuously because the merge produced no candidate at all", resolution.Candidates)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want merged_subject present -- \"nothing committed\" must not pass vacuously because the merge produced no candidate at all", resolution.Candidates)
 	}
 	if mergedCandidate.Confidence != 0.75 {
 		t.Fatalf("merged_subject confidence = %v, want exactly 0.75 (call 2's untruncated, full-coverage entry -- confirming the merge kept it over call 1's floor-capped 0.50 entry, which is the exact condition escape path (b) needs)", mergedCandidate.Confidence)

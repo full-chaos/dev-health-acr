@@ -367,9 +367,9 @@ func TestResolveSubjects_AliasLookupWiredEndToEnd(t *testing.T) {
 		aliasLookupClaimants: map[string][]CandidateNode{"dev-health-acr": {repoNode}},
 		aliasLookupComplete:  true,
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
 		t.Fatalf("resolution.Committed = %#v, want r1 committed end-to-end via AliasLookup", resolution.Committed)
@@ -404,9 +404,9 @@ func TestResolveSubjects_AliasLookupCommitsViaMatchAliasWhenOrdinarySearchMisses
 	if interpreted.TimeContext.Axis != contextfabric.TemporalCurrent {
 		t.Fatalf("testInterpreted's own Axis = %v, want TemporalCurrent -- this test's whole claim depends on being present-axis", interpreted.TimeContext.Axis)
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), interpreted, backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), interpreted, backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Candidates) != 1 {
 		t.Fatalf("resolution.Candidates = %#v, want exactly one -- ordinary search returned nothing for this term, so AliasLookup must be the only source", resolution.Candidates)
@@ -449,9 +449,9 @@ func TestResolveSubjects_TracerObservesAliasLookupReachedThroughWiredComposition
 	request := testRequest()
 	request.RequestID = "request_reachability_diag"
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("dev-health-acr"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("dev-health-acr"), deps, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
 		t.Fatalf("resolution.Committed = %#v, want r1 committed", resolution.Committed)
@@ -519,9 +519,9 @@ func TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttrib
 	deps := backend.deps()
 	deps.ResolutionTracer = tracer
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), deps, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "r1" {
 		t.Fatalf("resolution.Committed = %#v, want r1 committed via the identity-trust bump despite the stale graph attribute", resolution.Committed)
@@ -572,9 +572,9 @@ func TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttrib
 func TestResolveSubjects_AliasLookupErrorAbortsResolution(t *testing.T) {
 	t.Parallel()
 	backend := &fakeGraphBackend{enableAliasLookup: true, aliasLookupErr: context.DeadlineExceeded}
-	_, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), backend.deps())
+	_, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), backend.deps(), nil)
 	if err == nil {
-		t.Fatal("ResolveSubjects() error = nil, want the AliasLookup error propagated")
+		t.Fatal("ResolveSubjects(nil) error = nil, want the AliasLookup error propagated")
 	}
 }
 
@@ -604,9 +604,9 @@ func TestResolveSubjects_GraphMissingSiblingNeverCommitsViaIdentityTrust(t *test
 		aliasLookupClaimants: map[string][]CandidateNode{"chaos-ops": {repoNode}},
 		aliasLookupComplete:  false, // graphMissing > 0 somewhere in this call
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("chaos-ops"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("chaos-ops"), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING -- a demoted (fromKeyedLookup=false) claimant must not commit on the strength of an identity-trust bump it no longer carries", resolution.Committed)
@@ -621,9 +621,9 @@ func TestResolveSubjects_NilAliasLookupIsByteIdenticalToBeforeThisTicket(t *test
 	t.Parallel()
 	node := candidateNode(contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", 0.9, "*")
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Ask Dev": {node}}}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_ask_dev" {
 		t.Fatalf("resolution.Committed = %#v, want the ordinary exact-match commit, unaffected by AliasLookup being unset", resolution.Committed)

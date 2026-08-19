@@ -393,3 +393,19 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 	}
 	return needs
 }
+
+// confirmedExpectedKind extracts the expected_kind member from a
+// resolved confirmation set, if the request's receipts confirmed one
+// (CHAOS-3900 P1.D). Returns nil when no expected_kind was confirmed --
+// the common case, and the ONLY way a caller of ResolveSubjects can
+// obtain a nil *ConfirmedExpectedKind, which is what keeps an ordinary
+// no-receipt request's pool composition byte-identical to pre-P1
+// (filterCandidatesByConfirmedKind is a no-op on nil).
+func confirmedExpectedKind(confirmed []confirmedStructureMember) *ConfirmedExpectedKind {
+	for _, c := range confirmed {
+		if c.Member == contractsv1.ContextFabricStructureNeedExpectedKind {
+			return &ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectKind(c.AppliedValue)}
+		}
+	}
+	return nil
+}

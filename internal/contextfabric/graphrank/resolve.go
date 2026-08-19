@@ -612,7 +612,7 @@ type RawSignalObserver interface {
 // the exact-hint short-circuit below returns one too (a caller-supplied
 // hint that resolved exactly is already decisive on subject identity, so
 // there is nothing on this axis left to disambiguate).
-func ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+func ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, errors.New("authenticated organization is required")
 	}
@@ -1046,6 +1046,16 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// pure check; computing it twice is simpler and safer than threading
 	// resolution.go's private copy back out through a return value.
 	gateValid := gate.Validate() == nil
+	// CHAOS-3900 P1.D: narrows the hypothesis set to a CONFIRMED kind,
+	// when the request's own receipts confirmed one -- design brief
+	// §2.1's "the confirmed kind becomes the census scope." A nil
+	// confirmedKind (every request that confirmed no kind -- the
+	// overwhelming common case) makes this call a no-op returning
+	// candidatesBySubject UNCHANGED, so pool composition below is
+	// byte-identical to the pre-P1.D code path. See
+	// ConfirmedExpectedKind's own doc comment (ports.go) for why
+	// non-confirmed narrowing cannot reach this same call.
+	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind)
 	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
 	resolution.RetrievalDegraded = retrievalDegraded
 	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round

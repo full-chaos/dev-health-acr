@@ -61,8 +61,8 @@ func TestResolveSubjects_RawSignalObserverReportsRawVectorSimilarity(t *testing.
 	}
 	request, interpreted := testRequest(), testInterpreted("project x")
 
-	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps(), nil); err != nil {
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 
 	if len(observer.observed) != 1 {
@@ -92,8 +92,8 @@ func TestResolveSubjects_RawSignalObserverReportsRawLexicalCoverage(t *testing.T
 	}
 	request, interpreted := testRequest(), testInterpreted("project y")
 
-	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps(), nil); err != nil {
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 
 	if len(observer.observed) != 1 {
@@ -119,12 +119,12 @@ func TestResolveSubjects_RawSignalObserverNilIsNoop(t *testing.T) {
 	}
 	request, interpreted := testRequest(), testInterpreted("project z")
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v (nil observer must never cause a failure)", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v (nil observer must never cause a failure)", err)
 	}
 	if len(resolution.Candidates) != 1 {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want exactly 1", resolution.Candidates)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want exactly 1", resolution.Candidates)
 	}
 }
 
@@ -147,8 +147,8 @@ func TestResolveSubjects_RawSignalObserverNeverCalledForRejectedCandidate(t *tes
 	}
 	request, interpreted := testRequest(), testInterpreted("internal")
 
-	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps()); err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, backend.deps(), nil); err != nil {
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 
 	if len(observer.observed) != 0 {
