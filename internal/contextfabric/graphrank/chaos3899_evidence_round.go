@@ -309,6 +309,22 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		return emit(Attestation{Outcome: ShadowWouldClarify, Reason: ReasonScopedVisibility})
 	}
 
+	// CHAOS-3899 WIDENING measurement (chris-ratified pre-registered shadow
+	// measurement, 2026-08-19): fired here, deliberately BEFORE the
+	// multi-handle/no-discriminators/census-kind-unregistered branches
+	// below and OUTSIDE every one of their return statements, so this
+	// measurement's own two trace stages (evidence_source_native/
+	// evidence_source_native_probe) are structurally incapable of altering
+	// -- or even being read by -- ANY of Outcome/Reason/DIdentity/Kinds/
+	// PreconditionUnproven/NonCensusedSurvivor below: no local variable
+	// this call produces is referenced by any of the decisive code that
+	// follows. See BindSourceNativeHandles' own doc comment
+	// (chaos3899_source_native_grammar.go) for the full shadow-only
+	// guarantee. No new source read: claimantsFromCandidateNodes(...) was
+	// already computed by resolve.go for the anchor role, before this
+	// function was ever called (ShadowEvidenceRoundInput.AliasClaimants).
+	traceSourceNativeBinds(tracer, input.RequestID, BindSourceNativeHandles(input.Question, input.AliasClaimants, input.AliasLookupComplete))
+
 	bound := BindHandles(input.Question)
 	if IsMultiHandle(bound) {
 		return emit(Attestation{Outcome: ShadowWouldClarify, Reason: ReasonMultiHandle, UnscopedVisibility: true})
@@ -453,6 +469,45 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		base.Outcome = ShadowWouldClarify
 	}
 	return emit(base)
+}
+
+// traceSourceNativeBinds fires the CHAOS-3899 widening measurement's two
+// trace stages (chaos3899_source_native_grammar.go's own doc comment):
+// one aggregate "evidence_source_native" event (mirrors "evidence_round"'s
+// own non-vacuity proof -- fires unconditionally once the round reaches
+// past its axis/scope gates, regardless of what binds is), plus one
+// "evidence_source_native_probe" event per bind (mirrors "evidence_probe"'s
+// own "per-kind, never aggregated" cardinality, one level down to
+// "per grammar match"). A nil tracer is a no-op, identical to every other
+// emit path in this file. This function's ONLY effect is calling
+// tracer.Trace -- it returns nothing and touches no Attestation field, by
+// construction (see this function's own call site's doc comment for why
+// that placement is the structural shadow-only guarantee).
+func traceSourceNativeBinds(tracer ResolutionTracer, requestID string, binds []SourceNativeBind) {
+	if tracer == nil {
+		return
+	}
+	anyResolved := false
+	for _, b := range binds {
+		if b.Resolved {
+			anyResolved = true
+			break
+		}
+	}
+	tracer.Trace(ResolutionTraceEvent{
+		RequestID: requestID, Stage: "evidence_source_native",
+		ShadowSourceNativeMatchCount: len(binds), ShadowSourceNativeAnyResolved: anyResolved,
+	})
+	for _, b := range binds {
+		event := ResolutionTraceEvent{
+			RequestID: requestID, Stage: "evidence_source_native_probe",
+			ShadowSourceNativeGrammar: b.Grammar, ShadowSourceNativeResolved: b.Resolved,
+		}
+		if b.Resolved {
+			event.ShadowSourceNativeKind = b.Kind
+		}
+		tracer.Trace(event)
+	}
 }
 
 func appendUniqueCensusKind(kinds []CensusKind, kind CensusKind) []CensusKind {

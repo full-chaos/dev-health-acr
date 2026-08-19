@@ -347,7 +347,9 @@ type ResolutionTraceEvent struct {
 	// Stage is a closed vocabulary: "search", "alias_lookup",
 	// "corroboration", "decision", "identity_gate", "identity_universe",
 	// "evidence_round", "evidence_probe" (CHAOS-3899), "evidence_census_commit"
-	// (CHAOS-3896 Slice C).
+	// (CHAOS-3896 Slice C), "evidence_source_native",
+	// "evidence_source_native_probe" (CHAOS-3899 widening measurement,
+	// 2026-08-19).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -527,6 +529,38 @@ type ResolutionTraceEvent struct {
 	// -- this event only ever describes the graph read half.
 	GraphExistenceOK   bool
 	CensusCommitReason string
+	// ShadowSourceNativeMatchCount/ShadowSourceNativeAnyResolved
+	// (evidence_source_native stage ONLY, CHAOS-3899 WIDENING measurement --
+	// chris-ratified pre-registered shadow measurement, 2026-08-19): the
+	// source-native identifier grammar registry's own aggregate result for
+	// this resolution -- total syntactic matches across every
+	// sourceNativeGrammarRegistry entry, and whether AT LEAST ONE of them
+	// resolved to a unique identity-universe claimant (BindSourceNativeHandles'
+	// own completeness+uniqueness read, chaos3899_source_native_grammar.go).
+	// SHADOW-ONLY: this stage's own event, like evidence_round/evidence_probe,
+	// is never consumed by anything but a tracer -- see
+	// BindSourceNativeHandles' doc comment for the structural guarantee.
+	// One evidence_source_native event fires per resolution that reaches
+	// past the round's own axis/scope gates (mirrors evidence_round's own
+	// non-vacuity proof), independent of whether the ORIGINAL 3-entry
+	// handleGrammarRegistry itself bound anything.
+	ShadowSourceNativeMatchCount  int
+	ShadowSourceNativeAnyResolved bool
+	// ShadowSourceNativeGrammar/ShadowSourceNativeResolved/ShadowSourceNativeKind
+	// (evidence_source_native_probe stage ONLY, CHAOS-3899 WIDENING
+	// measurement): ONE per-match receipt -- mirrors evidence_probe's own
+	// "per-kind, never aggregated" discipline, applied one level down to
+	// "per grammar match". ShadowSourceNativeGrammar is the registry
+	// entry's own FIXED name (safe to trace, never derived from question
+	// text -- identical discipline to BoundHandle.Grammar); the matched
+	// LITERAL TEXT itself (SourceNativeBind.Term) is in-process provenance
+	// ONLY and is never placed on this or any other event field.
+	// ShadowSourceNativeKind is populated only when ShadowSourceNativeResolved
+	// is true (the resolved claimant's own kind, a closed enum -- same
+	// discipline as CensusKind above).
+	ShadowSourceNativeGrammar  string
+	ShadowSourceNativeResolved bool
+	ShadowSourceNativeKind     contextfabric.SubjectKind
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for

@@ -27,13 +27,19 @@ const chaos3899Secret = "zx-CORPUS-SECRET-9f3a1c-do-not-leak"
 // discipline).
 func TestShadowEvidenceRound_PrivacyCanary(t *testing.T) {
 	t.Parallel()
-	question := fmt.Sprintf("why did PR 532 fail for %s?", chaos3899Secret)
+	// chaos3899Secret also stands in for a source-native identifier (a
+	// repo-slug-shaped claimant term) here -- widening this registry must
+	// hold the exact same corpus-safety discipline the original 3-entry
+	// registry already does (CHAOS-3899 widening measurement, 2026-08-19).
+	question := fmt.Sprintf("why did PR 532 fail for %s and for source/%s?", chaos3899Secret, chaos3899Secret)
+	sourceSlug := "source/" + chaos3899Secret
 	input := ShadowEvidenceRoundInput{
 		RequestID: "req-canary", OrgID: "org-1", Question: question,
 		CurrentAxis: true, UnscopedVisibility: true, AliasLookupComplete: true,
 		PooledKinds: []CensusKind{contextfabric.SubjectPullRequest},
 		AliasClaimants: map[string][]IdentityMatch{
 			chaos3899Secret: {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + chaos3899Secret}, Mechanism: contextfabric.MatchAlias}},
+			sourceSlug:      {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + sourceSlug}, Mechanism: contextfabric.MatchAlias}},
 		},
 		CensusFunc: func(_ context.Context, _ string, _ CensusKind, handleValue string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
 			if handleValue != "532" {
@@ -49,8 +55,23 @@ func TestShadowEvidenceRound_PrivacyCanary(t *testing.T) {
 	}
 
 	events := append(tracer.eventsForStage("evidence_round"), tracer.eventsForStage("evidence_probe")...)
+	events = append(events, tracer.eventsForStage("evidence_source_native")...)
+	events = append(events, tracer.eventsForStage("evidence_source_native_probe")...)
 	if len(events) == 0 {
-		t.Fatalf("no evidence_round/evidence_probe events captured -- canary cannot run")
+		t.Fatalf("no evidence_round/evidence_probe/evidence_source_native(_probe) events captured -- canary cannot run")
+	}
+	sourceNativeProbes := tracer.eventsForStage("evidence_source_native_probe")
+	if len(sourceNativeProbes) == 0 {
+		t.Fatalf("no evidence_source_native_probe events captured -- the widening measurement's own canary coverage cannot run")
+	}
+	foundResolved := false
+	for _, e := range sourceNativeProbes {
+		if e.ShadowSourceNativeResolved {
+			foundResolved = true
+		}
+	}
+	if !foundResolved {
+		t.Fatalf("expected at least one resolved source-native probe (the planted repo-slug claimant) -- test setup did not exercise the resolving path")
 	}
 	for _, event := range events {
 		assertNoSecretInStringFields(t, event)
