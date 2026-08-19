@@ -637,10 +637,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// interpreted one: the lookup runs before Interpret and can only
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
+		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
 		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
-		e.recordBindingEpochDelta(ctx, principal, binding)
+		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)
 	}
 	return result, nil
 }
@@ -875,28 +876,56 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 	}
 }
 
-// recordBindingEpochDelta is the CHAOS-3898 §5b flip_during_investigation/
-// cf_binding_epoch_delta signal (see EngineTelemetry.RecordBindingEpochDelta's
-// own doc comment for the full contract). original is the ResolvedGraphBinding
-// this investigation's own graph reads and Save actually used -- captured
-// once, at request start, and NEVER re-resolved for correctness anywhere
-// else in this package. This function's own re-resolution exists SOLELY to
-// produce the telemetry comparison; its result is read nowhere but here.
+// bindingEpochDeltaSample is sampleBindingEpochDelta's own result: ok is
+// false whenever telemetry is disabled or the re-resolution itself failed
+// (fails open, same convention as every other optional signal in this
+// file), in which case emitBindingEpochDelta must be a no-op.
+type bindingEpochDeltaSample struct {
+	ok      bool
+	flipped bool
+	delta   int64
+}
+
+// sampleBindingEpochDelta is the CHAOS-3898 §5b flip_during_investigation/
+// cf_binding_epoch_delta signal's SAMPLE half (see
+// EngineTelemetry.RecordBindingEpochDelta's own doc comment for the full
+// contract). original is the ResolvedGraphBinding this investigation's own
+// graph reads and Save actually used -- captured once, at request start,
+// and NEVER re-resolved for correctness anywhere else in this package.
+// This function's own re-resolution exists SOLELY to produce the telemetry
+// comparison; its result is read nowhere but by emitBindingEpochDelta.
 //
-// Fails open: a nil telemetry sink or a failed re-resolution both simply
-// skip the signal. Called AFTER Save has already succeeded (both call
-// sites), so this can never affect whether a result is persisted or what
-// epoch it is stamped with.
-func (e *Engine) recordBindingEpochDelta(ctx context.Context, principal storage.Principal, original ResolvedGraphBinding) {
+// CHAOS-3898 P2 fix-forward (codex retroactive review of #151/#152,
+// chris-verified): this call MUST happen immediately BEFORE Save, not
+// after it -- Save's own I/O duration used to sit inside the window this
+// re-resolution measures, so a flip landing strictly AFTER Save had
+// already persisted the result (work this investigation was no longer
+// doing) could still be attributed to "during" it. Sampling right before
+// Save closes that gap; emitBindingEpochDelta (below) still only reports
+// the sample once Save has actually succeeded, so a failed Save still
+// emits nothing, exactly as before.
+func (e *Engine) sampleBindingEpochDelta(ctx context.Context, principal storage.Principal, original ResolvedGraphBinding) bindingEpochDeltaSample {
 	if e.telemetry == nil {
-		return
+		return bindingEpochDeltaSample{}
 	}
 	current, err := e.graph.ResolveInvestigationBinding(ctx, principal)
 	if err != nil {
-		return
+		return bindingEpochDeltaSample{}
 	}
 	delta := current.Epoch - original.Epoch
-	e.telemetry.RecordBindingEpochDelta(ctx, principal, delta != 0, delta)
+	return bindingEpochDeltaSample{ok: true, flipped: delta != 0, delta: delta}
+}
+
+// emitBindingEpochDelta reports a sample sampleBindingEpochDelta already
+// took -- called only after Save has succeeded, so this can never affect
+// whether a result is persisted or what epoch it is stamped with. A
+// not-ok sample (telemetry disabled, or the sample's own re-resolution
+// failed) is silently skipped, matching every other fail-open signal here.
+func (e *Engine) emitBindingEpochDelta(ctx context.Context, principal storage.Principal, sample bindingEpochDeltaSample) {
+	if !sample.ok {
+		return
+	}
+	e.telemetry.RecordBindingEpochDelta(ctx, principal, sample.flipped, sample.delta)
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

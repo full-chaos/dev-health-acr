@@ -431,6 +431,99 @@ func TestEngineRecordsBindingEpochDeltaWithoutFlip(t *testing.T) {
 	}
 }
 
+// bindingEpochDeltaOrderingStore is a resultStoreStub twin whose Save
+// records how many times its paired capturingGraphReader had already
+// resolved a binding BY THE TIME Save was called, and can be made to fail
+// -- CHAOS-3898 P2 fix-forward's own regression fixtures (codex
+// retroactive review of #151/#152, chris-verified): sampleBindingEpochDelta
+// must run BEFORE Save, and emitBindingEpochDelta must still be a no-op
+// when Save fails.
+type bindingEpochDeltaOrderingStore struct {
+	graph                    *capturingGraphReader
+	saveErr                  error
+	bindingCallCountAtSave   int
+	bindingCallCountObserved bool
+}
+
+func (s *bindingEpochDeltaOrderingStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64) error {
+	s.graph.bindingCallCountMu.Lock()
+	s.bindingCallCountAtSave = s.graph.bindingCallCount
+	s.bindingCallCountObserved = true
+	s.graph.bindingCallCountMu.Unlock()
+	return s.saveErr
+}
+
+func (s *bindingEpochDeltaOrderingStore) Get(context.Context, storage.Principal, string) (StoredInvestigationResult, error) {
+	return StoredInvestigationResult{}, nil
+}
+
+// TestEngineSamplesBindingEpochDeltaBeforeSave is CHAOS-3898 P2's direct
+// regression proof: the epoch re-resolution used for
+// flip_during_investigation/cf_binding_epoch_delta must be taken BEFORE
+// Save runs, not after. Before the fix, Save's own I/O sat inside the
+// window this signal measures -- a flip landing strictly after Save had
+// already persisted the result (work this investigation was no longer
+// doing) could still be attributed to "during" it. graph.bindingEpochs has
+// two entries (request-start resolve, then the sample); by the time Save
+// observes bindingCallCount, both must have already happened.
+func TestEngineSamplesBindingEpochDeltaBeforeSave(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+		bindingEpochs: []int64{5, 8},
+	}
+	store := &bindingEpochDeltaOrderingStore{graph: graph}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !store.bindingCallCountObserved {
+		t.Fatal("Save was never called")
+	}
+	if store.bindingCallCountAtSave != 2 {
+		t.Fatalf("bindingCallCount at Save = %d, want 2 (the epoch-delta sample must be taken BEFORE Save, not after)", store.bindingCallCountAtSave)
+	}
+	if len(telemetry.bindingEpochDeltas) != 1 || !telemetry.bindingEpochDeltas[0].flipped {
+		t.Fatalf("bindingEpochDeltas = %#v, want one flipped record", telemetry.bindingEpochDeltas)
+	}
+}
+
+// TestEngineDoesNotEmitBindingEpochDeltaWhenSaveFails proves
+// emitBindingEpochDelta's own fail-closed-on-error contract survives the
+// P2 reordering: sampleBindingEpochDelta now runs unconditionally before
+// Save, but the telemetry signal itself must still never fire for a Save
+// that failed -- a result that was never persisted has nothing this
+// signal should be reported against.
+func TestEngineDoesNotEmitBindingEpochDeltaWhenSaveFails(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+		bindingEpochs: []int64{5, 8},
+	}
+	store := &bindingEpochDeltaOrderingStore{graph: graph, saveErr: errors.New("save unavailable")}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err == nil {
+		t.Fatal("Investigate() error = nil, want the Save failure to surface")
+	}
+	if len(telemetry.bindingEpochDeltas) != 0 {
+		t.Fatalf("bindingEpochDeltas = %#v, want none recorded when Save fails", telemetry.bindingEpochDeltas)
+	}
+}
+
 func TestEngineResolvesPriorSubjectReceiptIntoSubjectHint(t *testing.T) {
 	t.Parallel()
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
