@@ -478,21 +478,49 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 // (resolving the source work item's optional repo attributes) relaxes to
 // LEFT, for the same zero-UUID reason queryWorkItems does.
 // queryWorkItemDependencies mints work_item.v2 endpoint references (design
-// brief D-4/§1.3). This producer does NOT yet implement §1.5's
-// work_item_ref stub kind for an unresolved target (a distinct, contract-first
-// addition -- a new SubjectKind requires JSON-schema/OpenAPI/golden-fixture
-// changes across internal/contracts/v1, out of THIS slice's scope; see
-// design brief §6 S2/S3 split and the CHAOS-3898 S2 PR description for the
-// explicit split). Until that lands, a row whose target does not resolve to
-// a real work_items row is OMITTED rather than projected with a dangling
-// endpoint reference (the target join stays LEFT for validity purposes --
-// see the doc comment below -- but no longer for identity purposes): a
-// missing edge is an honest gap the follow-up closes with a stub node and a
-// tombstone-healing rewrite; a dangling reference to a work_item.v2 node
-// that will never exist would be silently, permanently wrong. This is the
-// SAME "omit, never guess or dangle" discipline queryProjectTeams already
-// applies to an ambiguous project key.
+// brief D-4/§1.3) AND, since S2b, closes §1.5 (P5) for the one endpoint
+// that can genuinely fail to resolve: a row whose target_work_item_id does
+// not name a real work_items row (see this function's doc comment on
+// cross-system PR references) mints a NON-AUTHORITATIVE work_item_ref
+// stub subject and a relationship.v2 edge to it, rather than being
+// omitted -- an honest "we know this dependency exists, not what it
+// resolves to" placeholder, never a dangling reference to a work_item.v2
+// node that will never exist.
+//
+// Healing: whenever this SAME source row's target LATER resolves (a
+// later sync sees a real work_items row for target_work_item_id), the
+// resolved-edge branch below UNCONDITIONALLY derives what the ref-form
+// ids WOULD have been (the same deterministic DeriveWorkItemRef/
+// DeriveRelationship calls, from the SAME row data) and emits a
+// ProjectionTombstone for both the ref-form edge and the ref-form stub
+// node, in the SAME batch as the resolved edge. This is idempotent
+// whether or not the ref-form was ever actually minted (applyTombstone's
+// edge/node deletes are no-ops against a key that was never written), so
+// no cross-row bookkeeping is needed to know WHETHER healing is
+// "necessary" -- design brief §1.5.
+//
+// Cross-row bookkeeping IS needed for one narrow reason: the SAME
+// unresolved target can be the To of more than one row within a single
+// page (CHAOS-3779's own two-relationship-type case -- "blocks" AND
+// "relates_to" between the identical (source, target) pair, or two
+// DIFFERENT sources depending on the same target). The node tombstone's
+// CanonicalID depends only on the target's raw id, never on source or
+// type, so two such rows resolving in the same page would derive the
+// IDENTICAL node tombstone twice -- which
+// ContextFabricProjectionBatch.Validate() rejects outright ("tombstone
+// kind and canonical ID must be unique within a batch"). seenNodeTombstones
+// (a plain local map, fresh on every call -- this function is invoked
+// once per tick/page, never itself a persistent closure) dedupes exactly
+// that, and only that: the EDGE tombstone is always per-row-unique
+// already (it is keyed by source+target+type together, the row's own
+// identity) and is never deduped.
+//
+// queryWorkItemHierarchy, by contrast, does NOT need any of this: its
+// parent join is INNER (see that function's own doc comment), so an
+// unresolved parent can never reach a candidate row in the first place --
+// there is no ref-stub case to close there.
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	seenNodeTombstones := make(map[string]struct{})
 	const relationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
 	const rowKey = "concat(toString(w.repo_id), ':', d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
 	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced,
@@ -514,24 +542,65 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		}
 		observedAt = observedAt.UTC()
 		rowSortKey := repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType
-		// The target join is LEFT: a target_work_item_id is not
-		// guaranteed to name a work item at all (see this function's doc
-		// comment on cross-system PR references). targetHasCreated is
-		// exactly "did the target resolve" -- see this function's own top
-		// doc comment for why an unresolved target is omitted (not
-		// dangling-referenced) until the work_item_ref follow-up lands.
-		if targetHasCreated == 0 {
-			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
-		}
 		sourceCanonicalID, sourceOmitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, sourceID}, nil)
 		if err != nil {
 			return nil, err
 		}
+		if sourceOmitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
+		sourceValidFrom, sourceValidTo := requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt)
+		sourceSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: sourceID}
+		evidenceRefID := "acr:v1:work-item-dependency:" + repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType
+
+		// The target join is LEFT: a target_work_item_id is not
+		// guaranteed to name a work item at all (see this function's doc
+		// comment on cross-system PR references). targetHasCreated is
+		// exactly "did the target resolve" -- see this function's top doc
+		// comment for the §1.5 work_item_ref stub this branch mints
+		// instead of omitting the row.
+		if targetHasCreated == 0 {
+			refID, refOmitted := identity.DeriveWorkItemRef(targetID, nil)
+			if refOmitted {
+				return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+			}
+			refSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItemRef, CanonicalID: refID, Label: targetID}
+			// The stub's own window is the SOURCE row's window alone
+			// (edgeValidity with nil target bounds reduces to exactly
+			// that, laterTime/earlierTime's own nil-is-unbounded
+			// convention) -- nothing in this row says anything about
+			// the unresolved target's own lifecycle, so asserting more
+			// would be a guess this producer's own discipline forbids.
+			stubValidFrom, stubValidTo := edgeValidity(sourceValidFrom, sourceValidTo, nil, nil)
+			stubEntity := contractsv1.ContextFabricEntityProjection{
+				Subject: refSubject,
+				// Repo-scoped to the SOURCE row's own repo, not the
+				// target's (unknown) -- the stub is reachable only
+				// through this source work item's edge, so it can never
+				// be visible more broadly than the row that revealed it.
+				Authorization:  workItemAuthorization(repoID, repoSlug),
+				EvidenceRefIDs: []string{evidenceRefID},
+				ObservedAt:     observedAt, ValidFrom: stubValidFrom, ValidTo: stubValidTo, SourceVersion: ClickHouseSourceVersion,
+			}
+			refRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, sourceCanonicalID, refID, relationshipType)
+			refRelationship := contractsv1.ContextFabricRelationshipProjection{
+				RelationshipID: refRelationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
+				From: sourceSubject, To: refSubject,
+				Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
+				Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{evidenceRefID},
+				ObservedAt: observedAt, ValidFrom: stubValidFrom, ValidTo: stubValidTo, SourceVersion: ClickHouseSourceVersion,
+			}
+			return []candidate{
+				{observedAt: observedAt, sortKey: rowSortKey, entity: &stubEntity},
+				{observedAt: observedAt, sortKey: rowSortKey, relationship: &refRelationship},
+			}, nil
+		}
+
 		targetCanonicalID, targetOmitted, err := identity.Derive(identity.KindWorkItem, []string{targetRepoID, targetID}, nil)
 		if err != nil {
 			return nil, err
 		}
-		if sourceOmitted || targetOmitted {
+		if targetOmitted {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// work_item_dependencies carries only last_synced -- no interval
@@ -541,18 +610,48 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		// the target did not yet exist, and made the window depend on
 		// which endpoint happened to be joined rather than on the data.
 		validFrom, validTo := edgeValidity(
-			requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt),
+			sourceValidFrom, sourceValidTo,
 			optionalTime(targetHasCreated, targetCreatedAt), optionalTime(targetHasEnded, targetEndedAt))
-		relationshipID := "relationship:work_item_dependency:" + repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType
+		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, sourceCanonicalID, targetCanonicalID, relationshipType)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
-			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: sourceID},
+			From:       sourceSubject,
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: targetCanonicalID, Label: targetID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType},
+			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{evidenceRefID},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
+		candidates := []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}
+
+		// §1.5 tombstone healing: derive what the ref-form ids WOULD have
+		// been from this SAME row's own data and tombstone both,
+		// unconditionally -- idempotent no-ops if the ref-form was never
+		// actually minted (applyTombstone's edge/node deletes match zero
+		// rows against a key that was never written). No cross-row state
+		// is needed to know whether healing is "necessary".
+		if refID, refOmitted := identity.DeriveWorkItemRef(targetID, nil); !refOmitted {
+			refRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, sourceCanonicalID, refID, relationshipType)
+			edgeTombstone := contractsv1.ContextFabricProjectionTombstone{
+				Kind: "relationship", CanonicalID: refRelationshipID,
+				Reason:      "work_item target resolved: healing the ref-form work_item_dependency edge",
+				EffectiveAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			}
+			candidates = append(candidates, candidate{observedAt: observedAt, sortKey: rowSortKey, tombstone: &edgeTombstone})
+			// seenNodeTombstones: see this function's own top doc comment
+			// -- the node tombstone depends only on refID, so more than
+			// one row in this page resolving the SAME target must emit it
+			// exactly once, never once per row.
+			if _, seen := seenNodeTombstones[refID]; !seen {
+				seenNodeTombstones[refID] = struct{}{}
+				nodeTombstone := contractsv1.ContextFabricProjectionTombstone{
+					Kind: "work_item_ref", CanonicalID: refID,
+					Reason:      "work_item target resolved: healing the ref-form stub node if orphaned",
+					EffectiveAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+				}
+				candidates = append(candidates, candidate{observedAt: observedAt, sortKey: rowSortKey, tombstone: &nodeTombstone})
+			}
+		}
+		return candidates, nil
 	})
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -137,6 +138,21 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 	// name entityTables (tables.go) uses -- proof that table's producer
 	// actually scanned a row, not just that the batch as a whole is
 	// non-empty.
+	// CHAOS-3898 §1.5: work_item_dependencies' relationship id is the
+	// digest-scheme relationship.v2 id (identity.DeriveRelationship), not
+	// a hand-built string -- computed here from the same endpoint
+	// canonical ids the production producer itself derives, so this
+	// fixture can never drift from the actual scheme.
+	workItemChildID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, "WI-CHILD"}, nil)
+	if err != nil || omitted {
+		t.Fatalf("identity.Derive(child) failed: omitted=%v err=%v", omitted, err)
+	}
+	workItemParentID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, "WI-PARENT"}, nil)
+	if err != nil || omitted {
+		t.Fatalf("identity.Derive(parent) failed: omitted=%v err=%v", omitted, err)
+	}
+	workItemDependencyRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, workItemChildID, workItemParentID, "blocks")
+
 	wantCanonicalID := map[string]string{
 		// devhealthschema:not-a-production-replica this maps each table to the canonical ID its row is
 		// expected to project to. Keyed BY table on purpose, and it mirrors no
@@ -146,7 +162,7 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		"git_pull_requests":                    "pull_request:" + repoID + ":4242",
 		"deployments":                          "deployment.v2:" + repoID + ":deploy-parity-1",
 		"operational_incidents":                "incident:incident-parity-1",
-		"work_item_dependencies":               "relationship:work_item_dependency:" + repoID + ":WI-CHILD:WI-PARENT:blocks",
+		"work_item_dependencies":               workItemDependencyRelationshipID,
 		"work_items_hierarchy":                 "relationship:work_item_hierarchy:" + repoID + ":WI-CHILD:WI-PARENT",
 		"work_graph_deployment_incident_edges": "relationship:deployment_incident:edge-parity-1",
 		"git_pull_request_reviews":             "pull_request_review.v2:" + repoID + ":4242:review-parity-1",

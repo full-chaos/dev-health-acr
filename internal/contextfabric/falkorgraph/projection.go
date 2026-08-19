@@ -473,6 +473,34 @@ func (a *Adapter) applyTombstone(ctx context.Context, key, orgID string, tombsto
 			labelRelation, propRelationshipID, propObservedAtNs, propObservedAtNs)
 		_, err := a.api.query(ctx, key, cypher, map[string]interface{}{"rid": tombstone.CanonicalID, "effectiveNs": effectiveNs}, false)
 		return classifyProjectionError("apply relationship tombstone", err)
+	case "work_item_ref":
+		// CHAOS-3898 §1.5: the ONE genuinely new tombstone shape this
+		// design brief needs (the edge case above already existed -- see
+		// devhealthsource/tables.go's own doc comment on
+		// queryWorkItemDependencies for why). A work_item_ref stub is
+		// non-authoritative and heals on re-sync; devhealthsource emits
+		// this tombstone UNCONDITIONALLY whenever a target resolves,
+		// idempotent whether or not the stub was ever minted -- but the
+		// stub node itself must be deleted ONLY when no edge still
+		// references it, never unconditionally the way every OTHER
+		// subject tombstone's DETACH DELETE below is: a resolved row's
+		// edge tombstone (the "relationship"/"edge" case above, applied
+		// in the SAME batch) already retired the ref-form edge from
+		// THIS row, but a DIFFERENT still-unresolved row's edge to the
+		// SAME raw target id may legitimately still exist, and
+		// DETACH DELETE-ing the node would silently strand it.
+		//
+		// Plain DELETE, not DETACH DELETE: defense in depth. FalkorDB
+		// (matching Neo4j's Cypher semantics) refuses a DELETE against a
+		// node that still has relationships, so a bug in the "NOT
+		// (n)--()" guard below fails loudly here rather than silently
+		// detaching and deleting a node another edge still points at.
+		cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) WHERE (n.%s IS NULL OR n.%s <= $effectiveNs) AND NOT (n)--() DELETE n",
+			labelSubject, propOrgID, propKind, propCanonicalID, propObservedAtNs, propObservedAtNs)
+		_, err := a.api.query(ctx, key, cypher, map[string]interface{}{
+			"org": orgID, "kind": "work_item_ref", "id": tombstone.CanonicalID, "effectiveNs": effectiveNs,
+		}, false)
+		return classifyProjectionError("apply work_item_ref tombstone", err)
 	}
 	var kind, canonicalID string
 	switch strings.ToLower(tombstone.Kind) {

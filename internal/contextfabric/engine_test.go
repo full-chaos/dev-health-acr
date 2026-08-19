@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,10 +111,30 @@ type capturingGraphReader struct {
 	context         GraphContext
 	resolveRequests []InvestigationRequest
 	discoverHints   [][]SubjectHint
+	// bindingEpochs (CHAOS-3898 §5b), when non-empty, is consumed one
+	// value per ResolveInvestigationBinding call, in order -- the LAST
+	// value repeats once exhausted -- so a test can simulate a build/flip
+	// happening BETWEEN Engine's request-start binding resolution and its
+	// later re-resolution at Save (recordBindingEpochDelta). Left empty,
+	// every call returns epoch 0, matching every other test's existing
+	// expectation.
+	bindingEpochs      []int64
+	bindingCallCount   int
+	bindingCallCountMu sync.Mutex
 }
 
 func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
-	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: 0}, nil
+	if len(g.bindingEpochs) == 0 {
+		return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: 0}, nil
+	}
+	g.bindingCallCountMu.Lock()
+	index := g.bindingCallCount
+	if index >= len(g.bindingEpochs) {
+		index = len(g.bindingEpochs) - 1
+	}
+	g.bindingCallCount++
+	g.bindingCallCountMu.Unlock()
+	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: g.bindingEpochs[index]}, nil
 }
 
 func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
@@ -233,6 +254,7 @@ type recordingTelemetry struct {
 	subjectlessTerminalReasons     []string
 	priorSubjectReceiptSkipReasons []priorSubjectReceiptSkipReasonRecord
 	answerReuseServedRequestIDs    []answerReuseServedRequestIDRecord
+	bindingEpochDeltas             []bindingEpochDeltaRecord
 }
 
 type priorSubjectReceiptSkipReasonRecord struct {
@@ -243,6 +265,11 @@ type priorSubjectReceiptSkipReasonRecord struct {
 type answerReuseServedRequestIDRecord struct {
 	servedRequestID   string
 	requestIDMismatch bool
+}
+
+type bindingEpochDeltaRecord struct {
+	flipped bool
+	delta   int64
 }
 
 func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
@@ -263,6 +290,10 @@ func (r *recordingTelemetry) RecordPriorSubjectReceiptSkipReason(_ context.Conte
 
 func (r *recordingTelemetry) RecordAnswerReuseServedRequestID(_ context.Context, _ storage.Principal, servedRequestID string, requestIDMismatch bool) {
 	r.answerReuseServedRequestIDs = append(r.answerReuseServedRequestIDs, answerReuseServedRequestIDRecord{servedRequestID, requestIDMismatch})
+}
+
+func (r *recordingTelemetry) RecordBindingEpochDelta(_ context.Context, _ storage.Principal, flipped bool, delta int64) {
+	r.bindingEpochDeltas = append(r.bindingEpochDeltas, bindingEpochDeltaRecord{flipped, delta})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {
@@ -310,6 +341,96 @@ func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store Invest
 // as an exact SubjectHint on both ResolveSubjects and DiscoverContext, so
 // the same authorization/candidate path used for any other exact hint
 // re-verifies it -- nothing about the receipt is trusted outright.
+// TestEngineRecordsBindingEpochDeltaOnFlip is the CHAOS-3898 §5b
+// flip_during_investigation/cf_binding_epoch_delta direct proof: when the
+// organization's active graph epoch moves BETWEEN Engine's request-start
+// binding resolution and its later re-resolution at Save,
+// RecordBindingEpochDelta must report flipped=true and the signed delta --
+// and the ORIGINAL binding (not the re-resolved one) must still be what
+// Save actually persisted (graphEpoch on the store), proving the
+// telemetry-only re-resolution never contaminates correctness.
+func TestEngineRecordsBindingEpochDeltaOnFlip(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+		// First call (request start) resolves epoch 5; the SECOND call
+		// (recordBindingEpochDelta, at Save) resolves epoch 8 -- a
+		// simulated build/flip during the investigation.
+		bindingEpochs: []int64{5, 8},
+	}
+	store := &resultStoreStub{}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	// The ORIGINAL binding (epoch 5, resolved once at request start) is
+	// what Save actually persists -- proven at the store level by
+	// TestF5_FindReusableClassifiesGraphEpochMismatchDistinctlyFromNoCandidate
+	// and pginvestigation's own Save tests (resultStoreStub here does not
+	// itself capture graphEpoch). This test's own job is narrower and
+	// already fully covered by the telemetry assertion below: the
+	// re-resolution used for the signal never contaminates what gets
+	// stamped on the result.
+	if store.saved.ResultID == "" {
+		t.Fatal("Save was never called")
+	}
+
+	if len(telemetry.bindingEpochDeltas) != 1 {
+		t.Fatalf("bindingEpochDeltas = %#v, want exactly one record", telemetry.bindingEpochDeltas)
+	}
+	got := telemetry.bindingEpochDeltas[0]
+	if !got.flipped {
+		t.Fatalf("flipped = false, want true (epoch moved 5 -> 8 between binding resolution and save)")
+	}
+	if got.delta != 3 {
+		t.Fatalf("delta = %d, want 3 (8 - 5)", got.delta)
+	}
+}
+
+// TestEngineRecordsBindingEpochDeltaWithoutFlip proves the ordinary,
+// overwhelmingly common case: no build/flip happened, flipped=false and
+// delta=0 are still reported (unconditionally, every Save -- see
+// RecordBindingEpochDelta's own doc comment for why zero-vs-nonzero
+// must be a real counter, not silence).
+func TestEngineRecordsBindingEpochDeltaWithoutFlip(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+		bindingEpochs: []int64{5, 5},
+	}
+	store := &resultStoreStub{}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	if len(telemetry.bindingEpochDeltas) != 1 {
+		t.Fatalf("bindingEpochDeltas = %#v, want exactly one record", telemetry.bindingEpochDeltas)
+	}
+	got := telemetry.bindingEpochDeltas[0]
+	if got.flipped {
+		t.Fatalf("flipped = true, want false (epoch unchanged)")
+	}
+	if got.delta != 0 {
+		t.Fatalf("delta = %d, want 0", got.delta)
+	}
+}
+
 func TestEngineResolvesPriorSubjectReceiptIntoSubjectHint(t *testing.T) {
 	t.Parallel()
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}

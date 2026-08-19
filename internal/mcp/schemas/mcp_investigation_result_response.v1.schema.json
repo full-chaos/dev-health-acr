@@ -469,7 +469,8 @@
                 "episode",
                 "metric",
                 "pull_request_review",
-                "ci_pipeline_run"
+                "ci_pipeline_run",
+                "work_item_ref"
               ]
             },
             "canonical_id": {
@@ -509,7 +510,8 @@
                 "episode",
                 "metric",
                 "pull_request_review",
-                "ci_pipeline_run"
+                "ci_pipeline_run",
+                "work_item_ref"
               ]
             },
             "id": {
@@ -850,7 +852,8 @@
                 "episode",
                 "metric",
                 "pull_request_review",
-                "ci_pipeline_run"
+                "ci_pipeline_run",
+                "work_item_ref"
               ]
             },
             "members": {

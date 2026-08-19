@@ -730,8 +730,15 @@ func TestClickHouseProjectionSourceFullSnapshotIsOneCompleteBatch(t *testing.T) 
 	if len(batch.Relationships) != 6 {
 		t.Fatalf("relationships = %d, want 6: %+v", len(batch.Relationships), batch.Relationships)
 	}
-	if len(batch.Tombstones) != 0 {
-		t.Fatalf("unexpected tombstones: %+v", batch.Tombstones)
+	// CHAOS-3898 §1.5: the fixture's one work_item_dependencies row
+	// resolves its target, and a resolved row UNCONDITIONALLY tombstones
+	// the ref-form edge+node it would have produced had the target been
+	// unresolved -- idempotent no-ops here (the ref-form was never
+	// actually minted), but still emitted, per design brief §1.5's own
+	// "the producer derives BOTH id forms... whenever it emits a
+	// RESOLVED edge... it also emits a tombstone" rule.
+	if len(batch.Tombstones) != 2 {
+		t.Fatalf("tombstones = %d, want 2 (the resolved work_item_dependency row's ref-form edge+node healing): %+v", len(batch.Tombstones), batch.Tombstones)
 	}
 	if batch.Cursor != "" || batch.NextCursor == "" {
 		t.Fatalf("cursor = %q, next_cursor = %q", batch.Cursor, batch.NextCursor)

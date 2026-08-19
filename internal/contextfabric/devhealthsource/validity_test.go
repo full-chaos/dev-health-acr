@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -264,25 +265,37 @@ func TestF5_DependencyEdgeIntersectsBothEndpoints(t *testing.T) {
 	}
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_dependency:repo-1:WIDGET-101:WIDGET-099:blocks")
+	edge := relationshipByID(t, batch, workItemDependencyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-099", "blocks"))
 	requireWindow(t, "dependency", edge.ValidFrom, edge.ValidTo, &targetCreated, &targetEnded)
 }
 
-// TestF5_DependencyEdgeOmitsAnUnresolvedTarget: target_work_item_id is not
+// workItemDependencyRelationshipID computes the CHAOS-3898 §1.5
+// relationship.v2 id a resolved work_item_dependency edge derives, so
+// tests can look one up without hardcoding the digest scheme's output.
+func workItemDependencyRelationshipID(t *testing.T, sourceRepoID, sourceID, targetRepoID, targetID, relationshipType string) string {
+	t.Helper()
+	source, omitted, err := identity.Derive(identity.KindWorkItem, []string{sourceRepoID, sourceID}, nil)
+	if err != nil || omitted {
+		t.Fatalf("identity.Derive(source) failed: omitted=%v err=%v", omitted, err)
+	}
+	target, omitted, err := identity.Derive(identity.KindWorkItem, []string{targetRepoID, targetID}, nil)
+	if err != nil || omitted {
+		t.Fatalf("identity.Derive(target) failed: omitted=%v err=%v", omitted, err)
+	}
+	return identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, source, target, relationshipType)
+}
+
+// TestF5_DependencyEdgeStubsAnUnresolvedTarget: target_work_item_id is not
 // guaranteed to name a work item (it can carry a cross-system PR
-// reference), so the join is LEFT. CHAOS-3898 (design brief §1.3/§1.5):
-// once work_item's canonical id is repo-scoped (work_item.v2:<repo>:<id>),
-// an unresolved target has no repo_id to derive one FROM at all -- there is
-// no safe id to mint. Rather than dangling-reference the pre-CHAOS-3898
-// unqualified "work_item:<id>" shape (which would reintroduce exactly the
-// cross-repo collision class this ticket closes) the row is OMITTED,
-// consuming its page budget via a progress candidate so pagination still
-// advances -- never silently dropped, and never fabricated. The
-// work_item_ref non-authoritative stub kind (design brief §1.5) that heals
-// this deterministically on re-sync is out of this slice's scope (a new
-// contract-first SubjectKind); see this PR's own description for the
-// explicit follow-up.
-func TestF5_DependencyEdgeOmitsAnUnresolvedTarget(t *testing.T) {
+// reference), so the join is LEFT. CHAOS-3898 §1.5 (P5): rather than
+// dangling-reference a work_item.v2 node that will never exist, or
+// omitting the row entirely (S2's own interim state, before this slice),
+// the row mints a NON-AUTHORITATIVE work_item_ref stub subject and a
+// relationship.v2 edge to it -- an honest "we know this dependency
+// exists, not what it resolves to" placeholder that heals deterministically
+// once the target later resolves (see
+// TestF5_DependencyEdgeHealsRefStubOnceTargetResolves).
+func TestF5_DependencyEdgeStubsAnUnresolvedTarget(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	sourceCreated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -299,9 +312,87 @@ func TestF5_DependencyEdgeOmitsAnUnresolvedTarget(t *testing.T) {
 	}
 	batch := projectOneBatch(t, tables)
 
-	for _, relationship := range batch.Relationships {
-		if relationship.Type == "work_item_dependency" || relationship.From.CanonicalID == "work_item.v2:repo-1:WIDGET-101" {
-			t.Fatalf("an unresolved dependency target must be omitted, not dangling-referenced; got %+v", relationship)
+	source, omitted, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", "WIDGET-101"}, nil)
+	if err != nil || omitted {
+		t.Fatalf("identity.Derive(source) failed: omitted=%v err=%v", omitted, err)
+	}
+	refID, refOmitted := identity.DeriveWorkItemRef("ghpr:owner/repo#7", nil)
+	if refOmitted {
+		t.Fatalf("identity.DeriveWorkItemRef unexpectedly omitted")
+	}
+	wantRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, source, refID, "blocks")
+
+	var stub *contractsv1.ContextFabricEntityProjection
+	for i := range batch.Entities {
+		if batch.Entities[i].Subject.CanonicalID == refID {
+			stub = &batch.Entities[i]
+		}
+	}
+	if stub == nil {
+		t.Fatalf("no work_item_ref stub entity %q in batch; got entities %+v", refID, batch.Entities)
+	}
+	if stub.Subject.Kind != contractsv1.ContextFabricSubjectWorkItemRef {
+		t.Fatalf("stub kind = %q, want %q", stub.Subject.Kind, contractsv1.ContextFabricSubjectWorkItemRef)
+	}
+	if stub.Subject.Label != "ghpr:owner/repo#7" {
+		t.Fatalf("stub label = %q, want the raw target id", stub.Subject.Label)
+	}
+
+	edge := relationshipByID(t, batch, wantRelationshipID)
+	if edge.From.CanonicalID != source || edge.To.CanonicalID != refID {
+		t.Fatalf("ref-form edge From/To = %+v, want From=%q To=%q", edge, source, refID)
+	}
+	if len(batch.Tombstones) != 0 {
+		t.Fatalf("an unresolved target must never emit a tombstone (nothing to heal yet); got %+v", batch.Tombstones)
+	}
+}
+
+// TestF5_DependencyEdgeHealsRefStubOnceTargetResolves is §1.5's tombstone
+// healing half: once the SAME target later resolves, the producer emits
+// the REAL edge plus a tombstone for both the ref-form edge and the
+// ref-form stub node -- deterministically recomputed from the row's own
+// data, never requiring cross-row state to know a ref-form was ever
+// minted.
+func TestF5_DependencyEdgeHealsRefStubOnceTargetResolves(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	sourceCreated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	targetCreated := time.Date(2026, 1, 20, 0, 0, 0, 0, time.UTC)
+
+	tables := baseTables(at)
+	for index, table := range tables {
+		if table.match == "FROM work_item_dependencies AS d" {
+			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
+				sourceCreated, uint8(0), zeroTime, uint8(1), targetCreated, uint8(0), zeroTime, "repo-1"}}
+			continue
+		}
+		tables[index].rows = nil
+	}
+	batch := projectOneBatch(t, tables)
+
+	source, _, _ := identity.Derive(identity.KindWorkItem, []string{"repo-1", "WIDGET-101"}, nil)
+	refID, _ := identity.DeriveWorkItemRef("WIDGET-099", nil)
+	wantEdgeTombstoneID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, source, refID, "blocks")
+
+	foundEdgeTombstone, foundNodeTombstone := false, false
+	for _, tombstone := range batch.Tombstones {
+		switch {
+		case tombstone.Kind == "relationship" && tombstone.CanonicalID == wantEdgeTombstoneID:
+			foundEdgeTombstone = true
+		case tombstone.Kind == "work_item_ref" && tombstone.CanonicalID == refID:
+			foundNodeTombstone = true
+		}
+	}
+	if !foundEdgeTombstone {
+		t.Fatalf("no ref-form edge tombstone %q in batch; got %+v", wantEdgeTombstoneID, batch.Tombstones)
+	}
+	if !foundNodeTombstone {
+		t.Fatalf("no ref-form node tombstone %q in batch; got %+v", refID, batch.Tombstones)
+	}
+	// No work_item_ref stub entity is minted for a resolved row.
+	for _, entity := range batch.Entities {
+		if entity.Subject.Kind == contractsv1.ContextFabricSubjectWorkItemRef {
+			t.Fatalf("a resolved target must not also mint a work_item_ref stub entity; got %+v", entity)
 		}
 	}
 }
@@ -449,7 +540,7 @@ func TestDisjointDependencyEdgeCollapsesToADegenerateWindow(t *testing.T) {
 	}
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:work_item_dependency:repo-1:WIDGET-101:WIDGET-099:blocks")
+	edge := relationshipByID(t, batch, workItemDependencyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-099", "blocks"))
 	requireWindow(t, "dependency", edge.ValidFrom, edge.ValidTo, &targetCreated, &targetCreated)
 }
 
