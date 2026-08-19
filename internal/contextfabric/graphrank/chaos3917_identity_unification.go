@@ -50,6 +50,34 @@ package graphrank
 // every rival claimant WAS present in this same resolution's own pool);
 // it does not additionally narrow the truncation-immunity guarantee for
 // backends with no identity-completeness signal to consult.
+//
+// Codex xhigh review (task-mt05idj8-bxvfac, 2026-08-19) flagged this
+// residual gap as a P1 ("visible-only checking does not satisfy the
+// ratified completeness requirement") and proposed closing it by rewiring
+// exact_truncation_test.go's own fixtures to supply a complete claimant
+// enumeration, narrowing that test's guarantee to "exact labels survive
+// truncation when COMPLETE identity enumeration proves uniqueness."
+// Deliberately NOT implemented in this ticket: doing so changes production
+// commit behavior for every backend that does not wire AliasLookup at all
+// (aliasIdentityComplete is permanently false there, with or without
+// truncation), which is a strictly bigger, cross-cutting change than the
+// measured defect this ticket closes -- case 45 itself had a COMPLETE
+// identity read with the rival fully visible (identity_universe_calls=1,
+// identity_matched_rows=3), so this residual gap did not cause it.
+// Escalated to team-lead/chris as a follow-on hardening decision requiring
+// explicit sign-off, since it would also revise CHAOS-3810's own ratified
+// regression guarantee -- not something this ticket's scope authorizes
+// unilaterally.
+//
+// SHIP EXCEPTION RECORDED (orchestrator ruling, 2026-08-19, chris retains
+// override until merge): ship this visible-rival fix now; codex's finding
+// is real (epoch-1 healing mints claimants and truncation is endemic) but
+// is not what case 45 measured, and closing it fully is a designed change
+// to CHAOS-3810's own premise that gets its own ticket, design note, and
+// review. Follow-on: CHAOS-3922 (completeness-gated exact-label commit
+// proof), relations blocks CHAOS-3916 / related CHAOS-3917 / related
+// CHAOS-3810 -- must land before CHAOS-3916's cutover flips (the boundary
+// where the ratified design's "complete enumeration" words bind).
 
 // identityRivalClasses names, for identity key class c, the OTHER classes
 // CHAOS-3917's unified claimant-uniqueness proof also checks a term

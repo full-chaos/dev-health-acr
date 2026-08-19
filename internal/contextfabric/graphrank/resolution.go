@@ -945,7 +945,19 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		// identityCollision: unchanged from every other commit path above --
 		// a known rival claimant on the SAME (key class, term) makes even a
 		// positive keyed witness the wrong arbiter of WHICH claimant the
-		// caller meant.
+		// caller meant. identityCrossClassRivalClaimant (CHAOS-3917, codex
+		// xhigh review finding, confirmed) applied here too: without it,
+		// evidence_census was an unguarded SIXTH fast path -- a candidate
+		// the first pass correctly left ambiguous because a cross-class
+		// rival (e.g. an exact-label match's term also claimed by a
+		// colliding alias) is visible in this SAME identity/identityTerms
+		// side channel would otherwise commit anyway once the census round
+		// attested it, since identity/identityTerms are reused unchanged
+		// across the re-entry (resolve.go's second
+		// ResolveFromMergedCandidatesWithGate call passes the identical
+		// maps the first call already populated) and identityCollision
+		// alone -- exactly like the other five call sites before this
+		// fix -- cannot see a cross-class rival.
 		//
 		// evidenceStrength(...) >= gate.LoneFloor: "the ratified
 		// corroborated-band arithmetic computed locally over the raw base
@@ -964,6 +976,7 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			if index, ok := indexBySubjectKey(candidates, evidenceCensusAttestedKey); ok &&
 				!isVectorOnlyCandidate(candidates[index].MatchMechanisms) &&
 				!identityCollision(evidenceCensusAttestedKey, identity, identityTerms) &&
+				!identityCrossClassRivalClaimant(evidenceCensusAttestedKey, identity, identityTerms) &&
 				evidenceStrength(rawBase[evidenceCensusAttestedKey]) >= gate.LoneFloor {
 				committedIndex[index] = true
 				candidates[index].State = contextfabric.ResolutionCommitted

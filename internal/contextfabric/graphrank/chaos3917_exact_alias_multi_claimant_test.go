@@ -133,3 +133,49 @@ func TestResolveSubjects_ExactAliasMultiClaimantEndToEnd(t *testing.T) {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING committed end-to-end -- case 45's own wrong-commit shape (a project committed via exact-label match despite two colliding repository alias claimants on the identical term)", resolution.Committed)
 	}
 }
+
+// TestResolveFromMergedCandidatesWithGate_EvidenceCensusRefusesOnACrossClassRivalClaimant
+// is codex xhigh review's own confirmed P1 (task-mt05idj8-bxvfac,
+// 2026-08-19): resolution.go's evidence_census path (CHAOS-3896 Slice C,
+// design brief v6 §1.4) is a SIXTH commit path resolve.go re-enters
+// ResolveFromMergedCandidatesWithGate through (resolve.go's second call
+// site, passing evidenceCensusAttestedKey), reusing the SAME
+// identity/identityTerms maps the first pass already populated -- before
+// this fix it checked identityCollision only, not
+// identityCrossClassRivalClaimant, so a candidate the first pass correctly
+// left ambiguous BECAUSE of a visible cross-class rival (exactly case 45's
+// own shape) could still be census-attested and wrongly committed on the
+// second pass, since nothing in that block re-consulted the rival at all.
+//
+// Isolated at the resolution.go level (not a full ResolveSubjects
+// end-to-end call): correctly wiring runShadowEvidenceRoundForResolution's
+// own shadow-round preconditions (handle-grammar binding, per-kind census
+// enumeration, NonCensusedSurvivor) for an exact-label-shaped candidate is
+// its own undertaking, orthogonal to what this fix touches -- calling
+// ResolveFromMergedCandidatesWithGate directly with
+// evidenceCensusAttestedKey already set (exactly what resolve.go's own
+// second call site does) exercises the EXACT switch branch codex flagged,
+// with full control over the candidate pool, mirroring
+// chaos3884_identity_resolution_test.go's own direct-call testing
+// discipline for every other commit-gate branch in this file.
+func TestResolveFromMergedCandidatesWithGate_EvidenceCensusRefusesOnACrossClassRivalClaimant(t *testing.T) {
+	t.Parallel()
+	const term = "widget-service"
+	project := exactLabelCandidate(contextfabric.SubjectProject, "proj1", term, term)
+	repoA := repoAliasCandidate("repoA", term)
+	repoB := repoAliasCandidate("repoB", term)
+	identity, terms := identitySideChannels(project, repoA, repoB)
+
+	resolution := ResolveFromMergedCandidatesWithGate(
+		identityBySubject(project, repoA, repoB),
+		map[string]string{}, map[string]bool{}, 10, true,
+		true, /* searchTruncated: required for the evidence_census block to even be reachable in production (resolve.go only re-enters when the first pass left it ambiguous under truncation) */
+		nil, 0, false, 10, 20, true,
+		DefaultCommitGatePolicy(), identity, terms, true, nil, "",
+		SubjectKey(project.Subject), /* evidenceCensusAttestedKey: a census witness names the SAME exact-label candidate the rival check must still block */
+	)
+
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want NOTHING committed -- the census attestation must not override a known cross-class rival claimant on the SAME term (CHAOS-3917, codex xhigh finding P1)", resolution.Committed)
+	}
+}
