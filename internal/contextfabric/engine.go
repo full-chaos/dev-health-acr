@@ -186,7 +186,22 @@ type EngineTelemetry interface {
 	// a build/flip invalidate the prior turn's graph epoch?) from
 	// telemetry alone, the same motivation RecordAnswerReuse's own
 	// miss-reason split already serves for answer reuse.
-	RecordPriorSubjectReceiptSkipReason(ctx context.Context, principal storage.Principal, reason string, count int)
+	//
+	// epochDelta (CHAOS-3898 P2 fix-forward, codex retroactive review of
+	// #151/#152, chris-verified) is cf_receipt_taint_strip's own required
+	// field (design brief §5b: "count + epoch_delta (active − stored,
+	// int)") -- meaningful ONLY for reason=="stale_graph_epoch", always 0
+	// for every other reason. It is the SUM, across every receipt this
+	// call stripped for that reason, of (this investigation's own
+	// binding.Epoch − the receipt's own stored GraphEpoch, treating an
+	// absent GraphEpoch as 0) -- summed rather than reported per-receipt
+	// because this method already reports one aggregate call per reason
+	// per Investigate call; an operator recovers the average delta as
+	// epochDelta/count. A nonzero, non-tiny magnitude here is what
+	// distinguishes "the prior turn predates a recent flip by one epoch"
+	// from "this receipt names a pre-migration epoch from a long time
+	// ago" -- the count alone cannot.
+	RecordPriorSubjectReceiptSkipReason(ctx context.Context, principal storage.Principal, reason string, count int, epochDelta int64)
 	// RecordAnswerReuseServedRequestID (CHAOS-3888) reports, for every
 	// AnswerReuseHit outcome, the served (originally-stored) request id and
 	// whether it differs from the CURRENT call's own request id.
@@ -373,8 +388,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var priorHints []SubjectHint
 	var priorValidatedReceipts []BoundSubjectReceipt
 	var priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch int
+	var priorHintsStaleGraphEpochDelta int64
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints, priorValidatedReceipts, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
+		priorHints, priorValidatedReceipts, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch, priorHintsStaleGraphEpochDelta = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
 		// The v1 contract bounds RequestedScope.SubjectHints at 50
 		// (ContextFabricRequestedScope.Validate). request.Validate()
 		// already proved the caller's own hints are within that bound,
@@ -495,7 +511,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	if len(request.PriorSubjectReceipts) > 0 {
-		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch)
+		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch, priorHintsStaleGraphEpochDelta)
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
@@ -665,19 +681,28 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // concern -- see AnswerReuseGate's doc comment for the identical
 // distinction drawn between "the caller's request" and "what the backend
 // independently proves").
-// Returns (hints, validated, unloadable, noMatch, staleGraphEpoch) -- the
-// latter three (CHAOS-3888, extended by CHAOS-3898 §2.2) split what used to
-// be one implicit "receiptCount - len(hints)" gap into WHY each non-hint
-// receipt fell out: unloadable counts a receipt with a blank
-// ResultID/ReceiptID or whose prior InvestigationResult failed to load;
-// staleGraphEpoch (§2.2) counts a receipt whose prior result loaded but
-// whose StoredInvestigationResult carrier failed the ingress taint gate --
-// a DISTINCT reason from unloadable, because the row itself loaded fine, it
-// simply describes a different graph epoch than this investigation is
-// reading from; noMatch counts a receipt whose prior result loaded, passed
-// the taint gate, and still named no matching candidate.
+// Returns (hints, validated, unloadable, noMatch, staleGraphEpoch,
+// staleGraphEpochDelta) -- unloadable/noMatch/staleGraphEpoch (CHAOS-3888,
+// extended by CHAOS-3898 §2.2) split what used to be one implicit
+// "receiptCount - len(hints)" gap into WHY each non-hint receipt fell out:
+// unloadable counts a receipt with a blank ResultID/ReceiptID or whose
+// prior InvestigationResult failed to load; staleGraphEpoch (§2.2) counts a
+// receipt whose prior result loaded but whose StoredInvestigationResult
+// carrier failed the ingress taint gate -- a DISTINCT reason from
+// unloadable, because the row itself loaded fine, it simply describes a
+// different graph epoch than this investigation is reading from; noMatch
+// counts a receipt whose prior result loaded, passed the taint gate, and
+// still named no matching candidate.
 // recordPriorSubjectReceiptSkips (below) computes the fourth reason,
 // failed_reauth, from what happens to the returned hints afterward.
+//
+// staleGraphEpochDelta (CHAOS-3898 P2 fix-forward, codex retroactive
+// review of #151/#152) is cf_receipt_taint_strip's required epoch_delta
+// field's own accumulator: the SUM, over every receipt counted in
+// staleGraphEpoch, of (binding.Epoch − the receipt's own stored
+// GraphEpoch, treating an absent GraphEpoch as 0) -- see
+// EngineTelemetry.RecordPriorSubjectReceiptSkipReason's own doc comment
+// for why this is a sum rather than one value per receipt.
 //
 // validated is the SUBSET of receipts (same order as hints, 1:1) that
 // actually matched a candidate -- CHAOS-3898 P1-1 fix-forward (codex
@@ -696,16 +721,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // under a graph epoch this investigation is not reading from must never
 // contribute a label or a hint, however innocuous re-using its identifier
 // alone might look.
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int, int, int) {
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int, int, int, int64) {
 	hints := make([]SubjectHint, 0, len(receipts))
 	validated := make([]BoundSubjectReceipt, 0, len(receipts))
 	loaded := make(map[string]InvestigationResult, len(receipts))
 	unloadable := 0
 	noMatch := 0
 	staleGraphEpoch := 0
+	var staleGraphEpochDelta int64
 	for _, receipt := range receipts {
 		if ctx.Err() != nil {
-			return hints, validated, unloadable, noMatch, staleGraphEpoch
+			return hints, validated, unloadable, noMatch, staleGraphEpoch, staleGraphEpochDelta
 		}
 		resultID := strings.TrimSpace(receipt.ResultID)
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
@@ -729,6 +755,16 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			// different graph epoch.
 			if fetched.GraphEpoch == nil || *fetched.GraphEpoch != binding.Epoch {
 				staleGraphEpoch++
+				// storedEpoch defaults to 0 for an absent GraphEpoch (a
+				// pre-migration or reuse-disabled row) -- the same "no
+				// epoch stamped" convention this package already uses
+				// elsewhere (a nil EpochResolver degrades every rewired
+				// site to epoch 0's key).
+				var storedEpoch int64
+				if fetched.GraphEpoch != nil {
+					storedEpoch = *fetched.GraphEpoch
+				}
+				staleGraphEpochDelta += binding.Epoch - storedEpoch
 				continue
 			}
 			prior = fetched.Result
@@ -752,7 +788,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			noMatch++
 		}
 	}
-	return hints, validated, unloadable, noMatch, staleGraphEpoch
+	return hints, validated, unloadable, noMatch, staleGraphEpoch, staleGraphEpochDelta
 }
 
 // captureClarificationSelection builds and hands off a
@@ -831,7 +867,7 @@ func (e *Engine) captureClarificationSelection(ctx context.Context, principal st
 // binding, reported under its own reason so an operator can tell "the
 // prior turn's answer predates the current build/flip" apart from every
 // other skip cause.
-func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution, unloadable, noMatch, staleGraphEpoch int) {
+func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution, unloadable, noMatch, staleGraphEpoch int, staleGraphEpochDelta int64) {
 	if e.telemetry == nil {
 		return
 	}
@@ -862,17 +898,20 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 	// counts already exclude), so skipped can only ever be >= the sum of
 	// the other three.
 	if failedReauth := skipped - unloadable - noMatch - staleGraphEpoch; failedReauth > 0 {
-		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "failed_reauth", failedReauth)
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "failed_reauth", failedReauth, 0)
 	}
 	if unloadable > 0 {
-		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "unloadable", unloadable)
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "unloadable", unloadable, 0)
 	}
 	if noMatch > 0 {
-		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "no_match", noMatch)
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "no_match", noMatch, 0)
 	}
-	// CHAOS-3898 §5b cf_receipt_taint_strip.
+	// CHAOS-3898 §5b cf_receipt_taint_strip: epochDelta is the ONLY reason
+	// this method's epochDelta parameter is ever non-zero (see
+	// EngineTelemetry.RecordPriorSubjectReceiptSkipReason's own doc
+	// comment).
 	if staleGraphEpoch > 0 {
-		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "stale_graph_epoch", staleGraphEpoch)
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "stale_graph_epoch", staleGraphEpoch, staleGraphEpochDelta)
 	}
 }
 

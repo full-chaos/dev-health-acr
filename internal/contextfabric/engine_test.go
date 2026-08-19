@@ -258,8 +258,9 @@ type recordingTelemetry struct {
 }
 
 type priorSubjectReceiptSkipReasonRecord struct {
-	reason string
-	count  int
+	reason     string
+	count      int
+	epochDelta int64
 }
 
 type answerReuseServedRequestIDRecord struct {
@@ -284,8 +285,8 @@ func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ stor
 	r.subjectlessTerminalReasons = append(r.subjectlessTerminalReasons, reason)
 }
 
-func (r *recordingTelemetry) RecordPriorSubjectReceiptSkipReason(_ context.Context, _ storage.Principal, reason string, count int) {
-	r.priorSubjectReceiptSkipReasons = append(r.priorSubjectReceiptSkipReasons, priorSubjectReceiptSkipReasonRecord{reason, count})
+func (r *recordingTelemetry) RecordPriorSubjectReceiptSkipReason(_ context.Context, _ storage.Principal, reason string, count int, epochDelta int64) {
+	r.priorSubjectReceiptSkipReasons = append(r.priorSubjectReceiptSkipReasons, priorSubjectReceiptSkipReasonRecord{reason, count, epochDelta})
 }
 
 func (r *recordingTelemetry) RecordAnswerReuseServedRequestID(_ context.Context, _ storage.Principal, servedRequestID string, requestIDMismatch bool) {
@@ -611,7 +612,7 @@ func TestEngineSkipsUnresolvablePriorSubjectReceiptWithoutFailing(t *testing.T) 
 	// CHAOS-3888: an unloadable prior result (store.getErr) must classify as
 	// "unloadable", never "no_match" or "failed_reauth" -- see
 	// resolvePriorSubjectHints' own doc comment for the three-reason split.
-	if want := []priorSubjectReceiptSkipReasonRecord{{"unloadable", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+	if want := []priorSubjectReceiptSkipReasonRecord{{reason: "unloadable", count: 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
 	}
 }
@@ -668,7 +669,7 @@ func TestEngineStripsPriorSubjectReceiptFromADifferentGraphEpoch(t *testing.T) {
 	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
 		t.Fatalf("telemetry = %#v, want exactly one skip of count 1 recorded", telemetry.priorSubjectReceiptsSkipped)
 	}
-	if want := []priorSubjectReceiptSkipReasonRecord{{"stale_graph_epoch", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+	if want := []priorSubjectReceiptSkipReasonRecord{{reason: "stale_graph_epoch", count: 1, epochDelta: -7}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
 	}
 }
@@ -726,7 +727,7 @@ func TestEngineDoesNotLeakOrErrorWhenPriorSubjectReceiptFailsGraphAuthorization(
 	// distinct from "unloadable"/"no_match" -- the receipt's prior result
 	// loaded fine and named a real candidate; it is only re-resolution that
 	// declined it.
-	if want := []priorSubjectReceiptSkipReasonRecord{{"failed_reauth", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+	if want := []priorSubjectReceiptSkipReasonRecord{{reason: "failed_reauth", count: 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
 	}
 }
@@ -771,7 +772,7 @@ func TestEngineClassifiesPriorSubjectReceiptWithNoMatchingCandidateAsNoMatch(t *
 	if len(graph.resolveRequests) != 1 || len(graph.resolveRequests[0].RequestedScope.SubjectHints) != 0 {
 		t.Fatalf("resolveRequests = %#v, want no hint added for a receipt naming no matching candidate", graph.resolveRequests)
 	}
-	if want := []priorSubjectReceiptSkipReasonRecord{{"no_match", 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
+	if want := []priorSubjectReceiptSkipReasonRecord{{reason: "no_match", count: 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
 	}
 }

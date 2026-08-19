@@ -79,12 +79,19 @@ func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, prin
 
 // RecordPriorSubjectReceiptSkipReason logs at Info: a per-reason breakdown
 // of an already-reported RecordPriorSubjectReceiptsSkipped aggregate, not a
-// new failure signal of its own.
-func (t SlogEngineTelemetry) RecordPriorSubjectReceiptSkipReason(ctx context.Context, principal storage.Principal, reason string, count int) {
+// new failure signal of its own. epochDelta (CHAOS-3898 P2 fix-forward) is
+// logged only for reason=="stale_graph_epoch" -- see the interface method's
+// own doc comment for why it is 0, and therefore omitted, for every other
+// reason.
+func (t SlogEngineTelemetry) RecordPriorSubjectReceiptSkipReason(ctx context.Context, principal storage.Principal, reason string, count int, epochDelta int64) {
 	if count <= 0 {
 		return
 	}
-	args := append([]any{"org_id", principal.OrgID, "reason", reason, "count", count}, requestIDLogAttrs(ctx)...)
+	args := []any{"org_id", principal.OrgID, "reason", reason, "count", count}
+	if reason == "stale_graph_epoch" {
+		args = append(args, "epoch_delta", epochDelta)
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric prior-subject receipt skip reason", args...)
 }
 
