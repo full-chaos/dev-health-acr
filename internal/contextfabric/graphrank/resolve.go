@@ -1081,6 +1081,21 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	if !found {
 		return "", false
 	}
+	// A genuine backend fault (err != nil) is deliberately folded into the
+	// SAME fail-closed "refuse to commit" outcome as a confirmed absence
+	// (exists == false), not propagated as a hard ResolveSubjects error:
+	// this whole call is an ADDITIVE rescue attempt for a resolution the
+	// ordinary gates already left merely ambiguous -- a transient hiccup on
+	// the rescue's OWN extra I/O must not turn a legitimate "ambiguous,
+	// please clarify" outcome into a 500-class failure. This mirrors
+	// runShadowEvidenceRoundForResolution's own recover()-and-fall-back
+	// discipline immediately above this call site, extended to the
+	// synchronous error return this function (unlike a panic) can observe
+	// directly. Every top-of-ResolveSubjects ExactHint call remains
+	// unchanged and still propagates its own error hard -- that path serves
+	// a caller-EXPLICIT hint, where silently discarding a real backend fault
+	// would hide it from the very request that asked for it; this path
+	// serves an INTERNAL rescue the caller never asked for by name.
 	subject := contextfabric.SubjectRef{Kind: kind, CanonicalID: canonicalID}
 	node, exists, err := deps.ExactHint(ctx, subject)
 	if err != nil || !exists {
