@@ -151,15 +151,37 @@ type anchorCollisionFakeClient struct {
 	err        error
 	calls      int
 	statements []string
+	bindings   [][]contextpacket.ClickHouseBinding
 }
 
-func (c *anchorCollisionFakeClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+func (c *anchorCollisionFakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	c.calls++
 	c.statements = append(c.statements, statement)
+	c.bindings = append(c.bindings, bindings)
 	if c.err != nil {
 		return nil, c.err
 	}
 	return &anchorCollisionFakeScanner{count: c.count}, nil
+}
+
+// bindingValue looks up a named binding's value from the LAST recorded
+// Query call -- test helper only.
+func (c *anchorCollisionFakeClient) bindingValue(t *testing.T, name string) string {
+	t.Helper()
+	if len(c.bindings) == 0 {
+		t.Fatalf("bindingValue(%q): no Query call recorded", name)
+	}
+	for _, b := range c.bindings[len(c.bindings)-1] {
+		if b.Name == name {
+			v, ok := b.Value.(string)
+			if !ok {
+				t.Fatalf("bindingValue(%q): value %#v is not a string", name, b.Value)
+			}
+			return v
+		}
+	}
+	t.Fatalf("bindingValue(%q): no such binding among %v", name, c.bindings[len(c.bindings)-1])
+	return ""
 }
 
 type anchorCollisionFakeScanner struct {
@@ -274,6 +296,30 @@ func TestAnchorCollision_PinsEmptyResultForAggregationSetting(t *testing.T) {
 	}
 	if !strings.Contains(client.statements[0], "SETTINGS empty_result_for_aggregation_by_empty_set = 0") {
 		t.Fatalf("AnchorCollision statement missing the empty_result_for_aggregation_by_empty_set=0 setting pin: %s", client.statements[0])
+	}
+}
+
+// TestAnchorCollision_BindsOrgAndRawProjectID is a codex-review finding
+// (P3): the fake previously ignored SQL/bindings entirely, so a wrong
+// predicate or wrong binding (e.g. binding the FULL project.v2:<provider>:<id>
+// canonical id instead of canonicalIDValue's decoded raw id) would have
+// passed silently. Pins both: the statement filters on org_id AND id, and
+// the id binding is the DECODED raw id (provider stripped), never the
+// canonical id verbatim.
+func TestAnchorCollision_BindsOrgAndRawProjectID(t *testing.T) {
+	t.Parallel()
+	client := &anchorCollisionFakeClient{count: 1}
+	if _, err := devhealthsource.AnchorCollision(context.Background(), client, "org-42", contextfabric.SubjectProject, "project.v2:github:p-1"); err != nil {
+		t.Fatalf("AnchorCollision error = %v", err)
+	}
+	if !strings.Contains(client.statements[0], "org_id = {anchor_collision_org_id:String}") || !strings.Contains(client.statements[0], "id = {anchor_collision_project_id:String}") {
+		t.Fatalf("AnchorCollision statement missing expected org_id/id predicates: %s", client.statements[0])
+	}
+	if got := client.bindingValue(t, "anchor_collision_org_id"); got != "org-42" {
+		t.Fatalf("anchor_collision_org_id binding = %q, want %q", got, "org-42")
+	}
+	if got := client.bindingValue(t, "anchor_collision_project_id"); got != "p-1" {
+		t.Fatalf("anchor_collision_project_id binding = %q, want %q (the DECODED raw id, provider stripped)", got, "p-1")
 	}
 }
 
