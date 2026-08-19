@@ -1110,13 +1110,23 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			resolution.ClarificationPrompt = ClarificationPrompt(resolution.Candidates)
 		}
 	}
-	// CHAOS-3900 P1.C: derived from the SAME final candidate pool the
-	// resolution above committed to, after Slice B's reordering (order
-	// does not affect kindOfferMaterial's own distinct-kind computation,
-	// but using the SAME resolution.Candidates the caller sees keeps this
-	// call visibly tied to what was actually resolved, not an earlier
-	// intermediate pool).
-	return resolution, kindOfferMaterial(resolution.Candidates), nil
+	// CHAOS-3900 P1.C/P1.C': kindOfferMaterial is derived from the SAME
+	// final candidate pool the resolution above committed to, after Slice
+	// B's reordering (order does not affect its own distinct-kind
+	// computation, but using the SAME resolution.Candidates the caller
+	// sees keeps this call visibly tied to what was actually resolved, not
+	// an earlier intermediate pool). anchorOfferMaterial/handleOfferMaterial
+	// (P1.C', team-lead ruling) instead use aliasClaimantsByTerm/
+	// aliasIdentityComplete/request.Question -- data computed UNCONDITIONALLY
+	// above, before the gated shadow-evidence-round check, so a stall that
+	// skips that round still gets a real StructureNeeds block (see this
+	// file's own package doc comment, chaos3900_structure_offers.go).
+	offerMaterial := combineStructureOfferMaterial(
+		kindOfferMaterial(resolution.Candidates),
+		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), aliasIdentityComplete),
+		handleOfferMaterial(request.Question),
+	)
+	return resolution, offerMaterial, nil
 }
 
 // mergeCensusAttestedSatisfier implements design brief v6 §1.4's commit

@@ -106,6 +106,23 @@ type handleGrammarEntry struct {
 	// needs this narrower, context-free shape rather than re-running
 	// pattern against a value it was never anchored to match alone.
 	valuePattern *regexp.Regexp
+	// sourceColumn (CHAOS-3900 P1.C') is "the keyed source column [this
+	// handle] would bind" (design brief §2.1's own HandleOption
+	// description) -- disclosed on the wire so a caller can see what a
+	// confirmed handle would check, without exposing internal SQL alias
+	// details. "<base table>.<column>" form, a CLOSED STATIC MIRROR of
+	// devhealthsource's own chaos3899_census_registry.go
+	// censusKindRegistryEntries[kind].handlePredicate -- devhealthsource
+	// imports graphrank (for CensusFunc), so graphrank cannot read that
+	// registry directly (the same import-direction wall as every other
+	// contextfabric/graphrank/devhealthsource seam this epic works
+	// around). Team-lead ruling (P1.C' Q2): duplicate rather than plumb a
+	// new dependency-injection surface for closed, static registry data --
+	// TestHandleSourceColumnRegistryMatchesCensusRegistry
+	// (devhealthsource, since it already imports graphrank) is the parity
+	// test that turns drift into a named, failing test instead of a
+	// silent mismatch.
+	sourceColumn string
 }
 
 // handleGrammarRegistry is the CLOSED handle->kind registry (design brief
@@ -156,9 +173,9 @@ type handleGrammarEntry struct {
 //     provider-specific run-id shape) is a registry addition, not a
 //     redesign.
 var handleGrammarRegistry = []handleGrammarEntry{
-	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\bPR\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`)},
-	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS-\d+\b`), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`)},
-	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+run|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`)},
+	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\bPR\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
+	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS-\d+\b`), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`), sourceColumn: "work_items.work_item_id"},
+	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+run|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`), sourceColumn: "ci_pipeline_runs.run_id"},
 }
 
 // ValidateHandleGrammar (CHAOS-3900 P1.E) re-validates a STORED handle
@@ -184,6 +201,21 @@ func ValidateHandleGrammar(kind CensusKind, patternID string, value string) bool
 		}
 	}
 	return false
+}
+
+// HandleSourceColumn (CHAOS-3900 P1.C') returns the closed registry's
+// "<table>.<column>" a grammar-bound handle would check, for the SAME
+// (kind, patternID) pair ValidateHandleGrammar keys on -- see
+// handleGrammarEntry.sourceColumn's own doc comment for the mirror/parity
+// discipline this backs. ok=false for an unrecognized pair, matching
+// ValidateHandleGrammar's own "not silently permissive" rule.
+func HandleSourceColumn(kind CensusKind, patternID string) (string, bool) {
+	for _, entry := range handleGrammarRegistry {
+		if entry.kind == kind && entry.name == patternID {
+			return entry.sourceColumn, true
+		}
+	}
+	return "", false
 }
 
 // BindHandles applies the closed handle grammar to question (verbatim

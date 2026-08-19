@@ -303,6 +303,69 @@ func TestResolveSubjects_NilConfirmedKindIsByteIdenticalToPreP1D(t *testing.T) {
 	}
 }
 
+// TestResolveSubjects_AnchorAndHandleOffersEndToEnd is P1.C”s own
+// end-to-end integration pin (mirroring P1.D's TestResolveSubjects_
+// ConfirmedKindNarrowsThePool pattern): proves resolve.go's OWN wiring
+// (not anchorOfferMaterial/handleOfferMaterial in isolation) produces the
+// combined offer material. Two different terms each uniquely alias-match a
+// DIFFERENT repository (the disagreement case), and the question text
+// carries a grammar-bound PR number -- neither commits, and both surface
+// as offers on the SAME ResolveSubjects call.
+func TestResolveSubjects_AnchorAndHandleOffersEndToEnd(t *testing.T) {
+	t.Parallel()
+	repoA := aliasCandidateNode(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA", -1, []string{"widget-service"}, nil, true)
+	repoB := aliasCandidateNode(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB", -1, []string{"widget-svc"}, nil, true)
+	backend := &fakeGraphBackend{
+		enableAliasLookup: true,
+		aliasLookupClaimants: map[string][]CandidateNode{
+			"widget-service": {repoA},
+			"widget-svc":     {repoB},
+		},
+		aliasLookupComplete: true,
+	}
+	request := testRequest()
+	request.Question = "is PR 532 related to widget-service or widget-svc?"
+
+	resolution, material, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("widget-service", "widget-svc"), backend.deps(), nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want NOTHING committed: two terms disagree on the anchor, genuinely ambiguous", resolution.Committed)
+	}
+
+	wantMissing := map[contractsv1.ContextFabricStructureNeedKind]bool{
+		contractsv1.ContextFabricStructureNeedSubjectAnchor: true,
+		contractsv1.ContextFabricStructureNeedSubjectHandle: true,
+	}
+	if len(material.Missing) != len(wantMissing) {
+		t.Fatalf("material.Missing = %v, want exactly %v (kind is unambiguous here: only repositories are in the pool)", material.Missing, wantMissing)
+	}
+	for _, m := range material.Missing {
+		if !wantMissing[m] {
+			t.Errorf("material.Missing contains unexpected member %q", m)
+		}
+	}
+
+	if len(material.AnchorOptions) != 2 {
+		t.Fatalf("len(material.AnchorOptions) = %d, want 2 (one per disagreeing candidate)", len(material.AnchorOptions))
+	}
+	seenAnchors := map[string]bool{}
+	for _, opt := range material.AnchorOptions {
+		seenAnchors[opt.CanonicalID] = true
+	}
+	if !seenAnchors["repoA"] || !seenAnchors["repoB"] {
+		t.Errorf("material.AnchorOptions = %+v, want repoA AND repoB", material.AnchorOptions)
+	}
+
+	if len(material.HandleOptions) != 1 {
+		t.Fatalf("len(material.HandleOptions) = %d, want 1", len(material.HandleOptions))
+	}
+	if material.HandleOptions[0].Value != "532" || material.HandleOptions[0].Kind != contractsv1.ContextFabricSubjectPullRequest {
+		t.Errorf("material.HandleOptions[0] = %+v, want value=532 kind=pull_request", material.HandleOptions[0])
+	}
+}
+
 func TestValidateHandleGrammar(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -502,4 +565,141 @@ func TestVerifyAnchorClaimantUnique(t *testing.T) {
 			t.Errorf("VerifyAnchorClaimantUnique() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
 		}
 	})
+}
+
+func identityMatch(kind contractsv1.ContextFabricSubjectKind, id, label string) IdentityMatch {
+	return IdentityMatch{Row: IdentityRow{Kind: kind, CanonicalID: id, Label: label}}
+}
+
+func TestAnchorOfferMaterial_UniqueClaimantOffersNothing(t *testing.T) {
+	t.Parallel()
+	claimants := map[string][]IdentityMatch{
+		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
+	}
+	material := anchorOfferMaterial(claimants, true)
+	if len(material.Missing) != 0 || len(material.AnchorOptions) != 0 {
+		t.Errorf("material = %+v, want empty: a unique claimant is already decisive, nothing to elicit", material)
+	}
+}
+
+func TestAnchorOfferMaterial_DisagreementOffersOnePerCandidate(t *testing.T) {
+	t.Parallel()
+	claimants := map[string][]IdentityMatch{
+		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
+		"widget-svc":     {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB")},
+	}
+	material := anchorOfferMaterial(claimants, true)
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+		t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
+	}
+	if len(material.AnchorOptions) != 2 {
+		t.Fatalf("len(material.AnchorOptions) = %d, want 2", len(material.AnchorOptions))
+	}
+	for _, opt := range material.AnchorOptions {
+		if opt.Kind != contractsv1.ContextFabricSubjectRepository {
+			t.Errorf("AnchorOption.Kind = %q, want repository", opt.Kind)
+		}
+		if len(opt.MatchedTermHash) != 24 {
+			t.Errorf("len(AnchorOption.MatchedTermHash) = %d, want 24", len(opt.MatchedTermHash))
+		}
+		if opt.OfferSource != contractsv1.ContextFabricStructureOfferEngine {
+			t.Errorf("AnchorOption.OfferSource = %q, want engine", opt.OfferSource)
+		}
+	}
+}
+
+func TestAnchorOfferMaterial_NoCandidatesStillMissingWithEmptyOptions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero claimants", func(t *testing.T) {
+		material := anchorOfferMaterial(map[string][]IdentityMatch{}, true)
+		if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
+		}
+		if len(material.AnchorOptions) != 0 {
+			t.Errorf("len(material.AnchorOptions) = %d, want 0", len(material.AnchorOptions))
+		}
+	})
+	t.Run("incomplete read", func(t *testing.T) {
+		claimants := map[string][]IdentityMatch{
+			"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
+		}
+		material := anchorOfferMaterial(claimants, false)
+		if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
+		}
+		if len(material.AnchorOptions) != 0 {
+			t.Errorf("len(material.AnchorOptions) = %d, want 0", len(material.AnchorOptions))
+		}
+	})
+}
+
+func TestHandleOfferMaterial_NoGrammarMatchStillMissingWithEmptyOptions(t *testing.T) {
+	t.Parallel()
+	material := handleOfferMaterial("how healthy is the payments team")
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectHandle {
+		t.Fatalf("material.Missing = %v, want [subject_handle]", material.Missing)
+	}
+	if len(material.HandleOptions) != 0 {
+		t.Errorf("len(material.HandleOptions) = %d, want 0", len(material.HandleOptions))
+	}
+}
+
+func TestHandleOfferMaterial_GrammarMatchOffersHandle(t *testing.T) {
+	t.Parallel()
+	material := handleOfferMaterial("what is the status of PR 532?")
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectHandle {
+		t.Fatalf("material.Missing = %v, want [subject_handle]", material.Missing)
+	}
+	if len(material.HandleOptions) != 1 {
+		t.Fatalf("len(material.HandleOptions) = %d, want 1", len(material.HandleOptions))
+	}
+	opt := material.HandleOptions[0]
+	if opt.Kind != contractsv1.ContextFabricSubjectPullRequest || opt.PatternID != "pull_request_number" || opt.Value != "532" {
+		t.Errorf("HandleOptions[0] = %+v, want kind=pull_request pattern_id=pull_request_number value=532", opt)
+	}
+	if opt.SourceColumn != "git_pull_requests.number" {
+		t.Errorf("HandleOptions[0].SourceColumn = %q, want %q", opt.SourceColumn, "git_pull_requests.number")
+	}
+	if opt.OfferSource != contractsv1.ContextFabricStructureOfferEngine {
+		t.Errorf("HandleOptions[0].OfferSource = %q, want engine", opt.OfferSource)
+	}
+}
+
+func TestHandleOfferMaterial_MultipleGrammarMatchesOfferAll(t *testing.T) {
+	t.Parallel()
+	material := handleOfferMaterial("does PR 532 relate to CHAOS-3896?")
+	if len(material.HandleOptions) != 2 {
+		t.Fatalf("len(material.HandleOptions) = %d, want 2", len(material.HandleOptions))
+	}
+}
+
+func TestCombineStructureOfferMaterial(t *testing.T) {
+	t.Parallel()
+	kind := contextfabric.StructureOfferMaterial{
+		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+		KindOptions: []contractsv1.ContextFabricKindOption{{Kind: contractsv1.ContextFabricSubjectPullRequest}},
+	}
+	anchor := contextfabric.StructureOfferMaterial{
+		Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+		AnchorOptions: []contractsv1.ContextFabricAnchorOption{{CanonicalID: "repoA"}},
+	}
+	handle := contextfabric.StructureOfferMaterial{}
+
+	combined := combineStructureOfferMaterial(kind, anchor, handle)
+	wantMissing := []contractsv1.ContextFabricStructureNeedKind{
+		contractsv1.ContextFabricStructureNeedExpectedKind,
+		contractsv1.ContextFabricStructureNeedSubjectAnchor,
+	}
+	if len(combined.Missing) != len(wantMissing) {
+		t.Fatalf("combined.Missing = %v, want %v", combined.Missing, wantMissing)
+	}
+	for i, m := range wantMissing {
+		if combined.Missing[i] != m {
+			t.Errorf("combined.Missing[%d] = %q, want %q (order pin: kind before anchor)", i, combined.Missing[i], m)
+		}
+	}
+	if len(combined.KindOptions) != 1 || len(combined.AnchorOptions) != 1 || len(combined.HandleOptions) != 0 {
+		t.Errorf("combined = %+v, want 1 kind option, 1 anchor option, 0 handle options", combined)
+	}
 }

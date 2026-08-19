@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -11,22 +12,21 @@ import (
 )
 
 // CHAOS-3900 P1.C (pivot-intent design brief §2.1). ResolveSubjects
-// (resolve.go) calls kindOfferMaterial with the SAME candidate pool it
-// already assembled, right before it returns -- this file owns turning
-// that pool into the expected_kind disclosure StructureOfferMaterial
-// carries back to the engine.
+// (resolve.go) calls kindOfferMaterial/anchorOfferMaterial/handleOfferMaterial
+// with the SAME pool/identity/question-text data it already assembled,
+// right before it returns -- this file owns turning that data into the
+// StructureOfferMaterial the engine carries back.
 //
-// SCOPE NOTE (P1.C increment 1, flagged rather than silently absent):
-// AnchorOptions/HandleOptions are NOT built here yet. Their own candidate
-// material (identity-universe unique-claimant candidates, handle-grammar
-// bindings against question text) needs the SAME identity/alias data
-// runShadowEvidenceRoundForResolution (resolve.go) already threads --
-// which only exists on the gated shadow-evidence-round path
-// (deps.CensusFunc != nil && len(resolution.Committed) == 0 &&
-// searchTruncated), unlike expected_kind offers, which need only the
-// unconditionally-available candidate pool. Building anchor/handle offers
-// correctly needs that same gated data threaded out to this file too --
-// a follow-up increment, not a design change.
+// P1.C' (team-lead ruling): anchorOfferMaterial/handleOfferMaterial are
+// built from data computed UNCONDITIONALLY, before the gated
+// shadow-evidence-round check (deps.CensusFunc != nil &&
+// len(resolution.Committed) == 0 && searchTruncated) -- aliasClaimantsByTerm/
+// aliasIdentityComplete (AliasLookup's own read) and request.Question are
+// both already in scope at ResolveSubjects' own return point regardless of
+// whether the shadow round fires. This is what satisfies the
+// disclosure-not-gated-on-shadow-round requirement: a stalled resolution
+// that never triggers the census still gets a real (possibly empty)
+// StructureNeeds block, never an absent one.
 
 // structureOfferKinds is the closed set of subject kinds an expected_kind
 // offer may name (design brief §1.1's expected_kind row: "the census-kind
@@ -365,4 +365,143 @@ func identityRowCarriesTermHash(row IdentityRow, termHash string) bool {
 		}
 	}
 	return false
+}
+
+// anchorOfferMaterial builds the subject_anchor disclosure (CHAOS-3900
+// P1.C', team-lead ruling) from the SAME per-term unique-claimant scan
+// BindAnchor's own decisive path uses (anchorTermCandidates,
+// chaos3899_anchor.go) -- never a second, divergent notion of "unique
+// claimant."
+//
+// Three cases, all ruled explicitly (never inferred):
+//  1. EXACTLY ONE distinct (kind, canonical_id) candidate: this is already
+//     decisive by design brief §1.1/R4 -- BindAnchor itself would succeed
+//     on this same data, so there is nothing to elicit. Offering it anyway
+//     would be a clarification stop with zero information gain (the exact
+//     category error the §1.3 never-elicit rule targets), and would feed
+//     the Bridge a low-information single-option "confirmation" -- a noise
+//     label, not a real one. Returns an EMPTY StructureOfferMaterial (no
+//     Missing entry at all).
+//  2. TWO OR MORE distinct candidates (BindAnchor itself would refuse,
+//     ReasonAnchorNotUnique): genuine ambiguity across terms -- offer ONE
+//     AnchorOption per distinct candidate, subject_anchor becomes Missing.
+//  3. ZERO candidates (no unique-claimant material at all, or an
+//     incomplete identity-universe read): subject_anchor is STILL
+//     disclosed as Missing, with an EMPTY AnchorOptions list -- "disclosed
+//     as missing-and-helpful, nothing offerable" (team-lead ruling); an
+//     absent block or a silently dropped Missing row is forbidden either
+//     way.
+func anchorOfferMaterial(claimantsByTerm map[string][]IdentityMatch, complete bool) contextfabric.StructureOfferMaterial {
+	candidates := anchorTermCandidates(claimantsByTerm, complete)
+	if len(candidates) == 1 {
+		return contextfabric.StructureOfferMaterial{}
+	}
+	keys := make([]anchorCandidateKey, 0, len(candidates))
+	for k := range candidates {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].kind != keys[j].kind {
+			return keys[i].kind < keys[j].kind
+		}
+		return keys[i].id < keys[j].id
+	})
+	options := make([]contractsv1.ContextFabricAnchorOption, 0, len(keys))
+	for _, k := range keys {
+		info := candidates[k]
+		options = append(options, contractsv1.ContextFabricAnchorOption{
+			Kind: k.kind, CanonicalID: k.id, Label: anchorOfferLabel(info.label),
+			MatchedTermHash: HashAliasTerm(info.term),
+			OfferSource:     contractsv1.ContextFabricStructureOfferEngine,
+		})
+	}
+	return contextfabric.StructureOfferMaterial{
+		Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+		AnchorOptions: options,
+	}
+}
+
+// anchorOfferLabel renders an AnchorOption's display label from the
+// candidate's own identity-universe Label -- the SAME display text a
+// SubjectCandidate would already show for this row (not new disclosure;
+// unlike kindOfferLabel's fixed-sentence discipline, an anchor's whole
+// purpose is disambiguating BETWEEN named entities, so the offer must show
+// the entity's own name, not a generic sentence).
+func anchorOfferLabel(label string) string {
+	return label
+}
+
+// handleOfferMaterial builds the subject_handle disclosure (design brief
+// §2.1: "offered when a grammar-valid value arrived explicit_unattributed")
+// from BindHandles' own pure question-text scan. Every value BindHandles
+// finds here is, by construction, unattributed: composeStructureNeeds
+// (structure.go) is only ever composed on the subjectless terminal path,
+// so nothing has committed for a found handle to be attributed to.
+//
+// Mirrors anchorOfferMaterial's own three-case discipline for the
+// zero-candidates case: subject_handle is Missing whenever this function
+// runs (P1.C' does not yet implement §1.3's class-conditional gate, the
+// same known, accepted scope gap kindOfferMaterial already carries), with
+// HandleOptions holding however many grammar-valid values were found --
+// possibly zero, never an absent block.
+func handleOfferMaterial(question string) contextfabric.StructureOfferMaterial {
+	bound := BindHandles(question)
+	options := make([]contractsv1.ContextFabricHandleOption, 0, len(bound))
+	for _, b := range bound {
+		sourceColumn, ok := HandleSourceColumn(b.Kind, b.Grammar)
+		if !ok {
+			// Registry-miss: BindHandles only ever returns a (kind, grammar)
+			// pair from handleGrammarRegistry, and HandleSourceColumn reads
+			// the SAME registry -- unreachable by construction today. Skipped
+			// defensively rather than offered without a redemption target,
+			// mirroring structureReceiptPrefixForMember's own "never panic on
+			// a closed-registry mismatch" discipline.
+			continue
+		}
+		options = append(options, contractsv1.ContextFabricHandleOption{
+			Kind: b.Kind, PatternID: b.Grammar, Value: b.Value, SourceColumn: sourceColumn,
+			Label:       handleOfferLabel(b.Kind, b.Value),
+			OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+		})
+	}
+	return contextfabric.StructureOfferMaterial{
+		Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectHandle},
+		HandleOptions: options,
+	}
+}
+
+// handleOfferLabel renders a server-owned label for one handle offer --
+// mirrors kindOfferLabel's fixed-sentence-per-kind discipline, with the
+// grammar-extracted VALUE interpolated (a verbatim span already surfaced
+// in the offer's own value field, not new disclosure).
+func handleOfferLabel(kind contractsv1.ContextFabricSubjectKind, value string) string {
+	switch kind {
+	case contractsv1.ContextFabricSubjectPullRequest:
+		return "pull request #" + value
+	case contractsv1.ContextFabricSubjectWorkItem:
+		return "work item " + value
+	case contractsv1.ContextFabricSubjectCIRun:
+		return "CI run #" + value
+	default:
+		// Unreachable given handleGrammarRegistry's own closed kind set.
+		return value
+	}
+}
+
+// combineStructureOfferMaterial merges the per-member StructureOfferMaterial
+// values ResolveSubjects builds (kind, anchor, handle -- window is a later
+// slice) into the single value it returns. Missing entries concatenate in
+// CALL order, which callers must pass in §1.2 reading 1's own elicitation
+// priority (kind before anchor before window) -- each per-member builder
+// contributes at most one Missing entry for its own member, so a plain
+// concatenation can never duplicate or reorder across members.
+func combineStructureOfferMaterial(materials ...contextfabric.StructureOfferMaterial) contextfabric.StructureOfferMaterial {
+	var combined contextfabric.StructureOfferMaterial
+	for _, m := range materials {
+		combined.Missing = append(combined.Missing, m.Missing...)
+		combined.KindOptions = append(combined.KindOptions, m.KindOptions...)
+		combined.AnchorOptions = append(combined.AnchorOptions, m.AnchorOptions...)
+		combined.HandleOptions = append(combined.HandleOptions, m.HandleOptions...)
+	}
+	return combined
 }
