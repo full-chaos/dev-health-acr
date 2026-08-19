@@ -62,6 +62,17 @@ const (
 	ReasonGraphMissingSatisfier     DegradationReason = "graph_missing_satisfier"
 	ReasonProbeError                DegradationReason = "probe_error"
 	ReasonBudgetExhausted           DegradationReason = "budget_exhausted"
+	// ReasonAnchorCollision is CHAOS-3898 S3's addition (design brief v4.1
+	// §1.4: "anchor_collision typed non-decisive census outcome at BIND
+	// time"), not yet in 3896 brief v6's own §4 vocabulary table -- 3898
+	// exposes the surface (this reason plus
+	// devhealthsource.AnchorCollision's detection primitive); a future
+	// 3896 Slice B/C consumes both to refuse a project-anchored round
+	// whose raw source id resolves to more than one provider, distinct
+	// from ReasonAnchorNotUnique (claimant-COUNT ambiguity at the graph
+	// alias-lookup layer -- a different failure class from a
+	// provider-collided SOURCE id).
+	ReasonAnchorCollision DegradationReason = "anchor_collision"
 )
 
 // BoundHandle is one grammar-bound handle term: the CLOSED registry entry

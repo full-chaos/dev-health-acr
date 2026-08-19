@@ -289,10 +289,11 @@ func (e *Engine) terminalResult(
 		// received already carries it -- re-clamping here could only
 		// introduce a difference, and a terminal result saved under a key no
 		// lookup will ever form is a row the clarification loop cannot reach.
+		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
 		if err := e.results.Save(ctx, principal, result, watermark, epoch, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
-		e.recordBindingEpochDelta(ctx, principal, binding)
+		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)
 	}
 	return result, nil
 }

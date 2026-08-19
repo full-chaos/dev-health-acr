@@ -186,7 +186,22 @@ type EngineTelemetry interface {
 	// a build/flip invalidate the prior turn's graph epoch?) from
 	// telemetry alone, the same motivation RecordAnswerReuse's own
 	// miss-reason split already serves for answer reuse.
-	RecordPriorSubjectReceiptSkipReason(ctx context.Context, principal storage.Principal, reason string, count int)
+	//
+	// epochDelta (CHAOS-3898 P2 fix-forward, codex retroactive review of
+	// #151/#152, chris-verified) is cf_receipt_taint_strip's own required
+	// field (design brief §5b: "count + epoch_delta (active − stored,
+	// int)") -- meaningful ONLY for reason=="stale_graph_epoch", always 0
+	// for every other reason. It is the SUM, across every receipt this
+	// call stripped for that reason, of (this investigation's own
+	// binding.Epoch − the receipt's own stored GraphEpoch, treating an
+	// absent GraphEpoch as 0) -- summed rather than reported per-receipt
+	// because this method already reports one aggregate call per reason
+	// per Investigate call; an operator recovers the average delta as
+	// epochDelta/count. A nonzero, non-tiny magnitude here is what
+	// distinguishes "the prior turn predates a recent flip by one epoch"
+	// from "this receipt names a pre-migration epoch from a long time
+	// ago" -- the count alone cannot.
+	RecordPriorSubjectReceiptSkipReason(ctx context.Context, principal storage.Principal, reason string, count int, epochDelta int64)
 	// RecordAnswerReuseServedRequestID (CHAOS-3888) reports, for every
 	// AnswerReuseHit outcome, the served (originally-stored) request id and
 	// whether it differs from the CURRENT call's own request id.
@@ -341,7 +356,83 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return reused, nil
 	}
 
-	interpretation, err := e.interpreter.Interpret(ctx, principal, request)
+	// Prior-result receipts (PriorSubjectReceipts) name a subject already
+	// committed or proposed in an earlier InvestigationResult -- e.g. a
+	// conversational follow-up ("what about it") binding back to the
+	// subject a prior turn resolved. A receipt is a one-way identifier
+	// (ReceiptID), not itself a resolvable subject: only the Engine holds
+	// the InvestigationResultStore needed to look one up, so expansion
+	// happens here rather than inside GraphReader. The expanded request
+	// feeds the exact-hint path GraphReader already has (SubjectHint), so
+	// every resolved receipt is independently re-authorized before it can
+	// become a candidate -- a stale, foreign, or now-unauthorized receipt
+	// is skipped, never trusted outright, and never treated as an error.
+	//
+	// CHAOS-3898 P1-1 fix-forward (codex retroactive review of #151/#152,
+	// chris-verified): this resolution now runs BEFORE Interpret, not
+	// after. It used to run after Interpret, which meant Interpret's own
+	// input carried request.PriorSubjectReceipts VERBATIM -- every receipt
+	// the caller sent, including one this function's own §2.2 taint gate
+	// (below) would go on to strip for naming a stale graph epoch, or that
+	// never matched any candidate at all. A model interpreting a
+	// conversational reference ("it") against that unvalidated set could
+	// have its interpretation shaped by a receipt the engine was always
+	// going to treat as if it did not exist -- exactly the ingress-taint
+	// invariant Class A's design (§2.1: "ingress taint before Interpret")
+	// exists to hold everywhere, not just on the graph-reuse path. Moving
+	// this block up costs nothing: binding (the taint gate's own
+	// dependency) is resolved above, before tryReuse; nothing here reads
+	// `interpretation`. Interpret below now receives ONLY the receipts
+	// resolvePriorSubjectHints itself validated (priorValidatedReceipts).
+	graphRequest := request
+	var priorHints []SubjectHint
+	var priorValidatedReceipts []BoundSubjectReceipt
+	var priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch int
+	var priorHintsStaleGraphEpochDelta int64
+	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
+		priorHints, priorValidatedReceipts, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch, priorHintsStaleGraphEpochDelta = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
+		// The v1 contract bounds RequestedScope.SubjectHints at 50
+		// (ContextFabricRequestedScope.Validate). request.Validate()
+		// already proved the caller's own hints are within that bound,
+		// but Engine's own expansion must not push the combined total
+		// back out of it -- drop excess receipt-derived hints (never the
+		// caller's own explicit hints), and let the existing skip
+		// telemetry in recordPriorSubjectReceiptSkips below count the
+		// drop exactly like any other unresolved receipt.
+		//
+		// CHAOS-3898 P1-1 codex re-review finding (fixed here):
+		// priorValidatedReceipts is deliberately NOT truncated by this
+		// same cap. maxSubjectHints is a GRAPH-CONTRACT bound
+		// (ContextFabricRequestedScope.SubjectHints' own v1 limit) --
+		// Interpret's own input carries no such bound, and a validated
+		// receipt (one resolvePriorSubjectHints already proved passed the
+		// taint/match gate) dropped only because the caller's OWN
+		// explicit hints already filled the graph-side budget must still
+		// reach the interpreter: the model can still legitimately resolve
+		// "it" against it even though GraphReader will never see it as an
+		// exact hint. priorHints and priorValidatedReceipts are returned
+		// 1:1 index-aligned from resolvePriorSubjectHints, but diverge
+		// here on purpose -- each feeds a consumer with its own bound (or
+		// none).
+		const maxSubjectHints = 50
+		if available := maxSubjectHints - len(request.RequestedScope.SubjectHints); len(priorHints) > available {
+			if available < 0 {
+				available = 0
+			}
+			priorHints = priorHints[:available]
+		}
+		if len(priorHints) > 0 {
+			graphRequest.RequestedScope.SubjectHints = append(
+				append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), priorHints...,
+			)
+		}
+	}
+
+	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,
+	// never the raw request.PriorSubjectReceipts -- see the block above.
+	interpretRequest := request
+	interpretRequest.PriorSubjectReceipts = priorValidatedReceipts
+	interpretation, err := e.interpreter.Interpret(ctx, principal, interpretRequest)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageInterpretation, fmt.Errorf("interpret question: %w", err))
 	}
@@ -367,50 +458,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// asked, and the next interpreter implementation would reopen the
 	// hole. The engine owns what it can honestly answer.
 	//
-	// Placed before prior-receipt expansion and every capability call, so
-	// a rejected investigation does no graph or fact work at all.
+	// CHAOS-3898 P1-1 note: prior-receipt expansion no longer sits after
+	// this check (it moved above Interpret, see that block's own comment)
+	// -- an investigation this check goes on to REJECT still paid for
+	// resolvePriorSubjectHints' work (results-store reads, clarification
+	// capture) first. This is the required trade-off, not an oversight:
+	// Interpret's OWN input must never carry an ungated receipt, and
+	// Interpret necessarily runs before its output can be time-bounded.
+	// The prior "zero work before axis rejection" guarantee now holds for
+	// every capability call below this point, not for receipt resolution.
 	clampedInterpretedTime, err := resolveTimeContext(interpretation.TimeContext, e.now())
 	if err != nil {
 		return InvestigationResult{}, err
 	}
 	interpretation.TimeContext = clampedInterpretedTime
-	// Prior-result receipts (PriorSubjectReceipts) name a subject already
-	// committed or proposed in an earlier InvestigationResult -- e.g. a
-	// conversational follow-up ("what about it") binding back to the
-	// subject a prior turn resolved. A receipt is a one-way identifier
-	// (ReceiptID), not itself a resolvable subject: only the Engine holds
-	// the InvestigationResultStore needed to look one up, so expansion
-	// happens here rather than inside GraphReader. The expanded request
-	// feeds the exact-hint path GraphReader already has (SubjectHint), so
-	// every resolved receipt is independently re-authorized before it can
-	// become a candidate -- a stale, foreign, or now-unauthorized receipt
-	// is skipped, never trusted outright, and never treated as an error.
-	graphRequest := request
-	var priorHints []SubjectHint
-	var priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch int
-	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
-		// The v1 contract bounds RequestedScope.SubjectHints at 50
-		// (ContextFabricRequestedScope.Validate). request.Validate()
-		// already proved the caller's own hints are within that bound,
-		// but Engine's own expansion must not push the combined total
-		// back out of it -- drop excess receipt-derived hints (never the
-		// caller's own explicit hints), and let the existing skip
-		// telemetry in recordPriorSubjectReceiptSkips below count the
-		// drop exactly like any other unresolved receipt.
-		const maxSubjectHints = 50
-		if available := maxSubjectHints - len(request.RequestedScope.SubjectHints); len(priorHints) > available {
-			if available < 0 {
-				available = 0
-			}
-			priorHints = priorHints[:available]
-		}
-		if len(priorHints) > 0 {
-			graphRequest.RequestedScope.SubjectHints = append(
-				append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), priorHints...,
-			)
-		}
-	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
 	// investigation -- not later, at Save. A snapshot taken at Save time
@@ -462,7 +523,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	if len(request.PriorSubjectReceipts) > 0 {
-		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch)
+		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch, priorHintsStaleGraphEpochDelta)
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
@@ -604,10 +665,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// interpreted one: the lookup runs before Interpret and can only
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
+		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
 		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
-		e.recordBindingEpochDelta(ctx, principal, binding)
+		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)
 	}
 	return result, nil
 }
@@ -631,19 +693,36 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // concern -- see AnswerReuseGate's doc comment for the identical
 // distinction drawn between "the caller's request" and "what the backend
 // independently proves").
-// Returns (hints, unloadable, noMatch, staleGraphEpoch) -- the latter three
-// (CHAOS-3888, extended by CHAOS-3898 §2.2) split what used to be one
-// implicit "receiptCount - len(hints)" gap into WHY each non-hint receipt
-// fell out: unloadable counts a receipt with a blank ResultID/ReceiptID or
-// whose prior InvestigationResult failed to load; staleGraphEpoch (§2.2)
-// counts a receipt whose prior result loaded but whose StoredInvestigationResult
+// Returns (hints, validated, unloadable, noMatch, staleGraphEpoch,
+// staleGraphEpochDelta) -- unloadable/noMatch/staleGraphEpoch (CHAOS-3888,
+// extended by CHAOS-3898 §2.2) split what used to be one implicit
+// "receiptCount - len(hints)" gap into WHY each non-hint receipt fell out:
+// unloadable counts a receipt with a blank ResultID/ReceiptID or whose
+// prior InvestigationResult failed to load; staleGraphEpoch (§2.2) counts a
+// receipt whose prior result loaded but whose StoredInvestigationResult
 // carrier failed the ingress taint gate -- a DISTINCT reason from
 // unloadable, because the row itself loaded fine, it simply describes a
 // different graph epoch than this investigation is reading from; noMatch
 // counts a receipt whose prior result loaded, passed the taint gate, and
-// still named no matching candidate. recordPriorSubjectReceiptSkips (below)
-// computes the fourth reason, failed_reauth, from what happens to the
-// returned hints afterward.
+// still named no matching candidate.
+// recordPriorSubjectReceiptSkips (below) computes the fourth reason,
+// failed_reauth, from what happens to the returned hints afterward.
+//
+// staleGraphEpochDelta (CHAOS-3898 P2 fix-forward, codex retroactive
+// review of #151/#152) is cf_receipt_taint_strip's required epoch_delta
+// field's own accumulator: the SUM, over every receipt counted in
+// staleGraphEpoch, of (binding.Epoch − the receipt's own stored
+// GraphEpoch, treating an absent GraphEpoch as 0) -- see
+// EngineTelemetry.RecordPriorSubjectReceiptSkipReason's own doc comment
+// for why this is a sum rather than one value per receipt.
+//
+// validated is the SUBSET of receipts (same order as hints, 1:1) that
+// actually matched a candidate -- CHAOS-3898 P1-1 fix-forward (codex
+// retroactive review of #151/#152): this investigation's own INTERPRETER
+// call must never see a receipt that has not yet passed this function's own
+// taint/match gate, so a caller resolving receipts pre-Interpret (the
+// required ordering below) needs the validated subset, not just derived
+// hints, to build Interpret's own input.
 //
 // binding is THIS investigation's own ResolvedGraphBinding (CHAOS-3898
 // §2.1/§2.2 ingress taint): before any field of a loaded prior result is
@@ -654,15 +733,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // under a graph epoch this investigation is not reading from must never
 // contribute a label or a hint, however innocuous re-using its identifier
 // alone might look.
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, int, int, int) {
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int, int, int, int64) {
 	hints := make([]SubjectHint, 0, len(receipts))
+	validated := make([]BoundSubjectReceipt, 0, len(receipts))
 	loaded := make(map[string]InvestigationResult, len(receipts))
 	unloadable := 0
 	noMatch := 0
 	staleGraphEpoch := 0
+	var staleGraphEpochDelta int64
 	for _, receipt := range receipts {
 		if ctx.Err() != nil {
-			return hints, unloadable, noMatch, staleGraphEpoch
+			return hints, validated, unloadable, noMatch, staleGraphEpoch, staleGraphEpochDelta
 		}
 		resultID := strings.TrimSpace(receipt.ResultID)
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
@@ -686,6 +767,16 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			// different graph epoch.
 			if fetched.GraphEpoch == nil || *fetched.GraphEpoch != binding.Epoch {
 				staleGraphEpoch++
+				// storedEpoch defaults to 0 for an absent GraphEpoch (a
+				// pre-migration or reuse-disabled row) -- the same "no
+				// epoch stamped" convention this package already uses
+				// elsewhere (a nil EpochResolver degrades every rewired
+				// site to epoch 0's key).
+				var storedEpoch int64
+				if fetched.GraphEpoch != nil {
+					storedEpoch = *fetched.GraphEpoch
+				}
+				staleGraphEpochDelta += binding.Epoch - storedEpoch
 				continue
 			}
 			prior = fetched.Result
@@ -702,13 +793,14 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 				Kind: candidate.Subject.Kind, ID: candidate.Subject.CanonicalID,
 				Label: candidate.Subject.Label, Source: "prior_subject_receipt",
 			})
+			validated = append(validated, receipt)
 			break
 		}
 		if !matched {
 			noMatch++
 		}
 	}
-	return hints, unloadable, noMatch, staleGraphEpoch
+	return hints, validated, unloadable, noMatch, staleGraphEpoch, staleGraphEpochDelta
 }
 
 // captureClarificationSelection builds and hands off a
@@ -787,7 +879,7 @@ func (e *Engine) captureClarificationSelection(ctx context.Context, principal st
 // binding, reported under its own reason so an operator can tell "the
 // prior turn's answer predates the current build/flip" apart from every
 // other skip cause.
-func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution, unloadable, noMatch, staleGraphEpoch int) {
+func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution, unloadable, noMatch, staleGraphEpoch int, staleGraphEpochDelta int64) {
 	if e.telemetry == nil {
 		return
 	}
@@ -818,42 +910,73 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 	// counts already exclude), so skipped can only ever be >= the sum of
 	// the other three.
 	if failedReauth := skipped - unloadable - noMatch - staleGraphEpoch; failedReauth > 0 {
-		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "failed_reauth", failedReauth)
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "failed_reauth", failedReauth, 0)
 	}
 	if unloadable > 0 {
-		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "unloadable", unloadable)
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "unloadable", unloadable, 0)
 	}
 	if noMatch > 0 {
-		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "no_match", noMatch)
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "no_match", noMatch, 0)
 	}
-	// CHAOS-3898 §5b cf_receipt_taint_strip.
+	// CHAOS-3898 §5b cf_receipt_taint_strip: epochDelta is the ONLY reason
+	// this method's epochDelta parameter is ever non-zero (see
+	// EngineTelemetry.RecordPriorSubjectReceiptSkipReason's own doc
+	// comment).
 	if staleGraphEpoch > 0 {
-		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "stale_graph_epoch", staleGraphEpoch)
+		e.telemetry.RecordPriorSubjectReceiptSkipReason(ctx, principal, "stale_graph_epoch", staleGraphEpoch, staleGraphEpochDelta)
 	}
 }
 
-// recordBindingEpochDelta is the CHAOS-3898 §5b flip_during_investigation/
-// cf_binding_epoch_delta signal (see EngineTelemetry.RecordBindingEpochDelta's
-// own doc comment for the full contract). original is the ResolvedGraphBinding
-// this investigation's own graph reads and Save actually used -- captured
-// once, at request start, and NEVER re-resolved for correctness anywhere
-// else in this package. This function's own re-resolution exists SOLELY to
-// produce the telemetry comparison; its result is read nowhere but here.
+// bindingEpochDeltaSample is sampleBindingEpochDelta's own result: ok is
+// false whenever telemetry is disabled or the re-resolution itself failed
+// (fails open, same convention as every other optional signal in this
+// file), in which case emitBindingEpochDelta must be a no-op.
+type bindingEpochDeltaSample struct {
+	ok      bool
+	flipped bool
+	delta   int64
+}
+
+// sampleBindingEpochDelta is the CHAOS-3898 §5b flip_during_investigation/
+// cf_binding_epoch_delta signal's SAMPLE half (see
+// EngineTelemetry.RecordBindingEpochDelta's own doc comment for the full
+// contract). original is the ResolvedGraphBinding this investigation's own
+// graph reads and Save actually used -- captured once, at request start,
+// and NEVER re-resolved for correctness anywhere else in this package.
+// This function's own re-resolution exists SOLELY to produce the telemetry
+// comparison; its result is read nowhere but by emitBindingEpochDelta.
 //
-// Fails open: a nil telemetry sink or a failed re-resolution both simply
-// skip the signal. Called AFTER Save has already succeeded (both call
-// sites), so this can never affect whether a result is persisted or what
-// epoch it is stamped with.
-func (e *Engine) recordBindingEpochDelta(ctx context.Context, principal storage.Principal, original ResolvedGraphBinding) {
+// CHAOS-3898 P2 fix-forward (codex retroactive review of #151/#152,
+// chris-verified): this call MUST happen immediately BEFORE Save, not
+// after it -- Save's own I/O duration used to sit inside the window this
+// re-resolution measures, so a flip landing strictly AFTER Save had
+// already persisted the result (work this investigation was no longer
+// doing) could still be attributed to "during" it. Sampling right before
+// Save closes that gap; emitBindingEpochDelta (below) still only reports
+// the sample once Save has actually succeeded, so a failed Save still
+// emits nothing, exactly as before.
+func (e *Engine) sampleBindingEpochDelta(ctx context.Context, principal storage.Principal, original ResolvedGraphBinding) bindingEpochDeltaSample {
 	if e.telemetry == nil {
-		return
+		return bindingEpochDeltaSample{}
 	}
 	current, err := e.graph.ResolveInvestigationBinding(ctx, principal)
 	if err != nil {
-		return
+		return bindingEpochDeltaSample{}
 	}
 	delta := current.Epoch - original.Epoch
-	e.telemetry.RecordBindingEpochDelta(ctx, principal, delta != 0, delta)
+	return bindingEpochDeltaSample{ok: true, flipped: delta != 0, delta: delta}
+}
+
+// emitBindingEpochDelta reports a sample sampleBindingEpochDelta already
+// took -- called only after Save has succeeded, so this can never affect
+// whether a result is persisted or what epoch it is stamped with. A
+// not-ok sample (telemetry disabled, or the sample's own re-resolution
+// failed) is silently skipped, matching every other fail-open signal here.
+func (e *Engine) emitBindingEpochDelta(ctx context.Context, principal storage.Principal, sample bindingEpochDeltaSample) {
+	if !sample.ok {
+		return
+	}
+	e.telemetry.RecordBindingEpochDelta(ctx, principal, sample.flipped, sample.delta)
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {
