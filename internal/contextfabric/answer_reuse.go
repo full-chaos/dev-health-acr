@@ -386,6 +386,28 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, false
 	}
+	// CHAOS-3900 W1 (codex review, round 2): a window-keyed lookup
+	// (windowKey != "") must never serve a candidate whose OWN stored
+	// content disagrees with what a window fragment in the key claims.
+	// Every FRESH save this package's own write path produces already
+	// guarantees axis and window agree (canonicalizeEvidenceWindow only
+	// ever resolves a decisive Effective window against a current-axis
+	// request, and windowVetoResult's own window_axis_conflict veto keys
+	// its Save on the INTERPRETED context -- never the window-fragment
+	// key -- whenever Interpret disagrees) -- but that guarantee is a
+	// property of window.go's write path, not of this Store. Any row
+	// this Store might ever hold for a reason this package's own write
+	// path did not itself produce (e.g. a differently-ruled binary, a
+	// direct write, an earlier deploy of code this fix has since
+	// corrected) is caught HERE instead of trusted blind, mirroring
+	// reuseAuthorizationStillHolds' own "prove it, don't assume it"
+	// discipline for subjects/evidence. Fails exactly like an ordinary
+	// no-candidate miss -- never an error, always falls through to a
+	// fresh investigation.
+	if windowKey != "" && (candidate.Interpretation.TimeContext.Axis != TemporalCurrent || candidate.EffectiveEvidenceWindow == nil) {
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+		return InvestigationResult{}, false
+	}
 	if holds, missReason := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding); !holds {
 		e.recordReuseOutcome(ctx, principal, missReason)
 		return InvestigationResult{}, false

@@ -575,8 +575,12 @@ type ReuseVersionAuthorities struct {
 	IdentityNormalizationVersion string
 	// WindowInferenceVersion (CHAOS-3900 W1) is ONE MORE version constant,
 	// same shape again -- see ReuseKey.WindowInferenceVersion's own field
-	// doc comment for what it binds and why it is scoped to inferred
-	// windows only.
+	// doc comment for what it binds and, importantly, for why it is
+	// applied UNCONDITIONALLY to every reuse-participating row (codex
+	// review, W1 round 2: an earlier version of this comment claimed a
+	// per-row inferred-only scoping this bundle -- a single deployment-
+	// current constant threaded identically to every sibling field here --
+	// cannot express).
 	WindowInferenceVersion string
 }
 

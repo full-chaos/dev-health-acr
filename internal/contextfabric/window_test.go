@@ -496,3 +496,71 @@ func TestCHAOS3900_NonMCPExplicitWindow_StillContributesReuseKeyFragment(t *test
 		t.Errorf("KeyComponent = %q, want %q", canon.KeyComponent, want)
 	}
 }
+
+// TestCHAOS3900_WindowKeyedReuseRejectsCandidateWithDisagreeingAxis is the
+// codex review (W1 round 2) fix: tryReuse's own defense-in-depth recheck
+// (answer_reuse.go, right after FindReusable) must reject -- as an ordinary
+// miss, never an error -- ANY candidate a window-keyed lookup returns whose
+// own stored Interpretation.TimeContext.Axis is not current, or whose own
+// EffectiveEvidenceWindow is nil. This closes the gap independently of
+// window.go's own write-path guarantees: a candidate could disagree with
+// the window-fragment key for a reason this package's own write path never
+// produces (a differently-ruled binary, a direct write, an earlier-deployed
+// version of this code).
+func TestCHAOS3900_WindowKeyedReuseRejectsCandidateWithDisagreeingAxis(t *testing.T) {
+	t.Parallel()
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+
+	asOf := time.Unix(50, 0).UTC() // mustReuseTestEngine's fixed clock is Unix(200,0)
+	inconsistentCandidate := validInvestigationResult()
+	inconsistentCandidate.ResultID = "result_inconsistent_cached"
+	inconsistentCandidate.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}
+	// A candidate that disagrees with what a window-keyed lookup's own
+	// fragment claims: its OWN stored interpretation is historical, not
+	// current -- exactly the shape a pre-fix write path could have
+	// produced, or any other source this package's own write path did not
+	// itself vouch for.
+	inconsistentCandidate.Interpretation.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &asOf}
+	inconsistentCandidate.EffectiveEvidenceWindow = nil
+
+	var gateKeys []string
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+			gateKeys = append(gateKeys, key.TimeAxisKey)
+			// Always "finds" the inconsistent candidate, regardless of the
+			// key -- proving the REJECTION comes from tryReuse's own
+			// recheck, not from the gate declining to match.
+			return inconsistentCandidate, true, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(gateKeys) != 1 || gateKeys[0] != "current+w:rel:trailing_90d" {
+		t.Fatalf("reuse gate keys = %v, want exactly one call keyed \"current+w:rel:trailing_90d\"", gateKeys)
+	}
+	if result.Reused {
+		t.Fatal("result.Reused = true: a window-keyed lookup served a candidate whose own stored axis/window disagreed with the key")
+	}
+	if result.ResultID != freshTestResultID {
+		t.Errorf("result.ResultID = %q, want the fresh result %q", result.ResultID, freshTestResultID)
+	}
+}
