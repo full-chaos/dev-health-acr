@@ -240,7 +240,7 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 		SubjectTerms: []string{"incident outage payment gateway"},
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted)
+	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}

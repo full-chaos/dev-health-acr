@@ -375,8 +375,8 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 				report.DivergentCases++
 			}
 
-			baselineRes, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, buildRequest("r0"), primary)
-			wiredRes, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, buildRequest("r0"), primary)
+			baselineRes, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, buildRequest("r0"), primary, contextfabric.ResolvedGraphBinding{})
+			wiredRes, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, buildRequest("r0"), primary, contextfabric.ResolvedGraphBinding{})
 			if baselineErr != nil || wiredErr != nil {
 				m.DiffClass = replayChangedOther
 				report.Measurements = append(report.Measurements, m)

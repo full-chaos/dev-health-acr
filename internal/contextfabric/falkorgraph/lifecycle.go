@@ -65,6 +65,24 @@ func (a *Adapter) resolveWriteKey(ctx context.Context, orgID string) (string, er
 	return key, nil
 }
 
+// effectiveKey resolves the graph key ResolveSubjects/DiscoverContext
+// should use for one call, given a possibly-empty
+// contextfabric.ResolvedGraphBinding (CHAOS-3898 §2.1). binding.GraphKey !=
+// "" is the production path: Engine.Investigate always resolves a real
+// binding via ResolveInvestigationBinding before either call and threads it
+// through unchanged, so this is the ONLY branch that path ever takes.
+// binding.GraphKey == "" is the "no binding supplied" case -- a direct or
+// test caller of the adapter that bypasses Engine entirely -- and falls
+// back to resolving inline via resolveReadKey, byte-identical to this
+// method's own pre-CHAOS-3898-S2-Class-A behavior, so such a caller keeps
+// working without needing to resolve a binding of its own first.
+func (a *Adapter) effectiveKey(ctx context.Context, orgID string, binding contextfabric.ResolvedGraphBinding) (string, error) {
+	if binding.GraphKey != "" {
+		return binding.GraphKey, nil
+	}
+	return a.resolveReadKey(ctx, orgID, contextfabric.GraphKeyRoleInvestigationRead)
+}
+
 func (a *Adapter) resolveActiveEpoch(ctx context.Context, orgID string) (int64, error) {
 	if a.config.EpochResolver == nil {
 		return 0, nil

@@ -23,7 +23,11 @@ type graphReaderStub struct {
 	context    GraphContext
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error) {
+func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
+}
+
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
 	return g.resolution, nil
 }
 
@@ -49,15 +53,15 @@ type resultStoreStub struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities) error {
+func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
 	s.saved = result
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
 	return nil
 }
 
-func (s *resultStoreStub) Get(context.Context, storage.Principal, string) (InvestigationResult, error) {
-	return InvestigationResult{}, nil
+func (s *resultStoreStub) Get(context.Context, storage.Principal, string) (StoredInvestigationResult, error) {
+	return StoredInvestigationResult{}, nil
 }
 
 // staticResultStore is a resultStoreStub with a keyed Get, for exercising
@@ -66,22 +70,35 @@ type staticResultStore struct {
 	results map[string]InvestigationResult
 	gotIDs  []string
 	getErr  error
+	// graphEpoch (CHAOS-3898 §2.4), when non-nil, is the GraphEpoch every
+	// Get response carries. Defaults to 0 when left nil at construction --
+	// see the zero-value fallback in Get below -- matching every
+	// GraphReader test fake's own default ResolveInvestigationBinding
+	// epoch, so existing prior-subject-receipt tests keep passing the
+	// CHAOS-3898 §2.2 ingress taint gate unchanged. A test exercising the
+	// taint strip itself sets this to a different value explicitly.
+	graphEpoch *int64
 }
 
-func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities) error {
+func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64) error {
 	return nil
 }
 
-func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID string) (InvestigationResult, error) {
+func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID string) (StoredInvestigationResult, error) {
 	s.gotIDs = append(s.gotIDs, resultID)
 	if s.getErr != nil {
-		return InvestigationResult{}, s.getErr
+		return StoredInvestigationResult{}, s.getErr
 	}
 	result, ok := s.results[resultID]
 	if !ok {
-		return InvestigationResult{}, errors.New("investigation result not found")
+		return StoredInvestigationResult{}, errors.New("investigation result not found")
 	}
-	return result, nil
+	epoch := s.graphEpoch
+	if epoch == nil {
+		zero := int64(0)
+		epoch = &zero
+	}
+	return StoredInvestigationResult{Result: result, GraphEpoch: epoch}, nil
 }
 
 // capturingGraphReader records every request ResolveSubjects/DiscoverContext
@@ -95,7 +112,11 @@ type capturingGraphReader struct {
 	discoverHints   [][]SubjectHint
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion) (SubjectResolution, error) {
+func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: 0}, nil
+}
+
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
 	return g.resolution, nil
 }
@@ -787,7 +808,11 @@ type countingGraphReader struct {
 // reaching either. Committing nothing here used to reach the fact read
 // anyway -- precisely the defect CHAOS-3810 removed -- so a double that
 // commits nothing can no longer express "the engine did the work".
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error) {
+func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
+}
+
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
 	g.resolveCalls++
 	return SubjectResolution{
 		Candidates: []SubjectCandidate{},

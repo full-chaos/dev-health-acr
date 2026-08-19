@@ -60,14 +60,14 @@ func TestReuseKeyDistinguishesTwoAsOfTimes(t *testing.T) {
 
 	// Asking the same question as of March must NOT find it.
 	marchKey := reuseKeyFor(historicalResult(t, "result_march_0001", principal.OrgID, marchContext))
-	_, found, err := store.FindReusable(ctx, principal, marchKey)
+	_, found, _, err := store.FindReusable(ctx, principal, marchKey)
 	require.NoError(t, err)
 	require.False(t, found, "a June answer was served for a March question; the two as-of times must not share a reuse key")
 
 	// And the over-blocking guard: asking as of June DOES find it, so the
 	// test above is not passing merely because nothing is ever reusable.
 	juneKey := reuseKeyFor(juneResult)
-	reused, found, err := store.FindReusable(ctx, principal, juneKey)
+	reused, found, _, err := store.FindReusable(ctx, principal, juneKey)
 	require.NoError(t, err)
 	require.True(t, found, "the June answer must still be reusable for the June question")
 	require.Equal(t, juneResult.ResultID, reused.ResultID)
@@ -93,7 +93,7 @@ func TestReuseKeyDistinguishesAxesAtTheSameInstant(t *testing.T) {
 	saveWithReuseSnapshot(t, ctx, store, principal, stored)
 
 	observedKey := reuseKeyFor(historicalResult(t, "result_obs_00001", principal.OrgID, observedTime))
-	_, found, err := store.FindReusable(ctx, principal, observedKey)
+	_, found, _, err := store.FindReusable(ctx, principal, observedKey)
 	require.NoError(t, err)
 	require.False(t, found, "a valid-time answer was served for an observed-time question at the same instant")
 }
@@ -115,7 +115,7 @@ func TestReuseKeyDistinguishesHistoricalFromCurrent(t *testing.T) {
 
 	historicalKey := reuseKeyFor(historicalResult(t, "result_hist_0001", principal.OrgID,
 		contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf}))
-	_, found, err := store.FindReusable(ctx, principal, historicalKey)
+	_, found, _, err := store.FindReusable(ctx, principal, historicalKey)
 	require.NoError(t, err)
 	require.False(t, found, "a current-state answer was served for a historical question")
 
@@ -123,7 +123,7 @@ func TestReuseKeyDistinguishesHistoricalFromCurrent(t *testing.T) {
 	// 'current' default in migration 0013 is what makes this hold for
 	// every row written before that migration.
 	currentKey := reuseKeyFor(currentResult)
-	reused, found, err := store.FindReusable(ctx, principal, currentKey)
+	reused, found, _, err := store.FindReusable(ctx, principal, currentKey)
 	require.NoError(t, err)
 	require.True(t, found, "a current-axis answer must stay reusable for a current-axis question")
 	require.Equal(t, currentResult.ResultID, reused.ResultID)
@@ -229,7 +229,7 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 	require.NoError(t, err)
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, currentAxisKey, testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities))
+	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, currentAxisKey, testReuseRetrievalIdentity, testReusePromptVersions, testReuseVersionAuthorities, 0))
 
 	// A byte-identical follow-up request -- same text, same current axis --
 	// must find it. Before F6 this was a permanent miss.
@@ -254,7 +254,7 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 		// CHAOS-3884: same mirror, one more dimension.
 		IdentityNormalizationVersion: testReuseVersionAuthorities.IdentityNormalizationVersion,
 	}
-	reused, found, err := store.FindReusable(ctx, principal, lookup)
+	reused, found, _, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)
 	require.True(t, found, "an interpreted-historical answer was unreachable to the identical request that produced it; both reuse sides must derive the key the same way")
 	require.Equal(t, interpretedHistorical.ResultID, reused.ResultID)

@@ -213,7 +213,7 @@ func RunSuite(t *testing.T, newStore func(t *testing.T) contextfabric.Investigat
 			ctx := context.Background()
 
 			for index, step := range testCase.Save {
-				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{})
+				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
 				if step.WantErr {
 					if err == nil {
 						t.Fatalf("save[%d] %q: want error, got nil", index, step.Result.ResultID)
@@ -235,7 +235,7 @@ func RunSuite(t *testing.T, newStore func(t *testing.T) contextfabric.Investigat
 
 func runGet(t *testing.T, ctx context.Context, store contextfabric.InvestigationResultStore, step GetStep, isNotFound func(error) bool) {
 	t.Helper()
-	got, err := store.Get(ctx, step.Principal, step.ResultID)
+	stored, err := store.Get(ctx, step.Principal, step.ResultID)
 	if step.WantNotFound {
 		if !isNotFound(err) {
 			t.Fatalf("get %q: want not-found error, got %v", step.ResultID, err)
@@ -248,6 +248,11 @@ func runGet(t *testing.T, ctx context.Context, store contextfabric.Investigation
 	if step.Want == nil {
 		return
 	}
+	// CHAOS-3898 §2.4: Get now returns the StoredInvestigationResult
+	// carrier; this parity suite compares the wrapped canonical payload
+	// only -- persistence metadata (GraphEpoch) is a store-implementation
+	// detail, not part of what parity across stores means here.
+	got := stored.Result
 	gotJSON, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("marshal got result: %v", err)
@@ -323,7 +328,7 @@ func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.
 		// successful idempotent replay: doing so would report success
 		// while leaving the invalid stored row in place forever, since
 		// these stores never overwrite.
-		err := store.Save(context.Background(), orgA, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{})
+		err := store.Save(context.Background(), orgA, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
 		if err == nil {
 			t.Fatal("Save() error = nil, want a replay against a stored explicit-null row to be rejected, not treated as an idempotent success")
 		}

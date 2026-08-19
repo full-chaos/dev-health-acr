@@ -109,7 +109,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity, promptVersions contextfabric.ReusePromptVersions, versionAuthorities contextfabric.ReuseVersionAuthorities) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity, promptVersions contextfabric.ReusePromptVersions, versionAuthorities contextfabric.ReuseVersionAuthorities, graphEpoch int64) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -194,16 +194,27 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		// be reused. TimeAxisKeyFor never returns this value.
 		timeAxisKey = "unkeyed"
 	}
+	// CHAOS-3898 §2.1: graphEpoch is Engine's own ResolvedGraphBinding.Epoch,
+	// captured before the graph reads that produced result -- unlike every
+	// reuse-only column above, this is ALWAYS a real value (Engine cannot
+	// reach Save at all without first resolving a binding; see
+	// GraphReader.ResolveInvestigationBinding's doc comment), so it is
+	// persisted unconditionally, independent of s.reuseEnabled/questionHash
+	// gating: it is graph-identity provenance about this specific result,
+	// not itself a reuse-participation signal, and BOTH FindReusable's
+	// §2.3 predicate and Get's §2.4 carrier need it regardless of whether
+	// answer reuse happens to be enabled on this Store.
+	graphEpochColumn := sql.NullInt64{Int64: graphEpoch, Valid: true}
 
 	insertResult, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 ON CONFLICT (result_id) DO NOTHING`,
 		resultID, orgID, payload, result.GeneratedAt,
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
-		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion)
+		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -261,24 +272,26 @@ SELECT org_id, payload FROM acr.context_fabric_investigation_results WHERE resul
 // of the query: result_id is already a primary key, but Get must never
 // return a row belonging to a different organization (see
 // contextfabric.InvestigationResultStore's doc comment).
-func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.InvestigationResult, error) {
+func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
 	if s == nil || s.db == nil {
-		return contextfabric.InvestigationResult{}, errors.New("pginvestigation: store is not configured")
+		return contextfabric.StoredInvestigationResult{}, errors.New("pginvestigation: store is not configured")
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	resultID = strings.TrimSpace(resultID)
 	if orgID == "" || resultID == "" {
-		return contextfabric.InvestigationResult{}, ErrNotFound
+		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
+SELECT payload, graph_epoch, created_at FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
 	var payload []byte
-	switch err := row.Scan(&payload); {
+	var graphEpoch sql.NullInt64
+	var createdAt time.Time
+	switch err := row.Scan(&payload, &graphEpoch, &createdAt); {
 	case errors.Is(err, sql.ErrNoRows):
-		return contextfabric.InvestigationResult{}, ErrNotFound
+		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	case err != nil:
-		return contextfabric.InvestigationResult{}, fmt.Errorf("get investigation result: %w", sanitizeError(err))
+		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("get investigation result: %w", sanitizeError(err))
 	}
 
 	// P2 (Codex delta review, CHAOS-3755): an explicit `"degraded_reasons":
@@ -289,11 +302,11 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 	// WHEN PRESENT -- never null -- so this must be caught on the raw
 	// bytes, before or independent of the struct decode.
 	if err := rejectExplicitNullDegradedReasons(payload); err != nil {
-		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
+		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	var result contextfabric.InvestigationResult
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
+		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
 	}
 	// M2 (Codex adversarial review, CHAOS-3755): validate on read too, not
 	// just on write. Save already rejects an invalid result before it is
@@ -303,9 +316,19 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 	// -- a caller must never receive a result this package cannot vouch
 	// for.
 	if err := result.ValidateStored(); err != nil {
-		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
+		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
-	return result, nil
+	// CHAOS-3898 §2.4: persistence metadata lives ON the carrier, never
+	// inside Result -- a NULL graph_epoch (a pre-migration row, or one
+	// saved by a composition whose GraphReader never resolved a binding)
+	// becomes a nil pointer, which every consumer (starting with the §2.2
+	// ingress taint gate) must treat as "cannot prove this result's graph
+	// epoch" and strip by default, never a silent pass.
+	var graphEpochPtr *int64
+	if graphEpoch.Valid {
+		graphEpochPtr = &graphEpoch.Int64
+	}
+	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt}, nil
 }
 
 // reuseColumnsFor computes the CHAOS-3782 reuse-key column values Save
@@ -468,14 +491,14 @@ SELECT source, backend_watermark FROM acr.context_fabric_projection_checkpoints 
 // gets harder to satisfy for an older row, and condition 3 checks CURRENT
 // watermarks independent of which candidate row is being asked about --
 // so if the newest matching row fails, no older one can pass either.
-func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, key contextfabric.ReuseKey) (contextfabric.InvestigationResult, bool, error) {
+func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, key contextfabric.ReuseKey) (contextfabric.InvestigationResult, bool, contextfabric.ReuseMissReason, error) {
 	if s == nil || s.db == nil {
-		return contextfabric.InvestigationResult{}, false, errors.New("pginvestigation: store is not configured")
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, errors.New("pginvestigation: store is not configured")
 	}
 	if !s.reuseEnabled {
 		// Answer reuse was never enabled on this Store (WithAnswerReuse not
 		// passed to NewStore). An ordinary, safe miss -- not an error.
-		return contextfabric.InvestigationResult{}, false, nil
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	questionHash := strings.TrimSpace(key.QuestionHash)
@@ -484,25 +507,25 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// Treat it exactly like an empty question hash or an empty identity
 	// chain -- an ordinary miss, never a lookup that ignores the axis.
 	if orgID == "" || questionHash == "" || len(key.ModelIdentities) == 0 || strings.TrimSpace(key.TimeAxisKey) == "" {
-		return contextfabric.InvestigationResult{}, false, nil
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 	// CHAOS-3833: a composition that never supplied the retrieval
 	// discriminators must miss, not run a lookup that ignores them --
 	// the same fail-closed convention as an empty question hash or an
 	// empty identity chain above.
 	if strings.TrimSpace(key.EmbedRetrievalIdentity) == "" || strings.TrimSpace(key.RetrievalPolicyVersion) == "" {
-		return contextfabric.InvestigationResult{}, false, nil
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 	// CHAOS-3862: same fail-closed convention, one dimension over -- a
 	// composition that never supplied the current prompt versions must
 	// miss, not run a lookup that ignores them.
 	if strings.TrimSpace(key.InterpretationPromptVersion) == "" || strings.TrimSpace(key.SynthesisPromptVersion) == "" {
-		return contextfabric.InvestigationResult{}, false, nil
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 	// CHAOS-3862 round 2: same fail-closed convention, three MORE
 	// dimensions.
 	if strings.TrimSpace(key.QueryVersion) == "" || strings.TrimSpace(key.CanonicalServiceVersion) == "" || strings.TrimSpace(key.ModelOutputSchemaVersion) == "" {
-		return contextfabric.InvestigationResult{}, false, nil
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 	// sol round-2 F4 (noted, not solved -- no telemetry vocabulary change):
 	// every "ordinary miss" this guard block produces -- a genuinely
@@ -579,6 +602,11 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// stored value (Save always persists either a real string or SQL
 	// NULL, never ''), so the fail-closed guarantee holds without needing
 	// an explicit Valid=false wrapper here.
+	//
+	// CHAOS-3898 §2.3: graph_epoch = $16 is a FIFTH conjunctive predicate,
+	// migration 0021, same NULL-never-matches shape -- a pre-migration row
+	// (or one saved by a composition whose GraphReader never resolved a
+	// binding) holds NULL and can never satisfy it.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -596,6 +624,7 @@ WHERE org_id = $1
   AND canonical_service_version = $13
   AND model_output_schema_version = $14
   AND identity_normalization_version = $15
+  AND graph_epoch = $16
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -612,38 +641,98 @@ ORDER BY created_at DESC, result_id DESC
 LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
-		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion)
+		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch)
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):
-		return contextfabric.InvestigationResult{}, false, nil
+		// CHAOS-3898 v4.1 F5: this ONE payload-bearing SELECT cannot by
+		// itself distinguish "no row matches at all" from "a row matches
+		// every OTHER dimension but was generated under a different
+		// graph_epoch" -- classify with a SEPARATE, metadata-only query
+		// (no payload column in its select list, per design brief §5's
+		// SQL-predicate pin) before reporting the miss.
+		staleEpoch, classifyErr := s.matchesExceptGraphEpoch(ctx, orgID, questionHash, key)
+		if classifyErr != nil {
+			return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("classify reuse miss: %w", classifyErr)
+		}
+		if staleEpoch {
+			return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissStaleGraphEpoch, nil
+		}
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	case err != nil:
-		return contextfabric.InvestigationResult{}, false, fmt.Errorf("find reusable investigation result: %w", sanitizeError(err))
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("find reusable investigation result: %w", sanitizeError(err))
 	}
 
 	// Condition 3. Fail closed on any error or mismatch: a candidate this
 	// check cannot fully confirm fresh is never served.
 	fresh, err := s.watermarksStillMatch(ctx, orgID, sourceWatermarks)
 	if err != nil || !fresh {
-		return contextfabric.InvestigationResult{}, false, nil
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 
 	// Same defense in depth Get applies (CHAOS-3755 P2/M2 findings): never
 	// trust a stored row blind, even one this package itself wrote.
 	if err := rejectExplicitNullDegradedReasons(payload); err != nil {
-		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	var result contextfabric.InvestigationResult
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
 	}
 	// Lenient: this is a READ of a persisted row, exactly like Get. A row
 	// written by an older, looser binary must stay reusable rather than
 	// turning into a hard failure nobody can migrate away from.
 	if err := result.ValidateStored(); err != nil {
-		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
-	return result, true, nil
+	return result, true, "", nil
+}
+
+// matchesExceptGraphEpoch is the CHAOS-3898 v4.1 F5 metadata-only miss
+// classifier: it re-runs FindReusable's own conjunctive predicate set MINUS
+// the graph_epoch equality check, selecting NO payload column whatsoever
+// (design brief §5's SQL-predicate pin: the classification path is
+// FORBIDDEN from selecting or returning payload bytes or any stored
+// label/id field). A true result means "a row exists that would have
+// matched FindReusable's primary query if only its graph_epoch had been
+// this lookup's" -- proof the miss is ReuseMissStaleGraphEpoch, not
+// ReuseMissNoCandidate. Mirrors watermarksStillMatch's own no-payload
+// pattern.
+func (s *Store) matchesExceptGraphEpoch(ctx context.Context, orgID, questionHash string, key contextfabric.ReuseKey) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM acr.context_fabric_investigation_results
+    WHERE org_id = $1
+      AND question_hash = $2
+      AND contract_version = $3
+      AND projection_version = $4
+      AND model_identity = ANY($5)
+      AND time_axis_key = $7
+      AND embed_retrieval_identity = $8
+      AND retrieval_policy_version = $9
+      AND interpretation_prompt_version = $10
+      AND synthesis_prompt_version = $11
+      AND query_version = $12
+      AND canonical_service_version = $13
+      AND model_output_schema_version = $14
+      AND identity_normalization_version = $15
+      AND source_watermarks IS NOT NULL
+      AND invalidation_epoch IS NOT NULL
+      AND created_at > now() - ($6 * INTERVAL '1 second')
+      AND invalidation_epoch = COALESCE(
+            (SELECT epoch FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1),
+            0)
+)`,
+		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
+		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
+		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("classify reuse miss: %w", sanitizeError(err))
+	}
+	return exists, nil
 }
 
 // watermarksStillMatch reports whether the CURRENT set of (source,

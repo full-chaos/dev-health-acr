@@ -55,12 +55,14 @@ func NewStore() *Store {
 // result_id succeeds idempotently, a divergent one errors.
 //
 // reuseSnapshot, reuseEpoch, the CHAOS-3833 retrieval identity, the
-// CHAOS-3862 prompt versions, and the CHAOS-3862 round-2 version
-// authorities are accepted to satisfy contextfabric.InvestigationResultStore
-// but otherwise ignored: this test/dev store does not implement CHAOS-3782
-// answer reuse (contextfabric.AnswerReuseGate), so there is no reuse-key
-// bookkeeping to populate.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, _ contextfabric.ReuseRetrievalIdentity, _ contextfabric.ReusePromptVersions, _ contextfabric.ReuseVersionAuthorities) error {
+// CHAOS-3862 prompt versions, the CHAOS-3862 round-2 version authorities,
+// and the CHAOS-3898 graph epoch are accepted to satisfy
+// contextfabric.InvestigationResultStore but otherwise ignored: this
+// test/dev store does not implement CHAOS-3782 answer reuse
+// (contextfabric.AnswerReuseGate), so there is no reuse-key bookkeeping to
+// populate; Get correspondingly always returns a nil GraphEpoch on its
+// StoredInvestigationResult carrier.
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, _ contextfabric.ReuseRetrievalIdentity, _ contextfabric.ReusePromptVersions, _ contextfabric.ReuseVersionAuthorities, _ int64) error {
 	if s == nil {
 		return errors.New("memoryinvestigation: store is not configured")
 	}
@@ -118,24 +120,24 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 // principal.OrgID. A result stored under a different organization is
 // reported identically to an unknown result_id (ErrNotFound); this
 // package never allows result_id alone to satisfy a lookup.
-func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.InvestigationResult, error) {
+func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
 	if s == nil {
-		return contextfabric.InvestigationResult{}, errors.New("memoryinvestigation: store is not configured")
+		return contextfabric.StoredInvestigationResult{}, errors.New("memoryinvestigation: store is not configured")
 	}
 	if err := ctx.Err(); err != nil {
-		return contextfabric.InvestigationResult{}, err
+		return contextfabric.StoredInvestigationResult{}, err
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	resultID = strings.TrimSpace(resultID)
 	if orgID == "" || resultID == "" {
-		return contextfabric.InvestigationResult{}, ErrNotFound
+		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	}
 
 	s.mu.Lock()
 	stored, found := s.results[resultID]
 	s.mu.Unlock()
 	if !found || stored.orgID != orgID {
-		return contextfabric.InvestigationResult{}, ErrNotFound
+		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	}
 
 	// P2 (Codex delta review, CHAOS-3755): an explicit `"degraded_reasons":
@@ -146,11 +148,11 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// WHEN PRESENT -- never null -- so this must be caught on the raw
 	// bytes, before or independent of the struct decode.
 	if err := rejectExplicitNullDegradedReasons(stored.payload); err != nil {
-		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
+		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
 	}
 	var result contextfabric.InvestigationResult
 	if err := json.Unmarshal(stored.payload, &result); err != nil {
-		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: decode investigation result: %w", err)
+		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("memoryinvestigation: decode investigation result: %w", err)
 	}
 	// M2 (Codex adversarial review, CHAOS-3755): validate on read too, not
 	// just on write. Save already rejects an invalid result before it is
@@ -159,9 +161,13 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// binary with different validation) -- a caller must never receive a
 	// result this package cannot vouch for.
 	if err := result.ValidateStored(); err != nil {
-		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
+		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
 	}
-	return result, nil
+	// CHAOS-3898 §2.4: this store never persists a graph epoch (it does not
+	// implement answer reuse at all), so GraphEpoch is always nil -- every
+	// consumer (starting with the §2.2 ingress taint gate) must already
+	// treat that as "cannot prove", never a silent pass.
+	return contextfabric.StoredInvestigationResult{Result: result}, nil
 }
 
 // rejectExplicitNullDegradedReasons reports whether payload contains a

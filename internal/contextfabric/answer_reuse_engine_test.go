@@ -15,8 +15,18 @@ import (
 // stateful fake.
 type reuseGateFunc func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error)
 
-func (f reuseGateFunc) FindReusable(ctx context.Context, principal storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
-	return f(ctx, principal, key)
+func (f reuseGateFunc) FindReusable(ctx context.Context, principal storage.Principal, key ReuseKey) (InvestigationResult, bool, ReuseMissReason, error) {
+	result, ok, err := f(ctx, principal, key)
+	// CHAOS-3898 v4.1 F5: every existing test closure here predates the
+	// typed miss reason and returns only (result, ok, error) -- default a
+	// miss to ReuseMissNoCandidate, the ordinary case, unless a specific
+	// test constructs a fake that needs ReuseMissStaleGraphEpoch (those
+	// tests use their own dedicated fake instead of this adapter).
+	reason := ReuseMissReason("")
+	if !ok {
+		reason = ReuseMissNoCandidate
+	}
+	return result, ok, reason, err
 }
 
 // failingModelRuntime fails the test immediately if either method is
@@ -87,8 +97,35 @@ func reusableCandidate() (SubjectRef, InvestigationResult) {
 	return project, candidate
 }
 
+// bindingOnlyGraphReader resolves a fixed ResolvedGraphBinding (CHAOS-3898
+// §2.1) -- the ONE graph call every investigation makes now, reuse hit or
+// not, since tryReuse's own §2.3 lookup needs the epoch -- but fails the
+// test if ResolveSubjects/DiscoverContext are ever reached, preserving
+// every existing reuse-hit test's "the graph is never actually READ" proof
+// (AC-3782-1's guarantee was always specifically ZERO MODEL calls, never
+// zero graph calls; binding resolution is the one graph-adjacent call a
+// hit always makes).
+type bindingOnlyGraphReader struct{ t *testing.T }
+
+func (g bindingOnlyGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "binding-only-key", Epoch: 0}, nil
+}
+
+func (g bindingOnlyGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
+	g.t.Fatal("ResolveSubjects should not be reached on a reuse hit")
+	return SubjectResolution{}, nil
+}
+
+func (g bindingOnlyGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	g.t.Fatal("DiscoverContext should not be reached on a reuse hit")
+	return GraphContext{}, nil
+}
+
 func mustReuseTestEngine(t *testing.T, deps EngineDependencies) *Engine {
 	t.Helper()
+	if deps.Graph == nil {
+		deps.Graph = bindingOnlyGraphReader{t: t}
+	}
 	if deps.Interpreter == nil {
 		deps.Interpreter = interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
 			t.Fatal("interpreter should not be reached")
@@ -871,7 +908,11 @@ type orderTrackingGraphReader struct {
 	resolution SubjectResolution
 }
 
-func (g orderTrackingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error) {
+func (g orderTrackingGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "order-tracking-key", Epoch: 0}, nil
+}
+
+func (g orderTrackingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
 	*g.events = append(*g.events, "resolve_subjects")
 	return g.resolution, nil
 }
@@ -891,15 +932,15 @@ type snapshotCapturingResultStore struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities) error {
+func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
 	s.saveCalled = true
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
 	return nil
 }
 
-func (s *snapshotCapturingResultStore) Get(context.Context, storage.Principal, string) (InvestigationResult, error) {
-	return InvestigationResult{}, nil
+func (s *snapshotCapturingResultStore) Get(context.Context, storage.Principal, string) (StoredInvestigationResult, error) {
+	return StoredInvestigationResult{}, nil
 }
 
 // TestF1_SnapshotCapturedBeforeGraphReadAndPassedExplicitlyToSave is the
@@ -1080,14 +1121,14 @@ type keyRecordingResultStore struct {
 	savedKey string
 }
 
-func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities) error {
+func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
 	s.saved = result
 	s.savedKey = timeAxisKey
 	return nil
 }
 
-func (s *keyRecordingResultStore) Get(context.Context, storage.Principal, string) (InvestigationResult, error) {
-	return InvestigationResult{}, nil
+func (s *keyRecordingResultStore) Get(context.Context, storage.Principal, string) (StoredInvestigationResult, error) {
+	return StoredInvestigationResult{}, nil
 }
 
 // clampReuseEngine builds an engine whose clock the test controls, with a
@@ -1268,7 +1309,7 @@ type retrievalRecordingResultStore struct {
 	savedVersionAuthority ReuseVersionAuthorities
 }
 
-func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity, promptVersions ReusePromptVersions, versionAuthorities ReuseVersionAuthorities) error {
+func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity, promptVersions ReusePromptVersions, versionAuthorities ReuseVersionAuthorities, _ int64) error {
 	s.saveCalled = true
 	s.savedRetrieval = retrieval
 	s.savedPromptVersion = promptVersions
@@ -1276,8 +1317,8 @@ func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Princi
 	return nil
 }
 
-func (s *retrievalRecordingResultStore) Get(context.Context, storage.Principal, string) (InvestigationResult, error) {
-	return InvestigationResult{}, nil
+func (s *retrievalRecordingResultStore) Get(context.Context, storage.Principal, string) (StoredInvestigationResult, error) {
+	return StoredInvestigationResult{}, nil
 }
 
 // TestCHAOS3833_RetrievalIdentityFlowsToBothLookupAndSave proves the

@@ -60,7 +60,7 @@ func TestStore_getDefensiveCopyDoesNotLeakStoredState(t *testing.T) {
 		},
 		Warnings: []string{},
 	}
-	if err := store.Save(ctx, principal, original, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}); err != nil {
+	if err := store.Save(ctx, principal, original, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -68,18 +68,18 @@ func TestStore_getDefensiveCopyDoesNotLeakStoredState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	first.StrongestPressures[0] = "mutated"
-	first.Question = "mutated question"
+	first.Result.StrongestPressures[0] = "mutated"
+	first.Result.Question = "mutated question"
 
 	second, err := store.Get(ctx, principal, original.ResultID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if second.Question != "original question" {
-		t.Fatalf("stored question mutated: got %q", second.Question)
+	if second.Result.Question != "original question" {
+		t.Fatalf("stored question mutated: got %q", second.Result.Question)
 	}
-	if second.StrongestPressures[0] != "pressure-1" {
-		t.Fatalf("stored strongest_pressures mutated: got %q", second.StrongestPressures[0])
+	if second.Result.StrongestPressures[0] != "pressure-1" {
+		t.Fatalf("stored strongest_pressures mutated: got %q", second.Result.StrongestPressures[0])
 	}
 }
 
@@ -87,7 +87,7 @@ func TestStore_saveRespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	store := memoryinvestigation.NewStore()
-	err := store.Save(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.InvestigationResult{ResultID: "result-cancelled"}, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{})
+	err := store.Save(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.InvestigationResult{ResultID: "result-cancelled"}, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("save: want context.Canceled, got %v", err)
 	}

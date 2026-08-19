@@ -236,7 +236,11 @@ func newLiveContextFabricTestApp(t *testing.T, investigator contextfabric.Invest
 
 type liveGraphReader struct{ project contextfabric.SubjectRef }
 
-func (g liveGraphReader) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion) (contextfabric.SubjectResolution, error) {
+func (g liveGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
+	return contextfabric.ResolvedGraphBinding{GraphKey: "live-key", Epoch: 0}, nil
+}
+
+func (g liveGraphReader) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding) (contextfabric.SubjectResolution, error) {
 	return contextfabric.SubjectResolution{
 		Candidates: []contextfabric.SubjectCandidate{},
 		Committed:  []contextfabric.SubjectRef{g.project},

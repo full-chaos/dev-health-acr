@@ -62,7 +62,11 @@ type authzDroppingGraphReader struct {
 	dropped    int
 }
 
-func (g authzDroppingGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, _ InvestigationRequest, _ InterpretedQuestion) (SubjectResolution, error) {
+func (g authzDroppingGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "authz-dropping-key", Epoch: 0}, nil
+}
+
+func (g authzDroppingGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, _ InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
 	if g.dropped > 0 {
 		RecordSubjectCandidatesAuthzDropped(ctx, g.dropped)
 	}

@@ -40,7 +40,7 @@ func newMapResultStore() *mapResultStore {
 	return &mapResultStore{byOrg: map[string]map[string]InvestigationResult{}}
 }
 
-func (s *mapResultStore) Save(_ context.Context, principal storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities) error {
+func (s *mapResultStore) Save(_ context.Context, principal storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.byOrg[principal.OrgID] == nil {
@@ -50,14 +50,20 @@ func (s *mapResultStore) Save(_ context.Context, principal storage.Principal, re
 	return nil
 }
 
-func (s *mapResultStore) Get(_ context.Context, principal storage.Principal, resultID string) (InvestigationResult, error) {
+func (s *mapResultStore) Get(_ context.Context, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result, ok := s.byOrg[principal.OrgID][resultID]
 	if !ok {
-		return InvestigationResult{}, errors.New("investigation result not found")
+		return StoredInvestigationResult{}, errors.New("investigation result not found")
 	}
-	return result, nil
+	// CHAOS-3898 §2.4: this fake always reports epoch 0, matching every
+	// acceptanceGraphReader's fixed ResolveInvestigationBinding epoch, so
+	// the §2.2 ingress taint gate passes exactly as it did before that
+	// gate existed -- these tests exercise prior-subject-receipt matching,
+	// not graph-epoch staleness.
+	zero := int64(0)
+	return StoredInvestigationResult{Result: result, GraphEpoch: &zero}, nil
 }
 
 // acceptanceGraphReader is a GraphReader fake that records the last request
@@ -78,7 +84,11 @@ type acceptanceGraphReader struct {
 	discoverCalls int
 }
 
-func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion) (SubjectResolution, error) {
+func (g *acceptanceGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "acceptance-fake-key", Epoch: 0}, nil
+}
+
+func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
 	g.resolveCalls++
 	g.lastRequest = request
 	if g.err != nil {
@@ -499,7 +509,7 @@ func TestAcceptanceUnauthorizedSubjectDegradesSilentlyWithoutLeaking(t *testing.
 	priorPrincipal := storage.Principal{OrgID: "org_other_tenant"}
 	priorResult := bootstrapDraftToResult(project)
 	priorResult.ResultID = "result_prior_unauth1"
-	if err := results.Save(context.Background(), priorPrincipal, priorResult, nil, nil, TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent}), ReuseRetrievalIdentity{}, ReusePromptVersions{}, ReuseVersionAuthorities{}); err != nil {
+	if err := results.Save(context.Background(), priorPrincipal, priorResult, nil, nil, TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent}), ReuseRetrievalIdentity{}, ReusePromptVersions{}, ReuseVersionAuthorities{}, 0); err != nil {
 		t.Fatalf("seed Save() error = %v", err)
 	}
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), results)
@@ -619,7 +629,7 @@ func TestAcceptanceResultPersistsAndFollowUpBindsThePriorSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if stored.ResultID != first.ResultID || len(stored.ClaimedFacts) != len(first.ClaimedFacts) {
+	if stored.Result.ResultID != first.ResultID || len(stored.Result.ClaimedFacts) != len(first.ClaimedFacts) {
 		t.Fatalf("stored result = %#v, want it to match what Investigate returned", stored)
 	}
 

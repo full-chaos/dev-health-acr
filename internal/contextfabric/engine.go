@@ -278,6 +278,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, err
 	}
 
+	// CHAOS-3898 §2.1: resolve the ResolvedGraphBinding EXACTLY ONCE, here,
+	// at request start -- BEFORE tryReuse (F1: tryReuse already needs it,
+	// for the §2.3 SQL predicate and its own recheck graph calls, so
+	// binding this any later would leave tryReuse with nothing to use).
+	// The SAME value is threaded, unchanged, to every graph call this
+	// investigation makes (fresh or reuse-recheck), to Save, and into the
+	// §2.3 lookup -- never re-resolved independently at any of those call
+	// sites. Unlike the watermark/epoch snapshots below (which fail OPEN --
+	// an optional reuse-only signal), this is REQUIRED infrastructure: no
+	// graph call can run without a key to read from, so a resolution
+	// failure here fails the whole investigation.
+	binding, err := e.graph.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve graph binding: %w", err))
+	}
+
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
 	// ordering is the entire mechanism behind AC-3782-1's zero-model-call
 	// guarantee for a reuse hit. tryReuse itself only ever returns
@@ -296,7 +312,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// instant at different arrival times, and those answers legitimately
 	// differ. Keying on the wire value served a request meaning 12:00:30
 	// an answer that had meant 12:00:00.
-	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime); ok {
+	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, binding); ok {
 		return reused, nil
 	}
 
@@ -348,7 +364,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var priorHints []SubjectHint
 	var priorHintsUnloadable, priorHintsNoMatch int
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints, priorHintsUnloadable, priorHintsNoMatch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts)
+		priorHints, priorHintsUnloadable, priorHintsNoMatch = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
 		// The v1 contract bounds RequestedScope.SubjectHints at 50
 		// (ContextFabricRequestedScope.Validate). request.Validate()
 		// already proved the caller's own hints are within that bound,
@@ -416,7 +432,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// comment for why a context value is the right carrier for this
 	// specific, telemetry-only signal.
 	resolveCtx, subjectCandidatesAuthzDropped := withSubjectCandidatesAuthzDroppedRecorder(ctx)
-	resolution, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation)
+	resolution, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
@@ -424,7 +440,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch)
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
-		Request: graphRequest, Interpretation: interpretation, Resolution: resolution,
+		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
 	})
 	if err != nil {
 		return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
@@ -450,7 +466,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped)
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding)
 	}
 
 	factRequest := CanonicalFactRequest{
@@ -563,7 +579,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// interpreted one: the lookup runs before Interpret and can only
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
-		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities); err != nil {
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}
@@ -592,11 +608,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 // Returns (hints, unloadable, noMatch) -- the latter two (CHAOS-3888) split
 // what used to be one implicit "receiptCount - len(hints)" gap into WHY each
 // non-hint receipt fell out: unloadable counts a receipt with a blank
-// ResultID/ReceiptID or whose prior InvestigationResult failed to load;
-// noMatch counts a receipt whose prior result loaded but named no matching
-// candidate. recordPriorSubjectReceiptSkips (below) computes the third
-// reason, failed_reauth, from what happens to the returned hints afterward.
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt) ([]SubjectHint, int, int) {
+// ResultID/ReceiptID, whose prior InvestigationResult failed to load, OR
+// (CHAOS-3898 §2.2) whose loaded StoredInvestigationResult carrier failed the
+// ingress taint gate; noMatch counts a receipt whose prior result loaded,
+// passed the taint gate, and still named no matching candidate.
+// recordPriorSubjectReceiptSkips (below) computes the third reason,
+// failed_reauth, from what happens to the returned hints afterward.
+//
+// binding is THIS investigation's own ResolvedGraphBinding (CHAOS-3898
+// §2.1/§2.2 ingress taint): before any field of a loaded prior result is
+// read -- no id, no label, no candidate -- its carrier's GraphEpoch is
+// compared against binding.Epoch. A mismatch (including a nil GraphEpoch,
+// a pre-migration or reuse-disabled row) strips the receipt ENTIRELY,
+// exactly like an unloadable one: a receipt naming a subject discovered
+// under a graph epoch this investigation is not reading from must never
+// contribute a label or a hint, however innocuous re-using its identifier
+// alone might look.
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, int, int) {
 	hints := make([]SubjectHint, 0, len(receipts))
 	loaded := make(map[string]InvestigationResult, len(receipts))
 	unloadable := 0
@@ -618,7 +646,15 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 				unloadable++
 				continue
 			}
-			prior = fetched
+			// CHAOS-3898 §2.2: the taint gate runs BEFORE any field of
+			// fetched.Result is read -- a carrier whose GraphEpoch is
+			// absent, or differs from this investigation's own binding,
+			// is stripped entirely, never partially trusted.
+			if fetched.GraphEpoch == nil || *fetched.GraphEpoch != binding.Epoch {
+				unloadable++
+				continue
+			}
+			prior = fetched.Result
 			loaded[resultID] = prior
 		}
 		matched := false
