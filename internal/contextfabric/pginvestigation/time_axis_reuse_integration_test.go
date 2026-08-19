@@ -253,6 +253,8 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 		ModelOutputSchemaVersion: testReuseVersionAuthorities.ModelOutputSchemaVersion,
 		// CHAOS-3884: same mirror, one more dimension.
 		IdentityNormalizationVersion: testReuseVersionAuthorities.IdentityNormalizationVersion,
+		// CHAOS-3900 W1: same mirror, one more dimension.
+		WindowInferenceVersion: testReuseVersionAuthorities.WindowInferenceVersion,
 	}
 	reused, found, _, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)

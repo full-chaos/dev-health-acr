@@ -1,24 +1,22 @@
-package graphrank
+package contextfabric
 
 import (
 	"reflect"
 	"testing"
-
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 func TestBindWindowSpans_TrailingPhrases(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		question string
-		want     contextfabric.RelativeWindowID
+		want     RelativeWindowID
 	}{
-		{"what shipped over the last month", contextfabric.RelativeWindowTrailing30D},
-		{"what shipped over the past month", contextfabric.RelativeWindowTrailing30D},
-		{"how did the team do last quarter", contextfabric.RelativeWindowTrailing90D},
-		{"how did the team do past quarter", contextfabric.RelativeWindowTrailing90D},
-		{"what changed in the last year", contextfabric.RelativeWindowTrailing365D},
-		{"what changed in the past year", contextfabric.RelativeWindowTrailing365D},
+		{"what shipped over the last month", RelativeWindowTrailing30D},
+		{"what shipped over the past month", RelativeWindowTrailing30D},
+		{"how did the team do last quarter", RelativeWindowTrailing90D},
+		{"how did the team do past quarter", RelativeWindowTrailing90D},
+		{"what changed in the last year", RelativeWindowTrailing365D},
+		{"what changed in the past year", RelativeWindowTrailing365D},
 	}
 	for _, tc := range cases {
 		bound := BindWindowSpans(tc.question)

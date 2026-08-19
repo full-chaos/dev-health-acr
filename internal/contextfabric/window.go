@@ -1,0 +1,795 @@
+package contextfabric
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// CHAOS-3900 W1 (design brief v5.2 §1-§5, as amended by the pivot-intent
+// design brief's DP12(b) ruling). This file is the window contract's real
+// MECHANISM: Validate/clamp already lives on the contract types
+// (internal/contracts/v1/validate_context_fabric_window.go); this file is
+// what canonicalizes a request's evidence window BEFORE answer reuse, and
+// what composes the EFFECTIVE window once interpretation has run.
+//
+// SCOPE NOTE (read before extending): W1 ships the underlying mechanism --
+// canonicalization, the receipt-resolution-before-reuse ordering, the
+// unresolved-receipt veto, the proposal-only binder, TimeAxisKeyFor's
+// window dimension, and WindowInferenceVersion's reuse-key dimension. It
+// deliberately does NOT ship the disclosure/UX surface built on top of it:
+// no fresh WindowClarification is minted for a NON-veto ambiguous window
+// (that clarification-offer machinery, EvidenceWindow-on-projection,
+// WindowConfirmationMode, and the MCP explicit-value same-response
+// receipt-bound echo are W2/W2b), and §3/W4's window-insensitivity
+// decisive-gating consumes Provenance but is not implemented here -- W1
+// only sets Provenance correctly for W4 to consume later.
+
+// WindowInferenceVersion (CHAOS-3900 W1) is the ReuseKey.WindowInferenceVersion
+// conjunctive dimension's own deployment-current value -- composition wires
+// this into EngineOptions.ReuseVersionAuthorities.WindowInferenceVersion,
+// mirroring graphrank.IdentityNormalizationVersion's own composition
+// precedent exactly (internal/runtime/hosted/open.go). Bump this whenever
+// the window class vocabulary, the class-to-default table
+// (windowDefaultPolicy), or the binder's post-pass rules change in any way
+// that could change what INFERRED window an otherwise-identical question
+// receives.
+const WindowInferenceVersion = "win_v1"
+
+// windowDefaultPolicy pins the DW0-ruled default-width candidate (design
+// brief §9 decision matrix row DW0, chris: "quarter-to-year... quarter is
+// the tighter cardinality lever") as the ONE policy that actually ships in
+// W1 -- W0's shadow harness measured both WindowDefaultPolicy90D and
+// WindowDefaultPolicy365D; this is the ruled winner.
+var windowDefaultPolicy = WindowDefaultPolicy90D
+
+// relativeWindowDurations is the closed registry's own DURATION table --
+// the ONLY place an absolute bound is derived for a RelativeWindowID,
+// always from the engine's own e.now(), never from a caller-supplied
+// instant (design brief §5.1). RelativeWindowAllTime deliberately has NO
+// entry: it is the typed "no bound at all" sentinel, not a very-wide
+// duration.
+var relativeWindowDurations = map[RelativeWindowID]time.Duration{
+	RelativeWindowTrailing30D:  30 * 24 * time.Hour,
+	RelativeWindowTrailing90D:  90 * 24 * time.Hour,
+	RelativeWindowTrailing365D: 365 * 24 * time.Hour,
+}
+
+// windowRegistryMinDurationFactor is the K in design brief §5.1's registry
+// pin: "composition fails at startup if any registered relative window's
+// duration < K × maxAnswerReuseMaxAge" -- a future narrow registry entry
+// (e.g. a hypothetical trailing_48h) would otherwise silently violate the
+// assumption every reuse-key window fragment leans on: that a window's own
+// width is wide enough relative to the staleness window that watermark/
+// epoch invalidation, not window narrowness, is what actually bounds
+// answer freshness.
+const windowRegistryMinDurationFactor = 7
+
+// ValidateWindowRegistry is the design brief §5.1 registry pin, exposed for
+// composition to call once at startup (mirroring how config.go's own
+// bounds are asserted at composition time, never lazily on first use). It
+// is deliberately NOT called from NewEngine: EngineOptions carries no
+// answer-reuse-max-age of its own (that value lives in the Postgres store's
+// own configuration, internal/contextfabric/pginvestigation), so the
+// composition root -- wherever ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE is
+// read -- is what can call this with the SAME value it configures the
+// store with.
+func ValidateWindowRegistry(maxAnswerReuseMaxAge time.Duration) error {
+	if maxAnswerReuseMaxAge <= 0 {
+		// Answer reuse is disabled entirely -- the registry pin exists to
+		// protect a reuse-key assumption, so it is vacuous when there is no
+		// reuse key to protect.
+		return nil
+	}
+	minimum := maxAnswerReuseMaxAge * windowRegistryMinDurationFactor
+	for id, duration := range relativeWindowDurations {
+		if duration < minimum {
+			return &windowRegistryTooNarrowError{id: id, duration: duration, minimum: minimum}
+		}
+	}
+	return nil
+}
+
+type windowRegistryTooNarrowError struct {
+	id       RelativeWindowID
+	duration time.Duration
+	minimum  time.Duration
+}
+
+func (e *windowRegistryTooNarrowError) Error() string {
+	return "context fabric: relative window " + string(e.id) + " duration " + e.duration.String() +
+		" is narrower than " + strconv.Itoa(windowRegistryMinDurationFactor) + "x the configured answer-reuse max age (" + e.minimum.String() + ")"
+}
+
+// relativeWindowBounds derives absolute [start, end] bounds for id as of
+// now -- the ONLY function in this codebase that may do so, and only ever
+// from the engine's own now(). ok=false for RelativeWindowAllTime (no
+// bounds by definition) or an id outside the closed registry.
+func relativeWindowBounds(id RelativeWindowID, now time.Time) (start, end time.Time, ok bool) {
+	duration, known := relativeWindowDurations[id]
+	if !known {
+		return time.Time{}, time.Time{}, false
+	}
+	now = now.UTC()
+	return now.Add(-duration), now, true
+}
+
+// withinWindowSkew mirrors futureSkewTolerance's role for the
+// RelativeID-vs-explicit-bounds AGREEMENT check (design brief §1.2): a
+// caller's own clock is not this service's clock, so a caller ECHOING the
+// server's own derivation back is expected to differ by ordinary clock
+// skew, never treated as a mismatch for that alone.
+func withinWindowSkew(a, b time.Time) bool {
+	delta := a.Sub(b)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= futureSkewTolerance
+}
+
+// windowVetoReason is the closed vocabulary a window canonicalization
+// failure resolves to. Every non-empty value here is PINNED to no_match
+// regardless of the caller's own Options.AllowClarification (design brief
+// W1 scope: "AllowClarification=false per-terminal pins") -- a window
+// canonicalization failure never becomes clarification_required.
+type windowVetoReason string
+
+const (
+	windowVetoNone windowVetoReason = ""
+	// windowVetoConfirmationUnresolved: a PriorWindowReceipts entry could
+	// not be resolved/applied -- the named prior result could not be
+	// loaded, carried no WindowClarification, or named no matching option.
+	// Full R2-style veto: no reuse lookup, no interpretation-side
+	// inference, no answer of any kind is substituted. Recovery is retry
+	// the same receipt, or re-ask with an explicit evidence_window.
+	windowVetoConfirmationUnresolved windowVetoReason = "window_confirmation_unresolved"
+	// windowVetoConfirmationConflict: plural PriorWindowReceipts entries
+	// (>=2), or a resolved receipt disagreeing with a request-carried
+	// explicit evidence_window beyond ordinary clock skew. Agreeing bounds
+	// are fine (receipt provenance wins).
+	windowVetoConfirmationConflict windowVetoReason = "window_confirmation_conflict"
+	// windowVetoAxisConflict: a question_stated/clarification_confirmed
+	// window resolved at precedence step 1 (against the REQUEST's own
+	// current-axis TimeContext, the only axis a window can be canonicalized
+	// against), but Interpret went on to move the axis away from current.
+	// Checked POST-Interpret (Investigate, after clampedInterpretedTime is
+	// computed) -- codex review finding (W1 round 1): without this check, a
+	// model axis flip silently dropped the confirmed window from the
+	// answer (composeEffectiveWindow returns nil off the current-axis
+	// gate) while STILL saving/keying the result as if the window applied,
+	// with no disclosed reason for either. This veto makes the disagreement
+	// a NAMED terminal instead: no answer is synthesized under a window
+	// commitment interpretation itself no longer honors.
+	windowVetoAxisConflict windowVetoReason = "window_axis_conflict"
+)
+
+// windowBindingOutcome is the closed, counted vocabulary
+// RecordWindowBinderOutcome reports (design brief §1.2(d)/D2 flow
+// diagram), promoted from W0's own WindowBindReason -- see
+// chaos3900_window_binder.go. It stays a distinct alias here rather than
+// widening WindowBindReason itself, since a future binder outcome that has
+// no bearing on telemetry should not be forced to also be a valid
+// WindowBindReason value.
+type windowBindingOutcome = WindowBindReason
+
+// WindowCanonicalizationOutcome is the closed, content-safe vocabulary
+// EngineTelemetry.RecordWindowCanonicalization reports (design brief §1.2's
+// window_temporal_reconciliation signal, consolidated into one outcome
+// enum -- mirroring AnswerReuseOutcome's own shape rather than several
+// separate boolean counters).
+type WindowCanonicalizationOutcome string
+
+const (
+	// WindowCanonicalizationNone: no window is in play for this
+	// investigation at all (non-current axis, or a resolved class that
+	// carries no window, e.g. state_snapshot).
+	WindowCanonicalizationNone WindowCanonicalizationOutcome = "none"
+	// WindowCanonicalizationRequestStated: precedence step 1 resolved a
+	// question_stated window from the wire request (surface-appropriate
+	// per DP12(b)).
+	WindowCanonicalizationRequestStated WindowCanonicalizationOutcome = "request_stated"
+	// WindowCanonicalizationReceiptConfirmed: precedence step 1 resolved a
+	// clarification_confirmed window via winr_ receipt redemption.
+	WindowCanonicalizationReceiptConfirmed WindowCanonicalizationOutcome = "receipt_confirmed"
+	// WindowCanonicalizationInferredDefault: precedence step 2 -- no
+	// request-side window, so the class-to-default table (optionally
+	// overridden by a guards-passing binder proposal) picked one.
+	WindowCanonicalizationInferredDefault WindowCanonicalizationOutcome = "inferred_default"
+	// WindowCanonicalizationVetoUnresolved/VetoConflict mirror
+	// windowVetoReason's own two non-empty values -- see that type's doc
+	// comment.
+	WindowCanonicalizationVetoUnresolved WindowCanonicalizationOutcome = "veto_unresolved"
+	WindowCanonicalizationVetoConflict   WindowCanonicalizationOutcome = "veto_conflict"
+)
+
+// requestWindowCanonicalization is canonicalizeEvidenceWindow's own
+// result: the REQUEST-side half of window canonicalization (design brief
+// §1.2 precedence step 1), computed BEFORE tryReuse and BEFORE Interpret.
+type requestWindowCanonicalization struct {
+	// Effective is set only when a question_stated or clarification_confirmed
+	// window fully resolved at this step -- precedence step 1. nil means
+	// step 2 (composeEffectiveWindow, post-Interpret) still decides.
+	Effective *contractsv1.ContextFabricEffectiveEvidenceWindow
+	// KeyComponent is TimeAxisKeyFor's window fragment for Effective --
+	// "" whenever Effective is nil. An INFERRED default (step 2) never
+	// contributes a KeyComponent; see WindowInferenceVersion's own doc
+	// comment on ReuseKey for why that dimension exists instead.
+	KeyComponent string
+	// KeyEncoding is WHICH windowKeyEncoding computed KeyComponent --
+	// meaningless when KeyComponent == "". tryReuse threads this through to
+	// its own recheck (codex review, W1 round 5 consolidation) so the
+	// recheck can verify a candidate using the SAME trusted, in-process
+	// encoding THIS request's own lookup used, rather than inferring an
+	// encoding from the candidate's own stored (untrusted) Provenance --
+	// see windowKeyComponent's own doc comment for why that distinction is
+	// load-bearing.
+	KeyEncoding windowKeyEncoding
+	// Veto is non-empty when this request must short-circuit to a no_match
+	// terminal WITHOUT reuse, WITHOUT interpretation, and WITHOUT any
+	// window inference substituted (see windowVetoReason).
+	Veto windowVetoReason
+	// BinderProposal is the proposal-only temporal-expression binder's own
+	// verdict, computed over the verbatim question text -- carried forward
+	// to composeEffectiveWindow regardless of whether a request-side
+	// window already resolved at this step, so it is available unconditionally
+	// once Interpret returns without a second question-text scan.
+	BinderProposal WindowBindOutcome
+}
+
+// canonicalizeEvidenceWindow is the design brief §1.2 window-contract
+// mechanism's own entry point, called from Investigate at the SAME point
+// as resolveTimeContext's own request clamp -- BEFORE tryReuse, BEFORE
+// Interpret. It never returns an error: every failure mode it recognizes is
+// a VETO (windowVetoReason), not a Go error, because a window
+// canonicalization failure is an ordinary, expected outcome
+// (clarification-shaped, always no_match) rather than an exceptional one.
+//
+// Ordering is the entire point (design brief §1.2, "receipt-resolution-
+// BEFORE-reuse"): without it, a follow-up confirming a window via receipt
+// would reach tryReuse before the confirmation entered the reuse key, and
+// could be served a cached answer generated under the UNCONFIRMED inferred
+// default instead -- the confirmation silently dropped. Resolving receipts
+// here, before the caller below ever calls tryReuse, closes that.
+func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal storage.Principal, request InvestigationRequest) requestWindowCanonicalization {
+	// The binder runs over the verbatim question text alone -- no
+	// dependency on Interpret -- so it always runs, even when this request
+	// carries no window field at all (its RelativeID may still end up
+	// unused, at composeEffectiveWindow's own discretion, once state_snapshot
+	// or another windowless class is resolved).
+	binderProposal := ProposeWindowFromSpans(request.Question)
+	if e.telemetry != nil {
+		e.telemetry.RecordWindowBinderOutcome(ctx, principal, binderProposal.Reason)
+	}
+
+	// PriorWindowReceipts is checked BEFORE the axis gate, deliberately: a
+	// receipt can never apply outside the current axis (window is
+	// representable ONLY on axis=current), but that is a reason for the
+	// receipt to VETO, not a reason to skip it. Codex review finding (W1
+	// round 1): the axis gate used to short-circuit BEFORE this check, so a
+	// non-current-axis request carrying an unresolvable/inapplicable
+	// receipt (the request contract does not forbid PriorWindowReceipts on
+	// a non-current axis, only EvidenceWindow) silently proceeded to
+	// interpretation and reuse as if no receipt had been sent -- exactly
+	// the "no answer of any kind is substituted" invariant this file's own
+	// package doc comment promises, broken on this one axis.
+	if len(request.PriorWindowReceipts) > 0 {
+		if request.TimeContext.Axis != TemporalCurrent {
+			return requestWindowCanonicalization{Veto: windowVetoConfirmationUnresolved, BinderProposal: binderProposal}
+		}
+		return e.resolveWindowReceipts(ctx, principal, request, binderProposal)
+	}
+
+	if request.TimeContext.Axis != TemporalCurrent {
+		// Window is representable ONLY on the current axis
+		// (ContextFabricTimeContext.Validate already refuses an explicit
+		// evidence_window here at the wire boundary) -- nothing further to
+		// canonicalize.
+		return requestWindowCanonicalization{BinderProposal: binderProposal}
+	}
+
+	if request.TimeContext.EvidenceWindow == nil {
+		return requestWindowCanonicalization{BinderProposal: binderProposal}
+	}
+	effective, ok := e.deriveRequestedWindow(*request.TimeContext.EvidenceWindow, request.Consumer)
+	if !ok {
+		return requestWindowCanonicalization{Veto: windowVetoConfirmationConflict, BinderProposal: binderProposal}
+	}
+	return requestWindowCanonicalization{
+		Effective: &effective,
+		// ALWAYS keyed, regardless of Provenance tier -- codex review
+		// finding (W1 round 3), correcting round 1's own fix #5, which had
+		// this backwards. Round 1 reasoned "inferred tier -> no key
+		// fragment, WindowInferenceVersion guards it instead" and applied
+		// that uniformly to every inferred-tier window; that conflates two
+		// different things DP12(b)'s tier concept does NOT conflate:
+		// AUTHORITY (does this value get to drive a commit decision --
+		// orthogonal to reuse) versus VALUE IDENTITY (does this value need
+		// to be part of the cache key -- exactly what reuse cares about).
+		// WindowInferenceVersion is a single DEPLOYMENT-WIDE constant: it
+		// only guards the class-table/binder's OWN deterministic-from-the-
+		// question inference (composeEffectiveWindow's post-Interpret step
+		// 2, reached only when NO request-side window resolved at all) --
+		// consistent with how a reuse hit already trusts a cached
+		// interpretation's own Shape/etc. without re-deriving it (CHAOS-3782's
+		// own established tradeoff). A window resolved HERE, at precedence
+		// step 1, is never that: it is always a CALLER-SUPPLIED value
+		// (explicit field or receipt), arbitrary and independent of the
+		// question text, whether or not MCP's own tier rule (DP12(b))
+		// grants it decisive authority. Two MCP requests for the identical
+		// question but DIFFERENT explicit windows (e.g. trailing_30d vs
+		// trailing_90d) must never collapse onto the same "current" reuse
+		// key just because both happen to be tier=inferred_default -- that
+		// key collision is exactly what round 1's fix (KeyComponent="" for
+		// inferred_default here) produced, and what this revert closes.
+		// windowKeyRederivable: this window's bounds are re-derived from
+		// RelativeID at every call (relativeWindowBounds, above), never a
+		// frozen commitment -- see windowKeyRederivable's own doc comment.
+		KeyComponent:   windowKeyComponent(effective, windowKeyRederivable),
+		KeyEncoding:    windowKeyRederivable,
+		BinderProposal: binderProposal,
+	}
+}
+
+// deriveRequestedWindow canonicalizes a caller's explicit
+// ContextFabricRequestedEvidenceWindow into a server-owned Effective window,
+// applying the DP12(b) surface split (design brief pivot amendment): on
+// MCP, a bare explicit evidence_window carries no decisive authority of its
+// own -- it enters at inferred_default -- while every other surface's
+// stated-echo semantics (3900 §4, untouched by DP12(b)) grant
+// question_stated directly. ok=false means a RelativeID was supplied
+// alongside explicit bounds that disagree with the server's own derivation
+// beyond ordinary clock skew -- a conflict, never a silent preference of
+// one side.
+func (e *Engine) deriveRequestedWindow(requested contractsv1.ContextFabricRequestedEvidenceWindow, consumer ConsumerInfo) (contractsv1.ContextFabricEffectiveEvidenceWindow, bool) {
+	provenance := windowExplicitProvenance(consumer)
+	if requested.RelativeID == RelativeWindowAllTime {
+		return contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowAllTime, Provenance: provenance}, true
+	}
+	if requested.RelativeID != "" {
+		start, end, ok := relativeWindowBounds(requested.RelativeID, e.now())
+		if !ok {
+			return contractsv1.ContextFabricEffectiveEvidenceWindow{}, false
+		}
+		if requested.Start != nil && requested.End != nil &&
+			(!withinWindowSkew(*requested.Start, start) || !withinWindowSkew(*requested.End, end)) {
+			return contractsv1.ContextFabricEffectiveEvidenceWindow{}, false
+		}
+		return contractsv1.ContextFabricEffectiveEvidenceWindow{Start: &start, End: &end, RelativeID: requested.RelativeID, Provenance: provenance}, true
+	}
+	start, end := requested.Start.UTC(), requested.End.UTC()
+	return contractsv1.ContextFabricEffectiveEvidenceWindow{Start: &start, End: &end, Provenance: provenance}, true
+}
+
+// windowExplicitProvenance implements the DP12(b) uniform surface split
+// (pivot-intent design brief, ratified 07:28 08-19): tier is a function of
+// SURFACE alone. MCP's own bare explicit evidence_window field can never
+// itself grant question_stated -- only winr_ receipt redemption
+// (resolveWindowReceipts) can. Every other surface keeps 3900 §4's
+// ratified stated-echo semantics, untouched by this ruling.
+func windowExplicitProvenance(consumer ConsumerInfo) WindowProvenance {
+	if strings.TrimSpace(consumer.Surface) == "mcp" {
+		return WindowInferredDefault
+	}
+	return WindowQuestionStated
+}
+
+// resolveWindowReceipts implements design brief §5's winr_ redemption path:
+// PriorWindowReceipts names a stored ContextFabricWindowClarification's
+// own option by (result_id, receipt_id), and redemption applies that
+// option's FROZEN bounds byte-for-byte -- never re-derived from RelativeID
+// at redemption time. Any failure to fully confirm is a VETO (design brief
+// §2.5-style closed failure table applied to windows): no partial
+// application, no fallback to inference.
+func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Principal, request InvestigationRequest, binderProposal WindowBindOutcome) requestWindowCanonicalization {
+	veto := requestWindowCanonicalization{Veto: windowVetoConfirmationUnresolved, BinderProposal: binderProposal}
+	if len(request.PriorWindowReceipts) > 1 {
+		// Plural receipts: ambiguous by construction, never first-match-wins.
+		return requestWindowCanonicalization{Veto: windowVetoConfirmationConflict, BinderProposal: binderProposal}
+	}
+	if e.results == nil {
+		// No store to resolve against -- cannot confirm, so this cannot
+		// proceed as if nothing had been asked. Fail closed exactly like
+		// an unloadable receipt.
+		return veto
+	}
+	receipt := request.PriorWindowReceipts[0]
+	resultID := strings.TrimSpace(receipt.ResultID)
+	receiptID := strings.TrimSpace(receipt.ReceiptID)
+	if resultID == "" || receiptID == "" {
+		return veto
+	}
+	stored, err := e.results.Get(ctx, principal, resultID)
+	if err != nil || stored.Result.WindowClarification == nil {
+		return veto
+	}
+	var option *contractsv1.ContextFabricWindowOption
+	for i := range stored.Result.WindowClarification.Options {
+		if stored.Result.WindowClarification.Options[i].ReceiptID == receiptID {
+			option = &stored.Result.WindowClarification.Options[i]
+			break
+		}
+	}
+	if option == nil {
+		return veto
+	}
+	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{
+		Start: option.Start, End: option.End, RelativeID: option.RelativeID,
+		Provenance: WindowClarificationConfirmed,
+	}
+	if explicit := request.TimeContext.EvidenceWindow; explicit != nil {
+		// A caller who ALSO sent an explicit evidence_window alongside the
+		// receipt must agree with what the receipt confirms, beyond
+		// ordinary clock skew -- agreeing bounds are fine, and receipt
+		// provenance wins (design brief §5). Disagreement is a conflict,
+		// never a silent preference of one side.
+		if !windowsAgree(effective, *explicit) {
+			return requestWindowCanonicalization{Veto: windowVetoConfirmationConflict, BinderProposal: binderProposal}
+		}
+	}
+	return requestWindowCanonicalization{
+		Effective: &effective,
+		// windowKeyFrozen, NOT windowKeyRederivable -- codex review finding
+		// (W1 round 4): a receipt confirms one specific, already-minted
+		// option's FROZEN bounds, not a re-derivable-from-RelativeID value;
+		// see windowKeyFrozen's own doc comment for why two different prior
+		// offers named the same RelativeID must key differently unless
+		// their frozen bounds genuinely agree.
+		KeyComponent:   windowKeyComponent(effective, windowKeyFrozen),
+		KeyEncoding:    windowKeyFrozen,
+		BinderProposal: binderProposal,
+	}
+}
+
+// windowsAgree reports whether a receipt-confirmed effective window agrees
+// with a caller's own explicit request, beyond ordinary clock skew. BOTH a
+// carried RelativeID and carried explicit Start/End are checked when
+// present -- the wire contract legally admits a RequestedEvidenceWindow
+// carrying a RelativeID TOGETHER WITH explicit bounds (validate_context_fabric_window.go's
+// own shape rule only requires them to be internally ordered, never
+// mutually exclusive with RelativeID), so a caller could otherwise send a
+// RelativeID that happens to match the receipt while ALSO sending explicit
+// bounds that contradict it -- Codex review finding (W1 round 1): checking
+// RelativeID alone let that contradiction silently pass as "agree".
+func windowsAgree(effective contractsv1.ContextFabricEffectiveEvidenceWindow, requested contractsv1.ContextFabricRequestedEvidenceWindow) bool {
+	if requested.RelativeID != "" && requested.RelativeID != effective.RelativeID {
+		return false
+	}
+	if requested.Start == nil || requested.End == nil {
+		// Nothing concrete to disagree with beyond RelativeID, already
+		// checked above.
+		return true
+	}
+	if effective.Start == nil || effective.End == nil {
+		return false
+	}
+	return withinWindowSkew(*requested.Start, *effective.Start) && withinWindowSkew(*requested.End, *effective.End)
+}
+
+// composeEffectiveWindow is design brief §1.2 precedence steps 2-3, run
+// AFTER Interpret (mirroring where composeTemporalLabel already runs) --
+// the ONLY point a window's INFERRED default can be decided, because the
+// class-to-default table needs the interpreted Shape and the model's own
+// (already-sanitized) WindowClass/WindowConfidence pick, neither of which
+// exists before Interpret returns.
+//
+// requestWindow is precedence step 1's own Effective, if canonicalizeEvidenceWindow
+// already resolved one -- when non-nil it is returned UNCHANGED: a
+// confirmed or stated window is never overridden by an inferred pick.
+//
+// The interpreted axis, not the requested one, gates this: an interpreter
+// may legitimately move a current-axis request onto a historical axis
+// (engine.go's own established precedent), and a window inferred for an
+// axis the answer no longer speaks for would be a mismatched, misleading
+// disclosure -- so this returns nil whenever the INTERPRETED axis is not
+// current, regardless of what precedence step 1 found on the wire request.
+func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, now time.Time) *contractsv1.ContextFabricEffectiveEvidenceWindow {
+	if interpretation.TimeContext.Axis != TemporalCurrent {
+		return nil
+	}
+	if requestWindow != nil {
+		return requestWindow
+	}
+	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
+	relativeID, ok := DefaultRelativeID(outcome, windowDefaultPolicy)
+	if !ok {
+		// state_snapshot, or no class could be determined at all --
+		// "refuse to guess" (design brief §2): no window, never a wrong
+		// constraint.
+		return nil
+	}
+	if binderProposal.Reason == WindowBindRoutedInferred {
+		// A guards-passing binder span PROPOSES a RelativeID that
+		// overrides the class table's own pick (design brief §1.2) -- it
+		// still never mints question_stated authority; the provenance
+		// below stays inferred_default either way.
+		relativeID = binderProposal.RelativeID
+	}
+	if relativeID == RelativeWindowAllTime {
+		return &contractsv1.ContextFabricEffectiveEvidenceWindow{
+			RelativeID: relativeID, WindowClass: outcome.Class,
+			Provenance: WindowInferredDefault, Confidence: outcome.Confidence,
+		}
+	}
+	start, end, ok := relativeWindowBounds(relativeID, now)
+	if !ok {
+		// Unreachable in practice: DefaultRelativeID only ever returns a
+		// registry member or all_time (handled above), and
+		// binderProposal.RelativeID is only ever set from the SAME closed
+		// registry (chaos3900_window_binder.go's windowGrammarRegistry).
+		// Refuse rather than guess if that invariant is ever violated.
+		return nil
+	}
+	return &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		Start: &start, End: &end, RelativeID: relativeID, WindowClass: outcome.Class,
+		Provenance: WindowInferredDefault, Confidence: outcome.Confidence,
+	}
+}
+
+// windowCanonicalizationOutcome classifies the FINAL window outcome for
+// EngineTelemetry.RecordWindowCanonicalization, from canonicalization's own
+// veto/effective state and, once available, composeEffectiveWindow's own
+// result. Classified by canon.Effective.Provenance rather than by WHICH
+// step produced it, so an MCP bare explicit evidence_window -- which
+// resolves at precedence step 1 but carries inferred_default provenance
+// per DP12(b) -- is correctly reported as inferred, not as stated.
+func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effective *contractsv1.ContextFabricEffectiveEvidenceWindow) WindowCanonicalizationOutcome {
+	switch canon.Veto {
+	case windowVetoConfirmationUnresolved:
+		return WindowCanonicalizationVetoUnresolved
+	case windowVetoConfirmationConflict:
+		return WindowCanonicalizationVetoConflict
+	}
+	if canon.Effective != nil {
+		switch canon.Effective.Provenance {
+		case WindowClarificationConfirmed:
+			return WindowCanonicalizationReceiptConfirmed
+		case WindowQuestionStated:
+			return WindowCanonicalizationRequestStated
+		default:
+			return WindowCanonicalizationInferredDefault
+		}
+	}
+	if effective != nil {
+		return WindowCanonicalizationInferredDefault
+	}
+	return WindowCanonicalizationNone
+}
+
+// windowKeyEncoding is the discriminator EVERY window-key derivation call
+// site must supply EXPLICITLY (codex review, W1 round 5 consolidation,
+// replacing four bespoke per-source-path derivations across rounds 1-4
+// with this ONE canonical function). The discriminator always comes from
+// in-process, TRUSTED knowledge of which derivation path produced a
+// window -- at mint time, the call site simply knows; at tryReuse's own
+// recheck time, it is THIS SAME REQUEST's own requestWindowCanonicalization.KeyEncoding,
+// never inferred from a candidate's stored (and therefore, per the "prove
+// it, don't assume it" discipline every reuse recheck in this package
+// already follows, UNTRUSTED) Provenance field. This is the fix for the
+// round-5 finding that provenance-based dispatch could pick the wrong
+// encoding for a malformed or foreign-written row.
+type windowKeyEncoding int
+
+const (
+	// windowKeyRederivable: the window's bounds are DETERMINISTICALLY
+	// RE-DERIVABLE from RelativeID alone at any later moment
+	// (deriveRequestedWindow's own RelativeID branch; composeEffectiveWindow's
+	// inferred-default path, which contributes no key fragment at all --
+	// see WindowInferenceVersion's own doc comment for why that path needs
+	// no encoding here). The key DROPS the specific Start/End this call
+	// happened to compute and uses RelativeID alone, mirroring
+	// reuseCurrentAxisKey's own "as of whenever you answer this" precedent
+	// (answer_reuse.go): two "trailing_90d" requests asked at different
+	// wall-clock moments mean the SAME standing commitment and must share
+	// a reuse key -- safe because the staleness window (TRD §19.7.3
+	// condition 4), already enforced for EVERY reuse candidate regardless
+	// of window, is what bounds how much a "trailing_90d" window's actual
+	// bounds may have drifted between when a candidate was generated and
+	// when it is served.
+	windowKeyRederivable windowKeyEncoding = iota
+	// windowKeyFrozen: the window's bounds are ONE SPECIFIC, already-minted
+	// commitment (resolveWindowReceipts) that must NEVER be treated as
+	// interchangeable with a different commitment merely because both
+	// happen to share a RelativeID -- two different prior
+	// WindowClarification offers named "trailing_90d" but minted (and
+	// frozen) at different wall-clock moments freeze DIFFERENT absolute
+	// bounds and are different answers.
+	windowKeyFrozen
+)
+
+// windowKeyComponent is the ONE canonical window reuse-key fragment
+// derivation (design brief §5.1's rel:/abs: namespaces), covering every
+// window source through the SAME function rather than four independently-
+// maintained ones. Behavior:
+//
+//   - RelativeWindowAllTime: always "rel:all_time", regardless of encoding
+//     -- there are no bounds to freeze or drift, so no ambiguity exists to
+//     guard against either way. Distinct from no window component at all:
+//     a confirmed all-time answer and an unwindowed answer are different
+//     commitments and must not share a reuse-key row.
+//   - windowKeyRederivable with a RelativeID: "rel:<id>" (bounds dropped).
+//   - windowKeyFrozen, or windowKeyRederivable with NO RelativeID (an
+//     explicit caller-supplied absolute range carries no RelativeID to
+//     abbreviate by): "abs:<start_ns>:<end_ns>" when bounds are present,
+//     "" when they are not (a malformed/incomplete value contributes no
+//     fragment rather than a misleading one).
+//
+// Injectivity holds WITHIN each encoding's own equivalence: two
+// windowKeyFrozen (or bare-absolute) values produce the same fragment iff
+// their bounds are byte-identical; two windowKeyRederivable values with a
+// RelativeID produce the same fragment iff the RelativeID is identical (by
+// design -- see windowKeyRederivable's own doc comment for why collapsing
+// distinct-but-re-derivable bounds is the INTENDED behavior, not a gap).
+// Mixing encodings for the SAME underlying bounds is exactly what the
+// windowKeyEncoding parameter exists to prevent: a caller can never
+// accidentally derive the "rel:" abbreviation for a value this package
+// knows is actually frozen, because the encoding is passed explicitly by
+// callers who know which derivation path they are on, not inferred from
+// the value itself.
+func windowKeyComponent(effective contractsv1.ContextFabricEffectiveEvidenceWindow, encoding windowKeyEncoding) string {
+	if effective.RelativeID == RelativeWindowAllTime {
+		return "rel:all_time"
+	}
+	if encoding == windowKeyRederivable && effective.RelativeID != "" {
+		return "rel:" + string(effective.RelativeID)
+	}
+	if effective.Start == nil || effective.End == nil {
+		return ""
+	}
+	return "abs:" + formatUnixNano(*effective.Start) + ":" + formatUnixNano(*effective.End)
+}
+
+func formatUnixNano(value time.Time) string {
+	return strconv.FormatInt(value.UTC().UnixNano(), 10)
+}
+
+// composeTimeAxisKey appends a REQUEST-side window's reuse-key fragment
+// (windowKey, from windowKeyComponent) onto an axis key TimeAxisKeyFor
+// already computed. windowKey == "" (or axisKey == "", TimeAxisKeyFor's own
+// fail-closed "never reusable" sentinel) leaves axisKey byte-identical to
+// what TimeAxisKeyFor alone would have produced -- the ordinary case for
+// every investigation with no request-side window in play, which is every
+// investigation before CHAOS-3900 W1 and the overwhelming majority after it
+// too. An INFERRED window never reaches this function at all -- see
+// ReuseKey.WindowInferenceVersion's own field doc comment for why that
+// dimension exists instead of a key fragment for the inferred case.
+func composeTimeAxisKey(axisKey, windowKey string) string {
+	if windowKey == "" || axisKey == "" {
+		return axisKey
+	}
+	return axisKey + "+w:" + windowKey
+}
+
+// windowVetoPlaceholderJudgment is the fixed, non-interpolated
+// RequestedJudgment a window-veto terminal's placeholder Interpretation
+// carries (contract-required, non-empty) -- reached before Interpret ever
+// ran, so there is no real interpreted judgment to report. Names no
+// subject, term, or error text.
+const windowVetoPlaceholderJudgment = "evidence window confirmation"
+
+// windowVetoLimitations are the fixed, non-interpolated disclosures for
+// each windowVetoReason -- answer-facing prose naming no subject, term, or
+// error text, matching this codebase's existing terminal-limitation
+// discipline (unresolved.go's clarificationRequiredLimitation and
+// siblings).
+var windowVetoLimitations = map[windowVetoReason]string{
+	windowVetoConfirmationUnresolved: "A referenced evidence-window confirmation could not be resolved, so no canonical facts were read. Retry with the same receipt, or re-ask with an explicit evidence window.",
+	windowVetoConfirmationConflict:   "The evidence-window confirmation conflicted with another window signal on this request, so no canonical facts were read. Resend a single, agreeing window confirmation.",
+	windowVetoAxisConflict:           "The confirmed evidence window no longer applies once the question was understood to be about a different time axis, so no canonical facts were read. Re-ask without a window confirmation, or confirm the window for a current-state question.",
+}
+
+func windowVetoLimitation(veto windowVetoReason) string {
+	if limitation, ok := windowVetoLimitations[veto]; ok {
+		return limitation
+	}
+	return windowVetoLimitations[windowVetoConfirmationUnresolved]
+}
+
+func windowCanonicalizationOutcomeForVeto(veto windowVetoReason) WindowCanonicalizationOutcome {
+	switch veto {
+	case windowVetoConfirmationConflict, windowVetoAxisConflict:
+		return WindowCanonicalizationVetoConflict
+	default:
+		return WindowCanonicalizationVetoUnresolved
+	}
+}
+
+// windowVetoResult composes the model-free, no_match result for a window
+// canonicalization veto (design brief's own closed-failure-table
+// discipline, applied to windows) -- every answer-bearing field is empty by
+// construction, mirroring terminalResult's own discipline for the
+// subjectless-resolution case (unresolved.go).
+//
+// interpretation is nil for the PRE-Interpret vetoes (unresolved/conflict,
+// reached before Interpret ever ran -- a placeholder Interpretation is
+// synthesized, mirroring the request's own TimeContext) and non-nil for the
+// POST-Interpret windowVetoAxisConflict case, where a real interpretation
+// already exists and must be reported verbatim rather than replaced with a
+// placeholder.
+//
+// AllowClarification is NEVER consulted here (design brief W1 scope,
+// "AllowClarification=false per-terminal pins"): every window veto is
+// no_match, unconditionally.
+//
+// binding is the SAME ResolvedGraphBinding Investigate resolves before
+// this call (needed only to stamp Save's graphEpoch column honestly, since
+// binding resolution -- a graph read, never a model call -- has already
+// run by the time any window veto is known, pre- or post-Interpret).
+func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, binding ResolvedGraphBinding) (InvestigationResult, error) {
+	if e.telemetry != nil {
+		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))
+	}
+	limitation := windowVetoLimitation(veto)
+	resolvedInterpretation := InterpretedQuestion{
+		Shape:             ShapeOpen,
+		RequestedJudgment: windowVetoPlaceholderJudgment,
+		TimeContext:       request.TimeContext,
+		FactRequirements:  []FactRequirement{},
+	}
+	// timeAxisKeySource is the TimeContext Save/lookup key symmetry is
+	// measured against -- the REQUEST context for a pre-Interpret veto
+	// (matching tryReuse's own pre-Interpret lookup key for this exact
+	// request), or the INTERPRETED context for the post-Interpret axis
+	// conflict (the request-side key was already proved, by construction,
+	// to be what a fresh tryReuse call for this identical request would
+	// compute -- see canonicalizeEvidenceWindow's own ordering comment).
+	timeAxisKeySource := request.TimeContext
+	if interpretation != nil {
+		resolvedInterpretation = *interpretation
+		timeAxisKeySource = interpretation.TimeContext
+	}
+	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
+	result := InvestigationResult{
+		SchemaVersion:      InvestigationResultSchemaV1,
+		ResultID:           e.newResultID(),
+		RequestID:          request.RequestID,
+		GeneratedAt:        e.now().UTC(),
+		Status:             InvestigationNoMatch,
+		Question:           request.Question,
+		Reused:             false,
+		Interpretation:     resolvedInterpretation,
+		SubjectResolution:  SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		DirectJudgment:     "",
+		CurrentState:       "",
+		StrongestPressures: []string{},
+		Drivers:            []DriverJudgment{},
+		RemainingWork:      []Finding{},
+		ReadinessGaps:      []Finding{},
+		Paths:              []RelationshipPath{},
+		Conflicts:          []Finding{},
+		Limitations:        []string{limitation},
+		EvidenceRefIDs:     []string{},
+		ClaimedFacts:       []ClaimedFact{},
+		Coverage:           emptyCoverage,
+		// CHAOS-3900 W1 fix (test failure surfaced this): a non-current
+		// axis result REQUIRES a Temporal label (ContextFabricInvestigationResult.Validate,
+		// AC-3781-2's own invariant) -- reachable here whenever the veto's
+		// own TimeContext (request-side for a pre-Interpret veto, or the
+		// real interpreted one for windowVetoAxisConflict) is non-current,
+		// e.g. TestCHAOS3900_NonCurrentAxisWithWindowReceipt_Vetoes and
+		// TestCHAOS3900_AxisConflict_InterpreterFlipVetoesInsteadOfSilentlyDropping.
+		// composeTemporalLabel already returns nil on the current axis, so
+		// this is a no-op for the ordinary current-axis veto case.
+		Temporal:            composeTemporalLabel(resolvedInterpretation, emptyCoverage, ""),
+		Versions:            e.terminalVersions(),
+		DeterministicAnswer: limitation,
+		Warnings:            []string{},
+	}
+	if err := result.Validate(); err != nil {
+		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+	}
+	if e.results != nil {
+		// Keyed on the SAME TimeContext tryReuse's own lookup for this
+		// exact request would have used (see timeAxisKeySource above) --
+		// never on a window key component: a window veto is never itself
+		// a reusable answer (its own status is a refusal, not a judgment).
+		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+		}
+	}
+	return result, nil
+}

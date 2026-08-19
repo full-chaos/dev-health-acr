@@ -50,6 +50,14 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/SubjectHint":        "#/$defs/context_fabric_common.v1/$defs/SubjectHint",
 	"#/$defs/SubjectRef":         "#/$defs/context_fabric_common.v1/$defs/SubjectRef",
 	"#/$defs/TimeContext":        "#/$defs/context_fabric_common.v1/$defs/TimeContext",
+	// CHAOS-3900 W1: five more locally-$ref'd defs (TimeContext.evidence_window
+	// -> RequestedEvidenceWindow; RequestedEvidenceWindow/EffectiveEvidenceWindow/
+	// WindowOption -> RelativeWindowID; WindowClarification -> WindowOption).
+	"#/$defs/RelativeWindowID":        "#/$defs/context_fabric_common.v1/$defs/RelativeWindowID",
+	"#/$defs/RequestedEvidenceWindow": "#/$defs/context_fabric_common.v1/$defs/RequestedEvidenceWindow",
+	"#/$defs/EffectiveEvidenceWindow": "#/$defs/context_fabric_common.v1/$defs/EffectiveEvidenceWindow",
+	"#/$defs/WindowOption":            "#/$defs/context_fabric_common.v1/$defs/WindowOption",
+	"#/$defs/WindowClarification":     "#/$defs/context_fabric_common.v1/$defs/WindowClarification",
 }
 
 // contextFabricResultDefsRewrites relocates the cross-file pointers
@@ -65,6 +73,10 @@ var contextFabricResultDefsRewrites = map[string]string{
 	"context_fabric_common.v1.schema.json#/$defs/RelationshipPath":    "#/$defs/context_fabric_common.v1/$defs/RelationshipPath",
 	"context_fabric_common.v1.schema.json#/$defs/SubjectResolution":   "#/$defs/context_fabric_common.v1/$defs/SubjectResolution",
 	"context_fabric_common.v1.schema.json#/$defs/VersionSet":          "#/$defs/context_fabric_common.v1/$defs/VersionSet",
+	// CHAOS-3900 W1: two more cross-file pointers the result schema makes
+	// into context_fabric_common.v1.
+	"context_fabric_common.v1.schema.json#/$defs/EffectiveEvidenceWindow": "#/$defs/context_fabric_common.v1/$defs/EffectiveEvidenceWindow",
+	"context_fabric_common.v1.schema.json#/$defs/WindowClarification":     "#/$defs/context_fabric_common.v1/$defs/WindowClarification",
 }
 
 // contextFabricProjectionDefsRewrites relocates
@@ -86,6 +98,11 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/TemporalLabel":          "#/$defs/context_fabric_answer_projection.v1/$defs/TemporalLabel",
 	"#/$defs/TimeContext":            "#/$defs/context_fabric_answer_projection.v1/$defs/TimeContext",
 	"#/$defs/VersionSet":             "#/$defs/context_fabric_answer_projection.v1/$defs/VersionSet",
+	// CHAOS-3900 W1: TimeContext (reused into this file's own $defs, see
+	// answer_projection_closure_test.go's pinned reused-shapes set) now
+	// locally refs these two new defs.
+	"#/$defs/RequestedEvidenceWindow": "#/$defs/context_fabric_answer_projection.v1/$defs/RequestedEvidenceWindow",
+	"#/$defs/RelativeWindowID":        "#/$defs/context_fabric_answer_projection.v1/$defs/RelativeWindowID",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

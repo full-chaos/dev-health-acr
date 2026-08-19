@@ -145,17 +145,22 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	// entirely (same failure mode InputDigest/OutputDigest are excluded
 	// for, just for an id instead of a content hash).
 	"RequestID": {reason: "per-call correlation id, not a version/content-shape authority -- two calls with identical content-shape authorities still get distinct RequestIDs, so binding reuse to it would defeat reuse entirely"},
-	// WindowClass/WindowConfidence/WindowClassUnrecognized (CHAOS-3900 W0,
-	// SHADOW ONLY -- see chaos3900_window_vocab.go's package doc comment):
+	// WindowClass/WindowConfidence/WindowClassUnrecognized (CHAOS-3900):
 	// a per-call CLASSIFICATION OUTCOME, not a version/content-shape
-	// authority. It is not even part of the served answer in W0 -- nothing
-	// downstream of Interpret reads it, so binding reuse to it would be
-	// pointless as well as wrong; the design brief's own eventual
-	// WindowInferenceVersion dimension (§5.2, a real version authority for
-	// a LATER slice, once an inferred window actually rides an answer) is
-	// the field this would graduate into if W1+ ever lands, not this one.
-	"WindowClass":             {reason: "per-call shadow classification outcome, not a version identity -- unconsumed by any served answer in W0 (see chaos3900_window_vocab.go); a future WindowInferenceVersion dimension (design brief §5.2), not this field, is the eventual reuse-key authority once a window rides an answer"},
-	"WindowConfidence":        {reason: "per-call shadow classification outcome, not a version identity -- same reasoning as WindowClass"},
+	// authority -- these three ModelExecutionReceipt fields are a
+	// telemetry-only echo of the model's own raw pick (W0 shadow capture,
+	// chaos3900_window_vocab.go); the wire-carrying, decision-shaping copy
+	// is ContextFabricInterpretedQuestion.WindowClass/WindowConfidence
+	// (a DIFFERENT struct, out of this test's scope), which
+	// composeEffectiveWindow (window.go) consumes as of W1. Binding THIS
+	// receipt-level echo to reuse would still be pointless: it is a
+	// per-call outcome, never a deployment-wide version constant. The
+	// version authority that actually gates reuse for an inferred window
+	// is ReuseKey.WindowInferenceVersion (CHAOS-3900 W1, ports.go) -- a
+	// single deployment-current constant (contextfabric.WindowInferenceVersion),
+	// not any per-call field on this struct.
+	"WindowClass":             {reason: "per-call classification-outcome echo (telemetry only), not a version identity -- the decision-shaping copy lives on ContextFabricInterpretedQuestion, not this receipt; ReuseKey.WindowInferenceVersion (CHAOS-3900 W1) is the real version authority for an inferred window, and it is a deployment-wide constant, not a per-call field"},
+	"WindowConfidence":        {reason: "per-call classification-outcome echo (telemetry only), not a version identity -- same reasoning as WindowClass"},
 	"WindowClassUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as WindowClass"},
 }
 

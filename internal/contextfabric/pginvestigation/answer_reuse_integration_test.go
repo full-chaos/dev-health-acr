@@ -86,6 +86,8 @@ var testReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{
 	ModelOutputSchemaVersion: "context-fabric-model-output.v1",
 	// CHAOS-3884: same mirrored discipline, one more dimension.
 	IdentityNormalizationVersion: "identity_norm_v1",
+	// CHAOS-3900 W1: same mirrored discipline, one more dimension.
+	WindowInferenceVersion: contextfabric.WindowInferenceVersion,
 }
 
 func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKey {
@@ -102,9 +104,11 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 		ModelOutputSchemaVersion: testReuseVersionAuthorities.ModelOutputSchemaVersion,
 		// CHAOS-3884: same mirror, one more dimension.
 		IdentityNormalizationVersion: testReuseVersionAuthorities.IdentityNormalizationVersion,
-		QuestionHash:                 contextfabric.QuestionHash(result.Question),
-		ContractVersion:              result.Versions.ContractVersion,
-		ProjectionVersion:            result.Versions.ProjectionVersion,
+		// CHAOS-3900 W1: same mirror, one more dimension.
+		WindowInferenceVersion: testReuseVersionAuthorities.WindowInferenceVersion,
+		QuestionHash:           contextfabric.QuestionHash(result.Question),
+		ContractVersion:        result.Versions.ContractVersion,
+		ProjectionVersion:      result.Versions.ProjectionVersion,
 		// A single-member chain: the exact identity this result was
 		// stored under. Most tests in this file want the baseline "the
 		// key that was actually stored still matches" case; CHAOS-3786

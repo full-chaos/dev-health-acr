@@ -266,7 +266,18 @@ const (
 // unchanged into reuseAuthorizationStillHolds' own recheck graph calls, so
 // a reuse hit and the fresh investigation it would otherwise have run are
 // always evaluated against the SAME graph.
-func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, binding ResolvedGraphBinding) (InvestigationResult, bool) {
+// windowKey is CHAOS-3900 W1's own request-side window canonicalization
+// key fragment (requestWindowCanonicalization.KeyComponent, window.go) --
+// "" when no question_stated/clarification_confirmed window is in play for
+// this request. Composed onto the axis key via composeTimeAxisKey, never
+// folded into TimeAxisKeyFor itself, so every OTHER caller of
+// TimeAxisKeyFor (tests, other packages) is unaffected.
+// windowKeyEncoding is the SAME encoding requestWindowCanonicalization.KeyEncoding
+// carries for windowKey -- threaded through so the recheck below can
+// re-derive a candidate's OWN key using this request's own TRUSTED,
+// in-process encoding choice, never the candidate's stored (untrusted)
+// Provenance. Meaningless when windowKey == "".
+func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, windowKey string, windowKeyEnc windowKeyEncoding, binding ResolvedGraphBinding) (InvestigationResult, bool) {
 	if e.reuseGate == nil {
 		return InvestigationResult{}, false
 	}
@@ -322,7 +333,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	// Interpretation is still proved to match before anything is served:
 	// condition 6 re-resolves every subject against the candidate's own
 	// stored Interpretation.
-	timeAxisKey := TimeAxisKeyFor(effectiveTimeContext)
+	timeAxisKey := composeTimeAxisKey(TimeAxisKeyFor(effectiveTimeContext), windowKey)
 	if timeAxisKey == "" {
 		// A historical context missing its own required bounds. Fail
 		// closed rather than key it as anything -- see TimeAxisKeyFor.
@@ -356,9 +367,13 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// (identity-term normalization -- see ReuseKey's own field doc
 		// comment).
 		IdentityNormalizationVersion: e.reuseVersionAuthorities.IdentityNormalizationVersion,
-		QueryVersion:                 e.reuseVersionAuthorities.QueryVersion,
-		CanonicalServiceVersion:      e.reuseVersionAuthorities.CanonicalServiceVersion,
-		ModelOutputSchemaVersion:     e.reuseVersionAuthorities.ModelOutputSchemaVersion,
+		// CHAOS-3900 W1: a FOURTEENTH conjunctive dimension, same mirrored
+		// discipline -- see ReuseKey.WindowInferenceVersion's own field doc
+		// comment.
+		WindowInferenceVersion:   e.reuseVersionAuthorities.WindowInferenceVersion,
+		QueryVersion:             e.reuseVersionAuthorities.QueryVersion,
+		CanonicalServiceVersion:  e.reuseVersionAuthorities.CanonicalServiceVersion,
+		ModelOutputSchemaVersion: e.reuseVersionAuthorities.ModelOutputSchemaVersion,
 		// CHAOS-3898 §2.3: the SAME binding Investigate resolved before
 		// this call. A stored candidate matches only if it was generated
 		// under this exact active graph epoch.
@@ -375,6 +390,44 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	}
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, false
+	}
+	// CHAOS-3900 W1 (codex review, rounds 2-5, consolidated round 5): a
+	// window-keyed lookup (windowKey != "") must never serve a candidate
+	// whose OWN stored content disagrees with what the window fragment in
+	// the key claims. Re-deriving the candidate's OWN key with THIS
+	// request's OWN TRUSTED, in-process windowKeyEnc (never inferred from
+	// the candidate's stored -- and therefore untrusted -- Provenance
+	// field; round 5's own finding on why that inference was unsound) and
+	// comparing it against windowKey byte-for-byte is what closes every
+	// prior round's gap: two DIFFERENT windows (e.g. trailing_30d vs
+	// trailing_90d), two DIFFERENT frozen intervals sharing one
+	// RelativeID, and a candidate whose Provenance disagrees with its own
+	// actual content can never collide here. Every FRESH save this
+	// package's own write path produces already guarantees axis and
+	// window agree with the key it was saved under (canonicalizeEvidenceWindow
+	// only ever resolves a request-side Effective window against a
+	// current-axis request and always derives KeyComponent from that SAME
+	// Effective value and encoding; windowVetoResult's own window_axis_conflict
+	// veto keys its Save on the INTERPRETED context -- never the window-
+	// fragment key -- whenever Interpret disagrees) -- but that guarantee
+	// is a property of window.go's write path, not of this Store. Any row
+	// this Store might ever hold for a reason this package's own write
+	// path did not itself produce (e.g. a differently-ruled binary, a
+	// direct write, an earlier deploy of code a fix has since corrected)
+	// is caught HERE instead of trusted blind, mirroring
+	// reuseAuthorizationStillHolds' own "prove it, don't assume it"
+	// discipline for subjects/evidence. Fails exactly like an ordinary
+	// no-candidate miss -- never an error, always falls through to a
+	// fresh investigation.
+	if windowKey != "" {
+		if candidate.Interpretation.TimeContext.Axis != TemporalCurrent || candidate.EffectiveEvidenceWindow == nil {
+			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+			return InvestigationResult{}, false
+		}
+		if windowKeyComponent(*candidate.EffectiveEvidenceWindow, windowKeyEnc) != windowKey {
+			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+			return InvestigationResult{}, false
+		}
 	}
 	if holds, missReason := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding); !holds {
 		e.recordReuseOutcome(ctx, principal, missReason)

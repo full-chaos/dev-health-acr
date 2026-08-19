@@ -1,28 +1,33 @@
-package graphrank
+package contextfabric
 
 import (
 	"regexp"
 	"strings"
 	"unicode"
-
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
-// CHAOS-3900 W0 (design brief v5.2, §1.2(d)/D2 flow diagram): the
-// deterministic, engine-side temporal-expression binder, SHADOW/PROPOSAL
-// ONLY per chris's final-stamp descope ruling. A guards-passing span
-// PROPOSES a RelativeID for the inferred-default path (overriding the
-// class-table pick, §1.2's "a guards-passing binder span's RelativeID
-// overrides the class table's pick") -- it NEVER mints question_stated
-// authority (three successive absence proofs for an entity-collision guard
-// failed; side-channel prediction of what resolution could bind is unsound
-// as a class, per chris's ruling; see chaos3900-window-flow.md diagram D2).
-// This file implements ONLY the proposal half: BindWindowSpans, the
-// multi-span refusal, and the structural role check. There is no
-// collision guard in W0 (or in any v1 slice) -- none is needed, because
-// nothing here ever reaches decisive authority; a colliding span costs at
-// most one disclosed, gated inferred default (§1.2(d)'s own closing
-// argument).
+// CHAOS-3900 temporal-expression binder (design brief v5.2, §1.2(d)/D2 flow
+// diagram): PROPOSAL ONLY per chris's final-stamp descope ruling, in W0 and
+// still in W1. A guards-passing span PROPOSES a RelativeID for the
+// inferred-default path (overriding the class-table pick, §1.2's "a
+// guards-passing binder span's RelativeID overrides the class table's
+// pick") -- it NEVER mints question_stated authority (three successive
+// absence proofs for an entity-collision guard failed; side-channel
+// prediction of what resolution could bind is unsound as a class, per
+// chris's ruling; see chaos3900-window-flow.md diagram D2). This file
+// implements ONLY the proposal half: BindWindowSpans, the multi-span
+// refusal, and the structural role check. There is no collision guard in
+// this slice -- none is needed, because a binder proposal never reaches
+// decisive authority on its own; a colliding span costs at most one
+// disclosed, gated inferred default (§1.2(d)'s own closing argument).
+//
+// W0 shipped this in package graphrank, shadow-only, beside CHAOS-3896/
+// 3899's own grammar-registry discipline (chaos3899_handle_grammar.go). W1's
+// canonicalizeEvidenceWindow (window.go) calls ProposeWindowFromSpans as a
+// real pre-tryReuse engine step, which package graphrank's existing
+// "graphrank imports contextfabric" direction would turn into an import
+// cycle -- so this file moved into package contextfabric unchanged in
+// behavior.
 //
 // Corpus-safety discipline (same as chaos3899_handle_grammar.go's
 // BoundHandle): BoundWindowSpan below deliberately carries ONLY byte
@@ -37,14 +42,14 @@ import (
 // (offsets only -- see this file's own doc comment).
 type BoundWindowSpan struct {
 	Grammar    string // the registry entry's own fixed name -- safe to trace
-	RelativeID contextfabric.RelativeWindowID
+	RelativeID RelativeWindowID
 	SpanStart  int
 	SpanEnd    int
 }
 
 type windowGrammarEntry struct {
 	name       string
-	relativeID contextfabric.RelativeWindowID
+	relativeID RelativeWindowID
 	pattern    *regexp.Regexp
 }
 
@@ -66,9 +71,9 @@ type windowGrammarEntry struct {
 // "minimal, conservative slice-1 grammar... widening it is a registry
 // addition, not a redesign" precedent.
 var windowGrammarRegistry = []windowGrammarEntry{
-	{name: "trailing_month", relativeID: contextfabric.RelativeWindowTrailing30D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+month\b`)},
-	{name: "trailing_quarter", relativeID: contextfabric.RelativeWindowTrailing90D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+quarter\b`)},
-	{name: "trailing_year", relativeID: contextfabric.RelativeWindowTrailing365D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+year\b`)},
+	{name: "trailing_month", relativeID: RelativeWindowTrailing30D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+month\b`)},
+	{name: "trailing_quarter", relativeID: RelativeWindowTrailing90D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+quarter\b`)},
+	{name: "trailing_year", relativeID: RelativeWindowTrailing365D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+year\b`)},
 }
 
 // BindWindowSpans applies the closed grammar to question (verbatim
@@ -149,8 +154,21 @@ func hasWindowRole(question string, span BoundWindowSpan) bool {
 		}
 	}
 	after := question[span.SpanEnd:]
+	// isReuseTerminalPunctuation (answer_reuse.go), NOT a hand-rolled set --
+	// codex review finding (W1 round 4): QuestionHash's own CanonicalizeQuestion
+	// strips this EXACT closed set (including ';'/':', which a hand-rolled
+	// subset here previously omitted) before hashing, so two questions
+	// differing ONLY in which of these trailing marks they end with
+	// already hash IDENTICALLY. A binder role-check using a NARROWER set
+	// let those two hash-identical questions reach genuinely DIFFERENT
+	// binder outcomes (one clause-final-passes, the other doesn't) --
+	// which, for the inferred-default path (no reuse-key fragment of its
+	// own, guarded only by the single deployment-wide WindowInferenceVersion),
+	// meant a reuse hit could silently serve the OTHER phrasing's inferred
+	// window. Sharing the identical closed set with QuestionHash is what
+	// makes "same hash" and "same binder outcome" actually agree.
 	trailing := strings.TrimFunc(after, func(r rune) bool {
-		return unicode.IsSpace(r) || r == '.' || r == '?' || r == ',' || r == '!'
+		return unicode.IsSpace(r) || isReuseTerminalPunctuation(r)
 	})
 	if trailing == "" {
 		// Clause-final: only trailing whitespace/terminal punctuation
@@ -206,7 +224,7 @@ const (
 // WindowBindOutcome is the SHADOW-ONLY binder verdict for one question.
 type WindowBindOutcome struct {
 	Reason     WindowBindReason
-	RelativeID contextfabric.RelativeWindowID // set only when Reason == WindowBindRoutedInferred
+	RelativeID RelativeWindowID // set only when Reason == WindowBindRoutedInferred
 	SpansBound int
 }
 

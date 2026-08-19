@@ -35,7 +35,9 @@ import (
 // (+ retire records + build source progress) and the projection checkpoint
 // re-key to (org, epoch, source), respectively. 0021 is CHAOS-3898 S2's
 // §2.3 graph_epoch reuse-key dimension on context_fabric_investigation_results.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+// 0022 is CHAOS-3900 W1's window_inference_version reuse-key dimension on
+// the same table.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -431,12 +433,15 @@ func TestRunner_upgradeTo18AddsIdentityNormalizationReuseKeyColumn(t *testing.T)
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "identity_normalization_version")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_identity_norm_version_length")
 	// CHAOS-3898 §2.3's migration 0021 replaces v5 with v6 (one more reuse-
-	// key dimension, graph_epoch) -- "latest" here includes 0021, so the
-	// index this 0018 upgrade itself created is no longer the CURRENT one;
-	// see TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn for the
-	// dedicated 0018->0021-boundary proof this same replace-don't-stack
-	// pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
+	// key dimension, graph_epoch), and CHAOS-3900 W1's migration 0022 in turn
+	// replaces v6 with v7 (window_inference_version) -- "latest" here
+	// includes both, so the index this 0018 upgrade itself created is no
+	// longer the CURRENT one; see TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn
+	// and TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn for the
+	// dedicated 0018->0021 and 0021->0022 boundary proofs this same
+	// replace-don't-stack pattern needs.
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v5")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v4")
 }
@@ -494,8 +499,85 @@ func TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn(t *testing.T) {
 
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "graph_epoch")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_graph_epoch_nonneg")
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
+	// CHAOS-3900 W1's migration 0022 replaces v6 with v7 (one more reuse-key
+	// dimension, window_inference_version) -- "latest" here includes 0022,
+	// so the index this 0021 upgrade itself created is no longer the CURRENT
+	// one; see TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn for
+	// the dedicated 0021->0022-boundary proof this same replace-don't-stack
+	// pattern needs.
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v5")
+}
+
+// TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn mirrors
+// TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn (CHAOS-3900 W1): 0022
+// adds window_inference_version as one more reuse-key dimension on top of a
+// database already at 0021 (CHAOS-3898 §2.3's graph_epoch column, which
+// 0022 itself extends), proving both halves of the replace-don't-stack
+// pattern -- the new column/constraint/index exist, and the OLD v6 index is
+// actually dropped, not left stacked beside v7.
+func TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn(t *testing.T) {
+	// Given a database at the released main schema through migration 0021
+	// (everything CHAOS-3900 W1 builds on top of)...
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	preWindowInferenceFiles := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_acr_core.sql",
+		"0002_episode_repository_scoped_idempotency.sql",
+		"0003_credential_rotation_marker.sql",
+		"0004_device_authorization.sql",
+		"0005_device_authorization_hints.sql",
+		"0006_context_fabric_projection_checkpoints.sql",
+		"0007_context_fabric_projection_rebuild_markers.sql",
+		"0008_agent_episodes_updated_at.sql",
+		"0009_context_fabric_investigation_results.sql",
+		"0010_context_fabric_org_model_config.sql",
+		"0011_context_fabric_answer_reuse.sql",
+		"0012_context_fabric_reuse_fallback_identity_cutover.sql",
+		"0013_context_fabric_time_axis_reuse_key.sql",
+		"0014_context_fabric_embed_retrieval_reuse_key.sql",
+		"0015_context_fabric_prompt_version_reuse_key.sql",
+		"0016_context_fabric_clarification_selections.sql",
+		"0017_context_fabric_model_receipts_request_id.sql",
+		"0018_context_fabric_identity_normalization_reuse_key.sql",
+		"0019_context_fabric_graph_lifecycle.sql",
+		"0020_context_fabric_projection_checkpoints_epoch.sql",
+		"0021_context_fabric_graph_epoch_reuse_key.sql",
+	} {
+		preWindowInferenceFiles[name] = &fstest.MapFile{Data: mustReadFile(t, name)}
+	}
+	released, err := NewRunner(preWindowInferenceFiles)
+	require.NoError(t, err)
+	require.NoError(t, released.Up(ctx, db))
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
+
+	// When upgrading to the full (post-CHAOS-3900-W1) migration set.
+	latest, err := Embedded()
+	require.NoError(t, err)
+
+	// Then
+	require.NoError(t, latest.Up(ctx, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
+
+	requireContextFabricInvestigationResultsColumn(t, ctx, db, "window_inference_version")
+	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_window_inference_version_length")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
+}
+
+// TestRunner_upgradeTo22IsIdempotentOnRetry mirrors
+// TestRunner_upgradeTo21IsIdempotentOnRetry: 0022 must survive being
+// applied twice without erroring.
+func TestRunner_upgradeTo22IsIdempotentOnRetry(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	runner, err := Embedded()
+	require.NoError(t, err)
+	require.NoError(t, runner.Up(ctx, db))
+	require.NoError(t, runner.Up(ctx, db), "a second Up() over an already-migrated database must not error")
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
 }
 
 // TestRunner_upgradeTo21IsIdempotentOnRetry mirrors

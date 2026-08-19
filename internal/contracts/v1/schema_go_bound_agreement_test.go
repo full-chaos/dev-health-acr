@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -9,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 )
 
 // This file closes the numeric-drift CLASS.
@@ -152,6 +156,13 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"result#properties.question.maxLength":                      8000,
 		"common#$defs.SubjectRef.properties.label.maxLength":        512,
 		"common#$defs.SubjectRef.properties.canonical_id.maxLength": 256,
+		// CHAOS-3900 W1: ContextFabricWindowClarification.Validate's own
+		// bounds (validate_context_fabric_window.go) -- options is
+		// required non-empty (minItems 1, "window clarification options
+		// violate v1 bounds" on len==0) and capped at
+		// contextFabricWindowClarificationMaxOptions.
+		"common#$defs.WindowClarification.properties.options.maxItems": contextFabricWindowClarificationMaxOptions,
+		"common#$defs.WindowClarification.properties.options.minItems": 1,
 	}
 
 	discovered := schemaBounds(t, documents)
@@ -722,4 +733,209 @@ func TestFactKindVocabularyCannotBeMutatedByCallers(t *testing.T) {
 	if ContextFabricFactKindCount != len(ContextFabricFactKindVocabulary()) {
 		t.Errorf("ContextFabricFactKindCount is %d but the vocabulary holds %d", ContextFabricFactKindCount, len(ContextFabricFactKindVocabulary()))
 	}
+}
+
+// TestWindowShapeSchemaAndGoValidateAgree closes the CHAOS-3900 W1
+// window-SHAPE class TestSchemaAndGoBoundsAgree above does not reach: that
+// test enumerates numeric maxItems/maxLength/etc keywords, but the window
+// defect class codex round 6 opened and round 7 reopened twice more is
+// STRUCTURAL -- an anyOf/if/then combination that is laxer than
+// validate_context_fabric_window.go's own Validate()/validate() methods.
+// Two hand-audit passes (round 6's own fix, then round 7's re-review of
+// that fix) each missed at least one instance of the same shape, which is
+// exactly the pattern the house rule ("after the second boundary defect you
+// enforce the invariant, not the instance") exists for: this table is that
+// invariant. A future schema edit that reopens ANY of these gaps fails this
+// test instead of waiting for a third codex round to notice.
+//
+// Every case drives BOTH sides independently -- the Go method the write
+// path actually calls, and contractcheck.ValidateSerialized against the
+// canonical schema wrapping the shape in an otherwise-valid document -- and
+// asserts each against the test's own stated expectation, not merely
+// against each other. Asserting only mutual agreement would pass if both
+// sides regressed together in the same direction; asserting each against a
+// known-correct expectation is what actually catches that.
+func TestWindowShapeSchemaAndGoValidateAgree(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	assertParity := func(t *testing.T, wantValid bool, goErr, schemaErr error) {
+		t.Helper()
+		if goValid := goErr == nil; goValid != wantValid {
+			t.Errorf("Go verdict: valid=%v (err=%v), want valid=%v", goValid, goErr, wantValid)
+		}
+		if schemaValid := schemaErr == nil; schemaValid != wantValid {
+			t.Errorf("schema verdict: valid=%v (err=%v), want valid=%v", schemaValid, schemaErr, wantValid)
+		}
+	}
+
+	// --- RequestedEvidenceWindow, via request.time_context.evidence_window ---
+	requestedCases := []struct {
+		name      string
+		window    ContextFabricRequestedEvidenceWindow
+		wantValid bool
+	}{
+		{"relative_id + start, no end (codex round 7 F1)", ContextFabricRequestedEvidenceWindow{RelativeID: ContextFabricRelativeWindowTrailing90D, Start: &start}, false},
+		{"relative_id + end, no start (codex round 7 F1)", ContextFabricRequestedEvidenceWindow{RelativeID: ContextFabricRelativeWindowTrailing90D, End: &end}, false},
+		{"relative_id alone", ContextFabricRequestedEvidenceWindow{RelativeID: ContextFabricRelativeWindowTrailing90D}, true},
+		{"explicit bounds alone, no relative_id", ContextFabricRequestedEvidenceWindow{Start: &start, End: &end}, true},
+		{"all_time alone", ContextFabricRequestedEvidenceWindow{RelativeID: ContextFabricRelativeWindowAllTime}, true},
+		{"all_time with bounds", ContextFabricRequestedEvidenceWindow{RelativeID: ContextFabricRelativeWindowAllTime, Start: &start, End: &end}, false},
+	}
+	for _, tc := range requestedCases {
+		t.Run("RequestedEvidenceWindow/"+tc.name, func(t *testing.T) {
+			goErr := tc.window.validate()
+			request := validContextFabricContractRequest()
+			request.TimeContext.EvidenceWindow = &tc.window
+			encoded, err := json.Marshal(request)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			schemaErr := contractcheck.ValidateSerialized("", "context_fabric_investigation_request.v1.schema.json", encoded)
+			assertParity(t, tc.wantValid, goErr, schemaErr)
+		})
+	}
+
+	// --- EffectiveEvidenceWindow, via result.effective_evidence_window ---
+	effectiveCases := []struct {
+		name      string
+		window    ContextFabricEffectiveEvidenceWindow
+		wantValid bool
+	}{
+		{"relative_id + start, no end (codex round 7 F1)", ContextFabricEffectiveEvidenceWindow{Provenance: ContextFabricWindowInferredDefault, RelativeID: ContextFabricRelativeWindowTrailing30D, Start: &start}, false},
+		{"relative_id + end, no start (codex round 7 F1)", ContextFabricEffectiveEvidenceWindow{Provenance: ContextFabricWindowInferredDefault, RelativeID: ContextFabricRelativeWindowTrailing30D, End: &end}, false},
+		{"relative_id alone", ContextFabricEffectiveEvidenceWindow{Provenance: ContextFabricWindowInferredDefault, RelativeID: ContextFabricRelativeWindowTrailing30D}, true},
+	}
+	for _, tc := range effectiveCases {
+		t.Run("EffectiveEvidenceWindow/"+tc.name, func(t *testing.T) {
+			goErr := tc.window.validate()
+			result := validContextFabricContractResult()
+			result.EffectiveEvidenceWindow = &tc.window
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			schemaErr := contractcheck.ValidateSerialized("", "context_fabric_investigation_result.v1.schema.json", encoded)
+			assertParity(t, tc.wantValid, goErr, schemaErr)
+		})
+	}
+
+	// --- WindowOption, via result.window_clarification.options[0] ---
+	baseOption := ContextFabricWindowOption{ReceiptID: "winr_confirm00001", OptionID: "opt_1", Label: "a window option"}
+	optionCases := []struct {
+		name      string
+		option    ContextFabricWindowOption
+		wantValid bool
+	}{
+		{"neither relative_id nor bounds (codex round 7 F2)", baseOption, false},
+		{"all_time with bounds (codex round 7 F2)", withOption(baseOption, func(o *ContextFabricWindowOption) {
+			o.RelativeID = ContextFabricRelativeWindowAllTime
+			o.Start, o.End = &start, &end
+		}), false},
+		{"relative_id + start, no end (codex round 7 F1/F2)", withOption(baseOption, func(o *ContextFabricWindowOption) {
+			o.RelativeID = ContextFabricRelativeWindowTrailing30D
+			o.Start = &start
+		}), false},
+		{"relative_id + end, no start (codex round 7 F1/F2)", withOption(baseOption, func(o *ContextFabricWindowOption) {
+			o.RelativeID = ContextFabricRelativeWindowTrailing30D
+			o.End = &end
+		}), false},
+		{"relative_id + both bounds (valid control)", withOption(baseOption, func(o *ContextFabricWindowOption) {
+			o.RelativeID = ContextFabricRelativeWindowTrailing30D
+			o.Start, o.End = &start, &end
+		}), true},
+		{"all_time alone (valid control)", withOption(baseOption, func(o *ContextFabricWindowOption) { o.RelativeID = ContextFabricRelativeWindowAllTime }), true},
+		{"no relative_id, both bounds (valid control)", withOption(baseOption, func(o *ContextFabricWindowOption) { o.Start, o.End = &start, &end }), true},
+	}
+	for _, tc := range optionCases {
+		t.Run("WindowOption/"+tc.name, func(t *testing.T) {
+			goErr := tc.option.Validate()
+			result := validContextFabricContractResult()
+			result.WindowClarification = &ContextFabricWindowClarification{Options: []ContextFabricWindowOption{tc.option}}
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			schemaErr := contractcheck.ValidateSerialized("", "context_fabric_investigation_result.v1.schema.json", encoded)
+			assertParity(t, tc.wantValid, goErr, schemaErr)
+		})
+	}
+
+	// --- WindowClarification per-field uniqueness: the DOCUMENTED RESIDUAL
+	// asymmetry (codex round 7 F3/F5), not a closed gap. Standard JSON
+	// Schema (draft 2020-12) has no keyword for uniqueness on a derived
+	// subset of fields, so uniqueItems (whole-object equality) cannot
+	// reject two options that differ only in label -- see WindowClarification's
+	// own schema description for the full explanation. This is pinned as an
+	// EXPECTED disagreement, not silently left untested: if a future
+	// schema-validator upgrade ever makes this expressible, tightening the
+	// schema and flipping wantSchemaValid to false here (matching every
+	// other case's shared expectation) is the signal to do it.
+	uniquenessCases := []struct {
+		name            string
+		options         []ContextFabricWindowOption
+		wantGoValid     bool
+		wantSchemaValid bool
+	}{
+		{
+			name: "duplicate receipt_id, differing label",
+			options: []ContextFabricWindowOption{
+				withOption(baseOption, func(o *ContextFabricWindowOption) {
+					o.RelativeID = ContextFabricRelativeWindowTrailing30D
+					o.Start, o.End = &start, &end
+				}),
+				withOption(baseOption, func(o *ContextFabricWindowOption) {
+					o.OptionID, o.Label = "opt_2", "a differently-labeled window option"
+					o.RelativeID = ContextFabricRelativeWindowTrailing90D
+					o.Start, o.End = &start, &end
+				}),
+			},
+			wantGoValid:     false,
+			wantSchemaValid: true,
+		},
+		{
+			name: "duplicate option_id, differing label",
+			options: []ContextFabricWindowOption{
+				withOption(baseOption, func(o *ContextFabricWindowOption) {
+					o.RelativeID = ContextFabricRelativeWindowTrailing30D
+					o.Start, o.End = &start, &end
+				}),
+				withOption(baseOption, func(o *ContextFabricWindowOption) {
+					o.ReceiptID, o.Label = "winr_confirm00002", "a differently-labeled window option"
+					o.RelativeID = ContextFabricRelativeWindowTrailing90D
+					o.Start, o.End = &start, &end
+				}),
+			},
+			wantGoValid:     false,
+			wantSchemaValid: true,
+		},
+	}
+	for _, tc := range uniquenessCases {
+		t.Run("WindowClarification/"+tc.name, func(t *testing.T) {
+			clarification := ContextFabricWindowClarification{Options: tc.options}
+			goErr := clarification.Validate()
+			if goValid := goErr == nil; goValid != tc.wantGoValid {
+				t.Errorf("Go verdict: valid=%v (err=%v), want valid=%v", goValid, goErr, tc.wantGoValid)
+			}
+			result := validContextFabricContractResult()
+			result.WindowClarification = &clarification
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			schemaErr := contractcheck.ValidateSerialized("", "context_fabric_investigation_result.v1.schema.json", encoded)
+			if schemaValid := schemaErr == nil; schemaValid != tc.wantSchemaValid {
+				t.Errorf("schema verdict: valid=%v (err=%v), want valid=%v -- if this now differs, standard JSON Schema may have gained a way to express per-field uniqueness; see this test's own doc comment", schemaValid, schemaErr, tc.wantSchemaValid)
+			}
+		})
+	}
+}
+
+// withOption returns a copy of base with mutate applied, so table entries
+// above can start from one shared, already-valid receipt_id/option_id/label
+// triple and vary only the window shape under test.
+func withOption(base ContextFabricWindowOption, mutate func(*ContextFabricWindowOption)) ContextFabricWindowOption {
+	mutate(&base)
+	return base
 }

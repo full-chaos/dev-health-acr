@@ -183,6 +183,7 @@ func (e *Engine) terminalResult(
 	epoch RebuildEpoch,
 	subjectCandidatesAuthzDropped int,
 	binding ResolvedGraphBinding,
+	windowCanon requestWindowCanonicalization,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
@@ -274,9 +275,18 @@ func (e *Engine) terminalResult(
 		ClaimedFacts:         []ClaimedFact{},
 		Coverage:             coverage,
 		Temporal:             composeTemporalLabel(interpretation, coverage, ""),
-		Versions:             e.terminalVersions(),
-		DeterministicAnswer:  answer,
-		Warnings:             []string{},
+		// CHAOS-3900 W1: a subjectless terminal still discloses the window
+		// it would have read evidence against, exactly like any other
+		// result -- composeEffectiveWindow's own precedence rules apply
+		// identically regardless of whether a subject was ultimately
+		// committed.
+		EffectiveEvidenceWindow: composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, e.now()),
+		Versions:                e.terminalVersions(),
+		DeterministicAnswer:     answer,
+		Warnings:                []string{},
+	}
+	if e.telemetry != nil {
+		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
@@ -290,7 +300,7 @@ func (e *Engine) terminalResult(
 		// introduce a difference, and a terminal result saved under a key no
 		// lookup will ever form is a row the clarification loop cannot reach.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.results.Save(ctx, principal, result, watermark, epoch, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+		if err := e.results.Save(ctx, principal, result, watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)

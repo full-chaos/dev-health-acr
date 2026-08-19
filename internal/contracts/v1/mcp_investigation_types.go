@@ -174,6 +174,15 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.coverage.degraded_reasons[]",
 	"structured.limitations[]",
 	"structured.warnings[]",
+	// CHAOS-3900 W1: WindowOption.Label IS server-rendered, closed-vocabulary
+	// text derived from RelativeID, never model or source-derived prose --
+	// but classified conservatively as untrusted anyway, consistent with
+	// every OTHER "label" leaf in this list, rather than widening the
+	// leaf-name-based trusted-vocabulary pattern
+	// (answer_projection_closure_test.go's trustedBecauseClosed) to cover
+	// "label" globally, which would incorrectly whitelist genuine
+	// source-derived labels elsewhere in this same document.
+	"structured.window_clarification.options[].label",
 	// Entity display labels come from the source systems ACR projects
 	// from (issue trackers, repository hosts), so they are retrieved
 	// content wherever they appear -- including deep inside relationship

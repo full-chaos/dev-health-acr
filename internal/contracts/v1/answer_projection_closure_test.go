@@ -216,8 +216,8 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		untrusted     []string
 		expectedPaths int
 	}{
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 67},
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 139},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 73},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 162},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -276,6 +276,14 @@ func trustedBecauseClosed(path string) bool {
 	case "kind", "state", "status", "standing", "category", "shape", "role",
 		"axis", "derivation", "epistemic_status", "type", "availability",
 		"provenance", "outcome", "source_state",
+		// CHAOS-3900 W1: window_class/window_confidence/confidence are all
+		// closed-vocabulary strings (ContextFabricWindowClass,
+		// ContextFabricWindowConfidence) validated against their own
+		// registries before a result is stored -- never model prose. Note
+		// "confidence" here is a STRING leaf (ContextFabricEffectiveEvidenceWindow.Confidence);
+		// every OTHER "confidence" field in this contract (SubjectCandidate,
+		// DriverJudgment) is a float64 and never reaches this string walker.
+		"window_class", "window_confidence", "confidence",
 		// CHAOS-3781: "grain" is ContextFabricTemporalGrain (instant,
 		// day, none) and "match_mechanisms" is the closed set of ways a
 		// candidate was matched. Both are validated against their own

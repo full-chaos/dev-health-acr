@@ -157,6 +157,12 @@
     },
     "temporal": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/TemporalLabel"
+    },
+    "effective_evidence_window": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/EffectiveEvidenceWindow"
+    },
+    "window_clarification": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/WindowClarification"
     }
   },
   "required": [
