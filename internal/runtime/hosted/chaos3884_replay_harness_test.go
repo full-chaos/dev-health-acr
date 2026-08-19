@@ -78,8 +78,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedcache"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
+	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -416,7 +418,7 @@ func (c *replayTraceCapture) shadowOutcome() replayShadowOutcome {
 	return out
 }
 
-func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Client, wireIdentityUniverse bool, tracer graphrank.ResolutionTracer, censusFunc graphrank.CensusFunc) (contextfabric.GraphReader, error) {
+func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Client, wireIdentityUniverse bool, tracer graphrank.ResolutionTracer, censusFunc graphrank.CensusFunc, epochResolver contextfabric.OrgEpochResolver) (contextfabric.GraphReader, error) {
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return nil, err
@@ -432,6 +434,18 @@ func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Clien
 	// TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution,
 	// graphrank package).
 	graphConfig.CensusFunc = censusFunc
+	// CHAOS-3896 Slice B measurement infrastructure (team-lead-authorized
+	// fix-forward): epochResolver is nil unless the caller explicitly built
+	// one from ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED -- see
+	// buildReplayEpochResolver's own doc comment for why this harness had
+	// NONE before (it retroactively falsified two earlier "epoch 1"
+	// checkpoint artifacts, both of which actually read epoch 0). Wired
+	// identically on BOTH arms (baseline and wired): epoch selection is a
+	// GRAPH KEY concern, orthogonal to the IdentityUniverse
+	// baseline/wired distinction this harness exists to isolate -- both
+	// arms must read the SAME graph, exactly as they already share the
+	// same FalkorDB client.
+	graphConfig.EpochResolver = epochResolver
 	if wireIdentityUniverse {
 		graphConfig.IdentityUniverse = func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
 			return devhealthsource.IdentityUniverse(ctx, client, orgID)
@@ -447,6 +461,54 @@ func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Clien
 	}
 	embedderOptions.Embedder = embedcache.Wrap(embedderOptions.Embedder, embedCacheConfig)
 	return falkorgraph.NewWithEmbedder(graphConfig, embedderOptions)
+}
+
+// buildReplayEpochResolver is CHAOS-3896 Slice B's measurement-infrastructure
+// fix-forward (team-lead-authorized, "NEVER-AGAIN RIDER"): before this,
+// buildReplayGraphReader built its falkorgraph.Config via
+// falkorgraph.ConfigFromEnv ALONE, which has no epoch/lifecycle logic
+// whatsoever -- Config.EpochResolver stayed nil regardless of
+// ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED, so this harness could ONLY
+// ever read epoch 0 (falkorgraph's own resolveActiveEpoch: "nil
+// EpochResolver -> epoch 0, always"). Two earlier "post_rebuild" checkpoint
+// artifacts (gen-trial-chaos3896_checkpoint_post_rebuild{,_r2}.json) that
+// believed they measured epoch 1 with this exact flag exported actually
+// measured epoch 0 plus a day of ordinary incremental drift -- confirmed by
+// this finding, corrected on Linear. This function closes that gap with the
+// SAME 4-line pattern open.go's own buildGraphLifecycleResolver uses in
+// production, self-contained here because this harness (unlike open.go's
+// production composition) opens no Postgres connection of its own.
+//
+// nil, nil (both return values) when pglifecycle.EnvConfig.Enabled is
+// false -- the harness's own pre-existing, byte-identical-to-before
+// behavior for every run that does not set the flag. dsn empty is treated
+// identically (defensive: a caller enabling the flag without also setting
+// ACR_TEST_TRIAL_POSTGRES_DSN gets a clear error, not a silent epoch-0
+// fallback that LOOKS like this bug all over again).
+func buildReplayEpochResolver(ctx context.Context, dsn string) (contextfabric.OrgEpochResolver, error) {
+	envCfg, err := pglifecycle.ConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	if !envCfg.Enabled {
+		return nil, nil
+	}
+	if dsn == "" {
+		return nil, fmt.Errorf("buildReplayEpochResolver: %s is set but ACR_TEST_TRIAL_POSTGRES_DSN is empty -- refusing to silently fall back to epoch 0", pglifecycle.EnvEnabled)
+	}
+	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn})
+	if err != nil {
+		return nil, fmt.Errorf("buildReplayEpochResolver: open postgres: %w", err)
+	}
+	store, err := pglifecycle.NewStore(db)
+	if err != nil {
+		return nil, err
+	}
+	resolver, err := pglifecycle.NewResolver(store)
+	if err != nil {
+		return nil, err
+	}
+	return pglifecycle.NewCachedResolver(resolver, envCfg.Lease, pglifecycle.CachedResolverOptions{})
 }
 
 // TestChaos3884ReplayHarness is the live orchestration: loads the SAME
@@ -528,7 +590,35 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	baselineGraph, err := buildReplayGraphReader(logger, client, false, nil, nil)
+	// CHAOS-3896 Slice B measurement infrastructure (team-lead-authorized
+	// "NEVER-AGAIN RIDER"): built ONCE, wired identically into both arms
+	// below. epochResolver is nil (byte-identical to every run before this
+	// slice) unless ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED is set.
+	epochResolver, err := buildReplayEpochResolver(ctx, os.Getenv("ACR_TEST_TRIAL_POSTGRES_DSN"))
+	if err != nil {
+		t.Fatalf("build epoch resolver: %v", err)
+	}
+	// THE PROOF: resolve orgID's own active epoch BEFORE running a single
+	// case, and ASSERT it, never merely log it -- an epoch claim without a
+	// read-proof is exactly the "measurement fails toward fine" class this
+	// rider exists to close structurally. Runs even when epochResolver is
+	// nil (contextfabric.OrgEpochResolver's own nil-safe convention does
+	// not apply here since we are calling it directly, not through
+	// falkorgraph -- so guard explicitly and report 0, the documented
+	// "no lifecycle row" value, for that case).
+	var resolvedActiveEpoch int64
+	if epochResolver != nil {
+		resolvedActiveEpoch, err = epochResolver.ResolveActiveEpoch(ctx, orgID)
+		if err != nil {
+			t.Fatalf("resolve active epoch for %s: %v", orgID, err)
+		}
+		if resolvedActiveEpoch <= 0 {
+			t.Fatalf("ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED is set but ResolveActiveEpoch(%s) = %d -- want a positive epoch (a lifecycle row exists but reports no flip, or the flag is on against the wrong organization); refusing to silently measure epoch 0 under a flag that claims otherwise", orgID, resolvedActiveEpoch)
+		}
+	}
+	t.Logf("CHAOS-3896 Slice B epoch proof: org=%s resolved_active_epoch=%d (epochResolver wired=%v)", orgID, resolvedActiveEpoch, epochResolver != nil)
+
+	baselineGraph, err := buildReplayGraphReader(logger, client, false, nil, nil, epochResolver)
 	if err != nil {
 		t.Fatalf("build baseline graph reader: %v", err)
 	}
@@ -544,7 +634,7 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 	if os.Getenv("ACR_TEST_TRIAL_SHADOW_CENSUS") != "false" {
 		censusFunc = devhealthsource.NewCensusFunc(client)
 	}
-	wiredGraph, err := buildReplayGraphReader(logger, client, true, traceCapture, censusFunc)
+	wiredGraph, err := buildReplayGraphReader(logger, client, true, traceCapture, censusFunc, epochResolver)
 	if err != nil {
 		t.Fatalf("build wired graph reader: %v", err)
 	}
@@ -593,7 +683,9 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 			CorpusSHA256: corpusHash, Transport: "file_exchange", RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 			ExchangeModelName: arm, ExchangeSessionID: exchangeRuntime.nonce,
-			ControlsContinue: os.Getenv("ACR_TEST_TRIAL_CONTROLS_CONTINUE") == "true",
+			ControlsContinue:      os.Getenv("ACR_TEST_TRIAL_CONTROLS_CONTINUE") == "true",
+			ResolvedActiveEpoch:   resolvedActiveEpoch,
+			GraphLifecycleEnabled: epochResolver != nil,
 		},
 		BaseSHA:                  requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
 		PartAMeasurementDeferred: true,

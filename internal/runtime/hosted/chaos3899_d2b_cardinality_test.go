@@ -192,11 +192,11 @@ func TestChaos3899D2BCardinality(t *testing.T) {
 	// measurement never rides graphrank.ResolveSubjects' own shadow-round
 	// gate -- it runs its own bare aggregate reads, entirely separate from
 	// D2(a)'s decisive registry.
-	baselineGraph, err := buildReplayGraphReader(logger, client, false, nil, nil)
+	baselineGraph, err := buildReplayGraphReader(logger, client, false, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("build baseline graph reader: %v", err)
 	}
-	wiredGraph, err := buildReplayGraphReader(logger, client, true, nil, nil)
+	wiredGraph, err := buildReplayGraphReader(logger, client, true, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("build wired graph reader: %v", err)
 	}

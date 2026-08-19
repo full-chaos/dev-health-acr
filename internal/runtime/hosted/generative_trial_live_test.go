@@ -1281,6 +1281,21 @@ type trialProvenance struct {
 	// aborting the arm. false (the default) for every run before this
 	// field existed and every run that does not set the env var.
 	ControlsContinue bool `json:"controls_continue"`
+	// ResolvedActiveEpoch/GraphLifecycleEnabled (CHAOS-3896 Slice B,
+	// team-lead-authorized "NEVER-AGAIN RIDER") are the run's own
+	// structural proof of which graph epoch it actually read -- an epoch
+	// claim without this is exactly the "measurement fails toward fine"
+	// class chris's rider closes: two earlier checkpoint artifacts
+	// believed they read epoch 1 with the lifecycle flag exported and
+	// actually read epoch 0 (falkorgraph.Config.EpochResolver was never
+	// wired). 0 with GraphLifecycleEnabled=false is every run before this
+	// field existed and every run that does not enable the flag --
+	// byte-identical, not a breaking change to this shared struct. Only
+	// chaos3884_replay_harness_test.go populates these two fields today;
+	// every other trial script's provenance leaves them at their zero
+	// values.
+	ResolvedActiveEpoch   int64 `json:"resolved_active_epoch"`
+	GraphLifecycleEnabled bool  `json:"graph_lifecycle_enabled"`
 	// CommitGate is CHAOS-3857's sweep-cell record: the raw string this
 	// run actually read for each of falkorgraph's four commit-gate env
 	// vars (CommitGatePolicy's three thresholds + the M override), empty

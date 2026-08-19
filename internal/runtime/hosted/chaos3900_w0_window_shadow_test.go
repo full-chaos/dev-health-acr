@@ -213,11 +213,11 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 
 	// Same two-arm baseline/wired composition D2(b) uses, for the SAME
 	// scorecard-confirmation reason -- see this file's own doc comment.
-	baselineGraph, err := buildReplayGraphReader(logger, client, false, nil, nil)
+	baselineGraph, err := buildReplayGraphReader(logger, client, false, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("build baseline graph reader: %v", err)
 	}
-	wiredGraph, err := buildReplayGraphReader(logger, client, true, nil, nil)
+	wiredGraph, err := buildReplayGraphReader(logger, client, true, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("build wired graph reader: %v", err)
 	}
