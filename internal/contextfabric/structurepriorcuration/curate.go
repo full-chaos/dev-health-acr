@@ -35,6 +35,23 @@
 //     ships now, dark, and starts curating real proposals the moment W3's
 //     own capture lands; until then it always degrades to "no proposal",
 //     harmlessly.
+//   - sink-only, no persisted-result backfill (codex adversarial review,
+//     medium finding, ACKNOWLEDGED -- not narrowed to just the
+//     handle/anchor trims above): ReadSelections consumes ONLY
+//     context_fabric_structure_selections, which is explicitly lossy by
+//     design (background-queued, drops on a full queue -- structure_capture.go's
+//     own doc comment). Design brief §3.5's own loss bound requires
+//     curation to ALSO backfill from persisted results' own
+//     ConfirmedStructure + StructureNeeds offer sets (the durable,
+//     authoritative record) -- not implemented here. This means even
+//     v1's ONE promoted member (expected_kind) can under-count a real
+//     human confirmation the sink dropped, not only the handle/anchor
+//     members already trimmed above. The v1 promotion gate (>=1
+//     human_panel event) fails toward NOT promoting on a drop, never
+//     toward wrongly promoting -- so this is a reach gap (a real prior
+//     that should exist doesn't get curated), not a correctness gap (no
+//     wrong prior is ever curated from a drop). The backfill scan is a
+//     named v2 follow-on for ALL members, not handle/anchor alone.
 package structurepriorcuration
 
 import (

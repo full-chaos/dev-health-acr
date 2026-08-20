@@ -92,19 +92,42 @@ func openPriorsDB(ctx context.Context) (*sql.DB, error) {
 // the same Postgres curation reads from; an operator running curation
 // somewhere the corpus replay COULD have landed rows must populate this
 // from the corpus's own hash manifest first.
-func frozenQuestionHashesFromEnv() map[string]bool {
+//
+// Fails LOUDLY (codex adversarial review, medium finding) rather than
+// silently on a malformed entry: a value that is not exactly 64 lowercase
+// hex characters (QuestionHash's own shape, answer_reuse.go's
+// hex.EncodeToString(sha256...)) can never match a real captured hash, so
+// accepting it silently would look like exclusion is configured when it
+// is actually a no-op for that entry.
+func frozenQuestionHashesFromEnv() (map[string]bool, error) {
 	raw := strings.TrimSpace(os.Getenv("ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES"))
 	out := map[string]bool{}
 	if raw == "" {
-		return out
+		return out, nil
 	}
 	for _, h := range strings.Split(raw, ",") {
 		h = strings.TrimSpace(h)
-		if h != "" {
-			out[h] = true
+		if h == "" {
+			continue
+		}
+		if !isLowercaseSHA256Hex(h) {
+			return nil, fmt.Errorf("acr-projector priors: ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES entry %q is not a 64-character lowercase hex SHA-256 digest", h)
+		}
+		out[h] = true
+	}
+	return out, nil
+}
+
+func isLowercaseSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
 		}
 	}
-	return out
+	return true
 }
 
 func priorsCurate(args []string) error {
@@ -128,11 +151,24 @@ func priorsCurate(args []string) error {
 		return err
 	}
 
+	frozenHashes, err := frozenQuestionHashesFromEnv()
+	if err != nil {
+		return err
+	}
+	if len(frozenHashes) == 0 {
+		// codex adversarial review, medium finding: make the omission
+		// VISIBLE rather than silent -- an operator running curation
+		// somewhere the frozen corpus replay could have landed rows, with
+		// this variable unset, would otherwise get no signal that
+		// exclusion is a no-op for this run.
+		fmt.Fprintln(os.Stderr, "WARNING: ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES is unset or empty -- if this environment could contain frozen-corpus replay data, curation will NOT exclude it. Set the variable to the corpus's own QuestionHash manifest first if in doubt.")
+	}
+
 	events, err := structurepriorcuration.ReadSelections(ctx, db, *org)
 	if err != nil {
 		return err
 	}
-	entries := structurepriorcuration.Curate(events, frozenQuestionHashesFromEnv())
+	entries := structurepriorcuration.Curate(events, frozenHashes)
 	if len(entries) == 0 {
 		_, err := fmt.Printf("org %s: curation found nothing promotable (0 candidate selections met the promotion rule)\n", *org)
 		return err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -159,6 +160,77 @@ func TestFlipActiveVersion_RequiresRatifiedBy(t *testing.T) {
 	require.NoError(t, err)
 	err = store.FlipActiveVersion(ctx, orgID, nil, &v1, "")
 	require.Error(t, err, "flip with empty ratified-by must be refused (DP8(a))")
+}
+
+// TestFlipActiveVersion_OversizedRatifiedBy_RefusesBeforeAnyWrite is the
+// codex adversarial review pin (high finding, repro-confirmed and fixed):
+// an over-length ratifiedBy must be rejected BEFORE any write is
+// attempted -- never leave the pointer moved with no matching history row.
+func TestFlipActiveVersion_OversizedRatifiedBy_RefusesBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := newPriorsTestDatabase(t, ctx)
+	store, err := NewStore(db)
+	require.NoError(t, err)
+	orgID := "org-priors-oversized-ratifier"
+
+	v1, err := store.PublishVersion(ctx, orgID, oneEntry("pull_request"), "wm-1", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	oversized := strings.Repeat("x", 257)
+	err = store.FlipActiveVersion(ctx, orgID, nil, &v1, oversized)
+	require.Error(t, err)
+
+	// The pointer must be UNCHANGED -- no partial commit.
+	_, found, _, err := store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.False(t, found, "an oversized ratifiedBy must never leave the pointer moved")
+}
+
+// TestFlipActiveVersion_ColdStart_WrongExpectedCurrent_Refuses is the codex
+// adversarial review pin (medium finding, repro-confirmed and fixed): a
+// caller's stale/wrong belief about an org's active version must be
+// refused even when NO pointer row exists yet (the INSERT-branch CAS gap
+// the previous INSERT ... ON CONFLICT DO UPDATE shape left open).
+func TestFlipActiveVersion_ColdStart_WrongExpectedCurrent_Refuses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := newPriorsTestDatabase(t, ctx)
+	store, err := NewStore(db)
+	require.NoError(t, err)
+	orgID := "org-priors-cold-wrong-expect"
+
+	v1, err := store.PublishVersion(ctx, orgID, oneEntry("pull_request"), "wm-1", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+
+	wronglyExpected := int64(5) // no pointer row exists at all yet
+	err = store.FlipActiveVersion(ctx, orgID, &wronglyExpected, &v1, "chris")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, contextfabric.ErrPriorPointerConflict), "want ErrPriorPointerConflict, got %v", err)
+
+	_, found, _, err := store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.False(t, found, "the wrongly-expected flip must never have created a pointer")
+}
+
+// TestFlipActiveVersion_ColdStart_NilExpectedCurrent_Succeeds proves the
+// fix does not over-correct: the ORDINARY first-ever flip (nil
+// expectedCurrent, no row exists) must still succeed.
+func TestFlipActiveVersion_ColdStart_NilExpectedCurrent_Succeeds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := newPriorsTestDatabase(t, ctx)
+	store, err := NewStore(db)
+	require.NoError(t, err)
+	orgID := "org-priors-cold-nil-expect"
+
+	v1, err := store.PublishVersion(ctx, orgID, oneEntry("pull_request"), "wm-1", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	require.NoError(t, store.FlipActiveVersion(ctx, orgID, nil, &v1, "chris"))
+
+	set, found, _, err := store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, v1, set.Version)
 }
 
 func TestRollbackActiveVersion_RestoresPrevious(t *testing.T) {

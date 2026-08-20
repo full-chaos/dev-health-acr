@@ -244,17 +244,55 @@ SELECT EXISTS(SELECT 1 FROM acr.context_fabric_structure_priors WHERE org_id = $
 	return exists, nil
 }
 
+// maxRatifiedByLength mirrors migration 0026's own
+// ck_acr_cf_structure_prior_pointer_history_ratified_by_length CHECK --
+// validated here too (codex adversarial review, high finding, repro-
+// confirmed) so an oversized ratified_by fails with a CLEAR error BEFORE
+// any write is attempted, never as a constraint violation on the second of
+// two statements after the first has already committed.
+const maxRatifiedByLength = 256
+
+func validateRatifiedBy(ratifiedBy string) error {
+	if ratifiedBy == "" {
+		return errors.New("pgstructurepriors: ratified-by is required")
+	}
+	if len(ratifiedBy) > maxRatifiedByLength {
+		return fmt.Errorf("pgstructurepriors: ratified-by must be %d characters or fewer", maxRatifiedByLength)
+	}
+	return nil
+}
+
 // FlipActiveVersion is DP8(a)'s own operation: a HUMAN-RATIFIED pointer
 // move, never called from any automatic path in this repository --
 // cmd/acr-projector's "priors flip" subcommand is the sole caller.
 // expectedCurrent is the caller's own belief of the CURRENT active_version
-// (nil means "I believe there is none yet"); the CAS refuses
-// (ErrPriorPointerConflict) if that belief is stale.
+// (nil means "I believe there is none yet, or it is NULL"); the CAS
+// refuses (ErrPriorPointerConflict) if that belief is stale.
+//
+// CAS mechanism (codex adversarial review, two findings, repro-confirmed
+// and fixed here): a prior version of this function used
+// INSERT ... ON CONFLICT DO UPDATE ... WHERE active_version IS NOT DISTINCT
+// FROM $expected, whose WHERE clause protects ONLY the UPDATE arm -- a
+// caller racing the pointer's FIRST-EVER flip (no row exists yet) hit the
+// INSERT arm unconditionally, so a stale/wrong expectedCurrent was never
+// checked at all. It also wrote the pointer and the audit-history row as
+// TWO separate statements, so a failure on the second (e.g. an oversized
+// ratifiedBy tripping the history table's own CHECK constraint) left the
+// pointer already moved with no matching history row and an error
+// returned to the caller -- live state and the DP8(a) audit trail
+// silently disagreeing. This version fixes both: SELECT ... FOR UPDATE
+// locks (or proves absent) the row inside ONE transaction, the comparison
+// against expectedCurrent covers BOTH the present-row and absent-row
+// cases uniformly, and the pointer write plus the history insert commit
+// or roll back together.
 func (s *Store) FlipActiveVersion(ctx context.Context, orgID string, expectedCurrent, newVersion *int64, ratifiedBy string) error {
 	orgID = strings.TrimSpace(orgID)
 	ratifiedBy = strings.TrimSpace(ratifiedBy)
-	if orgID == "" || ratifiedBy == "" || newVersion == nil {
-		return errors.New("pgstructurepriors: organization, ratified-by, and a target version are required")
+	if orgID == "" || newVersion == nil {
+		return errors.New("pgstructurepriors: organization and a target version are required")
+	}
+	if err := validateRatifiedBy(ratifiedBy); err != nil {
+		return err
 	}
 	exists, err := s.versionExists(ctx, orgID, *newVersion)
 	if err != nil {
@@ -263,58 +301,47 @@ func (s *Store) FlipActiveVersion(ctx context.Context, orgID string, expectedCur
 	if !exists {
 		return fmt.Errorf("%w: org %s has no version %d", contextfabric.ErrPriorVersionNotFound, orgID, *newVersion)
 	}
-	now := time.Now().UTC()
-	row := s.db.QueryRowContext(ctx, `
-INSERT INTO acr.context_fabric_structure_prior_pointer (org_id, active_version, previous_version, ratified_by, updated_at)
-VALUES ($1, $3, NULL, $4, $5)
-ON CONFLICT (org_id) DO UPDATE SET
-    previous_version = acr.context_fabric_structure_prior_pointer.active_version,
-    active_version = $3, ratified_by = $4, updated_at = $5
-WHERE acr.context_fabric_structure_prior_pointer.active_version IS NOT DISTINCT FROM $2
-RETURNING active_version`,
-		orgID, expectedCurrent, *newVersion, ratifiedBy, now)
-	var got int64
-	if err := row.Scan(&got); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			s.telemetry().RecordFlipCASConflict(ctx, orgID)
-			return fmt.Errorf("%w: org %s active version changed since read", contextfabric.ErrPriorPointerConflict, orgID)
-		}
-		return fmt.Errorf("pgstructurepriors: flip active version: %w", sanitize(err))
-	}
-	return s.recordPointerHistory(ctx, orgID, expectedCurrent, newVersion, ratifiedBy, now)
+	return s.casPointer(ctx, orgID, expectedCurrent, *newVersion, ratifiedBy)
 }
 
 // RollbackActiveVersion is DP8(a)'s own rollback operation: point back at
 // the previous_version the last flip recorded. Refuses (ErrPriorVersionNotFound)
-// when there is nothing to roll back to.
+// when there is nothing to roll back to. Locks the pointer row for the
+// SAME transaction its own read and write happen in (see FlipActiveVersion's
+// own doc comment for why: the prior read-then-separately-write shape
+// raced and could leave the pointer and its own history disagreeing).
 func (s *Store) RollbackActiveVersion(ctx context.Context, orgID, ratifiedBy string) error {
 	orgID = strings.TrimSpace(orgID)
 	ratifiedBy = strings.TrimSpace(ratifiedBy)
-	if orgID == "" || ratifiedBy == "" {
-		return errors.New("pgstructurepriors: organization and ratified-by are required")
+	if err := validateRatifiedBy(ratifiedBy); err != nil {
+		return err
 	}
+	if orgID == "" {
+		return errors.New("pgstructurepriors: organization is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("pgstructurepriors: begin rollback: %w", sanitize(err))
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var current, previous sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `
-SELECT active_version, previous_version FROM acr.context_fabric_structure_prior_pointer WHERE org_id = $1`, orgID).Scan(&current, &previous)
-	if errors.Is(err, sql.ErrNoRows) || !previous.Valid {
+	err = tx.QueryRowContext(ctx, `
+SELECT active_version, previous_version FROM acr.context_fabric_structure_prior_pointer WHERE org_id = $1 FOR UPDATE`, orgID).Scan(&current, &previous)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !previous.Valid) {
 		return fmt.Errorf("%w: org %s has no previous version to roll back to", contextfabric.ErrPriorVersionNotFound, orgID)
 	}
 	if err != nil {
 		return fmt.Errorf("pgstructurepriors: read pointer for rollback: %w", sanitize(err))
 	}
+
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 UPDATE acr.context_fabric_structure_prior_pointer
-SET active_version = $3, previous_version = $2, ratified_by = $4, updated_at = $5
-WHERE org_id = $1 AND active_version IS NOT DISTINCT FROM $2`,
-		orgID, current, previous.Int64, ratifiedBy, now)
-	if err != nil {
+SET active_version = $2, previous_version = $3, ratified_by = $4, updated_at = $5
+WHERE org_id = $1`,
+		orgID, previous.Int64, current, ratifiedBy, now); err != nil {
 		return fmt.Errorf("pgstructurepriors: rollback: %w", sanitize(err))
-	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		s.telemetry().RecordFlipCASConflict(ctx, orgID)
-		return fmt.Errorf("%w: org %s active version changed since read", contextfabric.ErrPriorPointerConflict, orgID)
 	}
 	var currentPtr *int64
 	if current.Valid {
@@ -322,17 +349,82 @@ WHERE org_id = $1 AND active_version IS NOT DISTINCT FROM $2`,
 		currentPtr = &v
 	}
 	prev := previous.Int64
-	return s.recordPointerHistory(ctx, orgID, currentPtr, &prev, ratifiedBy, now)
-}
-
-func (s *Store) recordPointerHistory(ctx context.Context, orgID string, from, to *int64, ratifiedBy string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_structure_prior_pointer_history (org_id, from_version, to_version, ratified_by, ratified_at)
-VALUES ($1, $2, $3, $4, $5)`, orgID, from, to, ratifiedBy, at)
-	if err != nil {
+VALUES ($1, $2, $3, $4, $5)`, orgID, currentPtr, &prev, ratifiedBy, now); err != nil {
 		return fmt.Errorf("pgstructurepriors: record pointer history: %w", sanitize(err))
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("pgstructurepriors: commit rollback: %w", sanitize(err))
+	}
 	return nil
+}
+
+// casPointer is FlipActiveVersion's own transactional core: lock (or prove
+// absent) the org's pointer row, compare it against expectedCurrent -- an
+// ABSENT row compares equal only to a nil expectedCurrent, closing the
+// cold-start CAS gap the INSERT ... ON CONFLICT DO UPDATE shape's own
+// asymmetric WHERE clause used to leave open -- and, on a match, write the
+// new pointer and its audit-history row in the SAME transaction.
+func (s *Store) casPointer(ctx context.Context, orgID string, expectedCurrent *int64, newVersion int64, ratifiedBy string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("pgstructurepriors: begin flip: %w", sanitize(err))
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var current sql.NullInt64
+	err = tx.QueryRowContext(ctx, `
+SELECT active_version FROM acr.context_fabric_structure_prior_pointer WHERE org_id = $1 FOR UPDATE`, orgID).Scan(&current)
+	rowExists := true
+	if errors.Is(err, sql.ErrNoRows) {
+		rowExists, err = false, nil
+	}
+	if err != nil {
+		return fmt.Errorf("pgstructurepriors: read pointer for flip: %w", sanitize(err))
+	}
+
+	var currentPtr *int64
+	if rowExists && current.Valid {
+		v := current.Int64
+		currentPtr = &v
+	}
+	if !int64PtrEqual(currentPtr, expectedCurrent) {
+		s.telemetry().RecordFlipCASConflict(ctx, orgID)
+		return fmt.Errorf("%w: org %s active version changed since read", contextfabric.ErrPriorPointerConflict, orgID)
+	}
+
+	now := time.Now().UTC()
+	if rowExists {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE acr.context_fabric_structure_prior_pointer
+SET active_version = $2, previous_version = $3, ratified_by = $4, updated_at = $5
+WHERE org_id = $1`, orgID, newVersion, current, ratifiedBy, now); err != nil {
+			return fmt.Errorf("pgstructurepriors: flip active version: %w", sanitize(err))
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_structure_prior_pointer (org_id, active_version, previous_version, ratified_by, updated_at)
+VALUES ($1, $2, NULL, $3, $4)`, orgID, newVersion, ratifiedBy, now); err != nil {
+			return fmt.Errorf("pgstructurepriors: flip active version: %w", sanitize(err))
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_structure_prior_pointer_history (org_id, from_version, to_version, ratified_by, ratified_at)
+VALUES ($1, $2, $3, $4, $5)`, orgID, currentPtr, newVersion, ratifiedBy, now); err != nil {
+		return fmt.Errorf("pgstructurepriors: record pointer history: %w", sanitize(err))
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("pgstructurepriors: commit flip: %w", sanitize(err))
+	}
+	return nil
+}
+
+func int64PtrEqual(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // RevokeEntry is DP8(a)-adjacent (a per-entry kill, not a version flip, but
@@ -341,8 +433,11 @@ VALUES ($1, $2, $3, $4, $5)`, orgID, from, to, ratifiedBy, at)
 // a no-op, never an error.
 func (s *Store) RevokeEntry(ctx context.Context, orgID, entryID, ratifiedBy string) error {
 	orgID, entryID, ratifiedBy = strings.TrimSpace(orgID), strings.TrimSpace(entryID), strings.TrimSpace(ratifiedBy)
-	if orgID == "" || entryID == "" || ratifiedBy == "" {
-		return errors.New("pgstructurepriors: organization, entry id, and ratified-by are required")
+	if orgID == "" || entryID == "" {
+		return errors.New("pgstructurepriors: organization and entry id are required")
+	}
+	if err := validateRatifiedBy(ratifiedBy); err != nil {
+		return err
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_structure_prior_revocations (org_id, entry_id, revoked_by, revoked_at)
