@@ -173,6 +173,82 @@ func TestWorkloadCredentialSource_serverErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestWorkloadCredentialSource_rejectsAPlainHTTPNonLoopbackEndpoint(t *testing.T) {
+	endpoint, err := url.Parse("http://acr-api.example.com/api/v1/oauth/token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewWorkloadCredentialSource(WorkloadCredentialSourceOptions{
+		TokenEndpoint: endpoint, SubjectTokenFile: writeSubjectTokenFile(t, "jwt"),
+	}); err == nil {
+		t.Fatal("expected an error for a plain-http, non-loopback token endpoint -- the subject JWT must never be sendable in plaintext to an arbitrary host")
+	}
+}
+
+func TestWorkloadCredentialSource_refusesARedirectResponse(t *testing.T) {
+	// Codex round 1 finding: a redirect must never be followed, since that
+	// could retarget where the subject JWT is delivered.
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("the redirect target must never be reached: CheckRedirect should refuse the redirect first")
+	}))
+	defer redirectTarget.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirectTarget.URL, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	endpoint, err := url.Parse(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewWorkloadCredentialSource(WorkloadCredentialSourceOptions{
+		TokenEndpoint: endpoint, SubjectTokenFile: writeSubjectTokenFile(t, "jwt"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source(); err == nil {
+		t.Fatal("expected an error: the redirect must be refused, not followed")
+	}
+}
+
+func TestWorkloadCredentialSource_timesOutAnUnresponsiveEndpoint(t *testing.T) {
+	// Codex round 2 finding: an unresponsive endpoint must not hold this
+	// source's mutex (and every concurrent caller behind it) forever.
+	unblock := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-unblock
+	}))
+	// Unblock the handler BEFORE server.Close(): Close() waits (via an
+	// internal WaitGroup) for every in-flight handler to return, and this
+	// handler never returns until unblock is closed. Deferred calls run
+	// LIFO, so the LAST defer here runs FIRST -- close(unblock) must be
+	// deferred after server.Close() to unblock it before Close() waits.
+	defer server.Close()
+	defer close(unblock)
+
+	endpoint, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewWorkloadCredentialSource(WorkloadCredentialSourceOptions{
+		TokenEndpoint: endpoint, SubjectTokenFile: writeSubjectTokenFile(t, "jwt"), Timeout: 200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := source(); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a timeout error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("exchange did not respect the configured Timeout")
+	}
+}
+
 func TestNewWorkloadCredentialSource_requiresEndpointAndSubjectTokenFile(t *testing.T) {
 	endpoint, err := url.Parse("https://acr-api.internal.example/api/v1/oauth/token")
 	if err != nil {

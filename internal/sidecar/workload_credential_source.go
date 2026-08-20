@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,13 @@ const (
 	// own expiry, so a caller is never handed a token that expires
 	// mid-request.
 	workloadRefreshMargin = 30 * time.Second
+	// defaultWorkloadExchangeTimeout bounds a single exchange request
+	// end to end. Without it, an unresponsive token endpoint (accepts the
+	// connection, never replies) would hold this source's mutex
+	// indefinitely -- blocking every OTHER concurrent caller's credential
+	// resolution too, since the whole check-then-refresh sequence runs
+	// under one lock (see workloadCredentialSource's own doc comment).
+	defaultWorkloadExchangeTimeout = 20 * time.Second
 )
 
 // WorkloadCredentialSourceOptions configures NewWorkloadCredentialSource.
@@ -38,7 +46,10 @@ type WorkloadCredentialSourceOptions struct {
 	// kubelet's in-place rotation of the projected file is always
 	// honored. Required.
 	SubjectTokenFile string
-	Now              func() time.Time
+	// Timeout bounds a single exchange request end to end. Zero uses
+	// defaultWorkloadExchangeTimeout.
+	Timeout time.Duration
+	Now     func() time.Time
 }
 
 // workloadCredentialSource implements CredentialSource by RFC 8693 token
@@ -51,6 +62,7 @@ type workloadCredentialSource struct {
 	http             *http.Client
 	tokenEndpoint    *url.URL
 	subjectTokenFile string
+	timeout          time.Duration
 	now              func() time.Time
 
 	mu        sync.Mutex
@@ -86,8 +98,13 @@ func NewWorkloadCredentialSource(options WorkloadCredentialSourceOptions) (Crede
 	if now == nil {
 		now = time.Now
 	}
+	timeout := options.Timeout
+	if timeout <= 0 {
+		timeout = defaultWorkloadExchangeTimeout
+	}
 	source := &workloadCredentialSource{
-		http: client, tokenEndpoint: options.TokenEndpoint, subjectTokenFile: options.SubjectTokenFile, now: now,
+		http: client, tokenEndpoint: cloneURL(options.TokenEndpoint), subjectTokenFile: options.SubjectTokenFile,
+		timeout: timeout, now: now,
 	}
 	return source.load, nil
 }
@@ -128,7 +145,9 @@ func (s *workloadCredentialSource) exchange() (CredentialResult, time.Duration, 
 	form.Set("grant_type", workloadTokenExchangeGrantType)
 	form.Set("subject_token", subjectToken)
 	form.Set("subject_token_type", workloadSubjectTokenType)
-	request, err := http.NewRequest(http.MethodPost, s.tokenEndpoint.String(), strings.NewReader(form.Encode()))
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.tokenEndpoint.String(), strings.NewReader(form.Encode()))
 	if err != nil {
 		return CredentialResult{}, 0, fmt.Errorf("acr: build token exchange request: %w", err)
 	}

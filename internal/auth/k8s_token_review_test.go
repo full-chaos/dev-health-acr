@@ -180,6 +180,32 @@ func TestKubernetesTokenReviewValidator_oversizedResponseIsRejected(t *testing.T
 	}
 }
 
+func TestNewKubernetesTokenReviewValidator_rejectsAPlainHTTPNonLoopbackAPIServerURL(t *testing.T) {
+	_, err := NewKubernetesTokenReviewValidator(KubernetesTokenReviewOptions{
+		APIServerURL: "http://kubernetes.example.com", Audience: "aud", TrustDomain: "cluster.local",
+		ReviewerToken: func() (string, error) { return "t", nil },
+	})
+	if err == nil {
+		t.Fatal("expected an error for a plain-http, non-loopback api server url -- the reviewer token and subject token must never be sendable in plaintext to an arbitrary host")
+	}
+}
+
+func TestKubernetesTokenReviewValidator_refusesARedirectResponse(t *testing.T) {
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("the redirect target must never be reached: CheckRedirect should refuse the redirect first")
+	}))
+	defer redirectTarget.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirectTarget.URL, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	validator := newValidator(t, origin.URL, nil)
+	if _, err := validator.Validate(context.Background(), fakeSubjectJWT(t, time.Now().Add(time.Hour))); err == nil {
+		t.Fatal("expected an error: the redirect must be refused, not followed")
+	}
+}
+
 func TestNewKubernetesTokenReviewValidator_requiresAllFields(t *testing.T) {
 	base := KubernetesTokenReviewOptions{
 		APIServerURL: "https://kubernetes.default.svc", Audience: "aud", TrustDomain: "cluster.local",
