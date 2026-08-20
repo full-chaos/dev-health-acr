@@ -233,18 +233,27 @@ func (s *Sink) insert(event contextfabric.StructureSelectionEvent) {
 	s.metrics.addDelivered()
 }
 
-// pipelineContextPayload mirrors pgclarification's own flat JSONB shape
-// exactly (that type's own doc comment covers why flat, not nested).
+// pipelineContextPayload mirrors pgclarification's own flat JSONB shape,
+// with TWO more fields that sink deliberately omits (codex adversarial
+// review, CHAOS-3927 P4): IdentityNormalizationVersion (CHAOS-3884) and
+// WindowInferenceVersion (CHAOS-3900 W1) are part of the SAME
+// deployment-current ReuseVersionAuthorities bundle event.VersionAuthorities
+// already carries in full (structure_capture.go), and captured
+// training/diagnostic data that cannot distinguish those two deployment
+// dimensions is exactly the gap this table exists to avoid -- see that
+// type's own doc comment for what each one binds.
 type pipelineContextPayload struct {
-	ProjectionVersion           string   `json:"projection_version"`
-	ModelIdentities             []string `json:"model_identities"`
-	EmbedRetrievalIdentity      string   `json:"embed_retrieval_identity"`
-	RetrievalPolicyVersion      string   `json:"retrieval_policy_version"`
-	InterpretationPromptVersion string   `json:"interpretation_prompt_version"`
-	SynthesisPromptVersion      string   `json:"synthesis_prompt_version"`
-	QueryVersion                string   `json:"query_version"`
-	CanonicalServiceVersion     string   `json:"canonical_service_version"`
-	ModelOutputSchemaVersion    string   `json:"model_output_schema_version"`
+	ProjectionVersion            string   `json:"projection_version"`
+	ModelIdentities              []string `json:"model_identities"`
+	EmbedRetrievalIdentity       string   `json:"embed_retrieval_identity"`
+	RetrievalPolicyVersion       string   `json:"retrieval_policy_version"`
+	InterpretationPromptVersion  string   `json:"interpretation_prompt_version"`
+	SynthesisPromptVersion       string   `json:"synthesis_prompt_version"`
+	QueryVersion                 string   `json:"query_version"`
+	CanonicalServiceVersion      string   `json:"canonical_service_version"`
+	ModelOutputSchemaVersion     string   `json:"model_output_schema_version"`
+	IdentityNormalizationVersion string   `json:"identity_normalization_version"`
+	WindowInferenceVersion       string   `json:"window_inference_version"`
 }
 
 // knownMemberValues mirrors migration 0024's
@@ -330,7 +339,9 @@ func (s *Sink) insertContext(ctx context.Context, event contextfabric.StructureS
 		EmbedRetrievalIdentity: event.RetrievalIdentity.EmbedRetrievalIdentity, RetrievalPolicyVersion: event.RetrievalIdentity.RetrievalPolicyVersion,
 		InterpretationPromptVersion: event.PromptVersions.InterpretationPromptVersion, SynthesisPromptVersion: event.PromptVersions.SynthesisPromptVersion,
 		QueryVersion: event.VersionAuthorities.QueryVersion, CanonicalServiceVersion: event.VersionAuthorities.CanonicalServiceVersion,
-		ModelOutputSchemaVersion: event.VersionAuthorities.ModelOutputSchemaVersion,
+		ModelOutputSchemaVersion:     event.VersionAuthorities.ModelOutputSchemaVersion,
+		IdentityNormalizationVersion: event.VersionAuthorities.IdentityNormalizationVersion,
+		WindowInferenceVersion:       event.VersionAuthorities.WindowInferenceVersion,
 	})
 	if err != nil {
 		return fmt.Errorf("pgstructureselection: marshal pipeline context: %w", err)

@@ -57,6 +57,7 @@ func validEvent(orgID string) contextfabric.StructureSelectionEvent {
 		},
 		VersionAuthorities: contextfabric.ReuseVersionAuthorities{
 			QueryVersion: "devhealthfacts.clickhouse.v1", CanonicalServiceVersion: "context-fabric-facts.v1", ModelOutputSchemaVersion: "context-fabric-model-output.v1",
+			IdentityNormalizationVersion: "graphrank.alias-normalize.v1", WindowInferenceVersion: "win_v1",
 		},
 	}
 }
@@ -129,7 +130,9 @@ func TestInsertContext_PersistsEveryField(t *testing.T) {
 		EmbedRetrievalIdentity: event.RetrievalIdentity.EmbedRetrievalIdentity, RetrievalPolicyVersion: event.RetrievalIdentity.RetrievalPolicyVersion,
 		InterpretationPromptVersion: event.PromptVersions.InterpretationPromptVersion, SynthesisPromptVersion: event.PromptVersions.SynthesisPromptVersion,
 		QueryVersion: event.VersionAuthorities.QueryVersion, CanonicalServiceVersion: event.VersionAuthorities.CanonicalServiceVersion,
-		ModelOutputSchemaVersion: event.VersionAuthorities.ModelOutputSchemaVersion,
+		ModelOutputSchemaVersion:     event.VersionAuthorities.ModelOutputSchemaVersion,
+		IdentityNormalizationVersion: event.VersionAuthorities.IdentityNormalizationVersion,
+		WindowInferenceVersion:       event.VersionAuthorities.WindowInferenceVersion,
 	}, row.PipelineContext)
 }
 

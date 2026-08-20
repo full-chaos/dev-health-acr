@@ -430,13 +430,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// follow-up confirming structure via receipt can never be served a
 	// cached answer generated under unconfirmed inference instead.
 	structureCanon := e.canonicalizeStructure(ctx, principal, request)
-	// CHAOS-3900 P1.F: recorded unconditionally, BEFORE the veto
-	// short-circuit below, so both the veto and success path get exactly
-	// one cf_structure_receipt call per receipt-bearing member -- see
-	// recordStructureReceiptTelemetry's own doc comment for why it never
-	// needs to touch canonicalizeStructure's own tested control flow.
-	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
 	if structureCanon.Veto != structureVetoNone {
+		// CHAOS-3900 P1.F: a PRE-FLIGHT veto is FINAL the instant
+		// canonicalizeStructure returns it -- nothing downstream can still
+		// change this outcome, so telemetry records it immediately here,
+		// exactly as before CHAOS-3927 P4. (P4 codex review: this is
+		// deliberately NOT true of the success/no-veto path any more --
+		// see the deferred call below, right before/after the decisive
+		// Save, for why that one moved.)
+		recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
 		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, structureCanon.StaleMember, binding)
 	}
 
@@ -839,11 +841,39 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// silently discarding the conflict information Save reported).
 			var superseded *ErrStructureOfferSuperseded
 			if errors.As(err, &superseded) {
+				// CHAOS-3927 P4 (codex adversarial review fix): telemetry for
+				// this round was deliberately NOT recorded when
+				// canonicalizeStructure returned (see that call site's own
+				// comment) -- this branch is exactly why: the outcome was not
+				// yet final. Record it now as "stale", the SAME outcome a
+				// pre-flight detection of the identical condition would have
+				// recorded. structureCanon.PendingSelections is intentionally
+				// dropped here, never sent: the result they describe was
+				// never persisted.
+				recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
 				return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntry(structureCanon.Confirmed, superseded.Members), binding)
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)
+		// CHAOS-3927 P4 (codex adversarial review fix): THIS is the point
+		// the caller can finally prove a structure confirmation is durable
+		// -- Save just succeeded past the atomic supersession-claim check
+		// above, so every member in structureCanon.Confirmed genuinely won
+		// its claim (or there were none to claim, the common case, in
+		// which case both calls below are no-ops). Only now does the
+		// "applied" telemetry outcome get recorded, and only now do the
+		// events canonicalizeStructure built get sent to the sink -- see
+		// requestStructureCanonicalization.PendingSelections' own doc
+		// comment for why firing either earlier was wrong.
+		if len(structureCanon.Confirmed) > 0 {
+			recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
+			if e.structureSelectionSink != nil {
+				for _, event := range structureCanon.PendingSelections {
+					e.structureSelectionSink.RecordSelection(ctx, event)
+				}
+			}
+		}
 	}
 	return result, nil
 }

@@ -102,6 +102,21 @@ type requestStructureCanonicalization struct {
 	// snapshot -- matching ConfirmedStructure's own composition, which
 	// composeStructureOfferSnapshot's caller pairs this with 1:1).
 	OfferSnapshot []contractsv1.ContextFabricStructureOfferSnapshotEntry
+	// PendingSelections (CHAOS-3927 P4, codex adversarial review fix) holds
+	// one BUILT (never yet sent) StructureSelectionEvent per member this
+	// canonicalization confirmed -- non-nil only alongside Confirmed, same
+	// discipline as OfferSnapshot. Deliberately deferred: firing capture
+	// synchronously inside canonicalizeStructure's own loop (P4's first
+	// pass) could durably record a selection for a round that later loses
+	// the Save-time supersession claim race and is discarded entirely --
+	// design brief §3.5's own invariant is that the authoritative
+	// confirmation record is "the persisted canonical result," which this
+	// round is NOT yet at the moment canonicalizeStructure returns. Engine
+	// sends these only once Save has actually won every claim they depend
+	// on (engine.go, right after a successful decisive Save) -- never on
+	// the veto path (nothing was durably confirmed) and never on the
+	// Save-time-race path (the result these describe was never persisted).
+	PendingSelections []StructureSelectionEvent
 	// StaleMember (CHAOS-3927 P4) is populated ONLY alongside
 	// Veto==structureVetoStaleSupersededOffer -- the single member whose
 	// stored offer was already superseded, composed eagerly here (this is
@@ -376,6 +391,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 
 	var confirmed []confirmedStructureMember
 	var offerSnapshot []contractsv1.ContextFabricStructureOfferSnapshotEntry
+	var pendingSelections []StructureSelectionEvent
 	for _, m := range members {
 		if len(m.receipts) == 0 {
 			continue
@@ -433,33 +449,35 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		if m.offerSnapshot != nil {
 			offerSnapshot = append(offerSnapshot, m.offerSnapshot(stored.Result)...)
 		}
-		// CHAOS-3927 P4: a structure receipt just resolved cleanly, passed
-		// reverification, and cleared the supersession consult -- this is
-		// the ONLY point canonicalizeStructure confirms a member, so it is
-		// the ONLY point a StructureSelectionEvent can honestly be
-		// captured from (mirrors captureClarificationSelection's own
-		// "fires only on success" placement).
-		if m.offeredOptions != nil {
-			e.captureStructureSelection(ctx, principal, request.Consumer, m.member, resultID, stored.Result, m.offeredOptions(stored.Result), receiptID)
+		// CHAOS-3927 P4 (codex adversarial review fix): BUILD, never yet
+		// send, a StructureSelectionEvent for this confirmed member -- this
+		// is the only point canonicalizeStructure confirms a member, so it
+		// is the only point the event's content can honestly be built
+		// from, but sending it here (P4's first pass) durably recorded a
+		// selection for a round that could still lose the Save-time
+		// supersession claim race and be discarded -- see
+		// requestStructureCanonicalization.PendingSelections' own doc
+		// comment for the full reasoning and where these actually get
+		// sent.
+		if e.structureSelectionSink != nil && m.offeredOptions != nil {
+			pendingSelections = append(pendingSelections, e.buildStructureSelectionEvent(principal, request.Consumer, m.member, resultID, stored.Result, m.offeredOptions(stored.Result), receiptID))
 		}
 	}
-	return requestStructureCanonicalization{Confirmed: confirmed, OfferSnapshot: offerSnapshot}
+	return requestStructureCanonicalization{Confirmed: confirmed, OfferSnapshot: offerSnapshot, PendingSelections: pendingSelections}
 }
 
-// captureStructureSelection builds and hands off a StructureSelectionEvent
-// (CHAOS-3927 P4) for one receipt canonicalizeStructure just confirmed
-// against a real offer in a real prior result -- mirrors
-// Engine.captureClarificationSelection's own structure and fail-open
-// contract exactly (engine.go). A nil structureSelectionSink is the
-// ordinary "capture is off" case and this is a no-op; the sink call is
-// synchronous but MUST return promptly by StructureSelectionSink's own
-// documented contract, so this never adds meaningful latency to
-// Investigate, and it MUST NOT be able to fail this call -- there is no
-// error path back from RecordSelection by design.
-func (e *Engine) captureStructureSelection(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, member contractsv1.ContextFabricStructureNeedKind, priorResultID string, prior InvestigationResult, offered []StructureOfferedOption, receiptID string) {
-	if e.structureSelectionSink == nil {
-		return
-	}
+// buildStructureSelectionEvent builds (but never sends) a
+// StructureSelectionEvent (CHAOS-3927 P4) for one receipt
+// canonicalizeStructure just confirmed against a real offer in a real
+// prior result. Sending is Engine's own responsibility, deferred until the
+// caller can prove this round's Save actually won every supersession claim
+// it needed -- see requestStructureCanonicalization.PendingSelections' own
+// doc comment. This function itself never touches e.structureSelectionSink
+// at all -- callers already gate on it being non-nil before calling this
+// (canonicalizeStructure's own loop, above), matching the "don't do
+// pointless work when capture is off" discipline every other optional
+// dependency in this package follows.
+func (e *Engine) buildStructureSelectionEvent(principal storage.Principal, consumer ConsumerInfo, member contractsv1.ContextFabricStructureNeedKind, priorResultID string, prior InvestigationResult, offered []StructureOfferedOption, receiptID string) StructureSelectionEvent {
 	var selected StructureOfferedOption
 	for _, opt := range offered {
 		if opt.ReceiptID == receiptID {
@@ -467,7 +485,7 @@ func (e *Engine) captureStructureSelection(ctx context.Context, principal storag
 			break
 		}
 	}
-	e.structureSelectionSink.RecordSelection(ctx, StructureSelectionEvent{
+	return StructureSelectionEvent{
 		OrgID: principal.OrgID, CapturedAt: e.now().UTC(),
 		QuestionHash: QuestionHash(prior.Question), PriorResultID: priorResultID,
 		Member: string(member), Offered: offered, Selected: selected, Accepted: selected.Rank == 0,
@@ -476,7 +494,7 @@ func (e *Engine) captureStructureSelection(ctx context.Context, principal storag
 		ProjectionVersion:   e.reuseProjectionVersion, ModelIdentities: e.reuseModelIdentities,
 		RetrievalIdentity: e.reuseRetrievalIdentity, PromptVersions: e.reusePromptVersions,
 		VersionAuthorities: e.reuseVersionAuthorities,
-	})
+	}
 }
 
 // kindOptionsSnapshot/anchorOptionsSnapshot/handleOptionsSnapshot (P1.G)

@@ -476,7 +476,22 @@ func TestCHAOS3927P4_ConfirmedKindReceipt_CapturesAStructureSelectionEvent(t *te
 	}
 	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
 	sink := &capturingStructureSelectionSink{}
-	engine := mustReuseTestEngine(t, EngineDependencies{Results: store, StructureSelectionSink: sink})
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results:                store,
+		StructureSelectionSink: sink,
+		Graph:                  graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+	})
 
 	request := validInvestigationRequest()
 	// Redeems the SECOND offer (rank 1) -- proves Accepted correctly
@@ -484,9 +499,17 @@ func TestCHAOS3927P4_ConfirmedKindReceipt_CapturesAStructureSelectionEvent(t *te
 	// happenstance.
 	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0002"}}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
-	if canon.Veto != structureVetoNone || len(canon.Confirmed) != 1 {
-		t.Fatalf("canon = %+v, want a clean single confirmation", canon)
+	// CHAOS-3927 P4 (codex adversarial review fix): capture is now
+	// DEFERRED until Save actually succeeds (requestStructureCanonicalization.
+	// PendingSelections' own doc comment) -- this test must therefore drive
+	// the FULL Investigate call, not canonicalizeStructure alone, to reach
+	// the point capture is sent.
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want a clean single confirmation", len(result.ConfirmedStructure))
 	}
 	if len(sink.events) != 1 {
 		t.Fatalf("len(sink.events) = %d, want 1", len(sink.events))
@@ -563,6 +586,7 @@ func TestCHAOS3927P4_SaveTimeSupersessionConflict_TerminatesRoundAsStale(t *test
 
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	freshResult := validInvestigationResult()
+	sink := &capturingStructureSelectionSink{}
 
 	engine := mustReuseTestEngine(t, EngineDependencies{
 		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
@@ -575,7 +599,8 @@ func TestCHAOS3927P4_SaveTimeSupersessionConflict_TerminatesRoundAsStale(t *test
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
 			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
 		}),
-		Results: store,
+		Results:                store,
+		StructureSelectionSink: sink,
 	})
 
 	request := validInvestigationRequest()
@@ -590,6 +615,13 @@ func TestCHAOS3927P4_SaveTimeSupersessionConflict_TerminatesRoundAsStale(t *test
 	}
 	if result.ResultID == freshResult.ResultID {
 		t.Error("result.ResultID equals the discarded decisive result's own id -- the superseded computation must never be returned")
+	}
+	// CHAOS-3927 P4 (codex adversarial review fix): the losing round must
+	// NEVER durably capture a selection for a result that was never
+	// persisted (requestStructureCanonicalization.PendingSelections' own
+	// doc comment) -- this is the acceptance pin for that fix.
+	if len(sink.events) != 0 {
+		t.Errorf("len(sink.events) = %d, want 0: a round that loses the Save-time supersession race must capture NOTHING (its result was never persisted)", len(sink.events))
 	}
 	if len(result.ConfirmedStructure) != 1 || result.ConfirmedStructure[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
 		t.Errorf("result.ConfirmedStructure = %+v, want one vetoed_stale entry echoing the raced member", result.ConfirmedStructure)

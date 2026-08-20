@@ -84,13 +84,16 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// S2 (§2.3 graph_epoch reuse-key dimension) added 0021, and CHAOS-3900
 	// W1 (window_inference_version reuse-key dimension) added 0022,
 	// CHAOS-3927 P4 (structure_supersession_claims, the offer-supersession
-	// atomicity table) added 0023, and CHAOS-3927 P4's own capture-schema
+	// atomicity table) added 0023, CHAOS-3927 P4's own capture-schema
 	// evolution (structure_selections, the StructureSelectionEvent sink
-	// table) added 0024, so the embedded set is now 24 files. A future
-	// migration must bump this literal too -- see expectedMigrationVersions
-	// in migrations/postgres/runner_integration_test.go for the same
-	// convention, held in one place there.
-	require.Equal(t, "applied 24 migrations\n", first.String())
+	// table) added 0024, and CHAOS-3927 P4's codex-review backfill
+	// (structure_supersession_backfill, claiming pre-0023 confirmed-
+	// structure rows) added 0025, so the embedded set is now 25 files. A
+	// future migration must bump this literal too -- see
+	// expectedMigrationVersions in migrations/postgres/
+	// runner_integration_test.go for the same convention, held in one
+	// place there.
+	require.Equal(t, "applied 25 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

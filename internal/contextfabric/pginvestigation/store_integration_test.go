@@ -311,3 +311,71 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 	// direction: a successful round replaying itself is not a conflict.
 	require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
 }
+
+// TestMigration0025_BackfillsClaimsForPreMigrationConfirmedStructure is
+// CHAOS-3927 P4's own codex-adversarial-review acceptance pin (HIGH
+// finding): migration 0023 created the claim table EMPTY, so any
+// InvestigationResult already carrying an applied, receipt-sourced
+// ConfirmedStructure entry from BEFORE 0023 existed had no claim
+// protecting its redeemed offer. Migration 0025 backfills exactly that.
+//
+// This test simulates the pre-migration state directly: it INSERTs a raw
+// investigation_results row (bypassing Store.Save entirely -- Save today
+// would always mint the claim itself; this row represents one that was
+// written by an OLDER binary, before the claim table's write path
+// existed) carrying a confirmed_structure payload, with deliberately NO
+// matching claim row. It then re-executes 0025's own migration SQL
+// directly (the migration already ran once, against an empty table, when
+// newInvestigationTestDatabase set up the database -- re-running its
+// idempotent INSERT ... ON CONFLICT DO NOTHING against THIS row is exactly
+// what a real backfill deploy does against real pre-existing data) and
+// asserts the claim now exists.
+func TestMigration0025_BackfillsClaimsForPreMigrationConfirmedStructure(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+
+	principal := storage.Principal{OrgID: "org-backfill"}
+	priorResultID := "result-prior-legacy-structure-001"
+	const member = contextfabric.StructureNeedKind("subject_anchor")
+
+	// A confirmed-structure result, persisted WITHOUT going through the
+	// claim-aware Save path -- a raw INSERT is the only way to reproduce
+	// "this row predates the claim table" against a database that already
+	// has migration 0023's write-side behavior live in Store.Save.
+	legacy := resultWithConfirmedStructure("result-legacy-confirmed-001", member, priorResultID, "ancr_legacy00000001")
+	payload, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+VALUES ($1, $2, $3, $4)`, legacy.ResultID, principal.OrgID, payload, legacy.GeneratedAt)
+	require.NoError(t, err)
+
+	// Confirm the premise: no claim exists yet for this legacy row.
+	superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+	require.NoError(t, err)
+	require.False(t, superseded, "premise: a raw-inserted legacy row must carry no claim before the backfill runs")
+
+	// Re-run 0025's own migration SQL directly against this now-populated
+	// table -- the embedded copy is the SAME file the runner already
+	// applied once; re-executing its idempotent INSERT is what a real
+	// deploy's backfill does against real pre-existing rows.
+	backfillSQL, err := migrations.Files.ReadFile("0025_context_fabric_structure_supersession_backfill.sql")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(backfillSQL))
+	require.NoError(t, err)
+
+	superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+	require.NoError(t, err)
+	require.True(t, superseded, "the backfill must claim (org, prior_result_id, member) for the pre-existing confirmed-structure row")
+
+	// A NEW result attempting to redeem the SAME tuple must now be
+	// rejected -- exactly the double-redemption the finding described,
+	// now closed.
+	racer := resultWithConfirmedStructure("result-racer-post-backfill-01", member, priorResultID, "ancr_racer000000001")
+	racerErr := store.Save(ctx, principal, racer, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+	var conflict *contextfabric.ErrStructureOfferSuperseded
+	require.ErrorAs(t, racerErr, &conflict)
+	require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)
+}
