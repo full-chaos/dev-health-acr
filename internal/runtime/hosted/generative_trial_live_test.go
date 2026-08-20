@@ -1035,6 +1035,15 @@ type caseOutcome struct {
 	ClaimedFacts           int     `json:"claimed_facts,omitempty"`
 	Drivers                int     `json:"drivers,omitempty"`
 	RetrievalDegraded      bool    `json:"retrieval_degraded,omitempty"`
+	// StructureNeedsDisclosed (CHAOS-3927 P1 post-merge measurement,
+	// additive) is true iff this case's own result carried a non-nil
+	// StructureNeeds block -- a bool only, never the block's own content
+	// (no offer text, no kind/anchor/handle values), matching this
+	// harness's own counts/enums/ids/bools telemetry discipline. Only
+	// meaningful when Status != "" (a real, validated result was reached --
+	// see runOneCase); an "error:*" outcome leaves this at its zero value
+	// and is excluded from structureNeedsCoverage's own stalled tally.
+	StructureNeedsDisclosed bool `json:"structure_needs_disclosed,omitempty"`
 	// CommittedMatches/TopNonCommittedMatch (CHAOS-3880, additive): the
 	// committed candidate's own MatchMechanisms+Confidence, and the same for
 	// the best candidate the engine did NOT commit. Both are ADDITIVE and
@@ -1162,6 +1171,12 @@ func runTrialCase(ctx context.Context, t *testing.T, investigator contextfabric.
 
 	outcome.Status = string(result.Status)
 	outcome.CommittedCount = len(result.SubjectResolution.Committed)
+	// CHAOS-3927 P1 post-merge measurement: recorded for every real,
+	// validated result (Status is now set), not just stalled ones -- the
+	// stalled-only filter lives in structureNeedsCoverage's own tally, not
+	// here, so this field always reflects the true (result.StructureNeeds
+	// != nil) fact for the case it is on.
+	outcome.StructureNeedsDisclosed = result.StructureNeeds != nil
 	outcome.CandidateCount = len(result.SubjectResolution.Candidates)
 	for _, cand := range result.SubjectResolution.Candidates {
 		if cand.Confidence > outcome.TopCandidateConfidence {
@@ -1363,6 +1378,20 @@ type trialCommitGateProvenance struct {
 	VectorMarginCommitThresholdEnv string `json:"vector_margin_commit_threshold_env,omitempty"`
 }
 
+// structureNeedsCoverage (CHAOS-3927 P1 post-merge measurement) is the
+// run-level rollup of caseOutcome.StructureNeedsDisclosed over every
+// STALLED case (a real, validated result -- Status != "" -- that
+// committed no subject: CommittedCount == 0, control cases included).
+// DisclosedOnStalled/TotalStalled are counts only, never any question- or
+// offer-derived content, matching this harness's own telemetry
+// discipline. This is the standing P1/P3/P5 acceptance measurement for
+// "StructureNeeds present on every non-decisive terminal" -- see
+// composeStructureNeeds' own doc comment (internal/contextfabric/structure.go).
+type structureNeedsCoverage struct {
+	DisclosedOnStalled int `json:"disclosed_on_stalled"`
+	TotalStalled       int `json:"total_stalled"`
+}
+
 type trialReport struct {
 	Provenance        trialProvenance `json:"provenance"`
 	Arm               string          `json:"arm"`
@@ -1375,6 +1404,12 @@ type trialReport struct {
 	Unusable          int             `json:"unusable"`
 	CommittedTotal    int             `json:"committed_total"`
 	FailureClasses    map[string]int  `json:"failure_classes,omitempty"`
+	// StructureNeedsCoverage (CHAOS-3927 P1 post-merge measurement,
+	// additive) is nil on any report generated before this change existed
+	// (mirrors ClickHouseUsageSummary's own additive-optional discipline
+	// below) -- absence must be read as "not measured", never "zero
+	// coverage".
+	StructureNeedsCoverage *structureNeedsCoverage `json:"structure_needs_coverage,omitempty"`
 	// StageDistribution is the stage-resolved outcome distribution
 	// team-lead asked for -- most cases are expected to end in
 	// clarification_required for every arm (the benchmark commits only
@@ -1445,6 +1480,23 @@ func tallyOutcome(report *trialReport, outcome caseOutcome) {
 	}
 	report.StageDistribution[outcome.Stage]++
 	report.CommittedTotal += outcome.CommittedCount
+
+	// CHAOS-3927 P1 post-merge measurement: a case is STALLED iff it
+	// reached a real, validated result (Status != "" -- excludes every
+	// "error:*" outcome, which never got a result to check) AND committed
+	// no subject (CommittedCount == 0, control cases included: a
+	// correctly-abstaining control is stalled exactly like a genuine
+	// no_commit case for this purpose -- composeStructureNeeds' own
+	// subjectless-terminal path does not distinguish the two).
+	if outcome.Status != "" && outcome.CommittedCount == 0 {
+		if report.StructureNeedsCoverage == nil {
+			report.StructureNeedsCoverage = &structureNeedsCoverage{}
+		}
+		report.StructureNeedsCoverage.TotalStalled++
+		if outcome.StructureNeedsDisclosed {
+			report.StructureNeedsCoverage.DisclosedOnStalled++
+		}
+	}
 
 	switch {
 	case outcome.Outcome == "correct":
