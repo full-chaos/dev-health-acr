@@ -1064,13 +1064,19 @@ write_web_assertion_material() {
   key="$STATE/web/web-assertion.key"
   jwks="$STATE/web/web-assertions.jwks.json"
   openssl genpkey -algorithm ED25519 -out "$key"
-  # Mode 644, not 600: this key is bind-mounted read-only into web-fullstack and this JWKS
-  # into acr-api, both non-root containers whose UID does not match whatever host UID this
-  # script runs as -- see the identical reasoning on write_secret() in compose.sh. A per-run,
-  # torn-down-at-teardown signing key, not a standing credential.
-  chmod 644 "$key"
+  # This private key is bind-mounted read-only into web-fullstack, whose Dockerfile has no
+  # USER directive and so runs as root -- unlike acr-api's distroless nonroot UID 65532, no
+  # ownership mismatch applies here, and dev-health-web's own readPrivateKey()
+  # (src/lib/acr/config.ts) explicitly REJECTS any group/other permission bits
+  # ((mode & 0o077) !== 0) as "Agent Context Runtime is not configured." Mode 600, not 644,
+  # for this file specifically -- confirmed live: leaving it 644 makes device approval fail
+  # 503 "configuration" on a real Linux Docker host, since Docker Desktop's macOS file
+  # sharing does not surface that mode-bit rejection the same way a native bind mount does.
+  chmod 600 "$key"
   public="$(openssl pkey -in "$key" -pubout -outform DER | python3 -c 'import base64,sys; print(base64.urlsafe_b64encode(sys.stdin.buffer.read()[-32:]).rstrip(b"=").decode())')"
   printf '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"acr-fullstack-web","use":"sig","alg":"EdDSA","x":"%s"}]}\n' "$public" > "$jwks"
+  # This one stays 644: acr-api reads it fine at that mode (confirmed live,
+  # web_assertions_configured=true), and it is public key material by definition.
   chmod 644 "$jwks"
 }
 

@@ -160,6 +160,37 @@ jobs:
           timeout 300 opencode --pure run --format json "warmup" || true
           test -d "$warm/.npm" || echo "note: npm cache did not materialise" >&2
 
+      # This warmup run's bare {"$schema":...} config names no provider, so it never
+      # exercises OpenCode's own on-first-use `npm install` of the provider adapter into
+      # <config>/opencode/node_modules -- and PROVIDER_NPM_OFFLINE=true below means each
+      # task's own fresh, isolated $CLIENT_HOME (a deliberately clean root every run) can't
+      # install it live either. scripts/e2e/opencode-runtime-fixture.sh's
+      # OPENCODE_RUNTIME_FIXTURE mechanism exists for exactly this: a pre-verified
+      # node_modules tree the driver publishes into each task's client root instead of
+      # letting OpenCode fetch it. Build one here by installing the provider package the
+      # same way OpenCode would, then hash the resulting tree in the exact
+      # `<sha256>  <path>` manifest format the driver's validator requires. No symlinks are
+      # allowed in the fixture tree; npm's node_modules/.bin/* entries are always symlinks
+      # and are never needed to `require()` a library package, so they're stripped rather
+      # than causing the whole fixture to fail validation.
+      - name: Build the OpenCode provider runtime fixture
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/opencode-runtime-fixture"
+          mkdir -p "$fixture/config/opencode"
+          (
+            cd "$fixture/config/opencode"
+            npm init -y >/dev/null
+            npm install --no-fund --no-audit "$PROVIDER_NPM_SPEC"
+          )
+          find "$fixture/config/opencode/node_modules" -type l -delete
+          (
+            cd "$fixture"
+            find config/opencode -type f -print0 | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > tree-hashes.sha256
+          )
+          echo "OPENCODE_RUNTIME_FIXTURE=$fixture" >> "$GITHUB_ENV"
+
       - name: Record the operator client configuration is absent
         run: |
           test ! -e "$HOME/.config/opencode"
@@ -232,6 +263,7 @@ jobs:
           # Both caches are warmed above, so the graded run must not reach
           # the registry; a miss should fail loudly, not silently refetch.
           PROVIDER_NPM_OFFLINE: 'true'
+          OPENCODE_RUNTIME_FIXTURE: ${{ env.OPENCODE_RUNTIME_FIXTURE }}
         run: make fullstack-opencode-e2e
 
       - name: Prove the runner client configuration was never created
