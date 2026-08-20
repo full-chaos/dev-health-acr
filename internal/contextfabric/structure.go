@@ -258,8 +258,15 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				}
 				for _, opt := range stored.StructureNeeds.AnchorOptions {
 					if opt.ReceiptID == receiptID {
-						ok, _ := e.anchorVerifier(ctx, principal.OrgID, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
-						return ok
+						// Codex xhigh review (chaos-pivot-p1, first round),
+						// finding 2: ok alone is not trustworthy -- a
+						// misconfigured AnchorVerifier returning
+						// (true, AnchorVerificationClaimLost) (or any
+						// non-Valid reason) must not open redemption.
+						// Require the reason to be the closed vocabulary's
+						// own Valid member too, not just a truthy bool.
+						ok, reason := e.anchorVerifier(ctx, principal.OrgID, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
+						return ok && reason == AnchorVerificationValid
 					}
 				}
 				return false
@@ -302,8 +309,14 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				}
 				for _, opt := range stored.StructureNeeds.HandleOptions {
 					if opt.ReceiptID == receiptID {
-						ok, _ := e.handleVerifier(ctx, principal.OrgID, opt.Kind, opt.PatternID, opt.Value)
-						return ok
+						// Codex xhigh review (chaos-pivot-p1, first round),
+						// finding 2: same reasoning as the anchor reverify
+						// above -- require reason == HandleVerificationValid,
+						// not just a truthy ok, so a misconfigured
+						// HandleVerifier cannot open redemption on an
+						// inconsistent (true, non-valid-reason) result.
+						ok, reason := e.handleVerifier(ctx, principal.OrgID, opt.Kind, opt.PatternID, opt.Value)
+						return ok && reason == HandleVerificationValid
 					}
 				}
 				return false
@@ -537,9 +550,13 @@ func structureReceiptPrefixForMember(member contractsv1.ContextFabricStructureNe
 //
 // content is the caller's own stable serialization of everything that
 // makes one offer distinct from a sibling in the SAME member's list
-// (e.g. for a KindOption, the kind alone; for an AnchorOption, kind +
-// canonical_id + claimant_key) -- see composeStructureOffers' own call
-// sites for the exact per-member content strings.
+// (e.g. for an AnchorOption, kind + canonical_id + matched_term_hash +
+// offer_source + prior_version_id + prior_entry_id) -- see
+// composeStructureNeeds' own call sites for the exact per-member content
+// strings. Codex xhigh review (chaos-pivot-p1, first round), finding 7:
+// content must cover every field that can vary between two sibling
+// offers, including offer_source/prior_version_id/prior_entry_id, not
+// only the fields a given phase happens to populate yet.
 //
 // member MUST be a member structureReceiptPrefixForMember recognizes;
 // callers within this package only ever pass a closed-vocabulary
@@ -575,7 +592,14 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 	if len(material.KindOptions) > 0 {
 		needs.KindOptions = make([]contractsv1.ContextFabricKindOption, 0, len(material.KindOptions))
 		for _, opt := range material.KindOptions {
-			content := string(opt.Kind)
+			// Codex xhigh review (chaos-pivot-p1, first round), finding 7:
+			// offer_source/prior_version_id/prior_entry_id are wire fields
+			// that can (in a future reoffer/reuse path) distinguish two
+			// KindOptions that would otherwise share this content string --
+			// fold them in now so mintStructureOptionID/mintStructureReceiptID
+			// stay injective over the FULL option shape, not just its
+			// current phase-C-only fields.
+			content := string(opt.Kind) + "\x00" + string(opt.OfferSource) + "\x00" + opt.PriorVersionID + "\x00" + opt.PriorEntryID
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedExpectedKind, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedExpectedKind, resultID, content)
 			needs.KindOptions = append(needs.KindOptions, opt)
@@ -589,8 +613,11 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 			// list (two anchors sharing a (kind, canonical_id) but minted
 			// from different matched terms are different offers), so it
 			// belongs in the deterministic receipt-id/option-id content
-			// exactly like every other content field here.
-			content := string(opt.Kind) + "\x00" + opt.CanonicalID + "\x00" + opt.MatchedTermHash
+			// exactly like every other content field here. Codex xhigh
+			// review (chaos-pivot-p1, first round), finding 7: offer_source/
+			// prior_version_id/prior_entry_id fold in for the same
+			// full-shape-injectivity reason as the KindOption content above.
+			content := string(opt.Kind) + "\x00" + opt.CanonicalID + "\x00" + opt.MatchedTermHash + "\x00" + string(opt.OfferSource) + "\x00" + opt.PriorVersionID + "\x00" + opt.PriorEntryID
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
 			needs.AnchorOptions = append(needs.AnchorOptions, opt)
@@ -599,7 +626,9 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 	if len(material.HandleOptions) > 0 {
 		needs.HandleOptions = make([]contractsv1.ContextFabricHandleOption, 0, len(material.HandleOptions))
 		for _, opt := range material.HandleOptions {
-			content := string(opt.Kind) + "\x00" + opt.PatternID + "\x00" + opt.Value + "\x00" + opt.SourceColumn
+			// Codex xhigh review (chaos-pivot-p1, first round), finding 7:
+			// same full-shape-injectivity reason as Kind/Anchor above.
+			content := string(opt.Kind) + "\x00" + opt.PatternID + "\x00" + opt.Value + "\x00" + opt.SourceColumn + "\x00" + string(opt.OfferSource) + "\x00" + opt.PriorVersionID + "\x00" + opt.PriorEntryID
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectHandle, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectHandle, resultID, content)
 			needs.HandleOptions = append(needs.HandleOptions, opt)

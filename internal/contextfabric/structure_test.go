@@ -299,7 +299,7 @@ func anchorReceiptTestSetup() (priorResult InvestigationResult, request Investig
 			{
 				ReceiptID: "ancr_confirm0001", OptionID: "opt_anchor", Label: "the widget-service repository",
 				Kind: SubjectRepository, CanonicalID: "repository_widget_service",
-				MatchedTermHash: "matchedtermhash000000012",
+				MatchedTermHash: "aa11bb22cc33dd44ee55ff66",
 				OfferSource:     "engine",
 			},
 		},
@@ -344,7 +344,7 @@ func TestCHAOS3900_AnchorReceiptReverification_VerifierRejectsVetoes(t *testing.
 		Results: store,
 		AnchorVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason) {
 			calls++
-			if orgID != reusePrincipal().OrgID || kind != SubjectRepository || canonicalID != "repository_widget_service" || matchedTermHash != "matchedtermhash000000012" {
+			if orgID != reusePrincipal().OrgID || kind != SubjectRepository || canonicalID != "repository_widget_service" || matchedTermHash != "aa11bb22cc33dd44ee55ff66" {
 				t.Errorf("AnchorVerifier called with (org=%q, kind=%q, canonical_id=%q, matched_term_hash=%q), want the stored offer's own content", orgID, kind, canonicalID, matchedTermHash)
 			}
 			return false, AnchorVerificationClaimContested
@@ -387,6 +387,35 @@ func TestCHAOS3900_AnchorReceiptReverification_VerifierAcceptsConfirms(t *testin
 	entry := canon.Confirmed[0]
 	if entry.Member != "subject_anchor" || entry.AppliedValue != "repository_widget_service" {
 		t.Errorf("canon.Confirmed[0] = %+v, want member=subject_anchor applied_value=repository_widget_service", entry)
+	}
+}
+
+// TestCHAOS3900_AnchorReceiptReverification_InconsistentVerifierVetoes pins
+// the codex xhigh review finding (chaos-pivot-p1, first round, finding 2):
+// a MISCONFIGURED AnchorVerifier returning ok=true alongside a non-Valid
+// reason (an internal inconsistency a real verifier should never produce,
+// but a defensive caller cannot assume it never will) must NOT confirm the
+// anchor -- reverify requires both ok==true AND reason==AnchorVerificationValid,
+// never trusting the bool alone.
+func TestCHAOS3900_AnchorReceiptReverification_InconsistentVerifierVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := anchorReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		AnchorVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason) {
+			// Inconsistent on purpose: ok=true but a failure reason.
+			return true, AnchorVerificationClaimLost
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q (an inconsistent verifier result must fail closed)", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
 	}
 }
 
@@ -496,6 +525,32 @@ func TestCHAOS3900_HandleReceiptReverification_VerifierAcceptsConfirms(t *testin
 	entry := canon.Confirmed[0]
 	if entry.Member != "subject_handle" || entry.AppliedValue != "532" {
 		t.Errorf("canon.Confirmed[0] = %+v, want member=subject_handle applied_value=532", entry)
+	}
+}
+
+// TestCHAOS3900_HandleReceiptReverification_InconsistentVerifierVetoes pins
+// the codex xhigh review finding (chaos-pivot-p1, first round, finding 2):
+// same reasoning as the anchor twin above -- ok=true with a non-Valid
+// reason must not confirm.
+func TestCHAOS3900_HandleReceiptReverification_InconsistentVerifierVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := handleReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		HandleVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason) {
+			// Inconsistent on purpose: ok=true but a failure reason.
+			return true, HandleVerificationCensusUnavailable
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q (an inconsistent verifier result must fail closed)", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
 	}
 }
 

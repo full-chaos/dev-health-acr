@@ -156,13 +156,34 @@ func anchorTermCandidates(claimantsByTerm map[string][]IdentityMatch, complete b
 	if !complete {
 		return nil
 	}
+	// Codex xhigh review (chaos-pivot-p1, first round), finding 3: iterate
+	// terms in a DETERMINISTIC (sorted) order rather than raw map-range
+	// order. Two distinct unique-claimant terms can name the SAME (kind,
+	// canonical_id) (e.g. "repo-a" and "full-chaos/repo-a" both uniquely
+	// resolving to one repository) -- when that happens only one term's
+	// info can occupy the key, and which one must not depend on Go's
+	// randomized map iteration: that would make matched_term_hash (and
+	// everything minted from it downstream: label, receipt_id, option_id)
+	// nondeterministic across otherwise-identical retries. Sorted-term
+	// iteration plus first-write-wins makes the lexicographically-smallest
+	// term the stable, repeatable choice.
+	terms := make([]string, 0, len(claimantsByTerm))
+	for term := range claimantsByTerm {
+		terms = append(terms, term)
+	}
+	sort.Strings(terms)
 	seen := map[anchorCandidateKey]anchorCandidateInfo{}
-	for term, matches := range claimantsByTerm {
+	for _, term := range terms {
+		matches := claimantsByTerm[term]
 		if len(matches) != 1 {
 			continue
 		}
 		row := matches[0].Row
-		seen[anchorCandidateKey{kind: row.Kind, id: row.CanonicalID}] = anchorCandidateInfo{term: term, label: row.Label}
+		key := anchorCandidateKey{kind: row.Kind, id: row.CanonicalID}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = anchorCandidateInfo{term: term, label: row.Label}
 	}
 	return seen
 }

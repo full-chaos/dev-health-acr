@@ -91,6 +91,9 @@ func (o ContextFabricKindOption) Validate() error {
 	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
 		return fmt.Errorf("kind option offer_source is invalid")
 	}
+	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
+		return fmt.Errorf("kind option prior_version_id or prior_entry_id violates v1 bounds")
+	}
 	return nil
 }
 
@@ -107,11 +110,14 @@ func (o ContextFabricAnchorOption) Validate() error {
 	if !stringLengthBetween(o.CanonicalID, 1, 256) {
 		return fmt.Errorf("anchor option canonical_id violates v1 bounds")
 	}
-	if !stringLengthBetween(o.MatchedTermHash, 24, 24) {
-		return fmt.Errorf("anchor option matched_term_hash must be a 24-character digest")
+	if !matchedTermHashPattern.MatchString(o.MatchedTermHash) {
+		return fmt.Errorf("anchor option matched_term_hash must be a 24-character lowercase hex digest")
 	}
 	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
 		return fmt.Errorf("anchor option offer_source is invalid")
+	}
+	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
+		return fmt.Errorf("anchor option prior_version_id or prior_entry_id violates v1 bounds")
 	}
 	return nil
 }
@@ -131,6 +137,9 @@ func (o ContextFabricHandleOption) Validate() error {
 	}
 	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
 		return fmt.Errorf("handle option offer_source is invalid")
+	}
+	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
+		return fmt.Errorf("handle option prior_version_id or prior_entry_id violates v1 bounds")
 	}
 	return nil
 }
@@ -257,6 +266,9 @@ func (e ContextFabricConfirmedStructureEntry) Validate() error {
 	} else if e.PriorResultID != "" || e.ReceiptID != "" {
 		return fmt.Errorf("confirmed structure entry with source=%q must not carry a receipt identity", e.Source)
 	}
+	if !optionalStringBetween(e.PriorVersionID, 1, 256) || !optionalStringBetween(e.PriorEntryID, 1, 256) {
+		return fmt.Errorf("confirmed structure entry prior_version_id or prior_entry_id violates v1 bounds")
+	}
 	return nil
 }
 
@@ -272,6 +284,9 @@ func (e ContextFabricStructureOfferSnapshotEntry) Validate() error {
 	}
 	if !ValidContextFabricStructureOfferSource(e.OfferSource) {
 		return fmt.Errorf("structure offer snapshot entry offer_source is invalid")
+	}
+	if !optionalStringBetween(e.PriorVersionID, 1, 256) || !optionalStringBetween(e.PriorEntryID, 1, 256) {
+		return fmt.Errorf("structure offer snapshot entry prior_version_id or prior_entry_id violates v1 bounds")
 	}
 	return nil
 }

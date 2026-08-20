@@ -2224,7 +2224,8 @@
             "matched_term_hash": {
               "type": "string",
               "minLength": 24,
-              "maxLength": 24
+              "maxLength": 24,
+              "pattern": "^[0-9a-f]{24}$"
             },
             "offer_source": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSource"

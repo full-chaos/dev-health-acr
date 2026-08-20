@@ -100,3 +100,58 @@ func TestIdentityUniverse_AnyShortBranchPoisonsCompletenessGlobally(t *testing.T
 		t.Fatalf("project rows returned = %d, want 3 -- the under-budget branch's real rows must survive a sibling branch's incompleteness", projectRows)
 	}
 }
+
+// TestIdentityUniverse_TruncatedEmptyPageFailsClosed pins the codex xhigh
+// review finding (chaos-pivot-p1, first round, finding 6): an adapter that
+// reports truncated=true (more rows exist) yet returns an EMPTY page is an
+// inconsistent response -- it can never legitimately advance the cursor.
+// fetchIdentityKind must treat this as an incomplete read (complete=false),
+// not the unconditional complete=true a bare len(page)==0 check would have
+// returned; a truncated=false empty page (the ordinary "no rows for this
+// org" case) must still report complete=true.
+func TestIdentityUniverse_TruncatedEmptyPageFailsClosed(t *testing.T) {
+	original := identityUniverseKinds
+	t.Cleanup(func() { identityUniverseKinds = original })
+
+	inconsistentQuery := func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return nil, true, nil // truncated=true, zero rows: a backend contract violation.
+	}
+	identityUniverseKinds = []entityTable{
+		{name: "inconsistent", query: inconsistentQuery},
+	}
+
+	rows, _, complete, err := IdentityUniverse(context.Background(), nil, "org-truncated-empty-test")
+	if err != nil {
+		t.Fatalf("IdentityUniverse() error = %v", err)
+	}
+	if complete {
+		t.Fatal("IdentityUniverse() complete = true, want false -- truncated=true with an empty page must fail closed, never be trusted as done")
+	}
+	if len(rows) != 0 {
+		t.Fatalf("len(rows) = %d, want 0", len(rows))
+	}
+}
+
+// TestIdentityUniverse_UntruncatedEmptyPageIsComplete is the fail-closed
+// fix's positive twin: an ORDINARY empty page (truncated=false -- the
+// adapter itself says there is nothing more) must still report
+// complete=true, exactly as before this fix.
+func TestIdentityUniverse_UntruncatedEmptyPageIsComplete(t *testing.T) {
+	original := identityUniverseKinds
+	t.Cleanup(func() { identityUniverseKinds = original })
+
+	emptyQuery := func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return nil, false, nil
+	}
+	identityUniverseKinds = []entityTable{
+		{name: "empty", query: emptyQuery},
+	}
+
+	_, _, complete, err := IdentityUniverse(context.Background(), nil, "org-empty-test")
+	if err != nil {
+		t.Fatalf("IdentityUniverse() error = %v", err)
+	}
+	if !complete {
+		t.Fatal("IdentityUniverse() complete = false, want true -- an ordinary untruncated empty page is a legitimate, complete read")
+	}
+}

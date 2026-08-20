@@ -247,6 +247,19 @@ func VerifyHandle(ctx context.Context, orgID string, kind CensusKind, patternID,
 	if err != nil {
 		return false, HandleVerificationCensusUnavailable
 	}
+	// Codex xhigh review (chaos-pivot-p1, first round), finding 1: a
+	// ClosureMismatch/SatisfierSetClosureMismatch outcome is the SAME "race
+	// can only demote, never mint" signal chaos3899_census.go's own
+	// producer and this package's other CensusOutcome consumers
+	// (chaos3896_slice_b_presentation.go, chaos3896_slice_c_evidence_census.go)
+	// already treat as untrustworthy -- Count alone does not prove the
+	// fetched set/witness actually closed. An outcome that could not prove
+	// closure must fail the SAME way an unreachable census does
+	// (HandleVerificationCensusUnavailable), never silently validate on a
+	// bare Count>0.
+	if outcome.ClosureMismatch || outcome.SatisfierSetClosureMismatch {
+		return false, HandleVerificationCensusUnavailable
+	}
 	if outcome.Count == 0 {
 		return false, HandleVerificationNotFound
 	}

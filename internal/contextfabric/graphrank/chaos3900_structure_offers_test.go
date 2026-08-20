@@ -439,6 +439,32 @@ func TestVerifyHandle(t *testing.T) {
 			t.Errorf("VerifyHandle() = (%v, %q), want (false, %q)", valid, reason, HandleVerificationCensusUnavailable)
 		}
 	})
+	// Codex xhigh review (chaos-pivot-p1, first round), finding 1: a
+	// nonzero Count alone is not sufficient -- a ClosureMismatch (or
+	// SatisfierSetClosureMismatch) means the census could not PROVE the
+	// fetched set/witness actually closed against the aggregate (the same
+	// "race can only demote, never mint" rule chaos3899_census.go's own
+	// producer and every other CensusOutcome consumer in this package
+	// already apply). VerifyHandle must fail the SAME way an unreachable
+	// census does, never validate on a bare Count>0.
+	t.Run("closure mismatch fails safe, not open", func(t *testing.T) {
+		census := CensusFunc(func(context.Context, string, CensusKind, string, bool, contractsv1.ContextFabricSubjectKind, string, bool) (CensusOutcome, error) {
+			return CensusOutcome{Count: 1, ClosureMismatch: true}, nil
+		})
+		valid, reason := VerifyHandle(context.Background(), "org_1", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "532", census)
+		if valid || reason != HandleVerificationCensusUnavailable {
+			t.Errorf("VerifyHandle() = (%v, %q), want (false, %q)", valid, reason, HandleVerificationCensusUnavailable)
+		}
+	})
+	t.Run("satisfier-set closure mismatch fails safe, not open", func(t *testing.T) {
+		census := CensusFunc(func(context.Context, string, CensusKind, string, bool, contractsv1.ContextFabricSubjectKind, string, bool) (CensusOutcome, error) {
+			return CensusOutcome{Count: 3, SatisfierSetClosureMismatch: true}, nil
+		})
+		valid, reason := VerifyHandle(context.Background(), "org_1", contractsv1.ContextFabricSubjectPullRequest, "pull_request_number", "532", census)
+		if valid || reason != HandleVerificationCensusUnavailable {
+			t.Errorf("VerifyHandle() = (%v, %q), want (false, %q)", valid, reason, HandleVerificationCensusUnavailable)
+		}
+	})
 }
 
 func identityRow(kind contractsv1.ContextFabricSubjectKind, id, label string, aliases ...string) IdentityRow {
