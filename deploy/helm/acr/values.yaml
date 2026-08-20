@@ -273,3 +273,34 @@ networkPolicy:
     postgresPort: 5432
     clickhousePort: 9000
     entitlementPort: 8000
+    # Kubernetes API server port, needed only when workloadTokenExchange.enabled
+    # (acr-api calls TokenReview). Ports-only, same convention as the other
+    # egress rules above -- NetworkPolicy cannot target the API server by pod
+    # label the way it can an in-cluster Service.
+    kubernetesAPIPort: 443
+
+# CHAOS-4013: RFC 8693 workload token exchange. Disabled by default -- an
+# unconfigured deployment leaves api.RuntimeDependencies.WorkloadTokenExchange
+# nil and the grant on POST /api/v1/oauth/token degrades to a clean 503; the
+# pre-existing device-code grant on that endpoint is unaffected either way.
+workloadTokenExchange:
+  enabled: false
+  # ACR-specific TokenReview audience every subject token must be minted
+  # for; ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE.
+  audience: "dev-health-acr-token-exchange"
+  # Fixed, deployment-configured cluster identifier -- see
+  # internal/auth.KubernetesTokenReviewOptions.TrustDomain's own doc
+  # comment for why this is static rather than derived from the token.
+  # ACR_WORKLOAD_TRUST_DOMAIN.
+  trustDomain: ""
+  # Per-grant-class consumer ServiceAccounts this chart provisions so an
+  # operator can bind acr.workload_bindings rows against a stable identity.
+  # automountServiceAccountToken is always false for these -- a consuming
+  # workload's OWN pod spec must project a token scoped to `audience`
+  # explicitly (serviceAccountToken volume, no subPath -- subPath mounts
+  # never receive kubelet's live token rotation) rather than relying on the
+  # unscoped default automount.
+  consumerServiceAccounts:
+    - name: panel-read
+    - name: mcp-read
+    - name: ci-ops

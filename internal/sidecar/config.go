@@ -14,19 +14,29 @@ import (
 // Environment variables read by LoadConfig. All are optional except
 // APIURLEnvironment.
 const (
-	APIURLEnvironment                  = "ACR_API_URL"
-	TimeoutEnvironment                 = "ACR_API_TIMEOUT"
-	MaxResponseBytesEnvironment        = "ACR_API_MAX_RESPONSE_BYTES"
-	MaxRequestBodyBytesEnvironment     = "ACR_API_MAX_REQUEST_BODY_BYTES"
-	ProxyURLEnvironment                = "ACR_API_PROXY_URL"
-	CACertPathEnvironment              = "ACR_API_CA_BUNDLE"
-	AllowInsecureLoopbackEnvironment   = "ACR_API_ALLOW_INSECURE_LOOPBACK"
-	EnableWritebackEnvironment         = "ACR_ENABLE_WRITEBACK"
-	EnableTranscriptCaptureEnvironment = "ACR_ENABLE_TRANSCRIPT_CAPTURE"
-	ClientNameEnvironment              = "ACR_SIDECAR_CLIENT_NAME"
-	ClientVersionEnvironment           = "ACR_SIDECAR_CLIENT_VERSION"
-	SidecarVersionEnvironment          = "ACR_SIDECAR_VERSION"
-	LogLevelEnvironment                = "ACR_LOG_LEVEL"
+	APIURLEnvironment                    = "ACR_API_URL"
+	TimeoutEnvironment                   = "ACR_API_TIMEOUT"
+	MaxResponseBytesEnvironment          = "ACR_API_MAX_RESPONSE_BYTES"
+	MaxRequestBodyBytesEnvironment       = "ACR_API_MAX_REQUEST_BODY_BYTES"
+	ProxyURLEnvironment                  = "ACR_API_PROXY_URL"
+	CACertPathEnvironment                = "ACR_API_CA_BUNDLE"
+	AllowInsecureLoopbackEnvironment     = "ACR_API_ALLOW_INSECURE_LOOPBACK"
+	AllowInsecureInternalHTTPEnvironment = "ACR_API_ALLOW_INSECURE_INTERNAL_HTTP"
+	EnableWritebackEnvironment           = "ACR_ENABLE_WRITEBACK"
+	EnableTranscriptCaptureEnvironment   = "ACR_ENABLE_TRANSCRIPT_CAPTURE"
+	ClientNameEnvironment                = "ACR_SIDECAR_CLIENT_NAME"
+	ClientVersionEnvironment             = "ACR_SIDECAR_CLIENT_VERSION"
+	SidecarVersionEnvironment            = "ACR_SIDECAR_VERSION"
+	LogLevelEnvironment                  = "ACR_LOG_LEVEL"
+	// SubjectTokenFileEnvironment and TokenEndpointEnvironment configure
+	// RFC 8693 workload token exchange (CHAOS-4013) -- see
+	// NewWorkloadCredentialSource. Deliberately separate from
+	// TokenFileEnvironment (ACR_API_TOKEN_FILE): that loader accepts only
+	// an already-minted fcacr_ token, never a k8s projected ServiceAccount
+	// JWT, so overloading it would silently break both readers instead of
+	// cleanly supporting neither.
+	SubjectTokenFileEnvironment = "ACR_SUBJECT_TOKEN_FILE"
+	TokenEndpointEnvironment    = "ACR_TOKEN_ENDPOINT"
 )
 
 const (
@@ -150,6 +160,15 @@ type Config struct {
 	// httptest-style fixture drivers and must never be set against a
 	// non-loopback host; LoadConfig enforces that pairing.
 	AllowInsecureLoopback bool
+	// AllowInsecureInternalHTTP opts into plain HTTP for a NON-loopback
+	// host too (CHAOS-4013): a cluster-internal Service DNS name such as
+	// http://acr-api.<namespace>.svc:8080, where TLS termination happens
+	// only at a gateway if the endpoint is ever exposed externally.
+	// Distinct from AllowInsecureLoopback -- see that field's own doc
+	// comment -- and, unlike it, has no implicit host restriction beyond
+	// "not https", so operators must only set this within a trusted
+	// cluster network boundary.
+	AllowInsecureInternalHTTP bool
 	// ClientName, ClientVersion, and SidecarVersion identify this sidecar
 	// to the hosted API (client info payload, X-ACR-Client-Version header).
 	ClientName     string
@@ -211,6 +230,9 @@ func loadConfig(lookup lookupEnv) (Config, error) {
 	if cfg.AllowInsecureLoopback, err = boolOrDefault(lookup, AllowInsecureLoopbackEnvironment, false); err != nil {
 		return Config{}, err
 	}
+	if cfg.AllowInsecureInternalHTTP, err = boolOrDefault(lookup, AllowInsecureInternalHTTPEnvironment, false); err != nil {
+		return Config{}, err
+	}
 	if cfg.EnableWriteback, err = strictBoolOrDefault(lookup, EnableWritebackEnvironment, false); err != nil {
 		return Config{}, err
 	}
@@ -244,7 +266,7 @@ func (c Config) Validate() error {
 	if err := validateOriginOnly(c.APIBaseURL); err != nil {
 		return err
 	}
-	if err := validateScheme(c.APIBaseURL, c.AllowInsecureLoopback); err != nil {
+	if err := validateScheme(c.APIBaseURL, c.AllowInsecureInternalHTTP); err != nil {
 		return err
 	}
 	if c.Timeout < minTimeout || c.Timeout > maxTimeout {
@@ -261,6 +283,9 @@ func (c Config) Validate() error {
 	}
 	if c.ProxyURL != nil && c.APIBaseURL.Scheme == "http" && isLoopbackHost(c.APIBaseURL.Hostname()) {
 		return &ConfigError{Field: ProxyURLEnvironment, Detail: "must not be configured for an insecure loopback API URL"}
+	}
+	if c.ProxyURL != nil && c.APIBaseURL.Scheme == "http" && c.AllowInsecureInternalHTTP {
+		return &ConfigError{Field: ProxyURLEnvironment, Detail: "must not be configured for an insecure internal-HTTP API URL"}
 	}
 	if strings.TrimSpace(c.CACertPath) != "" {
 		// Parity check with the authoritative load path (loadCACertPool,

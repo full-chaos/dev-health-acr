@@ -228,6 +228,17 @@ URL whenever backing stores are enabled.
 {{- end -}}
 {{- end -}}
 
+{{- define "acr.validateWorkloadTokenExchange" -}}
+{{- if .Values.workloadTokenExchange.enabled -}}
+{{- if not (.Values.workloadTokenExchange.audience | default "") -}}
+{{- fail "workload-token-exchange: workloadTokenExchange.audience is required when workloadTokenExchange.enabled=true" -}}
+{{- end -}}
+{{- if not (.Values.workloadTokenExchange.trustDomain | default "") -}}
+{{- fail "workload-token-exchange: workloadTokenExchange.trustDomain is required when workloadTokenExchange.enabled=true" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Remote entitlement is selected automatically when an origin is supplied. Local
 allow-all entitlement is restricted to development/test and must not retain

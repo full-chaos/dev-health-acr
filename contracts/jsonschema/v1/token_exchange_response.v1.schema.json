@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/token_exchange_response.v1.schema.json",
+  "title": "RFC 8693 Token Exchange Response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "access_token", "issued_token_type", "token_type", "expires_in"],
+  "properties": {
+    "schema_version": { "const": "token_exchange_response.v1" },
+    "access_token": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "issued_token_type": { "const": "urn:ietf:params:oauth:token-type:access_token" },
+    "token_type": { "const": "Bearer" },
+    "expires_in": { "type": "integer", "minimum": 0, "maximum": 600 },
+    "scope": { "type": "string", "minLength": 1, "maxLength": 512 }
+  }
+}

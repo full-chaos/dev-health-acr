@@ -41,6 +41,9 @@ func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent 
 	if record.IssuanceProvenance != "" {
 		metadata["issuance_provenance"] = string(record.IssuanceProvenance)
 	}
+	if credential.WorkloadBindingID != nil {
+		metadata["workload_binding_id"] = *credential.WorkloadBindingID
+	}
 	return storage.AuditEvent{OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy, Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID, Status: "success", CreatedAt: credential.CreatedAt, Metadata: metadata}
 }
 
@@ -53,7 +56,18 @@ func credentialRevokedEvent(credential contractsv1.ClientCredential, actorID str
 }
 
 func credentialFromCreate(input storage.CredentialCreateInput, createdAt time.Time) contractsv1.ClientCredential {
-	return contractsv1.ClientCredential{SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: input.CredentialID, OrgID: input.OrgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: append([]string(nil), input.RepositoryScopes...), Scopes: append([]string(nil), input.Scopes...), CreatedAt: createdAt, ExpiresAt: cloneTime(input.ExpiresAt)}
+	return contractsv1.ClientCredential{
+		SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: input.CredentialID, OrgID: input.OrgID, Name: input.Name, TokenPrefix: input.TokenPrefix,
+		RepositoryScopes: append([]string(nil), input.RepositoryScopes...), Scopes: append([]string(nil), input.Scopes...), CreatedAt: createdAt, ExpiresAt: cloneTime(input.ExpiresAt),
+		WorkloadBindingID: nonEmptyPtr(input.WorkloadBindingID),
+	}
+}
+
+func nonEmptyPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time) contractsv1.ClientCredential {

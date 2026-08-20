@@ -56,4 +56,9 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.entitlementPort }}
     {{- end }}
+    {{- if and .Values.workloadTokenExchange.enabled .Values.networkPolicy.egress.kubernetesAPIPort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.kubernetesAPIPort }}
+    {{- end }}
 {{- end }}

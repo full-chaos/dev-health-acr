@@ -9,6 +9,15 @@ import (
 const (
 	defaultPacketPurgeInterval   = 5 * time.Minute
 	defaultPacketPurgeBatchLimit = 500
+
+	// defaultWorkloadCredentialPurgeInterval is shorter than the packet
+	// snapshot purge's: a workload re-exchanges a fresh
+	// acr.client_credentials row roughly every WorkloadAccessTokenLifetime
+	// (10 minutes, see internal/auth.WorkloadAccessTokenLifetime) for as
+	// long as it runs, so these rows accumulate far faster than any other
+	// purge target this package already sweeps.
+	defaultWorkloadCredentialPurgeInterval   = time.Minute
+	defaultWorkloadCredentialPurgeBatchLimit = 500
 )
 
 // packetPurgeFunc purges expired context packet snapshots up to a bounded
@@ -22,19 +31,19 @@ type packetPurgeFunc func(ctx context.Context, before time.Time, limit int) (int
 // nil observer is a valid no-op.
 type packetPurgeFailureObserver func(ctx context.Context, message string)
 
-// packetPurgeFailureMessage is the sole message ever passed to a
-// packetPurgeFailureObserver.
+// packetPurgeFailureMessage is the message startPacketPurgeLoop passes to
+// runPurgeTickLoop; startWorkloadCredentialPurgeLoop passes its own.
 const packetPurgeFailureMessage = "packet purge tick failed; retrying on next tick"
 
 // runPurgeTickLoop drains tick until either ctx is cancelled or tick is
 // closed, invoking purge with a bounded batch limit on every tick. It never
 // panics on a purge failure: a transient failure is retried on the next
 // tick, and is reported through observe using only the fixed redacted
-// message so recurring failures remain operationally visible without
-// leaking database error detail. The loop returns (does not leak) as soon
-// as ctx is done, which lets the caller join the goroutine that runs this
-// function from Close.
-func runPurgeTickLoop(ctx context.Context, tick <-chan time.Time, now func() time.Time, purge packetPurgeFunc, limit int, observe packetPurgeFailureObserver) {
+// message (never the underlying error) so recurring failures remain
+// operationally visible without leaking database error detail. The loop
+// returns (does not leak) as soon as ctx is done, which lets the caller
+// join the goroutine that runs this function from Close.
+func runPurgeTickLoop(ctx context.Context, tick <-chan time.Time, now func() time.Time, purge packetPurgeFunc, limit int, message string, observe packetPurgeFailureObserver) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -44,7 +53,7 @@ func runPurgeTickLoop(ctx context.Context, tick <-chan time.Time, now func() tim
 				return
 			}
 			if _, err := purge(ctx, now().UTC(), limit); err != nil && observe != nil {
-				observe(ctx, packetPurgeFailureMessage)
+				observe(ctx, message)
 			}
 		}
 	}
@@ -70,7 +79,41 @@ func startPacketPurgeLoop(ctx context.Context, purge packetPurgeFunc, now func()
 	go func() {
 		defer close(done)
 		defer ticker.Stop()
-		runPurgeTickLoop(loopCtx, ticker.C, now, purge, defaultPacketPurgeBatchLimit, observe)
+		runPurgeTickLoop(loopCtx, ticker.C, now, purge, defaultPacketPurgeBatchLimit, packetPurgeFailureMessage, observe)
+	}()
+	return func() error {
+		cancel()
+		<-done
+		return nil
+	}, nil
+}
+
+// workloadCredentialPurgeFailureMessage is startWorkloadCredentialPurgeLoop's
+// own message, passed to runPurgeTickLoop -- see packetPurgeFailureMessage's
+// doc comment.
+const workloadCredentialPurgeFailureMessage = "workload credential purge tick failed; retrying on next tick"
+
+// startWorkloadCredentialPurgeLoop is startPacketPurgeLoop's twin for
+// CHAOS-4013 workload-exchanged credential rows: same initial-synchronous-
+// purge-as-DELETE-privilege-proof, same cancellable background ticker, same
+// never-panics-on-failure contract -- reusing runPurgeTickLoop directly
+// since packetPurgeFunc's signature already matches
+// storagepostgres.NewWorkloadCredentialPurger's. Only the interval/batch
+// constants and the failure message differ.
+func startWorkloadCredentialPurgeLoop(ctx context.Context, purge packetPurgeFunc, now func() time.Time, observe packetPurgeFailureObserver) (func() error, error) {
+	if now == nil {
+		now = time.Now
+	}
+	if _, err := purge(ctx, now().UTC(), defaultWorkloadCredentialPurgeBatchLimit); err != nil {
+		return nil, err
+	}
+	loopCtx, cancel := context.WithCancel(context.Background())
+	ticker := time.NewTicker(defaultWorkloadCredentialPurgeInterval)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ticker.Stop()
+		runPurgeTickLoop(loopCtx, ticker.C, now, purge, defaultWorkloadCredentialPurgeBatchLimit, workloadCredentialPurgeFailureMessage, observe)
 	}()
 	return func() error {
 		cancel()

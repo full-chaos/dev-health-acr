@@ -96,6 +96,14 @@ type RuntimeDependencies struct {
 	// there is no reuse-capable store to invalidate against.
 	ReuseInvalidator contextfabric.ReuseInvalidator
 	ReadinessChecks  []ReadinessCheck
+	// WorkloadTokenExchange is optional (CHAOS-4013): nil means no
+	// Kubernetes TokenReview integration is configured for this
+	// deployment, and the RFC 8693 grant on POST /api/v1/oauth/token
+	// degrades to a clean 503 (see handleTokenExchange) -- the same
+	// "unconfigured optional dependency never fails closed" convention as
+	// Investigator/OrgModelConfigs above. The pre-existing device-code
+	// grant on that same endpoint is entirely unaffected either way.
+	WorkloadTokenExchange WorkloadTokenExchanger
 }
 
 func (r *RuntimeDependencies) validate() error {
@@ -114,6 +122,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.InvestigationResults != nil && storage.IsNil(r.InvestigationResults) {
 		return errors.New("hosted context fabric investigation result store must not be typed nil")
+	}
+	if r.WorkloadTokenExchange != nil && storage.IsNil(r.WorkloadTokenExchange) {
+		return errors.New("hosted workload token exchange must not be typed nil")
 	}
 	if len(r.ReadinessChecks) < 3 {
 		return errors.New("hosted read runtime requires postgres, clickhouse, and entitlement readiness checks")

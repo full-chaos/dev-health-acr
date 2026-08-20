@@ -51,23 +51,32 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	if err != nil {
 		return fail(fmt.Errorf("create episode store: %w", err))
 	}
+	workloadBindings, err := storagepostgres.NewWorkloadBindingStore(database)
+	if err != nil {
+		return fail(fmt.Errorf("create workload binding store: %w", err))
+	}
 	stopPurgeLoop, err := startPacketPurgeLoop(ctx, packets.PurgeExpiredWithAudit, nil, packetPurgeSlogObserver(logger))
 	if err != nil {
 		return fail(fmt.Errorf("purge expired packet snapshots: %w", err))
+	}
+	stopWorkloadCredentialPurgeLoop, err := startWorkloadCredentialPurgeLoop(ctx, storagepostgres.NewWorkloadCredentialPurger(database), nil, packetPurgeSlogObserver(logger))
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("purge expired workload credentials: %w", err), stopPurgeLoop()))
 	}
 	readinessTimeout := cfg.PostgresPingTimeout
 	if readinessTimeout <= 0 {
 		readinessTimeout = defaultPostgresReadinessTimeout
 	}
 	return postgresComponents{
-		credentials: credentials, devices: devices, audit: audit, packets: packets, episodes: episodes, db: database,
+		credentials: credentials, devices: devices, audit: audit, packets: packets, episodes: episodes,
+		workloadBindings: workloadBindings, db: database,
 		check: func(ctx context.Context) error {
 			checkContext, cancel := context.WithTimeout(ctx, readinessTimeout)
 			defer cancel()
 			return checkPostgresRuntime(checkContext, database, runner, cfg.EnableEpisodeWriteback)
 		},
 		close: func() error {
-			return errors.Join(stopPurgeLoop(), database.Close())
+			return errors.Join(stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), database.Close())
 		},
 	}, nil
 }

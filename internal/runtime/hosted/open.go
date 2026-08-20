@@ -131,6 +131,10 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
+	workloadTokenExchange, err := buildWorkloadTokenExchange(postgres, request.options.Now, os.LookupEnv)
+	if err != nil {
+		return nil, closeAfterError(runtime, fmt.Errorf("initialize workload token exchange: %w", err))
+	}
 	// CHAOS-3859: clarificationSink owns a background worker goroutine
 	// that must stop BEFORE postgres.close() tears down the pool it
 	// writes through -- same ordering Runtime.Close already gives
@@ -165,6 +169,13 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if investigationResultStore != nil {
 		investigationResults = investigationResultStore
 	}
+	// Same typed-nil guard: workloadTokenExchange is a concrete
+	// *auth.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
+	// unconfigured (see buildWorkloadTokenExchange's doc comment).
+	var workloadTokenExchanger api.WorkloadTokenExchanger
+	if workloadTokenExchange != nil {
+		workloadTokenExchanger = workloadTokenExchange
+	}
 	runtime.Dependencies = api.Dependencies{
 		Capabilities: capabilities, Now: request.options.Now, Observability: &hooks, Limits: manager, AuthAttempts: authAttempts,
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
@@ -183,6 +194,10 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			// guard decides that before returning it), so it needs no
 			// second typed-nil check here.
 			ReuseInvalidator: resultReuseInvalidator,
+			// CHAOS-4013: nil unless ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE
+			// and ACR_WORKLOAD_TRUST_DOMAIN are both set -- see
+			// buildWorkloadTokenExchange's own doc comment.
+			WorkloadTokenExchange: workloadTokenExchanger,
 		},
 	}
 	return runtime, nil

@@ -79,6 +79,11 @@ func (c *fixturePostgresConn) ExecContext(_ context.Context, query string, args 
 			args[0].Value, args[2].Value, args[3].Value, args[1].Value,
 			[]byte(args[5].Value.(string)), []byte(args[6].Value.(string)),
 			args[8].Value, args[9].Value, args[10].Value, args[11].Value,
+			// workload_binding_id ($15, CHAOS-4013): none of this fixture's
+			// callers issue a workload-exchanged credential, so this stays
+			// nil (SQL NULL) -- matches insertCredential's real 15th
+			// parameter position.
+			args[14].Value,
 		}
 	}
 	return driver.RowsAffected(1), nil
@@ -94,7 +99,7 @@ func (c *fixturePostgresConn) QueryContext(_ context.Context, query string, args
 }
 
 func (r *fixturePostgresRows) Columns() []string {
-	return []string{"credential_id", "name", "token_prefix", "org_id", "repository_scopes", "scopes", "created_at", "expires_at", "revoked_at", "last_used_at"}
+	return []string{"credential_id", "name", "token_prefix", "org_id", "repository_scopes", "scopes", "created_at", "expires_at", "revoked_at", "last_used_at", "workload_binding_id"}
 }
 
 func (r *fixturePostgresRows) Close() error { return nil }

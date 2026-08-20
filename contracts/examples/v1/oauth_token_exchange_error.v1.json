@@ -1,0 +1,4 @@
+{
+  "schema_version": "oauth_token_exchange_error.v1",
+  "error": "invalid_grant"
+}

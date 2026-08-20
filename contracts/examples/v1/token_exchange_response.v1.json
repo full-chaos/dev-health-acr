@@ -1,0 +1,8 @@
+{
+  "schema_version": "token_exchange_response.v1",
+  "access_token": "[REDACTED]",
+  "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+  "token_type": "Bearer",
+  "expires_in": 600,
+  "scope": "context:read evidence:read"
+}

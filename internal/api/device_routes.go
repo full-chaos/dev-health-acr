@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"mime"
 	"net/http"
 	"strconv"
 	"time"
@@ -42,7 +43,21 @@ func (a *App) handleDeviceAuthorization(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, response)
 }
 
+// handleDeviceToken dispatches POST /api/v1/oauth/token by Content-Type:
+// the pre-existing JSON device-code grant (handleDeviceCodeToken) stays
+// untouched, and RFC 8693 workload token exchange (CHAOS-4013) --
+// form-encoded, grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+// -- is handled by handleTokenExchange. Both share the same
+// AllowTokenRequest rate-limit budget for this endpoint.
 func (a *App) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err == nil && mediaType == "application/x-www-form-urlencoded" {
+		a.handleTokenExchange(w, r)
+		return
+	}
+	a.handleDeviceCodeToken(w, r)
+}
+
+func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 	if !a.allowDeviceRequest(w, r, a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
 		return
 	}

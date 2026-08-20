@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/oauth_token_exchange_error.v1.schema.json",
+  "title": "RFC 8693 Token Exchange Error v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "error"],
+  "properties": {
+    "schema_version": { "const": "oauth_token_exchange_error.v1" },
+    "error": { "enum": ["invalid_request", "invalid_grant", "invalid_scope", "unauthorized_client", "unsupported_grant_type"] }
+  }
+}

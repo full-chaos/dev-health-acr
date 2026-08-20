@@ -57,8 +57,9 @@ import (
 // own comment above already documents). 0029 is that same P5 ticket's own
 // one-time cleanup: clear reuse-key columns on pre-existing structure-
 // bearing rows a pre-P5 binary wrote before reuseColumnsFor's own source-
-// ineligibility fix existed.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29}
+// ineligibility fix existed. 0030 is CHAOS-4013's RFC 8693 workload token
+// exchange: acr.workload_bindings plus client_credentials.workload_binding_id.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

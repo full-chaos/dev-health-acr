@@ -365,6 +365,14 @@ type ClientCredential struct {
 	ExpiresAt        *time.Time `json:"expires_at"`
 	RevokedAt        *time.Time `json:"revoked_at"`
 	LastUsedAt       *time.Time `json:"last_used_at"`
+	// WorkloadBindingID is set only for a row issued through RFC 8693
+	// workload token exchange (CHAOS-4013); it identifies the declarative
+	// {trust domain, namespace, service account name, service account uid}
+	// binding this token was exchanged against, and is the value
+	// authentication uses as Principal.Subject for such a token instead of
+	// CredentialID (see internal/auth/middleware.go). Nil for every other
+	// credential (device-flow, self-service, rotation).
+	WorkloadBindingID *string `json:"workload_binding_id,omitempty"`
 }
 
 type ErrorEnvelope struct {

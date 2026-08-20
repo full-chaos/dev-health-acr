@@ -28,6 +28,10 @@ data:
   ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
   ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
   ACR_DEVICE_VERIFICATION_URL: {{ .Values.config.deviceVerificationUrl | quote }}
+  {{- if .Values.workloadTokenExchange.enabled }}
+  ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE: {{ .Values.workloadTokenExchange.audience | quote }}
+  ACR_WORKLOAD_TRUST_DOMAIN: {{ .Values.workloadTokenExchange.trustDomain | quote }}
+  {{- end }}
   {{- if or (eq .Values.config.environment "development") (eq .Values.config.environment "test") }}
   {{- with .Values.config.webAssertion }}
   {{- if and .issuer .audience .existingSecret }}

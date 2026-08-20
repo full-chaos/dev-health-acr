@@ -24,7 +24,7 @@ func validateOriginOnly(base *url.URL) error {
 	return nil
 }
 
-func validateScheme(base *url.URL, _ bool) error {
+func validateScheme(base *url.URL, allowInsecureInternalHTTP bool) error {
 	switch base.Scheme {
 	case "https":
 		return nil
@@ -32,8 +32,17 @@ func validateScheme(base *url.URL, _ bool) error {
 		if isLoopbackHost(base.Hostname()) {
 			return nil
 		}
+		// CHAOS-4013: an explicit, separately-named opt-in for a
+		// cluster-internal origin (e.g. http://acr-api.<ns>.svc:8080) --
+		// distinct from AllowInsecureLoopback, which only ever covers
+		// 127.0.0.1/::1/localhost fixture origins. Plain HTTP stays
+		// refused for every other non-loopback host; TLS is only skipped
+		// here because the traffic never leaves the cluster network.
+		if allowInsecureInternalHTTP {
+			return nil
+		}
 	}
-	return &ConfigError{Field: APIURLEnvironment, Detail: "must use https (plain http is only allowed for a loopback origin)"}
+	return &ConfigError{Field: APIURLEnvironment, Detail: "must use https (plain http is only allowed for a loopback origin, or an explicit internal-HTTP opt-in)"}
 }
 func isLoopbackHost(host string) bool {
 	ip := net.ParseIP(host)

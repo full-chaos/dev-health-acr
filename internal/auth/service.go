@@ -224,6 +224,7 @@ func (s *Service) issueCreateInput(request CreateCredentialRequest) (string, sto
 		CredentialID: credentialID, OrgID: request.OrgID, Name: request.Name, TokenPrefix: DisplayPrefix(token), TokenHash: HashToken(token),
 		RepositoryScopes: append([]string(nil), request.RepositoryScopes...), Scopes: append([]string(nil), request.Scopes...),
 		ActorID: request.CreatedBy, ExpiresAt: cloneTime(request.ExpiresAt),
+		IssuanceProvenance: request.IssuanceProvenance, WorkloadBindingID: request.WorkloadBindingID,
 	}, nil
 
 }

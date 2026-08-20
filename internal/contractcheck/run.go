@@ -46,6 +46,8 @@ var exampleSchemaPairs = map[string]string{
 	"credential_revoke_request.v1.json":                    "credential_revoke_request.v1.schema.json",
 	"credential_revoke_response.v1.json":                   "credential_revoke_response.v1.schema.json",
 	"oauth_device_error.v1.json":                           "oauth_device_error.v1.schema.json",
+	"token_exchange_response.v1.json":                      "token_exchange_response.v1.schema.json",
+	"oauth_token_exchange_error.v1.json":                   "oauth_token_exchange_error.v1.schema.json",
 	"credential_rotate_request.v1.json":                    "credential_rotate_request.v1.schema.json",
 	"credential_rotate_response.v1.json":                   "credential_rotate_response.v1.schema.json",
 	"context_fabric_investigation_request.v1.json":         "context_fabric_investigation_request.v1.schema.json",

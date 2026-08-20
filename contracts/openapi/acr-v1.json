@@ -665,6 +665,7 @@
       "post": {
         "security": [],
         "operationId": "exchangeDeviceToken",
+        "description": "Dispatches by Content-Type (CHAOS-4013): application/json is the pre-existing RFC 8628 device-code grant, unchanged; application/x-www-form-urlencoded is the RFC 8693 workload token-exchange grant.",
         "requestBody": {
           "required": true,
           "content": {
@@ -672,26 +673,66 @@
               "schema": {
                 "$ref": "../jsonschema/v1/device_token_request.v1.schema.json"
               }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["grant_type", "subject_token", "subject_token_type"],
+                "properties": {
+                  "grant_type": {
+                    "const": "urn:ietf:params:oauth:grant-type:token-exchange"
+                  },
+                  "subject_token": {
+                    "type": "string",
+                    "description": "The k8s projected ServiceAccount JWT, validated via Kubernetes TokenReview."
+                  },
+                  "subject_token_type": {
+                    "const": "urn:ietf:params:oauth:token-type:jwt"
+                  },
+                  "requested_token_type": {
+                    "const": "urn:ietf:params:oauth:token-type:access_token"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "description": "Space-delimited requested scope; may only narrow the resolved binding's grant, never widen it."
+                  }
+                }
+              }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Device grant redeemed once",
+            "description": "Device grant redeemed once, or a workload token successfully exchanged",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "../jsonschema/v1/device_token_response.v1.schema.json"
+                  "oneOf": [
+                    {
+                      "$ref": "../jsonschema/v1/device_token_response.v1.schema.json"
+                    },
+                    {
+                      "$ref": "../jsonschema/v1/token_exchange_response.v1.schema.json"
+                    }
+                  ]
                 }
               }
             }
           },
           "400": {
-            "description": "Pinned RFC device grant error",
+            "description": "Pinned RFC device grant error, or an RFC 8693 token-exchange error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "../jsonschema/v1/oauth_device_error.v1.schema.json"
+                  "oneOf": [
+                    {
+                      "$ref": "../jsonschema/v1/oauth_device_error.v1.schema.json"
+                    },
+                    {
+                      "$ref": "../jsonschema/v1/oauth_token_exchange_error.v1.schema.json"
+                    }
+                  ]
                 }
               }
             }
