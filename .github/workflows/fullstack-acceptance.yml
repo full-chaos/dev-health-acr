@@ -223,14 +223,17 @@ jobs:
           head="${{ github.event.pull_request.head.sha }}"
           # The wire contract, plus everything that implements or grades the web agreement
           # itself. The first four paths cover a change to what the two sides exchange; the
-          # last three cover a change to the check. Without them a PR could rewrite the
-          # browser driver, the L6 comparison, or the web half of the orchestrator and merge
-          # having never run a single browser-agreement check, since the only job that runs
-          # one on a PR is this one.
+          # rest cover a change to the check or to the stack it boots. Without them a PR could
+          # rewrite the browser driver, the L6 comparison, the compose product slice, or the
+          # web half of the orchestrator and merge having never run a single browser-agreement
+          # check, since the only job that runs one on a PR is this one.
           paths='^(contracts/|internal/contracts/|internal/api/'
           paths="${paths}|testdata/fullstack/"
           paths="${paths}|scripts/e2e/svs-browser\.mjs"
           paths="${paths}|scripts/e2e/fullstack-opencode\.sh"
+          paths="${paths}|scripts/e2e/compose\.sh"
+          paths="${paths}|\.github/fullstack/compose\.ci\.yml"
+          paths="${paths}|Makefile"
           paths="${paths}|tests/fullstack/assertrun/)"
           if git diff --name-only "$base" "$head" | grep -Eq "$paths"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -252,9 +255,15 @@ jobs:
           path: dev-health/web
           ref: ${{ inputs.web_ref }}
           persist-credentials: false
-      - name: Assemble the product-slice compose file
+      - name: Assemble the product-slice compose file and record checked-out refs
         if: steps.decide.outputs.run == 'true'
-        run: cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
+        run: |
+          set -euo pipefail
+          cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
+          ops_ref="$(git -C dev-health/ops rev-parse HEAD)"
+          web_ref="$(git -C dev-health/web rev-parse HEAD)"
+          echo "E2E_OPS_REF=$ops_ref" >> "$GITHUB_ENV"
+          echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         if: steps.decide.outputs.run == 'true'

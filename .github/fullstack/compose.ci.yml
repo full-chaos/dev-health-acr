@@ -200,7 +200,7 @@ services:
   # definition is what makes the merge valid. SECRET_KEY has no real secret behind it; this stack
   # is thrown away at the end of every run.
   bugsink:
-    image: bugsink/bugsink:latest
+    image: bugsink/bugsink@sha256:b697016950d8aa7d94020def15bc2727e8fc40148f079884ae4cdacf7ea1e9a3
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/bugsink
