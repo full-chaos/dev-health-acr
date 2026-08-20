@@ -128,6 +128,49 @@ func TestNodeCandidate_IdentityTrustedAloneBoostsConfidenceDespiteAStaleGraphAtt
 	}
 }
 
+// TestNodeCandidate_AdapterDeclaredAliasMechanismGetsASpecificReasonDespiteAStaleGraphAttribute
+// is CHAOS-3893's core pinning test: the SAME stale-graph-attribute shape as
+// TestNodeCandidate_IdentityTrustedAloneBoostsConfidenceDespiteAStaleGraphAttribute
+// (aliases: nil, node.Mechanism set explicitly the way reader.go's
+// AliasLookup closure sets it) must also produce the alias-specific
+// MatchReasons text, not the generic "Hybrid graph search..." fallback --
+// the reason switch trusts node.Mechanism the same way the mechanism
+// tagging below it already does, rather than re-deriving from the (here,
+// deliberately stale/absent) graph attribute.
+func TestNodeCandidate_AdapterDeclaredAliasMechanismGetsASpecificReasonDespiteAStaleGraphAttribute(t *testing.T) {
+	t.Parallel()
+	principal := storage.Principal{OrgID: "org_1"}
+	scope := contextfabric.RequestedScope{}
+	node := aliasCandidateNode(contextfabric.SubjectRepository, "repository_1", "full-chaos/dev-health-acr", -1, nil, nil, true)
+	node.Mechanism = contextfabric.MatchAlias
+
+	candidate, ok := NodeCandidate(principal, scope, "dev-health-acr", node, noInternalSubjects, true, nil, "")
+	if !ok {
+		t.Fatal("NodeCandidate() rejected a legitimately authorized node")
+	}
+	if candidate.MatchReasons[0] != "Repository/project alias matched." {
+		t.Fatalf("match reason = %q, want the alias-specific reason even though the graph's own \"aliases\" attribute does not (yet) contain this term", candidate.MatchReasons[0])
+	}
+}
+
+// TestNodeCandidate_AdapterDeclaredProviderKeyMechanismGetsASpecificReasonDespiteAStaleGraphAttribute
+// is the MatchProviderKey sibling of the test above.
+func TestNodeCandidate_AdapterDeclaredProviderKeyMechanismGetsASpecificReasonDespiteAStaleGraphAttribute(t *testing.T) {
+	t.Parallel()
+	principal := storage.Principal{OrgID: "org_1"}
+	scope := contextfabric.RequestedScope{}
+	node := aliasCandidateNode(contextfabric.SubjectRepository, "repository_1", "full-chaos/dev-health-acr", -1, nil, nil, true)
+	node.Mechanism = contextfabric.MatchProviderKey
+
+	candidate, ok := NodeCandidate(principal, scope, "github:full-chaos/dev-health-acr", node, noInternalSubjects, true, nil, "")
+	if !ok {
+		t.Fatal("NodeCandidate() rejected a legitimately authorized node")
+	}
+	if candidate.MatchReasons[0] != "Provider-qualified identifier matched." {
+		t.Fatalf("match reason = %q, want the provider-key-specific reason even though the graph's own \"provider_aliases\" attribute does not (yet) contain this term", candidate.MatchReasons[0])
+	}
+}
+
 // TestNodeCandidate_KeyedLookupNeverTrustsNonEligibleKind is BLOCKING-1's
 // other half: a team candidate (scoped for COUNTING, never eligible for the
 // confidence bump) found via the keyed lookup is STILL tagged MatchAlias

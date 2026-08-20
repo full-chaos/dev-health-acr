@@ -145,6 +145,20 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 			GateFired: matched || identityTrusted, FinalConfidence: confidence,
 		})
 	}
+	// CHAOS-3893: node.Mechanism is trusted AS DECLARED for a lookup-sourced
+	// node (AliasLookup's own doc comment, resolve.go) even when the LOCAL
+	// aliasMatched/providerMatched checks below are false -- exactly the
+	// same "graph attribute can be stale, the adapter's own read is not"
+	// gap TestNodeCandidate_IdentityTrustedAloneBoostsConfidenceDespiteAStaleGraphAttribute
+	// already covers for CONFIDENCE. Before this fix the reason prose had
+	// no matching fallback: an Option-C adapter-declared match whose graph
+	// attribute happened to be stale/absent fell all the way through to
+	// the generic "Hybrid graph search..." text, even though the mechanism
+	// tagging below (unconditionally seeded from node.Mechanism) already
+	// knew exactly which key class matched. Checked AFTER matched/
+	// aliasMatched/providerMatched so a genuine local match keeps its own
+	// (identical) reason text; this only fills the gap those three leave
+	// open.
 	reason := "Hybrid graph search matched the subject label or indexed context."
 	switch {
 	case matched:
@@ -152,6 +166,10 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 	case aliasMatched:
 		reason = "Repository/project alias matched."
 	case providerMatched:
+		reason = "Provider-qualified identifier matched."
+	case node.Mechanism == contextfabric.MatchAlias:
+		reason = "Repository/project alias matched."
+	case node.Mechanism == contextfabric.MatchProviderKey:
 		reason = "Provider-qualified identifier matched."
 	}
 	// CHAOS-3778 / AC-3778-6: record the retrieval mechanism the adapter
