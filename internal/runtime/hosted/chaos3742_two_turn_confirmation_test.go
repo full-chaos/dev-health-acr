@@ -69,11 +69,14 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"sort"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -85,21 +88,38 @@ import (
 // authored from the corpus source-of-record, never from any engine output
 // (design brief §5 head). PositiveWindowBand/NegativeWindowBand are 3900
 // RelativeID enum values (e.g. "trailing_90d"), never free text.
+// PositiveKind/NegativeKind double as the SUBJECT KIND for the
+// subject_anchor/subject_handle members (typed matching, codex round-1
+// finding #5: an untyped match on CanonicalID/Value alone can redeem the
+// wrong offer when two candidates share an id/value across kinds) as well
+// as the expected_kind member's own value.
 type twoTurnOracleEntry struct {
 	Index                     int    `json:"index"`
 	Member                    string `json:"member"` // expected_kind | subject_anchor | subject_handle | window
 	PositiveKind              string `json:"positive_kind,omitempty"`
 	PositiveAnchorCanonicalID string `json:"positive_anchor_canonical_id,omitempty"`
+	PositiveHandlePatternID   string `json:"positive_handle_pattern_id,omitempty"`
 	PositiveHandleValue       string `json:"positive_handle_value,omitempty"`
 	PositiveWindowBand        string `json:"positive_window_band,omitempty"`
 	NegativeKind              string `json:"negative_kind,omitempty"`
 	NegativeAnchorCanonicalID string `json:"negative_anchor_canonical_id,omitempty"`
+	// NegativeAnchorMatchedTerm is the RAW alias/label term (never a
+	// question-derived string -- a graph identity term, e.g. a repository
+	// slug) of a REAL, existing identity-universe row for the negative
+	// anchor. The harness hashes it at seed time via graphrank.HashAliasTerm
+	// -- the SAME function VerifyAnchorClaimantUnique re-verifies against
+	// (codex round-1 finding #2: a fabricated hash can never match any live
+	// row, making the anchor confirmed-wrong arm structurally unredeemable).
+	NegativeAnchorMatchedTerm string `json:"negative_anchor_matched_term,omitempty"`
+	NegativeHandlePatternID   string `json:"negative_handle_pattern_id,omitempty"`
 	NegativeHandleValue       string `json:"negative_handle_value,omitempty"`
 	NegativeWindowBand        string `json:"negative_window_band,omitempty"`
 	// NegativeCommittable marks this case's negative as one of DP10's
 	// "designated committable negatives" -- the anti-vacuity pin requires
-	// at least one NegativeCommittable==true entry per applicable member to
-	// actually be redeemed in a confirmed_wrong run.
+	// at least one NegativeCommittable==true entry PER APPLICABLE MEMBER
+	// (codex round-1 finding #4: a global counter lets one member's success
+	// mask another member's permanently-invalid negative) to actually be
+	// redeemed in a confirmed_wrong run.
 	NegativeCommittable bool `json:"negative_committable"`
 }
 
@@ -164,43 +184,89 @@ func loadTwoTurnOracleAnnex(t *testing.T, path string) twoTurnOracleAnnex {
 
 // --- pure logic: offer selection, commit classification (unit-testable, no live infra) ---
 
-// selectOracleOffer scans needs for the offer matching the oracle value for
-// entry.Member (kind/anchor/handle/window), using ONLY the oracle's own
-// typed fields as the match key (never "the offer the engine ranked
-// first" -- design brief §5 head's oracle-independence rule). A case where
-// no offer matches is scored offer_miss (found=false), never silently
-// skipped.
-func selectOracleOffer(needs *contractsv1.ContextFabricStructureNeeds, member string, wantKind, wantAnchorID, wantHandleValue, wantWindowBand string) (receiptID string, found bool) {
-	if needs == nil {
-		return "", false
-	}
+// oracleOfferQuery is the typed match key selectOracleOffer scans for.
+// Kind is checked for anchor/handle (codex round-1 finding #5: matching on
+// CanonicalID/Value alone can redeem the wrong typed offer when two
+// candidates share an id/value across different subject kinds).
+type oracleOfferQuery struct {
+	kind            string
+	anchorID        string
+	handlePatternID string
+	handleValue     string
+	windowBand      string
+}
+
+// selectOracleOffer scans result for the offer matching q for entry.Member
+// (kind/anchor/handle/window), using ONLY the oracle's own typed fields as
+// the match key (never "the offer the engine ranked first" -- design brief
+// §5 head's oracle-independence rule). A case where no offer matches is
+// scored offer_miss (found=false), never silently skipped.
+//
+// Window offers are read from result.WindowClarification.Options, NOT
+// result.StructureNeeds.WindowOptions (codex round-1 finding #1, confirmed
+// against structure.go's composeStructureNeeds: it populates KindOptions/
+// AnchorOptions/HandleOptions only -- window offers are minted through the
+// SEPARATE CHAOS-3900 W1 WindowClarification path; StructureNeeds.WindowOptions
+// exists on the wire per the design brief's "3900's type, verbatim" but is
+// not yet the field production actually fills).
+func selectOracleOffer(result contractsv1.ContextFabricInvestigationResult, member string, q oracleOfferQuery) (receiptID string, found bool) {
 	switch member {
 	case string(contractsv1.ContextFabricStructureNeedExpectedKind):
-		for _, opt := range needs.KindOptions {
-			if string(opt.Kind) == wantKind {
+		if result.StructureNeeds == nil {
+			return "", false
+		}
+		for _, opt := range result.StructureNeeds.KindOptions {
+			if string(opt.Kind) == q.kind {
 				return opt.ReceiptID, true
 			}
 		}
 	case string(contractsv1.ContextFabricStructureNeedSubjectAnchor):
-		for _, opt := range needs.AnchorOptions {
-			if opt.CanonicalID == wantAnchorID {
+		if result.StructureNeeds == nil {
+			return "", false
+		}
+		for _, opt := range result.StructureNeeds.AnchorOptions {
+			if opt.CanonicalID == q.anchorID && string(opt.Kind) == q.kind {
 				return opt.ReceiptID, true
 			}
 		}
 	case string(contractsv1.ContextFabricStructureNeedSubjectHandle):
-		for _, opt := range needs.HandleOptions {
-			if opt.Value == wantHandleValue {
+		if result.StructureNeeds == nil {
+			return "", false
+		}
+		for _, opt := range result.StructureNeeds.HandleOptions {
+			if opt.Value == q.handleValue && opt.PatternID == q.handlePatternID && string(opt.Kind) == q.kind {
 				return opt.ReceiptID, true
 			}
 		}
 	case string(contractsv1.ContextFabricStructureNeedWindow):
-		for _, opt := range needs.WindowOptions {
-			if string(opt.RelativeID) == wantWindowBand {
+		if result.WindowClarification == nil {
+			return "", false
+		}
+		for _, opt := range result.WindowClarification.Options {
+			if string(opt.RelativeID) == q.windowBand {
 				return opt.ReceiptID, true
 			}
 		}
 	}
 	return "", false
+}
+
+// positiveQuery/negativeQuery build the typed oracleOfferQuery for this
+// entry's own member from its positive/negative oracle fields.
+func (entry twoTurnOracleEntry) positiveQuery() oracleOfferQuery {
+	return oracleOfferQuery{
+		kind: entry.PositiveKind, anchorID: entry.PositiveAnchorCanonicalID,
+		handlePatternID: entry.PositiveHandlePatternID, handleValue: entry.PositiveHandleValue,
+		windowBand: entry.PositiveWindowBand,
+	}
+}
+
+func (entry twoTurnOracleEntry) negativeQuery() oracleOfferQuery {
+	return oracleOfferQuery{
+		kind: entry.NegativeKind, anchorID: entry.NegativeAnchorCanonicalID,
+		handlePatternID: entry.NegativeHandlePatternID, handleValue: entry.NegativeHandleValue,
+		windowBand: entry.NegativeWindowBand,
+	}
 }
 
 // twoTurnCommittedWrong reports whether committed is a decisive commit that
@@ -226,32 +292,47 @@ const (
 // bool, an id, or a closed-vocabulary status string -- the same privacy
 // discipline replayCaseOutcome pins (TestReplayCaseOutcomeCarriesNoQuestionOrTermText).
 type twoTurnCaseResult struct {
-	Index            int    `json:"index"`
-	Member           string `json:"member"`
-	Arm              string `json:"arm"`
-	Turn1Status      string `json:"turn1_status"`
-	Turn2Status      string `json:"turn2_status"`
-	OfferMiss        bool   `json:"offer_miss"`
-	Applied          bool   `json:"applied"`
-	CommittedCount   int    `json:"committed_count"`
-	WrongCommit      bool   `json:"wrong_commit"`
-	MutationProbe    string `json:"mutation_probe,omitempty"`
-	MutationTripped  bool   `json:"mutation_tripped,omitempty"`
+	Index       int    `json:"index"`
+	Member      string `json:"member"`
+	Arm         string `json:"arm"`
+	Turn1Status string `json:"turn1_status"`
+	Turn2Status string `json:"turn2_status"`
+	OfferMiss   bool   `json:"offer_miss"`
+	Applied     bool   `json:"applied"`
+	// TierRoutedCorrectly (inferred_tier arm only) asserts the injected
+	// explicit value actually landed at Source=explicit_unattributed,
+	// Provenance=inferred_default in the echo -- not merely "did not
+	// commit" (codex round-1 finding #6: a tier-routing regression that
+	// instead landed the value at question_stated could still fail to
+	// commit for an unrelated census reason, silently passing a commit-only
+	// check).
+	TierRoutedCorrectly bool   `json:"tier_routed_correctly,omitempty"`
+	CommittedCount      int    `json:"committed_count"`
+	WrongCommit         bool   `json:"wrong_commit"`
+	MutationProbe       string `json:"mutation_probe,omitempty"`
+	MutationTripped     bool   `json:"mutation_tripped,omitempty"`
+	// ArmInvalidReason is a closed-vocabulary classification only (never
+	// raw err.Error() text -- codex round-1 finding #9: an investigator
+	// error can carry upstream detail this outcome-only artifact must not
+	// persist).
 	ArmInvalidReason string `json:"arm_invalid_reason,omitempty"`
 }
 
 type twoTurnReport struct {
-	Provenance                  trialProvenance     `json:"provenance"`
-	OracleAnnexPath             string              `json:"oracle_annex_path"`
-	OracleAnnexCorpusSHA        string              `json:"oracle_annex_corpus_sha256"`
-	OracleAnnexSignedOff        bool                `json:"oracle_annex_signed_off"`
-	CasesRun                    int                 `json:"cases_run"`
-	GateReachableCount          int                 `json:"gate_reachable_count"`
-	NoDiscriminatorsCount       int                 `json:"no_discriminators_count"`
-	OfferMissCount              map[string]int      `json:"offer_miss_count"`
-	WrongCommitCount            int                 `json:"wrong_commit_count"`
-	InferredTierAnyCommit       int                 `json:"inferred_tier_any_commit_count"`
-	ConfirmedWrongRedeemedCount int                 `json:"confirmed_wrong_redeemed_committable_count"`
+	Provenance            trialProvenance `json:"provenance"`
+	OracleAnnexPath       string          `json:"oracle_annex_path"`
+	OracleAnnexCorpusSHA  string          `json:"oracle_annex_corpus_sha256"`
+	OracleAnnexSignedOff  bool            `json:"oracle_annex_signed_off"`
+	CasesRun              int             `json:"cases_run"`
+	GateReachableCount    int             `json:"gate_reachable_count"`
+	NoDiscriminatorsCount int             `json:"no_discriminators_count"`
+	OfferMissCount        map[string]int  `json:"offer_miss_count"`
+	WrongCommitCount      int             `json:"wrong_commit_count"`
+	InferredTierAnyCommit int             `json:"inferred_tier_any_commit_count"`
+	// ConfirmedWrongRedeemedCount is PER APPLICABLE MEMBER (codex round-1
+	// finding #4: a global scalar lets one member's success mask another
+	// member's permanently-unredeemable designated negative).
+	ConfirmedWrongRedeemedCount map[string]int      `json:"confirmed_wrong_redeemed_committable_count"`
 	AntiVacuityValid            bool                `json:"anti_vacuity_valid"`
 	MutationProbesTripped       map[string]int      `json:"mutation_probes_tripped"`
 	MutationProbesRun           map[string]int      `json:"mutation_probes_run"`
@@ -308,43 +389,56 @@ func TestValidateTwoTurnOracleAnnex(t *testing.T) {
 
 func TestSelectOracleOffer(t *testing.T) {
 	t.Parallel()
-	needs := &contractsv1.ContextFabricStructureNeeds{
-		Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
-		KindOptions: []contractsv1.ContextFabricKindOption{
-			{ReceiptID: "kindr_aaaaaaaaaaaaaaaaaaaaaaaa", Kind: contractsv1.ContextFabricSubjectPullRequest},
+	base := contractsv1.ContextFabricInvestigationResult{
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+			KindOptions: []contractsv1.ContextFabricKindOption{
+				{ReceiptID: "kindr_aaaaaaaaaaaaaaaaaaaaaaaa", Kind: contractsv1.ContextFabricSubjectPullRequest},
+			},
+			AnchorOptions: []contractsv1.ContextFabricAnchorOption{
+				{ReceiptID: "ancr_bbbbbbbbbbbbbbbbbbbbbbbb", Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository_ask_dev"},
+				// A second offer sharing the same CanonicalID under a
+				// DIFFERENT kind -- proves kind-typed matching (codex
+				// round-1 finding #5), not just CanonicalID equality.
+				{ReceiptID: "ancr_zzzzzzzzzzzzzzzzzzzzzzzz", Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "repository_ask_dev"},
+			},
+			HandleOptions: []contractsv1.ContextFabricHandleOption{
+				{ReceiptID: "handr_cccccccccccccccccccccc", Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "532"},
+			},
 		},
-		AnchorOptions: []contractsv1.ContextFabricAnchorOption{
-			{ReceiptID: "ancr_bbbbbbbbbbbbbbbbbbbbbbbb", CanonicalID: "repository_ask_dev"},
-		},
-		HandleOptions: []contractsv1.ContextFabricHandleOption{
-			{ReceiptID: "handr_cccccccccccccccccccccc", Value: "532"},
-		},
-		WindowOptions: []contractsv1.ContextFabricWindowOption{
-			{ReceiptID: "winr_dddddddddddddddddddddd", RelativeID: "trailing_90d"},
+		WindowClarification: &contractsv1.ContextFabricWindowClarification{
+			Options: []contractsv1.ContextFabricWindowOption{
+				{ReceiptID: "winr_dddddddddddddddddddddd", RelativeID: "trailing_90d"},
+			},
 		},
 	}
 
 	cases := []struct {
-		name                                                   string
-		member, wantKind, wantAnchorID, wantHandle, wantWindow string
-		wantReceiptID                                          string
-		wantFound                                              bool
+		name          string
+		member        string
+		q             oracleOfferQuery
+		wantReceiptID string
+		wantFound     bool
+		nilResult     bool
 	}{
-		{"kind match", string(contractsv1.ContextFabricStructureNeedExpectedKind), "pull_request", "", "", "", "kindr_aaaaaaaaaaaaaaaaaaaaaaaa", true},
-		{"kind miss", string(contractsv1.ContextFabricStructureNeedExpectedKind), "review", "", "", "", "", false},
-		{"anchor match", string(contractsv1.ContextFabricStructureNeedSubjectAnchor), "", "repository_ask_dev", "", "", "ancr_bbbbbbbbbbbbbbbbbbbbbbbb", true},
-		{"anchor miss", string(contractsv1.ContextFabricStructureNeedSubjectAnchor), "", "repository_other", "", "", "", false},
-		{"handle match", string(contractsv1.ContextFabricStructureNeedSubjectHandle), "", "", "532", "", "handr_cccccccccccccccccccccc", true},
-		{"window match", string(contractsv1.ContextFabricStructureNeedWindow), "", "", "", "trailing_90d", "winr_dddddddddddddddddddddd", true},
-		{"nil needs", string(contractsv1.ContextFabricStructureNeedExpectedKind), "pull_request", "", "", "", "", false},
+		{"kind match", string(contractsv1.ContextFabricStructureNeedExpectedKind), oracleOfferQuery{kind: "pull_request"}, "kindr_aaaaaaaaaaaaaaaaaaaaaaaa", true, false},
+		{"kind miss", string(contractsv1.ContextFabricStructureNeedExpectedKind), oracleOfferQuery{kind: "review"}, "", false, false},
+		{"anchor match by kind", string(contractsv1.ContextFabricStructureNeedSubjectAnchor), oracleOfferQuery{kind: "repository", anchorID: "repository_ask_dev"}, "ancr_bbbbbbbbbbbbbbbbbbbbbbbb", true, false},
+		{"anchor match other kind, same id", string(contractsv1.ContextFabricStructureNeedSubjectAnchor), oracleOfferQuery{kind: "project", anchorID: "repository_ask_dev"}, "ancr_zzzzzzzzzzzzzzzzzzzzzzzz", true, false},
+		{"anchor miss on kind mismatch", string(contractsv1.ContextFabricStructureNeedSubjectAnchor), oracleOfferQuery{kind: "team", anchorID: "repository_ask_dev"}, "", false, false},
+		{"anchor miss on id", string(contractsv1.ContextFabricStructureNeedSubjectAnchor), oracleOfferQuery{kind: "repository", anchorID: "repository_other"}, "", false, false},
+		{"handle match", string(contractsv1.ContextFabricStructureNeedSubjectHandle), oracleOfferQuery{kind: "pull_request", handlePatternID: "pull_request_number", handleValue: "532"}, "handr_cccccccccccccccccccccc", true, false},
+		{"handle miss on pattern", string(contractsv1.ContextFabricStructureNeedSubjectHandle), oracleOfferQuery{kind: "pull_request", handlePatternID: "wrong_pattern", handleValue: "532"}, "", false, false},
+		{"window match (from WindowClarification, not StructureNeeds)", string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: "trailing_90d"}, "winr_dddddddddddddddddddddd", true, false},
+		{"nil result", string(contractsv1.ContextFabricStructureNeedExpectedKind), oracleOfferQuery{kind: "pull_request"}, "", false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			input := needs
-			if tc.name == "nil needs" {
-				input = nil
+			input := base
+			if tc.nilResult {
+				input = contractsv1.ContextFabricInvestigationResult{}
 			}
-			gotID, gotFound := selectOracleOffer(input, tc.member, tc.wantKind, tc.wantAnchorID, tc.wantHandle, tc.wantWindow)
+			gotID, gotFound := selectOracleOffer(input, tc.member, tc.q)
 			if gotFound != tc.wantFound || gotID != tc.wantReceiptID {
 				t.Errorf("selectOracleOffer(%s) = (%q, %v), want (%q, %v)", tc.name, gotID, gotFound, tc.wantReceiptID, tc.wantFound)
 			}
@@ -416,8 +510,7 @@ func twoTurnRequest(index int, tc trialCase, requestIDSuffix string) contractsv1
 // reports whether it converted.
 func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1 contractsv1.ContextFabricInvestigationResult, timeout time.Duration) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmPositive), Turn1Status: string(turn1.Status)}
-	receiptID, found := selectOracleOffer(turn1.StructureNeeds, entry.Member,
-		entry.PositiveKind, entry.PositiveAnchorCanonicalID, entry.PositiveHandleValue, entry.PositiveWindowBand)
+	receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 	if !found {
 		res.OfferMiss = true
 		return res
@@ -429,6 +522,7 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 	turn2, err := investigator.Investigate(callCtx, principal, req)
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
+		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
 		return res
 	}
 	res.Turn2Status = string(turn2.Status)
@@ -467,8 +561,12 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	case string(contractsv1.ContextFabricStructureNeedExpectedKind):
 		req.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectKind(entry.NegativeKind)}
 	case string(contractsv1.ContextFabricStructureNeedSubjectHandle):
+		// PatternID is REQUIRED by ContextFabricRequestedHandle.Validate
+		// (codex round-1 finding #3: an omitted pattern_id makes the whole
+		// request fail Validate() before structure canonicalization ever
+		// runs, so this arm never reaches production handle logic at all).
 		req.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{
-			Kind: contractsv1.ContextFabricSubjectKind(entry.NegativeKind), Value: entry.NegativeHandleValue,
+			Kind: contractsv1.ContextFabricSubjectKind(entry.NegativeKind), PatternID: entry.NegativeHandlePatternID, Value: entry.NegativeHandleValue,
 		}}
 	case string(contractsv1.ContextFabricStructureNeedWindow):
 		req.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(entry.NegativeWindowBand)}
@@ -484,10 +582,21 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	result, err := investigator.Investigate(callCtx, principal, req)
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
+		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
 		return res
 	}
 	res.Turn2Status = string(result.Status)
 	res.CommittedCount = len(result.SubjectResolution.Committed)
+	// Positive tier-routing proof (codex round-1 finding #6): the injected
+	// value must have landed at explicit_unattributed/inferred_default in
+	// the echo -- checked directly, not inferred from "did not commit".
+	for _, e := range result.ConfirmedStructure {
+		if string(e.Member) == entry.Member &&
+			e.Source == contractsv1.ContextFabricStructureSourceExplicitUnattributed &&
+			e.Provenance == contractsv1.ContextFabricStructureInferredDefault {
+			res.TierRoutedCorrectly = true
+		}
+	}
 	return res
 }
 
@@ -544,9 +653,19 @@ func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver
 			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
 			AnchorOptions: []contractsv1.ContextFabricAnchorOption{{
 				ReceiptID: receiptID, OptionID: "opt_twoturn_seed_negative", Label: "harness-seeded negative anchor",
-				Kind:            contractsv1.ContextFabricSubjectKind(entry.NegativeKind),
-				CanonicalID:     entry.NegativeAnchorCanonicalID,
-				MatchedTermHash: "000000000000000000000000",
+				Kind:        contractsv1.ContextFabricSubjectKind(entry.NegativeKind),
+				CanonicalID: entry.NegativeAnchorCanonicalID,
+				// HashAliasTerm is the SAME function VerifyAnchorClaimantUnique
+				// re-verifies against at redemption time (codex round-1
+				// finding #2, confirmed against
+				// graphrank.VerifyAnchorClaimantUnique/identityRowCarriesTermHash):
+				// a fabricated hash can never match any live identity-universe
+				// row, making this arm structurally unredeemable. The annex
+				// must name a REAL alias/label term of an existing, wrong
+				// entity for this to ever succeed -- seeding supplies the
+				// offer's ORIGIN only, never a shortcut around real
+				// re-verification.
+				MatchedTermHash: graphrank.HashAliasTerm(entry.NegativeAnchorMatchedTerm),
 				OfferSource:     contractsv1.ContextFabricStructureOfferEngine,
 			}},
 		},
@@ -577,7 +696,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		var err error
 		offerResultID, err = seedAnchorNegativeResult(ctx, store, principal, index, entry, receiptID)
 		if err != nil {
-			res.ArmInvalidReason = "harness-seeded anchor negative could not be made redeemable: " + err.Error()
+			res.ArmInvalidReason = "harness-seeded anchor negative could not be made redeemable: " + contextFabricRejectionClass(err)
 			return res
 		}
 	} else {
@@ -586,8 +705,10 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		case string(contractsv1.ContextFabricStructureNeedExpectedKind):
 			setupReq.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectKind(entry.NegativeKind)}
 		case string(contractsv1.ContextFabricStructureNeedSubjectHandle):
+			// PatternID is REQUIRED (codex round-1 finding #3, same as the
+			// inferred-tier arm above).
 			setupReq.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{
-				Kind: contractsv1.ContextFabricSubjectKind(entry.NegativeKind), Value: entry.NegativeHandleValue,
+				Kind: contractsv1.ContextFabricSubjectKind(entry.NegativeKind), PatternID: entry.NegativeHandlePatternID, Value: entry.NegativeHandleValue,
 			}}
 		case string(contractsv1.ContextFabricStructureNeedWindow):
 			setupReq.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(entry.NegativeWindowBand)}
@@ -596,13 +717,12 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		setupResult, err := investigator.Investigate(setupCtx, principal, setupReq)
 		cancel()
 		if err != nil {
-			res.ArmInvalidReason = "setup turn failed: " + err.Error()
+			res.ArmInvalidReason = "setup turn failed: " + contextFabricRejectionClass(err)
 			return res
 		}
 		offerResultID = setupResult.ResultID
 		var found bool
-		receiptID, found = selectOracleOffer(setupResult.StructureNeeds, entry.Member,
-			entry.NegativeKind, entry.NegativeAnchorCanonicalID, entry.NegativeHandleValue, entry.NegativeWindowBand)
+		receiptID, found = selectOracleOffer(setupResult, entry.Member, entry.negativeQuery())
 		if !found {
 			res.ArmInvalidReason = "setup turn did not offer the designated negative back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)"
 			return res
@@ -616,6 +736,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 	turn2, err := investigator.Investigate(callCtx, principal, req)
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
+		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
 		return res
 	}
 	res.Turn2Status = string(turn2.Status)
@@ -648,8 +769,15 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 		defer cancel()
 		result, err := investigator.Investigate(callCtx, principal, req)
 		if err != nil {
+			// codex round-1 finding #7: an investigator error is NOT
+			// evidence the probe's expected veto/refusal fired -- a
+			// timeout, a dependency outage, or an unrelated internal error
+			// would previously have been silently counted as a trip. Left
+			// untripped and reported as inconclusive; the run's own
+			// tripped==ran invariant then correctly flags it as a finding
+			// rather than a false pass.
 			res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-			res.MutationTripped = true // a hard rejection is itself a non-conversion, which is what every probe here expects
+			res.ArmInvalidReason = "investigate error (inconclusive, not counted as a trip): " + contextFabricRejectionClass(err)
 			return res
 		}
 		res.Turn2Status = string(result.Status)
@@ -796,19 +924,52 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
 
+	// Transport label reflects which transport actually ran (codex round-1
+	// finding #10: hard-coding "real_api" while a file-exchange runtime is
+	// wired gives the acceptance artifact false provenance).
+	transportLabel := "real_api"
+	if exchangeDir != "" {
+		transportLabel = "file_exchange"
+	}
 	report := twoTurnReport{
 		Provenance: trialProvenance{
-			CorpusSHA256: corpusHash, Transport: "real_api", RunStartedAt: runStartedAt,
+			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 		},
 		OracleAnnexPath: annexPath, OracleAnnexCorpusSHA: annex.CorpusSHA256, OracleAnnexSignedOff: annex.SignedOff,
-		OfferMissCount:        map[string]int{},
-		MutationProbesTripped: map[string]int{},
-		MutationProbesRun:     map[string]int{},
+		OfferMissCount:              map[string]int{},
+		MutationProbesTripped:       map[string]int{},
+		MutationProbesRun:           map[string]int{},
+		ConfirmedWrongRedeemedCount: map[string]int{},
 	}
 
-	confirmedWrongRedeemedCommittable := 0
-	for _, entry := range annex.Entries {
+	// ACR_TEST_TRIAL_LIMIT bounds how many annex entries this run processes
+	// (codex round-1 finding #11: run-two-turn.sh already exports this, but
+	// nothing read it). Mirrors TestGenerativeTrialCorpus's own limit
+	// semantics: cap, never reorder.
+	entries := annex.Entries
+	if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
+		limit, lerr := strconv.Atoi(raw)
+		if lerr != nil || limit <= 0 {
+			t.Fatalf("ACR_TEST_TRIAL_LIMIT must be a positive integer, got %q", raw)
+		}
+		if limit < len(entries) {
+			entries = entries[:limit]
+		}
+	}
+
+	// applicableMembers/redeemedApplicableMembers back the PER-MEMBER
+	// anti-vacuity check (codex round-1 finding #4): a member is
+	// "applicable" iff the annex designates at least one committable
+	// negative for it, and the run is valid only once EVERY applicable
+	// member has actually redeemed one.
+	applicableMembers := map[string]bool{}
+	for _, entry := range entries {
+		if entry.NegativeCommittable {
+			applicableMembers[entry.Member] = true
+		}
+	}
+	for _, entry := range entries {
 		if entry.Index < 0 || entry.Index >= len(corpus) {
 			t.Fatalf("oracle annex entry names index %d, corpus has %d cases", entry.Index, len(corpus))
 		}
@@ -848,7 +1009,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout)
 		if confirmedWrong.ArmInvalidReason == "" && confirmedWrong.Applied && entry.NegativeCommittable {
-			confirmedWrongRedeemedCommittable++
+			report.ConfirmedWrongRedeemedCount[entry.Member]++
 		}
 		if confirmedWrong.WrongCommit {
 			report.WrongCommitCount++
@@ -860,8 +1021,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// supersession to have happened; probes (i)/(ii) are cheap enough
 		// to run alongside it rather than standing up a separate case).
 		if positive.Applied {
-			receiptID, found := selectOracleOffer(turn1.StructureNeeds, entry.Member,
-				entry.PositiveKind, entry.PositiveAnchorCanonicalID, entry.PositiveHandleValue, entry.PositiveWindowBand)
+			receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 			if found {
 				for _, mutationResult := range runTwoTurnMutationArm(ctx, investigator, principal, entry.Index, tc, entry, turn1.ResultID, receiptID, caseTimeout) {
 					report.MutationProbesRun[mutationResult.MutationProbe]++
@@ -877,8 +1037,17 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			entry.Index, entry.Member, positive.Applied, positive.OfferMiss, inferred.CommittedCount, inferred.ArmInvalidReason,
 			confirmedWrong.Applied, confirmedWrong.WrongCommit, confirmedWrong.ArmInvalidReason)
 	}
-	report.ConfirmedWrongRedeemedCount = confirmedWrongRedeemedCommittable
-	report.AntiVacuityValid = confirmedWrongRedeemedCommittable >= 1
+	// Per-member anti-vacuity (codex round-1 finding #4): valid only once
+	// EVERY member with a designated committable negative has redeemed at
+	// least one.
+	var unsatisfiedMembers []string
+	for member := range applicableMembers {
+		if report.ConfirmedWrongRedeemedCount[member] < 1 {
+			unsatisfiedMembers = append(unsatisfiedMembers, member)
+		}
+	}
+	sort.Strings(unsatisfiedMembers)
+	report.AntiVacuityValid = len(applicableMembers) > 0 && len(unsatisfiedMembers) == 0
 
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -900,7 +1069,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		outPath, report.CasesRun, report.GateReachableCount, report.WrongCommitCount, report.AntiVacuityValid)
 
 	if !report.AntiVacuityValid {
-		t.Errorf("confirmed_wrong arm anti-vacuity check failed: %d designated committable negatives redeemed, want >=1 (design brief v4/sol-r3 #4) -- the arm is INVALID for this run", confirmedWrongRedeemedCommittable)
+		t.Errorf("confirmed_wrong arm anti-vacuity check failed: members %v redeemed zero designated committable negatives (design brief v4/sol-r3 #4) -- the arm is INVALID for this run", unsatisfiedMembers)
 	}
 	if report.WrongCommitCount > 0 {
 		t.Errorf("wrong_commit_count=%d, want 0 (DP9: ZERO wrong commits, period)", report.WrongCommitCount)
@@ -914,6 +1083,15 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	for probe, ran := range report.MutationProbesRun {
 		if tripped := report.MutationProbesTripped[probe]; tripped != ran {
 			t.Errorf("mutation probe %q tripped %d/%d attempts, want %d/%d -- the run is INVALID for this probe", probe, tripped, ran, ran, ran)
+		}
+	}
+	// Positive tier-routing proof (codex round-1 finding #6): every
+	// inferred-tier result that actually ran (not structurally exempt, no
+	// investigate error) must show the injected value landed at
+	// explicit_unattributed/inferred_default.
+	for _, r := range report.Results {
+		if r.Arm == string(twoTurnArmInferredTier) && r.ArmInvalidReason == "" && !r.TierRoutedCorrectly {
+			t.Errorf("case %d member %q: inferred-tier injection did not route to explicit_unattributed/inferred_default in the echo -- tier-routing finding", r.Index, r.Member)
 		}
 	}
 }

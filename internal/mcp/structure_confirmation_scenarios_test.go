@@ -120,14 +120,24 @@ func buildRefusalResult(scenario structureConfirmationScenario, resultID, receip
 			Kind: contractsv1.ContextFabricSubjectKind(scenario.Kind), PatternID: scenario.PatternID,
 			Value: scenario.Value, SourceColumn: scenario.SourceColumn, OfferSource: contractsv1.ContextFabricStructureOfferEngine,
 		}}
-	case string(contractsv1.ContextFabricStructureNeedWindow):
-		start, end := time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC), time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
-		needs.WindowOptions = []contractsv1.ContextFabricWindowOption{{
-			ReceiptID: receiptID, OptionID: "opt_" + scenario.Label, Label: "the last 90 days",
-			RelativeID: contractsv1.ContextFabricRelativeWindowID(scenario.AppliedValue), Start: &start, End: &end,
-		}}
 	}
 	result.StructureNeeds = needs
+	if scenario.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+		// Window offers are minted through the SEPARATE CHAOS-3900 W1
+		// WindowClarification path, not StructureNeeds.WindowOptions
+		// (codex round-1 finding #1, confirmed against
+		// internal/contextfabric/structure.go's composeStructureNeeds,
+		// which populates KindOptions/AnchorOptions/HandleOptions only --
+		// StructureNeeds.WindowOptions exists on the wire per "3900's type,
+		// verbatim" but is not the field production actually fills).
+		start, end := time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC), time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+		result.WindowClarification = &contractsv1.ContextFabricWindowClarification{
+			Options: []contractsv1.ContextFabricWindowOption{{
+				ReceiptID: receiptID, OptionID: "opt_" + scenario.Label, Label: "the last 90 days",
+				RelativeID: contractsv1.ContextFabricRelativeWindowID(scenario.AppliedValue), Start: &start, End: &end,
+			}},
+		}
+	}
 	result.ConfirmedStructure = nil
 	return result
 }
@@ -174,9 +184,8 @@ func setReceipt(req *contractsv1.MCPInvestigateQuestionRequest, member string, r
 // TestCHAOS3900_*/TestCHAOS3972_* suites -- this suite's job is the MCP
 // surface's own contract, not a second copy of engine-level redemption
 // proof.
-func twoTurnFixtureBootstrap(t *testing.T, refusal, converted contractsv1.ContextFabricInvestigationResult, receiptID string) *Bootstrap {
+func twoTurnFixtureBootstrap(t *testing.T, refusal, converted contractsv1.ContextFabricInvestigationResult, member, priorResultID, receiptID string) *Bootstrap {
 	t.Helper()
-	var sawReceipt bool
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/context-fabric/investigations":
@@ -184,13 +193,28 @@ func twoTurnFixtureBootstrap(t *testing.T, refusal, converted contractsv1.Contex
 			if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
 				t.Errorf("decode investigation request: %v", err)
 			}
-			for _, receipts := range [][]contractsv1.ContextFabricBoundSubjectReceipt{
-				seen.PriorKindReceipts, seen.PriorAnchorReceipts, seen.PriorHandleReceipts, seen.PriorWindowReceipts,
-			} {
-				for _, r := range receipts {
-					if r.ReceiptID == receiptID {
-						sawReceipt = true
-					}
+			// Only the CORRECTLY-NAMESPACED field, bound to the exact
+			// (result_id, receipt_id) pair, counts as a confirmation --
+			// scanning every prior_*_receipts field regardless of member
+			// (the original version) would silently accept a receipt
+			// mis-mapped into the wrong field or bound to a different
+			// result (a real class of mapping bug this fixture exists to
+			// catch).
+			var receiptsForMember []contractsv1.ContextFabricBoundSubjectReceipt
+			switch member {
+			case string(contractsv1.ContextFabricStructureNeedExpectedKind):
+				receiptsForMember = seen.PriorKindReceipts
+			case string(contractsv1.ContextFabricStructureNeedSubjectAnchor):
+				receiptsForMember = seen.PriorAnchorReceipts
+			case string(contractsv1.ContextFabricStructureNeedSubjectHandle):
+				receiptsForMember = seen.PriorHandleReceipts
+			case string(contractsv1.ContextFabricStructureNeedWindow):
+				receiptsForMember = seen.PriorWindowReceipts
+			}
+			sawReceipt := false
+			for _, r := range receiptsForMember {
+				if r.ReceiptID == receiptID && r.ResultID == priorResultID {
+					sawReceipt = true
 				}
 			}
 			if sawReceipt {
@@ -237,7 +261,7 @@ func TestStructureConfirmationScenarios(t *testing.T) {
 
 			refusal := buildRefusalResult(scenario, priorResultID, receiptID)
 			converted := buildConvertedResult(scenario, priorResultID, receiptID)
-			boot := twoTurnFixtureBootstrap(t, refusal, converted, receiptID)
+			boot := twoTurnFixtureBootstrap(t, refusal, converted, scenario.Member, priorResultID, receiptID)
 
 			// Turn 1: refusal. The agent PARSES structure_needs for the
 			// offer's receipt_id/prior_result_id -- read directly off the
@@ -259,7 +283,7 @@ func TestStructureConfirmationScenarios(t *testing.T) {
 			if len(turn1.Structured.ConfirmedStructure) != 0 {
 				t.Fatalf("turn 1: confirmed_structure = %+v, want none before any confirmation", turn1.Structured.ConfirmedStructure)
 			}
-			parsedReceiptID := extractOfferReceipt(t, turn1.Structured.StructureNeeds, scenario.Member)
+			parsedReceiptID := extractOfferReceipt(t, turn1.Structured, scenario.Member)
 			if parsedReceiptID != receiptID {
 				t.Fatalf("parsed offer receipt_id = %q, want %q", parsedReceiptID, receiptID)
 			}
@@ -277,7 +301,11 @@ func TestStructureConfirmationScenarios(t *testing.T) {
 			turn2 := callInvestigateQuestion(t, boot, turn2Req)
 
 			// Converted: confirmed_structure echo present for the applied
-			// case, StructureNeeds cleared (decisive terminal).
+			// case, StructureNeeds cleared (decisive terminal -- codex
+			// round-1 finding #8: this assertion was missing).
+			if turn2.Structured.StructureNeeds != nil {
+				t.Fatalf("turn 2: structured.structure_needs = %+v, want nil (decisive terminal clears disclosure)", turn2.Structured.StructureNeeds)
+			}
 			if len(turn2.Structured.ConfirmedStructure) != 1 {
 				t.Fatalf("turn 2: confirmed_structure = %+v, want exactly one applied entry", turn2.Structured.ConfirmedStructure)
 			}
@@ -306,8 +334,9 @@ func TestStructureConfirmationScenarios(t *testing.T) {
 // machine-readable rather than hand-matched by the test. The prior_result_id
 // half of the receipt comes from structured.result_id (asserted separately,
 // callInvestigateQuestion's caller).
-func extractOfferReceipt(t *testing.T, needs *contractsv1.ContextFabricStructureNeeds, member string) (receiptID string) {
+func extractOfferReceipt(t *testing.T, structured contractsv1.ContextFabricAnswerProjection, member string) (receiptID string) {
 	t.Helper()
+	needs := structured.StructureNeeds
 	switch member {
 	case string(contractsv1.ContextFabricStructureNeedExpectedKind):
 		if len(needs.KindOptions) != 1 {
@@ -325,10 +354,13 @@ func extractOfferReceipt(t *testing.T, needs *contractsv1.ContextFabricStructure
 		}
 		return needs.HandleOptions[0].ReceiptID
 	case string(contractsv1.ContextFabricStructureNeedWindow):
-		if len(needs.WindowOptions) != 1 {
-			t.Fatalf("window_options = %+v, want exactly one offer", needs.WindowOptions)
+		// Window offers project through WindowClarification, not
+		// StructureNeeds.WindowOptions (see buildRefusalResult's own
+		// comment, codex round-1 finding #1).
+		if structured.WindowClarification == nil || len(structured.WindowClarification.Options) != 1 {
+			t.Fatalf("window_clarification.options = %+v, want exactly one offer", structured.WindowClarification)
 		}
-		return needs.WindowOptions[0].ReceiptID
+		return structured.WindowClarification.Options[0].ReceiptID
 	default:
 		t.Fatalf("unknown member %q", member)
 		return ""
