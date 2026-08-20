@@ -111,23 +111,41 @@ type requestStructureCanonicalization struct {
 	// the Save-time supersession claim race and is discarded entirely --
 	// design brief §3.5's own invariant is that the authoritative
 	// confirmation record is "the persisted canonical result," which this
-	// round is NOT yet at the moment canonicalizeStructure returns. Engine
-	// sends these only once Save has actually won every claim they depend
-	// on (engine.go, right after a successful decisive Save) -- never on
-	// the veto path (nothing was durably confirmed) and never on the
+	// round is NOT yet at the moment canonicalizeStructure returns.
+	// Engine.recordStructureConfirmationOutcome sends these only once Save
+	// has actually won every claim they depend on -- called from every
+	// Save call site that can carry a non-empty Confirmed (Investigate's
+	// own decisive path in engine.go, AND terminalResult's own
+	// subjectless-terminal path in unresolved.go, added by codex round-2's
+	// own finding that round 1 only wired the former) -- never on the veto
+	// path (nothing was durably confirmed) and never on the
 	// Save-time-race path (the result these describe was never persisted).
 	PendingSelections []StructureSelectionEvent
-	// StaleMember (CHAOS-3927 P4) is populated ONLY alongside
-	// Veto==structureVetoStaleSupersededOffer -- the single member whose
-	// stored offer was already superseded, composed eagerly here (this is
-	// the one veto class the design brief's §2.5 table explicitly requires
-	// an echo entry for: "echo disposition vetoed_stale") rather than
-	// deferred the way the pre-existing structureVetoConfirmationConflict/
+	// StaleMembers (CHAOS-3927 P4) is populated ONLY alongside
+	// Veto==structureVetoStaleSupersededOffer -- every member whose stored
+	// offer was already superseded, composed eagerly here (this is the one
+	// veto class the design brief's §2.5 table explicitly requires an echo
+	// entry for: "echo disposition vetoed_stale") rather than deferred the
+	// way the pre-existing structureVetoConfirmationConflict/
 	// structureVetoConfirmationUnresolved gap is (composeConfirmedStructure's
 	// own KNOWN GAP comment) -- canonicalizeStructure already has every
 	// field the echo needs in scope at the exact moment it detects
 	// staleness, so composing it here costs nothing extra.
-	StaleMember *contractsv1.ContextFabricConfirmedStructureEntry
+	//
+	// A SLICE, not a single entry (codex round-3 adversarial review,
+	// MEDIUM finding): the PRE-FLIGHT consult (canonicalizeStructure's own
+	// loop) can only ever detect ONE stale member per veto -- it returns
+	// immediately on the first one found, the same short-circuit discipline
+	// structureVetoConfirmationConflict/Unresolved already use, so this
+	// slice holds exactly one entry on that path -- but the SAVE-TIME race
+	// (ErrStructureOfferSuperseded.Members, engine.go/unresolved.go) can
+	// legitimately report MULTIPLE members losing their claim in the SAME
+	// Save (e.g. a request redeeming both expected_kind and subject_anchor
+	// against a prior result a concurrent Save already claimed both
+	// members of) -- a single-entry echo there silently dropped every
+	// member past the first, violating the "one entry PER carried member"
+	// wire contract this exists to uphold.
+	StaleMembers []contractsv1.ContextFabricConfirmedStructureEntry
 }
 
 // HandleVerificationReason is the closed vocabulary Engine's handle
@@ -439,7 +457,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 					PriorVersionID: priorVersionID, PriorEntryID: priorEntryID,
 					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
 				}
-				return requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer, StaleMember: &stale}
+				return requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer, StaleMembers: []contractsv1.ContextFabricConfirmedStructureEntry{stale}}
 			}
 		}
 		confirmed = append(confirmed, confirmedStructureMember{
@@ -540,7 +558,7 @@ func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, princip
 // error (500) instead of the handled veto terminal (round-2 finding).
 func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, structureCanon requestStructureCanonicalization, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding) (InvestigationResult, error) {
 	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
-	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntry(structureCanon.Confirmed, superseded.Members), binding)
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntries(structureCanon.Confirmed, superseded.Members), binding)
 }
 
 // kindOptionsSnapshot/anchorOptionsSnapshot/handleOptionsSnapshot (P1.G)
@@ -667,14 +685,19 @@ func structureVetoLimitation(veto structureVetoReason) string {
 // Interpret ever runs) -- no post-Interpret axis-conflict analogue exists
 // for structure the way windowVetoAxisConflict does, so this signature
 // carries no *InterpretedQuestion parameter.
-// staleMember, when non-nil, is composed onto the resulting InvestigationResult.ConfirmedStructure
-// as its sole entry (design brief §2.5's stale-offer row: "echo disposition
-// vetoed_stale") -- callers pass requestStructureCanonicalization.StaleMember
-// on the veto==structureVetoStaleSupersededOffer path, and nil for every
-// other veto reason (the pre-existing conflict/unresolved echo gap,
-// composeConfirmedStructure's own KNOWN GAP comment, unchanged by this
-// function).
-func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, staleMember *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding) (InvestigationResult, error) {
+// staleMembers, when non-empty, is composed onto the resulting
+// InvestigationResult.ConfirmedStructure VERBATIM (design brief §2.5's
+// stale-offer row: "echo disposition vetoed_stale") -- callers pass
+// requestStructureCanonicalization.StaleMembers on the
+// veto==structureVetoStaleSupersededOffer path (one entry from the
+// pre-flight consult, or every member ErrStructureOfferSuperseded.Members
+// named from the Save-time race -- codex round-3 adversarial review,
+// MEDIUM finding: a single-entry parameter here silently dropped every
+// member past the first when a Save-time race conflicted on more than
+// one), and nil/empty for every other veto reason (the pre-existing
+// conflict/unresolved echo gap, composeConfirmedStructure's own KNOWN GAP
+// comment, unchanged by this function).
+func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, staleMembers []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding) (InvestigationResult, error) {
 	limitation := structureVetoLimitation(veto)
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -710,8 +733,8 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 		DeterministicAnswer: limitation,
 		Warnings:            []string{},
 	}
-	if staleMember != nil {
-		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{*staleMember}
+	if len(staleMembers) > 0 {
+		result.ConfirmedStructure = staleMembers
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
@@ -762,33 +785,39 @@ func composeConfirmedStructure(confirmed []confirmedStructureMember) []contracts
 	return entries
 }
 
-// staleConfirmedStructureEntry (CHAOS-3927 P4) rebuilds the echo entry for
-// the Save-time supersession race (engine.go's own ErrStructureOfferSuperseded
-// handling): confirmed is the SAME structureCanon.Confirmed slice the
-// discarded decisive result was built from, and members is
-// ErrStructureOfferSuperseded.Members -- the subset of those confirmed
-// members whose atomic claim actually lost the race. Returns the first
-// matching entry, Disposition forced to vetoed_stale -- structureVetoResult
-// composes it exactly like a pre-flight-detected stale veto's own
-// StaleMember, so a caller cannot distinguish which detection path caught
-// the staleness from the response alone.
-func staleConfirmedStructureEntry(confirmed []confirmedStructureMember, members []contractsv1.ContextFabricStructureNeedKind) *contractsv1.ContextFabricConfirmedStructureEntry {
+// staleConfirmedStructureEntries (CHAOS-3927 P4) rebuilds the echo entries
+// for the Save-time supersession race (engine.go's/unresolved.go's own
+// ErrStructureOfferSuperseded handling): confirmed is the SAME
+// structureCanon.Confirmed slice the discarded decisive result was built
+// from, and members is ErrStructureOfferSuperseded.Members -- EVERY
+// confirmed member whose atomic claim actually lost the race, which can be
+// more than one (codex round-3 adversarial review, MEDIUM finding: an
+// earlier version of this function returned only the FIRST matching
+// entry, silently dropping every member past it from the wire-visible
+// echo when a single Save lost the claim on more than one member at
+// once). Returns one entry per matching member, in confirmed's own order,
+// Disposition forced to vetoed_stale -- structureVetoResult composes them
+// exactly like a pre-flight-detected stale veto's own StaleMembers, so a
+// caller cannot distinguish which detection path caught the staleness
+// from the response alone.
+func staleConfirmedStructureEntries(confirmed []confirmedStructureMember, members []contractsv1.ContextFabricStructureNeedKind) []contractsv1.ContextFabricConfirmedStructureEntry {
 	lost := make(map[contractsv1.ContextFabricStructureNeedKind]bool, len(members))
 	for _, m := range members {
 		lost[m] = true
 	}
+	var entries []contractsv1.ContextFabricConfirmedStructureEntry
 	for _, c := range confirmed {
 		if !lost[c.Member] {
 			continue
 		}
-		return &contractsv1.ContextFabricConfirmedStructureEntry{
+		entries = append(entries, contractsv1.ContextFabricConfirmedStructureEntry{
 			Member: c.Member, AppliedValue: c.AppliedValue, Source: contractsv1.ContextFabricStructureSourceReceipt,
 			PriorResultID: c.PriorResultID, ReceiptID: c.ReceiptID, OfferSource: c.OfferSource,
 			PriorVersionID: c.PriorVersionID, PriorEntryID: c.PriorEntryID,
 			Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
-		}
+		})
 	}
-	return nil
+	return entries
 }
 
 // structureReceiptPrefixForMember maps each closed StructureNeedKind

@@ -295,13 +295,20 @@ type EngineTelemetry interface {
 	// cf_structure_receipt{member,outcome}) reports the OUTCOME of one
 	// structure-receipt-bearing member for one Investigate call --
 	// StructureReceiptOutcome's own doc comment (structure.go) for the
-	// three-value vocabulary and why atomicity makes every receipt-bearing
-	// member share the SAME outcome on a veto. Called unconditionally,
-	// once per member that carried at least one receipt (kindr_/ancr_/
-	// handr_), immediately after canonicalizeStructure returns -- covers
-	// both the veto short-circuit and the eventual success path from one
-	// call site, since the outcome is fully determined by
-	// requestStructureCanonicalization's own Veto/Confirmed fields.
+	// four-value vocabulary (CHAOS-3927 P4 added "stale") and why atomicity
+	// makes every receipt-bearing member share the SAME outcome on a veto.
+	// Called once per member that carried at least one receipt (kindr_/
+	// ancr_/handr_), but NOT always immediately after canonicalizeStructure
+	// returns any more (CHAOS-3927 P4, codex round-1/round-2 adversarial
+	// review): a PRE-FLIGHT veto (unresolved/conflict/stale) is still final
+	// the instant canonicalizeStructure returns it and is recorded right
+	// there; the "applied"/"stale" outcome for a request that CONFIRMED
+	// something is deferred until the confirming Save actually succeeds or
+	// loses the Save-time supersession race -- see
+	// Engine.recordStructureConfirmationOutcome/
+	// Engine.structureSupersessionVetoResult (structure.go) for the two
+	// call sites this now comes from, both of which can carry a non-empty
+	// structureCanon.Confirmed.
 	RecordStructureReceipt(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome)
 }
 
@@ -439,7 +446,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// see the deferred call below, right before/after the decisive
 		// Save, for why that one moved.)
 		recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, structureCanon.StaleMember, binding)
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, structureCanon.StaleMembers, binding)
 	}
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that

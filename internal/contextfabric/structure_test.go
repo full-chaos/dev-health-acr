@@ -644,14 +644,104 @@ func TestCHAOS3927P4_SaveTimeSupersessionConflict_TerminatesRoundAsStale(t *test
 type supersessionRacingResultStore struct {
 	*staticResultStore
 	saveCalls int
+	// conflictMembers is returned as ErrStructureOfferSuperseded.Members on
+	// the FIRST Save call -- defaults to []{"expected_kind"} when left nil
+	// (every pre-existing single-member test's own expectation).
+	conflictMembers []contractsv1.ContextFabricStructureNeedKind
 }
 
 func (s *supersessionRacingResultStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64) error {
 	s.saveCalls++
 	if s.saveCalls == 1 {
-		return &ErrStructureOfferSuperseded{Members: []contractsv1.ContextFabricStructureNeedKind{"expected_kind"}}
+		members := s.conflictMembers
+		if members == nil {
+			members = []contractsv1.ContextFabricStructureNeedKind{"expected_kind"}
+		}
+		return &ErrStructureOfferSuperseded{Members: members}
 	}
 	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch)
+}
+
+// TestCHAOS3927P4_SaveTimeSupersessionConflict_EchoesEveryLostMember is
+// codex round-3's own acceptance pin (MEDIUM finding): a single Save-time
+// supersession race can legitimately conflict on MORE THAN ONE confirmed
+// member at once (a request redeeming both expected_kind AND
+// subject_anchor against a prior result a concurrent Save already claimed
+// BOTH members of) -- the resulting stale terminal's ConfirmedStructure
+// echo must carry ONE ENTRY PER LOST MEMBER, never silently collapse to
+// just the first (the wire contract's own "one entry per carried member"
+// rule, and the exact defect an earlier version of staleConfirmedStructureEntries
+// -- then singular, staleConfirmedStructureEntry -- had).
+func TestCHAOS3927P4_SaveTimeSupersessionConflict_EchoesEveryLostMember(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0011"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind", "subject_anchor"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+		AnchorOptions: []AnchorOption{
+			{
+				ReceiptID: "ancr_confirm0001", OptionID: "opt_anchor", Label: "the widget-service repository",
+				Kind: SubjectRepository, CanonicalID: "repository_widget_service",
+				MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: "engine",
+			},
+		},
+	}
+	store := &supersessionRacingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}},
+		conflictMembers:   []contractsv1.ContextFabricStructureNeedKind{"expected_kind", "subject_anchor"},
+	}
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		AnchorVerifier: func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+			return true, AnchorVerificationValid
+		},
+		Results: store,
+	})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+	request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "ancr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if len(result.ConfirmedStructure) != 2 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 2 (BOTH lost members echoed, not just the first)", len(result.ConfirmedStructure))
+	}
+	seen := map[StructureNeedKind]bool{}
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
+			t.Errorf("entry %+v: disposition = %q, want vetoed_stale", entry, entry.Disposition)
+		}
+		seen[entry.Member] = true
+	}
+	if !seen["expected_kind"] || !seen["subject_anchor"] {
+		t.Errorf("result.ConfirmedStructure = %+v, want entries for BOTH expected_kind and subject_anchor", result.ConfirmedStructure)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
 }
 
 // anchorReceiptTestSetup builds a prior result carrying one AnchorOption
