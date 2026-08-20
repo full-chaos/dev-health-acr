@@ -24,16 +24,39 @@ import (
 // short JSON fields; 1 MiB is generous headroom above any real one.
 const maxExchangeResponseBytes = 1 << 20
 
-// readBoundedResponseFile reads respPath through a size-limited reader,
-// preserving os.ReadFile's os.IsNotExist-compatible error for a
-// not-yet-published response (the exchange poll loop's own "not ready
-// yet" branch depends on that).
+// readBoundedResponseFile reads respPath through openNoFollowNonBlocking
+// (fileexchange_open_unix.go / fileexchange_open_unsupported.go) and a
+// size-limited reader, preserving os.Open's os.IsNotExist-compatible error
+// for a not-yet-published response (the exchange poll loop's own "not
+// ready yet" branch depends on that).
+//
+// codex adversarial review, round 2: a plain os.Open/os.ReadFile (round 1's
+// own fix) still (a) followed a symlink planted at respPath after this
+// package's own directory-level ownership check ran once at construction
+// time (a TOCTOU window -- MEDIUM), and (b) could block INSIDE os.Open
+// itself, forever, if respPath had been replaced with a FIFO -- before
+// this function's size bound or the caller's own context/deadline ever got
+// a chance to apply (MEDIUM). openNoFollowNonBlocking's O_NOFOLLOW makes
+// the kernel refuse a symlink atomically with the open; O_NONBLOCK makes a
+// FIFO open return immediately instead of blocking, so the fstat regular-
+// file check just below rejects it as a normal, fast error instead of a
+// hang.
 func readBoundedResponseFile(respPath string) ([]byte, error) {
-	file, err := os.Open(respPath)
+	file, err := openNoFollowNonBlocking(respPath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("panelharness: response path %s is not a regular file (%s)", respPath, info.Mode().Type())
+	}
+	if info.Size() > maxExchangeResponseBytes {
+		return nil, fmt.Errorf("panelharness: response file %s exceeded %d bytes", respPath, maxExchangeResponseBytes)
+	}
 	limited := io.LimitReader(file, maxExchangeResponseBytes+1)
 	raw, err := io.ReadAll(limited)
 	if err != nil {
@@ -85,6 +108,23 @@ const fileExchangeOperation = "structure_selection"
 // fresh per-run session nonce -- one Selector per panelist per run, exactly
 // as fileExchangeRuntime is one instance per test process.
 func NewFileExchangeSelector(dir, canonicalModelIdentity string, timeout time.Duration) (*FileExchangeSelector, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("panelharness: create file-exchange dir: %w", err)
+	}
+	// codex adversarial review (round 2, MEDIUM): round 1 checked
+	// requests/ and responses/ but never dir itself -- a writable PARENT
+	// directory lets another local writer replace or relocate either
+	// subdirectory (e.g. rename requests/ aside and create a new one it
+	// controls) even when the subdirectories' own permissions look fine at
+	// the moment they were checked. dir's own ownership/permissions are
+	// verified once here, in addition to each subdirectory below.
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("panelharness: stat file-exchange dir: %w", err)
+	}
+	if err := verifyExchangeDirOwnership(dirInfo); err != nil {
+		return nil, fmt.Errorf("panelharness: %s: %w", dir, err)
+	}
 	for _, sub := range []string{"requests", "responses"} {
 		subPath := filepath.Join(dir, sub)
 		if err := os.MkdirAll(subPath, 0o755); err != nil {

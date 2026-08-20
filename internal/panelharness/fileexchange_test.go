@@ -158,6 +158,26 @@ func TestNewFileExchangeSelector_RejectsWorldWritableDirectory(t *testing.T) {
 	}
 }
 
+// TestNewFileExchangeSelector_RejectsWorldWritableParentDirectory is a
+// regression test for codex round-2 finding MEDIUM-2: only the requests/
+// and responses/ subdirectories were ownership/permission-checked; a
+// world-writable PARENT directory (the one MkdirAll(dir, 0o755) creates or
+// reuses) went unchecked, even though another user could still repoint or
+// replace entries directly under it.
+func TestNewFileExchangeSelector_RejectsWorldWritableParentDirectory(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "exchange")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, err := NewFileExchangeSelector(dir, "anthropic/sol-max", 5*time.Second); err == nil {
+		t.Error("expected a world-writable file-exchange parent directory to be rejected")
+	}
+}
+
 func TestFileExchangeSelector_RejectsOversizedResponseFile(t *testing.T) {
 	dir := t.TempDir()
 	selector, err := NewFileExchangeSelector(dir, "anthropic/sol-max", 300*time.Millisecond)

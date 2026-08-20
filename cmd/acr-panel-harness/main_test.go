@@ -87,6 +87,39 @@ func TestLoadPanelistConfigs_RejectsSharedFileExchangeDir(t *testing.T) {
 	}
 }
 
+// TestDetectAliasedFileExchangeDirs_RejectsSymlinkAlias is a regression test
+// for codex round-2 finding HIGH-1: loadPanelistConfigs's own distinct-
+// directory check compares filepath.Abs results, which does not resolve
+// symlinks, so two differently-spelled paths naming the SAME directory (one
+// via a symlink) would sail through it undetected. detectAliasedFileExchangeDirs
+// is the authoritative check that runs after every panelist's requests/
+// subdirectory actually exists, using os.SameFile (device+inode identity).
+func TestDetectAliasedFileExchangeDirs_RejectsSymlinkAlias(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real-exchange")
+	alias := filepath.Join(dir, "alias-exchange")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	const tokenEnvA, tokenEnvB = "ACR_PANEL_HARNESS_TEST_TOKEN_ALIAS_A", "ACR_PANEL_HARNESS_TEST_TOKEN_ALIAS_B"
+	t.Setenv(tokenEnvA, testValidBearerToken)
+	t.Setenv(tokenEnvB, testValidBearerToken)
+	configs := []panelistConfig{
+		{CanonicalModelIdentity: "anthropic/sol-max", BearerTokenEnv: tokenEnvA, FileExchangeDir: real},
+		{CanonicalModelIdentity: "anthropic/luna", BearerTokenEnv: tokenEnvB, FileExchangeDir: alias},
+	}
+	for _, config := range configs {
+		if _, err := buildPanelist(config, "https://acr.example.com", 0, 0); err != nil {
+			t.Fatalf("buildPanelist(%s): %v", config.CanonicalModelIdentity, err)
+		}
+	}
+
+	if err := detectAliasedFileExchangeDirs(configs); err == nil {
+		t.Error("expected an error when two panelists' file_exchange_dir values are a symlink alias of the same directory")
+	}
+}
+
 func TestBuildPanelist_RequiresBearerTokenEnvironmentVariableToBeSet(t *testing.T) {
 	config := panelistConfig{CanonicalModelIdentity: "anthropic/sol-max", BearerTokenEnv: "ACR_PANEL_HARNESS_TEST_UNSET_TOKEN", FileExchangeDir: t.TempDir()}
 	os.Unsetenv(config.BearerTokenEnv)

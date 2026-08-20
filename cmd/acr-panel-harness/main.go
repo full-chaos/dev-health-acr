@@ -98,6 +98,20 @@ func run(arguments []string, stdout, stderr *os.File) error {
 		}
 		panelists = append(panelists, panelist)
 	}
+	// codex adversarial review (round 2, HIGH): loadPanelistConfigs's own
+	// distinct-directory check compares filepath.Abs results, which does
+	// NOT resolve symlinks -- two differently-spelled paths (one behind a
+	// symlink) could still name the SAME underlying directory, and each
+	// FileExchangeSelector starts its own sequence numbering at zero, so
+	// two panelists sharing a directory THIS WAY would collide on
+	// identical request/response filenames undetected. Every buildPanelist
+	// call above has already created its own requests/ subdirectory (this
+	// is why the check runs here, after that loop, not before it): os.Stat
+	// + os.SameFile compares actual device+inode identity, which a symlink
+	// alias cannot disguise.
+	if err := detectAliasedFileExchangeDirs(configs); err != nil {
+		return err
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -146,7 +160,12 @@ func loadPanelistConfigs(path string) ([]panelistConfig, error) {
 	// or be misread as another's. Every configured directory must be
 	// distinct -- resolved to an absolute path first, so "./panel-a" and
 	// "panel-a" (or a relative path from a different cwd) can't disguise
-	// the same directory as two different ones.
+	// the same directory as two different ones. This is the CHEAP,
+	// pre-existence check: filepath.Abs cannot resolve a symlink, so it
+	// cannot catch two DIFFERENT paths that are the same directory via one
+	// -- detectAliasedFileExchangeDirs (below), which runs once every
+	// directory actually exists, is the authoritative check for that
+	// (codex round 2, HIGH).
 	seenDirs := make(map[string]string, len(configs)) // absolute dir -> first identity that used it
 	for _, config := range configs {
 		if strings.TrimSpace(config.FileExchangeDir) == "" {
@@ -162,6 +181,39 @@ func loadPanelistConfigs(path string) ([]panelistConfig, error) {
 		seenDirs[absolute] = config.CanonicalModelIdentity
 	}
 	return configs, nil
+}
+
+// detectAliasedFileExchangeDirs is the authoritative distinct-directory
+// check (codex adversarial review, round 2, HIGH): it compares each
+// config's own requests/ subdirectory by os.SameFile (device+inode
+// identity), which a symlink -- unlike loadPanelistConfigs's own
+// filepath.Abs comparison -- cannot disguise. Must run only after every
+// panelist has already been built (each buildPanelist call creates its own
+// requests/ subdirectory via NewFileExchangeSelector), since os.Stat needs
+// the path to exist.
+func detectAliasedFileExchangeDirs(configs []panelistConfig) error {
+	type statted struct {
+		identity string
+		info     os.FileInfo
+	}
+	seen := make([]statted, 0, len(configs))
+	for _, config := range configs {
+		if strings.TrimSpace(config.FileExchangeDir) == "" {
+			continue
+		}
+		requestsDir := filepath.Join(config.FileExchangeDir, "requests")
+		info, err := os.Stat(requestsDir)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", requestsDir, err)
+		}
+		for _, other := range seen {
+			if os.SameFile(info, other.info) {
+				return fmt.Errorf("panelists %q and %q share the same file-exchange directory (one is a symlink alias of the other) -- every panelist needs its own, independent directory", other.identity, config.CanonicalModelIdentity)
+			}
+		}
+		seen = append(seen, statted{identity: config.CanonicalModelIdentity, info: info})
+	}
+	return nil
 }
 
 func buildPanelist(config panelistConfig, apiBaseURL string, callTimeout, fileExchangeTimeout time.Duration) (panelharness.Panelist, error) {
