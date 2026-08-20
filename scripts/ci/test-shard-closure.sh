@@ -63,6 +63,12 @@ trap 'rm -rf "$tmpdir"' EXIT
 for index in "${indices[@]}"; do
   "$repo_root/scripts/ci/test-shard.sh" "$index" "$total" | tr ' ' '\n' >>"$tmpdir/union"
 done
+# CHAOS-3974: test-shard.sh excludes isolated_packages from the round-robin
+# split above and runs them in their own dedicated CI job instead (see
+# race-devhealthschema in ci.yml). They are still part of the suite this
+# script proves total, so they join the union here rather than being
+# missed as a package no shard covers.
+"$repo_root/scripts/ci/test-shard.sh" isolated | tr ' ' '\n' >>"$tmpdir/union"
 
 LC_ALL=C sort "$tmpdir/union" | grep -v '^$' >"$tmpdir/union.sorted"
 (cd "$repo_root" && go list ./...) | LC_ALL=C sort >"$tmpdir/all.sorted"

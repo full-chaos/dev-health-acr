@@ -256,6 +256,41 @@ jobs:
           printf 'shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
           make test-race GOTEST_PKGS="$packages"
 
+  # CHAOS-3974: internal/contextfabric/devhealthschema's full-repo
+  # declaration-closure tests walk every file in the module, so their cost
+  # under -race scales with the module's total .go file count rather than
+  # with this package's own size. Sharing a race-matrix shard meant that
+  # growth silently ate into a GOTEST_TIMEOUT budget the walk did not own
+  # -- and other packages the round-robin happened to place beside it paid
+  # for it too (the shard could also draw testcontainer-heavy packages,
+  # compounding contention). CHAOS-3972 already hit the shared ceiling once
+  # and the fix then was to raise GOTEST_TIMEOUT for every shard. This job
+  # gives the walk its own scope and its own -timeout instead, so the next
+  # time the repo grows only this job's budget has to grow -- the race
+  # matrix's shared GOTEST_TIMEOUT never has to move again on this
+  # package's account. scripts/ci/test-shard.sh excludes this package from
+  # the round-robin split above (isolated_packages) so it is tested here
+  # and only here; scripts/ci/test-shard-closure.sh proves the two together
+  # still cover the whole module exactly once.
+  race-devhealthschema:
+    name: race (devhealthschema, isolated scope)
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.6'
+          cache: true
+      - name: Run isolated devhealthschema race suite
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated)"
+          printf 'isolated packages:\n%s\n' "$packages"
+          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=900s
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -479,6 +514,7 @@ jobs:
       - lint
       - unit
       - race
+      - race-devhealthschema
       - build
       - contracts
       - container-contract-smoke
