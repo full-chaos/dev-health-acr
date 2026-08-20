@@ -120,6 +120,33 @@ type StructureSelectionEvent struct {
 	RetrievalIdentity  ReuseRetrievalIdentity
 	PromptVersions     ReusePromptVersions
 	VersionAuthorities ReuseVersionAuthorities
+	// Consensus is the CHAOS-3860 P6 gap fix (design brief §2.4/§B5:
+	// "events gain ... ConsensusEvidence (3860 panel ids + agreement
+	// bits)"), absent from the original P4 shipment (migration 0024) and
+	// added here additively (migration 0026). Present ONLY on events a
+	// 3860 agent-user (multi-model panel) acceptance run captures; nil on
+	// every other capture path (human_panel, agent_explicit,
+	// agent_explicit_echo, and single-model agent_receipt confirmations
+	// with no panel behind them).
+	Consensus *ConsensusEvidence
+}
+
+// ConsensusEvidence records a CHAOS-3860 multi-model panel's agreement
+// shape for one StructureSelectionEvent -- design brief §2.4's own words,
+// verbatim: "panel member model identity ids + per-member agreement bits
+// -- ids/enums, nothing else". PanelModelIdentities names every panel
+// member that independently produced a selection for this event's Member
+// (e.g. sol/luna/opus model identities); AgreementBits is a PARALLEL slice
+// (AgreementBits[i] corresponds to PanelModelIdentities[i]) reporting
+// whether that panel member's own independently-derived selection matched
+// Selected. Consensus curation (design brief §3.2's promotion rule) reads
+// agreement across AgreementBits, never question text or free-form
+// rationale -- neither field this type carries. Zero value (both slices
+// nil/empty) is invalid wherever Consensus is non-nil; construct only with
+// len(PanelModelIdentities) == len(AgreementBits) >= 1.
+type ConsensusEvidence struct {
+	PanelModelIdentities []string `json:"panel_model_identities"`
+	AgreementBits        []bool   `json:"agreement_bits"`
 }
 
 // StructureSelectionSink is notified once per successfully-redeemed

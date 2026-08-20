@@ -319,8 +319,33 @@ func validateEvent(event contextfabric.StructureSelectionEvent) error {
 	if _, known := knownSelectionProvenanceValues[event.SelectionProvenance]; !known {
 		return fmt.Errorf("pgstructureselection: selection_provenance %q is not in the closed vocabulary", event.SelectionProvenance)
 	}
+	if event.Consensus != nil {
+		if event.SelectionMode != structureSelectionModeAgentReceiptValue {
+			return fmt.Errorf("pgstructureselection: consensus evidence requires selection_mode %q, got %q", structureSelectionModeAgentReceiptValue, event.SelectionMode)
+		}
+		if len(event.Consensus.PanelModelIdentities) == 0 {
+			return errors.New("pgstructureselection: consensus evidence requires at least one panel model identity")
+		}
+		if len(event.Consensus.PanelModelIdentities) != len(event.Consensus.AgreementBits) {
+			return errors.New("pgstructureselection: consensus evidence panel_model_identities and agreement_bits must be the same length")
+		}
+		for _, identity := range event.Consensus.PanelModelIdentities {
+			if strings.TrimSpace(identity) == "" {
+				return errors.New("pgstructureselection: consensus evidence panel model identity must not be blank")
+			}
+		}
+	}
 	return nil
 }
+
+// structureSelectionModeAgentReceiptValue mirrors
+// contextfabric.structureSelectionModeAgentReceipt's own literal (that
+// constant is unexported outside its package) -- this is the ONLY
+// SelectionMode a 3860 panel run reaches through today (P6 speaks the
+// hosted contract as a credentialed non-panel caller, same as any other
+// agent_receipt confirmation), matching migration 0026's own CHECK
+// constraint exactly.
+const structureSelectionModeAgentReceiptValue = "agent_receipt"
 
 func (s *Sink) insertContext(ctx context.Context, event contextfabric.StructureSelectionEvent) error {
 	if err := validateEvent(event); err != nil {
@@ -346,13 +371,24 @@ func (s *Sink) insertContext(ctx context.Context, event contextfabric.StructureS
 	if err != nil {
 		return fmt.Errorf("pgstructureselection: marshal pipeline context: %w", err)
 	}
+	// consensusJSON stays nil (-> SQL NULL, migration 0026's default) for
+	// every event outside a 3860 panel run, mirroring
+	// pginvestigation.Store's own nil-[]byte-means-NULL precedent for
+	// source_watermarks rather than a sentinel sql.NullString wrapper.
+	var consensusJSON []byte
+	if event.Consensus != nil {
+		consensusJSON, err = json.Marshal(event.Consensus)
+		if err != nil {
+			return fmt.Errorf("pgstructureselection: marshal consensus evidence: %w", err)
+		}
+	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_structure_selections
-    (selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    (selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context, consensus_evidence)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		selectionID, event.OrgID, event.CapturedAt, event.QuestionHash, event.PriorResultID, event.Member,
 		event.Selected.ReceiptID, event.Selected.AppliedValue, event.Accepted,
-		event.SelectionMode, event.SelectionProvenance, offeredJSON, pipelineJSON)
+		event.SelectionMode, event.SelectionProvenance, offeredJSON, pipelineJSON, consensusJSON)
 	if err != nil {
 		return fmt.Errorf("pgstructureselection: insert selection: %w", err)
 	}

@@ -77,22 +77,28 @@ type storedSelectionRow struct {
 	OfferedRaw           []byte
 	Offered              []contextfabric.StructureOfferedOption
 	PipelineContext      pipelineContextPayload
+	Consensus            *contextfabric.ConsensusEvidence
 }
 
 func mustLoadSelectionRow(t *testing.T, ctx context.Context, db *sql.DB, priorResultID string) storedSelectionRow {
 	t.Helper()
 	var row storedSelectionRow
 	var pipelineJSON []byte
+	var consensusJSON []byte
 	require.NoError(t, db.QueryRowContext(ctx, `
-SELECT selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context
+SELECT selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context, consensus_evidence
 FROM acr.context_fabric_structure_selections WHERE prior_result_id = $1`, priorResultID).Scan(
 		&row.SelectionID, &row.OrgID, &row.CapturedAt, &row.QuestionHash, &row.PriorResultID, &row.Member,
 		&row.SelectedReceiptID, &row.SelectedAppliedValue, &row.Accepted, &row.SelectionMode, &row.SelectionProvenance,
-		&row.OfferedRaw, &pipelineJSON,
+		&row.OfferedRaw, &pipelineJSON, &consensusJSON,
 	))
 	require.NotEmpty(t, row.SelectionID, "selection_id must be a real application-generated primary key, not left blank")
 	require.NoError(t, json.Unmarshal(row.OfferedRaw, &row.Offered))
 	require.NoError(t, json.Unmarshal(pipelineJSON, &row.PipelineContext))
+	if consensusJSON != nil {
+		row.Consensus = &contextfabric.ConsensusEvidence{}
+		require.NoError(t, json.Unmarshal(consensusJSON, row.Consensus))
+	}
 	return row
 }
 
@@ -134,6 +140,59 @@ func TestInsertContext_PersistsEveryField(t *testing.T) {
 		IdentityNormalizationVersion: event.VersionAuthorities.IdentityNormalizationVersion,
 		WindowInferenceVersion:       event.VersionAuthorities.WindowInferenceVersion,
 	}, row.PipelineContext)
+	require.Nil(t, row.Consensus, "consensus_evidence must stay NULL for a non-3860 (human_panel) event")
+}
+
+// TestInsertContext_PersistsConsensusEvidenceWhenPresent is the CHAOS-3860
+// P6 precondition fix's own write-path proof (migration 0026): a
+// well-formed agent_receipt event carrying ConsensusEvidence round-trips
+// its panel model identities and parallel agreement bits exactly.
+func TestInsertContext_PersistsConsensusEvidenceWhenPresent(t *testing.T) {
+	ctx := context.Background()
+	db := newStructureSelectionTestDatabase(t, ctx)
+	sink, err := NewSink(db, SinkOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sink.Close(closeCtx)
+	})
+
+	event := validEvent("org-structure-consensus")
+	event.SelectionMode = "agent_receipt"
+	event.Consensus = &contextfabric.ConsensusEvidence{
+		PanelModelIdentities: []string{"anthropic/sol-max", "anthropic/luna", "openai-compatible/opus"},
+		AgreementBits:        []bool{true, true, false},
+	}
+	require.NoError(t, sink.insertContext(ctx, event))
+
+	row := mustLoadSelectionRow(t, ctx, db, event.PriorResultID)
+	require.NotNil(t, row.Consensus)
+	require.Equal(t, *event.Consensus, *row.Consensus)
+}
+
+// TestInsertContext_RejectsConsensusEvidenceOutsideAgentReceiptMode proves
+// validateEvent enforces migration 0026's own CHECK constraint in Go
+// first, with a clearer error than a raw constraint violation, and leaves
+// no row behind.
+func TestInsertContext_RejectsConsensusEvidenceOutsideAgentReceiptMode(t *testing.T) {
+	ctx := context.Background()
+	db := newStructureSelectionTestDatabase(t, ctx)
+	sink, err := NewSink(db, SinkOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sink.Close(closeCtx)
+	})
+
+	event := validEvent("org-structure-consensus-reject")
+	event.Consensus = &contextfabric.ConsensusEvidence{PanelModelIdentities: []string{"anthropic/sol-max"}, AgreementBits: []bool{true}}
+	require.Error(t, sink.insertContext(ctx, event), "consensus evidence on a human_panel event must be rejected before any insert")
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_structure_selections WHERE prior_result_id = $1`, event.PriorResultID).Scan(&count))
+	require.Equal(t, 0, count)
 }
 
 // TestInsertContext_RejectsMalformedEventBeforeAnyInsert proves

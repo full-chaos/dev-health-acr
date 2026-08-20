@@ -36,8 +36,14 @@ import (
 // re-key to (org, epoch, source), respectively. 0021 is CHAOS-3898 S2's
 // §2.3 graph_epoch reuse-key dimension on context_fabric_investigation_results.
 // 0022 is CHAOS-3900 W1's window_inference_version reuse-key dimension on
-// the same table.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}
+// the same table. 0023 is CHAOS-3927 P4's structure-offer supersession
+// atomicity table. 0024 is CHAOS-3927 P4's structure_selections capture
+// table (StructureSelectionEvent). 0025 is CHAOS-3927 P4's codex-review
+// backfill of pre-0023 confirmed-structure rows. 0026 is CHAOS-3860 P6's
+// precondition fix: StructureSelectionEvent gains the ConsensusEvidence
+// column the design brief's own §4 P6 row names as a P4 dependency, which
+// P4 shipped without (discovered while activating P6, DP5(b)).
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
