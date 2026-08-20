@@ -3,7 +3,18 @@
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
 GOTEST_SHUFFLE_SEED ?= 20260727
-GOTEST_TIMEOUT ?= 300s
+# CHAOS-3972: internal/contextfabric/devhealthschema's full-repo declaration
+# sweep (TestNoSecondPhysicalSourceOutsideTheDeclaration) already ran at
+# 299.8s under -race on CI (main @ 3f5a6e63, shard 1 of 4) -- 0.2s inside the
+# old 300s ceiling with none of this PR's changes applied. This PR's own
+# modest addition (35 of 1218 .go files, +2234 lines) was enough to push it
+# past 300s on two separate CI runs, both timing out at exactly 300.0s. The
+# sweep is CPU-bound (regex-matching every line of every .go file) and pays
+# the race detector's full instrumentation cost; it is not hung, just slow,
+# and was already living on a hair-trigger before this PR touched it. Raise
+# the ceiling rather than papering over the next PR's inevitable trip of the
+# same wire.
+GOTEST_TIMEOUT ?= 420s
 # CI partitions the module across shard runners by passing an explicit
 # package list; the default is the whole module so local `make test*`
 # invocations are unchanged.
