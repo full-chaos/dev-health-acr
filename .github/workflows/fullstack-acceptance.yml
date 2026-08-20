@@ -147,30 +147,33 @@ jobs:
       # OPENCODE_DISABLE_* vars do not suppress it. The provider adapter is
       # installed on first use too. One throwaway run warms both. The native
       # deps are arch-specific, so this must run on the runner's own OS/arch.
-      # Renders the SAME provider declaration tests/fullstack/opencode/opencode.json.template
-      # does (name "contextfabric", $PROVIDER_NPM_SPEC, an unreachable placeholder baseURL --
-      # never dereferenced: provider initialisation populates OpenCode's package cache before
-      # it ever tries to reach the model server) rather than the template's own bare
-      # {"$schema":...} config a prior version of this step used. That bare config named no
-      # provider, so it never exercised OpenCode's on-first-use provider install at all.
+      # Renders the ACTUAL tests/fullstack/opencode/opencode.json.template (the same one
+      # render_client_sandbox() uses for every graded task) with placeholder values for the
+      # MCP/ACR fields -- never dereferenced, since provider initialisation populates
+      # OpenCode's package cache before it ever tries to reach the model server or spawn the
+      # MCP subprocess -- rather than a bare {"$schema":...} config or a hand-rolled subset of
+      # the template a prior version of this step used. Either of those, it turns out, is not
+      # equivalent: OpenCode's own config/model-key resolution is exact-match and undocumented
+      # in its failure mode (see docs/fullstack-acceptance.md §6's "Unexpected server error"
+      # note), so reusing the identical, already-proven-working template file end to end is
+      # the only way to be sure warmup exercises the real path rather than a close-but-subtly-
+      # different one.
       - name: Pre-warm the OpenCode and provider caches
         run: |
           set -euo pipefail
           npm cache add "$PROVIDER_NPM_SPEC"
           warm="$RUNNER_TEMP/opencode-warm"
-          mkdir -p "$warm"/{config,data,cache,state}
-          printf '%s' "$(jq -n --arg npmSpec "$PROVIDER_NPM_SPEC" '{
-            "$schema": "https://opencode.ai/config.json",
-            model: "contextfabric/oracle",
-            provider: {
-              contextfabric: {
-                npm: $npmSpec,
-                name: "context-fabric-oracle",
-                options: { baseURL: "http://127.0.0.1:1/v1", apiKey: "warmup", timeout: 1000 },
-                models: { oracle: { name: "context-fabric-oracle" } }
-              }
-            }
-          }')" > "$warm/config/opencode.json"
+          mkdir -p "$warm"/config/opencode "$warm"/{data,cache,state}
+          sed \
+            -e "s#__MODEL_PORT__#1#g" \
+            -e "s#__PROVIDER_NPM_SPEC__#${PROVIDER_NPM_SPEC}#g" \
+            -e "s#__ACR_MCP_BIN__#/bin/true#g" \
+            -e "s#__ACR_API_URL__#https://127.0.0.1:1#g" \
+            -e "s#__ACR_TOKEN_FILE__#/dev/null#g" \
+            -e "s#__ACR_CA_BUNDLE__#/dev/null#g" \
+            -e "s#__ACR_SIDECAR_VERSION__#1.0.0#g" \
+            dev-health-acr/tests/fullstack/opencode/opencode.json.template \
+            > "$warm/config/opencode/opencode.json"
           export HOME="$warm"
           export XDG_CONFIG_HOME="$warm/config" XDG_DATA_HOME="$warm/data"
           export XDG_CACHE_HOME="$warm/cache" XDG_STATE_HOME="$warm/state"
