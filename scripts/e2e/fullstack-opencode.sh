@@ -1064,10 +1064,14 @@ write_web_assertion_material() {
   key="$STATE/web/web-assertion.key"
   jwks="$STATE/web/web-assertions.jwks.json"
   openssl genpkey -algorithm ED25519 -out "$key"
-  chmod 600 "$key"
+  # Mode 644, not 600: this key is bind-mounted read-only into web-fullstack and this JWKS
+  # into acr-api, both non-root containers whose UID does not match whatever host UID this
+  # script runs as -- see the identical reasoning on write_secret() in compose.sh. A per-run,
+  # torn-down-at-teardown signing key, not a standing credential.
+  chmod 644 "$key"
   public="$(openssl pkey -in "$key" -pubout -outform DER | python3 -c 'import base64,sys; print(base64.urlsafe_b64encode(sys.stdin.buffer.read()[-32:]).rstrip(b"=").decode())')"
   printf '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"acr-fullstack-web","use":"sig","alg":"EdDSA","x":"%s"}]}\n' "$public" > "$jwks"
-  chmod 600 "$jwks"
+  chmod 644 "$jwks"
 }
 
 # The web overlay lands in svs.override.yml because the shared compose() helper already
