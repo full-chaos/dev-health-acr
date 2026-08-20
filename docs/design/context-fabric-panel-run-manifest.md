@@ -1,0 +1,111 @@
+# CHAOS-3860 P6 panel run manifest
+
+Status: **Implementation contract** — authoritative for `internal/panelharness`,
+`cmd/acr-panel-harness`, and `testdata/panelharness/v1/`.
+
+Ruling: sol-max architectural channel, CHAOS-3860, 2026-08-20 (adopted
+recommendation (b), amended as (d) staged as (b) — see the Linear issue's own
+comment history for the full ruling text).
+
+## 1. What this harness is, and is not
+
+`internal/panelharness` is the CHAOS-3860 P6 activation driver: it runs a
+multi-model panel through the two-turn select-and-continue confirmation flow
+(pivot-intent design brief §2.4/§3.1) against a REAL org's REAL data, speaking
+the hosted ACR contract directly over HTTP
+(`POST /api/v1/context-fabric/investigations`) with a REAL, per-panelist
+bearer credential — the "3860 guard": no synthetic principal, no shared
+credential, no in-process bypass of authentication.
+
+It is **not**:
+
+- A second capture pipeline. Every structure-offer receipt a panelist
+  redeems flows through the EXISTING P4 capture path
+  (`internal/contextfabric/structure_capture.go`,
+  `internal/contextfabric/pgstructureselection`) exactly like any other
+  `agent_receipt` confirmation. This package adds no engine code and no
+  contract field.
+- A writer of `consensus_evidence`. This package has no Postgres access at
+  all — HTTP only — so it cannot construct a
+  `contextfabric.ConsensusEvidence` value even by mistake. Consensus is
+  computed here, client-side, from the harness's own observations, and
+  reported ONLY in the manifest this document describes.
+- The P5 annotator. Materializing verified consensus onto captured rows —
+  the `consensus_evidence` column's actual write path — is separately
+  ratified, later work, owned by an internal, ops-scoped component that
+  reads these manifests. This package produces the annotator's INPUT; it
+  does not implement the annotator.
+
+## 2. The manifest: a harness-owned schema, not a product contract
+
+`testdata/panelharness/v1/schema/panel_run_manifest.v1.schema.json` is this
+package's own versioned artifact — it mirrors
+`testdata/fullstack/v1/schema/context_fabric_agent_result.v1.schema.json`'s
+own precedent exactly: it never enters `contracts/`, it is not subject to the
+CONTRACT-FIRST rule in `AGENTS.md`, because ACR itself does not produce or
+consume it as a wire contract — the harness produces it, and a future P5
+annotator consumes it. `internal/panelharness.PanelRunManifest` (Go) and the
+JSON Schema above are kept in lockstep by hand; there is no code generator
+between them (the schema is small and changes rarely enough that generation
+would be more machinery than the problem needs).
+
+One manifest file is written per (org, question) panel activation, via
+`PanelRunManifest.WriteFile` (temp-file-then-rename, matching every other
+durable-artifact publish convention in this repo). Manifests are immutable by
+convention: nothing in this repo ever opens one for in-place editing.
+
+### 2.1 Row resolution (for the future P5 annotator)
+
+The ruling names the future annotator's lookup key into
+`acr.context_fabric_structure_selections` as
+`(org_id, prior_result_id, member, selected_receipt_id)` — a bare result id
+is insufficient, because a StructureSelectionEvent's own `prior_result_id`
+identifies the TURN-1 result an offer came FROM, not the turn-2 result it
+landed in. `PanelistSelection` carries every field that lookup needs
+(`prior_result_id`, `receipt_id`, plus `confirmed_result_id` for the turn-2
+result_id an operator would use to independently re-verify a redemption
+against the hosted API's own read path).
+
+### 2.2 The required invariant
+
+Every `PanelMemberRun` carries `complete` and `distinct_identities` booleans,
+computed by `internal/panelharness.BuildMemberRun` — the ONLY place in this
+package this invariant is evaluated, so no caller can re-derive a
+slightly-different version of it:
+
+- **complete**: true only when EVERY configured panelist produced a landed
+  (applied, not vetoed/superseded/unresolved) selection for this member.
+  A panelist that errored, timed out, or had its confirmation vetoed
+  contributes NO entry at all — never a placeholder — so a missing panelist
+  is indistinguishable from an absent one, by design.
+- **distinct_identities**: true only when every panelist's
+  `canonical_model_identity` is unique. Two "panelists" reporting the same
+  underlying model can never carry multi-model authority, no matter how
+  their votes split.
+- **agreement_bits[i]** reports whether `panelists[i].applied_value` equals
+  the majority value (ties broken on the lexicographically smaller value,
+  deterministic and reproducible from `value_counts` alone — never on
+  panelist arrival order, which a retry could reshuffle).
+
+None of this computes or asserts a PROMOTION decision. The actual authority
+threshold (when does multi-model consensus outrank single-model support) is
+P5/curation's own, separately-ratified rule (design brief §3.2's promotion
+rule) — this harness reports the raw histogram and the three booleans above;
+it does not guess the threshold.
+
+## 3. Privacy discipline
+
+`question_hash` is `contextfabric.QuestionHash(question)` — the SAME
+canonicalizing SHA-256 hash the P4 capture schema already uses. The raw
+question TEXT is never carried by a manifest, matching the standing rule
+(design brief §6): question text stays out of telemetry, capture sinks, and
+prior stores; only the product's own org-scoped result storage
+(`engine.go`'s own `result.Question` persistence) is the legitimate
+exception, and manifests are not that.
+
+## 4. Frozen corpus stays eval-only
+
+This harness runs against a real org's own real data. It is never pointed at
+the frozen evaluation corpus (`.remember/acr-3778-corpus-frozen-annotated.json`)
+— that corpus stays eval-only forever, per the holdout discipline CHAOS-3860's
+own GUARDS section states as a design requirement, not an option.

@@ -145,6 +145,7 @@ pinned OpenCode release; it runs in its own workflow, not in `make verify`. See
 - `internal/auth/**`, `internal/storage/**`: security and persistence owners.
 - `internal/contextfabric/**`, `cmd/acr-projector/**`: Context Fabric owner. Backend adapter subpackages (`falkorgraph`, `pgprojection`) own their SQL/vendor client directly rather than adding a backend-specific concept to `internal/storage`; `devhealthsource` is the exception where the data already belongs to `internal/storage` (approved episodes) and reads through `storage.EpisodeStore` like any other caller instead of forking a parallel path.
 - `docs/adr/**`: architecture decision owner.
+- `internal/panelharness/**`, `cmd/acr-panel-harness/**`: CHAOS-3860 P6 activation harness owner (design brief §4's "harness/ops" sharding row). Speaks the hosted API as an external HTTP client with real credentials; never touches Postgres directly and never writes `consensus_evidence` (see `docs/design/context-fabric-panel-run-manifest.md`).
 
 ## NOTES
 
