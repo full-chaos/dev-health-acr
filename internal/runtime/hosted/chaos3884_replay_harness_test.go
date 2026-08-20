@@ -185,19 +185,22 @@ type replayCaseOutcome struct {
 	// it cannot observe composeStructureNeeds' own real decision the way
 	// the generative harness's StructureNeedsDisclosed does (that field
 	// reads result.StructureNeeds != nil off an ACTUAL composed result).
-	// This field instead MIRRORS composeStructureNeeds' current gate
-	// (structure.go: "if len(material.Missing) == 0 { return nil }")
+	// This field instead calls contextfabric.StructureNeedsWouldDisclose
 	// against the wired arm's own StructureOfferMaterial -- the SECOND
 	// return value GraphReader.ResolveSubjects already produces, previously
 	// discarded here -- without running receipt minting or the rest of
 	// that pipeline (which needs a result identity this harness never
-	// mints). Today the two predicates are identical, proven by
-	// TestComposeStructureNeeds_MissingGateMatchesReplayProxy
-	// (structure_test.go, internal/contextfabric): it calls the REAL
-	// composeStructureNeeds against Missing empty vs non-empty and asserts
-	// nil vs non-nil, so a FUTURE second gate condition added to
-	// composeStructureNeeds breaks that test and forces this proxy to be
-	// revisited, rather than silently drifting and reading "fine" forever.
+	// mints). Codex xhigh review, round 1 (chaos-replay-structure-needs-coverage):
+	// the first version of this field hand-rolled
+	// len(material.Missing) != 0 as a SEPARATE expression from
+	// composeStructureNeeds' own gate, and a test asserting the two
+	// currently agree cannot stop them being edited independently later.
+	// StructureNeedsWouldDisclose is now the ONE function
+	// composeStructureNeeds itself calls to decide disclosure -- this field
+	// calls that same function, so the two provably cannot diverge (see
+	// TestStructureNeedsWouldDisclose_MatchesComposeStructureNeeds,
+	// structure_test.go, internal/contextfabric, which exhaustively checks
+	// every closed-vocabulary member).
 	// Baseline has no equivalent field, by the same "wired-arm-only"
 	// reasoning WiredSearchTruncated's own doc comment gives: baseline is
 	// the pre-CHAOS-3884 counterfactual, never what production discloses.
@@ -899,14 +902,16 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		} else {
 			outcome.DiffClass = classifyReplayDiff(tc, baselineRes.Committed, wiredRes.Committed)
 		}
-		// CHAOS-3927 P1 post-merge invariance measurement: Missing
-		// non-empty is composeStructureNeeds' own disclosure condition,
-		// checked directly against the wired arm's already-computed offer
-		// material. See tallyReplayStructureNeedsCoverage's own doc
-		// comment for the stalled-gate/aggregation logic itself (factored
-		// out and unit-tested there).
+		// CHAOS-3927 P1 post-merge invariance measurement:
+		// contextfabric.StructureNeedsWouldDisclose is the SAME function
+		// composeStructureNeeds itself calls to decide disclosure -- not a
+		// second, hand-written copy of its condition -- checked directly
+		// against the wired arm's already-computed offer material. See
+		// tallyReplayStructureNeedsCoverage's own doc comment for the
+		// stalled-gate/aggregation logic itself (factored out and
+		// unit-tested there).
 		if wiredErr == nil {
-			outcome.WiredStructureNeedsWouldDisclose = len(wiredOfferMaterial.Missing) != 0
+			outcome.WiredStructureNeedsWouldDisclose = contextfabric.StructureNeedsWouldDisclose(wiredOfferMaterial)
 		}
 		tallyReplayStructureNeedsCoverage(&report, wiredErr, outcome.Wired.CommittedCount, outcome.WiredStructureNeedsWouldDisclose)
 		report.Outcomes = append(report.Outcomes, outcome)
