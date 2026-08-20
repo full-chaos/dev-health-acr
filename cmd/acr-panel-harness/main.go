@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -136,6 +137,29 @@ func loadPanelistConfigs(path string) ([]panelistConfig, error) {
 	}
 	if len(configs) == 0 {
 		return nil, fmt.Errorf("panelists config %s named no panelists", path)
+	}
+	// codex adversarial review (round 1, HIGH): two panelists pointed at
+	// the SAME file_exchange_dir would race on identical
+	// "<seq6>-structure_selection.json" filenames (each FileExchangeSelector
+	// starts its own sequence at zero, independently of any other
+	// panelist's), so one panelist's request or response could overwrite
+	// or be misread as another's. Every configured directory must be
+	// distinct -- resolved to an absolute path first, so "./panel-a" and
+	// "panel-a" (or a relative path from a different cwd) can't disguise
+	// the same directory as two different ones.
+	seenDirs := make(map[string]string, len(configs)) // absolute dir -> first identity that used it
+	for _, config := range configs {
+		if strings.TrimSpace(config.FileExchangeDir) == "" {
+			continue // buildPanelist reports this specific error per-panelist
+		}
+		absolute, err := filepath.Abs(config.FileExchangeDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve file_exchange_dir %q: %w", config.FileExchangeDir, err)
+		}
+		if first, duplicate := seenDirs[absolute]; duplicate {
+			return nil, fmt.Errorf("panelists %q and %q share the same file_exchange_dir %q -- every panelist needs its own directory", first, config.CanonicalModelIdentity, config.FileExchangeDir)
+		}
+		seenDirs[absolute] = config.CanonicalModelIdentity
 	}
 	return configs, nil
 }

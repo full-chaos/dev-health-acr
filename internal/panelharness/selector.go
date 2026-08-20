@@ -65,3 +65,19 @@ func projectOffers(needs contractsv1.ContextFabricStructureNeeds) []offerProject
 	}
 	return offers
 }
+
+// offerIsTopRanked reports whether receiptID was the rank-0 (first-listed)
+// offer among needs' options for member -- run.go's own PanelistSelection.Accepted
+// derivation, matching StructureSelectionEvent.Accepted's identical
+// "selected == engine's own leading proposal" semantics. false when
+// receiptID is not found at all (should not happen for a receipt this
+// package's own Selector chose from these same offers, but fails closed
+// rather than panicking or guessing).
+func offerIsTopRanked(needs contractsv1.ContextFabricStructureNeeds, member, receiptID string) bool {
+	for _, offer := range projectOffers(needs) {
+		if offer.Member == member && offer.ReceiptID == receiptID {
+			return offer.Rank == 0
+		}
+	}
+	return false
+}

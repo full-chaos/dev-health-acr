@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -14,6 +15,35 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
+
+// maxExchangeResponseBytes bounds how much of a single response file this
+// package will read (codex adversarial review, round 1, MEDIUM): a
+// writable responses/ directory could otherwise let an oversized or
+// symlinked file force unbounded memory allocation via a plain
+// os.ReadFile. A genuine structure_selection response is a handful of
+// short JSON fields; 1 MiB is generous headroom above any real one.
+const maxExchangeResponseBytes = 1 << 20
+
+// readBoundedResponseFile reads respPath through a size-limited reader,
+// preserving os.ReadFile's os.IsNotExist-compatible error for a
+// not-yet-published response (the exchange poll loop's own "not ready
+// yet" branch depends on that).
+func readBoundedResponseFile(respPath string) ([]byte, error) {
+	file, err := os.Open(respPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	limited := io.LimitReader(file, maxExchangeResponseBytes+1)
+	raw, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxExchangeResponseBytes {
+		return nil, fmt.Errorf("panelharness: response file %s exceeded %d bytes", respPath, maxExchangeResponseBytes)
+	}
+	return raw, nil
+}
 
 // FileExchangeSelector is a Selector for non-API panelists (CLI-driven
 // models such as sol/luna, answered by an out-of-process responder script)
@@ -56,8 +86,25 @@ const fileExchangeOperation = "structure_selection"
 // as fileExchangeRuntime is one instance per test process.
 func NewFileExchangeSelector(dir, canonicalModelIdentity string, timeout time.Duration) (*FileExchangeSelector, error) {
 	for _, sub := range []string{"requests", "responses"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+		subPath := filepath.Join(dir, sub)
+		if err := os.MkdirAll(subPath, 0o755); err != nil {
 			return nil, fmt.Errorf("panelharness: create file-exchange dir %s: %w", sub, err)
+		}
+		// codex adversarial review (round 1, HIGH): this envelope discloses
+		// its own session nonce in every request it writes -- the nonce
+		// guard alone cannot stop another local writer, in a shared or
+		// world-writable directory, from planting a forged response ahead
+		// of the real responder. Verify ownership/permissions on the
+		// ACTUAL directory a request/response will be read from and
+		// written to, after MkdirAll (so a pre-existing directory this
+		// call did not create is checked too, not only a freshly-created
+		// one).
+		info, err := os.Stat(subPath)
+		if err != nil {
+			return nil, fmt.Errorf("panelharness: stat file-exchange dir %s: %w", sub, err)
+		}
+		if err := verifyExchangeDirOwnership(info); err != nil {
+			return nil, fmt.Errorf("panelharness: %s: %w", subPath, err)
 		}
 	}
 	nonceBytes := make([]byte, 16)
@@ -224,7 +271,7 @@ func (f *FileExchangeSelector) exchange(ctx context.Context, prompt string) (jso
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
-			raw, err := os.ReadFile(respPath)
+			raw, err := readBoundedResponseFile(respPath)
 			if err != nil {
 				if os.IsNotExist(err) {
 					if time.Now().After(deadline) {

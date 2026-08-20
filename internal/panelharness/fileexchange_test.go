@@ -139,6 +139,46 @@ func TestFileExchangeSelector_RejectsStaleSessionNonce(t *testing.T) {
 	}
 }
 
+func TestNewFileExchangeSelector_RejectsWorldWritableDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// NewFileExchangeSelector's own MkdirAll(subPath, 0o755) only sets a
+	// mode when IT creates the subdirectory -- pre-creating requests/ here
+	// with a world-writable mode is what actually exercises the ownership
+	// check (MkdirAll is a no-op, and does not reset permissions, on an
+	// already-existing directory).
+	requestsDir := filepath.Join(dir, "requests")
+	if err := os.MkdirAll(requestsDir, 0o777); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(requestsDir, 0o777); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, err := NewFileExchangeSelector(dir, "anthropic/sol-max", 5*time.Second); err == nil {
+		t.Error("expected a world-writable file-exchange requests/ directory to be rejected")
+	}
+}
+
+func TestFileExchangeSelector_RejectsOversizedResponseFile(t *testing.T) {
+	dir := t.TempDir()
+	selector, err := NewFileExchangeSelector(dir, "anthropic/sol-max", 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewFileExchangeSelector: %v", err)
+	}
+
+	go runFileExchangeResponder(dir, func(request exchangeRequest) exchangeResponse {
+		// A syntactically valid (quoted) JSON string, just large enough
+		// that the whole response FILE exceeds maxExchangeResponseBytes --
+		// this must be rejected by SIZE before ever reaching JSON parsing.
+		oversized, _ := json.Marshal(strings.Repeat("a", maxExchangeResponseBytes+1))
+		return exchangeResponse{SessionNonce: request.SessionNonce, Output: oversized}
+	})
+
+	_, err = selector.SelectReceipts(context.Background(), "Was Ask Dev ready to ship?", sampleStructureNeeds())
+	if err == nil {
+		t.Fatal("expected an oversized response file to be rejected rather than read into memory")
+	}
+}
+
 func TestFileExchangeSelector_SurfacesResponderReportedErrorWithoutLeakingItsText(t *testing.T) {
 	dir := t.TempDir()
 	selector, err := NewFileExchangeSelector(dir, "anthropic/sol-max", 5*time.Second)

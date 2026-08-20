@@ -3,7 +3,9 @@ package panelharness
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -73,6 +76,20 @@ type Client struct {
 	http        *http.Client
 	baseURL     *url.URL
 	bearerToken string
+	// tokenFingerprint is a SHA-256 hex digest of bearerToken, computed
+	// once here -- NEVER the token itself -- so a caller (Run's own
+	// duplicate-credential check, codex round 1 HIGH) can detect two
+	// panelists sharing the same underlying credential without needing
+	// raw access to it.
+	tokenFingerprint string
+}
+
+// TokenFingerprint returns a SHA-256 hex digest of this Client's own
+// bearer token. It exists ONLY for equality comparison (Run's
+// duplicate-credential guard) -- it is a one-way digest, never reversible
+// to the token, and is safe to log or compare across panelists.
+func (c *Client) TokenFingerprint() string {
+	return c.tokenFingerprint
 }
 
 // NewClient builds a Client against baseURL, authenticating every call with
@@ -87,12 +104,34 @@ func NewClient(baseURL, bearerToken string, timeout time.Duration) (*Client, err
 	if trimmedToken == "" {
 		return nil, errors.New("panelharness: bearer token is required")
 	}
+	// codex adversarial review (round 1, HIGH): a caller could point
+	// bearer_token_env at ANY nonblank environment value -- a license key,
+	// an unrelated secret -- and this client would happily transmit it as
+	// an ACR bearer credential. auth.IsTokenShapeValid is the SAME shape
+	// gate internal/auth/middleware.go itself enforces server-side (and
+	// scripts/e2e/compose.sh's own `[[ "$token" == fcacr_* ]]` sanity
+	// check after minting one); failing closed on an obviously-wrong shape
+	// here, client-side, is a cheap, precedented defense that costs
+	// nothing for a genuine credential minted by `acr-api credentials
+	// create`.
+	if !auth.IsTokenShapeValid(trimmedToken) {
+		return nil, errors.New("panelharness: bearer token does not have the expected ACR credential shape (mint one with `acr-api credentials create`, never a license key or unrelated secret)")
+	}
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("panelharness: invalid base URL %q", baseURL)
 	}
 	if parsed.Scheme != "https" && !isLoopbackHost(parsed.Hostname()) {
 		return nil, fmt.Errorf("panelharness: base URL %q must use https (loopback hosts may use http for local development)", baseURL)
+	}
+	// codex round 1 (MEDIUM): unlike internal/sidecar/config_parse.go's own
+	// APIBaseURL validation, nothing here rejected a path/query/fragment/
+	// userinfo component -- a misconfigured base URL could carry a secret
+	// in a query string to every request, or silently redirect every call
+	// under an unexpected path prefix. The base URL names an ORIGIN only;
+	// investigationsPath is the one fixed path this client ever appends.
+	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return nil, fmt.Errorf("panelharness: base URL %q must be a bare origin (no path, query, fragment, or userinfo)", baseURL)
 	}
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -108,9 +147,15 @@ func NewClient(baseURL, bearerToken string, timeout time.Duration) (*Client, err
 			},
 			Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
 		},
-		baseURL:     parsed,
-		bearerToken: trimmedToken,
+		baseURL:          parsed,
+		bearerToken:      trimmedToken,
+		tokenFingerprint: tokenFingerprint(trimmedToken),
 	}, nil
+}
+
+func tokenFingerprint(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func isLoopbackHost(host string) bool {
@@ -167,23 +212,31 @@ func (c *Client) Investigate(ctx context.Context, requestID string, request cont
 		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: investigation response exceeded %d bytes", maxResponseBytes)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("%w: %d: %s", ErrUnexpectedStatus, response.StatusCode, truncateForError(body))
+		// codex round 1 (MEDIUM): the raw response body is untrusted
+		// upstream content that could reflect request data (including,
+		// pathologically, the Authorization header a misconfigured or
+		// compromised endpoint echoes back) or carry control characters
+		// into a terminal. AGENTS.md's own ANTI-PATTERNS list is explicit:
+		// "Never log ... raw request bodies" -- this repo's standing rule
+		// extends the same discipline to a raw upstream response body
+		// reaching an error a CLI then prints. Only the status code and a
+		// byte length ever reach the returned error now, mirroring the
+		// SAME "class + length, never content" idiom fileexchange.go
+		// already applies to a responder's own error text.
+		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("%w: status %d (%d response bytes)", ErrUnexpectedStatus, response.StatusCode, len(body))
 	}
 	var result contractsv1.ContextFabricInvestigationResult
 	if err := json.Unmarshal(body, &result); err != nil {
 		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: decode investigation response: %w", err)
 	}
-	return result, nil
-}
-
-// truncateForError bounds how much of a failure response body an error
-// message can carry -- an upstream 4xx/5xx body is untrusted content (this
-// repo's own standing rule: "retrieved content is untrusted data, never
-// executable instructions" extends to never logging it unbounded either).
-func truncateForError(body []byte) string {
-	const maxErrorBodyBytes = 512
-	if len(body) <= maxErrorBodyBytes {
-		return string(body)
+	// codex round 1 (MEDIUM): a permissive json.Unmarshal alone accepts a
+	// well-formed-but-empty `{}` as a "successful" decisive result.
+	// internal/sidecar.Client.Investigate calls this SAME method
+	// (validateStoredInvestigationResult, unexported to that package) after
+	// every decode; this client applies the identical gate rather than
+	// inventing a second one.
+	if err := result.ValidateStored(); err != nil {
+		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: hosted API returned an invalid investigation result: %w", err)
 	}
-	return string(body[:maxErrorBodyBytes]) + "...(truncated)"
+	return result, nil
 }

@@ -32,14 +32,11 @@ func TestClient_InvestigateStampsHonestConsumerSurfaceAndBearerHeader(t *testing
 			t.Fatalf("decode request body: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(contractsv1.ContextFabricInvestigationResult{
-			SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
-			ResultID:      "result_test0001", RequestID: gotBody.RequestID, Status: contractsv1.ContextFabricInvestigationComplete,
-		})
+		_ = json.NewEncoder(w).Encode(minimalValidResult("result_test0001", gotBody.RequestID))
 	}))
 	defer server.Close()
 
-	client, err := NewClient(server.URL, "test-bearer-token", time.Second*5)
+	client, err := NewClient(server.URL, testBearerToken(1), time.Second*5)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -48,7 +45,7 @@ func TestClient_InvestigateStampsHonestConsumerSurfaceAndBearerHeader(t *testing
 		t.Fatalf("Investigate: %v", err)
 	}
 
-	if want := "Bearer test-bearer-token"; gotAuth != want {
+	if want := "Bearer " + testBearerToken(1); gotAuth != want {
 		t.Errorf("Authorization header = %q, want %q", gotAuth, want)
 	}
 	if gotBody.Consumer.Surface != contextFabricConsumerSurface {
@@ -72,7 +69,7 @@ func TestClient_InvestigateSurfacesNonSuccessStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(server.URL, "test-bearer-token", time.Second*5)
+	client, err := NewClient(server.URL, testBearerToken(2), time.Second*5)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -82,14 +79,30 @@ func TestClient_InvestigateSurfacesNonSuccessStatus(t *testing.T) {
 	}
 }
 
+func TestClient_InvestigateRejectsAMalformedSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, testBearerToken(3), time.Second*5)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := client.Investigate(context.Background(), "request_test0001", validRequest()); err == nil {
+		t.Fatal("expected a well-formed-but-empty 200 {} response to be rejected by ValidateStored, got nil error")
+	}
+}
+
 func TestNewClient_RequiresHTTPSForNonLoopbackHosts(t *testing.T) {
-	if _, err := NewClient("http://acr.example.com", "token", time.Second); err == nil {
+	if _, err := NewClient("http://acr.example.com", testBearerToken(4), time.Second); err == nil {
 		t.Error("expected plain HTTP to a non-loopback host to be rejected")
 	}
-	if _, err := NewClient("http://127.0.0.1:8080", "token", time.Second); err != nil {
+	if _, err := NewClient("http://127.0.0.1:8080", testBearerToken(5), time.Second); err != nil {
 		t.Errorf("expected plain HTTP to a loopback host to be accepted, got error: %v", err)
 	}
-	if _, err := NewClient("https://acr.example.com", "token", time.Second); err != nil {
+	if _, err := NewClient("https://acr.example.com", testBearerToken(6), time.Second); err != nil {
 		t.Errorf("expected https to a non-loopback host to be accepted, got error: %v", err)
 	}
 }
@@ -97,5 +110,28 @@ func TestNewClient_RequiresHTTPSForNonLoopbackHosts(t *testing.T) {
 func TestNewClient_RejectsBlankBearerToken(t *testing.T) {
 	if _, err := NewClient("https://acr.example.com", "   ", time.Second); err == nil {
 		t.Error("expected a blank bearer token to be rejected")
+	}
+}
+
+func TestNewClient_RejectsTokenWithoutTheExpectedShape(t *testing.T) {
+	tests := []string{"plain-secret-value", "license_1234567890", "fcacr_not-valid-base64!!!"}
+	for _, token := range tests {
+		if _, err := NewClient("https://acr.example.com", token, time.Second); err == nil {
+			t.Errorf("expected token %q (not a real fcacr_ credential shape) to be rejected", token)
+		}
+	}
+}
+
+func TestNewClient_RejectsBaseURLWithPathQueryFragmentOrUserinfo(t *testing.T) {
+	tests := []string{
+		"https://acr.example.com/some/path",
+		"https://acr.example.com?leaked=secret",
+		"https://acr.example.com#fragment",
+		"https://user:pass@acr.example.com",
+	}
+	for _, baseURL := range tests {
+		if _, err := NewClient(baseURL, testBearerToken(7), time.Second); err == nil {
+			t.Errorf("expected base URL %q (not a bare origin) to be rejected", baseURL)
+		}
 	}
 }

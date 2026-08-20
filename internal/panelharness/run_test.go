@@ -38,37 +38,42 @@ func newTwoTurnServer(t *testing.T, receiptID, appliedValue string, disposition 
 		turn++
 		w.Header().Set("Content-Type", "application/json")
 		if turn == 1 {
-			_ = json.NewEncoder(w).Encode(contractsv1.ContextFabricInvestigationResult{
-				SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
-				ResultID:      "result_turn1", RequestID: request.RequestID,
-				Status: contractsv1.ContextFabricInvestigationClarificationRequired,
-				StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
-					Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
-					KindOptions: []contractsv1.ContextFabricKindOption{
-						{ReceiptID: receiptID, OptionID: "opt1", Label: "Pull request", Kind: "pull_request"},
-					},
+			result := minimalValidResult("result_turn1", request.RequestID)
+			result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+			result.SubjectResolution.ClarificationPrompt = "Which kind of work item is this about?"
+			result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+				Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+				KindOptions: []contractsv1.ContextFabricKindOption{
+					{ReceiptID: receiptID, OptionID: "opt1", Label: "Pull request", Kind: "pull_request", OfferSource: contractsv1.ContextFabricStructureOfferEngine},
 				},
-			})
+			}
+			_ = json.NewEncoder(w).Encode(result)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(contractsv1.ContextFabricInvestigationResult{
-			SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
-			ResultID:      "result_turn2", RequestID: request.RequestID,
-			Status: contractsv1.ContextFabricInvestigationComplete,
-			ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{
-				{
-					Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: appliedValue,
-					Source: contractsv1.ContextFabricStructureSourceReceipt, ReceiptID: receiptID,
-					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: disposition,
-				},
+		result := minimalValidResult("result_turn2", request.RequestID)
+		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+			{
+				Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: appliedValue,
+				Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_turn1", ReceiptID: receiptID,
+				Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: disposition,
 			},
-		})
+		}
+		_ = json.NewEncoder(w).Encode(result)
 	}))
 }
 
 func newTestPanelist(t *testing.T, identity string, server *httptest.Server, selections map[string]string, selectErr error) Panelist {
 	t.Helper()
-	client, err := NewClient(server.URL, "test-token-"+identity, 5*time.Second)
+	// Each identity gets its OWN shape-valid token (derived deterministically
+	// from identity, so repeated calls with the same identity are stable):
+	// distinct tokens matter once duplicate-credential rejection exists,
+	// and every existing test here uses a distinct CanonicalModelIdentity
+	// per panelist already.
+	var discriminator byte
+	for i := 0; i < len(identity); i++ {
+		discriminator += identity[i]
+	}
+	client, err := NewClient(server.URL, testBearerToken(discriminator), 5*time.Second)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -111,6 +116,69 @@ func TestRun_TwoTurnFlowProducesAppliedSelectionInManifest(t *testing.T) {
 	}
 	if member.Panelists[0].ConfirmedResultID != "result_turn2" {
 		t.Errorf("ConfirmedResultID = %q, want result_turn2", member.Panelists[0].ConfirmedResultID)
+	}
+	if !member.Panelists[0].Accepted {
+		t.Error("Accepted = false, want true: the redeemed receipt was turn 1's only (therefore rank-0/top-ranked) offer")
+	}
+}
+
+// TestRun_AcceptedReflectsOfferRankNotProvenance is a regression test for a
+// real bug caught during review: Accepted must report whether the redeemed
+// receipt was the rank-0 (top-ranked) offer turn 1 presented, NOT whether
+// its confirmation provenance was clarification_confirmed -- every
+// successfully redeemed structure receipt on this flow carries that same
+// provenance regardless of rank, so a provenance-based check is always
+// true and never actually distinguishes "confirmed the engine's leading
+// proposal" from "overrode it with a lower-ranked alternative." This test
+// offers TWO kind options and has the panelist choose the SECOND
+// (rank 1) one, asserting Accepted is false.
+func TestRun_AcceptedReflectsOfferRankNotProvenance(t *testing.T) {
+	turn := 0
+	const topRanked, chosen = "kindr_top_ranked_00000000", "kindr_second_choice_0000"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request contractsv1.ContextFabricInvestigationRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		turn++
+		w.Header().Set("Content-Type", "application/json")
+		if turn == 1 {
+			result := minimalValidResult("result_turn1", request.RequestID)
+			result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+			result.SubjectResolution.ClarificationPrompt = "Which kind of work item is this about?"
+			result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+				Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+				KindOptions: []contractsv1.ContextFabricKindOption{
+					{ReceiptID: topRanked, OptionID: "opt1", Label: "Pull request", Kind: "pull_request", OfferSource: contractsv1.ContextFabricStructureOfferEngine},
+					{ReceiptID: chosen, OptionID: "opt2", Label: "Work item", Kind: "work_item", OfferSource: contractsv1.ContextFabricStructureOfferEngine},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(result)
+			return
+		}
+		result := minimalValidResult("result_turn2", request.RequestID)
+		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+			{
+				Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "work_item",
+				Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_turn1", ReceiptID: chosen,
+				Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+			},
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	}))
+	defer server.Close()
+
+	panelist := newTestPanelist(t, "anthropic/sol-max", server, map[string]string{"expected_kind": chosen}, nil)
+	manifest, err := Run(context.Background(), RunConfig{
+		OrgID: "org-test", Question: "Was Ask Dev ready to ship?",
+		Panelists: []Panelist{panelist}, BaseRequest: validRequest(),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(manifest.Members) != 1 || len(manifest.Members[0].Panelists) != 1 {
+		t.Fatalf("Members = %+v, want one member with one panelist", manifest.Members)
+	}
+	if manifest.Members[0].Panelists[0].Accepted {
+		t.Error("Accepted = true, want false: the panelist confirmed the SECOND (rank 1) offer, overriding the engine's own top-ranked proposal -- provenance alone (clarification_confirmed either way) must not report this as accepted")
 	}
 }
 
@@ -170,11 +238,7 @@ func TestRun_DecisiveTurn1ContributesNoSelection(t *testing.T) {
 		var request contractsv1.ContextFabricInvestigationRequest
 		_ = json.NewDecoder(r.Body).Decode(&request)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(contractsv1.ContextFabricInvestigationResult{
-			SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
-			ResultID:      "result_decisive", RequestID: request.RequestID,
-			Status: contractsv1.ContextFabricInvestigationComplete, // no StructureNeeds at all
-		})
+		_ = json.NewEncoder(w).Encode(minimalValidResult("result_decisive", request.RequestID)) // Status complete, no StructureNeeds at all
 	}))
 	defer server.Close()
 
@@ -195,5 +259,57 @@ func TestRun_RequiresAtLeastOnePanelist(t *testing.T) {
 	_, err := Run(context.Background(), RunConfig{OrgID: "org-test", Question: "q"})
 	if err == nil {
 		t.Fatal("expected an error for zero configured panelists")
+	}
+}
+
+// TestRun_RejectsPanelistsSharingTheSameBearerCredential is a regression
+// test for codex round-1 finding HIGH-2: nothing previously stopped two
+// panelist configs from using the identical bearer token (only their
+// CanonicalModelIdentity strings had to differ), letting one authenticated
+// principal be silently counted as multiple "distinct" panelists.
+func TestRun_RejectsPanelistsSharingTheSameBearerCredential(t *testing.T) {
+	server := newTwoTurnServer(t, "kindr_receipt00000000000001", "pull_request", contractsv1.ContextFabricStructureDispositionApplied)
+	defer server.Close()
+
+	sharedToken := testBearerToken(99)
+	clientA, err := NewClient(server.URL, sharedToken, 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewClient A: %v", err)
+	}
+	clientB, err := NewClient(server.URL, sharedToken, 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewClient B: %v", err)
+	}
+	panelistA := Panelist{CanonicalModelIdentity: "anthropic/sol-max", Client: clientA, Selector: stubSelector{}}
+	panelistB := Panelist{CanonicalModelIdentity: "anthropic/luna", Client: clientB, Selector: stubSelector{}}
+
+	_, err = Run(context.Background(), RunConfig{
+		OrgID: "org-test", Question: "Was Ask Dev ready to ship?",
+		Panelists: []Panelist{panelistA, panelistB}, BaseRequest: validRequest(),
+	})
+	if err == nil {
+		t.Fatal("expected an error when two panelists share the same bearer credential")
+	}
+}
+
+// TestRun_ErrorsWhenEveryPanelistFails is a regression test for codex
+// round-1 finding MEDIUM-12: a run where every panelist errors (bad
+// credentials, unreachable API, timeouts) must not silently return a
+// successful, zero-member manifest -- that outcome is indistinguishable
+// from every panelist genuinely finding the question decisive on turn 1.
+func TestRun_ErrorsWhenEveryPanelistFails(t *testing.T) {
+	failingA := newTestPanelist(t, "anthropic/sol-max", httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})), nil, nil)
+	failingB := newTestPanelist(t, "anthropic/luna", httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})), nil, nil)
+
+	_, err := Run(context.Background(), RunConfig{
+		OrgID: "org-test", Question: "Was Ask Dev ready to ship?",
+		Panelists: []Panelist{failingA, failingB}, BaseRequest: validRequest(),
+	})
+	if err == nil {
+		t.Fatal("expected an error when every configured panelist fails")
 	}
 }

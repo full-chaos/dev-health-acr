@@ -25,6 +25,24 @@ type Panelist struct {
 // RunConfig configures one full panel run: one org, one question, driven
 // through every configured panelist independently and in parallel.
 type RunConfig struct {
+	// OrgID is a CALLER-ASSERTED label carried onto the manifest -- it is
+	// NOT independently verified against any panelist's own credential
+	// (codex adversarial review, round 1, HIGH: this package has no
+	// "whoami"/introspection call to cross-check a bearer token's actual
+	// org scope, and neither ContextFabricInvestigationResult nor any
+	// other hosted-API response body echoes org_id back to the caller --
+	// the hosted side enforces org scoping server-side via the
+	// credential's own storage.Principal, which this package never
+	// observes). The real enforcement boundary is OPERATIONAL: every
+	// panelist's credential must be minted against THIS SAME org via
+	// `acr-api credentials create --org-id <this-org>` (see
+	// cmd/acr-panel-harness's own doc comment) -- a token from a
+	// different org will simply run this harness against ITS OWN org's
+	// data while the manifest silently records the asserted OrgID,
+	// mismatched. Closing this gap for real needs a hosted-side
+	// introspection endpoint this package does not have and is not
+	// authorized to add unilaterally; flagged to the orchestrator as an
+	// architectural fork, not solved here.
 	OrgID     string
 	Question  string
 	Panelists []Panelist
@@ -56,6 +74,25 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 	if len(cfg.Panelists) == 0 {
 		return PanelRunManifest{}, fmt.Errorf("panelharness: at least one panelist is required")
 	}
+	// codex adversarial review (round 1, HIGH): nothing previously stopped
+	// two panelist CONFIGS from pointing at the SAME underlying credential
+	// (only their CanonicalModelIdentity strings had to differ) -- one
+	// authenticated principal would then be counted as several distinct
+	// "panelists" for the required invariant's own distinct-identities
+	// check, which trusts the label, not the credential. Fail closed
+	// before any network call: TokenFingerprint is a one-way digest, so
+	// this never handles or logs a raw token.
+	seenFingerprints := make(map[string]string, len(cfg.Panelists)) // fingerprint -> first identity that used it
+	for _, panelist := range cfg.Panelists {
+		if panelist.Client == nil {
+			return PanelRunManifest{}, fmt.Errorf("panelharness: panelist %s has no Client configured", panelist.CanonicalModelIdentity)
+		}
+		fingerprint := panelist.Client.TokenFingerprint()
+		if first, duplicate := seenFingerprints[fingerprint]; duplicate {
+			return PanelRunManifest{}, fmt.Errorf("panelharness: panelists %q and %q share the same bearer credential -- every panelist must use its OWN, independently minted token", first, panelist.CanonicalModelIdentity)
+		}
+		seenFingerprints[fingerprint] = panelist.CanonicalModelIdentity
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
@@ -64,6 +101,7 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	results := make([][]panelistMemberResult, len(cfg.Panelists))
+	panelistErrors := make([]error, len(cfg.Panelists))
 	for i, panelist := range cfg.Panelists {
 		group.Go(func() error {
 			memberResults, err := runPanelist(groupCtx, cfg.OrgID, cfg.Question, cfg.BaseRequest, panelist)
@@ -75,7 +113,10 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 				// Complete check already treats honestly (missing
 				// panelist => incomplete, never silently ignored). Only a
 				// context cancellation (the caller gave up on the WHOLE
-				// run) propagates.
+				// run) propagates immediately; every other per-panelist
+				// error is recorded (panelistErrors) and checked once
+				// every panelist has finished, below.
+				panelistErrors[i] = err
 				if groupCtx.Err() != nil {
 					return err
 				}
@@ -87,6 +128,16 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 	}
 	if err := group.Wait(); err != nil {
 		return PanelRunManifest{}, fmt.Errorf("panelharness: panel run canceled: %w", err)
+	}
+	// codex adversarial review (round 1, MEDIUM): a run where EVERY
+	// panelist errored (bad credentials, unreachable API, every turn
+	// timed out) previously returned a successful, zero-member manifest
+	// -- indistinguishable from a run where every panelist genuinely
+	// found the question decisive on turn 1 (also zero members, also
+	// legitimate). Surface the former as an error instead of silently
+	// asserting a member-less manifest is meaningful.
+	if allPanelistsFailed(panelistErrors) {
+		return PanelRunManifest{}, fmt.Errorf("panelharness: every configured panelist failed (first error: %w)", firstNonNil(panelistErrors))
 	}
 
 	byMember := make(map[string][]PanelistSelection)
@@ -126,6 +177,23 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 // own stated delta over the CHAOS-3742 trial harness: "driving the
 // CLARIFICATION flow rather than stopping at first resolution."
 func runPanelist(ctx context.Context, orgID, question string, base contractsv1.ContextFabricInvestigationRequest, panelist Panelist) ([]panelistMemberResult, error) {
+	// codex adversarial review (round 1, MEDIUM): base is COPIED into
+	// every concurrently-running panelist's own turn1Request/turn2Request
+	// (Run starts one goroutine per panelist, all sharing the same
+	// RunConfig.BaseRequest value) -- a struct copy copies each
+	// Prior*Receipts field's SLICE HEADER, not its backing array. If
+	// BaseRequest ever arrived with a non-nil Prior*Receipts slice (this
+	// harness's own CLI never sets one, but the exported Run/RunConfig API
+	// does not prevent a caller from doing so), every panelist's later
+	// append in applyPriorReceipts could write into the SAME shared
+	// backing array from multiple goroutines at once -- a data race, and
+	// worse, a chance for one panelist's receipts to bleed into another's
+	// request. Turn 1 and turn 2's Prior*Receipts are entirely this
+	// function's own responsibility to construct (turn 1 asks fresh; turn
+	// 2's are built by applyPriorReceipts below), so both are explicitly
+	// reset to nil before use, guaranteeing every append starts a FRESH
+	// backing array no other goroutine can ever see.
+	clearPriorReceipts(&base)
 	turn1Request := base
 	turn1Request.Question = question
 	requestID1, err := generateRequestID()
@@ -169,7 +237,7 @@ func runPanelist(ctx context.Context, orgID, question string, base contractsv1.C
 
 	memberResults := make([]panelistMemberResult, 0, len(selections))
 	for member, receiptID := range selections {
-		entry, ok := findConfirmedEntry(turn2Result.ConfirmedStructure, member, receiptID)
+		entry, ok := findConfirmedEntry(turn2Result.ConfirmedStructure, member, turn1Result.ResultID, receiptID)
 		if !ok || entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
 			// Vetoed, superseded, or otherwise not applied -- this
 			// panelist's attempted confirmation did not actually land, so
@@ -185,12 +253,55 @@ func runPanelist(ctx context.Context, orgID, question string, base contractsv1.C
 				PriorResultID:          turn1Result.ResultID,
 				ReceiptID:              receiptID,
 				AppliedValue:           entry.AppliedValue,
-				Accepted:               entry.Provenance == contractsv1.ContextFabricStructureClarificationConfirmed,
-				ConfirmedResultID:      turn2Result.ResultID,
+				// Accepted reports whether this receipt was the
+				// TOP-RANKED (rank 0) offer turn 1 presented for member --
+				// PanelistSelection's own doc comment, matching
+				// StructureSelectionEvent.Accepted's identical semantics.
+				// NOT entry.Provenance: every successfully redeemed
+				// structure receipt on this flow carries
+				// ContextFabricStructureClarificationConfirmed provenance
+				// regardless of rank, so that comparison is always true
+				// and would never actually measure acceptance of the
+				// engine's own leading proposal.
+				Accepted:          offerIsTopRanked(*turn1Result.StructureNeeds, member, receiptID),
+				ConfirmedResultID: turn2Result.ResultID,
 			},
 		})
 	}
 	return memberResults, nil
+}
+
+// allPanelistsFailed reports whether every entry in errs is non-nil --
+// i.e. every configured panelist errored, with not even one genuinely
+// decisive (zero-error, zero-selection) outcome among them.
+func allPanelistsFailed(errs []error) bool {
+	for _, err := range errs {
+		if err == nil {
+			return false
+		}
+	}
+	return len(errs) > 0
+}
+
+// firstNonNil returns the first non-nil error in errs, or nil if none.
+func firstNonNil(errs []error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clearPriorReceipts resets every Prior*Receipts field to nil -- see
+// runPanelist's own call-site comment for why this matters even though
+// this harness's own CLI never populates them on BaseRequest today.
+func clearPriorReceipts(request *contractsv1.ContextFabricInvestigationRequest) {
+	request.PriorSubjectReceipts = nil
+	request.PriorWindowReceipts = nil
+	request.PriorKindReceipts = nil
+	request.PriorAnchorReceipts = nil
+	request.PriorHandleReceipts = nil
 }
 
 // applyPriorReceipts buckets selections (member -> receipt id) into
@@ -216,9 +327,19 @@ func applyPriorReceipts(request *contractsv1.ContextFabricInvestigationRequest, 
 // and receiptID -- ConfirmedStructure carries one entry per carried
 // member, so a linear scan over its (always small, single-digit) length is
 // simplest and clearest.
-func findConfirmedEntry(confirmed []contractsv1.ContextFabricConfirmedStructureEntry, member, receiptID string) (contractsv1.ContextFabricConfirmedStructureEntry, bool) {
+// findConfirmedEntry matches on the FULL (member, priorResultID, receiptID)
+// tuple, not receipt/member alone (codex round 1, HIGH): receipts are
+// globally scoped by (PriorResultID, ReceiptID) --
+// ContextFabricConfirmedStructureEntry's own doc comment states this
+// explicitly ("a bare receipt id is only unique within its issuing
+// result") -- so matching on member+receiptID alone could attribute a
+// response entry to the WRONG prior result if a receipt id ever collided
+// across two different stored results. priorResultID here is always
+// turn1Result.ResultID, the result THIS package's own turn-1 call actually
+// received the offer from.
+func findConfirmedEntry(confirmed []contractsv1.ContextFabricConfirmedStructureEntry, member, priorResultID, receiptID string) (contractsv1.ContextFabricConfirmedStructureEntry, bool) {
 	for _, entry := range confirmed {
-		if string(entry.Member) == member && entry.ReceiptID == receiptID {
+		if string(entry.Member) == member && entry.PriorResultID == priorResultID && entry.ReceiptID == receiptID {
 			return entry, true
 		}
 	}
