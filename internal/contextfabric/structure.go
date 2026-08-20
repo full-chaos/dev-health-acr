@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -548,15 +549,12 @@ func structureReceiptPrefixForMember(member contractsv1.ContextFabricStructureNe
 // collapsing them onto one id is correct, never a collision to guard
 // against.
 //
-// content is the caller's own stable serialization of everything that
-// makes one offer distinct from a sibling in the SAME member's list
-// (e.g. for an AnchorOption, kind + canonical_id + matched_term_hash +
-// offer_source + prior_version_id + prior_entry_id) -- see
-// composeStructureNeeds' own call sites for the exact per-member content
-// strings. Codex xhigh review (chaos-pivot-p1, first round), finding 7:
-// content must cover every field that can vary between two sibling
-// offers, including offer_source/prior_version_id/prior_entry_id, not
-// only the fields a given phase happens to populate yet.
+// content is structureOfferContent's own canonical serialization of the
+// WHOLE offer struct (see that function's doc comment for why: round-1
+// finding 7 and round-2 finding 3 were the SAME defect class twice --
+// content built from a hand-picked field list silently under-covering a
+// wire field nobody remembered to add). See composeStructureNeeds' own
+// call sites for exactly what each member passes.
 //
 // member MUST be a member structureReceiptPrefixForMember recognizes;
 // callers within this package only ever pass a closed-vocabulary
@@ -577,6 +575,42 @@ func mintStructureOptionID(member contractsv1.ContextFabricStructureNeedKind, re
 	return "opt_" + hex.EncodeToString(sum[:])[:16]
 }
 
+// structureOfferContent derives mintStructureReceiptID/mintStructureOptionID's
+// own content input from v's FULL wire struct (a KindOption/AnchorOption/
+// HandleOption value with ReceiptID/OptionID already cleared by the
+// caller -- those are the fields being computed FROM this content, so
+// they must never feed back into it) via json.Marshal, not a hand-picked
+// field list.
+//
+// Team-lead ruling (chaos-pivot-p1, post-round-2): round-1 finding 7
+// (offer_source/prior_version_id/prior_entry_id omitted) and round-2
+// finding 3 (label omitted) were the SAME defect class landing TWICE --
+// each fix-forward closed the specific fields that round caught, leaving
+// the underlying pattern (content = whatever fields someone remembered to
+// list) able to repeat for the next field this repo's own future work
+// adds to any of these three types. Serializing the whole struct instead
+// makes that omission structurally impossible: a new wire field joins
+// every option's identity automatically, the moment it exists on the
+// struct, with no second edit required here.
+//
+// json.Marshal on these types is exactly as deterministic as the old
+// hand-built strings: none of the three carries a map, slice, or any
+// other field whose Go encoding varies between equal values, so struct
+// field order (fixed at compile time) is ALL that decides byte order,
+// every call, forever. Marshal can only fail on types encoding/json
+// cannot represent (channels, funcs, cyclic values) -- none of which a
+// plain string/enum struct like these three can ever contain -- so the
+// error path below is unreachable in practice; it still returns a
+// deterministic (Go-syntax) fallback rather than panicking, because a
+// minted id must never be able to crash the engine.
+func structureOfferContent(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%#v", v)
+	}
+	return string(b)
+}
+
 // composeStructureNeeds fills in the deterministic receipt_id/option_id
 // for every offer StructureOfferMaterial carries -- ResultID was not yet
 // known when ResolveSubjects built the material's own CONTENT fields, so
@@ -592,14 +626,9 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 	if len(material.KindOptions) > 0 {
 		needs.KindOptions = make([]contractsv1.ContextFabricKindOption, 0, len(material.KindOptions))
 		for _, opt := range material.KindOptions {
-			// Codex xhigh review (chaos-pivot-p1, first round), finding 7:
-			// offer_source/prior_version_id/prior_entry_id are wire fields
-			// that can (in a future reoffer/reuse path) distinguish two
-			// KindOptions that would otherwise share this content string --
-			// fold them in now so mintStructureOptionID/mintStructureReceiptID
-			// stay injective over the FULL option shape, not just its
-			// current phase-C-only fields.
-			content := string(opt.Kind) + "\x00" + string(opt.OfferSource) + "\x00" + opt.PriorVersionID + "\x00" + opt.PriorEntryID
+			contentSrc := opt
+			contentSrc.ReceiptID, contentSrc.OptionID = "", ""
+			content := structureOfferContent(contentSrc)
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedExpectedKind, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedExpectedKind, resultID, content)
 			needs.KindOptions = append(needs.KindOptions, opt)
@@ -608,16 +637,9 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 	if len(material.AnchorOptions) > 0 {
 		needs.AnchorOptions = make([]contractsv1.ContextFabricAnchorOption, 0, len(material.AnchorOptions))
 		for _, opt := range material.AnchorOptions {
-			// CHAOS-3900 P1.E (team-lead ruling): matched_term_hash is part
-			// of what makes this offer distinct from a sibling in the same
-			// list (two anchors sharing a (kind, canonical_id) but minted
-			// from different matched terms are different offers), so it
-			// belongs in the deterministic receipt-id/option-id content
-			// exactly like every other content field here. Codex xhigh
-			// review (chaos-pivot-p1, first round), finding 7: offer_source/
-			// prior_version_id/prior_entry_id fold in for the same
-			// full-shape-injectivity reason as the KindOption content above.
-			content := string(opt.Kind) + "\x00" + opt.CanonicalID + "\x00" + opt.MatchedTermHash + "\x00" + string(opt.OfferSource) + "\x00" + opt.PriorVersionID + "\x00" + opt.PriorEntryID
+			contentSrc := opt
+			contentSrc.ReceiptID, contentSrc.OptionID = "", ""
+			content := structureOfferContent(contentSrc)
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectAnchor, resultID, content)
 			needs.AnchorOptions = append(needs.AnchorOptions, opt)
@@ -626,9 +648,9 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 	if len(material.HandleOptions) > 0 {
 		needs.HandleOptions = make([]contractsv1.ContextFabricHandleOption, 0, len(material.HandleOptions))
 		for _, opt := range material.HandleOptions {
-			// Codex xhigh review (chaos-pivot-p1, first round), finding 7:
-			// same full-shape-injectivity reason as Kind/Anchor above.
-			content := string(opt.Kind) + "\x00" + opt.PatternID + "\x00" + opt.Value + "\x00" + opt.SourceColumn + "\x00" + string(opt.OfferSource) + "\x00" + opt.PriorVersionID + "\x00" + opt.PriorEntryID
+			contentSrc := opt
+			contentSrc.ReceiptID, contentSrc.OptionID = "", ""
+			content := structureOfferContent(contentSrc)
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectHandle, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectHandle, resultID, content)
 			needs.HandleOptions = append(needs.HandleOptions, opt)

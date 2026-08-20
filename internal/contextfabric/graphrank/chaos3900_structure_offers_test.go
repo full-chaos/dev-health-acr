@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -658,6 +659,72 @@ func TestAnchorOfferMaterial_NoCandidatesStillMissingWithEmptyOptions(t *testing
 			t.Errorf("len(material.AnchorOptions) = %d, want 0", len(material.AnchorOptions))
 		}
 	})
+}
+
+// TestAnchorOfferMaterial_MoreThanMaxCandidatesIsCapped pins the codex
+// xhigh review finding (chaos-pivot-p1, round 2, finding 1): an ambiguous
+// term matching more than structureOfferMaxOptions distinct
+// (kind, canonical_id) claimants must never mint an AnchorOptions list the
+// wire Validate() would then reject (len > 20) -- it must be capped,
+// deterministically, to the first structureOfferMaxOptions candidates in
+// the SAME sorted (kind, canonical_id) order anchorOfferMaterial already
+// uses.
+func TestAnchorOfferMaterial_MoreThanMaxCandidatesIsCapped(t *testing.T) {
+	t.Parallel()
+	claimants := make(map[string][]IdentityMatch, structureOfferMaxOptions+5)
+	for i := 0; i < structureOfferMaxOptions+5; i++ {
+		term := fmt.Sprintf("term-%02d", i)
+		id := fmt.Sprintf("repo-%02d", i)
+		claimants[term] = []IdentityMatch{identityMatch(contractsv1.ContextFabricSubjectRepository, id, id)}
+	}
+	material := anchorOfferMaterial(claimants, true)
+	if len(material.AnchorOptions) != structureOfferMaxOptions {
+		t.Fatalf("len(material.AnchorOptions) = %d, want %d (capped)", len(material.AnchorOptions), structureOfferMaxOptions)
+	}
+	// The kept candidates must be the lexicographically-first
+	// canonical_ids ("repo-00".."repo-19"), not an arbitrary subset.
+	seen := make(map[string]bool, len(material.AnchorOptions))
+	for _, opt := range material.AnchorOptions {
+		seen[opt.CanonicalID] = true
+	}
+	for i := 0; i < structureOfferMaxOptions; i++ {
+		want := fmt.Sprintf("repo-%02d", i)
+		if !seen[want] {
+			t.Errorf("capped AnchorOptions missing %q, want the first %d ids kept", want, structureOfferMaxOptions)
+		}
+	}
+}
+
+// TestHandleOfferMaterial_DuplicateOccurrencesAreDeduped pins the codex
+// xhigh review finding (chaos-pivot-p1, round 2, finding 1): the SAME
+// handle text repeated in one question must not mint two options with
+// identical content (and therefore identical receipt_id/option_id, which
+// the wire Validate() rejects as a duplicate).
+func TestHandleOfferMaterial_DuplicateOccurrencesAreDeduped(t *testing.T) {
+	t.Parallel()
+	material := handleOfferMaterial("PR 532 relates to PR 532 which also mentions PR 532")
+	if len(material.HandleOptions) != 1 {
+		t.Fatalf("len(material.HandleOptions) = %d, want 1 (three identical occurrences deduped)", len(material.HandleOptions))
+	}
+	if material.HandleOptions[0].Value != "532" {
+		t.Errorf("HandleOptions[0].Value = %q, want 532", material.HandleOptions[0].Value)
+	}
+}
+
+// TestHandleOfferMaterial_MoreThanMaxDistinctMatchesIsCapped is the dedup
+// fix's companion: enough DISTINCT handle-shaped tokens in one question
+// must still be capped at structureOfferMaxOptions, for the same
+// never-fail-Validate reasoning as the anchor cap above.
+func TestHandleOfferMaterial_MoreThanMaxDistinctMatchesIsCapped(t *testing.T) {
+	t.Parallel()
+	question := "compare"
+	for i := 0; i < structureOfferMaxOptions+5; i++ {
+		question += fmt.Sprintf(" PR %d", 1000+i)
+	}
+	material := handleOfferMaterial(question)
+	if len(material.HandleOptions) != structureOfferMaxOptions {
+		t.Fatalf("len(material.HandleOptions) = %d, want %d (capped)", len(material.HandleOptions), structureOfferMaxOptions)
+	}
 }
 
 func TestHandleOfferMaterial_NoGrammarMatchStillMissingWithEmptyOptions(t *testing.T) {

@@ -28,6 +28,21 @@ import (
 // that never triggers the census still gets a real (possibly empty)
 // StructureNeeds block, never an absent one.
 
+// structureOfferMaxOptions bounds AnchorOptions/HandleOptions before they
+// ever reach composeStructureNeeds -- mirrors
+// internal/contracts/v1's own unexported contextFabricStructureNeedsMaxOptions
+// (the wire Validate() bound every offer list is checked against). Codex
+// xhigh review (chaos-pivot-p1, round 2, finding 1): neither builder
+// capped its own output before this fix -- an ambiguous term matching many
+// distinct identity-universe entities, or a question mentioning more than
+// this many handle-shaped tokens, could mint an offer list the wire
+// contract itself would then reject, turning what should be a graceful
+// clarification disclosure into an internal validation error. Truncating
+// to the FIRST entries in each builder's own already-deterministic order
+// is a conservative, always-safe choice: fewer offered options, never a
+// validation failure.
+const structureOfferMaxOptions = 20
+
 // structureOfferKinds is the closed set of subject kinds an expected_kind
 // offer may name (design brief §1.1's expected_kind row: "the census-kind
 // registry... + the identity-scoped kinds"). A superset of
@@ -419,6 +434,12 @@ func anchorOfferMaterial(claimantsByTerm map[string][]IdentityMatch, complete bo
 		}
 		return keys[i].id < keys[j].id
 	})
+	// Codex xhigh review (chaos-pivot-p1, round 2, finding 1): cap AFTER
+	// sorting so truncation is deterministic (always the same
+	// lexicographically-first candidates), never a function of map order.
+	if len(keys) > structureOfferMaxOptions {
+		keys = keys[:structureOfferMaxOptions]
+	}
 	options := make([]contractsv1.ContextFabricAnchorOption, 0, len(keys))
 	for _, k := range keys {
 		info := candidates[k]
@@ -460,6 +481,16 @@ func anchorOfferLabel(label string) string {
 func handleOfferMaterial(question string) contextfabric.StructureOfferMaterial {
 	bound := BindHandles(question)
 	options := make([]contractsv1.ContextFabricHandleOption, 0, len(bound))
+	// Codex xhigh review (chaos-pivot-p1, round 2, finding 1): BindHandles
+	// reports every regex occurrence, so the SAME handle text repeated in
+	// one question (or matched by more than one registry entry) would
+	// otherwise mint two options with IDENTICAL content -- same
+	// (kind, pattern_id, value, source_column, offer_source, prior fields)
+	// -- and therefore the SAME receipt_id/option_id, which the wire
+	// Validate() rejects as a duplicate. Dedup by that exact content tuple,
+	// keeping BindHandles' own already-deterministic first-occurrence
+	// order (no map iteration involved), before the offer even exists.
+	seen := make(map[contractsv1.ContextFabricHandleOption]struct{}, len(bound))
 	for _, b := range bound {
 		sourceColumn, ok := HandleSourceColumn(b.Kind, b.Grammar)
 		if !ok {
@@ -471,11 +502,25 @@ func handleOfferMaterial(question string) contextfabric.StructureOfferMaterial {
 			// a closed-registry mismatch" discipline.
 			continue
 		}
-		options = append(options, contractsv1.ContextFabricHandleOption{
+		opt := contractsv1.ContextFabricHandleOption{
 			Kind: b.Kind, PatternID: b.Grammar, Value: b.Value, SourceColumn: sourceColumn,
 			Label:       handleOfferLabel(b.Kind, b.Value),
 			OfferSource: contractsv1.ContextFabricStructureOfferEngine,
-		})
+		}
+		// opt's ReceiptID/OptionID are still unset (minted later, in
+		// composeStructureNeeds), so opt itself is already exactly the
+		// content-only dedup key -- no need to build a separate one.
+		if _, exists := seen[opt]; exists {
+			continue
+		}
+		seen[opt] = struct{}{}
+		options = append(options, opt)
+	}
+	// Codex xhigh review (chaos-pivot-p1, round 2, finding 1): cap AFTER
+	// dedup, in BindHandles' own deterministic order, for the same
+	// always-safe-truncation reasoning as anchorOfferMaterial above.
+	if len(options) > structureOfferMaxOptions {
+		options = options[:structureOfferMaxOptions]
 	}
 	return contextfabric.StructureOfferMaterial{
 		Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectHandle},

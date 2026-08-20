@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -609,6 +610,72 @@ func TestMintStructureReceiptID_DeterministicAndUniqueWithinResult(t *testing.T)
 			}
 		}
 	})
+}
+
+// TestStructureOfferContent_EveryFieldIsLoadBearing pins the team-lead
+// ruling made after round-1 finding 7 (offer_source/prior_version_id/
+// prior_entry_id omitted from mint content) recurred as round-2 finding 3
+// (label omitted): mint content is now structureOfferContent's own
+// json.Marshal of the WHOLE option struct, not a hand-picked field list,
+// specifically so this omission class becomes structurally impossible.
+// This test enforces that mechanically: for every exported field on each
+// of the three option types EXCEPT receipt_id/option_id (computed FROM
+// the content, never part of it), changing that ONE field's value must
+// change structureOfferContent's own output. If a future change reverts
+// to a hand-picked field list and forgets one, this test fails on that
+// field by name -- and it needs no update when a new field is added to
+// any of these three types, unlike the hand-picked lists it replaces.
+func TestStructureOfferContent_EveryFieldIsLoadBearing(t *testing.T) {
+	t.Parallel()
+	t.Run("KindOption", func(t *testing.T) {
+		t.Parallel()
+		assertContentFieldsLoadBearing(t, contractsv1.ContextFabricKindOption{})
+	})
+	t.Run("AnchorOption", func(t *testing.T) {
+		t.Parallel()
+		assertContentFieldsLoadBearing(t, contractsv1.ContextFabricAnchorOption{})
+	})
+	t.Run("HandleOption", func(t *testing.T) {
+		t.Parallel()
+		assertContentFieldsLoadBearing(t, contractsv1.ContextFabricHandleOption{})
+	})
+}
+
+// assertContentFieldsLoadBearing takes a zero value of one option type,
+// sets every field OTHER than ReceiptID/OptionID to a distinct baseline
+// string value, then flips each of those fields one at a time and asserts
+// structureOfferContent's output changes every time. Uses reflection so
+// it needs no update when T grows a new field -- the whole point of the
+// json.Marshal-based content derivation this test is pinning.
+func assertContentFieldsLoadBearing(t *testing.T, zero interface{}) {
+	t.Helper()
+	typ := reflect.TypeOf(zero)
+	base := reflect.New(typ).Elem()
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if f.Name == "ReceiptID" || f.Name == "OptionID" {
+			continue
+		}
+		if base.Field(i).Kind() != reflect.String {
+			t.Fatalf("field %s is not string-kind; this test needs a case added for its kind", f.Name)
+		}
+		base.Field(i).SetString("base-" + f.Name)
+	}
+	baseContent := structureOfferContent(base.Interface())
+
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if f.Name == "ReceiptID" || f.Name == "OptionID" {
+			continue
+		}
+		mutated := reflect.New(typ).Elem()
+		mutated.Set(base)
+		mutated.Field(i).SetString("mutated-" + f.Name)
+		mutatedContent := structureOfferContent(mutated.Interface())
+		if mutatedContent == baseContent {
+			t.Errorf("changing field %s alone did not change structureOfferContent's output -- this field is not load-bearing in the minted id (the round-1-finding-7/round-2-finding-3 omission class)", f.Name)
+		}
+	}
 }
 
 func TestMintStructureOptionID_Deterministic(t *testing.T) {
