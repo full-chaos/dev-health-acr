@@ -713,7 +713,14 @@ func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, princip
 // only wired this conversion into Investigate's own call site, leaving
 // terminalResult's own Save call to surface the race as a raw persistence
 // error (500) instead of the handled veto terminal (round-2 finding).
-func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, structureCanon requestStructureCanonicalization, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding) (InvestigationResult, error) {
+//
+// confirmed (CHAOS-4003) is the caller's MERGED confirmed-member list --
+// structureCanon.Confirmed plus window's own ConfirmedMember, when present
+// (mergeConfirmedMembers, window.go) -- not structureCanon itself, since a
+// window-only claim loss at Save time must echo exactly like a
+// kind/anchor/handle one does, via the SAME staleConfirmedStructureEntries
+// call below.
+func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding) (InvestigationResult, error) {
 	// CHAOS-3972 P3: cf_structure_explicit{member,outcome} -- the SAME
 	// synthetic Veto:structureVetoStaleSupersededOffer canonicalization
 	// recordStructureReceiptTelemetry's own call above uses, so an
@@ -721,7 +728,7 @@ func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal 
 	// non-applied too, never silently left unrecorded or misreported as
 	// "applied" against a round that was actually discarded.
 	recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
-	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntries(structureCanon.Confirmed, superseded.Members), binding)
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntries(confirmed, superseded.Members), binding)
 }
 
 // resolveExplicitStructure implements design brief §2.5's "explicit

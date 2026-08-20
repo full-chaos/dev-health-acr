@@ -265,6 +265,14 @@ func resultWithConfirmedStructure(resultID string, member contextfabric.Structur
 // member) tuple under DIFFERENT result_ids -- the second must lose,
 // atomically, with neither its result nor its claim persisted, while the
 // first result and its claim remain completely intact.
+// CHAOS-4003: table-ified over member -- expected_kind (the pre-existing
+// pin) AND window (the member this ticket closes the staleness hole for),
+// sharing ONE store/database instance across both t.Run subtests so the
+// SAME assertions also prove the two members' claims are independent of
+// each other in the REAL Postgres CHECK-constrained table (0023's own
+// member vocabulary CHECK already listed 'window' -- this is the proof the
+// Go write path actually exercises that value, not just that the
+// constraint would permit it).
 func TestStore_structureSupersessionClaims(t *testing.T) {
 	ctx := context.Background()
 	db := newInvestigationTestDatabase(t, ctx)
@@ -272,44 +280,48 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 	require.NoError(t, err)
 
 	principal := storage.Principal{OrgID: "org-supersession"}
-	priorResultID := "result-prior-structure-offer-001"
-	const member = contextfabric.StructureNeedKind("expected_kind")
 
-	// Before any Save, nothing is claimed.
-	superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
-	require.NoError(t, err)
-	require.False(t, superseded, "IsStructureSuperseded before any Save must be false")
+	for _, member := range []contextfabric.StructureNeedKind{"expected_kind", "window"} {
+		t.Run(string(member), func(t *testing.T) {
+			priorResultID := "result-prior-structure-offer-" + string(member)
 
-	winner := resultWithConfirmedStructure("result-supersession-winner-001", member, priorResultID, "kindr_winner00000001")
-	require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+			// Before any Save, nothing is claimed.
+			superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+			require.NoError(t, err)
+			require.False(t, superseded, "IsStructureSuperseded before any Save must be false")
 
-	superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
-	require.NoError(t, err)
-	require.True(t, superseded, "IsStructureSuperseded after the winning Save must be true")
+			winner := resultWithConfirmedStructure("result-supersession-winner-"+string(member), member, priorResultID, "kindr_winner00000001")
+			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
 
-	loser := resultWithConfirmedStructure("result-supersession-loser-0001", member, priorResultID, "kindr_loser000000001")
-	saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
-	require.Error(t, saveErr, "a second Save redeeming the SAME (org, prior_result_id, member) must fail")
-	var conflict *contextfabric.ErrStructureOfferSuperseded
-	require.ErrorAs(t, saveErr, &conflict)
-	require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)
+			superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+			require.NoError(t, err)
+			require.True(t, superseded, "IsStructureSuperseded after the winning Save must be true")
 
-	// The loser's result must NOT have been persisted -- the whole
-	// transaction (claim attempt AND result insert) rolled back together.
-	_, getErr := store.Get(ctx, principal, loser.ResultID)
-	require.ErrorIs(t, getErr, pginvestigation.ErrNotFound)
+			loser := resultWithConfirmedStructure("result-supersession-loser-"+string(member), member, priorResultID, "kindr_loser000000001")
+			saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+			require.Error(t, saveErr, "a second Save redeeming the SAME (org, prior_result_id, member) must fail")
+			var conflict *contextfabric.ErrStructureOfferSuperseded
+			require.ErrorAs(t, saveErr, &conflict)
+			require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)
 
-	// The winner is completely unaffected by the loser's failed attempt.
-	stored, err := store.Get(ctx, principal, winner.ResultID)
-	require.NoError(t, err)
-	require.Equal(t, winner.ConfirmedStructure, stored.Result.ConfirmedStructure)
+			// The loser's result must NOT have been persisted -- the whole
+			// transaction (claim attempt AND result insert) rolled back together.
+			_, getErr := store.Get(ctx, principal, loser.ResultID)
+			require.ErrorIs(t, getErr, pginvestigation.ErrNotFound)
 
-	// A THIRD Save that is a byte-for-byte replay of the winner (an
-	// idempotent retry) must still succeed -- the claim it would attempt
-	// is already held by the SAME result_id, matching the design brief's
-	// own "receipts are NOT consumed by a failed round" symmetry the other
-	// direction: a successful round replaying itself is not a conflict.
-	require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+			// The winner is completely unaffected by the loser's failed attempt.
+			stored, err := store.Get(ctx, principal, winner.ResultID)
+			require.NoError(t, err)
+			require.Equal(t, winner.ConfirmedStructure, stored.Result.ConfirmedStructure)
+
+			// A THIRD Save that is a byte-for-byte replay of the winner (an
+			// idempotent retry) must still succeed -- the claim it would attempt
+			// is already held by the SAME result_id, matching the design brief's
+			// own "receipts are NOT consumed by a failed round" symmetry the other
+			// direction: a successful round replaying itself is not a conflict.
+			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+		})
+	}
 }
 
 // TestMigration0025_BackfillsClaimsForPreMigrationConfirmedStructure is

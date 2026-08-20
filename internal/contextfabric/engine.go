@@ -479,7 +479,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// and persists the no_match terminal directly.
 	windowCanon := e.canonicalizeEvidenceWindow(ctx, principal, request)
 	if windowCanon.Veto != windowVetoNone {
-		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, binding)
+		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding)
 	}
 
 	// CHAOS-3900 P1 (pivot-intent design brief §2.1): canonicalize
@@ -512,6 +512,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		echoEntries := structureCanon.StaleMembers
 		if len(echoEntries) == 0 {
 			echoEntries = structureCanon.VetoedEntries
+		}
+		// CHAOS-4003 (codex xhigh review finding): windowCanon already ran
+		// and may have cleanly confirmed a window BEFORE structureCanon's
+		// own veto fired here -- the same "one entry per carried member,
+		// including vetoed ones" wire rule composeConfirmedStructure's own
+		// doc comment cites means a successfully confirmed window must not
+		// silently vanish from THIS terminal's echo just because a
+		// DIFFERENT member (kind/anchor/handle) is why the whole request
+		// was rejected. composeConfirmedStructure builds the one
+		// applied-disposition entry the SAME way the decisive path does.
+		if windowCanon.ConfirmedMember != nil {
+			echoEntries = append(echoEntries, composeConfirmedStructure([]confirmedStructureMember{*windowCanon.ConfirmedMember}, nil)...)
 		}
 		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding)
 	}
@@ -678,7 +690,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// disagreement instead: no answer is synthesized under a window
 	// commitment interpretation no longer honors.
 	if windowCanon.Effective != nil && clampedInterpretedTime.Axis != TemporalCurrent {
-		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, binding)
+		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding)
 	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
@@ -909,7 +921,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// (empty/nil when this request carried no structure receipts) --
 	// mirrors EffectiveEvidenceWindow's own placement, right beside the
 	// window echo it is the structure-frame sibling of.
-	result.ConfirmedStructure = composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit)
+	result.ConfirmedStructure = composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit)
 	// CHAOS-3900 P1.G (design brief §2.1 B5): a decisive result reached via
 	// structure confirmation still carries the full (offered, selected)
 	// pair the Bridge needs. No guard needed: structureCanon.OfferSnapshot
@@ -946,7 +958,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// silently discarding the conflict information Save reported).
 			var superseded *ErrStructureOfferSuperseded
 			if errors.As(err, &superseded) {
-				return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon, superseded, binding)
+				recordWindowSupersessionRaceTelemetry(ctx, e.telemetry, principal, superseded)
+				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding)
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
