@@ -705,6 +705,38 @@ func TestComposeStructureNeeds_EmptyMissingIsNil(t *testing.T) {
 	}
 }
 
+// TestComposeStructureNeeds_MissingGateMatchesReplayProxy is a CONTRACT
+// LOCK (CHAOS-3927 P1 post-merge invariance measurement, team-lead
+// ruling): internal/runtime/hosted's replay harness cannot observe
+// composeStructureNeeds' real decision directly (it never calls the full
+// Investigate() pipeline -- see WiredStructureNeedsWouldDisclose's own doc
+// comment, chaos3884_replay_harness_test.go), so it MIRRORS this exact
+// gate instead: len(material.Missing) == 0 -> nil, non-zero -> non-nil.
+// This test calls the REAL composeStructureNeeds against both shapes and
+// pins nil/non-nil directly against it -- if a FUTURE change adds a
+// SECOND condition to composeStructureNeeds' own gate (so Missing alone
+// no longer decides disclosure), this test breaks, forcing the replay
+// harness's proxy to be revisited rather than silently drifting into a
+// stale "fine" reading.
+func TestComposeStructureNeeds_MissingGateMatchesReplayProxy(t *testing.T) {
+	t.Parallel()
+	t.Run("empty Missing -> nil, matching the proxy's false case", func(t *testing.T) {
+		t.Parallel()
+		needs := composeStructureNeeds(StructureOfferMaterial{}, "result_00000001")
+		if needs != nil {
+			t.Errorf("composeStructureNeeds(Missing=nil) = %+v, want nil", needs)
+		}
+	})
+	t.Run("non-empty Missing -> non-nil, matching the proxy's true case", func(t *testing.T) {
+		t.Parallel()
+		material := StructureOfferMaterial{Missing: []StructureNeedKind{"subject_handle"}}
+		needs := composeStructureNeeds(material, "result_00000001")
+		if needs == nil {
+			t.Error("composeStructureNeeds(Missing=[subject_handle]) = nil, want non-nil")
+		}
+	})
+}
+
 // TestComposeStructureNeeds_MintsReceiptAndOptionIDs pins that
 // composeStructureNeeds actually fills in the ids StructureOfferMaterial
 // left unset, deterministically from the given resultID.
