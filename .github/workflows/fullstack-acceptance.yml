@@ -80,6 +80,29 @@ jobs:
           web_ref="$(git -C dev-health/web rev-parse HEAD)"
           echo "E2E_OPS_REF=$ops_ref" >> "$GITHUB_ENV"
           echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
+      # E2E_WEB is 'off' on a pull_request (the web-agreement job below covers that path
+      # instead) and 'on' otherwise -- see the "Run the full-stack acceptance gate" step's env
+      # block. fullstack-opencode.sh's render_web_override() imports
+      # dev-health/web/node_modules/@playwright/test directly and run_web_agreement_check()
+      # requires it to already exist; a bare checkout has no node_modules at all.
+      # pnpm/action-setup v6.0.9
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        if: github.event_name != 'pull_request'
+        with:
+          package_json_file: dev-health/web/package.json
+      # actions/setup-node v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        if: github.event_name != 'pull_request'
+        with:
+          node-version: 25
+          cache: pnpm
+          cache-dependency-path: dev-health/web/pnpm-lock.yaml
+      - name: Install web dependencies and the Playwright browser runtime
+        if: github.event_name != 'pull_request'
+        working-directory: dev-health/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
@@ -230,9 +253,12 @@ jobs:
           paths='^(contracts/|internal/contracts/|internal/api/'
           paths="${paths}|testdata/fullstack/"
           paths="${paths}|scripts/e2e/svs-browser\.mjs"
+          paths="${paths}|scripts/e2e/device-login-browser\.mjs"
           paths="${paths}|scripts/e2e/fullstack-opencode\.sh"
           paths="${paths}|scripts/e2e/compose\.sh"
           paths="${paths}|\.github/fullstack/compose\.ci\.yml"
+          paths="${paths}|deploy/compose/acr\.compose\.yml"
+          paths="${paths}|\.github/workflows/fullstack-acceptance\.yml"
           paths="${paths}|Makefile"
           paths="${paths}|tests/fullstack/assertrun/)"
           if git diff --name-only "$base" "$head" | grep -Eq "$paths"; then
@@ -264,6 +290,27 @@ jobs:
           web_ref="$(git -C dev-health/web rev-parse HEAD)"
           echo "E2E_OPS_REF=$ops_ref" >> "$GITHUB_ENV"
           echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
+      # fullstack-opencode.sh's render_web_override() imports
+      # dev-health/web/node_modules/@playwright/test directly and run_web_agreement_check()
+      # requires it to already exist; a bare checkout has no node_modules at all.
+      # pnpm/action-setup v6.0.9
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        if: steps.decide.outputs.run == 'true'
+        with:
+          package_json_file: dev-health/web/package.json
+      # actions/setup-node v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        if: steps.decide.outputs.run == 'true'
+        with:
+          node-version: 25
+          cache: pnpm
+          cache-dependency-path: dev-health/web/pnpm-lock.yaml
+      - name: Install web dependencies and the Playwright browser runtime
+        if: steps.decide.outputs.run == 'true'
+        working-directory: dev-health/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         if: steps.decide.outputs.run == 'true'
