@@ -195,6 +195,41 @@ func TestInsertContext_RejectsConsensusEvidenceOutsideAgentReceiptMode(t *testin
 	require.Equal(t, 0, count)
 }
 
+// TestInsertContext_RejectsSingleMemberOrDuplicateConsensus proves the
+// codex round-1 tightening: a panel is plural by definition, so a
+// single-entry (or duplicate-identity) ConsensusEvidence payload is
+// rejected in Go before any insert is attempted, matching migration
+// 0026's own ck_acr_cf_structure_selections_consensus_panel_size CHECK.
+func TestInsertContext_RejectsSingleMemberOrDuplicateConsensus(t *testing.T) {
+	ctx := context.Background()
+	db := newStructureSelectionTestDatabase(t, ctx)
+	sink, err := NewSink(db, SinkOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sink.Close(closeCtx)
+	})
+
+	singleMember := validEvent("org-structure-consensus-single")
+	singleMember.SelectionMode = "agent_receipt"
+	singleMember.Consensus = &contextfabric.ConsensusEvidence{PanelModelIdentities: []string{"anthropic/sol-max"}, AgreementBits: []bool{true}}
+	require.Error(t, sink.insertContext(ctx, singleMember), "a single-entry payload cannot represent a panel")
+
+	duplicateMember := validEvent("org-structure-consensus-duplicate")
+	duplicateMember.SelectionMode = "agent_receipt"
+	duplicateMember.Consensus = &contextfabric.ConsensusEvidence{
+		PanelModelIdentities: []string{"anthropic/sol-max", "anthropic/sol-max"},
+		AgreementBits:        []bool{true, false},
+	}
+	require.Error(t, sink.insertContext(ctx, duplicateMember), "a panel's members must be distinct")
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_structure_selections WHERE prior_result_id IN ($1, $2)`,
+		singleMember.PriorResultID, duplicateMember.PriorResultID).Scan(&count))
+	require.Equal(t, 0, count)
+}
+
 // TestInsertContext_RejectsMalformedEventBeforeAnyInsert proves
 // validateEvent runs BEFORE the INSERT is attempted: a malformed event
 // (unknown member) must error, and must leave NO row behind -- mirrors

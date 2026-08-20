@@ -34,8 +34,34 @@ ALTER TABLE acr.context_fabric_structure_selections
 -- confirmation); every other mode must leave it NULL, so a future reader
 -- can trust presence as the ConsensusEvidence signal itself, never guess
 -- from SelectionMode alone.
+--
+-- IMPORTANT SCOPE NOTE (codex adversarial review, round 1, confirmed):
+-- selection_mode = 'agent_receipt' is shared by EVERY credentialed
+-- confirmation, panel or not -- this CHECK, like pgstructureselection's
+-- Go-side validateEvent, enforces SHAPE (a well-formed, >=2-member payload
+-- can only ride an agent_receipt row) and CANNOT by itself prove a given
+-- row's consensus_evidence genuinely came from a multi-model panel run
+-- rather than a single caller constructing a plausible payload directly
+-- against the sink. No production code path populates this column today
+-- (Engine.buildStructureSelectionEvent never sets StructureSelectionEvent.
+-- Consensus) -- closing that authenticity gap needs request-level
+-- provenance this migration deliberately does not add (the P6 activation
+-- report's own architectural-fork note: it is either a hosted-contract
+-- field addition, full contract-first change, or a harness-side-only
+-- consensus computation that never writes this column at all).
 ALTER TABLE acr.context_fabric_structure_selections
     DROP CONSTRAINT IF EXISTS ck_acr_cf_structure_selections_consensus_mode;
 ALTER TABLE acr.context_fabric_structure_selections
     ADD CONSTRAINT ck_acr_cf_structure_selections_consensus_mode
         CHECK (consensus_evidence IS NULL OR selection_mode = 'agent_receipt');
+
+-- A panel is plural by definition (design brief §2.4/§B5/§3.1: "multi-model
+-- panel") -- a single-entry payload can never represent agreement OR
+-- disagreement between panel members, so the DB itself rejects it, not
+-- only the Go-side validateEvent (defense in depth against any future
+-- direct-SQL writer that bypasses the sink).
+ALTER TABLE acr.context_fabric_structure_selections
+    DROP CONSTRAINT IF EXISTS ck_acr_cf_structure_selections_consensus_panel_size;
+ALTER TABLE acr.context_fabric_structure_selections
+    ADD CONSTRAINT ck_acr_cf_structure_selections_consensus_panel_size
+        CHECK (consensus_evidence IS NULL OR jsonb_array_length(consensus_evidence -> 'panel_model_identities') >= 2);

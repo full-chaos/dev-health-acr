@@ -323,16 +323,32 @@ func validateEvent(event contextfabric.StructureSelectionEvent) error {
 		if event.SelectionMode != structureSelectionModeAgentReceiptValue {
 			return fmt.Errorf("pgstructureselection: consensus evidence requires selection_mode %q, got %q", structureSelectionModeAgentReceiptValue, event.SelectionMode)
 		}
-		if len(event.Consensus.PanelModelIdentities) == 0 {
-			return errors.New("pgstructureselection: consensus evidence requires at least one panel model identity")
+		// >= 2, not >= 1: a "panel" (design brief §2.4/§B5's own word,
+		// echoed in §3.1's "multi-model panel") is plural by definition --
+		// a single-entry payload cannot represent agreement OR
+		// disagreement between panel members, so it can never be genuine
+		// ConsensusEvidence (codex adversarial review, round 1: tightens,
+		// but does not by itself close, the provenance-authenticity gap
+		// this field's own doc comment names -- see
+		// contextfabric.ConsensusEvidence's doc comment for why closing it
+		// fully needs request-level wiring this migration deliberately
+		// does not add).
+		if len(event.Consensus.PanelModelIdentities) < 2 {
+			return errors.New("pgstructureselection: consensus evidence requires at least two panel model identities (a panel is plural by definition)")
 		}
 		if len(event.Consensus.PanelModelIdentities) != len(event.Consensus.AgreementBits) {
 			return errors.New("pgstructureselection: consensus evidence panel_model_identities and agreement_bits must be the same length")
 		}
+		seenIdentity := make(map[string]struct{}, len(event.Consensus.PanelModelIdentities))
 		for _, identity := range event.Consensus.PanelModelIdentities {
-			if strings.TrimSpace(identity) == "" {
+			trimmed := strings.TrimSpace(identity)
+			if trimmed == "" {
 				return errors.New("pgstructureselection: consensus evidence panel model identity must not be blank")
 			}
+			if _, duplicate := seenIdentity[trimmed]; duplicate {
+				return fmt.Errorf("pgstructureselection: consensus evidence panel model identity %q is duplicated -- a panel's members must be distinct", trimmed)
+			}
+			seenIdentity[trimmed] = struct{}{}
 		}
 	}
 	return nil

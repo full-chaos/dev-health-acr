@@ -143,7 +143,20 @@ type StructureSelectionEvent struct {
 // agreement across AgreementBits, never question text or free-form
 // rationale -- neither field this type carries. Zero value (both slices
 // nil/empty) is invalid wherever Consensus is non-nil; construct only with
-// len(PanelModelIdentities) == len(AgreementBits) >= 1.
+// len(PanelModelIdentities) == len(AgreementBits) >= 2, distinct identities
+// (pgstructureselection.validateEvent and migration 0026's own CHECK
+// constraints both enforce this shape).
+//
+// SCOPE NOTE (codex adversarial review, round 1, confirmed): this type and
+// its validators enforce SHAPE only. Nothing here -- nor anywhere in this
+// package -- can prove a given event's Consensus genuinely came from a
+// real multi-model panel run rather than a single caller constructing a
+// plausible-looking payload directly: SelectionMode=agent_receipt is
+// shared by every credentialed confirmation, panel or not, and
+// Engine.buildStructureSelectionEvent never sets this field today (no
+// production writer exists yet). Closing that authenticity gap requires
+// request-level provenance wiring that is an open architectural question,
+// not this migration's scope -- see the CHAOS-3860 P6 activation report.
 type ConsensusEvidence struct {
 	PanelModelIdentities []string `json:"panel_model_identities"`
 	AgreementBits        []bool   `json:"agreement_bits"`
