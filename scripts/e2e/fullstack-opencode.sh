@@ -64,6 +64,19 @@ OPENCODE_OBSERVED_VERSION=""
 PROVIDER_NPM_SPEC="${PROVIDER_NPM_SPEC:-@ai-sdk/openai-compatible@3.0.14}"
 OPENCODE_RUNTIME_FIXTURE="${OPENCODE_RUNTIME_FIXTURE:-}"
 OPENCODE_RUNTIME_FIXTURE_SHA256=""
+# OpenCode's provider loader keeps its OWN cache of the resolved provider package under
+# <XDG_CACHE_HOME>/opencode/packages/<name>@<version>/, entirely separate from the
+# <config>/opencode/node_modules OPENCODE_RUNTIME_FIXTURE stages. With PROVIDER_NPM_OFFLINE
+# set, OpenCode's provider-initialization step still makes a registry check before it will
+# trust a locally present package, and that check fails closed even when node_modules already
+# has the package -- confirmed live: "Failed to initialize provider" reproduces the same way
+# whether or not OPENCODE_RUNTIME_FIXTURE is staged, and stops reproducing the moment this
+# cache directory is pre-populated instead. OPENCODE_PACKAGE_CACHE, if set, names a directory
+# whose contents get copied into every task's fresh $CLIENT_HOME/cache/opencode/packages/ --
+# see prepare_artifacts(). This is a plain cache, not a security-sensitive fixture: staging it
+# is best-effort, and a missing or stale entry just means OpenCode refetches normally rather
+# than failing closed the way a corrupt OPENCODE_RUNTIME_FIXTURE does.
+OPENCODE_PACKAGE_CACHE="${OPENCODE_PACKAGE_CACHE:-}"
 # OpenCode installs the provider adapter, and its own ~83MB @opencode-ai/{plugin,sdk}
 # bootstrap, on first use. CI pre-warms both and then sets PROVIDER_NPM_OFFLINE=true so the
 # graded run cannot reach the registry; locally the default stays false so a cold cache works.
@@ -187,6 +200,15 @@ prepare_artifacts() {
   chmod 700 "$CLIENT_HOME"
   OPENCODE_RUNTIME_FIXTURE_SHA256="$(stage_opencode_runtime_fixture "$OPENCODE_RUNTIME_FIXTURE" "$CLIENT_HOME/config/opencode")" \
     || fs_die 'OPENCODE_RUNTIME_FIXTURE staging failed'
+  if [[ -n "$OPENCODE_PACKAGE_CACHE" ]]; then
+    if [[ -d "$OPENCODE_PACKAGE_CACHE" && -r "$OPENCODE_PACKAGE_CACHE" ]]; then
+      mkdir -p "$CLIENT_HOME/cache/opencode/packages"
+      cp -R "$OPENCODE_PACKAGE_CACHE/." "$CLIENT_HOME/cache/opencode/packages/" \
+        || note 'OPENCODE_PACKAGE_CACHE copy failed; the graded run will fetch the provider package live instead'
+    else
+      note "OPENCODE_PACKAGE_CACHE=${OPENCODE_PACKAGE_CACHE} is not a readable directory; ignoring it"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------

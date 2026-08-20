@@ -147,32 +147,59 @@ jobs:
       # OPENCODE_DISABLE_* vars do not suppress it. The provider adapter is
       # installed on first use too. One throwaway run warms both. The native
       # deps are arch-specific, so this must run on the runner's own OS/arch.
+      # Renders the SAME provider declaration tests/fullstack/opencode/opencode.json.template
+      # does (name "contextfabric", $PROVIDER_NPM_SPEC, an unreachable placeholder baseURL --
+      # never dereferenced: provider initialisation populates OpenCode's package cache before
+      # it ever tries to reach the model server) rather than the template's own bare
+      # {"$schema":...} config a prior version of this step used. That bare config named no
+      # provider, so it never exercised OpenCode's on-first-use provider install at all.
       - name: Pre-warm the OpenCode and provider caches
         run: |
+          set -euo pipefail
           npm cache add "$PROVIDER_NPM_SPEC"
           warm="$RUNNER_TEMP/opencode-warm"
           mkdir -p "$warm"/{config,data,cache,state}
-          printf '%s' "{\"\$schema\":\"https://opencode.ai/config.json\"}" \
-            > "$warm/config/opencode.json"
+          printf '%s' "$(jq -n --arg npmSpec "$PROVIDER_NPM_SPEC" '{
+            "$schema": "https://opencode.ai/config.json",
+            model: "contextfabric/oracle",
+            provider: {
+              contextfabric: {
+                npm: $npmSpec,
+                name: "context-fabric-oracle",
+                options: { baseURL: "http://127.0.0.1:1/v1", apiKey: "warmup", timeout: 1000 },
+                models: { oracle: { name: "context-fabric-oracle" } }
+              }
+            }
+          }')" > "$warm/config/opencode.json"
           export HOME="$warm"
           export XDG_CONFIG_HOME="$warm/config" XDG_DATA_HOME="$warm/data"
           export XDG_CACHE_HOME="$warm/cache" XDG_STATE_HOME="$warm/state"
-          timeout 300 opencode --pure run --format json "warmup" || true
+          timeout 300 opencode --pure run --format json --model contextfabric/oracle "warmup" || true
           test -d "$warm/.npm" || echo "note: npm cache did not materialise" >&2
+          # OpenCode's provider loader keeps its own resolved-package cache under
+          # <XDG_CACHE_HOME>/opencode/packages/<name>@<version>/, entirely separate from any
+          # node_modules tree -- confirmed live: with PROVIDER_NPM_OFFLINE=true below, the
+          # graded run's provider-initialization step still makes a registry check that fails
+          # closed even when the package already exists elsewhere (e.g. via
+          # OPENCODE_RUNTIME_FIXTURE's node_modules), and stops failing the moment this exact
+          # cache directory is pre-populated instead. See prepare_artifacts() in
+          # fullstack-opencode.sh for where OPENCODE_PACKAGE_CACHE gets copied into each
+          # task's own fresh $CLIENT_HOME.
+          if [[ -d "$warm/cache/opencode/packages" ]]; then
+            echo "OPENCODE_PACKAGE_CACHE=$warm/cache/opencode/packages" >> "$GITHUB_ENV"
+          else
+            echo "::warning::OpenCode provider package cache did not materialise during warmup; the offline graded run may fail to initialize its provider"
+          fi
 
-      # This warmup run's bare {"$schema":...} config names no provider, so it never
-      # exercises OpenCode's own on-first-use `npm install` of the provider adapter into
-      # <config>/opencode/node_modules -- and PROVIDER_NPM_OFFLINE=true below means each
-      # task's own fresh, isolated $CLIENT_HOME (a deliberately clean root every run) can't
-      # install it live either. scripts/e2e/opencode-runtime-fixture.sh's
-      # OPENCODE_RUNTIME_FIXTURE mechanism exists for exactly this: a pre-verified
-      # node_modules tree the driver publishes into each task's client root instead of
-      # letting OpenCode fetch it. Build one here by installing the provider package the
-      # same way OpenCode would, then hash the resulting tree in the exact
-      # `<sha256>  <path>` manifest format the driver's validator requires. No symlinks are
-      # allowed in the fixture tree; npm's node_modules/.bin/* entries are always symlinks
-      # and are never needed to `require()` a library package, so they're stripped rather
-      # than causing the whole fixture to fail validation.
+      # scripts/e2e/opencode-runtime-fixture.sh's OPENCODE_RUNTIME_FIXTURE mechanism: a
+      # pre-verified node_modules tree the driver publishes into each task's client root,
+      # covering <config>/opencode/node_modules specifically (a different concern from the
+      # package cache above, which is what the offline run actually needed). Build one by
+      # installing the provider package the same way OpenCode would, then hash the resulting
+      # tree in the exact `<sha256>  <path>` manifest format the driver's validator requires.
+      # No symlinks are allowed in the fixture tree; npm's node_modules/.bin/* entries are
+      # always symlinks and are never needed to `require()` a library package, so they're
+      # stripped rather than causing the whole fixture to fail validation.
       - name: Build the OpenCode provider runtime fixture
         run: |
           set -euo pipefail
@@ -264,6 +291,7 @@ jobs:
           # the registry; a miss should fail loudly, not silently refetch.
           PROVIDER_NPM_OFFLINE: 'true'
           OPENCODE_RUNTIME_FIXTURE: ${{ env.OPENCODE_RUNTIME_FIXTURE }}
+          OPENCODE_PACKAGE_CACHE: ${{ env.OPENCODE_PACKAGE_CACHE }}
         run: make fullstack-opencode-e2e
 
       - name: Prove the runner client configuration was never created
