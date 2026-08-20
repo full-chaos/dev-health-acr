@@ -92,11 +92,19 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// (StructureSelectionEvent's ConsensusEvidence field, the design
 	// brief's own §4 P6 dependency that P4 shipped without) added 0026,
 	// CHAOS-3860 P6's codex-review panel-size CHECK constraint added 0027,
-	// so the embedded set is now 27 files. A future migration must bump
-	// this literal too -- see expectedMigrationVersions in
-	// migrations/postgres/runner_integration_test.go for the same
-	// convention, held in one place there.
-	require.Equal(t, "applied 27 migrations\n", first.String())
+	// and CHAOS-3977 P5 (structure_priors, the versioned prior store +
+	// active-version pointer + pointer history + per-entry revocations --
+	// renumbered from 0026 to 0028 during the rebase onto origin/main:
+	// both P6 and P5 independently claimed 0026 as separate features
+	// landed in parallel, P6 merged first) added 0028, and CHAOS-3977 P5's
+	// own one-time reuse-column cleanup (structure_bearing_reuse_cleanup,
+	// clearing pre-existing structure-bearing rows' reuse columns,
+	// renumbered from 0027 to 0029 for the same reason) added 0029, so the
+	// embedded set is now 29 files. A future migration must bump this
+	// literal too -- see expectedMigrationVersions in migrations/postgres/
+	// runner_integration_test.go for the same convention, held in one
+	// place there.
+	require.Equal(t, "applied 29 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

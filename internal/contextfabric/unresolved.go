@@ -187,6 +187,7 @@ func (e *Engine) terminalResult(
 	windowCanon requestWindowCanonicalization,
 	structureCanon requestStructureCanonicalization,
 	structureMaterial StructureOfferMaterial,
+	priorEntries []StructurePriorEntry,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
@@ -252,7 +253,12 @@ func (e *Engine) terminalResult(
 	// would have read evidence against, exactly like any other result --
 	// composeEffectiveWindow's own precedence rules apply identically
 	// regardless of whether a subject was ultimately committed.
-	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, e.now())
+	// CHAOS-3977 P5 (design brief §3.4, DP4(a) site two): shares
+	// Investigate's own gate exactly (resolveWindowPriorProposal), and the
+	// SAME priorEntries Investigate already fetched (fetchPriorEntries) --
+	// no second I/O call here.
+	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
+	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
 	// CHAOS-3900 W2: same fresh-disclosure/nudge wiring as the decisive
 	// path (engine.go) -- a terminal that stalled on structure is
 	// EXACTLY the case a window nudge (when requested) matters most, an

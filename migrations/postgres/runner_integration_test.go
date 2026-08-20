@@ -46,8 +46,19 @@ import (
 // that same P6 fix's codex-review follow-up: a panel-size CHECK
 // constraint requiring >=2 distinct panel model identities, added as its
 // own migration rather than editing the already-pushed 0026 in place
-// (this checksum-pinning discipline is exactly why).
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}
+// (this checksum-pinning discipline is exactly why). 0028 is CHAOS-3977
+// P5's structure-prior store (versioned snapshots + active-version
+// pointer + pointer history + per-entry revocations) -- renumbered from
+// 0026 during the rebase onto origin/main: both CHAOS-3860 P6 and this
+// branch's own CHAOS-3977 work independently claimed version 26 as
+// separate features landed in parallel; CHAOS-3860 P6 merged to main
+// first, so this branch's migrations moved to the next free versions
+// rather than the other way around (the SAME renumbering precedent 0018's
+// own comment above already documents). 0029 is that same P5 ticket's own
+// one-time cleanup: clear reuse-key columns on pre-existing structure-
+// bearing rows a pre-P5 binary wrote before reuseColumnsFor's own source-
+// ineligibility fix existed.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

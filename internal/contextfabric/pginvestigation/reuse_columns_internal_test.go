@@ -8,6 +8,7 @@ import (
 	"time"
 
 	contextfabric "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // noDialDriver is a database/sql driver that is registered but never
@@ -135,5 +136,75 @@ func TestReuseColumnsFor_NilEpochNeverPopulatesInvalidationEpoch(t *testing.T) {
 	}
 	if invalidationEpoch.Valid {
 		t.Fatalf("invalidationEpoch = %+v, want NULL when reuseEpoch is nil", invalidationEpoch)
+	}
+}
+
+// TestReuseColumnsFor_StructureNeedsBearingResultNeverPopulatesReuseColumns
+// is CHAOS-3977 P5's own fix for a codex adversarial review finding
+// (repro-confirmed): the design brief's extended source-ineligibility rule
+// (§2.1/v3/B2 -- "NO structure-bearing result is ever a reuse source...
+// EVERY result carrying StructureNeeds, ConfirmedStructure, or a veto
+// terminal") was only ever implemented on the reuse-LOOKUP side (engine.go's
+// DP11 bypass); a result disclosing StructureNeeds on a FRESH (nothing
+// confirmed THIS request) investigation could still be SAVED as a valid
+// reuse source. That became a real correctness gap once StructureNeeds
+// could carry prior-sourced offers subject to revocation -- a stale row
+// could re-serve a since-revoked prior offer. reuseColumnsFor must now
+// return all-NULL/nil for ANY result carrying a non-nil StructureNeeds.
+func TestReuseColumnsFor_StructureNeedsBearingResultNeverPopulatesReuseColumns(t *testing.T) {
+	t.Parallel()
+	store := newNoDialStore(t, WithAnswerReuse(time.Hour))
+
+	result := contextfabric.InvestigationResult{
+		Question: "What is the status of Ask Dev?",
+		Versions: contextfabric.VersionSet{
+			ContractVersion:   "contract-v1",
+			ProjectionVersion: "projection-v1",
+			ModelIdentity:     "test/model-v1",
+		},
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+		},
+	}
+	snapshot := contextfabric.SourceWatermarkSnapshot{"source-a": "watermark-1"}
+	epoch := int64(3)
+
+	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch := store.reuseColumnsFor(result, snapshot, &epoch)
+
+	if questionHash.Valid || contractVersion.Valid || projectionVersion.Valid || modelIdentity.Valid || sourceWatermarks != nil || invalidationEpoch.Valid {
+		t.Fatalf("reuseColumnsFor(StructureNeeds-bearing result) = (%+v, %+v, %+v, %+v, %v, %+v), want all-NULL/nil -- a structure-bearing result must never become a reuse source",
+			questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch)
+	}
+}
+
+// TestReuseColumnsFor_ConfirmedStructureBearingResultNeverPopulatesReuseColumns
+// is the SAME fix's other half: a decisive result reached via structure
+// confirmation (ConfirmedStructure non-empty) must also never become a
+// reuse source, even though DP11's own bypass already means such a
+// request never ATTEMPTS a reuse lookup itself -- this is the SOURCE-side
+// half of the same invariant, for a DIFFERENT later request that might
+// otherwise match it.
+func TestReuseColumnsFor_ConfirmedStructureBearingResultNeverPopulatesReuseColumns(t *testing.T) {
+	t.Parallel()
+	store := newNoDialStore(t, WithAnswerReuse(time.Hour))
+
+	result := contextfabric.InvestigationResult{
+		Question: "What is the status of Ask Dev?",
+		Versions: contextfabric.VersionSet{
+			ContractVersion:   "contract-v1",
+			ProjectionVersion: "projection-v1",
+			ModelIdentity:     "test/model-v1",
+		},
+		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "pull_request", Source: contractsv1.ContextFabricStructureSourceReceipt, Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied},
+		},
+	}
+	snapshot := contextfabric.SourceWatermarkSnapshot{"source-a": "watermark-1"}
+	epoch := int64(3)
+
+	questionHash, _, _, _, sourceWatermarks, invalidationEpoch := store.reuseColumnsFor(result, snapshot, &epoch)
+
+	if questionHash.Valid || sourceWatermarks != nil || invalidationEpoch.Valid {
+		t.Fatalf("reuseColumnsFor(ConfirmedStructure-bearing result) left reuse columns populated -- want all-NULL/nil")
 	}
 }

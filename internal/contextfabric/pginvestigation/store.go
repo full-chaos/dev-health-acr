@@ -521,6 +521,32 @@ func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseS
 	if !s.reuseEnabled || reuseSnapshot == nil {
 		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
 	}
+	// CHAOS-3977 P5 (codex adversarial review, medium/high finding,
+	// repro-confirmed): the design brief's own extended source-
+	// ineligibility rule (§2.1/v3/B2 -- "NO structure-bearing result is
+	// ever a reuse source -- not just structure-confirmed answers but
+	// EVERY result carrying StructureNeeds, ConfirmedStructure, or a veto
+	// terminal") was implemented on the CONSUMING side only (engine.go's
+	// DP11 bypass, which skips the reuse LOOKUP whenever
+	// structureCanon.Confirmed is non-empty) -- this WRITE-side half was
+	// never added, so a FRESH investigation (nothing confirmed on THIS
+	// request) that reaches a subjectless terminal with a disclosed
+	// StructureNeeds block was still saved as a valid reuse SOURCE. That
+	// was merely a missed optimization before this ticket (an engine-
+	// derived offer served from a stale cached row is always regenerable
+	// and not wrong); it became a real correctness gap the moment a
+	// StructureNeeds block could carry PRIOR-sourced offers (this
+	// ticket): a revoked or superseded prior offer, or one flipped away
+	// by DP8(a), could be re-served verbatim from an old cached row,
+	// silently defeating revocation. Refusing reuse-column population for
+	// ANY structure-bearing result (never-empty StructureNeeds or
+	// ConfirmedStructure) closes both the pre-existing gap and this
+	// ticket's own exposure of it -- strictly more conservative than
+	// today's behavior, so it can only remove reuse hits that were never
+	// supposed to happen, never break a legitimate one.
+	if result.StructureNeeds != nil || len(result.ConfirmedStructure) > 0 {
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
+	}
 	// Codex round-2 finding #4: a punctuation-only (or otherwise
 	// entirely-stripped) question canonicalizes to the empty string, so
 	// every such question would share ONE hash. Never let this row

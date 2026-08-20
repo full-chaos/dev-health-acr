@@ -152,6 +152,28 @@ type EngineDependencies struct {
 	// feature did not exist -- capture is strictly additive and never
 	// changes canonicalizeStructure's own resolution behavior.
 	StructureSelectionSink StructureSelectionSink
+	// PriorConsultant is optional (CHAOS-3977 P5, design brief §3.4). When
+	// set, Engine consults it at EXACTLY the two DP4(a)-ruled sites --
+	// consultPriorStructureOffers (the StructureNeeds offer builder) and
+	// resolveWindowPriorProposal (the inferred-default proposal slot),
+	// priors_consult.go -- for prior-sourced, non-decisive offer/default
+	// proposals. Leaving this nil means no prior is ever consulted, exactly
+	// as if the feature did not exist: every offer stays engine-derived,
+	// byte-identical to pre-P5 behavior. See PriorConsultant's own doc
+	// comment for the fail-open, org-scoped contract this dependency must
+	// uphold.
+	PriorConsultant PriorConsultant
+	// PriorHandleGrammarChecker is CHAOS-3977 P5's own offer-time grammar
+	// check for a prior-proposed subject_handle entry -- the SAME
+	// HandleGrammarChecker type graphrank.ResolveDeps already threads for
+	// engine-derived explicit-handle offers (structure.go's own doc
+	// comment), duplicated onto Engine because a prior-sourced proposal is
+	// merged AFTER ResolveSubjects returns, outside graphrank's own call
+	// boundary. nil means a prior can never propose a subject_handle offer
+	// (the safe degradation -- mergePriorHandleOffers, priors_consult.go --
+	// never a redemption-time weakening: HandleVerifier's own fail-closed
+	// reverify still gates every handr_ receipt regardless of OfferSource).
+	PriorHandleGrammarChecker HandleGrammarChecker
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -319,6 +341,23 @@ type EngineTelemetry interface {
 	// value, immediately after canonicalizeStructure returns -- mirrors
 	// RecordStructureReceipt's own call-site discipline exactly.
 	RecordStructureExplicit(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureExplicitOutcome)
+	// RecordPriorConsulted (CHAOS-3977 P5, design brief §3.4's
+	// cf_prior_consulted{member,outcome}) reports the outcome of consulting
+	// the org's active prior version for ONE structure/window member, for
+	// one Investigate call -- see PriorConsultedOutcome's own doc comment
+	// (priors.go) for the closed vocabulary. Called at most once per member
+	// per call, and only when a candidate prior entry for that member
+	// existed at all (priors_consult.go's own "a member with nothing to say
+	// contributes no call" discipline, mirroring RecordStructureOfferCount).
+	RecordPriorConsulted(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome PriorConsultedOutcome)
+	// RecordPriorDegradation (CHAOS-3977 P5, design brief §3.4's
+	// cf_prior_degradation{state}) reports a consult-level failure to read
+	// the prior store at all -- see PriorDegradationState's own doc comment
+	// for the closed vocabulary. Every state degrades consultation to
+	// engine-derived offers only and never fails or delays the round;
+	// called at most once per Investigate call's prior consult (the read is
+	// shared between both DP4(a) sites -- see Investigate's own call site).
+	RecordPriorDegradation(ctx context.Context, principal storage.Principal, state PriorDegradationState)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -343,6 +382,8 @@ type Engine struct {
 	structureSelectionSink     StructureSelectionSink
 	handleVerifier             HandleVerifier
 	anchorVerifier             AnchorVerifier
+	priorConsultant            PriorConsultant
+	priorHandleGrammarChecker  HandleGrammarChecker
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -371,6 +412,8 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		structureSelectionSink:     dependencies.StructureSelectionSink,
 		handleVerifier:             dependencies.HandleVerifier,
 		anchorVerifier:             dependencies.AnchorVerifier,
+		priorConsultant:            dependencies.PriorConsultant,
+		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:  options.ReuseRetrievalIdentity,
 		reusePromptVersions:     options.ReusePromptVersions,
@@ -685,6 +728,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if err != nil {
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
+	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
+	// call, shared by BOTH DP4(a) sites (the offer-builder merge just
+	// below, and the inferred-default window slot later in this function --
+	// composeEffectiveWindow's own call site -- and terminalResult's own
+	// subjectless-terminal twin, unresolved.go) -- see fetchPriorEntries'
+	// own doc comment (priors_consult.go) for why this is the sole I/O call
+	// site. No-op (returns nil) when e.priorConsultant is nil.
+	priorEntries := e.fetchPriorEntries(ctx, principal, QuestionHash(request.Question))
+	// CHAOS-3977 P5 (design brief §2.4/§3.4, DP4(a) site one): merge
+	// prior-sourced offers into the engine-derived material BEFORE
+	// composeStructureNeeds mints any receipt/option id (unresolved.go/
+	// structure.go), so a prior-sourced offer's id is minted through the
+	// exact same path an engine-derived one's is.
+	structureMaterial = e.consultPriorStructureOffers(ctx, principal, priorEntries, structureMaterial)
 	if len(request.PriorSubjectReceipts) > 0 {
 		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch, priorHintsStaleGraphEpochDelta)
 	}
@@ -715,7 +772,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial)
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, priorEntries)
 	}
 
 	factRequest := CanonicalFactRequest{
@@ -820,7 +877,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// otherwise this is the ONLY point an INFERRED default can be decided,
 	// since it needs the interpreted Shape and the model's own window
 	// class/confidence pick.
-	result.EffectiveEvidenceWindow = composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, e.now())
+	// CHAOS-3977 P5 (design brief §2.4/§3.4, DP4(a) site two): consult only
+	// when precedence steps 1-2 both declined to decide (no confirmed/
+	// stated window, no binder-routed span) -- i.e. only at the point
+	// composeEffectiveWindow's own class-table fallback would otherwise run
+	// -- so a prior can never override a caller's own confirmation or the
+	// binder's own deterministic read of the question text. No-op when
+	// e.priorConsultant is nil.
+	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
+	result.EffectiveEvidenceWindow = composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}

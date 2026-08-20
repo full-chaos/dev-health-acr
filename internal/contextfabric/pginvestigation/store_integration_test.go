@@ -407,3 +407,82 @@ VALUES ($1, $2, $3, $4)`, malformed.resultID, principal.OrgID, []byte(malformed.
 	require.ErrorAs(t, racerErr, &conflict)
 	require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)
 }
+
+// TestMigration0027_ClearsReuseColumnsForPreExistingStructureBearingRows is
+// CHAOS-3977 P5's own cleanup-migration pin (codex adversarial review
+// round 2/3, medium finding, repro-confirmed and fixed): a row written by
+// a PRE-FIX binary could carry populated reuse-key columns alongside a
+// non-nil structure_needs or non-empty confirmed_structure in its own
+// payload -- reuseColumnsFor's own fix (this same ticket) only governs
+// FUTURE Saves, so migration 0027 is the one-time retroactive cleanup.
+// This test reproduces the pre-fix shape with a raw INSERT (the only way
+// to construct it against a database that already has the fixed
+// reuseColumnsFor live), re-runs 0027's own SQL, and asserts every reuse
+// column is cleared for BOTH structure_needs-bearing and
+// confirmed_structure-bearing rows -- and that an UNRELATED, ordinary
+// reusable row is left completely untouched.
+func TestMigration0027_ClearsReuseColumnsForPreExistingStructureBearingRows(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	orgID := "org-migration-0027"
+	now := time.Now().UTC()
+
+	insertLegacyRow := func(resultID string, payload string, reusable bool) {
+		var questionHash, contractVersion, projectionVersion, modelIdentity any
+		var sourceWatermarks any
+		var invalidationEpoch any
+		if reusable {
+			questionHash, contractVersion, projectionVersion, modelIdentity = contextfabric.QuestionHash(resultID), "contract-v1", "projection-v1", "model-v1"
+			sourceWatermarks = []byte(`{"source-a":"watermark-1"}`)
+			invalidationEpoch = int64(0)
+		}
+		_, err := db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			resultID, orgID, []byte(payload), now, questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, "current")
+		require.NoError(t, err)
+	}
+
+	// A structure_needs-bearing row, pre-fix-shaped (reuse columns
+	// populated as if reuseColumnsFor had never excluded it).
+	insertLegacyRow("result-0027-structure-needs", `{"structure_needs":{"missing":["expected_kind"]}}`, true)
+	// A confirmed_structure-bearing row, same pre-fix shape.
+	insertLegacyRow("result-0027-confirmed-structure", `{"confirmed_structure":[{"member":"expected_kind","applied_value":"pull_request","source":"receipt","provenance":"clarification_confirmed","disposition":"applied"}]}`, true)
+	// An ORDINARY reusable row -- must be left completely untouched.
+	insertLegacyRow("result-0027-ordinary", `{}`, true)
+	// A structure_needs-bearing row that was ALREADY correctly excluded
+	// (reuse columns NULL) -- must stay NULL, not error.
+	insertLegacyRow("result-0027-already-excluded", `{"structure_needs":{"missing":["expected_kind"]}}`, false)
+
+	backfillSQL, err := migrations.Files.ReadFile("0029_context_fabric_structure_bearing_reuse_cleanup.sql")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(backfillSQL))
+	require.NoError(t, err)
+
+	assertReuseColumnsNull := func(resultID string) {
+		t.Helper()
+		var questionHash, sourceWatermarks sql.NullString
+		var invalidationEpoch sql.NullInt64
+		err := db.QueryRowContext(ctx, `
+SELECT question_hash, source_watermarks::text, invalidation_epoch FROM acr.context_fabric_investigation_results WHERE result_id = $1`, resultID).
+			Scan(&questionHash, &sourceWatermarks, &invalidationEpoch)
+		require.NoError(t, err)
+		require.False(t, questionHash.Valid, "result %s: question_hash must be NULL after the cleanup", resultID)
+		require.False(t, sourceWatermarks.Valid, "result %s: source_watermarks must be NULL after the cleanup", resultID)
+		require.False(t, invalidationEpoch.Valid, "result %s: invalidation_epoch must be NULL after the cleanup", resultID)
+	}
+	assertReuseColumnsPopulated := func(resultID string) {
+		t.Helper()
+		var questionHash sql.NullString
+		err := db.QueryRowContext(ctx, `
+SELECT question_hash FROM acr.context_fabric_investigation_results WHERE result_id = $1`, resultID).Scan(&questionHash)
+		require.NoError(t, err)
+		require.True(t, questionHash.Valid, "result %s: an ordinary reusable row must be left untouched", resultID)
+	}
+
+	assertReuseColumnsNull("result-0027-structure-needs")
+	assertReuseColumnsNull("result-0027-confirmed-structure")
+	assertReuseColumnsNull("result-0027-already-excluded")
+	assertReuseColumnsPopulated("result-0027-ordinary")
+}
