@@ -328,11 +328,10 @@ type CalibrationArtifact struct {
 	// SourceReportPath is the source report's own path on disk (empty when
 	// the report was built in memory rather than read from a file -- e.g.
 	// every synthetic-fixture test in this package). SourceReportSHA256 is
-	// the SHA-256 of the source report's own JSON encoding, ALWAYS present
-	// when the report itself is non-empty -- a path can go stale (the file
-	// moved, renamed, or was deleted since), but the hash identifies the
-	// EXACT measurement data this artifact was calibrated from regardless of
-	// where -- or whether -- that file still exists.
+	// the SHA-256 of the source report's own ON-DISK BYTES -- see
+	// NewCalibrationArtifact's own doc comment (CHAOS-3852, porting codex r8
+	// O3) for why this must be the ACTUAL file content, not a
+	// re-marshalling of the (reduced) CalibrationReport struct.
 	SourceReportPath   string `json:"source_report_path,omitempty"`
 	SourceReportSHA256 string `json:"source_report_sha256,omitempty"`
 }
@@ -342,16 +341,25 @@ type CalibrationArtifact struct {
 // CalibrateFromReport call's own inputs and result -- reportPath is the
 // SOURCE report's path on disk (empty when the report was built in memory).
 //
-// RESIDUAL (codex r8 O3 was scoped to MarginCalibrationArtifact only, not
-// re-litigated here): this function's own SourceReportSHA256 has the SAME
-// lossy-re-serialization defect NewMarginCalibrationArtifact's own doc
-// comment describes (hashes json.Marshal(report), a reduced mirror of the
-// real file, never the file's own bytes) -- CHAOS-3834's tau-calibration
-// tool predates this ticket and is out of CHAOS-3829's changeset scope; a
-// future round against THIS tool specifically should apply the identical
-// fix (thread the caller's raw report bytes through, as
-// NewMarginCalibrationArtifact now does).
-func NewCalibrationArtifact(result CalibrationResult, report CalibrationReport, opts CalibrationOptions, reportPath string) CalibrationArtifact {
+// reportBytes is CHAOS-3852's port of CHAOS-3829 codex r8 O3's fix (applied
+// to NewMarginCalibrationArtifact first; this function was flagged as the
+// same defect, out of that changeset's scope, and left as a RESIDUAL until
+// now): the RAW bytes the caller actually read from reportPath, hashed
+// DIRECTLY when present. The ORIGINAL implementation here hashed
+// json.Marshal(report) instead -- report is CalibrationReport, a
+// deliberately REDUCED mirror of the real oracle report JSON (see its own
+// doc comment: "only the fields the calibration math reads"), so
+// re-marshalling drops every field the harness actually wrote but this
+// struct doesn't declare, and reorders/reformats what survives. The
+// resulting hash identified a LOSSY RE-SERIALIZATION, never the actual file
+// on disk -- a caller re-reading the artifact later could not verify it
+// against the source file's own sha256sum, because the two were never
+// computed from the same bytes, defeating the entire point of a content
+// hash. reportBytes==nil falls back to the original marshal-based hash --
+// this is the SYNTHETIC-FIXTURE path (every non-live test in this package
+// builds a CalibrationReport directly in memory, with no real file to hash
+// the bytes of), not a regression of the fix.
+func NewCalibrationArtifact(result CalibrationResult, report CalibrationReport, opts CalibrationOptions, reportPath string, reportBytes []byte) CalibrationArtifact {
 	artifact := CalibrationArtifact{
 		CalibrationResult:   result,
 		TargetEmbedIdentity: opts.TargetEmbedIdentity,
@@ -360,7 +368,10 @@ func NewCalibrationArtifact(result CalibrationResult, report CalibrationReport, 
 		ReportTau:           report.Tau,
 		SourceReportPath:    reportPath,
 	}
-	if encoded, err := json.Marshal(report); err == nil {
+	if len(reportBytes) > 0 {
+		sum := sha256.Sum256(reportBytes)
+		artifact.SourceReportSHA256 = hex.EncodeToString(sum[:])
+	} else if encoded, err := json.Marshal(report); err == nil {
 		sum := sha256.Sum256(encoded)
 		artifact.SourceReportSHA256 = hex.EncodeToString(sum[:])
 	}
