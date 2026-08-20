@@ -497,6 +497,52 @@ func (e *Engine) buildStructureSelectionEvent(principal storage.Principal, consu
 	}
 }
 
+// recordStructureConfirmationOutcome (CHAOS-3927 P4, codex round-2
+// adversarial review fix) records the FINAL "applied" telemetry outcome
+// and flushes structureCanon.PendingSelections to the wired sink, for a
+// structure confirmation whose owning Save has just genuinely succeeded.
+//
+// SHARED between every Save call site that can carry a non-empty
+// structureCanon.Confirmed -- today that is Investigate's own decisive
+// path (engine.go) AND terminalResult's own subjectless-terminal path
+// (unresolved.go): a confirmed kind/anchor/handle can just as easily
+// narrow a census down to zero committed subjects (a no_match/
+// clarification_required terminal) as it can reach a synthesized answer,
+// and round 1's fix deferring capture/telemetry to "right after Save
+// succeeds" only touched Investigate's own call site, silently dropping
+// BOTH signals for every subjectless-terminal confirmation (round-2
+// finding). A future THIRD Save call site that can carry confirmed
+// structure must call this too, not hand-copy its body.
+func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, principal storage.Principal, request InvestigationRequest, structureCanon requestStructureCanonicalization) {
+	if len(structureCanon.Confirmed) == 0 {
+		return
+	}
+	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
+	if e.structureSelectionSink != nil {
+		for _, event := range structureCanon.PendingSelections {
+			e.structureSelectionSink.RecordSelection(ctx, event)
+		}
+	}
+}
+
+// structureSupersessionVetoResult (CHAOS-3927 P4, codex round-2
+// adversarial review fix) converts a Save-time ErrStructureOfferSuperseded
+// into the SAME stale_superseded_offer veto terminal a pre-flight
+// detection would have produced, recording "stale" telemetry (never
+// "applied", and never sending structureCanon.PendingSelections -- the
+// result they describe was never persisted).
+//
+// SHARED for the identical reason recordStructureConfirmationOutcome
+// above is: every Save call site that can carry confirmed structure can
+// also lose the atomic claim race to a concurrent one, and round 1's fix
+// only wired this conversion into Investigate's own call site, leaving
+// terminalResult's own Save call to surface the race as a raw persistence
+// error (500) instead of the handled veto terminal (round-2 finding).
+func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, structureCanon requestStructureCanonicalization, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding) (InvestigationResult, error) {
+	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntry(structureCanon.Confirmed, superseded.Members), binding)
+}
+
 // kindOptionsSnapshot/anchorOptionsSnapshot/handleOptionsSnapshot (P1.G)
 // each build one member's ContextFabricStructureOfferSnapshotEntry list
 // from its own offer type -- three short, near-identical functions rather

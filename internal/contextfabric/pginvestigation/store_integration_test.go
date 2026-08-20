@@ -330,6 +330,12 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 // idempotent INSERT ... ON CONFLICT DO NOTHING against THIS row is exactly
 // what a real backfill deploy does against real pre-existing data) and
 // asserts the claim now exists.
+//
+// It also plants three sibling rows whose confirmed_structure is NOT a
+// JSON array (null, a scalar, an object -- codex round-2 adversarial
+// review, MEDIUM finding) alongside the valid legacy row, proving the
+// backfill tolerates every malformed shape without aborting for the whole
+// table.
 func TestMigration0025_BackfillsClaimsForPreMigrationConfirmedStructure(t *testing.T) {
 	ctx := context.Background()
 	db := newInvestigationTestDatabase(t, ctx)
@@ -356,6 +362,28 @@ VALUES ($1, $2, $3, $4)`, legacy.ResultID, principal.OrgID, payload, legacy.Gene
 	superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
 	require.NoError(t, err)
 	require.False(t, superseded, "premise: a raw-inserted legacy row must carry no claim before the backfill runs")
+
+	// codex round-2 adversarial review, MEDIUM finding: siblings whose
+	// confirmed_structure is NOT a JSON array -- explicit null, a scalar,
+	// and an object -- must never abort the backfill for every OTHER row.
+	// These raw payloads deliberately violate Go's own contract (they
+	// could never be produced by contextfabric.InvestigationResult's own
+	// json.Marshal) -- exactly the "reached storage some other way"
+	// posture Get's own defensive checks already assume elsewhere in this
+	// package.
+	for _, malformed := range []struct {
+		resultID string
+		payload  string
+	}{
+		{"result-malformed-null-0001", `{"confirmed_structure": null}`},
+		{"result-malformed-scalar001", `{"confirmed_structure": "not-an-array"}`},
+		{"result-malformed-object001", `{"confirmed_structure": {"member": "expected_kind"}}`},
+	} {
+		_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+VALUES ($1, $2, $3, $4)`, malformed.resultID, principal.OrgID, []byte(malformed.payload), legacy.GeneratedAt)
+		require.NoError(t, err)
+	}
 
 	// Re-run 0025's own migration SQL directly against this now-populated
 	// table -- the embedded copy is the SAME file the runner already

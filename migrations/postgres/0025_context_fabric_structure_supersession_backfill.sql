@@ -45,9 +45,26 @@ FROM (
         entry->>'prior_result_id' AS prior_result_id,
         entry->>'member'          AS member
     FROM acr.context_fabric_investigation_results r,
-         LATERAL jsonb_array_elements(r.payload->'confirmed_structure') AS entry
-    WHERE r.payload ? 'confirmed_structure'
-      AND entry->>'disposition' = 'applied'
+         -- codex round-2 adversarial review, MEDIUM finding: an unguarded
+         -- jsonb_array_elements(r.payload->'confirmed_structure') aborts
+         -- this ENTIRE migration the moment ANY row's confirmed_structure
+         -- is not itself a JSON array -- missing key (-> yields SQL NULL),
+         -- explicit JSON null, or (a hand-edited/foreign-written row,
+         -- Get's own "may have reached storage some other way" defensive
+         -- posture applies here too) an object or scalar. The CASE guard
+         -- makes every one of those shapes degrade to an EMPTY array
+         -- (jsonb_typeof(NULL::jsonb) is SQL NULL, which the equality
+         -- check below also fails, so a missing key takes the same safe
+         -- path as an explicit null) rather than raising -- a row this
+         -- migration cannot make sense of contributes zero candidate
+         -- claims, it never blocks every OTHER row's backfill.
+         LATERAL jsonb_array_elements(
+             CASE WHEN jsonb_typeof(r.payload->'confirmed_structure') = 'array'
+                  THEN r.payload->'confirmed_structure'
+                  ELSE '[]'::jsonb
+             END
+         ) AS entry
+    WHERE entry->>'disposition' = 'applied'
       AND entry->>'source' = 'receipt'
       AND coalesce(entry->>'prior_result_id', '') <> ''
       AND coalesce(entry->>'member', '') <> ''

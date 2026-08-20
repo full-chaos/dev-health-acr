@@ -841,17 +841,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// silently discarding the conflict information Save reported).
 			var superseded *ErrStructureOfferSuperseded
 			if errors.As(err, &superseded) {
-				// CHAOS-3927 P4 (codex adversarial review fix): telemetry for
-				// this round was deliberately NOT recorded when
-				// canonicalizeStructure returned (see that call site's own
-				// comment) -- this branch is exactly why: the outcome was not
-				// yet final. Record it now as "stale", the SAME outcome a
-				// pre-flight detection of the identical condition would have
-				// recorded. structureCanon.PendingSelections is intentionally
-				// dropped here, never sent: the result they describe was
-				// never persisted.
-				recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
-				return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntry(structureCanon.Confirmed, superseded.Members), binding)
+				return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon, superseded, binding)
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
@@ -861,19 +851,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// -- Save just succeeded past the atomic supersession-claim check
 		// above, so every member in structureCanon.Confirmed genuinely won
 		// its claim (or there were none to claim, the common case, in
-		// which case both calls below are no-ops). Only now does the
-		// "applied" telemetry outcome get recorded, and only now do the
-		// events canonicalizeStructure built get sent to the sink -- see
-		// requestStructureCanonicalization.PendingSelections' own doc
-		// comment for why firing either earlier was wrong.
-		if len(structureCanon.Confirmed) > 0 {
-			recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
-			if e.structureSelectionSink != nil {
-				for _, event := range structureCanon.PendingSelections {
-					e.structureSelectionSink.RecordSelection(ctx, event)
-				}
-			}
-		}
+		// which case this is a no-op). See
+		// recordStructureConfirmationOutcome's own doc comment for why this
+		// call is shared with terminalResult's own Save call site, not
+		// hand-copied.
+		e.recordStructureConfirmationOutcome(ctx, principal, request, structureCanon)
 	}
 	return result, nil
 }

@@ -330,9 +330,27 @@ func (e *Engine) terminalResult(
 		// lookup will ever form is a row the clarification loop cannot reach.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
 		if err := e.results.Save(ctx, principal, result, watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+			// CHAOS-3927 P4 (codex round-2 adversarial review fix): a
+			// subjectless terminal can carry confirmed structure exactly
+			// like a synthesized answer can (result.ConfirmedStructure
+			// above), so it can just as easily lose the atomic
+			// supersession claim race Investigate's own decisive-Save call
+			// site already handles -- see structureSupersessionVetoResult's
+			// own doc comment for why this MUST be the shared helper, not
+			// a hand-copy (round 1's fix only wired Investigate's call
+			// site, leaving this one to surface the race as a raw 500).
+			var superseded *ErrStructureOfferSuperseded
+			if errors.As(err, &superseded) {
+				return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon, superseded, binding)
+			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)
+		// CHAOS-3927 P4 (codex round-2 adversarial review fix): same
+		// deferred-until-durable telemetry/capture flush Investigate's own
+		// decisive path applies -- see recordStructureConfirmationOutcome's
+		// own doc comment.
+		e.recordStructureConfirmationOutcome(ctx, principal, request, structureCanon)
 	}
 	return result, nil
 }
