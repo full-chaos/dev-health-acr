@@ -459,6 +459,19 @@ func pass1Reported(offences []string, relative, table string) bool {
 // class as concat-assembled DDL. A source doing that is deliberately
 // hiding, which is review's job, not this test's.
 func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
+	if raceDetectorEnabled {
+		// CHAOS-3974: this sweep walks every .go file in the repo and
+		// regex-matches every line against every declared table name. On
+		// CI's 2-core runners, the race detector's instrumentation cost was
+		// enough to push it past the go test -timeout on its own -- not a
+		// hang, just CPU-bound work that no longer fits the race-detector
+		// budget as the repo grows. The `unit` CI job runs this exact test
+		// (same GOTEST_PKGS=./... default) via `make test-coverage`, which
+		// does not pass -race, so the declaration-closure proof this test
+		// makes is still checked on every PR; only the race-detector pass
+		// over it is skipped.
+		t.Skip("CHAOS-3974: full-repo declaration sweep exceeds the race-detector budget on CI's 2-core runners; covered without -race by the unit job (make test-coverage)")
+	}
 	t.Parallel()
 	root := repoRoot(t)
 
