@@ -87,6 +87,23 @@ type Config struct {
 	// hosted composition constructs a non-nil contextfabric.PriorConsultant
 	// AT ALL, the same "does the dependency exist" gate
 	// EnableContextFabricInvestigations is for the investigator itself.
+	//
+	// ROLLOUT PRECONDITION (codex adversarial review round 2, medium
+	// finding, ACKNOWLEDGED -- deliberately an operational sequencing note,
+	// not a code change): pginvestigation's reuseColumnsFor now refuses to
+	// populate reuse columns for any structure-bearing result (this same
+	// changeset's own fix), but that fix only governs FUTURE Saves -- it
+	// does not retroactively invalidate rows a pre-fix binary already
+	// wrote with reuse columns populated. If a deployment has BOTH answer
+	// reuse (ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE) AND this flag on
+	// simultaneously, a pre-fix cached row could theoretically still be
+	// served for up to that staleness window after this binary deploys,
+	// bypassing prior consultation for that one cached answer. Deploy the
+	// binary carrying the reuseColumnsFor fix and let
+	// ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE fully elapse BEFORE the
+	// FIRST `priors flip` in any deployment that also has answer reuse
+	// enabled -- this flag being off during that wait costs nothing (see
+	// this field's own first sentence).
 	StructurePriorsEnabled bool
 	// AnswerReuseMaxAge (CHAOS-3782, ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE)
 	// is the staleness window TRD §19.7.3 condition 4 enforces: a stored

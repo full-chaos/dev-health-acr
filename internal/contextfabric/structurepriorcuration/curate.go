@@ -60,6 +60,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -77,6 +78,14 @@ type SelectionEvent struct {
 	SelectedAppliedValue string
 	SelectionMode        string
 	SelectionProvenance  string
+	// CapturedAt is the event's own APP-clock capture time (structure_capture.go's
+	// own field of the same name) -- read so a caller can stamp a
+	// meaningful high-water mark (the latest CapturedAt actually curated
+	// from) onto the published version, even though v1 itself still reads
+	// the org's FULL history every run rather than filtering by it. See
+	// this package's own doc comment for the incremental-cursor v2
+	// follow-on this is NOT yet.
+	CapturedAt time.Time
 }
 
 // ReadSelections reads every acr.context_fabric_structure_selections row
@@ -91,7 +100,7 @@ func ReadSelections(ctx context.Context, db *sql.DB, orgID string) ([]SelectionE
 		return nil, fmt.Errorf("structurepriorcuration: organization is required")
 	}
 	rows, err := db.QueryContext(ctx, `
-SELECT org_id, question_hash, member, selected_applied_value, selection_mode, selection_provenance
+SELECT org_id, question_hash, member, selected_applied_value, selection_mode, selection_provenance, captured_at
 FROM acr.context_fabric_structure_selections
 WHERE org_id = $1`, orgID)
 	if err != nil {
@@ -101,7 +110,7 @@ WHERE org_id = $1`, orgID)
 	var out []SelectionEvent
 	for rows.Next() {
 		var e SelectionEvent
-		if err := rows.Scan(&e.OrgID, &e.QuestionHash, &e.Member, &e.SelectedAppliedValue, &e.SelectionMode, &e.SelectionProvenance); err != nil {
+		if err := rows.Scan(&e.OrgID, &e.QuestionHash, &e.Member, &e.SelectedAppliedValue, &e.SelectionMode, &e.SelectionProvenance, &e.CapturedAt); err != nil {
 			return nil, fmt.Errorf("structurepriorcuration: scan selection: %w", err)
 		}
 		out = append(out, e)

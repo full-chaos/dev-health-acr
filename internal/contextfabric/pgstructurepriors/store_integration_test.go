@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -253,7 +254,7 @@ func TestRollbackActiveVersion_RestoresPrevious(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, v2, set.Version)
 
-	require.NoError(t, store.RollbackActiveVersion(ctx, orgID, "chris"))
+	require.NoError(t, store.RollbackActiveVersion(ctx, orgID, &v2, "chris"))
 
 	set, found, _, err = store.GetActive(ctx, orgID)
 	require.NoError(t, err)
@@ -273,7 +274,7 @@ func TestRollbackActiveVersion_NoPrevious_Refuses(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.FlipActiveVersion(ctx, orgID, nil, &v1, "chris"))
 
-	err = store.RollbackActiveVersion(ctx, orgID, "chris")
+	err = store.RollbackActiveVersion(ctx, orgID, &v1, "chris")
 	require.Error(t, err)
 	require.True(t, errors.Is(err, contextfabric.ErrPriorVersionNotFound))
 }
@@ -313,6 +314,122 @@ func TestRevokeEntry_MarksRevokedAcrossVersions(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.True(t, set.Entries[0].Revoked, "the SAME entry_id must stay revoked in a NEWER version that re-proposes it")
+}
+
+// TestRollbackActiveVersion_WrongExpectedCurrent_Conflicts is the codex
+// adversarial review round 2 pin (high finding, repro-confirmed and
+// fixed): rollback must refuse when the caller's own observed current
+// version does not match reality -- e.g. a concurrent flip already
+// retargeted the pointer -- rather than silently rolling back whatever IS
+// current.
+func TestRollbackActiveVersion_WrongExpectedCurrent_Conflicts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := newPriorsTestDatabase(t, ctx)
+	store, err := NewStore(db)
+	require.NoError(t, err)
+	orgID := "org-priors-rollback-conflict"
+
+	v1, err := store.PublishVersion(ctx, orgID, oneEntry("pull_request"), "wm-1", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	require.NoError(t, store.FlipActiveVersion(ctx, orgID, nil, &v1, "chris"))
+	v2, err := store.PublishVersion(ctx, orgID, oneEntry("work_item"), "wm-2", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	require.NoError(t, store.FlipActiveVersion(ctx, orgID, &v1, &v2, "chris"))
+
+	wrongExpected := int64(999)
+	err = store.RollbackActiveVersion(ctx, orgID, &wrongExpected, "chris")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, contextfabric.ErrPriorPointerConflict), "want ErrPriorPointerConflict, got %v", err)
+
+	// Active version is UNCHANGED after the failed rollback.
+	set, found, _, err := store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, v2, set.Version)
+}
+
+// TestRollbackActiveVersion_RetryAfterSuccess_ConflictsRatherThanReversing
+// is the retry-idempotency half of the same round-2 finding: retrying a
+// rollback command with the SAME expectedCurrent after it already
+// succeeded must conflict (the pointer moved), never silently reverse the
+// rollback it already performed.
+func TestRollbackActiveVersion_RetryAfterSuccess_ConflictsRatherThanReversing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := newPriorsTestDatabase(t, ctx)
+	store, err := NewStore(db)
+	require.NoError(t, err)
+	orgID := "org-priors-rollback-retry"
+
+	v1, err := store.PublishVersion(ctx, orgID, oneEntry("pull_request"), "wm-1", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	require.NoError(t, store.FlipActiveVersion(ctx, orgID, nil, &v1, "chris"))
+	v2, err := store.PublishVersion(ctx, orgID, oneEntry("work_item"), "wm-2", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	require.NoError(t, store.FlipActiveVersion(ctx, orgID, &v1, &v2, "chris"))
+
+	require.NoError(t, store.RollbackActiveVersion(ctx, orgID, &v2, "chris"))
+	set, found, _, err := store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, v1, set.Version)
+
+	// Retry with the SAME expectedCurrent (v2) -- the pointer is now v1,
+	// so this must conflict, never silently roll v1 back to v2.
+	err = store.RollbackActiveVersion(ctx, orgID, &v2, "chris")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, contextfabric.ErrPriorPointerConflict))
+	set, found, _, err = store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, v1, set.Version, "the retry must never have reversed the already-successful rollback")
+}
+
+// TestFlipActiveVersion_ConcurrentColdStart_OneWinsOneConflicts is the
+// codex adversarial review round 2 pin (medium finding, repro-confirmed
+// and fixed): two concurrent first-ever flips for the same org (both with
+// nil expectedCurrent, no pointer row exists yet) must resolve to exactly
+// one winner and one ErrPriorPointerConflict loser -- never two successes,
+// and never a loser reported as a generic/unclassified error.
+func TestFlipActiveVersion_ConcurrentColdStart_OneWinsOneConflicts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := newPriorsTestDatabase(t, ctx)
+	store, err := NewStore(db)
+	require.NoError(t, err)
+	orgID := "org-priors-concurrent-cold-start"
+
+	v1, err := store.PublishVersion(ctx, orgID, oneEntry("pull_request"), "wm-1", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	v2, err := store.PublishVersion(ctx, orgID, oneEntry("work_item"), "wm-2", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = store.FlipActiveVersion(ctx, orgID, nil, &v1, "chris") }()
+	go func() { defer wg.Done(); errs[1] = store.FlipActiveVersion(ctx, orgID, nil, &v2, "dana") }()
+	wg.Wait()
+
+	successes, conflicts := 0, 0
+	for _, e := range errs {
+		switch {
+		case e == nil:
+			successes++
+		case errors.Is(e, contextfabric.ErrPriorPointerConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected error (want nil or ErrPriorPointerConflict): %v", e)
+		}
+	}
+	require.Equal(t, 1, successes, "exactly one concurrent first-ever flip must win")
+	require.Equal(t, 1, conflicts, "the loser must be ErrPriorPointerConflict, not a generic error")
+
+	set, found, _, err := store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, set.Version == v1 || set.Version == v2)
 }
 
 func TestGetActive_OrgIsolation(t *testing.T) {

@@ -55,3 +55,45 @@ func TestFrozenQuestionHashesFromEnv_MalformedEntry_FailsLoudly(t *testing.T) {
 		})
 	}
 }
+
+// TestRequireFrozenQuestionHashes_EmptyWithoutAttestation_Refuses is the
+// codex adversarial review round 2 pin (high finding, repro-confirmed and
+// fixed): curation must REFUSE (a hard error) rather than warn-and-proceed
+// when the frozen-hash manifest is empty and the operator has not
+// explicitly attested there is none to exclude.
+func TestRequireFrozenQuestionHashes_EmptyWithoutAttestation_Refuses(t *testing.T) {
+	t.Setenv("ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES", "")
+	_, err := requireFrozenQuestionHashes(false)
+	if err == nil {
+		t.Fatal("requireFrozenQuestionHashes(false) with an empty manifest: error = nil, want an error")
+	}
+}
+
+// TestRequireFrozenQuestionHashes_EmptyWithAttestation_Proceeds proves the
+// explicit override actually works: an operator who deliberately attests
+// no frozen corpus exists in this environment is not blocked.
+func TestRequireFrozenQuestionHashes_EmptyWithAttestation_Proceeds(t *testing.T) {
+	t.Setenv("ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES", "")
+	got, err := requireFrozenQuestionHashes(true)
+	if err != nil {
+		t.Fatalf("requireFrozenQuestionHashes(true) error = %v, want nil", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("requireFrozenQuestionHashes(true) = %v, want empty", got)
+	}
+}
+
+// TestRequireFrozenQuestionHashes_ConfiguredHashes_NeverNeedsAttestation
+// proves the ordinary, well-configured case is unaffected by the
+// attestation flag either way.
+func TestRequireFrozenQuestionHashes_ConfiguredHashes_NeverNeedsAttestation(t *testing.T) {
+	h := strings.Repeat("a", 64)
+	t.Setenv("ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES", h)
+	got, err := requireFrozenQuestionHashes(false)
+	if err != nil {
+		t.Fatalf("requireFrozenQuestionHashes(false) with a configured manifest: error = %v, want nil", err)
+	}
+	if !got[h] {
+		t.Fatalf("requireFrozenQuestionHashes(false) = %v, want %q present", got, h)
+	}
+}

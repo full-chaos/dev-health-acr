@@ -214,8 +214,8 @@ func (s *Store) PublishVersion(ctx context.Context, orgID string, entries []cont
 		return 0, fmt.Errorf("pgstructurepriors: begin publish: %w", sanitize(err))
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "structure_priors:"+orgID); err != nil {
-		return 0, fmt.Errorf("pgstructurepriors: acquire publish lock: %w", sanitize(err))
+	if err := acquirePointerLock(ctx, tx, orgID); err != nil {
+		return 0, err
 	}
 	row := tx.QueryRowContext(ctx, `
 INSERT INTO acr.context_fabric_structure_priors (org_id, version, entries, created_from_watermark, curation_rule_version)
@@ -305,12 +305,26 @@ func (s *Store) FlipActiveVersion(ctx context.Context, orgID string, expectedCur
 }
 
 // RollbackActiveVersion is DP8(a)'s own rollback operation: point back at
-// the previous_version the last flip recorded. Refuses (ErrPriorVersionNotFound)
-// when there is nothing to roll back to. Locks the pointer row for the
-// SAME transaction its own read and write happen in (see FlipActiveVersion's
-// own doc comment for why: the prior read-then-separately-write shape
-// raced and could leave the pointer and its own history disagreeing).
-func (s *Store) RollbackActiveVersion(ctx context.Context, orgID, ratifiedBy string) error {
+// the previous_version the last flip recorded. Refuses
+// (ErrPriorVersionNotFound) when there is nothing to roll back to.
+//
+// expectedCurrent (codex adversarial review round 2, high finding, repro-
+// confirmed and fixed): a prior version of this function derived BOTH the
+// rollback's target and its own CAS comparison purely from whatever the
+// pointer happened to read as current UNDER ITS OWN LOCK -- which means it
+// had no way to refuse a rollback whose premise had already changed. Two
+// concrete failure shapes: (1) an operator decides to roll v2 back to v1,
+// but a concurrent flip installs v3 (previous=v2) first -- the old code
+// would silently roll v3 back to v2, not the v2-to-v1 the operator
+// intended; (2) a v2-to-v1 rollback succeeds but its acknowledgement is
+// lost, and the operator retries the SAME command -- the old code would
+// then roll v1 (now current) back to v2, undoing its own prior success.
+// Requiring the caller's own observed expectedCurrent and comparing it
+// under the SAME lock closes both: case (1) becomes an ordinary CAS
+// conflict (current is v3, not v2), and case (2)'s retry also conflicts
+// (current is now v1, not v2) rather than silently reversing itself --
+// the caller re-reads and sees the rollback already happened.
+func (s *Store) RollbackActiveVersion(ctx context.Context, orgID string, expectedCurrent *int64, ratifiedBy string) error {
 	orgID = strings.TrimSpace(orgID)
 	ratifiedBy = strings.TrimSpace(ratifiedBy)
 	if err := validateRatifiedBy(ratifiedBy); err != nil {
@@ -324,6 +338,9 @@ func (s *Store) RollbackActiveVersion(ctx context.Context, orgID, ratifiedBy str
 		return fmt.Errorf("pgstructurepriors: begin rollback: %w", sanitize(err))
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := acquirePointerLock(ctx, tx, orgID); err != nil {
+		return err
+	}
 
 	var current, previous sql.NullInt64
 	err = tx.QueryRowContext(ctx, `
@@ -334,6 +351,15 @@ SELECT active_version, previous_version FROM acr.context_fabric_structure_prior_
 	if err != nil {
 		return fmt.Errorf("pgstructurepriors: read pointer for rollback: %w", sanitize(err))
 	}
+	var currentPtr *int64
+	if current.Valid {
+		v := current.Int64
+		currentPtr = &v
+	}
+	if !int64PtrEqual(currentPtr, expectedCurrent) {
+		s.telemetry().RecordFlipCASConflict(ctx, orgID)
+		return fmt.Errorf("%w: org %s active version changed since read", contextfabric.ErrPriorPointerConflict, orgID)
+	}
 
 	now := time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, `
@@ -343,11 +369,6 @@ WHERE org_id = $1`,
 		orgID, previous.Int64, current, ratifiedBy, now); err != nil {
 		return fmt.Errorf("pgstructurepriors: rollback: %w", sanitize(err))
 	}
-	var currentPtr *int64
-	if current.Valid {
-		v := current.Int64
-		currentPtr = &v
-	}
 	prev := previous.Int64
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_structure_prior_pointer_history (org_id, from_version, to_version, ratified_by, ratified_at)
@@ -356,6 +377,24 @@ VALUES ($1, $2, $3, $4, $5)`, orgID, currentPtr, &prev, ratifiedBy, now); err !=
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("pgstructurepriors: commit rollback: %w", sanitize(err))
+	}
+	return nil
+}
+
+// acquirePointerLock serializes EVERY pointer-mutating operation for orgID
+// (flip, rollback, and PublishVersion's own advisory lock -- same key
+// namespace) behind one Postgres advisory transaction lock (codex
+// adversarial review round 2, medium finding, repro-confirmed and fixed):
+// SELECT ... FOR UPDATE on an ABSENT row locks nothing, so two concurrent
+// first-ever flips for the same org could both observe "no row" and both
+// attempt their own INSERT -- the loser's primary-key violation surfaced
+// as a generic ErrUnavailable, not the documented ErrPriorPointerConflict
+// a caller's retry/reconcile flow depends on. Acquiring this lock BEFORE
+// the SELECT makes the absent-row case exclusive too, exactly like an
+// existing row's own FOR UPDATE already was.
+func acquirePointerLock(ctx context.Context, tx *sql.Tx, orgID string) error {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "structure_priors:"+orgID); err != nil {
+		return fmt.Errorf("pgstructurepriors: acquire pointer lock: %w", sanitize(err))
 	}
 	return nil
 }
@@ -372,6 +411,9 @@ func (s *Store) casPointer(ctx context.Context, orgID string, expectedCurrent *i
 		return fmt.Errorf("pgstructurepriors: begin flip: %w", sanitize(err))
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := acquirePointerLock(ctx, tx, orgID); err != nil {
+		return err
+	}
 
 	var current sql.NullInt64
 	err = tx.QueryRowContext(ctx, `

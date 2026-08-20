@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -31,8 +32,10 @@ automatically.
   flip --org ID --version N --by WHO  CAS the org's active-version pointer to
                                        N (must already exist, e.g. from
                                        curate) -- the human-ratified promotion
-  rollback --org ID --by WHO          CAS the org's active-version pointer
-                                       back to its previous value
+  rollback --org ID --expect-current N --by WHO
+                                       CAS the org's active-version pointer
+                                       back to its previous value; N is the
+                                       CURRENT active version you observed
   revoke --org ID --entry ID --by WHO kill one entry, in every version that
                                        ever proposes it, present or future
 `
@@ -118,6 +121,47 @@ func frozenQuestionHashesFromEnv() (map[string]bool, error) {
 	return out, nil
 }
 
+// latestCapturedAt returns the maximum CapturedAt across events, RFC3339
+// nano-formatted, or "" for an empty slice -- PublishVersion's own
+// created_from_watermark. See the field's own doc comment
+// (structurepriorcuration.SelectionEvent) for what this does and does not
+// prove.
+func latestCapturedAt(events []structurepriorcuration.SelectionEvent) string {
+	var max time.Time
+	for _, e := range events {
+		if e.CapturedAt.After(max) {
+			max = e.CapturedAt
+		}
+	}
+	if max.IsZero() {
+		return ""
+	}
+	return max.UTC().Format(time.RFC3339Nano)
+}
+
+// requireFrozenQuestionHashes is priorsCurate's own fail-closed gate
+// (codex adversarial review round 2, high finding, repro-confirmed and
+// fixed): a warning an automated/scripted run can never see fails exactly
+// the deployment mistake it exists to catch. Refuses (a hard error, not a
+// warning) whenever ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES
+// is unset/empty AND the operator has not passed --attest-no-frozen-corpus
+// -- the explicit, logged, DP10-style human decision this HARD REQUIREMENT
+// needs, never an inferred default. Factored out of priorsCurate so it is
+// testable without a database (the check itself performs no I/O).
+func requireFrozenQuestionHashes(attestNoFrozenCorpus bool) (map[string]bool, error) {
+	frozenHashes, err := frozenQuestionHashesFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if len(frozenHashes) == 0 && !attestNoFrozenCorpus {
+		return nil, errors.New("acr-projector priors curate: ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES is unset or empty -- refusing to publish an unguarded prior version. If this environment genuinely cannot contain frozen-corpus replay data, re-run with --attest-no-frozen-corpus; otherwise set the variable to the corpus's own QuestionHash manifest first")
+	}
+	if len(frozenHashes) == 0 {
+		fmt.Fprintln(os.Stderr, "ATTESTED: proceeding with NO frozen-corpus exclusion, per --attest-no-frozen-corpus.")
+	}
+	return frozenHashes, nil
+}
+
 func isLowercaseSHA256Hex(s string) bool {
 	if len(s) != 64 {
 		return false
@@ -134,12 +178,31 @@ func priorsCurate(args []string) error {
 	flags := flag.NewFlagSet("acr-projector priors curate", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	org := flags.String("org", "", "organization ID to curate (required)")
+	// attestNoFrozenCorpus (codex adversarial review round 2, high finding,
+	// repro-confirmed and fixed): curation used to WARN and proceed when
+	// ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES was unset
+	// or empty -- a warning an automated/scripted run can never see fails
+	// exactly the deployment mistake it exists to catch. The HARD
+	// REQUIREMENT (frozen-corpus QuestionHashes never enter curation
+	// output) is now enforced by REFUSING to run at all with an empty
+	// exclusion set, unless the operator explicitly attests there is none
+	// to exclude in this environment -- an explicit, logged, DP10-style
+	// human decision, never an inferred default.
+	attestNoFrozenCorpus := flags.Bool("attest-no-frozen-corpus", false, "required when ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES is unset/empty -- an explicit attestation that this environment cannot contain frozen-corpus replay data")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if strings.TrimSpace(*org) == "" {
 		return errors.New("acr-projector priors curate requires --org")
 	}
+	// Checked BEFORE any database connection is opened: cheap, and fails
+	// fast on the deployment mistake this gate exists to catch rather than
+	// spending a Postgres round trip first.
+	frozenHashes, err := requireFrozenQuestionHashes(*attestNoFrozenCorpus)
+	if err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 	db, err := openPriorsDB(ctx)
 	if err != nil {
@@ -151,19 +214,6 @@ func priorsCurate(args []string) error {
 		return err
 	}
 
-	frozenHashes, err := frozenQuestionHashesFromEnv()
-	if err != nil {
-		return err
-	}
-	if len(frozenHashes) == 0 {
-		// codex adversarial review, medium finding: make the omission
-		// VISIBLE rather than silent -- an operator running curation
-		// somewhere the frozen corpus replay could have landed rows, with
-		// this variable unset, would otherwise get no signal that
-		// exclusion is a no-op for this run.
-		fmt.Fprintln(os.Stderr, "WARNING: ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_FROZEN_QUESTION_HASHES is unset or empty -- if this environment could contain frozen-corpus replay data, curation will NOT exclude it. Set the variable to the corpus's own QuestionHash manifest first if in doubt.")
-	}
-
 	events, err := structurepriorcuration.ReadSelections(ctx, db, *org)
 	if err != nil {
 		return err
@@ -173,11 +223,23 @@ func priorsCurate(args []string) error {
 		_, err := fmt.Printf("org %s: curation found nothing promotable (0 candidate selections met the promotion rule)\n", *org)
 		return err
 	}
-	version, err := store.PublishVersion(ctx, *org, entries, "", contextfabric.CurationRuleVersionV1)
+	// watermark (codex adversarial review round 2, medium finding, repro-
+	// confirmed and fixed): v1 still reads the org's FULL selection
+	// history every run (structurepriorcuration's own doc comment covers
+	// why an incremental cursor is a named v2 follow-on, not implemented
+	// here) -- but nothing stopped this from stamping a MEANINGFUL
+	// watermark for what it actually read, and an always-empty one
+	// defeated the design brief's own "created_from event-log watermark"
+	// reproducibility/audit purpose for every run, not just future
+	// incremental ones. latestCapturedAt is the high-water mark of the
+	// events THIS run actually curated from -- a real, checkable value,
+	// even though it does not yet gate what a future run reads.
+	watermark := latestCapturedAt(events)
+	version, err := store.PublishVersion(ctx, *org, entries, watermark, contextfabric.CurationRuleVersionV1)
 	if err != nil {
 		return fmt.Errorf("publish version: %w", err)
 	}
-	_, err = fmt.Printf("org %s: published version %d with %d entries (NOT active -- run `priors flip --org %s --version %d --by <you>` to promote it)\n", *org, version, len(entries), *org, version)
+	_, err = fmt.Printf("org %s: published version %d with %d entries, watermark=%s (NOT active -- run `priors flip --org %s --version %d --by <you>` to promote it)\n", *org, version, len(entries), watermark, *org, version)
 	return err
 }
 
@@ -221,12 +283,13 @@ func priorsRollback(args []string) error {
 	flags := flag.NewFlagSet("acr-projector priors rollback", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	org := flags.String("org", "", "organization ID (required)")
+	expectCurrent := flags.Int64("expect-current", -1, "the CURRENT active version you observed (required) -- guards against a concurrent flip retargeting this rollback, or a retry silently reversing it")
 	by := flags.String("by", "", "your identity -- DP8(a) requires a human-ratified actor (required)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*org) == "" || strings.TrimSpace(*by) == "" {
-		return errors.New("acr-projector priors rollback requires --org and --by")
+	if strings.TrimSpace(*org) == "" || strings.TrimSpace(*by) == "" || *expectCurrent < 0 {
+		return errors.New("acr-projector priors rollback requires --org, --expect-current, and --by")
 	}
 	ctx := context.Background()
 	db, err := openPriorsDB(ctx)
@@ -239,10 +302,11 @@ func priorsRollback(args []string) error {
 		return err
 	}
 
-	if err := store.RollbackActiveVersion(ctx, *org, *by); err != nil {
+	expected := *expectCurrent
+	if err := store.RollbackActiveVersion(ctx, *org, &expected, *by); err != nil {
 		return fmt.Errorf("rollback: %w", err)
 	}
-	_, err = fmt.Printf("org %s: active version rolled back (ratified by %s)\n", *org, *by)
+	_, err = fmt.Printf("org %s: active version rolled back from %d (ratified by %s)\n", *org, expected, *by)
 	return err
 }
 
