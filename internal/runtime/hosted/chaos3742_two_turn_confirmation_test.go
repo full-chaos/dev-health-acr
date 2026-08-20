@@ -587,14 +587,24 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	}
 	res.Turn2Status = string(result.Status)
 	res.CommittedCount = len(result.SubjectResolution.Committed)
-	// Positive tier-routing proof (codex round-1 finding #6): the injected
-	// value must have landed at explicit_unattributed/inferred_default in
-	// the echo -- checked directly, not inferred from "did not commit".
-	for _, e := range result.ConfirmedStructure {
-		if string(e.Member) == entry.Member &&
-			e.Source == contractsv1.ContextFabricStructureSourceExplicitUnattributed &&
-			e.Provenance == contractsv1.ContextFabricStructureInferredDefault {
+	// Positive tier-routing proof (codex round-1 finding #6, codex round-2
+	// finding: window's own echo is a SEPARATE mechanism -- window.go's
+	// windowExplicitProvenance stamps EffectiveEvidenceWindow.Provenance,
+	// never ConfirmedStructure; window is not part of composeConfirmedStructure
+	// at all despite the design brief's aspirational "same uniform
+	// mechanism" framing). Checked directly per member, not inferred from
+	// "did not commit".
+	if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+		if result.EffectiveEvidenceWindow != nil && result.EffectiveEvidenceWindow.Provenance == contractsv1.ContextFabricWindowInferredDefault {
 			res.TierRoutedCorrectly = true
+		}
+	} else {
+		for _, e := range result.ConfirmedStructure {
+			if string(e.Member) == entry.Member &&
+				e.Source == contractsv1.ContextFabricStructureSourceExplicitUnattributed &&
+				e.Provenance == contractsv1.ContextFabricStructureInferredDefault {
+				res.TierRoutedCorrectly = true
+			}
 		}
 	}
 	return res
@@ -763,7 +773,16 @@ func twoTurnMutationProbe(applied bool, status string, committedCount int) (trip
 // that does NOT trip is itself a finding (the run is invalid, per the
 // harness's own fails-toward-fine discipline), never silently ignored.
 func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1ResultID, receiptID string, timeout time.Duration) []twoTurnCaseResult {
-	run := func(probe string, req contractsv1.ContextFabricInvestigationRequest) twoTurnCaseResult {
+	// run calls Investigate EXACTLY ONCE per probe (codex round-2 finding
+	// #7: the original stale-probe implementation called Investigate a
+	// SECOND time to inspect the disposition, so an error on the first call
+	// could be silently overridden by whatever the second, independent call
+	// happened to return -- two calls against the same request is itself
+	// the bug, not merely "which call's result to trust"). requireStale, when
+	// true, additionally demands the vetoed_stale disposition specifically
+	// (probe iii's own tell, vs the generic non-apply the other two probes
+	// accept).
+	run := func(probe string, req contractsv1.ContextFabricInvestigationRequest, requireStale bool) twoTurnCaseResult {
 		res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmMutation), MutationProbe: probe}
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
@@ -782,12 +801,22 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 		}
 		res.Turn2Status = string(result.Status)
 		res.CommittedCount = len(result.SubjectResolution.Committed)
+		staleDisposition := false
 		for _, e := range result.ConfirmedStructure {
-			if string(e.Member) == entry.Member && e.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
+			if string(e.Member) != entry.Member {
+				continue
+			}
+			if e.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
 				res.Applied = true
+			}
+			if e.Disposition == contractsv1.ContextFabricStructureDispositionVetoedStale {
+				staleDisposition = true
 			}
 		}
 		res.MutationTripped = twoTurnMutationProbe(res.Applied, res.Turn2Status, res.CommittedCount)
+		if requireStale {
+			res.MutationTripped = res.MutationTripped && staleDisposition
+		}
 		return res
 	}
 
@@ -795,14 +824,14 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 
 	// (i) remove the confirming receipt: the refusal must return.
 	removeConfirmationReq := twoTurnRequest(index, tc, "mutation_remove_confirmation")
-	results = append(results, run("remove_confirmation", removeConfirmationReq))
+	results = append(results, run("remove_confirmation", removeConfirmationReq, false))
 
 	// (ii) corrupt the receipt id: 400/veto, never an answer.
 	corruptReq := twoTurnRequest(index, tc, "mutation_corrupt_receipt")
 	setTwoTurnReceipt(&corruptReq, entry.Member, contractsv1.ContextFabricBoundSubjectReceipt{
 		ResultID: turn1ResultID, ReceiptID: receiptID + "corrupted",
 	})
-	results = append(results, run("corrupt_receipt", corruptReq))
+	results = append(results, run("corrupt_receipt", corruptReq, false))
 
 	// (iii) redeem the ALREADY-REDEEMED (now superseded) offer again ->
 	// stale_superseded_offer veto. Requires the positive arm to have
@@ -812,23 +841,7 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 	setTwoTurnReceipt(&staleReq, entry.Member, contractsv1.ContextFabricBoundSubjectReceipt{
 		ResultID: turn1ResultID, ReceiptID: receiptID,
 	})
-	staleResult := run("stale_superseded_offer", staleReq)
-	// The specific tell for THIS probe (vs the generic veto the other two
-	// probes accept): the disposition must be vetoed_stale, not merely
-	// "did not apply" -- a plain conflict veto would otherwise pass this
-	// probe for the wrong reason.
-	staleResult.MutationTripped = false
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	staleCheck, err := investigator.Investigate(callCtx, principal, staleReq)
-	cancel()
-	if err == nil {
-		for _, e := range staleCheck.ConfirmedStructure {
-			if string(e.Member) == entry.Member && e.Disposition == contractsv1.ContextFabricStructureDispositionVetoedStale {
-				staleResult.MutationTripped = true
-			}
-		}
-	}
-	results = append(results, staleResult)
+	results = append(results, run("stale_superseded_offer", staleReq, true))
 
 	return results
 }
@@ -984,7 +997,15 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			continue
 		}
 		report.CasesRun++
-		if turn1.StructureNeeds == nil {
+		// codex round-2 finding #1: StructureNeeds and WindowClarification
+		// are composed INDEPENDENTLY on the subjectless-terminal path
+		// (unresolved.go) -- window is never added to
+		// StructureOfferMaterial.Missing (structure.go's composeStructureNeeds
+		// only tracks kind/anchor/handle), so a window-only stalled case can
+		// have StructureNeeds==nil while WindowClarification is non-nil.
+		// Skipping on StructureNeeds alone would silently drop every
+		// window-only case from every arm.
+		if turn1.StructureNeeds == nil && turn1.WindowClarification == nil {
 			report.NoDiscriminatorsCount++
 			continue
 		}
