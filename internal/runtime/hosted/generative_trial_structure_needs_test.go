@@ -203,3 +203,48 @@ func TestTallyOutcome_StructureNeedsCoverage_NoStalledCasesStaysNil(t *testing.T
 		t.Fatalf("report.StructureNeedsCoverage = %+v, want nil (no stalled case was tallied)", report.StructureNeedsCoverage)
 	}
 }
+
+// TestTallyReplayStructureNeedsCoverage pins
+// tallyReplayStructureNeedsCoverage (chaos3884_replay_harness_test.go,
+// CHAOS-3927 P1 post-merge invariance measurement) with the SAME
+// mutation-resistant shape TestTallyOutcome_StructureNeedsCoverage above
+// uses: the two EXCLUDED cases (an error and a committed case) both set
+// wiredStructureNeedsDisclosed=true deliberately, so the assertions only
+// pass if the stalled gate correctly ignores them.
+func TestTallyReplayStructureNeedsCoverage(t *testing.T) {
+	report := &replayReport{}
+
+	// Stalled + disclosed: counts toward both.
+	tallyReplayStructureNeedsCoverage(report, nil, 0, true)
+	// Stalled + NOT disclosed: counts toward total_stalled only.
+	tallyReplayStructureNeedsCoverage(report, nil, 0, false)
+	// Committed (not stalled) -- disclosed=true is deliberate (see doc
+	// comment above): must still be excluded.
+	tallyReplayStructureNeedsCoverage(report, nil, 1, true)
+	// Error (wiredErr != nil) -- disclosed=true is equally deliberate:
+	// must still be excluded, same reasoning as the generative harness's
+	// own error case.
+	tallyReplayStructureNeedsCoverage(report, context.DeadlineExceeded, 0, true)
+
+	if report.StructureNeedsCoverage == nil {
+		t.Fatal("report.StructureNeedsCoverage = nil, want a populated summary after at least one stalled case")
+	}
+	if got, want := report.StructureNeedsCoverage.TotalStalled, 2; got != want {
+		t.Errorf("TotalStalled = %d, want %d (the two stalled cases; committed and error cases excluded)", got, want)
+	}
+	if got, want := report.StructureNeedsCoverage.DisclosedOnStalled, 1; got != want {
+		t.Errorf("DisclosedOnStalled = %d, want %d (only the genuinely stalled+disclosed case -- the two excluded cases' disclosed=true must NOT leak in)", got, want)
+	}
+}
+
+// TestTallyReplayStructureNeedsCoverage_NoStalledCasesStaysNil is the
+// additive-optional twin, mirroring
+// TestTallyOutcome_StructureNeedsCoverage_NoStalledCasesStaysNil above.
+func TestTallyReplayStructureNeedsCoverage_NoStalledCasesStaysNil(t *testing.T) {
+	report := &replayReport{}
+	tallyReplayStructureNeedsCoverage(report, nil, 1, false)
+
+	if report.StructureNeedsCoverage != nil {
+		t.Fatalf("report.StructureNeedsCoverage = %+v, want nil (no stalled case was tallied)", report.StructureNeedsCoverage)
+	}
+}

@@ -705,6 +705,54 @@ func TestComposeStructureNeeds_EmptyMissingIsNil(t *testing.T) {
 	}
 }
 
+// TestStructureNeedsWouldDisclose_MatchesComposeStructureNeeds is a
+// CONTRACT LOCK (CHAOS-3927 P1 post-merge invariance measurement,
+// team-lead ruling, hardened after codex xhigh review round 1 on
+// chaos-replay-structure-needs-coverage): the FIRST version of this lock
+// tested composeStructureNeeds against two hand-picked Missing shapes,
+// pinning that StructureNeedsWouldDisclose's SEPARATE len(Missing) != 0
+// expression currently agreed with it -- nothing stopped the two being
+// edited independently later (codex's own example: narrowing the harness's
+// copy to len(Missing) > 1 would have left that test green while
+// undercounting every single-missing disclosure). StructureNeedsWouldDisclose
+// is now the ONE function composeStructureNeeds itself calls (structure.go),
+// so this test instead exhaustively cross-checks that shared function
+// against every closed-vocabulary ContextFabricStructureNeedKind member
+// PLUS the empty case -- proving nil/non-nil tracks
+// StructureNeedsWouldDisclose's own return for the FULL vocabulary, not
+// just one arbitrarily-chosen member (closing codex's "never tests
+// subject_anchor" gap too).
+func TestStructureNeedsWouldDisclose_MatchesComposeStructureNeeds(t *testing.T) {
+	t.Parallel()
+	t.Run("empty Missing", func(t *testing.T) {
+		t.Parallel()
+		material := StructureOfferMaterial{}
+		want := StructureNeedsWouldDisclose(material)
+		if want {
+			t.Fatal("StructureNeedsWouldDisclose(empty material) = true, want false")
+		}
+		needs := composeStructureNeeds(material, "result_00000001")
+		if (needs != nil) != want {
+			t.Errorf("composeStructureNeeds(empty material) non-nil = %v, want %v (StructureNeedsWouldDisclose's own answer)", needs != nil, want)
+		}
+	})
+	for _, kind := range contractsv1.ContextFabricStructureNeedKindVocabulary() {
+		kind := kind
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			material := StructureOfferMaterial{Missing: []StructureNeedKind{kind}}
+			want := StructureNeedsWouldDisclose(material)
+			if !want {
+				t.Fatalf("StructureNeedsWouldDisclose(Missing=[%s]) = false, want true (a single valid vocabulary member is always non-empty Missing)", kind)
+			}
+			needs := composeStructureNeeds(material, "result_00000001")
+			if (needs != nil) != want {
+				t.Errorf("composeStructureNeeds(Missing=[%s]) non-nil = %v, want %v (StructureNeedsWouldDisclose's own answer)", kind, needs != nil, want)
+			}
+		})
+	}
+}
+
 // TestComposeStructureNeeds_MintsReceiptAndOptionIDs pins that
 // composeStructureNeeds actually fills in the ids StructureOfferMaterial
 // left unset, deterministically from the given resultID.

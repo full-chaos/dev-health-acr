@@ -611,15 +611,36 @@ func structureOfferContent(v interface{}) string {
 	return string(b)
 }
 
+// StructureNeedsWouldDisclose reports whether composeStructureNeeds would
+// compose a non-nil StructureNeeds block for material -- the single source
+// of truth for that decision. composeStructureNeeds itself calls this
+// (never a second, parallel len(material.Missing) != 0 check), so the two
+// can never diverge.
+//
+// Exported (CHAOS-3927 P1 post-merge invariance measurement, codex xhigh
+// review finding, chaos-replay-structure-needs-coverage round 1): the
+// replay harness (internal/runtime/hosted) cannot call composeStructureNeeds
+// directly -- it has no result identity to mint receipt/option ids with --
+// but needs to ask this SAME question about a StructureOfferMaterial it
+// already has. The harness calls this function directly rather than
+// re-deriving the condition, closing the "two hand-written copies of the
+// same gate can silently drift" defect a test-only contract lock could not
+// actually prevent (a test pins two SEPARATE expressions to agree today;
+// it cannot stop them from being edited independently tomorrow -- sharing
+// the one function does).
+func StructureNeedsWouldDisclose(material StructureOfferMaterial) bool {
+	return len(material.Missing) != 0
+}
+
 // composeStructureNeeds fills in the deterministic receipt_id/option_id
 // for every offer StructureOfferMaterial carries -- ResultID was not yet
 // known when ResolveSubjects built the material's own CONTENT fields, so
 // minting waits until the result composing this disclosure has one (see
-// StructureOfferMaterial's own doc comment). nil whenever Missing is
-// empty (nothing to disclose -- mirrors composeEffectiveWindow's own
-// nil-means-nothing-in-play convention).
+// StructureOfferMaterial's own doc comment). nil whenever
+// StructureNeedsWouldDisclose is false (nothing to disclose -- mirrors
+// composeEffectiveWindow's own nil-means-nothing-in-play convention).
 func composeStructureNeeds(material StructureOfferMaterial, resultID string) *contractsv1.ContextFabricStructureNeeds {
-	if len(material.Missing) == 0 {
+	if !StructureNeedsWouldDisclose(material) {
 		return nil
 	}
 	needs := &contractsv1.ContextFabricStructureNeeds{Missing: material.Missing}

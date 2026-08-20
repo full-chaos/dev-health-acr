@@ -179,6 +179,32 @@ type replayCaseOutcome struct {
 	// added latency, reported as such (not overclaimed as exact).
 	BaselineElapsedMS int64 `json:"baseline_elapsed_ms"`
 	WiredElapsedMS    int64 `json:"wired_elapsed_ms"`
+	// WiredStructureNeedsWouldDisclose (CHAOS-3927 P1 post-merge invariance
+	// measurement, additive) is a PROXY, not an observation -- team-lead
+	// ruling: this harness never calls the full Investigate() pipeline, so
+	// it cannot observe composeStructureNeeds' own real decision the way
+	// the generative harness's StructureNeedsDisclosed does (that field
+	// reads result.StructureNeeds != nil off an ACTUAL composed result).
+	// This field instead calls contextfabric.StructureNeedsWouldDisclose
+	// against the wired arm's own StructureOfferMaterial -- the SECOND
+	// return value GraphReader.ResolveSubjects already produces, previously
+	// discarded here -- without running receipt minting or the rest of
+	// that pipeline (which needs a result identity this harness never
+	// mints). Codex xhigh review, round 1 (chaos-replay-structure-needs-coverage):
+	// the first version of this field hand-rolled
+	// len(material.Missing) != 0 as a SEPARATE expression from
+	// composeStructureNeeds' own gate, and a test asserting the two
+	// currently agree cannot stop them being edited independently later.
+	// StructureNeedsWouldDisclose is now the ONE function
+	// composeStructureNeeds itself calls to decide disclosure -- this field
+	// calls that same function, so the two provably cannot diverge (see
+	// TestStructureNeedsWouldDisclose_MatchesComposeStructureNeeds,
+	// structure_test.go, internal/contextfabric, which exhaustively checks
+	// every closed-vocabulary member).
+	// Baseline has no equivalent field, by the same "wired-arm-only"
+	// reasoning WiredSearchTruncated's own doc comment gives: baseline is
+	// the pre-CHAOS-3884 counterfactual, never what production discloses.
+	WiredStructureNeedsWouldDisclose bool `json:"wired_structure_needs_would_disclose,omitempty"`
 }
 
 // replayShadowCensusKind is ONE per-kind census receipt (CHAOS-3899, brief
@@ -273,6 +299,15 @@ type replayReport struct {
 	CasesRun         int                     `json:"cases_run"`
 	DiffTally        map[replayDiffClass]int `json:"diff_tally"`
 	Outcomes         []replayCaseOutcome     `json:"outcomes"`
+	// StructureNeedsCoverage (CHAOS-3927 P1 post-merge invariance
+	// measurement, additive) is the run-level rollup of
+	// WiredStructureNeedsWouldDisclose over every STALLED case -- reuses
+	// structureNeedsCoverage verbatim from generative_trial_live_test.go
+	// (same package, same "disclosed_on_stalled/total_stalled" counts-only
+	// shape), aggregated in the main loop below. nil unless at least one
+	// stalled case ran, mirroring that type's own additive-optional
+	// discipline.
+	StructureNeedsCoverage *structureNeedsCoverage `json:"structure_needs_coverage,omitempty"`
 }
 
 // replayStatus classifies ONE arm's resolution outcome using this harness's
@@ -309,6 +344,33 @@ func buildReplayArmOutcome(res contractsv1.ContextFabricSubjectResolution, err e
 	outcome.Committed = committedMatchProvenance(res.Committed, res.Candidates)
 	outcome.CandidatePool = candidatePoolProvenance(res.Candidates)
 	return outcome
+}
+
+// tallyReplayStructureNeedsCoverage (CHAOS-3927 P1 post-merge invariance
+// measurement) aggregates ONE case's wired-arm outcome into report's own
+// StructureNeedsCoverage -- mirrors tallyOutcome's own stalled-gate
+// reasoning in generative_trial_live_test.go exactly, adapted to this
+// harness's vocabulary: a case is STALLED iff the wired arm reached a real
+// result (wiredErr == nil -- excludes every interpret/resolve error, which
+// never produced offer material to check) AND committed no subject
+// (wiredCommittedCount == 0, control cases included -- composeStructureNeeds'
+// own subjectless-terminal path does not distinguish control from
+// non-control, matching the generative harness's identical rule). Factored
+// out as its own pure function (report *replayReport, not the whole loop
+// state) so it can be unit-tested directly, the same fix codex xhigh review
+// required for the generative harness's own coverage aggregation
+// (chaos-structure-needs-coverage, finding 2).
+func tallyReplayStructureNeedsCoverage(report *replayReport, wiredErr error, wiredCommittedCount int, wiredStructureNeedsDisclosed bool) {
+	if wiredErr != nil || wiredCommittedCount != 0 {
+		return
+	}
+	if report.StructureNeedsCoverage == nil {
+		report.StructureNeedsCoverage = &structureNeedsCoverage{}
+	}
+	report.StructureNeedsCoverage.TotalStalled++
+	if wiredStructureNeedsDisclosed {
+		report.StructureNeedsCoverage.DisclosedOnStalled++
+	}
 }
 
 // sameCommittedSet reports whether a and b name the same subjects
@@ -812,7 +874,7 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		baselineRes, _, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 		outcome.BaselineElapsedMS = time.Since(baselineStart).Milliseconds()
 		wiredStart := time.Now()
-		wiredRes, _, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+		wiredRes, wiredOfferMaterial, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 		outcome.WiredElapsedMS = time.Since(wiredStart).Milliseconds()
 		cancelCase()
 
@@ -840,6 +902,18 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		} else {
 			outcome.DiffClass = classifyReplayDiff(tc, baselineRes.Committed, wiredRes.Committed)
 		}
+		// CHAOS-3927 P1 post-merge invariance measurement:
+		// contextfabric.StructureNeedsWouldDisclose is the SAME function
+		// composeStructureNeeds itself calls to decide disclosure -- not a
+		// second, hand-written copy of its condition -- checked directly
+		// against the wired arm's already-computed offer material. See
+		// tallyReplayStructureNeedsCoverage's own doc comment for the
+		// stalled-gate/aggregation logic itself (factored out and
+		// unit-tested there).
+		if wiredErr == nil {
+			outcome.WiredStructureNeedsWouldDisclose = contextfabric.StructureNeedsWouldDisclose(wiredOfferMaterial)
+		}
+		tallyReplayStructureNeedsCoverage(&report, wiredErr, outcome.Wired.CommittedCount, outcome.WiredStructureNeedsWouldDisclose)
 		report.Outcomes = append(report.Outcomes, outcome)
 		report.DiffTally[outcome.DiffClass]++
 		report.CasesRun++
