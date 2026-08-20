@@ -95,8 +95,6 @@ jobs:
         if: github.event_name != 'pull_request'
         with:
           node-version: 25
-          cache: pnpm
-          cache-dependency-path: dev-health/web/pnpm-lock.yaml
       - name: Install web dependencies and the Playwright browser runtime
         if: github.event_name != 'pull_request'
         working-directory: dev-health/web
@@ -316,8 +314,6 @@ jobs:
         if: steps.decide.outputs.run == 'true'
         with:
           node-version: 25
-          cache: pnpm
-          cache-dependency-path: dev-health/web/pnpm-lock.yaml
       - name: Install web dependencies and the Playwright browser runtime
         if: steps.decide.outputs.run == 'true'
         working-directory: dev-health/web
