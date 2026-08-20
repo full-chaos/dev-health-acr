@@ -18,7 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
-const rootUsage = `Usage: acr-projector [serve|rebuild|rollback|version]
+const rootUsage = `Usage: acr-projector [serve|rebuild|rollback|priors|version]
 
 Commands:
   serve             run the Context Fabric projection worker and readiness server
@@ -33,6 +33,8 @@ Commands:
                      ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED) -- the
                      disaster-recovery lever for a flip that should not have
                      happened. Refused outside the grace window.
+  priors <sub>       CHAOS-3977 P5's own Bridge prior store operator surface
+                     (curate/flip/rollback/revoke) -- see 'priors --help'.
   version            print build identity
 `
 
@@ -67,8 +69,10 @@ func run(args []string) error {
 		return rebuild(args)
 	case "rollback":
 		return rollback(args)
+	case "priors":
+		return priorsCommand(args)
 	default:
-		return fmt.Errorf("unknown command %q; use serve, rebuild, or version", command)
+		return fmt.Errorf("unknown command %q; use serve, rebuild, rollback, priors, or version", command)
 	}
 }
 

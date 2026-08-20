@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructurepriors"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructureselection"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -475,6 +476,34 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ok, reason := graphrank.VerifyAnchorClaimantUnique(ctx, orgID, kind, canonicalID, matchedTermHash, identityUniverse)
 		return ok, contextfabric.AnchorVerificationReason(reason)
 	})
+	// priorConsultant (CHAOS-3977 P5, design brief §3.4) is nil unless
+	// ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED is set -- the deployment-
+	// wide half of the "flag-gated per org, default OFF" gate; the per-org
+	// half is the active-version pointer itself (pgstructurepriors.Store.GetActive
+	// degrades to "no active version" for any org that was never flipped,
+	// DP8(a)). Shares postgres.db with every other Postgres-backed
+	// dependency in this function -- read-only, no separate connection.
+	var priorConsultant contextfabric.PriorConsultant
+	var priorHandleGrammarChecker contextfabric.HandleGrammarChecker
+	if request.config.StructurePriorsEnabled {
+		priorStore, err := pgstructurepriors.NewStore(postgres.db)
+		if err != nil {
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize structure prior store: %w", err)
+		}
+		priorConsultant = contextfabric.NewPriorConsultant(priorStore)
+		// priorHandleGrammarChecker mirrors graphConfig.HandleGrammarChecker
+		// (buildContextFabricGraphReader, above) exactly -- the SAME pure,
+		// no-I/O registry lookup, duplicated here because Engine's own prior
+		// consultation (priors_consult.go) merges AFTER ResolveSubjects
+		// returns, outside that function's own call boundary -- see
+		// EngineDependencies.PriorHandleGrammarChecker's own doc comment.
+		priorHandleGrammarChecker = func(kind contractsv1.ContextFabricSubjectKind, patternID, value string) (string, bool) {
+			if !graphrank.ValidateHandleGrammar(graphrank.CensusKind(kind), patternID, value) {
+				return "", false
+			}
+			return graphrank.HandleSourceColumn(graphrank.CensusKind(kind), patternID)
+		}
+	}
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
 		devhealthfacts.NewProviders(clickhouse.queryClient),
 		contextfabric.FactRegistryOptions{Now: request.options.Now},
@@ -634,6 +663,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// CHAOS-3900 P1.E: see anchorVerifier's own construction comment
 		// above.
 		AnchorVerifier: anchorVerifier,
+		// CHAOS-3977 P5: nil unless ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED
+		// -- see priorConsultant's own construction comment above.
+		PriorConsultant:           priorConsultant,
+		PriorHandleGrammarChecker: priorHandleGrammarChecker,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
 		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions

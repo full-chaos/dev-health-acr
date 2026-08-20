@@ -350,7 +350,7 @@ func TestWindowExplicitProvenance(t *testing.T) {
 func TestComposeEffectiveWindow_NonCurrentAxisNeverCarriesAWindow(t *testing.T) {
 	t.Parallel()
 	historical := InterpretedQuestion{Shape: ShapeSingleSubject, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: timePtr(time.Now())}}
-	got := composeEffectiveWindow(historical, nil, WindowBindOutcome{}, time.Now())
+	got := composeEffectiveWindow(historical, nil, WindowBindOutcome{}, windowPriorProposal{}, time.Now())
 	if got != nil {
 		t.Errorf("composeEffectiveWindow(historical axis) = %+v, want nil", got)
 	}
@@ -369,7 +369,7 @@ func TestComposeEffectiveWindow_BinderProposalOverridesClassTableDefault(t *test
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	binder := WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: RelativeWindowTrailing365D, SpansBound: 1}
 
-	got := composeEffectiveWindow(interpreted, nil, binder, now)
+	got := composeEffectiveWindow(interpreted, nil, binder, windowPriorProposal{}, now)
 	if got == nil {
 		t.Fatal("composeEffectiveWindow = nil, want an inferred window")
 	}
@@ -390,7 +390,7 @@ func TestComposeEffectiveWindow_RequestWindowNeverOverridden(t *testing.T) {
 	interpreted := InterpretedQuestion{Shape: ShapeSingleSubject, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}
 	binder := WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: RelativeWindowTrailing30D, SpansBound: 1}
 
-	got := composeEffectiveWindow(interpreted, requestWindow, binder, time.Now())
+	got := composeEffectiveWindow(interpreted, requestWindow, binder, windowPriorProposal{}, time.Now())
 	if got != requestWindow {
 		t.Errorf("composeEffectiveWindow did not return the request-side window unchanged: got %+v, want %+v", got, requestWindow)
 	}

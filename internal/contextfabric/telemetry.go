@@ -174,3 +174,24 @@ func (t SlogEngineTelemetry) RecordStructureExplicit(ctx context.Context, princi
 	args := append([]any{"org_id", principal.OrgID, "member", string(member), "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure explicit", args...)
 }
+
+// RecordPriorConsulted (CHAOS-3977 P5). member/outcome are both closed
+// enums -- see PriorConsultedOutcome's own doc comment (priors.go).
+func (t SlogEngineTelemetry) RecordPriorConsulted(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome PriorConsultedOutcome) {
+	args := append([]any{"org_id", principal.OrgID, "member", string(member), "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric prior consulted", args...)
+}
+
+// RecordPriorDegradation (CHAOS-3977 P5) logs at Warn for
+// PriorDegradationPointerDangling (design brief §3.4: "additionally raises
+// an operator signal because it means a retire outran its grace") and at
+// Info for every other state -- an ordinary, expected degrade-and-continue
+// outcome, never itself a sign anything is broken.
+func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, principal storage.Principal, state PriorDegradationState) {
+	args := append([]any{"org_id", principal.OrgID, "state", string(state)}, requestIDLogAttrs(ctx)...)
+	if state == PriorDegradationPointerDangling {
+		t.logger.WarnContext(ctx, "context fabric prior consultation degraded: active version pointer names a missing snapshot", args...)
+		return
+	}
+	t.logger.InfoContext(ctx, "context fabric prior consultation degraded", args...)
+}

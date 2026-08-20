@@ -487,7 +487,22 @@ func windowsAgree(effective contractsv1.ContextFabricEffectiveEvidenceWindow, re
 // axis the answer no longer speaks for would be a mismatched, misleading
 // disclosure -- so this returns nil whenever the INTERPRETED axis is not
 // current, regardless of what precedence step 1 found on the wire request.
-func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, now time.Time) *contractsv1.ContextFabricEffectiveEvidenceWindow {
+// windowPriorProposal (CHAOS-3977 P5, design brief §3.4, DP4(a) site two)
+// is Engine's own pre-consulted prior proposal for the inferred-default
+// slot -- computed BEFORE composeEffectiveWindow runs (Engine has ctx/
+// principal; this function does not), ONLY when precedence steps 1-2 both
+// declined to decide (Investigate's own call-site gate, engine.go). OK
+// false is the zero value, so an unset windowPriorProposal{} behaves
+// exactly like "no prior consulted" -- byte-identical to pre-P5 behavior
+// for every caller that does not thread one.
+type windowPriorProposal struct {
+	RelativeID     RelativeWindowID
+	PriorVersionID string
+	PriorEntryID   string
+	OK             bool
+}
+
+func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, priorWindow windowPriorProposal, now time.Time) *contractsv1.ContextFabricEffectiveEvidenceWindow {
 	if interpretation.TimeContext.Axis != TemporalCurrent {
 		return nil
 	}
@@ -499,15 +514,30 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 	if !ok {
 		// state_snapshot, or no class could be determined at all --
 		// "refuse to guess" (design brief §2): no window, never a wrong
-		// constraint.
+		// constraint. A prior proposal is deliberately NOT consulted to
+		// rescue this case (CHAOS-3977 P5) -- design brief §3.4 names the
+		// prior as substituting for "the engine's own fallback... would
+		// otherwise guess," not as a second-chance override of a refusal;
+		// see windowPriorProposal's own doc comment.
 		return nil
 	}
-	if binderProposal.Reason == WindowBindRoutedInferred {
+	switch {
+	case binderProposal.Reason == WindowBindRoutedInferred:
 		// A guards-passing binder span PROPOSES a RelativeID that
 		// overrides the class table's own pick (design brief §1.2) -- it
 		// still never mints question_stated authority; the provenance
-		// below stays inferred_default either way.
+		// below stays inferred_default either way. Takes priority over any
+		// prior proposal (a deterministic read of THIS question's own text
+		// beats a historical aggregate).
 		relativeID = binderProposal.RelativeID
+	case priorWindow.OK:
+		// CHAOS-3977 P5 (design brief §3.4, DP4(a) site two): a prior may
+		// propose the RelativeID the class table would otherwise guess --
+		// same inferred_default provenance either way (disclosed via
+		// cf_prior_consulted telemetry, PriorVersionID/PriorEntryID
+		// included -- see priors_consult.go's own scoping note on why this
+		// slot's disclosure is telemetry-only in v1, not a new wire field).
+		relativeID = priorWindow.RelativeID
 	}
 	if relativeID == RelativeWindowAllTime {
 		return &contractsv1.ContextFabricEffectiveEvidenceWindow{

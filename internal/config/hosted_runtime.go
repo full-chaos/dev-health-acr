@@ -65,6 +65,13 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironmen
 	if cfg.EnableContextFabricInvestigations, err = boolValue(lookup, GraphReadsEnabledEnvVar, false); err != nil {
 		return err
 	}
+	// CHAOS-3977 P5 (design brief §3.4): "Flag-gated per org... default OFF"
+	// -- the per-org half of that gate is the active-version pointer itself
+	// (an org absent a flip has no active version regardless of this flag);
+	// this is the deployment-wide half.
+	if cfg.StructurePriorsEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED", false); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -129,6 +136,7 @@ func (c Config) SafeAttributes() []any {
 		"postgres_max_idle_conns_configured", c.PostgresMaxIdleConnsConfigured,
 		"episode_writeback_enabled", c.EnableEpisodeWriteback,
 		"context_fabric_investigations_enabled", c.EnableContextFabricInvestigations,
+		"context_fabric_structure_priors_enabled", c.StructurePriorsEnabled,
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,
 		"entitlement_mode", string(c.EntitlementMode()),

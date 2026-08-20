@@ -78,6 +78,16 @@ type Config struct {
 	// convention ADR 0007 established (and ADR 0009 carries forward) for
 	// the projection worker.
 	EnableContextFabricInvestigations bool
+	// StructurePriorsEnabled (CHAOS-3977 P5, design brief §3.4,
+	// ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED) is the Bridge prior
+	// store's own master switch -- default OFF. Even when true, an
+	// organization with no active prior version (§3.7 cold start, or the
+	// pointer never flipped -- DP8(a)) simply degrades to engine-derived
+	// offers, identically to this being false; this flag governs whether
+	// hosted composition constructs a non-nil contextfabric.PriorConsultant
+	// AT ALL, the same "does the dependency exist" gate
+	// EnableContextFabricInvestigations is for the investigator itself.
+	StructurePriorsEnabled bool
 	// AnswerReuseMaxAge (CHAOS-3782, ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE)
 	// is the staleness window TRD §19.7.3 condition 4 enforces: a stored
 	// investigation result older than this is never reused, regardless of
