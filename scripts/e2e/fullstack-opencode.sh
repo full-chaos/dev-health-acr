@@ -64,6 +64,19 @@ OPENCODE_OBSERVED_VERSION=""
 PROVIDER_NPM_SPEC="${PROVIDER_NPM_SPEC:-@ai-sdk/openai-compatible@3.0.14}"
 OPENCODE_RUNTIME_FIXTURE="${OPENCODE_RUNTIME_FIXTURE:-}"
 OPENCODE_RUNTIME_FIXTURE_SHA256=""
+# OpenCode's provider loader keeps its OWN cache of the resolved provider package under
+# <XDG_CACHE_HOME>/opencode/packages/<name>@<version>/, entirely separate from the
+# <config>/opencode/node_modules OPENCODE_RUNTIME_FIXTURE stages. With PROVIDER_NPM_OFFLINE
+# set, OpenCode's provider-initialization step still makes a registry check before it will
+# trust a locally present package, and that check fails closed even when node_modules already
+# has the package -- confirmed live: "Failed to initialize provider" reproduces the same way
+# whether or not OPENCODE_RUNTIME_FIXTURE is staged, and stops reproducing the moment this
+# cache directory is pre-populated instead. OPENCODE_PACKAGE_CACHE, if set, names a directory
+# whose contents get copied into every task's fresh $CLIENT_HOME/cache/opencode/packages/ --
+# see prepare_artifacts(). This is a plain cache, not a security-sensitive fixture: staging it
+# is best-effort, and a missing or stale entry just means OpenCode refetches normally rather
+# than failing closed the way a corrupt OPENCODE_RUNTIME_FIXTURE does.
+OPENCODE_PACKAGE_CACHE="${OPENCODE_PACKAGE_CACHE:-}"
 # OpenCode installs the provider adapter, and its own ~83MB @opencode-ai/{plugin,sdk}
 # bootstrap, on first use. CI pre-warms both and then sets PROVIDER_NPM_OFFLINE=true so the
 # graded run cannot reach the registry; locally the default stays false so a cold cache works.
@@ -187,6 +200,15 @@ prepare_artifacts() {
   chmod 700 "$CLIENT_HOME"
   OPENCODE_RUNTIME_FIXTURE_SHA256="$(stage_opencode_runtime_fixture "$OPENCODE_RUNTIME_FIXTURE" "$CLIENT_HOME/config/opencode")" \
     || fs_die 'OPENCODE_RUNTIME_FIXTURE staging failed'
+  if [[ -n "$OPENCODE_PACKAGE_CACHE" ]]; then
+    if [[ -d "$OPENCODE_PACKAGE_CACHE" && -r "$OPENCODE_PACKAGE_CACHE" ]]; then
+      mkdir -p "$CLIENT_HOME/cache/opencode/packages"
+      cp -R "$OPENCODE_PACKAGE_CACHE/." "$CLIENT_HOME/cache/opencode/packages/" \
+        || note 'OPENCODE_PACKAGE_CACHE copy failed; the graded run will fetch the provider package live instead'
+    else
+      note "OPENCODE_PACKAGE_CACHE=${OPENCODE_PACKAGE_CACHE} is not a readable directory; ignoring it"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1064,10 +1086,20 @@ write_web_assertion_material() {
   key="$STATE/web/web-assertion.key"
   jwks="$STATE/web/web-assertions.jwks.json"
   openssl genpkey -algorithm ED25519 -out "$key"
+  # This private key is bind-mounted read-only into web-fullstack, whose Dockerfile has no
+  # USER directive and so runs as root -- unlike acr-api's distroless nonroot UID 65532, no
+  # ownership mismatch applies here, and dev-health-web's own readPrivateKey()
+  # (src/lib/acr/config.ts) explicitly REJECTS any group/other permission bits
+  # ((mode & 0o077) !== 0) as "Agent Context Runtime is not configured." Mode 600, not 644,
+  # for this file specifically -- confirmed live: leaving it 644 makes device approval fail
+  # 503 "configuration" on a real Linux Docker host, since Docker Desktop's macOS file
+  # sharing does not surface that mode-bit rejection the same way a native bind mount does.
   chmod 600 "$key"
   public="$(openssl pkey -in "$key" -pubout -outform DER | python3 -c 'import base64,sys; print(base64.urlsafe_b64encode(sys.stdin.buffer.read()[-32:]).rstrip(b"=").decode())')"
   printf '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"acr-fullstack-web","use":"sig","alg":"EdDSA","x":"%s"}]}\n' "$public" > "$jwks"
-  chmod 600 "$jwks"
+  # This one stays 644: acr-api reads it fine at that mode (confirmed live,
+  # web_assertions_configured=true), and it is public key material by definition.
+  chmod 644 "$jwks"
 }
 
 # The web overlay lands in svs.override.yml because the shared compose() helper already
@@ -1362,7 +1394,15 @@ bootstrap_web_user() {
     printf '%s\n' "$create_output" | redact_log >&2
     fs_die "could not create the isolated web user (dev-hops exited ${create_status})"
   fi
-  compose exec -T api dev-hops admin users update --email "$WEB_EMAIL" --verified --org "$(<"$STATE/org-id")" --role owner >/dev/null
+  # --superuser: dev-health-web's /agent-context/context-packet is now a compatibility alias
+  # for pre-move bookmarks (see its own comment) -- Context Fabric validation moved to its
+  # platform-admin home at /superadmin/context-fabric/validation, gated on
+  # session.user.is_superuser, not on org role or the agent_context_runtime entitlement alone.
+  # Without this the alias silently redirects a non-superuser org owner to /diagnose or /dev
+  # instead, and run_web_agreement_check's wait for the "Context Fabric" heading times out
+  # 30s later with no signal of why. This isolated harness user is torn down with the rest of
+  # the project at the end of the run, so platform-superuser scope here is not a standing grant.
+  compose exec -T api dev-hops admin users update --email "$WEB_EMAIL" --verified --superuser --org "$(<"$STATE/org-id")" --role owner >/dev/null
   assert_acr_entitlement
 }
 
@@ -1445,13 +1485,23 @@ run_web_agreement_check() {
   wait_web_ready
   bootstrap_web_user
   assert_repository_catalog_visible
+  # SVS_TASK_REFERENCE is deliberately empty: task_ref is an exact-match filter on
+  # work_items.v1/work_item_dependencies.v1/work_graph.v1 server side, and the direct-HTTP/MCP
+  # paths this check is compared against never set it. A ticket reference here (e.g.
+  # "CHAOS-3065") does not match this fixture's seeded work items and silently drops those
+  # sources to "unavailable" only on the browser path -- see svs-browser.mjs's optionalValue().
+  # A comment MUST NOT sit inside this backslash-continued env-var chain: bash only escapes
+  # the newline that immediately follows a `\`, so a `#...` line here would silently end the
+  # logical command right there, turning every SVS_* assignment before it into inert local
+  # shell variables that never reach `node` below -- exactly the "SVS_WEB_URL is required"
+  # crash this comment's own first draft caused.
   SVS_WEB_URL="http://127.0.0.1:${WEB_PORT}" \
   SVS_WEB_EMAIL="$WEB_EMAIL" \
   SVS_WEB_PASSWORD="$WEB_PASSWORD" \
   SVS_GOAL="$(task_field "$task_id" '.goal')" \
   SVS_REPOSITORY="$FULLSTACK_REPO_SLUG" \
   SVS_BRANCH="$(task_field "$task_id" '.scope.branch // ""')" \
-  SVS_TASK_REFERENCE="CHAOS-3065" \
+  SVS_TASK_REFERENCE="" \
   SVS_BROWSER_PACKET="$ARTIFACTS/web-packet.json" \
   SVS_BROWSER_EVIDENCE="$ARTIFACTS/web-evidence.json" \
   SVS_BROWSER_SCREENSHOT="$ARTIFACTS/playwright/context-packet.png" \

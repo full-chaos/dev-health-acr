@@ -267,12 +267,23 @@ VALUES
 -- in an "incidents" table is required or possible -- see the note above about
 -- incidents.v1 querying a table ops migration 068 dropped; this edge only
 -- needs to satisfy its own WHERE clause (org_id + repo_id).
+--
+-- Confidence must stay >= 0.5. internal/contextpacket/source_executor.go filters rows with
+-- `{include_low_confidence:UInt8} = 1 OR confidence >= 0.5`, and the MCP context_for_task tool
+-- (internal/mcp) never sets IncludeLowConfidence, so it defaults to false -- unlike the direct
+-- HTTP context-packets endpoint, which every fullstack-opencode.sh caller invokes with
+-- include_low_confidence:true. A prior 0.4 value passed the direct-HTTP capture used by
+-- capture_api_packet but was silently dropped from the live packet OpenCode's MCP session
+-- actually sees, so deployment_incident_provenance.v1 came back "unavailable:no_evidence"
+-- only through the real agent-facing path -- exactly the surface task-001's oracle requires
+-- to be complete (see task-001-checkout-flake-exact-commit.oracle.json's
+-- expected_unavailable_sources_note). Caught the first time this gate ran for real in CI.
 INSERT INTO work_graph_deployment_incident_edges
     (edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence,
      source, evidence, observed_at, computed_at)
 VALUES
     ('edge-deploy-incident-2026-01-14-01', '__ORG_ID__', 'deploy-widget-2026-01-14-01',
-     'none', 'synthetic', '00000000-3065-4000-8000-000000000001', 0.4, 'heuristic',
+     'none', 'synthetic', '00000000-3065-4000-8000-000000000001', 0.6, 'heuristic',
      'no operational incident correlated with this deployment', '2026-01-14 11:10:00.000',
      '2026-01-14 12:00:00.000');
 

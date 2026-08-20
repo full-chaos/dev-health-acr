@@ -7,13 +7,24 @@ function value(name) {
     return found;
 }
 
+// optionalValue: SVS_TASK_REFERENCE flows into the live request as `task_ref`, which
+// work_items.v1/work_item_dependencies.v1/work_graph.v1 use as an exact-match filter server
+// side (see internal/contextpacket/source_queries.go) -- a non-empty value that does not match
+// a seeded work item or work-graph edge silently drops those sources to "unavailable", exactly
+// like leaving the field blank does for a real operator with no specific task in mind. The
+// direct-HTTP/MCP paths this check is compared against never set task_ref at all, so the
+// browser form must not force a value either.
+function optionalValue(name) {
+    return process.env[name] ?? "";
+}
+
 const baseUrl = value("SVS_WEB_URL");
 const email = value("SVS_WEB_EMAIL");
 const password = value("SVS_WEB_PASSWORD");
 const goal = value("SVS_GOAL");
 const repository = value("SVS_REPOSITORY");
 const branch = value("SVS_BRANCH");
-const taskReference = value("SVS_TASK_REFERENCE");
+const taskReference = optionalValue("SVS_TASK_REFERENCE");
 const packetOutput = resolve(value("SVS_BROWSER_PACKET"));
 const evidenceOutput = resolve(value("SVS_BROWSER_EVIDENCE"));
 const screenshotOutput = resolve(value("SVS_BROWSER_SCREENSHOT"));
@@ -161,7 +172,13 @@ try {
     }
 
     await page.goto(`${baseUrl}/agent-context/context-packet`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "Context Fabric", level: 1 }).waitFor();
+    // /agent-context/context-packet is now a compatibility alias that redirects a superuser to
+    // /superadmin/context-fabric/validation, whose page wrapper renders its own "Context Fabric
+    // Validation" h1 above the Explorer widget's "Context Fabric" h1 -- both level 1, so a
+    // substring match on "Context Fabric" resolves to both and Playwright's strict mode
+    // rejects it. `exact: true` pins this to the Explorer widget's own heading, matching what
+    // this locator found (uniquely) before that page move.
+    await page.getByRole("heading", { name: "Context Fabric", level: 1, exact: true }).waitFor();
     await page.getByLabel(/Goal/).fill(goal);
     await page.getByLabel("Repository").selectOption(repository);
     await page.getByLabel("Branch or commit").fill(branch);

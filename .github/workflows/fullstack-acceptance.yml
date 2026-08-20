@@ -8,10 +8,13 @@ name: fullstack-acceptance
 # slice, the real acr-api, the real host-local acr-mcp sidecar, and a real
 # headless OpenCode session driven by a deterministic local model.
 #
-# It needs a checkout of the sibling full-chaos/dev-health monorepo for
-# compose.yml, the Ops image and dev-health-web, so it cannot run on forks.
-# Fork pull requests are skipped rather than failed; `make verify` still
-# covers the contract surface there.
+# The product slice is assembled from the PUBLIC full-chaos/dev-health-ops
+# and full-chaos/dev-health-web repositories, checked out tokenlessly into a
+# dev-health/{ops,web} layout, with a minimal CI-only compose file
+# (.github/fullstack/compose.ci.yml, authored from scratch — see that file's
+# header) copied to dev-health/compose.yml. "full-chaos/dev-health" is not a
+# GitHub repository; it is chris's local folder name for that same layout,
+# and DEV_HEALTH_ROOT/E2E_WEB_ROOT below name the CI equivalent of it.
 
 "on":
   pull_request:
@@ -26,7 +29,7 @@ name: fullstack-acceptance
         required: false
         default: full
       web_ref:
-        description: optional full-chaos/dev-health ref to prove; empty uses its default branch
+        description: optional full-chaos/dev-health-web ref to prove; empty uses its default branch
         required: false
         type: string
         default: ""
@@ -46,60 +49,70 @@ env:
   PROVIDER_NPM_SPEC: "@ai-sdk/openai-compatible@3.0.14"
 
 jobs:
-  # This gate boots the product slice, so it needs a token that can read the private sibling
-  # repository. Without one, actions/checkout fails with "Input required and not supplied:
-  # token" — which names neither the missing secret nor the repository it was for. Both jobs
-  # below are gated on this check instead, so an unconfigured repository reports a skip with an
-  # actionable message rather than a red X with a cryptic cause. The `secrets` context is not
-  # available in a job-level `if`, which is why this is a job rather than a condition.
-  preflight:
-    name: preflight
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      product_repo_readable: ${{ steps.token.outputs.present }}
-    steps:
-      - id: token
-        env:
-          PRODUCT_REPO_TOKEN: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${PRODUCT_REPO_TOKEN:-}" ]]; then
-            echo 'present=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'present=false' >> "$GITHUB_OUTPUT"
-            echo "::warning title=Full-stack acceptance skipped::DEV_HEALTH_REPO_TOKEN is not configured on this repository, so full-chaos/dev-health cannot be checked out and the gate cannot boot the product slice. Add a repository secret holding a token with read access to that repository to enable it."
-          fi
-
   compose:
     name: compose acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: preflight
-    # A fork PR has no access to the private sibling repository, and neither does a repository
-    # without the token secret configured.
-    if: >-
-      needs.preflight.outputs.product_repo_readable == 'true' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
+      # scripts/e2e/compose.sh's ensure_image() references the locally-built ACR image by
+      # digest (repo:tag@sha256:<id>) so Compose never quietly rebuilds or refetches it, but
+      # that Image-ID-as-digest trick only resolves locally under Docker's containerd image
+      # store -- the classic overlay2 graph driver GitHub-hosted runners ship by default has
+      # no local record of that "digest" and falls through to an actual registry pull, which
+      # 404s: "pull access denied for <project>-acr-api, repository does not exist". This must
+      # run before anything else touches Docker in this job.
+      - name: Enable the Docker containerd image store
+        run: |
+          echo '{"features": {"containerd-snapshotter": true}}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}'
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           path: dev-health-acr
           persist-credentials: false
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0 — public repo, no token needed.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          repository: full-chaos/dev-health
-          path: dev-health
-          ref: ${{ inputs.web_ref }}
-          token: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
+          repository: full-chaos/dev-health-ops
+          path: dev-health/ops
           persist-credentials: false
-      - name: Record the checked-out Dev Health ref
+      # actions/checkout v7.0.0 — public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-web
+          path: dev-health/web
+          ref: ${{ inputs.web_ref }}
+          persist-credentials: false
+      - name: Assemble the product-slice compose file and record checked-out refs
         run: |
-          web_ref="$(git -C dev-health rev-parse HEAD)"
+          set -euo pipefail
+          cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
+          ops_ref="$(git -C dev-health/ops rev-parse HEAD)"
+          web_ref="$(git -C dev-health/web rev-parse HEAD)"
+          echo "E2E_OPS_REF=$ops_ref" >> "$GITHUB_ENV"
           echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
+      # E2E_WEB is 'off' on a pull_request (the web-agreement job below covers that path
+      # instead) and 'on' otherwise -- see the "Run the full-stack acceptance gate" step's env
+      # block. fullstack-opencode.sh's render_web_override() imports
+      # dev-health/web/node_modules/@playwright/test directly and run_web_agreement_check()
+      # requires it to already exist; a bare checkout has no node_modules at all.
+      # pnpm/action-setup v6.0.9
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        if: github.event_name != 'pull_request'
+        with:
+          package_json_file: dev-health/web/package.json
+      # actions/setup-node v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        if: github.event_name != 'pull_request'
+        with:
+          node-version: 25
+      - name: Install web dependencies and the Playwright browser runtime
+        if: github.event_name != 'pull_request'
+        working-directory: dev-health/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
@@ -108,6 +121,19 @@ jobs:
 
       - name: Install the pinned OpenCode release
         run: |
+          # The npm package's own postinstall script (postinstall.mjs) runs the freshly
+          # unpacked binary with `--version` to verify the download -- with no HOME/XDG
+          # override of its own, so `npm install` itself (not just an explicit `opencode
+          # --version` afterward) initialises ~/.config/opencode and ~/.local/share/opencode.
+          # docs/fullstack-acceptance.md §6 already documents that even a bare version check
+          # does this; the later "operator client configuration is absent" steps assert those
+          # paths never exist on this runner at all, so the whole install must run against a
+          # throwaway root, not just this step's own explicit version check.
+          preflight="$RUNNER_TEMP/opencode-preflight"
+          mkdir -p "$preflight"/{config,data,cache,state}
+          export HOME="$preflight"
+          export XDG_CONFIG_HOME="$preflight/config" XDG_DATA_HOME="$preflight/data"
+          export XDG_CACHE_HOME="$preflight/cache" XDG_STATE_HOME="$preflight/state"
           npm install --global --no-fund --no-audit \
             "opencode-ai@${OPENCODE_PINNED_VERSION}"
           observed="$(opencode --version)"
@@ -121,18 +147,79 @@ jobs:
       # OPENCODE_DISABLE_* vars do not suppress it. The provider adapter is
       # installed on first use too. One throwaway run warms both. The native
       # deps are arch-specific, so this must run on the runner's own OS/arch.
+      # Renders the ACTUAL tests/fullstack/opencode/opencode.json.template (the same one
+      # render_client_sandbox() uses for every graded task) with placeholder values for the
+      # MCP/ACR fields -- never dereferenced, since provider initialisation populates
+      # OpenCode's package cache before it ever tries to reach the model server or spawn the
+      # MCP subprocess -- rather than a bare {"$schema":...} config or a hand-rolled subset of
+      # the template a prior version of this step used. Either of those, it turns out, is not
+      # equivalent: OpenCode's own config/model-key resolution is exact-match and undocumented
+      # in its failure mode (see docs/fullstack-acceptance.md §6's "Unexpected server error"
+      # note), so reusing the identical, already-proven-working template file end to end is
+      # the only way to be sure warmup exercises the real path rather than a close-but-subtly-
+      # different one.
       - name: Pre-warm the OpenCode and provider caches
         run: |
+          set -euo pipefail
           npm cache add "$PROVIDER_NPM_SPEC"
           warm="$RUNNER_TEMP/opencode-warm"
-          mkdir -p "$warm"/{config,data,cache,state}
-          printf '%s' "{\"\$schema\":\"https://opencode.ai/config.json\"}" \
-            > "$warm/config/opencode.json"
+          mkdir -p "$warm"/config/opencode "$warm"/{data,cache,state}
+          sed \
+            -e "s#__MODEL_PORT__#1#g" \
+            -e "s#__PROVIDER_NPM_SPEC__#${PROVIDER_NPM_SPEC}#g" \
+            -e "s#__ACR_MCP_BIN__#/bin/true#g" \
+            -e "s#__ACR_API_URL__#https://127.0.0.1:1#g" \
+            -e "s#__ACR_TOKEN_FILE__#/dev/null#g" \
+            -e "s#__ACR_CA_BUNDLE__#/dev/null#g" \
+            -e "s#__ACR_SIDECAR_VERSION__#1.0.0#g" \
+            dev-health-acr/tests/fullstack/opencode/opencode.json.template \
+            > "$warm/config/opencode/opencode.json"
           export HOME="$warm"
           export XDG_CONFIG_HOME="$warm/config" XDG_DATA_HOME="$warm/data"
           export XDG_CACHE_HOME="$warm/cache" XDG_STATE_HOME="$warm/state"
-          timeout 300 opencode --pure run --format json "warmup" || true
+          timeout 300 opencode --pure run --format json --model contextfabric/oracle "warmup" || true
           test -d "$warm/.npm" || echo "note: npm cache did not materialise" >&2
+          # OpenCode's provider loader keeps its own resolved-package cache under
+          # <XDG_CACHE_HOME>/opencode/packages/<name>@<version>/, entirely separate from any
+          # node_modules tree -- confirmed live: with PROVIDER_NPM_OFFLINE=true below, the
+          # graded run's provider-initialization step still makes a registry check that fails
+          # closed even when the package already exists elsewhere (e.g. via
+          # OPENCODE_RUNTIME_FIXTURE's node_modules), and stops failing the moment this exact
+          # cache directory is pre-populated instead. See prepare_artifacts() in
+          # fullstack-opencode.sh for where OPENCODE_PACKAGE_CACHE gets copied into each
+          # task's own fresh $CLIENT_HOME.
+          if [[ -d "$warm/cache/opencode/packages" ]]; then
+            echo "OPENCODE_PACKAGE_CACHE=$warm/cache/opencode/packages" >> "$GITHUB_ENV"
+          else
+            echo "::warning::OpenCode provider package cache did not materialise during warmup; the offline graded run may fail to initialize its provider"
+          fi
+
+      # scripts/e2e/opencode-runtime-fixture.sh's OPENCODE_RUNTIME_FIXTURE mechanism: a
+      # pre-verified node_modules tree the driver publishes into each task's client root,
+      # covering <config>/opencode/node_modules specifically (a different concern from the
+      # package cache above, which is what the offline run actually needed). Build one by
+      # installing the provider package the same way OpenCode would, then hash the resulting
+      # tree in the exact `<sha256>  <path>` manifest format the driver's validator requires.
+      # No symlinks are allowed in the fixture tree; npm's node_modules/.bin/* entries are
+      # always symlinks and are never needed to `require()` a library package, so they're
+      # stripped rather than causing the whole fixture to fail validation.
+      - name: Build the OpenCode provider runtime fixture
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/opencode-runtime-fixture"
+          mkdir -p "$fixture/config/opencode"
+          (
+            cd "$fixture/config/opencode"
+            npm init -y >/dev/null
+            npm install --no-fund --no-audit "$PROVIDER_NPM_SPEC"
+          )
+          find "$fixture/config/opencode/node_modules" -type l -delete
+          (
+            cd "$fixture"
+            find config/opencode -type f -print0 | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > tree-hashes.sha256
+          )
+          echo "OPENCODE_RUNTIME_FIXTURE=$fixture" >> "$GITHUB_ENV"
 
       - name: Record the operator client configuration is absent
         run: |
@@ -206,6 +293,8 @@ jobs:
           # Both caches are warmed above, so the graded run must not reach
           # the registry; a miss should fail loudly, not silently refetch.
           PROVIDER_NPM_OFFLINE: 'true'
+          OPENCODE_RUNTIME_FIXTURE: ${{ env.OPENCODE_RUNTIME_FIXTURE }}
+          OPENCODE_PACKAGE_CACHE: ${{ env.OPENCODE_PACKAGE_CACHE }}
         run: make fullstack-opencode-e2e
 
       - name: Prove the runner client configuration was never created
@@ -227,12 +316,15 @@ jobs:
     name: web agreement (contract paths)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: preflight
-    if: >-
-      needs.preflight.outputs.product_repo_readable == 'true' &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request'
     steps:
+      # See the equivalent step in the compose job for why this must run before anything else
+      # touches Docker in this job.
+      - name: Enable the Docker containerd image store
+        run: |
+          echo '{"features": {"containerd-snapshotter": true}}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}'
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -247,28 +339,69 @@ jobs:
           head="${{ github.event.pull_request.head.sha }}"
           # The wire contract, plus everything that implements or grades the web agreement
           # itself. The first four paths cover a change to what the two sides exchange; the
-          # last three cover a change to the check. Without them a PR could rewrite the
-          # browser driver, the L6 comparison, or the web half of the orchestrator and merge
-          # having never run a single browser-agreement check, since the only job that runs
-          # one on a PR is this one.
+          # rest cover a change to the check or to the stack it boots. Without them a PR could
+          # rewrite the browser driver, the L6 comparison, the compose product slice, or the
+          # web half of the orchestrator and merge having never run a single browser-agreement
+          # check, since the only job that runs one on a PR is this one.
           paths='^(contracts/|internal/contracts/|internal/api/'
           paths="${paths}|testdata/fullstack/"
           paths="${paths}|scripts/e2e/svs-browser\.mjs"
+          paths="${paths}|scripts/e2e/device-login-browser\.mjs"
           paths="${paths}|scripts/e2e/fullstack-opencode\.sh"
+          paths="${paths}|scripts/e2e/compose\.sh"
+          paths="${paths}|\.github/fullstack/compose\.ci\.yml"
+          paths="${paths}|deploy/compose/acr\.compose\.yml"
+          paths="${paths}|\.github/workflows/fullstack-acceptance\.yml"
+          paths="${paths}|Makefile"
           paths="${paths}|tests/fullstack/assertrun/)"
           if git diff --name-only "$base" "$head" | grep -Eq "$paths"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0 — public repo, no token needed.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         if: steps.decide.outputs.run == 'true'
         with:
-          repository: full-chaos/dev-health
-          path: dev-health
-          token: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
+          repository: full-chaos/dev-health-ops
+          path: dev-health/ops
           persist-credentials: false
+      # actions/checkout v7.0.0 — public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        if: steps.decide.outputs.run == 'true'
+        with:
+          repository: full-chaos/dev-health-web
+          path: dev-health/web
+          ref: ${{ inputs.web_ref }}
+          persist-credentials: false
+      - name: Assemble the product-slice compose file and record checked-out refs
+        if: steps.decide.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
+          ops_ref="$(git -C dev-health/ops rev-parse HEAD)"
+          web_ref="$(git -C dev-health/web rev-parse HEAD)"
+          echo "E2E_OPS_REF=$ops_ref" >> "$GITHUB_ENV"
+          echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
+      # fullstack-opencode.sh's render_web_override() imports
+      # dev-health/web/node_modules/@playwright/test directly and run_web_agreement_check()
+      # requires it to already exist; a bare checkout has no node_modules at all.
+      # pnpm/action-setup v6.0.9
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        if: steps.decide.outputs.run == 'true'
+        with:
+          package_json_file: dev-health/web/package.json
+      # actions/setup-node v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        if: steps.decide.outputs.run == 'true'
+        with:
+          node-version: 25
+      - name: Install web dependencies and the Playwright browser runtime
+        if: steps.decide.outputs.run == 'true'
+        working-directory: dev-health/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         if: steps.decide.outputs.run == 'true'
@@ -278,6 +411,17 @@ jobs:
       - name: Install the pinned OpenCode release
         if: steps.decide.outputs.run == 'true'
         run: |
+          # See the equivalent step in the compose job: the npm package's own postinstall
+          # script verifies the download by running the binary with `--version` against
+          # whatever HOME the install itself runs under, so the whole `npm install` needs the
+          # throwaway root, not just an explicit version check afterward. This job doesn't
+          # assert the operator's config is absent today, but there's no reason for it to
+          # touch the runner's real HOME either.
+          preflight="$RUNNER_TEMP/opencode-preflight"
+          mkdir -p "$preflight"/{config,data,cache,state}
+          export HOME="$preflight"
+          export XDG_CONFIG_HOME="$preflight/config" XDG_DATA_HOME="$preflight/data"
+          export XDG_CACHE_HOME="$preflight/cache" XDG_STATE_HOME="$preflight/state"
           npm install --global --no-fund --no-audit \
             "opencode-ai@${OPENCODE_PINNED_VERSION}"
           test "$(opencode --version)" = "$OPENCODE_PINNED_VERSION"
