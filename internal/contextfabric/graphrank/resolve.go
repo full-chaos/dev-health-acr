@@ -604,12 +604,20 @@ type RawSignalObserver interface {
 // ranked by ResolveFromMergedCandidates. Ported from
 // zepgraph.(*Adapter).ResolveSubjects's body, deduplicated so every graph
 // backend shares the exact same resolution/ranking/ambiguity behavior.
-func ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps) (contextfabric.SubjectResolution, error) {
+//
+// CHAOS-3900 P1.C: also returns the structure-offer material this same
+// resolution pass derives (expected_kind candidates from the SAME
+// candidate pool -- see kindOfferMaterial, chaos3900_structure_offers.go).
+// Every early-return error path returns a zero StructureOfferMaterial{};
+// the exact-hint short-circuit below returns one too (a caller-supplied
+// hint that resolved exactly is already decisive on subject identity, so
+// there is nothing on this axis left to disambiguate).
+func ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
-		return contextfabric.SubjectResolution{}, errors.New("authenticated organization is required")
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, errors.New("authenticated organization is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return contextfabric.SubjectResolution{}, err
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 	}
 	terms := SubjectTerms(request, interpreted)
 	candidatesBySubject := make(map[string]contextfabric.SubjectCandidate)
@@ -642,7 +650,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		}
 		node, ok, err := deps.ExactHint(ctx, subject)
 		if err != nil {
-			return contextfabric.SubjectResolution{}, err
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 		}
 		if !ok {
 			continue
@@ -682,7 +690,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// a different subject than the one a prior receipt bound can still be
 	// found and compete on its own terms.
 	if AnyCallerSourced(candidatesBySubject, callerSourced) {
-		return FinalizeExactResolution(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates), nil
+		return FinalizeExactResolution(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates), contextfabric.StructureOfferMaterial{}, nil
 	}
 	// observationParentKey maps an observation (document/episode) subject
 	// key to its found canonical parent's subject key -- only set when
@@ -824,7 +832,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	for _, term := range terms {
 		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
 		if err != nil {
-			return contextfabric.SubjectResolution{}, err
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 		}
 		if truncated {
 			searchTruncated = true
@@ -866,7 +874,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if deps.AliasLookup != nil {
 		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
 		if err != nil {
-			return contextfabric.SubjectResolution{}, err
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 		}
 		aliasIdentityComplete = complete
 		aliasClaimantsByTerm = claimantsByTerm
@@ -911,7 +919,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if question != "" {
 			results, truncated, degraded, err := deps.SearchQuestion(ctx, question, request.Options.MaxSubjectCandidates)
 			if err != nil {
-				return contextfabric.SubjectResolution{}, err
+				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 			}
 			if truncated {
 				searchTruncated = true
@@ -1038,6 +1046,16 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// pure check; computing it twice is simpler and safer than threading
 	// resolution.go's private copy back out through a return value.
 	gateValid := gate.Validate() == nil
+	// CHAOS-3900 P1.D: narrows the hypothesis set to a CONFIRMED kind,
+	// when the request's own receipts confirmed one -- design brief
+	// §2.1's "the confirmed kind becomes the census scope." A nil
+	// confirmedKind (every request that confirmed no kind -- the
+	// overwhelming common case) makes this call a no-op returning
+	// candidatesBySubject UNCHANGED, so pool composition below is
+	// byte-identical to the pre-P1.D code path. See
+	// ConfirmedExpectedKind's own doc comment (ports.go) for why
+	// non-confirmed narrowing cannot reach this same call.
+	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind)
 	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
 	resolution.RetrievalDegraded = retrievalDegraded
 	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round
@@ -1092,7 +1110,23 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			resolution.ClarificationPrompt = ClarificationPrompt(resolution.Candidates)
 		}
 	}
-	return resolution, nil
+	// CHAOS-3900 P1.C/P1.C': kindOfferMaterial is derived from the SAME
+	// final candidate pool the resolution above committed to, after Slice
+	// B's reordering (order does not affect its own distinct-kind
+	// computation, but using the SAME resolution.Candidates the caller
+	// sees keeps this call visibly tied to what was actually resolved, not
+	// an earlier intermediate pool). anchorOfferMaterial/handleOfferMaterial
+	// (P1.C', team-lead ruling) instead use aliasClaimantsByTerm/
+	// aliasIdentityComplete/request.Question -- data computed UNCONDITIONALLY
+	// above, before the gated shadow-evidence-round check, so a stall that
+	// skips that round still gets a real StructureNeeds block (see this
+	// file's own package doc comment, chaos3900_structure_offers.go).
+	offerMaterial := combineStructureOfferMaterial(
+		kindOfferMaterial(resolution.Candidates),
+		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), aliasIdentityComplete),
+		handleOfferMaterial(request.Question),
+	)
+	return resolution, offerMaterial, nil
 }
 
 // mergeCensusAttestedSatisfier implements design brief v6 §1.4's commit

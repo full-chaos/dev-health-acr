@@ -66,11 +66,11 @@ func (g authzDroppingGraphReader) ResolveInvestigationBinding(context.Context, s
 	return ResolvedGraphBinding{GraphKey: "authz-dropping-key", Epoch: 0}, nil
 }
 
-func (g authzDroppingGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, _ InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
+func (g authzDroppingGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, _ InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
 	if g.dropped > 0 {
 		RecordSubjectCandidatesAuthzDropped(ctx, g.dropped)
 	}
-	return g.resolution, nil
+	return g.resolution, StructureOfferMaterial{}, nil
 }
 
 func (g authzDroppingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

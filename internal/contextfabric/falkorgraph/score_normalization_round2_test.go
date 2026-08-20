@@ -85,12 +85,12 @@ func TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	adapter := newFakeAdapter(t, fake)
 	request, interpreted := openQuestionRequest("incident outage payment gateway")
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
-		t.Fatalf("ResolveSubjects() committed %#v from a lone hit matching only 1 of 4 query terms -- want no auto-commit (drift D11/P1: a weak or truncated lone hit must not read as an unambiguous match)", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v from a lone hit matching only 1 of 4 query terms -- want no auto-commit (drift D11/P1: a weak or truncated lone hit must not read as an unambiguous match)", resolution.Committed)
 	}
 	// Codex R2-4: pin the exact confidence, not just "didn't commit" -- a
 	// 2-of-4 match would also stay under the lone-candidate gate (0.625,
@@ -98,7 +98,7 @@ func TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	// committed" alone cannot distinguish the claimed 1-of-4 edge from a
 	// different, weaker claim.
 	if len(resolution.Candidates) != 1 {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want exactly 1", resolution.Candidates)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want exactly 1", resolution.Candidates)
 	}
 	const want1of4 = 0.50 + 0.25*0.25 // fulltextRelevanceFloor + span*(1/4)
 	if got := resolution.Candidates[0].Confidence; got != want1of4 {
@@ -118,12 +118,12 @@ func TestResolveSubjectsFullyMatchingLoneFulltextHitStillAutoCommits(t *testing.
 	adapter := newFakeAdapter(t, fake)
 	request, interpreted := openQuestionRequest("payment gateway outage")
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "strong_hit" {
-		t.Fatalf("ResolveSubjects() committed %#v, want the lone, fully-term-matching hit auto-committed", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v, want the lone, fully-term-matching hit auto-committed", resolution.Committed)
 	}
 }
 
@@ -180,12 +180,12 @@ func TestResolveSubjectsComparesConfidenceAcrossTermsOnOneScale(t *testing.T) {
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Candidates) != 2 {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want 2 (one per independent Search() call)", resolution.Candidates)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want 2 (one per independent Search() call)", resolution.Candidates)
 	}
 	byID := make(map[string]float64, 2)
 	for _, c := range resolution.Candidates {
@@ -194,13 +194,13 @@ func TestResolveSubjectsComparesConfidenceAcrossTermsOnOneScale(t *testing.T) {
 	full, fullOK := byID["full_match"]
 	partial, partialOK := byID["partial_match"]
 	if !fullOK || !partialOK {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want both full_match and partial_match present", resolution.Candidates)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want both full_match and partial_match present", resolution.Candidates)
 	}
 	if full <= partial {
 		t.Fatalf("full_match confidence (%v, from an independent 1-term query's own call) did not rank above partial_match confidence (%v, a 1-of-3-term hit from a DIFFERENT call) -- confidence is not comparable across independent Search() calls (Codex P3)", full, partial)
 	}
 	if resolution.Candidates[0].Subject.CanonicalID != "full_match" {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want full_match sorted first (higher confidence)", resolution.Candidates)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want full_match sorted first (higher confidence)", resolution.Candidates)
 	}
 }
 
@@ -240,15 +240,15 @@ func TestResolveSubjectsNonExactFulltextPairDoesNotAutoCommit(t *testing.T) {
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
-		t.Fatalf("ResolveSubjects() committed %#v for two equally-strong, competing non-exact fulltext hits -- want no auto-commit, want clarification (Codex P2: two competing lexical hits are genuinely ambiguous)", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v for two equally-strong, competing non-exact fulltext hits -- want no auto-commit, want clarification (Codex P2: two competing lexical hits are genuinely ambiguous)", resolution.Committed)
 	}
 	if resolution.ClarificationPrompt == "" {
-		t.Fatal("ResolveSubjects() produced no ClarificationPrompt for an ambiguous two-candidate fulltext resolution")
+		t.Fatal("ResolveSubjects(nil) produced no ClarificationPrompt for an ambiguous two-candidate fulltext resolution")
 	}
 }
 

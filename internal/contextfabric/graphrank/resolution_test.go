@@ -21,9 +21,9 @@ func TestResolveSubjectsCommitsDocumentOnlyQuestionWithNoCanonicalParent(t *test
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Platform Postmortem": {document}}}
 	// traverse defaults to ObservationNoParent (fakeGraphBackend.deps()'s
 	// zero value), matching "no incoming attribution edge exists at all".
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Platform Postmortem"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Platform Postmortem"), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "document_5678" {
 		t.Fatalf("resolution.Committed = %#v, want the standalone document committed since no canonical parent exists", resolution.Committed)
@@ -54,9 +54,9 @@ func TestResolveSubjectsRetainsSharedParentAheadOfHigherScoringObservationsUnder
 	}
 	request := testRequest()
 	request.Options.MaxSubjectCandidates = 2
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Postmortem"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Postmortem"), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_ask_dev" {
 		t.Fatalf("resolution.Committed = %#v, want the shared canonical parent committed, not a fake ambiguity", resolution.Committed)
@@ -91,9 +91,9 @@ func TestResolveSubjectsCommitsReceiptSubjectOverHybridExactMatchUnderTightBudge
 	request := testRequest()
 	request.Options.MaxSubjectCandidates = 1
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: receiptSubject.Kind, ID: receiptSubject.CanonicalID, Label: receiptSubject.Label, Source: "prior_subject_receipt"}}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Project A"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Project A"), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_z" {
 		t.Fatalf("resolution.Committed = %#v, want the receipt-derived subject committed under a tight budget", resolution.Committed)
@@ -109,9 +109,9 @@ func TestResolveSubjectsMarksCloseCandidatesAmbiguousAndOffersClarification(t *t
 	alpha := candidateNode(contextfabric.SubjectProject, "project_alpha", "Widget Alpha", 0.75, "*")
 	beta := candidateNode(contextfabric.SubjectProject, "project_beta", "Widget Beta", 0.70, "*")
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Which widget": {alpha, beta}}}
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Which widget"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Which widget"), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want none for ambiguous candidates", resolution.Committed)
@@ -140,9 +140,9 @@ func TestResolveSubjectsClarificationPromptOnlyNamesRetainedCandidates(t *testin
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Which widget": {alpha, beta}}}
 	request := testRequest()
 	request.Options.MaxSubjectCandidates = 1
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which widget"), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which widget"), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Candidates) != 1 {
 		t.Fatalf("resolution.Candidates = %#v, want truncated to Options.MaxSubjectCandidates=1", resolution.Candidates)

@@ -73,9 +73,9 @@ func TestLiveRelationshipProjectionPreservesPriorCanonicalEntityMetadata(t *test
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"Dev Agent"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() by previous name error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) by previous name error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != project {
 		t.Fatalf("previous-name resolution after relationship write = %#v, want the project still resolvable by its entity-set previous name", resolution)
@@ -168,9 +168,9 @@ func TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization(t 
 	// repository must still see it after the edge write, even though the
 	// edge itself carried a completely different scope.
 	scopedPrincipal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
-	resolution, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != repoBacked {
 		t.Fatalf("resolution for a principal scoped to the work item's OWN repository = %#v, want it still admitted -- the later edge write must not have downgraded its authorization from %q to the edge's own scope",
@@ -189,18 +189,18 @@ func TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization(t 
 	repoLessRequest := liveInvestigationRequest()
 	repoLessRequest.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: repoLess.Kind, ID: repoLess.CanonicalID, Label: repoLess.Label, Source: "live-test"}}
 
-	deniedResolution, err := adapter.ResolveSubjects(ctx, scopedPrincipal, repoLessRequest, repoLessInterpreted, contextfabric.ResolvedGraphBinding{})
+	deniedResolution, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, repoLessRequest, repoLessInterpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() for repoLess with a repo-scoped principal error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) for repoLess with a repo-scoped principal error = %v", err)
 	}
 	if len(deniedResolution.Committed) != 0 {
 		t.Fatalf("repo-scoped principal resolution for the sentinel-scoped work item = %#v, want it denied", deniedResolution)
 	}
 
 	orgWidePrincipal := storage.Principal{OrgID: orgID}
-	admittedResolution, err := adapter.ResolveSubjects(ctx, orgWidePrincipal, repoLessRequest, repoLessInterpreted, contextfabric.ResolvedGraphBinding{})
+	admittedResolution, _, err := adapter.ResolveSubjects(ctx, orgWidePrincipal, repoLessRequest, repoLessInterpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() for repoLess with an org-wide principal error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) for repoLess with an org-wide principal error = %v", err)
 	}
 	if len(admittedResolution.Committed) != 1 || admittedResolution.Committed[0] != repoLess {
 		t.Fatalf("org-wide principal resolution for the sentinel-scoped work item = %#v, want it admitted", admittedResolution)
@@ -263,9 +263,9 @@ func TestLiveContentProjectionNeverDowngradesTheAttachedSubjectsOwnAuthorization
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: repoBacked.Kind, ID: repoBacked.CanonicalID, Label: repoBacked.Label, Source: "live-test"}}
 
 	scopedPrincipal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
-	resolution, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != repoBacked {
 		t.Fatalf("resolution for a principal scoped to the work item's OWN repository = %#v, want it still admitted -- a later content write must not have downgraded its authorization", resolution)
@@ -323,9 +323,9 @@ func TestLiveEpisodeProjectionNeverDowngradesTheAttachedSubjectsOwnAuthorization
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: repoBacked.Kind, ID: repoBacked.CanonicalID, Label: repoBacked.Label, Source: "live-test"}}
 
 	scopedPrincipal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
-	resolution, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != repoBacked {
 		t.Fatalf("resolution for a principal scoped to the work item's OWN repository = %#v, want it still admitted -- a later episode write must not have downgraded its authorization", resolution)
@@ -391,9 +391,9 @@ func TestLiveRelationshipProjectionNeverOverwritesAnEndpointsOwnLabel(t *testing
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
 	request := liveInvestigationRequest()
-	resolution, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: orgID}, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: orgID}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() by canonical title error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) by canonical title error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != titled {
 		t.Fatalf("resolution by canonical title after a bare-ID-labeled edge write = %#v, want the subject still resolvable by its real title (label must not have been overwritten with the edge's ID label)", resolution)
@@ -451,9 +451,9 @@ func TestLiveApplyProjectionBatchSkipsStaleOutOfOrderTombstone(t *testing.T) {
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{work.Label},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != work {
 		t.Fatalf("resolution after stale tombstone = %#v, want the subject still present (tombstone must have been a no-op)", resolution)
@@ -499,18 +499,18 @@ func TestLiveResolveSubjectsAcceptsPrincipalWildcardRepositoryScope(t *testing.T
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: project.Kind, ID: project.CanonicalID, Label: project.Label, Source: "live-test"}}
 
 	allowed := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/*"}}
-	resolution, err := adapter.ResolveSubjects(ctx, allowed, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, allowed, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() owner-wildcard error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) owner-wildcard error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != project {
 		t.Fatalf("owner-wildcard resolution = %#v, want the project admitted for acme/*", resolution)
 	}
 
 	denied := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"other-owner/*"}}
-	deniedResolution, err := adapter.ResolveSubjects(ctx, denied, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	deniedResolution, _, err := adapter.ResolveSubjects(ctx, denied, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() unrelated-owner error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) unrelated-owner error = %v", err)
 	}
 	if len(deniedResolution.Committed) != 0 {
 		t.Fatalf("unrelated-owner resolution = %#v, want no unsafe widening", deniedResolution)
@@ -582,9 +582,9 @@ func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *t
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "dependencies", SubjectTerms: []string{project.Label},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != project {
 		t.Fatalf("origin resolution = %#v, want the project resolvable (its own scope IS visible to the restricted principal)", resolution)
@@ -672,9 +672,9 @@ func TestLivePartOfEdgeRoundTripsFromProjectionThroughDiscoverContext(t *testing
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "hierarchy", SubjectTerms: []string{child.Label},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactRequiredChildren}},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != child {
 		t.Fatalf("origin resolution = %#v, want the child work item resolvable", resolution)

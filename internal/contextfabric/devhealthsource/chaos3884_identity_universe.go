@@ -136,7 +136,19 @@ func fetchIdentityKind(ctx context.Context, client contextpacket.ClickHouseQuery
 		if len(rows) > identityUniverseRowBudget {
 			return rows, observedAt, false, nil
 		}
-		if !truncated || len(page) == 0 {
+		if len(page) == 0 {
+			// Codex xhigh review (chaos-pivot-p1, first round), finding 6:
+			// an empty page is only a legitimate "done" signal when the
+			// adapter also says truncated=false. truncated=true with an
+			// empty page is an inconsistent adapter response (it claims
+			// more rows exist but returns none to advance the cursor from)
+			// -- treat it as an incomplete read and fail closed, matching
+			// this same read's err!=nil handling, rather than the
+			// unconditional complete=true a bare len(page)==0 check would
+			// have returned. Still must not index page[len(page)-1] below.
+			return rows, observedAt, !truncated, nil
+		}
+		if !truncated {
 			return rows, observedAt, true, nil
 		}
 		last := page[len(page)-1]

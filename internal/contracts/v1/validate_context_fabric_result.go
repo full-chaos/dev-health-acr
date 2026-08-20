@@ -760,6 +760,39 @@ func (r ContextFabricInvestigationResult) validate(bounds contextFabricBounds) e
 			return fmt.Errorf("window_clarification: %w", err)
 		}
 	}
+	if r.StructureNeeds != nil {
+		if err := r.StructureNeeds.Validate(); err != nil {
+			return fmt.Errorf("structure_needs: %w", err)
+		}
+	}
+	// One entry per CARRIED member (design brief §2.1) -- bounded by the
+	// closed frame-member vocabulary's own size, not an offer-list cap.
+	if len(r.ConfirmedStructure) > ContextFabricStructureNeedKindCount {
+		return fmt.Errorf("confirmed_structure exceeds v1 bounds")
+	}
+	seenConfirmedMembers := make(map[ContextFabricStructureNeedKind]struct{}, len(r.ConfirmedStructure))
+	for i, entry := range r.ConfirmedStructure {
+		if err := entry.Validate(); err != nil {
+			return fmt.Errorf("confirmed_structure[%d]: %w", i, err)
+		}
+		if _, exists := seenConfirmedMembers[entry.Member]; exists {
+			return fmt.Errorf("confirmed_structure[%d]: member %q already carried -- one entry per member", i, entry.Member)
+		}
+		seenConfirmedMembers[entry.Member] = struct{}{}
+	}
+	// Bounded by ContextFabricStructureNeedKindCount members (kind/anchor/
+	// handle/window) times each member's own mint-time offer-set cap
+	// (contextFabricStructureNeedsMaxOptions) -- the design brief's own
+	// "copies at most the offer set's own mint-time bound PER MEMBER"
+	// rule, not a single flat cap across every member.
+	if len(r.StructureOfferSnapshot) > ContextFabricStructureNeedKindCount*contextFabricStructureNeedsMaxOptions {
+		return fmt.Errorf("structure_offer_snapshot exceeds v1 bounds")
+	}
+	for i, entry := range r.StructureOfferSnapshot {
+		if err := entry.Validate(); err != nil {
+			return fmt.Errorf("structure_offer_snapshot[%d]: %w", i, err)
+		}
+	}
 	return nil
 }
 

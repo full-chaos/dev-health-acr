@@ -425,6 +425,41 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
+	// handleVerifier (CHAOS-3900 P1.E) adapts graphrank.VerifyHandle over
+	// the SAME devhealthsource.NewCensusFunc(clickhouse.queryClient)
+	// construction buildContextFabricGraphReader above already wires onto
+	// graphConfig.CensusFunc (when wireIdentityUniverse=true, which this
+	// caller always passes -- see that function's own doc comment) --
+	// wrapping the client a second time here is cheap (NewCensusFunc is a
+	// stateless closure constructor, not a new connection) and keeps this
+	// dependency visible at Engine's own construction site rather than
+	// threading it out of buildContextFabricGraphReader's unrelated return
+	// signature. contextfabric.Engine fails a handr_ redemption CLOSED
+	// when this is nil (HandleVerifier's own doc comment); it is never
+	// nil here because request.config.EnableContextFabricInvestigations
+	// gating above already requires falkorgraph.Configured, and this
+	// function's own ClickHouse component is always live by the time it
+	// is called.
+	censusFunc := devhealthsource.NewCensusFunc(clickhouse.queryClient)
+	handleVerifier := contextfabric.HandleVerifier(func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, contextfabric.HandleVerificationReason) {
+		ok, reason := graphrank.VerifyHandle(ctx, orgID, kind, patternID, value, censusFunc)
+		return ok, contextfabric.HandleVerificationReason(reason)
+	})
+	// anchorVerifier (CHAOS-3900 P1.E, team-lead ruling) adapts
+	// graphrank.VerifyAnchorClaimantUnique over the SAME
+	// devhealthsource.IdentityUniverse construction
+	// buildContextFabricGraphReader above already wires onto
+	// graphConfig.IdentityUniverse -- same "wrap the client a second time,
+	// cheaply" reasoning as handleVerifier above. contextfabric.Engine
+	// fails an ancr_ redemption CLOSED when this is nil (AnchorVerifier's
+	// own doc comment).
+	identityUniverse := graphrank.IdentityUniverseFunc(func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+		return devhealthsource.IdentityUniverse(ctx, clickhouse.queryClient, orgID)
+	})
+	anchorVerifier := contextfabric.AnchorVerifier(func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, contextfabric.AnchorVerificationReason) {
+		ok, reason := graphrank.VerifyAnchorClaimantUnique(ctx, orgID, kind, canonicalID, matchedTermHash, identityUniverse)
+		return ok, contextfabric.AnchorVerificationReason(reason)
+	})
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
 		devhealthfacts.NewProviders(clickhouse.queryClient),
 		contextfabric.FactRegistryOptions{Now: request.options.Now},
@@ -564,6 +599,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// clarificationSink's own construction comment above for why this
 		// does not depend on reuseEnabled.
 		ClarificationSelectionSink: clarificationSink,
+		// CHAOS-3900 P1.E: see handleVerifier's own construction comment
+		// above.
+		HandleVerifier: handleVerifier,
+		// CHAOS-3900 P1.E: see anchorVerifier's own construction comment
+		// above.
+		AnchorVerifier: anchorVerifier,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
 		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions

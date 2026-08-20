@@ -111,9 +111,9 @@ func (g bindingOnlyGraphReader) ResolveInvestigationBinding(context.Context, sto
 	return ResolvedGraphBinding{GraphKey: "binding-only-key", Epoch: 0}, nil
 }
 
-func (g bindingOnlyGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
+func (g bindingOnlyGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
 	g.t.Fatal("ResolveSubjects should not be reached on a reuse hit")
-	return SubjectResolution{}, nil
+	return SubjectResolution{}, StructureOfferMaterial{}, nil
 }
 
 func (g bindingOnlyGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
@@ -912,9 +912,9 @@ func (g orderTrackingGraphReader) ResolveInvestigationBinding(context.Context, s
 	return ResolvedGraphBinding{GraphKey: "order-tracking-key", Epoch: 0}, nil
 }
 
-func (g orderTrackingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
+func (g orderTrackingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
 	*g.events = append(*g.events, "resolve_subjects")
-	return g.resolution, nil
+	return g.resolution, StructureOfferMaterial{}, nil
 }
 
 func (g orderTrackingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

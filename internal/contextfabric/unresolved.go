@@ -184,6 +184,8 @@ func (e *Engine) terminalResult(
 	subjectCandidatesAuthzDropped int,
 	binding ResolvedGraphBinding,
 	windowCanon requestWindowCanonicalization,
+	structureCanon requestStructureCanonicalization,
+	structureMaterial StructureOfferMaterial,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
@@ -239,9 +241,15 @@ func (e *Engine) terminalResult(
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
 	}
+	// Hoisted so composeStructureNeeds below can mint deterministic offer
+	// ids from the SAME ResultID this result is actually saved under
+	// (CHAOS-3900 P1.C) -- calling e.newResultID() a second time inside
+	// the literal would mint a result identity StructureNeeds' own
+	// receipts were never keyed against.
+	resultID := e.newResultID()
 	result := InvestigationResult{
 		SchemaVersion: InvestigationResultSchemaV1,
-		ResultID:      e.newResultID(),
+		ResultID:      resultID,
 		RequestID:     request.RequestID,
 		GeneratedAt:   e.now().UTC(),
 		Status:        status,
@@ -281,13 +289,34 @@ func (e *Engine) terminalResult(
 		// identically regardless of whether a subject was ultimately
 		// committed.
 		EffectiveEvidenceWindow: composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, e.now()),
-		Versions:                e.terminalVersions(),
-		DeterministicAnswer:     answer,
-		Warnings:                []string{},
+		// CHAOS-3900 P1: a subjectless terminal still echoes any structure
+		// this request confirmed, exactly like the window echo beside it --
+		// a confirmed kind/anchor/handle narrowed what this round searched
+		// for even when it still ended without a committed subject.
+		ConfirmedStructure: composeConfirmedStructure(structureCanon.Confirmed),
+		// CHAOS-3900 P1.G: no guard needed -- structureCanon.OfferSnapshot
+		// is only ever non-nil alongside structureCanon.Confirmed, see
+		// requestStructureCanonicalization's own doc comment (structure.go).
+		StructureOfferSnapshot: structureCanon.OfferSnapshot,
+		// CHAOS-3900 P1.C: the disclosure block itself -- present exactly
+		// on this subjectless-terminal path (design brief §2.1: "present
+		// whenever an investigation round ends short of decisive"),
+		// deliberately NOT composed on the main synthesized-answer path,
+		// matching the P1 acceptance criterion's own scope ("StructureNeeds
+		// present on every non-decisive terminal").
+		StructureNeeds:      composeStructureNeeds(structureMaterial, resultID),
+		Versions:            e.terminalVersions(),
+		DeterministicAnswer: answer,
+		Warnings:            []string{},
 	}
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}
+	// CHAOS-3900 P1.F: StructureNeeds is only ever composed on this
+	// subjectless-terminal path (result.StructureNeeds above), so this is
+	// the ONLY call site for cf_structure_needs_disclosed/
+	// cf_structure_offer_count.
+	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

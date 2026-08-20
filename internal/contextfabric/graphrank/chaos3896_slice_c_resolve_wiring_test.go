@@ -40,9 +40,9 @@ func TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate(t *testing.T) {
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 {
 		t.Fatalf("resolution.Committed = %#v, want exactly one committed subject", resolution.Committed)
@@ -89,9 +89,9 @@ func TestResolveSubjects_EvidenceCensusRefusesOnGraphMissingSatisfier(t *testing
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want none -- an absent graph node must never commit", resolution.Committed)
@@ -146,9 +146,9 @@ func TestResolveSubjects_EvidenceCensusSkipsWhenGateInvalid(t *testing.T) {
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want none under an invalid gate", resolution.Committed)
@@ -196,9 +196,9 @@ func TestResolveSubjects_EvidenceCensusRecoversATruncatedAwayReferent(t *testing
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "pull_request:repo-1:532" {
 		t.Fatalf("resolution.Committed = %#v, want the recovered satisfier committed", resolution.Committed)

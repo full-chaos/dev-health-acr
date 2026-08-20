@@ -125,9 +125,9 @@ func TestResolveSubjects_ExactAliasMultiClaimantEndToEnd(t *testing.T) {
 		aliasLookupComplete:  true,
 	}
 
-	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps())
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps(), nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING committed end-to-end -- case 45's own wrong-commit shape (a project committed via exact-label match despite two colliding repository alias claimants on the identical term)", resolution.Committed)

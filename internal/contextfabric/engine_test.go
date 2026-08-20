@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -22,14 +23,20 @@ func (f interpreterFunc) Interpret(ctx context.Context, principal storage.Princi
 type graphReaderStub struct {
 	resolution SubjectResolution
 	context    GraphContext
+	// material (CHAOS-3900 P1.C) is the StructureOfferMaterial
+	// ResolveSubjects returns alongside resolution -- zero value by
+	// default (every pre-P1.C caller of this stub gets an empty block,
+	// byte-identical to before this field existed), settable per test
+	// that specifically exercises structure-offer composition.
+	material StructureOfferMaterial
 }
 
 func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
-	return g.resolution, nil
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
+	return g.resolution, g.material, nil
 }
 
 func (g graphReaderStub) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
@@ -137,9 +144,9 @@ func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, stor
 	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: g.bindingEpochs[index]}, nil
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding) (SubjectResolution, error) {
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
-	return g.resolution, nil
+	return g.resolution, StructureOfferMaterial{}, nil
 }
 
 func (g *capturingGraphReader) DiscoverContext(_ context.Context, _ storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
@@ -259,6 +266,22 @@ type recordingTelemetry struct {
 	// mirror the pair above's own list-not-count discipline.
 	windowBinderOutcomes           []WindowBindReason
 	windowCanonicalizationOutcomes []WindowCanonicalizationOutcome
+	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
+	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
+	structureNeedsDisclosed []contractsv1.ContextFabricStructureNeedKind
+	structureOfferCounts    []structureOfferCountRecord
+	structureReceipts       []structureReceiptRecord
+}
+
+type structureOfferCountRecord struct {
+	member contractsv1.ContextFabricStructureNeedKind
+	source contractsv1.ContextFabricStructureOfferSource
+	count  int
+}
+
+type structureReceiptRecord struct {
+	member  contractsv1.ContextFabricStructureNeedKind
+	outcome StructureReceiptOutcome
 }
 
 type priorSubjectReceiptSkipReasonRecord struct {
@@ -307,6 +330,18 @@ func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ stor
 
 func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ storage.Principal, outcome WindowCanonicalizationOutcome) {
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
+	r.structureNeedsDisclosed = append(r.structureNeedsDisclosed, member)
+}
+
+func (r *recordingTelemetry) RecordStructureOfferCount(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
+	r.structureOfferCounts = append(r.structureOfferCounts, structureOfferCountRecord{member, source, count})
+}
+
+func (r *recordingTelemetry) RecordStructureReceipt(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome) {
+	r.structureReceipts = append(r.structureReceipts, structureReceiptRecord{member, outcome})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {
@@ -1288,12 +1323,12 @@ func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, stora
 	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
 }
 
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error) {
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveCalls++
 	return SubjectResolution{
 		Candidates: []SubjectCandidate{},
 		Committed:  []SubjectRef{{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}},
-	}, nil
+	}, StructureOfferMaterial{}, nil
 }
 
 func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

@@ -130,9 +130,9 @@ func TestLiveTemporalAdmissionExcludesClosedWindows(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalValidTime, AsOf: &asOf,
 	})
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) == 0 {
 		t.Fatal("the anchor subject, whose window spans the requested time, did not resolve")
@@ -200,9 +200,9 @@ func TestLiveTemporalAdmissionBeforeAnythingExisted(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalValidTime, AsOf: &asOf,
 	})
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	for _, subject := range resolution.Committed {
 		if subject.CanonicalID == "project_anchor" {
@@ -235,9 +235,9 @@ func TestLiveTemporalAdmissionIsHalfOpen(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalValidTime, AsOf: &boundary,
 	})
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	graphContext, err := adapter.DiscoverContext(ctx, principal, contextfabric.GraphDiscoveryRequest{
 		Request: request, Interpretation: interpreted, Resolution: resolution,
@@ -276,9 +276,9 @@ func TestLiveTemporalRangeAdmitsOverlap(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalRange, Start: &start, End: &end,
 	})
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	graphContext, err := adapter.DiscoverContext(ctx, principal, contextfabric.GraphDiscoveryRequest{
 		Request: request, Interpretation: interpreted, Resolution: resolution,
@@ -310,9 +310,9 @@ func TestLiveCurrentAxisIsUnaffected(t *testing.T) {
 	}
 
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	graphContext, err := adapter.DiscoverContext(ctx, principal, contextfabric.GraphDiscoveryRequest{
 		Request: request, Interpretation: interpreted, Resolution: resolution,
@@ -388,9 +388,9 @@ func TestLiveReferencedStubsCarryNoValidityWindow(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalValidTime, AsOf: &outside,
 	})
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	var found bool
 	for _, subject := range resolution.Committed {

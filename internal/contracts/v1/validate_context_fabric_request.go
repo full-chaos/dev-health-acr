@@ -32,13 +32,15 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 		if err := receipt.Validate(); err != nil {
 			return fmt.Errorf("prior_subject_receipts: %w", err)
 		}
-		if hasWindowReceiptPrefix(receipt.ReceiptID) {
-			// CHAOS-3900 W1 / pivot brief §2.5 row 1: a winr_-namespaced id
-			// belongs to PriorWindowReceipts, never PriorSubjectReceipts --
-			// fail loudly here rather than let it fall through to subject
-			// matching, where it could never match anything and would
-			// silently degrade instead of surfacing as malformed.
-			return fmt.Errorf("prior_subject_receipts: receipt_id must not carry the %q namespace prefix", ContextFabricWindowOptionReceiptPrefix)
+		// CHAOS-3900 P1 (pivot brief §2.5 row 1, generalizing W1's own
+		// winr_-only check to the CLOSED SET of all four structure-receipt
+		// namespaces): none of kindr_/ancr_/handr_/winr_ belongs in
+		// prior_subject_receipts -- fail loudly here rather than let it
+		// fall through to subject matching, where it could never match
+		// anything and would silently degrade instead of surfacing as
+		// malformed.
+		if err := validateNoStructureReceiptPrefix("prior_subject_receipts", receipt.ReceiptID, ""); err != nil {
+			return err
 		}
 		key := receipt.ResultID + "\x00" + receipt.ReceiptID
 		if _, exists := seenReceipts[key]; exists {
@@ -46,27 +48,22 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 		}
 		seenReceipts[key] = struct{}{}
 	}
-	if len(r.PriorWindowReceipts) > 20 {
-		return fmt.Errorf("prior_window_receipts exceed v1 bounds")
+	// CHAOS-3900 W1 (design brief §5 "m4") / P1 (§2.1): each of the four
+	// structure-receipt fields validates identically -- shared bound,
+	// its OWN required namespace prefix (which by construction also
+	// rejects the other three), and uniqueness. See
+	// validateStructureReceiptField's own doc comment.
+	if err := validateStructureReceiptField("prior_window_receipts", r.PriorWindowReceipts, ContextFabricWindowOptionReceiptPrefix); err != nil {
+		return err
 	}
-	seenWindowReceipts := make(map[string]struct{}, len(r.PriorWindowReceipts))
-	for _, receipt := range r.PriorWindowReceipts {
-		if err := receipt.Validate(); err != nil {
-			return fmt.Errorf("prior_window_receipts: %w", err)
-		}
-		// CHAOS-3900 W1 (design brief §5 "m4"): every PriorWindowReceipts
-		// entry MUST carry the winr_ prefix -- a typed check atop the
-		// length bounds ContextFabricBoundSubjectReceipt.Validate already
-		// enforces. A non-winr_ id here is 400 at validation, never a
-		// silent fallthrough to subject matching (pivot brief §2.5 row 1).
-		if !hasWindowReceiptPrefix(receipt.ReceiptID) {
-			return fmt.Errorf("prior_window_receipts: receipt_id must carry the %q namespace prefix", ContextFabricWindowOptionReceiptPrefix)
-		}
-		key := receipt.ResultID + "\x00" + receipt.ReceiptID
-		if _, exists := seenWindowReceipts[key]; exists {
-			return fmt.Errorf("prior_window_receipts must be unique")
-		}
-		seenWindowReceipts[key] = struct{}{}
+	if err := validateStructureReceiptField("prior_kind_receipts", r.PriorKindReceipts, ContextFabricKindOptionReceiptPrefix); err != nil {
+		return err
+	}
+	if err := validateStructureReceiptField("prior_anchor_receipts", r.PriorAnchorReceipts, ContextFabricAnchorOptionReceiptPrefix); err != nil {
+		return err
+	}
+	if err := validateStructureReceiptField("prior_handle_receipts", r.PriorHandleReceipts, ContextFabricHandleOptionReceiptPrefix); err != nil {
+		return err
 	}
 	if err := r.RequestedScope.Validate(); err != nil {
 		return fmt.Errorf("requested_scope: %w", err)

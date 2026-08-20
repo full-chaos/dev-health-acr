@@ -73,6 +73,36 @@ func TestBindAnchor_NoClaimantsRefuses(t *testing.T) {
 	}
 }
 
+// TestAnchorTermCandidates_TwoTermsSameEntityIsDeterministic pins the codex
+// xhigh review finding (chaos-pivot-p1, first round, finding 3): two
+// DIFFERENT unique-claimant terms ("repo-a" and "full-chaos/repo-a") can
+// both name the SAME (kind, canonical_id) -- when that happens, exactly one
+// term's info occupies anchorTermCandidates' own result, and repeated calls
+// with the identical input must always pick the SAME one (the
+// lexicographically-smallest term), never a value that varies with Go's
+// randomized map iteration order.
+func TestAnchorTermCandidates_TwoTermsSameEntityIsDeterministic(t *testing.T) {
+	t.Parallel()
+	claimants := map[string][]IdentityMatch{
+		"repo-a":            {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1", Label: "repo-a-label"}, Mechanism: contextfabric.MatchAlias}},
+		"full-chaos/repo-a": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1", Label: "full-chaos-label"}, Mechanism: contextfabric.MatchAlias}},
+	}
+	key := anchorCandidateKey{kind: contextfabric.SubjectRepository, id: "repository:r-1"}
+	for i := 0; i < 50; i++ {
+		candidates := anchorTermCandidates(claimants, true)
+		if len(candidates) != 1 {
+			t.Fatalf("iteration %d: len(candidates) = %d, want 1", i, len(candidates))
+		}
+		info, ok := candidates[key]
+		if !ok {
+			t.Fatalf("iteration %d: candidates missing key %#v", i, key)
+		}
+		if info.term != "full-chaos/repo-a" {
+			t.Fatalf("iteration %d: info.term = %q, want the lexicographically-smallest term %q (non-deterministic tie-break)", i, info.term, "full-chaos/repo-a")
+		}
+	}
+}
+
 func TestClaimantsFromCandidateNodes(t *testing.T) {
 	t.Parallel()
 	node := CandidateNode{Attributes: map[string]interface{}{

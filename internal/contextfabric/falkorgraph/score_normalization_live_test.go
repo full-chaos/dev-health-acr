@@ -240,12 +240,12 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 		SubjectTerms: []string{"incident outage payment gateway"},
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
-	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{})
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
 	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
+		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
-		t.Fatalf("ResolveSubjects() committed %#v against a real FalkorDB server for a lone hit matching only 1 of 4 query terms -- want no auto-commit", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v against a real FalkorDB server for a lone hit matching only 1 of 4 query terms -- want no auto-commit", resolution.Committed)
 	}
 	// Codex R2-3: asserting only "nothing committed" passes vacuously if
 	// the search found nothing at all (e.g. a query/index regression that
@@ -261,7 +261,7 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 		}
 	}
 	if weakCandidate == nil {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want the planted weak hit (%s) present -- \"nothing committed\" must not pass vacuously because nothing was found at all", resolution.Candidates, weak.CanonicalID)
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want the planted weak hit (%s) present -- \"nothing committed\" must not pass vacuously because nothing was found at all", resolution.Candidates, weak.CanonicalID)
 	}
 	// Read live, not a hand-duplicated literal (CHAOS-3857 un-staling sweep,
 	// chris 2026-08-17): this used to hardcode 0.72, which drifted the

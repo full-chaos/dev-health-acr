@@ -526,6 +526,18 @@ type ContextFabricInvestigationRequest struct {
 	// fall through to the wrong matcher instead of failing loudly at
 	// validation (see Validate's winr_-prefix check).
 	PriorWindowReceipts []ContextFabricBoundSubjectReceipt `json:"prior_window_receipts,omitempty"`
+	// PriorKindReceipts, PriorAnchorReceipts, and PriorHandleReceipts
+	// (CHAOS-3900 P1, pivot-intent design brief §2.1) name kindr_/ancr_/
+	// handr_-prefixed receipts from an earlier stored result's own
+	// StructureNeeds offer sets -- three MORE new, PARALLEL fields
+	// following PriorWindowReceipts' own precedent exactly: each match
+	// target and effect differs (kind narrows the census scope, anchor
+	// binds the 3896 discriminator, handle binds a keyed source row), so
+	// none of the four (nor PriorSubjectReceipts) may ever accept another's
+	// namespace -- see Validate's closed structure-receipt-prefix check.
+	PriorKindReceipts   []ContextFabricBoundSubjectReceipt `json:"prior_kind_receipts,omitempty"`
+	PriorAnchorReceipts []ContextFabricBoundSubjectReceipt `json:"prior_anchor_receipts,omitempty"`
+	PriorHandleReceipts []ContextFabricBoundSubjectReceipt `json:"prior_handle_receipts,omitempty"`
 	RequestedScope      ContextFabricRequestedScope        `json:"requested_scope,omitempty"`
 	TimeContext         ContextFabricTimeContext           `json:"time_context"`
 	Options             ContextFabricInvestigationOptions  `json:"options"`
@@ -1007,6 +1019,29 @@ type ContextFabricInvestigationResult struct {
 	// ContextFabricWindowClarification's own doc comment for why it lives
 	// on the canonical result rather than projection-only.
 	WindowClarification *ContextFabricWindowClarification `json:"window_clarification,omitempty"`
+	// StructureNeeds (CHAOS-3900 P1) is the disclosure block naming which
+	// intent-frame members (kind/anchor/handle/window) are missing or
+	// ambiguous, with typed receipt-bound offers per member -- present
+	// whenever this round ends short of decisive. nil on a decisive
+	// result that needed no clarification at all.
+	StructureNeeds *ContextFabricStructureNeeds `json:"structure_needs,omitempty"`
+	// ConfirmedStructure (CHAOS-3900 P1) is the wire-visible disposition
+	// for every structure member THIS request carried (receipt or
+	// explicit field), including vetoed ones -- present whenever the
+	// request carried any structure receipt or explicit structure field,
+	// one entry per carried member (design brief §2.1's silent-drop
+	// closure).
+	ConfirmedStructure []ContextFabricConfirmedStructureEntry `json:"confirmed_structure,omitempty"`
+	// StructureOfferSnapshot (CHAOS-3900 P1) echoes the SOURCE offer set
+	// for every redeemed member on a DECISIVE result only (design brief
+	// §2.1's B5 gap: StructureNeeds itself appears only on non-decisive
+	// terminals, so a decisive result reached via confirmation would
+	// otherwise lose the (offered, selected) pair the Bridge needs).
+	// Construction-bounded (never post-hoc truncated) and
+	// CANONICAL-STORAGE-ONLY -- it is deliberately absent from
+	// ContextFabricAnswerProjection; ConfirmedStructure above is what
+	// projects.
+	StructureOfferSnapshot []ContextFabricStructureOfferSnapshotEntry `json:"structure_offer_snapshot,omitempty"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public

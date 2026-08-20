@@ -113,30 +113,77 @@ type AnchorBinding struct {
 // a single term's own >=2-claimant case does, for the same "an ambiguous
 // anchor must refuse, never guess" reason.
 func BindAnchor(claimantsByTerm map[string][]IdentityMatch, complete bool) (AnchorBinding, bool) {
-	if !complete {
-		return AnchorBinding{}, false
-	}
-	type candidateKey struct {
-		kind CensusKind
-		id   string
-	}
-	seen := map[candidateKey]string{} // -> one contributing term, for determinism/testability only
-	for term, matches := range claimantsByTerm {
-		if len(matches) != 1 {
-			continue
-		}
-		row := matches[0].Row
-		seen[candidateKey{kind: row.Kind, id: row.CanonicalID}] = term
-	}
+	seen := anchorTermCandidates(claimantsByTerm, complete)
 	if len(seen) != 1 {
 		return AnchorBinding{}, false
 	}
 	// Deterministic single-entry extraction (map has exactly one key here).
-	keys := make([]candidateKey, 0, 1)
+	keys := make([]anchorCandidateKey, 0, 1)
 	for k := range seen {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].id < keys[j].id }) // no-op for len==1, kept for clarity/future-proofing
 	k := keys[0]
-	return AnchorBinding{Kind: k.kind, CanonicalID: k.id, Term: seen[k]}, true
+	return AnchorBinding{Kind: k.kind, CanonicalID: k.id, Term: seen[k].term}, true
+}
+
+// anchorCandidateKey identifies one distinct (kind, canonical_id) pair a
+// per-term identity-universe read named as its own SOLE claimant.
+type anchorCandidateKey struct {
+	kind CensusKind
+	id   string
+}
+
+// anchorCandidateInfo carries what BindAnchor's own decisive path needs
+// (term, for AnchorBinding.Term) plus what CHAOS-3900 P1.C's own
+// anchorOfferMaterial (chaos3900_structure_offers.go) additionally needs
+// (label, for a human-displayable AnchorOption.label) about ONE anchor
+// candidate.
+type anchorCandidateInfo struct {
+	term  string
+	label string
+}
+
+// anchorTermCandidates is BindAnchor's own per-term uniqueness scan (R4:
+// "≥2 claimants or an incomplete read -> no anchor discriminator" for a
+// SINGLE term's own claimant set), factored out so anchorOfferMaterial can
+// reuse the IDENTICAL filtering logic BindAnchor's decisive path uses --
+// "which terms have exactly one claimant" must never have two divergent
+// implementations. complete=false returns nil, mirroring BindAnchor's own
+// fail-closed shape (an incomplete read proves nothing, including a
+// single-claimant one).
+func anchorTermCandidates(claimantsByTerm map[string][]IdentityMatch, complete bool) map[anchorCandidateKey]anchorCandidateInfo {
+	if !complete {
+		return nil
+	}
+	// Codex xhigh review (chaos-pivot-p1, first round), finding 3: iterate
+	// terms in a DETERMINISTIC (sorted) order rather than raw map-range
+	// order. Two distinct unique-claimant terms can name the SAME (kind,
+	// canonical_id) (e.g. "repo-a" and "full-chaos/repo-a" both uniquely
+	// resolving to one repository) -- when that happens only one term's
+	// info can occupy the key, and which one must not depend on Go's
+	// randomized map iteration: that would make matched_term_hash (and
+	// everything minted from it downstream: label, receipt_id, option_id)
+	// nondeterministic across otherwise-identical retries. Sorted-term
+	// iteration plus first-write-wins makes the lexicographically-smallest
+	// term the stable, repeatable choice.
+	terms := make([]string, 0, len(claimantsByTerm))
+	for term := range claimantsByTerm {
+		terms = append(terms, term)
+	}
+	sort.Strings(terms)
+	seen := map[anchorCandidateKey]anchorCandidateInfo{}
+	for _, term := range terms {
+		matches := claimantsByTerm[term]
+		if len(matches) != 1 {
+			continue
+		}
+		row := matches[0].Row
+		key := anchorCandidateKey{kind: row.Kind, id: row.CanonicalID}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = anchorCandidateInfo{term: term, label: row.Label}
+	}
+	return seen
 }

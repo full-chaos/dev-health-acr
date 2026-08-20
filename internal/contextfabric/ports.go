@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -134,8 +135,83 @@ type QuestionInterpreter interface {
 // to compile.
 type GraphReader interface {
 	ResolveInvestigationBinding(ctx context.Context, principal storage.Principal) (ResolvedGraphBinding, error)
-	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding) (SubjectResolution, error)
+	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
+}
+
+// ConfirmedExpectedKind (CHAOS-3900 P1.D, pivot-intent design brief §2.1)
+// is a caller-CONFIRMED kindr_ receipt's own resolved value, threaded
+// into ResolveSubjects so it can narrow its own candidate pool to this
+// kind alone ("the confirmed kind becomes the census scope... A
+// RECEIPT-confirmed kind is caller authority and may do this... without
+// the extra proof").
+//
+// DELIBERATELY a dedicated type, not a bare ContextFabricSubjectKind
+// (design ruling, P1.D's own tripwire): this is HOW the §2.0
+// kind-insensitivity rule stays enforced by construction rather than by
+// discipline. §2.0 requires that any kind narrowing NOT sourced from a
+// confirmed receipt (an inferred_default proposal, an echo-derived
+// value, a future Bridge prior) additionally prove all-kinds
+// insensitivity before a decisive outcome may rely on it -- but no such
+// inferred-tier kind source exists anywhere in this codebase yet (P1.D
+// scoping confirmed this by grep: zero hits). Rather than wire an
+// insensitivity-proof GATE with no live branch to guard (untestable
+// protection, worse than no protection -- a false sense of coverage),
+// this type itself is the guard: graphrank's pool filter
+// (filterCandidatesByConfirmedKind) accepts ONLY this type, which only
+// canonicalizeStructure's own receipt-confirmation path can construct.
+// A future inferred/explicit kind source cannot narrow the pool through
+// this same function without EITHER routing through confirmation
+// (unlikely to be what such a feature wants) OR a reviewer visibly
+// widening this type or adding a second, parallel filter -- and
+// kindInsensitivityProof (structure.go) is the standalone, unit-tested,
+// UNWIRED primitive that MUST be wired into whichever narrowing path
+// that new source takes before it may drive a decisive outcome (also
+// recorded as a precondition on CHAOS-3927 and the P3/P5 commissioning
+// checklists -- process enforcement backing this type-level one).
+type ConfirmedExpectedKind struct {
+	Kind contractsv1.ContextFabricSubjectKind
+}
+
+// StructureOfferMaterial is CHAOS-3900 P1.C's own return channel: the
+// engine-derived structure-offer candidates ResolveSubjects builds
+// alongside its ordinary subject resolution, using the SAME pool/identity/
+// question-text material that resolution already computed (pool kind-set,
+// identity-universe unique-claimant candidates, handle-grammar bindings --
+// see internal/contextfabric/graphrank's own doc comments for exactly
+// which existing primitives each candidate list is built from).
+//
+// DELIBERATELY a widened RETURN VALUE, not a field folded onto
+// SubjectResolution or threaded via json:"-" (team-lead ruling, P1.C
+// seam decision): SubjectResolution is a WIRE type (it IS the served
+// result's own subject_resolution field), and this material feeds a
+// DIFFERENT wire field (structure_needs) once composed -- and this
+// session's own defect ledger (the reuse-path bypass, the key collapse,
+// the schema-parity drift) is entirely the invisible-seam class, so
+// load-bearing dataflow belongs in a signature the compiler and every
+// reviewer sees, not behind a serialization-discipline convention on a
+// persisted type.
+//
+// The KindOptions/AnchorOptions/HandleOptions below are PARTIALLY built:
+// every content field (Kind, Label, CanonicalID, PatternID, Value,
+// SourceColumn, OfferSource) is set, but ReceiptID and OptionID
+// are left zero-valued -- minting them requires the result's own
+// ResultID (mintStructureReceiptID's own "result identity" input, per
+// the team-lead's deterministic-minting ruling), which does not exist
+// yet at ResolveSubjects' own call time (Engine mints it only once
+// composing the final result, after ResolveSubjects/DiscoverContext have
+// both already returned). composeStructureNeeds (structure.go) fills
+// both ids in once ResultID is known.
+type StructureOfferMaterial struct {
+	// Missing is the class-conditional §1.3 NEVER-ELICIT-filtered set --
+	// ResolveSubjects already has the INTERPRETED question (Shape/cohort_shape)
+	// as its own parameter, so it can apply the rule directly rather than
+	// deferring it to a caller that would need to re-derive class from the
+	// same interpretation a second time.
+	Missing       []contractsv1.ContextFabricStructureNeedKind
+	KindOptions   []contractsv1.ContextFabricKindOption
+	AnchorOptions []contractsv1.ContextFabricAnchorOption
+	HandleOptions []contractsv1.ContextFabricHandleOption
 }
 
 type GraphDiscoveryRequest struct {

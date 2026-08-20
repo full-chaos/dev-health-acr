@@ -186,6 +186,21 @@ type RequestedEvidenceWindow = contractsv1.ContextFabricRequestedEvidenceWindow
 type EffectiveEvidenceWindow = contractsv1.ContextFabricEffectiveEvidenceWindow
 type WindowOption = contractsv1.ContextFabricWindowOption
 type WindowClarification = contractsv1.ContextFabricWindowClarification
+
+// CHAOS-3900 P1: the StructureNeeds wire shapes, same alias convention.
+type StructureNeeds = contractsv1.ContextFabricStructureNeeds
+type KindOption = contractsv1.ContextFabricKindOption
+type AnchorOption = contractsv1.ContextFabricAnchorOption
+type HandleOption = contractsv1.ContextFabricHandleOption
+type AcceptedGrammar = contractsv1.ContextFabricAcceptedGrammar
+type ConfirmedStructureEntry = contractsv1.ContextFabricConfirmedStructureEntry
+type StructureOfferSnapshotEntry = contractsv1.ContextFabricStructureOfferSnapshotEntry
+type StructureNeedKind = contractsv1.ContextFabricStructureNeedKind
+type StructureOfferSource = contractsv1.ContextFabricStructureOfferSource
+type StructureSource = contractsv1.ContextFabricStructureSource
+type StructureProvenance = contractsv1.ContextFabricStructureProvenance
+type StructureDisposition = contractsv1.ContextFabricStructureDisposition
+
 type InvestigationOptions = contractsv1.ContextFabricInvestigationOptions
 type ConsumerInfo = contractsv1.ContextFabricConsumerInfo
 type SubjectRef = contractsv1.ContextFabricSubjectRef

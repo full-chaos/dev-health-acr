@@ -58,6 +58,21 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/EffectiveEvidenceWindow": "#/$defs/context_fabric_common.v1/$defs/EffectiveEvidenceWindow",
 	"#/$defs/WindowOption":            "#/$defs/context_fabric_common.v1/$defs/WindowOption",
 	"#/$defs/WindowClarification":     "#/$defs/context_fabric_common.v1/$defs/WindowClarification",
+	// CHAOS-3900 P1: locally-$ref'd defs KindOption/AnchorOption/
+	// HandleOption/AcceptedGrammar/StructureNeeds/ConfirmedStructureEntry/
+	// StructureOfferSnapshotEntry pull in (SubjectKind is new; it also
+	// replaces what SubjectRef/SubjectCandidate/etc. still inline rather
+	// than $ref).
+	"#/$defs/SubjectKind":          "#/$defs/context_fabric_common.v1/$defs/SubjectKind",
+	"#/$defs/StructureOfferSource": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSource",
+	"#/$defs/StructureNeedKind":    "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind",
+	"#/$defs/KindOption":           "#/$defs/context_fabric_common.v1/$defs/KindOption",
+	"#/$defs/AnchorOption":         "#/$defs/context_fabric_common.v1/$defs/AnchorOption",
+	"#/$defs/HandleOption":         "#/$defs/context_fabric_common.v1/$defs/HandleOption",
+	"#/$defs/AcceptedGrammar":      "#/$defs/context_fabric_common.v1/$defs/AcceptedGrammar",
+	"#/$defs/StructureSource":      "#/$defs/context_fabric_common.v1/$defs/StructureSource",
+	"#/$defs/StructureProvenance":  "#/$defs/context_fabric_common.v1/$defs/StructureProvenance",
+	"#/$defs/StructureDisposition": "#/$defs/context_fabric_common.v1/$defs/StructureDisposition",
 }
 
 // contextFabricResultDefsRewrites relocates the cross-file pointers
@@ -77,6 +92,11 @@ var contextFabricResultDefsRewrites = map[string]string{
 	// into context_fabric_common.v1.
 	"context_fabric_common.v1.schema.json#/$defs/EffectiveEvidenceWindow": "#/$defs/context_fabric_common.v1/$defs/EffectiveEvidenceWindow",
 	"context_fabric_common.v1.schema.json#/$defs/WindowClarification":     "#/$defs/context_fabric_common.v1/$defs/WindowClarification",
+	// CHAOS-3900 P1: three more cross-file pointers the result schema
+	// makes into context_fabric_common.v1.
+	"context_fabric_common.v1.schema.json#/$defs/StructureNeeds":              "#/$defs/context_fabric_common.v1/$defs/StructureNeeds",
+	"context_fabric_common.v1.schema.json#/$defs/ConfirmedStructureEntry":     "#/$defs/context_fabric_common.v1/$defs/ConfirmedStructureEntry",
+	"context_fabric_common.v1.schema.json#/$defs/StructureOfferSnapshotEntry": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSnapshotEntry",
 }
 
 // contextFabricProjectionDefsRewrites relocates

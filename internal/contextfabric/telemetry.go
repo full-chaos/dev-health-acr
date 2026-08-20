@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -140,4 +141,28 @@ func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, prin
 func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
+}
+
+// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F). member is a closed
+// StructureNeedKind enum value -- content-safe by construction, never
+// question text or a subject identifier.
+func (t SlogEngineTelemetry) RecordStructureNeedsDisclosed(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
+	args := append([]any{"org_id", principal.OrgID, "member", string(member)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric structure needs disclosed", args...)
+}
+
+// RecordStructureOfferCount (CHAOS-3900 P1.F). member/source are both
+// closed enums; count is a plain integer -- the full event is
+// counts/enums only, never an offer's own label/value/canonical_id.
+func (t SlogEngineTelemetry) RecordStructureOfferCount(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
+	args := append([]any{"org_id", principal.OrgID, "member", string(member), "source", string(source), "count", count}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric structure offer count", args...)
+}
+
+// RecordStructureReceipt (CHAOS-3900 P1.F). member/outcome are both closed
+// enums -- see StructureReceiptOutcome's own doc comment (structure.go)
+// for the three-value vocabulary and its atomicity guarantee.
+func (t SlogEngineTelemetry) RecordStructureReceipt(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome) {
+	args := append([]any{"org_id", principal.OrgID, "member", string(member), "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric structure receipt", args...)
 }

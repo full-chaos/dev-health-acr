@@ -507,7 +507,21 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		recheckRequest.RequestedScope.SubjectHints = hints
 	}
 
-	resolution, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding)
+	// CHAOS-3900 P1.C: this recheck only re-verifies SUBJECT authorization
+	// (the committed set below) -- it discards the structure-offer
+	// material ResolveSubjects also returns, deliberately: a reuse
+	// recheck never produces a NEW served result of its own (it either
+	// confirms the candidate or misses), so there is nothing to attach
+	// fresh offers to here.
+	//
+	// CHAOS-3900 P1.D: nil, not derived from any structureCanon -- and
+	// provably always nil here, not merely defaulted: this recheck runs
+	// only from inside tryReuse, and canonicalizeStructure's own
+	// reuse-bypass (engine.go) means tryReuse is NEVER called at all
+	// once a request has confirmed structure. A non-nil
+	// ConfirmedExpectedKind reaching this call site would mean the
+	// bypass itself had broken.
+	resolution, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil)
 	if err != nil {
 		return false, AnswerReuseMissAuthorization
 	}
