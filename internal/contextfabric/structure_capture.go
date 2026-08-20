@@ -120,6 +120,48 @@ type StructureSelectionEvent struct {
 	RetrievalIdentity  ReuseRetrievalIdentity
 	PromptVersions     ReusePromptVersions
 	VersionAuthorities ReuseVersionAuthorities
+	// Consensus is the CHAOS-3860 P6 gap fix (design brief §2.4/§B5:
+	// "events gain ... ConsensusEvidence (3860 panel ids + agreement
+	// bits)"), absent from the original P4 shipment (migration 0024) and
+	// added here additively (migration 0026). Present ONLY on events a
+	// 3860 agent-user (multi-model panel) acceptance run captures; nil on
+	// every other capture path (human_panel, agent_explicit,
+	// agent_explicit_echo, and single-model agent_receipt confirmations
+	// with no panel behind them).
+	Consensus *ConsensusEvidence
+}
+
+// ConsensusEvidence records a CHAOS-3860 multi-model panel's agreement
+// shape for one StructureSelectionEvent -- design brief §2.4's own words,
+// verbatim: "panel member model identity ids + per-member agreement bits
+// -- ids/enums, nothing else". PanelModelIdentities names every panel
+// member that independently produced a selection for this event's Member
+// (e.g. sol/luna/opus model identities); AgreementBits is a PARALLEL slice
+// (AgreementBits[i] corresponds to PanelModelIdentities[i]) reporting
+// whether that panel member's own independently-derived selection matched
+// Selected. Consensus curation (design brief §3.2's promotion rule) reads
+// agreement across AgreementBits, never question text or free-form
+// rationale -- neither field this type carries. Zero value (both slices
+// nil/empty) is invalid wherever Consensus is non-nil; construct only with
+// len(PanelModelIdentities) == len(AgreementBits) >= 2, distinct identities
+// (pgstructureselection.validateEvent and migration 0027's own CHECK
+// constraint -- ck_acr_cf_structure_selections_consensus_panel_size --
+// both enforce this shape; migration 0026 owns the column itself and the
+// SelectionMode gate).
+//
+// SCOPE NOTE (codex adversarial review, round 1, confirmed): this type and
+// its validators enforce SHAPE only. Nothing here -- nor anywhere in this
+// package -- can prove a given event's Consensus genuinely came from a
+// real multi-model panel run rather than a single caller constructing a
+// plausible-looking payload directly: SelectionMode=agent_receipt is
+// shared by every credentialed confirmation, panel or not, and
+// Engine.buildStructureSelectionEvent never sets this field today (no
+// production writer exists yet). Closing that authenticity gap requires
+// request-level provenance wiring that is an open architectural question,
+// not this migration's scope -- see the CHAOS-3860 P6 activation report.
+type ConsensusEvidence struct {
+	PanelModelIdentities []string `json:"panel_model_identities"`
+	AgreementBits        []bool   `json:"agreement_bits"`
 }
 
 // StructureSelectionSink is notified once per successfully-redeemed

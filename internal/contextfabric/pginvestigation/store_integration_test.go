@@ -455,7 +455,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 	// (reuse columns NULL) -- must stay NULL, not error.
 	insertLegacyRow("result-0027-already-excluded", `{"structure_needs":{"missing":["expected_kind"]}}`, false)
 
-	backfillSQL, err := migrations.Files.ReadFile("0027_context_fabric_structure_bearing_reuse_cleanup.sql")
+	backfillSQL, err := migrations.Files.ReadFile("0029_context_fabric_structure_bearing_reuse_cleanup.sql")
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, string(backfillSQL))
 	require.NoError(t, err)
