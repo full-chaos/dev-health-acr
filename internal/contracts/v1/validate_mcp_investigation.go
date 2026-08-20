@@ -80,10 +80,18 @@ func (r MCPInvestigateQuestionRequest) Validate() error {
 	if len(r.SubjectHandles) > MCPInvestigationReceiptsMaxCount {
 		return fmt.Errorf("investigate_question subject_handles exceeds v1 bounds")
 	}
+	seenHandles := make(map[ContextFabricRequestedHandle]struct{}, len(r.SubjectHandles))
 	for _, handle := range r.SubjectHandles {
 		if err := handle.Validate(); err != nil {
 			return fmt.Errorf("subject_handles: %w", err)
 		}
+		// codex xhigh review, CHAOS-3972 round 1, finding 4: the published
+		// schema declares subject_handles uniqueItems -- Go must enforce
+		// the identical bound at this tool boundary too.
+		if _, exists := seenHandles[handle]; exists {
+			return fmt.Errorf("investigate_question subject_handles entries must be unique")
+		}
+		seenHandles[handle] = struct{}{}
 	}
 	if r.EvidenceWindow != nil {
 		if err := r.EvidenceWindow.validate(); err != nil {

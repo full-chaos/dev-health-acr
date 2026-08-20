@@ -72,8 +72,17 @@ const (
 // ContextFabricConfirmedStructureEntry (with Disposition=applied,
 // Provenance=clarification_confirmed) once a result exists to attach it to.
 type confirmedStructureMember struct {
-	Member         contractsv1.ContextFabricStructureNeedKind
-	AppliedValue   string
+	Member       contractsv1.ContextFabricStructureNeedKind
+	AppliedValue string
+	// AppliedKind (CHAOS-3972 P3, codex xhigh review round 1 finding 3) is
+	// the confirmed offer's own Kind -- populated for subject_handle (the
+	// one member with an explicit-field conflict class to check against,
+	// §2.1: "anchors are RECEIPT-ONLY on the MCP surface... there is no
+	// explicit anchor field"). Empty for expected_kind (AppliedValue IS
+	// already the kind there) and subject_anchor (no explicit-anchor
+	// conflict class exists). See resolveExplicitStructure's own handle
+	// conflict check, the sole reader.
+	AppliedKind    contractsv1.ContextFabricSubjectKind
 	PriorResultID  string
 	ReceiptID      string
 	OfferSource    contractsv1.ContextFabricStructureOfferSource
@@ -272,7 +281,7 @@ type HandleGrammarChecker func(kind contractsv1.ContextFabricSubjectKind, patter
 type structureReceiptMember struct {
 	member          contractsv1.ContextFabricStructureNeedKind
 	receipts        []contractsv1.ContextFabricBoundSubjectReceipt
-	appliedValueFor func(stored InvestigationResult, receiptID string) (value string, offerSource contractsv1.ContextFabricStructureOfferSource, priorVersionID, priorEntryID string, ok bool)
+	appliedValueFor func(stored InvestigationResult, receiptID string) (value string, kind contractsv1.ContextFabricSubjectKind, offerSource contractsv1.ContextFabricStructureOfferSource, priorVersionID, priorEntryID string, ok bool)
 	// reverify (P1.E) is canonicalizeStructure's own redemption-time
 	// re-verification hook, additional to appliedValueFor's stored-offer
 	// lookup above. nil means the stored offer's content is trusted as
@@ -334,16 +343,16 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		{
 			member:   contractsv1.ContextFabricStructureNeedExpectedKind,
 			receipts: request.PriorKindReceipts,
-			appliedValueFor: func(stored InvestigationResult, receiptID string) (string, contractsv1.ContextFabricStructureOfferSource, string, string, bool) {
+			appliedValueFor: func(stored InvestigationResult, receiptID string) (string, contractsv1.ContextFabricSubjectKind, contractsv1.ContextFabricStructureOfferSource, string, string, bool) {
 				if stored.StructureNeeds == nil {
-					return "", "", "", "", false
+					return "", "", "", "", "", false
 				}
 				for _, opt := range stored.StructureNeeds.KindOptions {
 					if opt.ReceiptID == receiptID {
-						return string(opt.Kind), opt.OfferSource, opt.PriorVersionID, opt.PriorEntryID, true
+						return string(opt.Kind), opt.Kind, opt.OfferSource, opt.PriorVersionID, opt.PriorEntryID, true
 					}
 				}
-				return "", "", "", "", false
+				return "", "", "", "", "", false
 			},
 			offerSnapshot: func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
 				if stored.StructureNeeds == nil {
@@ -361,16 +370,16 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		{
 			member:   contractsv1.ContextFabricStructureNeedSubjectAnchor,
 			receipts: request.PriorAnchorReceipts,
-			appliedValueFor: func(stored InvestigationResult, receiptID string) (string, contractsv1.ContextFabricStructureOfferSource, string, string, bool) {
+			appliedValueFor: func(stored InvestigationResult, receiptID string) (string, contractsv1.ContextFabricSubjectKind, contractsv1.ContextFabricStructureOfferSource, string, string, bool) {
 				if stored.StructureNeeds == nil {
-					return "", "", "", "", false
+					return "", "", "", "", "", false
 				}
 				for _, opt := range stored.StructureNeeds.AnchorOptions {
 					if opt.ReceiptID == receiptID {
-						return opt.CanonicalID, opt.OfferSource, opt.PriorVersionID, opt.PriorEntryID, true
+						return opt.CanonicalID, opt.Kind, opt.OfferSource, opt.PriorVersionID, opt.PriorEntryID, true
 					}
 				}
-				return "", "", "", "", false
+				return "", "", "", "", "", false
 			},
 			offerSnapshot: func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
 				if stored.StructureNeeds == nil {
@@ -416,16 +425,16 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		{
 			member:   contractsv1.ContextFabricStructureNeedSubjectHandle,
 			receipts: request.PriorHandleReceipts,
-			appliedValueFor: func(stored InvestigationResult, receiptID string) (string, contractsv1.ContextFabricStructureOfferSource, string, string, bool) {
+			appliedValueFor: func(stored InvestigationResult, receiptID string) (string, contractsv1.ContextFabricSubjectKind, contractsv1.ContextFabricStructureOfferSource, string, string, bool) {
 				if stored.StructureNeeds == nil {
-					return "", "", "", "", false
+					return "", "", "", "", "", false
 				}
 				for _, opt := range stored.StructureNeeds.HandleOptions {
 					if opt.ReceiptID == receiptID {
-						return opt.Value, opt.OfferSource, opt.PriorVersionID, opt.PriorEntryID, true
+						return opt.Value, opt.Kind, opt.OfferSource, opt.PriorVersionID, opt.PriorEntryID, true
 					}
 				}
-				return "", "", "", "", false
+				return "", "", "", "", "", false
 			},
 			offerSnapshot: func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
 				if stored.StructureNeeds == nil {
@@ -491,7 +500,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		if err != nil {
 			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
 		}
-		value, offerSource, priorVersionID, priorEntryID, ok := m.appliedValueFor(stored.Result, receiptID)
+		value, kind, offerSource, priorVersionID, priorEntryID, ok := m.appliedValueFor(stored.Result, receiptID)
 		if !ok {
 			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
 		}
@@ -525,7 +534,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 			}
 		}
 		confirmed = append(confirmed, confirmedStructureMember{
-			Member: m.member, AppliedValue: value, PriorResultID: resultID, ReceiptID: receiptID,
+			Member: m.member, AppliedValue: value, AppliedKind: kind, PriorResultID: resultID, ReceiptID: receiptID,
 			OfferSource: offerSource, PriorVersionID: priorVersionID, PriorEntryID: priorEntryID,
 		})
 		if m.offerSnapshot != nil {
@@ -692,8 +701,14 @@ func (e *Engine) resolveExplicitStructure(request InvestigationRequest, confirme
 	}
 
 	if len(request.SubjectHandles) > 0 {
-		if confirmedValue, ok := confirmedMemberValue(confirmed, contractsv1.ContextFabricStructureNeedSubjectHandle); ok {
-			if !containsHandleValue(request.SubjectHandles, confirmedValue) {
+		if confirmedValue, confirmedKind, ok := confirmedMemberKindValue(confirmed, contractsv1.ContextFabricStructureNeedSubjectHandle); ok {
+			// codex xhigh review, CHAOS-3972 round 1, finding 3: agreement
+			// must match on (kind, value) TOGETHER -- a stored
+			// (pull_request, "532") receipt and an explicit
+			// (work_item, "532") request name DIFFERENT subjects that
+			// merely share a numeric string, and must never be read as
+			// agreement.
+			if !containsHandle(request.SubjectHandles, confirmedKind, confirmedValue) {
 				return nil, structureVetoConfirmationConflict
 			}
 		} else if len(request.SubjectHandles) == 1 {
@@ -731,6 +746,20 @@ func confirmedMemberValue(confirmed []confirmedStructureMember, member contracts
 	return "", false
 }
 
+// confirmedMemberKindValue is confirmedMemberValue's own (value, kind)
+// pair variant -- subject_handle's own explicit-vs-receipt agreement check
+// needs BOTH (codex xhigh review, CHAOS-3972 round 1, finding 3): value
+// alone cannot distinguish a genuinely agreeing explicit handle from one
+// that merely shares the same numeric string with a DIFFERENT kind.
+func confirmedMemberKindValue(confirmed []confirmedStructureMember, member contractsv1.ContextFabricStructureNeedKind) (value string, kind contractsv1.ContextFabricSubjectKind, ok bool) {
+	for _, c := range confirmed {
+		if c.Member == member {
+			return c.AppliedValue, c.AppliedKind, true
+		}
+	}
+	return "", "", false
+}
+
 func containsSubjectKind(kinds []contractsv1.ContextFabricSubjectKind, kind contractsv1.ContextFabricSubjectKind) bool {
 	for _, k := range kinds {
 		if k == kind {
@@ -740,9 +769,12 @@ func containsSubjectKind(kinds []contractsv1.ContextFabricSubjectKind, kind cont
 	return false
 }
 
-func containsHandleValue(handles []contractsv1.ContextFabricRequestedHandle, value string) bool {
+// containsHandle reports whether handles carries an entry naming BOTH the
+// same kind and the same value -- see confirmedMemberKindValue's own doc
+// comment for why value alone is not a safe agreement test.
+func containsHandle(handles []contractsv1.ContextFabricRequestedHandle, kind contractsv1.ContextFabricSubjectKind, value string) bool {
 	for _, h := range handles {
-		if h.Value == value {
+		if h.Kind == kind && h.Value == value {
 			return true
 		}
 	}

@@ -174,11 +174,13 @@ type GraphReader interface {
 // this same function without EITHER routing through confirmation
 // (unlikely to be what such a feature wants) OR a reviewer visibly
 // widening this type or adding a second, parallel filter -- and
-// kindInsensitivityProof (structure.go) is the standalone, unit-tested,
-// UNWIRED primitive that MUST be wired into whichever narrowing path
-// that new source takes before it may drive a decisive outcome (also
-// recorded as a precondition on CHAOS-3927 and the P3/P5 commissioning
-// checklists -- process enforcement backing this type-level one).
+// kindInsensitivityProof (graphrank/chaos3900_structure_offers.go) is the
+// insensitivity-proof primitive P1.D's own scoping named a HARD
+// PRECONDITION of introducing any inferred-tier kind source -- WIRED as of
+// CHAOS-3972 P3 into RunShadowEvidenceRound's own decisive switch
+// (chaos3899_evidence_round.go), consulted whenever the round's PooledKinds
+// was narrowed by request.ExpectedKinds (the explicit-tier source this
+// ticket introduces) rather than a kindr_ receipt.
 type ConfirmedExpectedKind struct {
 	Kind contractsv1.ContextFabricSubjectKind
 }

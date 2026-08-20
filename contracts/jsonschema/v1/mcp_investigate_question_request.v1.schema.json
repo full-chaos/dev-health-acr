@@ -69,7 +69,8 @@
       "items": {
         "$ref": "#/$defs/RequestedHandle"
       },
-      "maxItems": 20
+      "maxItems": 20,
+      "uniqueItems": true
     },
     "evidence_window": {
       "$ref": "#/$defs/RequestedEvidenceWindow"

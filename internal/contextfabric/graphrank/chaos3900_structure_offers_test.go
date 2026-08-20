@@ -186,14 +186,21 @@ func fakeCensusFn(counts map[CensusKind]int, err error) CensusFunc {
 func TestKindInsensitivityProof(t *testing.T) {
 	t.Parallel()
 
+	// pull_request and ci_pipeline_run both accept a repository anchor
+	// (KindHasAnchorFK: pull_request explicitly, ci_pipeline_run via the
+	// default case) -- the ONE anchor kind that reaches both pooled kinds
+	// in these tests, so anchorApplies is true for every censused kind.
+	const anchorKind = contextfabric.SubjectRepository
+	const anchorCanonicalID = "repository:r-1"
+
 	t.Run("single all-kinds satisfier is commit-sound", func(t *testing.T) {
 		census := fakeCensusFn(map[CensusKind]int{
 			contractsv1.ContextFabricSubjectPullRequest: 1,
-			contractsv1.ContextFabricSubjectWorkItem:    0,
+			contractsv1.ContextFabricSubjectCIRun:       0,
 		}, nil)
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectWorkItem},
-			"", false, "", "", false, census)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivityCommitSound {
 			t.Errorf("kindInsensitivityProof() = %q, want %q", got, kindInsensitivityCommitSound)
 		}
@@ -201,11 +208,11 @@ func TestKindInsensitivityProof(t *testing.T) {
 	t.Run("zero all-kinds satisfiers is no-match-sound", func(t *testing.T) {
 		census := fakeCensusFn(map[CensusKind]int{
 			contractsv1.ContextFabricSubjectPullRequest: 0,
-			contractsv1.ContextFabricSubjectWorkItem:    0,
+			contractsv1.ContextFabricSubjectCIRun:       0,
 		}, nil)
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectWorkItem},
-			"", false, "", "", false, census)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivityNoMatchSound {
 			t.Errorf("kindInsensitivityProof() = %q, want %q", got, kindInsensitivityNoMatchSound)
 		}
@@ -213,11 +220,11 @@ func TestKindInsensitivityProof(t *testing.T) {
 	t.Run("more than one all-kinds satisfier is kind_sensitive_outcome", func(t *testing.T) {
 		census := fakeCensusFn(map[CensusKind]int{
 			contractsv1.ContextFabricSubjectPullRequest: 1,
-			contractsv1.ContextFabricSubjectWorkItem:    1,
+			contractsv1.ContextFabricSubjectCIRun:       1,
 		}, nil)
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectWorkItem},
-			"", false, "", "", false, census)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q", got, kindInsensitivitySensitive)
 		}
@@ -226,7 +233,7 @@ func TestKindInsensitivityProof(t *testing.T) {
 		census := fakeCensusFn(map[CensusKind]int{contractsv1.ContextFabricSubjectPullRequest: 1}, nil)
 		got := kindInsensitivityProof(context.Background(), "org_1",
 			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectDocument},
-			"", false, "", "", false, census)
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q (registry-miss poison)", got, kindInsensitivitySensitive)
 		}
@@ -234,22 +241,91 @@ func TestKindInsensitivityProof(t *testing.T) {
 	t.Run("a census error fails safe, not open", func(t *testing.T) {
 		census := fakeCensusFn(nil, errors.New("boom"))
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest}, "", false, "", "", false, census)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest}, "", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q on census error", got, kindInsensitivitySensitive)
 		}
 	})
 	t.Run("nil census is sensitive, not a panic", func(t *testing.T) {
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest}, "", false, "", "", false, nil)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest}, "", "", false, anchorKind, anchorCanonicalID, true, nil)
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q on nil census", got, kindInsensitivitySensitive)
 		}
 	})
 	t.Run("empty pre-narrowing kind set is sensitive", func(t *testing.T) {
-		got := kindInsensitivityProof(context.Background(), "org_1", nil, "", false, "", "", false, fakeCensusFn(nil, nil))
+		got := kindInsensitivityProof(context.Background(), "org_1", nil, "", "", false, anchorKind, anchorCanonicalID, true, fakeCensusFn(nil, nil))
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q on empty kind set", got, kindInsensitivitySensitive)
+		}
+	})
+	// codex xhigh review, CHAOS-3972 round 1, finding 1's own regression
+	// pin: a handle bound to ONE kind must never be applied to another
+	// pooled kind as if it were valid there too.
+	t.Run("a handle bound to one kind is never applied to another pooled kind", func(t *testing.T) {
+		calls := map[CensusKind]struct {
+			value       string
+			handleBound bool
+			anchorBound bool
+		}{}
+		census := func(_ context.Context, _ string, kind CensusKind, value string, handleBound bool, _ contextfabric.SubjectKind, _ string, anchorBound bool) (CensusOutcome, error) {
+			calls[kind] = struct {
+				value       string
+				handleBound bool
+				anchorBound bool
+			}{value, handleBound, anchorBound}
+			if kind == contractsv1.ContextFabricSubjectCIRun {
+				return CensusOutcome{Count: 1}, nil
+			}
+			return CensusOutcome{Count: 0}, nil
+		}
+		// A repository anchor reaches BOTH pooled kinds (pull_request
+		// explicitly, ci_pipeline_run via the default KindHasAnchorFK
+		// case), so pull_request is still legitimately censused -- via the
+		// anchor, never the ci_pipeline_run handle.
+		got := kindInsensitivityProof(context.Background(), "org_1",
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			contractsv1.ContextFabricSubjectCIRun, "18234567", true, anchorKind, anchorCanonicalID, true, census)
+		if got != kindInsensitivityCommitSound {
+			t.Fatalf("kindInsensitivityProof() = %q, want %q", got, kindInsensitivityCommitSound)
+		}
+		if pr := calls[contractsv1.ContextFabricSubjectPullRequest]; pr.handleBound || pr.value != "" {
+			t.Errorf("pull_request census call carried handleBound=%v value=%q -- the ci_pipeline_run handle must never apply to a kind it was never bound to", pr.handleBound, pr.value)
+		}
+		if pr := calls[contractsv1.ContextFabricSubjectPullRequest]; !pr.anchorBound {
+			t.Errorf("pull_request census call carried anchorBound=false, want true -- it must still be censused via the anchor")
+		}
+		if ci := calls[contractsv1.ContextFabricSubjectCIRun]; !ci.handleBound || ci.value != "18234567" {
+			t.Errorf("ci_pipeline_run census call = %+v, want handleBound=true value=18234567", ci)
+		}
+	})
+	// codex xhigh review, CHAOS-3972 round 1, finding 2's own regression
+	// pin: a census outcome that could not prove closure must never feed
+	// the total, in either direction.
+	t.Run("closure mismatch poisons the proof even at count 1", func(t *testing.T) {
+		census := func(_ context.Context, _ string, kind CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+			if kind == contractsv1.ContextFabricSubjectPullRequest {
+				return CensusOutcome{Count: 1, ClosureMismatch: true}, nil
+			}
+			return CensusOutcome{Count: 0}, nil
+		}
+		got := kindInsensitivityProof(context.Background(), "org_1",
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
+		if got != kindInsensitivitySensitive {
+			t.Errorf("kindInsensitivityProof() = %q, want %q -- a ClosureMismatch outcome must never certify commit_sound", got, kindInsensitivitySensitive)
+		}
+	})
+	t.Run("a pooled kind no keyed predicate reaches poisons the proof", func(t *testing.T) {
+		// work_item's own anchor FK is project, not repository -- the
+		// shared anchorKind above (repository) does not reach it, and no
+		// handle is bound, so nothing censuses it.
+		census := fakeCensusFn(map[CensusKind]int{contractsv1.ContextFabricSubjectPullRequest: 1}, nil)
+		got := kindInsensitivityProof(context.Background(), "org_1",
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectWorkItem},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
+		if got != kindInsensitivitySensitive {
+			t.Errorf("kindInsensitivityProof() = %q, want %q -- work_item has no reachable keyed predicate here", got, kindInsensitivitySensitive)
 		}
 	})
 }

@@ -517,8 +517,17 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 	// caller authority may narrow without this extra proof, exactly like a
 	// confirmed window.
 	if len(input.PreNarrowingExplicitKinds) > 0 && (base.Outcome == ShadowWouldCommit || base.Outcome == ShadowWouldNoMatch) {
+		// handleKind (codex xhigh review, CHAOS-3972 round 1, finding 1):
+		// the SAME per-kind applicability gate the main census loop above
+		// already applies (handleApplies := handle.Kind == kind) -- the
+		// proof must never apply this handle's value to a kind it was
+		// never bound to.
+		var handleKind CensusKind
+		if handle != nil {
+			handleKind = handle.Kind
+		}
 		proof := kindInsensitivityProof(ctx, input.OrgID, input.PreNarrowingExplicitKinds,
-			valueOr(handle != nil, handle), handle != nil, anchor.Kind, anchor.CanonicalID, anchorOK, input.CensusFunc)
+			handleKind, valueOr(handle != nil, handle), handle != nil, anchor.Kind, anchor.CanonicalID, anchorOK, input.CensusFunc)
 		sound := (base.Outcome == ShadowWouldCommit && proof == kindInsensitivityCommitSound) ||
 			(base.Outcome == ShadowWouldNoMatch && proof == kindInsensitivityNoMatchSound)
 		if !sound {

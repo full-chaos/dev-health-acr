@@ -83,10 +83,18 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 	if len(r.SubjectHandles) > 20 {
 		return fmt.Errorf("subject_handles exceeds v1 bounds")
 	}
+	seenHandles := make(map[ContextFabricRequestedHandle]struct{}, len(r.SubjectHandles))
 	for _, handle := range r.SubjectHandles {
 		if err := handle.Validate(); err != nil {
 			return fmt.Errorf("subject_handles: %w", err)
 		}
+		// codex xhigh review, CHAOS-3972 round 1, finding 4: the published
+		// schema declares subject_handles uniqueItems -- Go must enforce
+		// the identical bound, not merely a looser one.
+		if _, exists := seenHandles[handle]; exists {
+			return fmt.Errorf("subject_handles entries must be unique")
+		}
+		seenHandles[handle] = struct{}{}
 	}
 	if err := r.RequestedScope.Validate(); err != nil {
 		return fmt.Errorf("requested_scope: %w", err)
