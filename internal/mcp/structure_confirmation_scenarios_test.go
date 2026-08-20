@@ -149,6 +149,20 @@ func buildRefusalResult(scenario structureConfirmationScenario, resultID, receip
 func buildConvertedResult(scenario structureConfirmationScenario, priorResultID, receiptID string) contractsv1.ContextFabricInvestigationResult {
 	result := parityResult()
 	result.StructureNeeds = nil
+	if scenario.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+		// Window confirmation echoes through EffectiveEvidenceWindow.Provenance,
+		// NOT ConfirmedStructure (codex round-3 finding, confirmed against
+		// internal/contextfabric/window.go's resolveWindowReceipts and
+		// engine.go:836-840 -- composeConfirmedStructure is built from
+		// structureCanon.Confirmed/Explicit only, which window redemption
+		// never touches). A fabricated ConfirmedStructure window entry
+		// would model a wire shape production never actually produces.
+		result.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+			RelativeID: contractsv1.ContextFabricRelativeWindowID(scenario.AppliedValue),
+			Provenance: contractsv1.ContextFabricWindowClarificationConfirmed,
+		}
+		return result
+	}
 	result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
 		Member: contractsv1.ContextFabricStructureNeedKind(scenario.Member), AppliedValue: scenario.AppliedValue,
 		Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: priorResultID, ReceiptID: receiptID,
@@ -300,12 +314,32 @@ func TestStructureConfirmationScenarios(t *testing.T) {
 			})
 			turn2 := callInvestigateQuestion(t, boot, turn2Req)
 
-			// Converted: confirmed_structure echo present for the applied
-			// case, StructureNeeds cleared (decisive terminal -- codex
+			// Converted: StructureNeeds cleared (decisive terminal -- codex
 			// round-1 finding #8: this assertion was missing).
 			if turn2.Structured.StructureNeeds != nil {
 				t.Fatalf("turn 2: structured.structure_needs = %+v, want nil (decisive terminal clears disclosure)", turn2.Structured.StructureNeeds)
 			}
+			if scenario.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+				// Window's confirmation echo is EffectiveEvidenceWindow.Provenance,
+				// NOT confirmed_structure (codex round-3 finding: window
+				// redemption never populates ConfirmedStructure in the
+				// merged production code, despite the design brief's
+				// aspirational "same uniform mechanism" framing -- a real
+				// gap between brief and shipped code, worth flagging
+				// upstream, not papered over here).
+				if len(turn2.Structured.ConfirmedStructure) != 0 {
+					t.Errorf("turn 2: confirmed_structure = %+v, want none for window (production echoes window via effective_evidence_window)", turn2.Structured.ConfirmedStructure)
+				}
+				if turn2.Structured.EffectiveEvidenceWindow == nil || turn2.Structured.EffectiveEvidenceWindow.Provenance != contractsv1.ContextFabricWindowClarificationConfirmed {
+					t.Fatalf("turn 2: effective_evidence_window = %+v, want provenance=clarification_confirmed", turn2.Structured.EffectiveEvidenceWindow)
+				}
+				if err := turn2.Validate(); err != nil {
+					t.Fatalf("turn 2 response failed contract validation: %v", err)
+				}
+				return
+			}
+			// Converted: confirmed_structure echo present for the applied
+			// case (every non-window member).
 			if len(turn2.Structured.ConfirmedStructure) != 1 {
 				t.Fatalf("turn 2: confirmed_structure = %+v, want exactly one applied entry", turn2.Structured.ConfirmedStructure)
 			}

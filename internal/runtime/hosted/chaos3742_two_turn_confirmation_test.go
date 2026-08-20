@@ -269,6 +269,27 @@ func (entry twoTurnOracleEntry) negativeQuery() oracleOfferQuery {
 	}
 }
 
+// memberApplied reports whether member was actually confirmed/applied on
+// result. Window is a SEPARATE mechanism from every other member (codex
+// round-3 finding, confirmed against engine.go:836-840/window.go:420-423):
+// window redemption stamps EffectiveEvidenceWindow.Provenance=
+// clarification_confirmed and NEVER adds a ConfirmedStructure entry --
+// composeConfirmedStructure is built from structureCanon.Confirmed/Explicit,
+// which resolveWindowReceipts never touches. Checking ConfirmedStructure
+// alone for window (the round-1/round-2 code) can never detect a window
+// confirmation at all.
+func memberApplied(result contractsv1.ContextFabricInvestigationResult, member string) bool {
+	if member == string(contractsv1.ContextFabricStructureNeedWindow) {
+		return result.EffectiveEvidenceWindow != nil && result.EffectiveEvidenceWindow.Provenance == contractsv1.ContextFabricWindowClarificationConfirmed
+	}
+	for _, e := range result.ConfirmedStructure {
+		if string(e.Member) == member && e.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
+			return true
+		}
+	}
+	return false
+}
+
 // twoTurnCommittedWrong reports whether committed is a decisive commit that
 // does NOT match the corpus's own ground truth -- the confirmed_wrong arm's
 // pass/fail predicate (design brief §5 head: "ANY resulting oracle-wrong
@@ -319,16 +340,28 @@ type twoTurnCaseResult struct {
 }
 
 type twoTurnReport struct {
-	Provenance            trialProvenance `json:"provenance"`
-	OracleAnnexPath       string          `json:"oracle_annex_path"`
-	OracleAnnexCorpusSHA  string          `json:"oracle_annex_corpus_sha256"`
-	OracleAnnexSignedOff  bool            `json:"oracle_annex_signed_off"`
-	CasesRun              int             `json:"cases_run"`
-	GateReachableCount    int             `json:"gate_reachable_count"`
-	NoDiscriminatorsCount int             `json:"no_discriminators_count"`
-	OfferMissCount        map[string]int  `json:"offer_miss_count"`
-	WrongCommitCount      int             `json:"wrong_commit_count"`
-	InferredTierAnyCommit int             `json:"inferred_tier_any_commit_count"`
+	Provenance trialProvenance `json:"provenance"`
+	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
+	// (codex round-3 finding #3: the wrapper script already exports
+	// ACR_TEST_TRIAL_BASE_SHA -- required provenance, team-lead ruling
+	// 2026-08-17 -- but the report never captured it, so the artifact could
+	// not prove which origin/main baseline the run was based on).
+	BaseSHA              string `json:"base_sha"`
+	OracleAnnexPath      string `json:"oracle_annex_path"`
+	OracleAnnexCorpusSHA string `json:"oracle_annex_corpus_sha256"`
+	OracleAnnexSignedOff bool   `json:"oracle_annex_signed_off"`
+	CasesRun             int    `json:"cases_run"`
+	// PositiveAppliedCount is the fail-open guard (codex round-3 finding
+	// #2): a run where every case offer-misses or errors could otherwise
+	// report zero wrong commits and pass the anti-vacuity check via
+	// confirmed_wrong alone, having proven NOTHING about ordinary
+	// conversion. The final assertion requires this > 0.
+	PositiveAppliedCount  int            `json:"positive_applied_count"`
+	GateReachableCount    int            `json:"gate_reachable_count"`
+	NoDiscriminatorsCount int            `json:"no_discriminators_count"`
+	OfferMissCount        map[string]int `json:"offer_miss_count"`
+	WrongCommitCount      int            `json:"wrong_commit_count"`
+	InferredTierAnyCommit int            `json:"inferred_tier_any_commit_count"`
 	// ConfirmedWrongRedeemedCount is PER APPLICABLE MEMBER (codex round-1
 	// finding #4: a global scalar lets one member's success mask another
 	// member's permanently-unredeemable designated negative).
@@ -527,11 +560,7 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 	}
 	res.Turn2Status = string(turn2.Status)
 	res.CommittedCount = len(turn2.SubjectResolution.Committed)
-	for _, e := range turn2.ConfirmedStructure {
-		if string(e.Member) == entry.Member && e.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
-			res.Applied = true
-		}
-	}
+	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	return res
 }
@@ -751,11 +780,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 	}
 	res.Turn2Status = string(turn2.Status)
 	res.CommittedCount = len(turn2.SubjectResolution.Committed)
-	for _, e := range turn2.ConfirmedStructure {
-		if string(e.Member) == entry.Member && e.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
-			res.Applied = true
-		}
-	}
+	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	return res
 }
@@ -801,15 +826,10 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 		}
 		res.Turn2Status = string(result.Status)
 		res.CommittedCount = len(result.SubjectResolution.Committed)
+		res.Applied = memberApplied(result, entry.Member)
 		staleDisposition := false
 		for _, e := range result.ConfirmedStructure {
-			if string(e.Member) != entry.Member {
-				continue
-			}
-			if e.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
-				res.Applied = true
-			}
-			if e.Disposition == contractsv1.ContextFabricStructureDispositionVetoedStale {
+			if string(e.Member) == entry.Member && e.Disposition == contractsv1.ContextFabricStructureDispositionVetoedStale {
 				staleDisposition = true
 			}
 		}
@@ -949,6 +969,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 		},
+		BaseSHA:         requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
 		OracleAnnexPath: annexPath, OracleAnnexCorpusSHA: annex.CorpusSHA256, OracleAnnexSignedOff: annex.SignedOff,
 		OfferMissCount:              map[string]int{},
 		MutationProbesTripped:       map[string]int{},
@@ -1014,6 +1035,9 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if positive.OfferMiss {
 			report.OfferMissCount[entry.Member]++
 		}
+		if positive.Applied {
+			report.PositiveAppliedCount++
+		}
 		if positive.CommittedCount > 0 {
 			report.GateReachableCount++
 		}
@@ -1041,7 +1065,15 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// positive arm actually converted (probe (iii) needs a real
 		// supersession to have happened; probes (i)/(ii) are cheap enough
 		// to run alongside it rather than standing up a separate case).
-		if positive.Applied {
+		// EXCLUDES window (codex round-3 finding): window redemption has
+		// NO supersession/staleness concept at all -- window.go's own
+		// windowVetoReason vocabulary is
+		// {confirmation_unresolved, confirmation_conflict, axis_conflict},
+		// with nothing analogous to structure's stale_superseded_offer.
+		// Running probe (iii) against window could never trip by
+		// construction, which would misreport as a probe DEFECT rather
+		// than the structural exemption it actually is.
+		if positive.Applied && entry.Member != string(contractsv1.ContextFabricStructureNeedWindow) {
 			receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 			if found {
 				for _, mutationResult := range runTwoTurnMutationArm(ctx, investigator, principal, entry.Index, tc, entry, turn1.ResultID, receiptID, caseTimeout) {
@@ -1089,6 +1121,15 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	t.Logf("two-turn report written to %s: cases_run=%d gate_reachable=%d wrong_commits=%d anti_vacuity_valid=%v",
 		outPath, report.CasesRun, report.GateReachableCount, report.WrongCommitCount, report.AntiVacuityValid)
 
+	// Fail-open guard (codex round-3 finding #2): a run where every case
+	// offer-missed or errored could otherwise pass -- zero wrong commits
+	// and a satisfied anti-vacuity check prove nothing when NOTHING ever
+	// actually converted. This is checked BEFORE anti-vacuity so a
+	// completely broken harness fails on the more fundamental signal
+	// first, not last.
+	if report.PositiveAppliedCount == 0 {
+		t.Errorf("positive_applied_count=0 across %d cases -- the positive arm never converted a single case, so this run proves nothing about conversion (fails open otherwise: zero wrong commits and a vacuously-true anti-vacuity check would not catch a harness that never actually confirms anything)", report.CasesRun)
+	}
 	if !report.AntiVacuityValid {
 		t.Errorf("confirmed_wrong arm anti-vacuity check failed: members %v redeemed zero designated committable negatives (design brief v4/sol-r3 #4) -- the arm is INVALID for this run", unsatisfiedMembers)
 	}
