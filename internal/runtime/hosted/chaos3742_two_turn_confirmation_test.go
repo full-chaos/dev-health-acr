@@ -1923,7 +1923,18 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// present)"). ControlsWitnessed is a best-effort Status==no_match
 	// proxy -- see controlSeen/controlWitnessed's own doc comment -- so a
 	// miss here is reported as a finding, never silently passed.
-	if report.ControlsTotal > 0 && report.ControlsWitnessed < report.ControlsTotal {
+	//
+	// A zero denominator (codex round-2 finding, HIGH confidence) must
+	// NOT read as a vacuous pass: a limited/truncated run (ACR_TEST_TRIAL_
+	// LIMIT) or an annex that happens to name no control entries can drive
+	// ControlsTotal to 0, and 0 < 0 is false either way -- the old
+	// "ControlsTotal > 0 &&" guard change would not have helped, since the
+	// comparison itself is vacuously satisfied at 0/0. The denominator
+	// being zero is itself the finding: D0 cannot be reported at all, so
+	// the run is INVALID for this check rather than silently green.
+	if report.ControlsTotal == 0 {
+		t.Errorf("controls_total=0: this run recorded NO control cases (entries with no expected answer) -- D0 cannot be reported and the run is INVALID for this check")
+	} else if report.ControlsWitnessed < report.ControlsTotal {
 		t.Errorf("controls_witnessed=%d/%d, want %d/%d (D0: every control case must be witnessed no_match at turn 1)", report.ControlsWitnessed, report.ControlsTotal, report.ControlsTotal, report.ControlsTotal)
 	}
 }
