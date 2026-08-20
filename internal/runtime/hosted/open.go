@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructureselection"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -125,7 +126,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config store: %w", err))
 	}
-	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, clarificationSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
+	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
@@ -138,6 +139,9 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// whenever the investigator itself was not composed; Sink.Close
 	// nil-guards itself, so Runtime.Close can call it unconditionally.
 	runtime.clarificationSink = clarificationSink
+	// CHAOS-3927 P4: structureSelectionSink gets the identical treatment,
+	// same reasoning, same nil-guarded unconditional Close.
+	runtime.structureSelectionSink = structureSelectionSink
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil;
 	// runtimeEvictor is a concrete *modelruntimeresolver.Resolver, possibly
 	// nil. Assigning either nil pointer directly into its interface-typed
@@ -417,13 +421,13 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 	return graphReader, embedRetrievalIdentity, nil
 }
 
-func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, error) {
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, *pgstructureselection.Sink, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
-		return nil, nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil, nil
 	}
 	graphReader, embedRetrievalIdentity, err := buildContextFabricGraphReader(request, postgres, clickhouse, true)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 	// handleVerifier (CHAOS-3900 P1.E) adapts graphrank.VerifyHandle over
 	// the SAME devhealthsource.NewCensusFunc(clickhouse.queryClient)
@@ -465,7 +469,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		contextfabric.FactRegistryOptions{Now: request.options.Now},
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
 	}
 	// CHAOS-3782: WithAnswerReuse turns on Save's reuse-column bookkeeping
 	// and FindReusable/InvalidateOrganizationReuse. request.config.AnswerReuseMaxAge
@@ -481,7 +485,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	}
 	investigationStore, err := pginvestigation.NewStore(postgres.db, storeOpts...)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
 	// reuseSnapshotter, reuseEpochSnapshotter, and reuseInvalidator all
 	// stay nil when reuse is disabled -- Engine then never queries
@@ -520,16 +524,16 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if deploymentDefaultRuntime == nil {
 		deploymentDefaultRuntime, err = newContextFabricModelRuntime(ctx, os.LookupEnv)
 		if err != nil {
-			return nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, err
 		}
 	}
 	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 	receiptSink, err := buildModelReceiptSink(postgres)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
 	// -- the same typed-nil-interface trap open()'s own conversion guards
@@ -556,7 +560,18 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// else in this function.
 	clarificationSink, err := pgclarification.NewSink(postgres.db, pgclarification.SinkOptions{Logger: request.options.Logger})
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("initialize clarification selection sink: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize clarification selection sink: %w", err)
+	}
+	// CHAOS-3927 P4: clarificationSink's own structure-offer twin, SAME
+	// unconditional/reuseEnabled-independent construction reasoning as
+	// clarificationSink immediately above -- capture only needs
+	// e.results != nil, not answer reuse.
+	structureSelectionSink, err := pgstructureselection.NewSink(postgres.db, pgstructureselection.SinkOptions{Logger: request.options.Logger})
+	if err != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = clarificationSink.Close(closeCtx)
+		cancel()
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize structure selection sink: %w", err)
 	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink},
@@ -599,6 +614,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// clarificationSink's own construction comment above for why this
 		// does not depend on reuseEnabled.
 		ClarificationSelectionSink: clarificationSink,
+		// CHAOS-3927 P4: see structureSelectionSink's own construction
+		// comment above for why this does not depend on reuseEnabled.
+		StructureSelectionSink: structureSelectionSink,
 		// CHAOS-3900 P1.E: see handleVerifier's own construction comment
 		// above.
 		HandleVerifier: handleVerifier,
@@ -664,16 +682,18 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		},
 	})
 	if err != nil {
-		// clarificationSink's worker must not outlive this function on a
-		// failed composition -- it is the only fallible step after
-		// construction, so this is the only cleanup site that needs it. A
-		// short bounded context is enough: the queue is guaranteed empty
-		// (nothing has called RecordSelection on an engine that was never
-		// returned), so Close only needs to signal the worker to exit.
+		// clarificationSink/structureSelectionSink's workers must not
+		// outlive this function on a failed composition -- NewEngine is
+		// the only fallible step after both are constructed, so this is
+		// the only cleanup site that needs them. A short bounded context
+		// is enough: both queues are guaranteed empty (nothing has called
+		// RecordSelection on an engine that was never returned), so Close
+		// only needs to signal each worker to exit.
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = clarificationSink.Close(closeCtx)
+		_ = structureSelectionSink.Close(closeCtx)
 		cancel()
-		return nil, nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
 	}
 	// evictor is a concrete *modelruntimeresolver.Resolver, possibly nil
 	// (when orgModelConfigStore was nil) -- guard the typed-nil-interface
@@ -684,9 +704,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// through the same interface-typed local, so it needs no separate
 	// guard here.
 	if evictor == nil {
-		return engine, investigationStore, nil, reuseInvalidator, clarificationSink, nil
+		return engine, investigationStore, nil, reuseInvalidator, clarificationSink, structureSelectionSink, nil
 	}
-	return engine, investigationStore, evictor, reuseInvalidator, clarificationSink, nil
+	return engine, investigationStore, evictor, reuseInvalidator, clarificationSink, structureSelectionSink, nil
 }
 
 // contextFabricSynthesizerOptions is the complete static version identity

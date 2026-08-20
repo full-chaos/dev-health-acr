@@ -142,6 +142,16 @@ type EngineDependencies struct {
 	// contract as HandleVerifier above, see AnchorVerifier's own doc
 	// comment (structure.go).
 	AnchorVerifier AnchorVerifier
+	// StructureSelectionSink is optional (CHAOS-3927 P4, capture-only
+	// phase, mirroring ClarificationSelectionSink's own contract exactly).
+	// When set, Engine notifies it every time a caller's kindr_/ancr_/
+	// handr_ receipt successfully resolves to a confirmed structure
+	// member -- see StructureSelectionSink's own doc comment for the
+	// fail-open contract this dependency must uphold. Leaving this nil
+	// means no structure selection is ever captured, exactly as if the
+	// feature did not exist -- capture is strictly additive and never
+	// changes canonicalizeStructure's own resolution behavior.
+	StructureSelectionSink StructureSelectionSink
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -285,13 +295,20 @@ type EngineTelemetry interface {
 	// cf_structure_receipt{member,outcome}) reports the OUTCOME of one
 	// structure-receipt-bearing member for one Investigate call --
 	// StructureReceiptOutcome's own doc comment (structure.go) for the
-	// three-value vocabulary and why atomicity makes every receipt-bearing
-	// member share the SAME outcome on a veto. Called unconditionally,
-	// once per member that carried at least one receipt (kindr_/ancr_/
-	// handr_), immediately after canonicalizeStructure returns -- covers
-	// both the veto short-circuit and the eventual success path from one
-	// call site, since the outcome is fully determined by
-	// requestStructureCanonicalization's own Veto/Confirmed fields.
+	// four-value vocabulary (CHAOS-3927 P4 added "stale") and why atomicity
+	// makes every receipt-bearing member share the SAME outcome on a veto.
+	// Called once per member that carried at least one receipt (kindr_/
+	// ancr_/handr_), but NOT always immediately after canonicalizeStructure
+	// returns any more (CHAOS-3927 P4, codex round-1/round-2 adversarial
+	// review): a PRE-FLIGHT veto (unresolved/conflict/stale) is still final
+	// the instant canonicalizeStructure returns it and is recorded right
+	// there; the "applied"/"stale" outcome for a request that CONFIRMED
+	// something is deferred until the confirming Save actually succeeds or
+	// loses the Save-time supersession race -- see
+	// Engine.recordStructureConfirmationOutcome/
+	// Engine.structureSupersessionVetoResult (structure.go) for the two
+	// call sites this now comes from, both of which can carry a non-empty
+	// structureCanon.Confirmed.
 	RecordStructureReceipt(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome)
 }
 
@@ -314,6 +331,7 @@ type Engine struct {
 	reusePromptVersions        ReusePromptVersions
 	reuseVersionAuthorities    ReuseVersionAuthorities
 	clarificationSelectionSink ClarificationSelectionSink
+	structureSelectionSink     StructureSelectionSink
 	handleVerifier             HandleVerifier
 	anchorVerifier             AnchorVerifier
 	serviceVersion             string
@@ -341,6 +359,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
+		structureSelectionSink:     dependencies.StructureSelectionSink,
 		handleVerifier:             dependencies.HandleVerifier,
 		anchorVerifier:             dependencies.AnchorVerifier,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
@@ -418,14 +437,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// follow-up confirming structure via receipt can never be served a
 	// cached answer generated under unconfirmed inference instead.
 	structureCanon := e.canonicalizeStructure(ctx, principal, request)
-	// CHAOS-3900 P1.F: recorded unconditionally, BEFORE the veto
-	// short-circuit below, so both the veto and success path get exactly
-	// one cf_structure_receipt call per receipt-bearing member -- see
-	// recordStructureReceiptTelemetry's own doc comment for why it never
-	// needs to touch canonicalizeStructure's own tested control flow.
-	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
 	if structureCanon.Veto != structureVetoNone {
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, binding)
+		// CHAOS-3900 P1.F: a PRE-FLIGHT veto is FINAL the instant
+		// canonicalizeStructure returns it -- nothing downstream can still
+		// change this outcome, so telemetry records it immediately here,
+		// exactly as before CHAOS-3927 P4. (P4 codex review: this is
+		// deliberately NOT true of the success/no-veto path any more --
+		// see the deferred call below, right before/after the decisive
+		// Save, for why that one moved.)
+		recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, structureCanon.StaleMembers, binding)
 	}
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
@@ -814,9 +835,34 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// same asymmetry from the other side.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
 		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+			// CHAOS-3927 P4 (design brief §2.1): a decisive result carrying
+			// confirmed structure can still lose the atomic (org,
+			// prior_result_id, member) supersession claim to a concurrent
+			// Save that got there first -- the narrow race
+			// canonicalizeStructure's own pre-flight consult cannot fully
+			// close (StructureSupersessionChecker's own doc comment). This
+			// computed result must NEVER reach the caller: the round
+			// terminates stale_superseded_offer instead, the SAME veto
+			// terminal a pre-flight detection would have produced, echoing
+			// whichever confirmed member actually lost the race (never
+			// silently discarding the conflict information Save reported).
+			var superseded *ErrStructureOfferSuperseded
+			if errors.As(err, &superseded) {
+				return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon, superseded, binding)
+			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)
+		// CHAOS-3927 P4 (codex adversarial review fix): THIS is the point
+		// the caller can finally prove a structure confirmation is durable
+		// -- Save just succeeded past the atomic supersession-claim check
+		// above, so every member in structureCanon.Confirmed genuinely won
+		// its claim (or there were none to claim, the common case, in
+		// which case this is a no-op). See
+		// recordStructureConfirmationOutcome's own doc comment for why this
+		// call is shared with terminalResult's own Save call site, not
+		// hand-copied.
+		e.recordStructureConfirmationOutcome(ctx, principal, request, structureCanon)
 	}
 	return result, nil
 }

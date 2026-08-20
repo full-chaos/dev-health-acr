@@ -67,7 +67,7 @@ func TestBuildContextFabricInvestigator_composesFalkorGraphWithAModelRuntime(t *
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
 	// When
-	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 
 	// Then
 	if err != nil {
@@ -86,7 +86,7 @@ func TestBuildContextFabricInvestigator_composesFalkorGraphWithoutAModelRuntime(
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
 	// When
-	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 
 	// Then the investigator is still composed: the graph and canonical-fact
 	// layers are live, and only the answer step degrades per request.
@@ -104,7 +104,7 @@ func TestBuildContextFabricInvestigator_staysUnbuiltWithoutTheGraphBackend(t *te
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
 	// When
-	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 
 	// Then a configured model alone must not compose an investigator: the
 	// graph backend is still the gate, and an unconfigured one never fails
@@ -137,7 +137,7 @@ func TestBuildContextFabricInvestigator_wiresBothReuseSnapshottersWhenReuseIsEna
 	request.config.AnswerReuseMaxAge = time.Hour
 
 	// When
-	investigator, _, _, reuseInvalidator, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, reuseInvalidator, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 	if err != nil {
 		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
 	}
@@ -196,7 +196,7 @@ func TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority(t *te
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 	request.config.AnswerReuseMaxAge = time.Hour
 
-	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 	if err != nil {
 		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
 	}
@@ -255,7 +255,7 @@ func TestBuildContextFabricInvestigator_wiresTheClarificationSelectionSink(t *te
 	configureGraph(t)
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
-	investigator, _, _, _, clarificationSink, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 	if err != nil {
 		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
 	}
@@ -263,6 +263,7 @@ func TestBuildContextFabricInvestigator_wiresTheClarificationSelectionSink(t *te
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = clarificationSink.Close(closeCtx)
+		_ = structureSelectionSink.Close(closeCtx)
 	})
 	if clarificationSink == nil {
 		t.Fatal("buildContextFabricInvestigator returned a nil clarification sink alongside a composed investigator (CHAOS-3859)")
@@ -274,6 +275,37 @@ func TestBuildContextFabricInvestigator_wiresTheClarificationSelectionSink(t *te
 	engineValue := reflect.ValueOf(engine).Elem()
 	if field := mustField(t, engineValue, "clarificationSelectionSink"); field.IsNil() {
 		t.Error("clarificationSelectionSink is nil; open.go's wiring silently disabled CHAOS-3859 capture -- PriorSubjectReceipts resolutions would be observed and immediately discarded")
+	}
+}
+
+// TestBuildContextFabricInvestigator_wiresTheStructureSelectionSink mirrors
+// TestBuildContextFabricInvestigator_wiresTheClarificationSelectionSink
+// exactly (CHAOS-3927 P4): the SAME inverse-mutation guard for
+// structureSelectionSink, this event type's own composition-root wiring.
+func TestBuildContextFabricInvestigator_wiresTheStructureSelectionSink(t *testing.T) {
+	configureGraph(t)
+	request, postgres, clickhouse := investigatorBuildRequest(t)
+
+	investigator, _, _, _, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	if err != nil {
+		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = clarificationSink.Close(closeCtx)
+		_ = structureSelectionSink.Close(closeCtx)
+	})
+	if structureSelectionSink == nil {
+		t.Fatal("buildContextFabricInvestigator returned a nil structure selection sink alongside a composed investigator (CHAOS-3927 P4)")
+	}
+	engine, ok := investigator.(*contextfabric.Engine)
+	if !ok {
+		t.Fatalf("investigator is a %T, want *contextfabric.Engine", investigator)
+	}
+	engineValue := reflect.ValueOf(engine).Elem()
+	if field := mustField(t, engineValue, "structureSelectionSink"); field.IsNil() {
+		t.Error("structureSelectionSink is nil; open.go's wiring silently disabled CHAOS-3927 P4 capture -- structure receipt confirmations would be observed and immediately discarded")
 	}
 }
 
@@ -290,7 +322,7 @@ func TestBuildContextFabricInvestigator_wiresTheIdentityUniverse(t *testing.T) {
 	configureGraph(t)
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
-	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 	if err != nil {
 		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
 	}
@@ -323,7 +355,7 @@ func TestBuildContextFabricInvestigator_wiresTheResolutionTracer(t *testing.T) {
 	configureGraph(t)
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
-	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 	if err != nil {
 		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
 	}
@@ -377,7 +409,7 @@ func TestBuildContextFabricInvestigator_reuseInvalidatorIsNilWhenReuseIsDisabled
 	configureGraph(t)
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
-	investigator, _, _, reuseInvalidator, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, reuseInvalidator, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 	if err != nil {
 		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
 	}
@@ -398,7 +430,7 @@ func TestBuildContextFabricInvestigator_failsOnAMisconfiguredModelProvider(t *te
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
 	// When
-	investigator, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 
 	// Then startup fails rather than silently serving 503s.
 	if err == nil {

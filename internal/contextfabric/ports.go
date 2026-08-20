@@ -345,6 +345,85 @@ type InvestigationResultStore interface {
 	Get(context.Context, storage.Principal, string) (StoredInvestigationResult, error)
 }
 
+// ErrStructureOfferSuperseded is the typed conflict
+// InvestigationResultStore.Save returns when the ATOMIC (org,
+// prior_result_id, member) supersession claim for one or more of the
+// SAVED result's ConfirmedStructure entries (Disposition=applied,
+// Source=receipt) lost its race to a concurrent Save (pivot-intent design
+// brief §2.1: "supersession is an ALL-OR-NOTHING CLAIM keyed (org,
+// PriorResultID, member), written in the SAME transaction as R2's result
+// Save -- two concurrent redemptions of the same (org, R1, member) race on
+// the claim row, exactly one transaction wins, and the loser's round
+// terminates stale_superseded_offer").
+//
+// A Save returning this error MUST NOT have persisted the result: per
+// §2.5's failure-branch table, "A FAILED Save transaction writes no claim,
+// so the failed-round rule... is preserved by construction -- the claim
+// exists iff the result that redeemed it exists." Symmetrically here: the
+// result must exist iff its claims were won, so a losing Save rolls back
+// BOTH the claim attempt and the result insert together.
+//
+// Engine.Investigate is the only intended caller of errors.As against this
+// type -- on a match it discards the computed (but unsaved) decisive
+// result and terminates the round stale_superseded_offer instead (the
+// SAME veto path canonicalizeStructure's own pre-flight consult reaches),
+// rather than surfacing an ordinary persistence failure.
+type ErrStructureOfferSuperseded struct {
+	// Members lists every ConfirmedStructure member whose claim lost the
+	// race, in the order Save attempted them. Always non-empty when this
+	// error is returned.
+	Members []contractsv1.ContextFabricStructureNeedKind
+}
+
+func (e *ErrStructureOfferSuperseded) Error() string {
+	return "context fabric: structure offer supersession claim conflict for " + joinStructureNeedKinds(e.Members)
+}
+
+// StructureSupersessionChecker is an OPTIONAL capability an
+// InvestigationResultStore implementation may additionally provide --
+// Engine discovers it via a type assertion on whatever satisfies
+// InvestigationResultStore (never a new EngineDependencies field), exactly
+// the same discovery shape the rest of this package avoids only where a
+// dependency is genuinely required. It is deliberately NOT part of the
+// InvestigationResultStore interface itself: adding a required method
+// there would force every test double and the in-memory store to
+// implement transactional claim bookkeeping just to satisfy the
+// interface, when the actual atomicity guarantee already lives entirely
+// in Save's own typed ErrStructureOfferSuperseded conflict -- this
+// checker only ever shortcuts an otherwise-doomed round BEFORE Engine
+// pays for the full investigation pipeline.
+//
+// IsStructureSuperseded reports whether (orgID, priorResultID, member) has
+// ALREADY been claimed by a result other than the one this call would
+// redeem it into -- a plain, non-atomic read against the SAME claim table
+// Save's atomic insert writes to. A true result, or a non-nil error
+// (the read itself could not be trusted), both veto the redemption
+// canonicalizeStructure is resolving: per the design brief's
+// authority-relevant-read fail-closed rule ("any read this section's
+// rules depend on that is UNAVAILABLE at decision time tiers the
+// affected member DOWN... never proceed-as-confirmed"), an unreadable
+// claim table is treated exactly like a confirmed stale claim, never as
+// "assume fresh."
+//
+// This is an optimization only: the narrow race this check cannot close
+// (a concurrent Save claiming the SAME tuple between this read and the
+// eventual Save) is closed by Save's own atomic insert regardless of
+// whether this method is ever called.
+type StructureSupersessionChecker interface {
+	IsStructureSuperseded(ctx context.Context, orgID, priorResultID string, member contractsv1.ContextFabricStructureNeedKind) (bool, error)
+}
+
+func joinStructureNeedKinds(members []contractsv1.ContextFabricStructureNeedKind) string {
+	if len(members) == 0 {
+		return "(unspecified member)"
+	}
+	out := string(members[0])
+	for _, m := range members[1:] {
+		out += ", " + string(m)
+	}
+	return out
+}
+
 // SourceWatermarkSnapshot is the CHAOS-3782 answer-reuse watermark
 // snapshot (TRD §19.7.3 condition 3): the CURRENT backend_watermark of
 // every source checkpointed for an organization, keyed by source name,

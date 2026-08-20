@@ -241,3 +241,169 @@ VALUES ($1, $2, $3, $4)`, resultID, orgID, payload, time.Date(2026, 1, 15, 9, 30
 		}
 	})
 }
+
+// resultWithConfirmedStructure builds a FULLY VALID InvestigationResult
+// (validResult's own contract) additionally carrying one applied,
+// receipt-sourced ConfirmedStructure entry for member -- CHAOS-3927 P4's
+// own claim-bearing fixture. priorResultID/receiptID must each satisfy
+// ContextFabricConfirmedStructureEntry.Validate()'s 8..256 char bound.
+func resultWithConfirmedStructure(resultID string, member contextfabric.StructureNeedKind, priorResultID, receiptID string) contextfabric.InvestigationResult {
+	result := validResult(resultID)
+	result.ConfirmedStructure = []contextfabric.ConfirmedStructureEntry{
+		{
+			Member: member, AppliedValue: "pull_request", Source: "receipt",
+			PriorResultID: priorResultID, ReceiptID: receiptID,
+			Provenance: "clarification_confirmed", Disposition: "applied",
+		},
+	}
+	return result
+}
+
+// TestStore_structureSupersessionClaims is CHAOS-3927 P4's own acceptance
+// pin for the atomicity guarantee ErrStructureOfferSuperseded's doc
+// comment describes: two Saves redeeming the SAME (org, prior_result_id,
+// member) tuple under DIFFERENT result_ids -- the second must lose,
+// atomically, with neither its result nor its claim persisted, while the
+// first result and its claim remain completely intact.
+func TestStore_structureSupersessionClaims(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+
+	principal := storage.Principal{OrgID: "org-supersession"}
+	priorResultID := "result-prior-structure-offer-001"
+	const member = contextfabric.StructureNeedKind("expected_kind")
+
+	// Before any Save, nothing is claimed.
+	superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+	require.NoError(t, err)
+	require.False(t, superseded, "IsStructureSuperseded before any Save must be false")
+
+	winner := resultWithConfirmedStructure("result-supersession-winner-001", member, priorResultID, "kindr_winner00000001")
+	require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+
+	superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+	require.NoError(t, err)
+	require.True(t, superseded, "IsStructureSuperseded after the winning Save must be true")
+
+	loser := resultWithConfirmedStructure("result-supersession-loser-0001", member, priorResultID, "kindr_loser000000001")
+	saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+	require.Error(t, saveErr, "a second Save redeeming the SAME (org, prior_result_id, member) must fail")
+	var conflict *contextfabric.ErrStructureOfferSuperseded
+	require.ErrorAs(t, saveErr, &conflict)
+	require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)
+
+	// The loser's result must NOT have been persisted -- the whole
+	// transaction (claim attempt AND result insert) rolled back together.
+	_, getErr := store.Get(ctx, principal, loser.ResultID)
+	require.ErrorIs(t, getErr, pginvestigation.ErrNotFound)
+
+	// The winner is completely unaffected by the loser's failed attempt.
+	stored, err := store.Get(ctx, principal, winner.ResultID)
+	require.NoError(t, err)
+	require.Equal(t, winner.ConfirmedStructure, stored.Result.ConfirmedStructure)
+
+	// A THIRD Save that is a byte-for-byte replay of the winner (an
+	// idempotent retry) must still succeed -- the claim it would attempt
+	// is already held by the SAME result_id, matching the design brief's
+	// own "receipts are NOT consumed by a failed round" symmetry the other
+	// direction: a successful round replaying itself is not a conflict.
+	require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+}
+
+// TestMigration0025_BackfillsClaimsForPreMigrationConfirmedStructure is
+// CHAOS-3927 P4's own codex-adversarial-review acceptance pin (HIGH
+// finding): migration 0023 created the claim table EMPTY, so any
+// InvestigationResult already carrying an applied, receipt-sourced
+// ConfirmedStructure entry from BEFORE 0023 existed had no claim
+// protecting its redeemed offer. Migration 0025 backfills exactly that.
+//
+// This test simulates the pre-migration state directly: it INSERTs a raw
+// investigation_results row (bypassing Store.Save entirely -- Save today
+// would always mint the claim itself; this row represents one that was
+// written by an OLDER binary, before the claim table's write path
+// existed) carrying a confirmed_structure payload, with deliberately NO
+// matching claim row. It then re-executes 0025's own migration SQL
+// directly (the migration already ran once, against an empty table, when
+// newInvestigationTestDatabase set up the database -- re-running its
+// idempotent INSERT ... ON CONFLICT DO NOTHING against THIS row is exactly
+// what a real backfill deploy does against real pre-existing data) and
+// asserts the claim now exists.
+//
+// It also plants three sibling rows whose confirmed_structure is NOT a
+// JSON array (null, a scalar, an object -- codex round-2 adversarial
+// review, MEDIUM finding) alongside the valid legacy row, proving the
+// backfill tolerates every malformed shape without aborting for the whole
+// table.
+func TestMigration0025_BackfillsClaimsForPreMigrationConfirmedStructure(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+
+	principal := storage.Principal{OrgID: "org-backfill"}
+	priorResultID := "result-prior-legacy-structure-001"
+	const member = contextfabric.StructureNeedKind("subject_anchor")
+
+	// A confirmed-structure result, persisted WITHOUT going through the
+	// claim-aware Save path -- a raw INSERT is the only way to reproduce
+	// "this row predates the claim table" against a database that already
+	// has migration 0023's write-side behavior live in Store.Save.
+	legacy := resultWithConfirmedStructure("result-legacy-confirmed-001", member, priorResultID, "ancr_legacy00000001")
+	payload, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+VALUES ($1, $2, $3, $4)`, legacy.ResultID, principal.OrgID, payload, legacy.GeneratedAt)
+	require.NoError(t, err)
+
+	// Confirm the premise: no claim exists yet for this legacy row.
+	superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+	require.NoError(t, err)
+	require.False(t, superseded, "premise: a raw-inserted legacy row must carry no claim before the backfill runs")
+
+	// codex round-2 adversarial review, MEDIUM finding: siblings whose
+	// confirmed_structure is NOT a JSON array -- explicit null, a scalar,
+	// and an object -- must never abort the backfill for every OTHER row.
+	// These raw payloads deliberately violate Go's own contract (they
+	// could never be produced by contextfabric.InvestigationResult's own
+	// json.Marshal) -- exactly the "reached storage some other way"
+	// posture Get's own defensive checks already assume elsewhere in this
+	// package.
+	for _, malformed := range []struct {
+		resultID string
+		payload  string
+	}{
+		{"result-malformed-null-0001", `{"confirmed_structure": null}`},
+		{"result-malformed-scalar001", `{"confirmed_structure": "not-an-array"}`},
+		{"result-malformed-object001", `{"confirmed_structure": {"member": "expected_kind"}}`},
+	} {
+		_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+VALUES ($1, $2, $3, $4)`, malformed.resultID, principal.OrgID, []byte(malformed.payload), legacy.GeneratedAt)
+		require.NoError(t, err)
+	}
+
+	// Re-run 0025's own migration SQL directly against this now-populated
+	// table -- the embedded copy is the SAME file the runner already
+	// applied once; re-executing its idempotent INSERT is what a real
+	// deploy's backfill does against real pre-existing rows.
+	backfillSQL, err := migrations.Files.ReadFile("0025_context_fabric_structure_supersession_backfill.sql")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(backfillSQL))
+	require.NoError(t, err)
+
+	superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+	require.NoError(t, err)
+	require.True(t, superseded, "the backfill must claim (org, prior_result_id, member) for the pre-existing confirmed-structure row")
+
+	// A NEW result attempting to redeem the SAME tuple must now be
+	// rejected -- exactly the double-redemption the finding described,
+	// now closed.
+	racer := resultWithConfirmedStructure("result-racer-post-backfill-01", member, priorResultID, "ancr_racer000000001")
+	racerErr := store.Save(ctx, principal, racer, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+	var conflict *contextfabric.ErrStructureOfferSuperseded
+	require.ErrorAs(t, racerErr, &conflict)
+	require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)
+}

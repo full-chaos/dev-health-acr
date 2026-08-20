@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -284,6 +285,462 @@ func TestCHAOS3900_NoStructureReceipts_CanonicalizeStructureIsANoOp(t *testing.T
 	}
 	if len(canon.Confirmed) != 0 {
 		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+}
+
+// supersedingResultStore wraps staticResultStore, additionally implementing
+// StructureSupersessionChecker (CHAOS-3927 P4) so a test can pin exactly
+// which (orgID, priorResultID, member) tuples canonicalizeStructure's own
+// pre-flight consult must treat as already superseded -- keyed exactly
+// like structure.go's own call, so a test constructs the key with the
+// SAME three values it configured the request/prior result with.
+type supersedingResultStore struct {
+	*staticResultStore
+	superseded map[string]bool
+	checkErr   error
+	checkCalls []string
+}
+
+func supersessionKey(orgID, priorResultID string, member contractsv1.ContextFabricStructureNeedKind) string {
+	return orgID + "|" + priorResultID + "|" + string(member)
+}
+
+func (s *supersedingResultStore) IsStructureSuperseded(_ context.Context, orgID, priorResultID string, member contractsv1.ContextFabricStructureNeedKind) (bool, error) {
+	key := supersessionKey(orgID, priorResultID, member)
+	s.checkCalls = append(s.checkCalls, key)
+	if s.checkErr != nil {
+		return false, s.checkErr
+	}
+	return s.superseded[key], nil
+}
+
+// TestCHAOS3927P4_SupersededKindReceiptVetoesAsStale is P4's own
+// pre-flight-detection acceptance pin (design brief §2.1/§2.5's "redeeming
+// a superseded offer" row): a kindr_ receipt that resolves cleanly against
+// its stored offer, and reverifies fine, must STILL veto if a
+// StructureSupersessionChecker reports the (org, prior_result_id, member)
+// tuple already claimed by a newer result -- the whole request terminates
+// stale_superseded_offer, never applying the stale confirmation.
+func TestCHAOS3927P4_SupersededKindReceiptVetoesAsStale(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0006"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+	}
+	principal := reusePrincipal()
+	store := &supersedingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}},
+		superseded:        map[string]bool{supersessionKey(principal.OrgID, priorResult.ResultID, "expected_kind"): true},
+	}
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("reuse gate must not be called on a structure-veto request")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if len(store.checkCalls) == 0 {
+		t.Fatal("IsStructureSuperseded was never consulted")
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 1 (the stale echo entry)", len(result.ConfirmedStructure))
+	}
+	entry := result.ConfirmedStructure[0]
+	if entry.Member != "expected_kind" || entry.Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
+		t.Errorf("result.ConfirmedStructure[0] = %+v, want member=expected_kind disposition=vetoed_stale", entry)
+	}
+	if entry.PriorResultID != priorResult.ResultID || entry.ReceiptID != "kindr_confirm0001" {
+		t.Errorf("result.ConfirmedStructure[0] receipt identity = (%q, %q), want (%q, %q)", entry.PriorResultID, entry.ReceiptID, priorResult.ResultID, "kindr_confirm0001")
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS3927P4_SupersessionCheckError_FailsClosed pins the
+// authority-relevant-read fail-closed rule (design brief §2.0): when the
+// wired StructureSupersessionChecker itself errors, canonicalizeStructure
+// must treat that identically to a confirmed-stale claim -- never
+// "assume fresh and apply the confirmation anyway."
+func TestCHAOS3927P4_SupersessionCheckError_FailsClosed(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0007"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+	}
+	store := &supersedingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}},
+		checkErr:          errors.New("claim table unavailable"),
+	}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q (fail-closed on an unreadable claim table)", result.Status, InvestigationNoMatch)
+	}
+	if len(result.ConfirmedStructure) != 1 || result.ConfirmedStructure[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
+		t.Errorf("result.ConfirmedStructure = %+v, want one vetoed_stale entry", result.ConfirmedStructure)
+	}
+}
+
+// TestCHAOS3927P4_NoCheckerWired_ConfirmationAppliesNormally proves the
+// pre-flight consult is a pure optimization: staticResultStore does NOT
+// implement StructureSupersessionChecker, and a request that would
+// otherwise confirm cleanly must still confirm -- the type assertion
+// missing must never itself veto anything (StructureSupersessionChecker's
+// own doc comment: "this checker only ever shortcuts an otherwise-doomed
+// round").
+func TestCHAOS3927P4_NoCheckerWired_ConfirmationAppliesNormally(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0008"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoNone {
+		t.Fatalf("canon.Veto = %q, want structureVetoNone (no checker wired -> nothing to veto on)", canon.Veto)
+	}
+	if len(canon.Confirmed) != 1 {
+		t.Fatalf("len(canon.Confirmed) = %d, want 1", len(canon.Confirmed))
+	}
+}
+
+// capturingStructureSelectionSink is a fake contextfabric.StructureSelectionSink
+// (CHAOS-3927 P4) that records every event handed to it, for asserting
+// captureStructureSelection's own wiring end to end.
+type capturingStructureSelectionSink struct {
+	events []StructureSelectionEvent
+}
+
+func (s *capturingStructureSelectionSink) RecordSelection(_ context.Context, event StructureSelectionEvent) {
+	s.events = append(s.events, event)
+}
+
+// TestCHAOS3927P4_ConfirmedKindReceipt_CapturesAStructureSelectionEvent is
+// the capture-pipeline acceptance pin (design brief §2.4/§3.1): a receipt
+// that resolves cleanly to a confirmed member must hand a
+// StructureSelectionEvent to the wired sink, carrying the FULL offer list
+// (not just the winner), the correct Selected/Accepted values, and the
+// human/agent mode+provenance proxies.
+func TestCHAOS3927P4_ConfirmedKindReceipt_CapturesAStructureSelectionEvent(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0010"
+	priorResult.Question = "was the widget-service release healthy?"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+			{ReceiptID: "kindr_confirm0002", OptionID: "opt_wi", Label: "a work item", Kind: SubjectWorkItem, OfferSource: "engine"},
+		},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	sink := &capturingStructureSelectionSink{}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results:                store,
+		StructureSelectionSink: sink,
+		Graph:                  graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	// Redeems the SECOND offer (rank 1) -- proves Accepted correctly
+	// reports false for a non-top-ranked selection, not just true by
+	// happenstance.
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0002"}}
+
+	// CHAOS-3927 P4 (codex adversarial review fix): capture is now
+	// DEFERRED until Save actually succeeds (requestStructureCanonicalization.
+	// PendingSelections' own doc comment) -- this test must therefore drive
+	// the FULL Investigate call, not canonicalizeStructure alone, to reach
+	// the point capture is sent.
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want a clean single confirmation", len(result.ConfirmedStructure))
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("len(sink.events) = %d, want 1", len(sink.events))
+	}
+	event := sink.events[0]
+	if event.OrgID != reusePrincipal().OrgID {
+		t.Errorf("event.OrgID = %q, want %q", event.OrgID, reusePrincipal().OrgID)
+	}
+	if event.QuestionHash != QuestionHash(priorResult.Question) {
+		t.Errorf("event.QuestionHash = %q, want QuestionHash(prior.Question)", event.QuestionHash)
+	}
+	if event.PriorResultID != priorResult.ResultID || event.Member != "expected_kind" {
+		t.Errorf("event = %+v, want prior_result_id=%q member=expected_kind", event, priorResult.ResultID)
+	}
+	if len(event.Offered) != 2 {
+		t.Fatalf("len(event.Offered) = %d, want 2 (the COMPLETE offer set, not just the winner)", len(event.Offered))
+	}
+	if event.Selected.ReceiptID != "kindr_confirm0002" || event.Selected.AppliedValue != string(SubjectWorkItem) {
+		t.Errorf("event.Selected = %+v, want receipt_id=kindr_confirm0002 applied_value=work_item", event.Selected)
+	}
+	if event.Accepted {
+		t.Error("event.Accepted = true for a rank-1 (non-top) selection, want false")
+	}
+	if event.SelectionMode != "agent_receipt" {
+		t.Errorf("event.SelectionMode = %q, want agent_receipt (reusePrincipal carries no AuthenticationMethodWebAssertion)", event.SelectionMode)
+	}
+}
+
+// TestCHAOS3927P4_VetoedReceipt_CapturesNoStructureSelectionEvent pins the
+// negative case: a receipt that VETOES (never confirmed) must capture
+// nothing -- mirrors captureClarificationSelection's own "a veto has
+// nothing to label" placement.
+func TestCHAOS3927P4_VetoedReceipt_CapturesNoStructureSelectionEvent(t *testing.T) {
+	t.Parallel()
+
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	sink := &capturingStructureSelectionSink{}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store, StructureSelectionSink: sink})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_03", ReceiptID: "kindr_confirm0001"}}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto == structureVetoNone {
+		t.Fatal("expected a veto for a receipt naming a nonexistent prior result")
+	}
+	if len(sink.events) != 0 {
+		t.Errorf("len(sink.events) = %d, want 0 on a vetoed request", len(sink.events))
+	}
+}
+
+// TestCHAOS3927P4_SaveTimeSupersessionConflict_TerminatesRoundAsStale
+// covers the race the pre-flight consult cannot fully close (its own doc
+// comment): a decisive result's Save call itself returns
+// ErrStructureOfferSuperseded (the atomic claim lost at Save time, after
+// the whole investigation already computed). Engine must discard the
+// computed result -- never return it or a bare persistence error -- and
+// terminate the round with the SAME stale_superseded_offer veto terminal a
+// pre-flight detection would have produced.
+func TestCHAOS3927P4_SaveTimeSupersessionConflict_TerminatesRoundAsStale(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0009"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+	}
+	store := &supersessionRacingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}},
+	}
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	sink := &capturingStructureSelectionSink{}
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:                store,
+		StructureSelectionSink: sink,
+	})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want no error (the conflict must convert to a veto terminal, not surface as a raw error)", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if result.ResultID == freshResult.ResultID {
+		t.Error("result.ResultID equals the discarded decisive result's own id -- the superseded computation must never be returned")
+	}
+	// CHAOS-3927 P4 (codex adversarial review fix): the losing round must
+	// NEVER durably capture a selection for a result that was never
+	// persisted (requestStructureCanonicalization.PendingSelections' own
+	// doc comment) -- this is the acceptance pin for that fix.
+	if len(sink.events) != 0 {
+		t.Errorf("len(sink.events) = %d, want 0: a round that loses the Save-time supersession race must capture NOTHING (its result was never persisted)", len(sink.events))
+	}
+	if len(result.ConfirmedStructure) != 1 || result.ConfirmedStructure[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
+		t.Errorf("result.ConfirmedStructure = %+v, want one vetoed_stale entry echoing the raced member", result.ConfirmedStructure)
+	}
+	if result.ConfirmedStructure[0].Member != "expected_kind" {
+		t.Errorf("result.ConfirmedStructure[0].Member = %q, want expected_kind", result.ConfirmedStructure[0].Member)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// supersessionRacingResultStore wraps staticResultStore, making its FIRST
+// Save call (the decisive, ConfirmedStructure-bearing one Investigate
+// builds) return ErrStructureOfferSuperseded -- simulating the race
+// pginvestigation.Store.Save's own atomic claim insert closes -- and every
+// subsequent Save (the veto terminal Engine retries with) succeed
+// normally, exactly as a real store would once the losing transaction has
+// rolled back.
+type supersessionRacingResultStore struct {
+	*staticResultStore
+	saveCalls int
+	// conflictMembers is returned as ErrStructureOfferSuperseded.Members on
+	// the FIRST Save call -- defaults to []{"expected_kind"} when left nil
+	// (every pre-existing single-member test's own expectation).
+	conflictMembers []contractsv1.ContextFabricStructureNeedKind
+}
+
+func (s *supersessionRacingResultStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64) error {
+	s.saveCalls++
+	if s.saveCalls == 1 {
+		members := s.conflictMembers
+		if members == nil {
+			members = []contractsv1.ContextFabricStructureNeedKind{"expected_kind"}
+		}
+		return &ErrStructureOfferSuperseded{Members: members}
+	}
+	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch)
+}
+
+// TestCHAOS3927P4_SaveTimeSupersessionConflict_EchoesEveryLostMember is
+// codex round-3's own acceptance pin (MEDIUM finding): a single Save-time
+// supersession race can legitimately conflict on MORE THAN ONE confirmed
+// member at once (a request redeeming both expected_kind AND
+// subject_anchor against a prior result a concurrent Save already claimed
+// BOTH members of) -- the resulting stale terminal's ConfirmedStructure
+// echo must carry ONE ENTRY PER LOST MEMBER, never silently collapse to
+// just the first (the wire contract's own "one entry per carried member"
+// rule, and the exact defect an earlier version of staleConfirmedStructureEntries
+// -- then singular, staleConfirmedStructureEntry -- had).
+func TestCHAOS3927P4_SaveTimeSupersessionConflict_EchoesEveryLostMember(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0011"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind", "subject_anchor"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+		AnchorOptions: []AnchorOption{
+			{
+				ReceiptID: "ancr_confirm0001", OptionID: "opt_anchor", Label: "the widget-service repository",
+				Kind: SubjectRepository, CanonicalID: "repository_widget_service",
+				MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: "engine",
+			},
+		},
+	}
+	store := &supersessionRacingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}},
+		conflictMembers:   []contractsv1.ContextFabricStructureNeedKind{"expected_kind", "subject_anchor"},
+	}
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		AnchorVerifier: func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+			return true, AnchorVerificationValid
+		},
+		Results: store,
+	})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+	request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "ancr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if len(result.ConfirmedStructure) != 2 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 2 (BOTH lost members echoed, not just the first)", len(result.ConfirmedStructure))
+	}
+	seen := map[StructureNeedKind]bool{}
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
+			t.Errorf("entry %+v: disposition = %q, want vetoed_stale", entry, entry.Disposition)
+		}
+		seen[entry.Member] = true
+	}
+	if !seen["expected_kind"] || !seen["subject_anchor"] {
+		t.Errorf("result.ConfirmedStructure = %+v, want entries for BOTH expected_kind and subject_anchor", result.ConfirmedStructure)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
 	}
 }
 

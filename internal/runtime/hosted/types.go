@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructureselection"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -49,9 +50,14 @@ type Runtime struct {
 	closers           []func() error
 	usageTelemetry    *auth.UsageTelemetry
 	clarificationSink *pgclarification.Sink
-	postgresClose     func() error
-	independentClosed bool
-	postgresClosed    bool
+	// structureSelectionSink (CHAOS-3927 P4) is clarificationSink's own
+	// structure-offer twin -- SAME pool, SAME worker-timeout-before-
+	// postgresClose discipline, see Close's own comment for why both must
+	// get an unconditional, independent shutdown attempt.
+	structureSelectionSink *pgstructureselection.Sink
+	postgresClose          func() error
+	independentClosed      bool
+	postgresClosed         bool
 }
 
 func (r *Runtime) Close() error {
@@ -85,7 +91,7 @@ func (r *Runtime) Close() error {
 	// rather than replaying a stale error from a round that already ended.
 	// (This mirrors the pre-F6 code, which joined its own timeout err only
 	// into the transient return value, never into r.closeErr.)
-	var usageErr, sinkErr error
+	var usageErr, sinkErr, structureSinkErr error
 	var workerTimedOut bool
 	if r.usageTelemetry != nil {
 		if err := r.usageTelemetry.Close(); errors.Is(err, auth.ErrUsageTelemetryShutdownTimeout) {
@@ -101,13 +107,26 @@ func (r *Runtime) Close() error {
 			workerTimedOut = true
 		}
 	}
+	// CHAOS-3927 P4: structureSelectionSink is a THIRD worker writing
+	// through the identical pool, so it gets the SAME unconditional,
+	// independent shutdown attempt as clarificationSink immediately above
+	// -- never skipped just because usageTelemetry or clarificationSink
+	// already timed out this round.
+	if r.structureSelectionSink != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		structureSinkErr = r.structureSelectionSink.Close(closeCtx)
+		cancel()
+		if structureSinkErr != nil {
+			workerTimedOut = true
+		}
+	}
 	// The OTHER, unrelated closers (clickhouse, entitlement, ...) share no
 	// worker with the pool, so they run regardless of the outcome above.
 	// closeIndependentLocked is itself idempotent, so persisting its result
-	// across retries is safe (unlike usageErr/sinkErr above).
+	// across retries is safe (unlike usageErr/sinkErr/structureSinkErr above).
 	r.closeErr = errors.Join(r.closeErr, r.closeIndependentLocked())
 	if workerTimedOut {
-		return errors.Join(r.closeErr, usageErr, sinkErr)
+		return errors.Join(r.closeErr, usageErr, sinkErr, structureSinkErr)
 	}
 	if r.postgresClose != nil {
 		r.closeErr = errors.Join(r.closeErr, r.postgresClose())
