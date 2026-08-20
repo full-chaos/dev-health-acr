@@ -506,7 +506,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// receipts); the success path is recorded once Save has actually
 		// won, via recordStructureConfirmationOutcome (structure.go).
 		recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, structureCanon)
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, structureCanon.StaleMembers, binding)
+		// StaleMembers (structureVetoStaleSupersededOffer) and VetoedEntries
+		// (CHAOS-3963, every other veto reason) are mutually exclusive by
+		// construction -- exactly one is ever non-empty for a given veto.
+		echoEntries := structureCanon.StaleMembers
+		if len(echoEntries) == 0 {
+			echoEntries = structureCanon.VetoedEntries
+		}
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding)
 	}
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
