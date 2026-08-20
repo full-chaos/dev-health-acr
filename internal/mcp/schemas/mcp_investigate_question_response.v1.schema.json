@@ -220,6 +220,22 @@
         },
         "projection_budget": {
           "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectionBudget"
+        },
+        "effective_evidence_window": {
+          "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/EffectiveEvidenceWindow"
+        },
+        "window_clarification": {
+          "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/WindowClarification"
+        },
+        "structure_needs": {
+          "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureNeeds"
+        },
+        "confirmed_structure": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ConfirmedStructureEntry"
+          },
+          "maxItems": 4
         }
       },
       "required": [
@@ -1100,6 +1116,662 @@
             "trailing_365d",
             "all_time"
           ]
+        },
+        "SubjectKind": {
+          "description": "CHAOS-3900 P1: the closed ContextFabricSubjectKind vocabulary, given its own $def so KindOption/AnchorOption/HandleOption/AcceptedGrammar can $ref it directly rather than each re-duplicating the enum inline the way SubjectRef/SubjectCandidate/etc. still do at their own call sites.",
+          "type": "string",
+          "enum": [
+            "organization",
+            "team",
+            "project",
+            "repository",
+            "work_item",
+            "pull_request",
+            "deployment",
+            "incident",
+            "document",
+            "decision",
+            "episode",
+            "metric",
+            "pull_request_review",
+            "ci_pipeline_run",
+            "work_item_ref"
+          ]
+        },
+        "EffectiveEvidenceWindow": {
+          "description": "CHAOS-3900 W1: the window an answer actually speaks for once canonicalization has run. Server-computed; never accepted from the wire.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "start": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "relative_id": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/RelativeWindowID"
+            },
+            "window_class": {
+              "type": "string",
+              "enum": [
+                "trend_assessment",
+                "recent_activity_lookup",
+                "state_snapshot",
+                "explicit_window"
+              ]
+            },
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "inferred_default",
+                "question_stated",
+                "clarification_confirmed"
+              ]
+            },
+            "confidence": {
+              "type": "string",
+              "enum": [
+                "high",
+                "low"
+              ]
+            }
+          },
+          "required": [
+            "provenance"
+          ],
+          "if": {
+            "properties": {
+              "relative_id": {
+                "const": "all_time"
+              }
+            },
+            "required": [
+              "relative_id"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "start"
+                  ]
+                },
+                {
+                  "required": [
+                    "end"
+                  ]
+                }
+              ]
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "relative_id"
+              ]
+            },
+            {
+              "required": [
+                "start",
+                "end"
+              ]
+            }
+          ],
+          "not": {
+            "description": "CHAOS-3900 W1 (codex round 7): mirrors RequestedEvidenceWindow's own completeness guard -- the anyOf above proves at least one of relative_id/start+end is present but does not forbid a partial bound alongside a relative_id. See RequestedEvidenceWindow's identical clause for the full explanation.",
+            "anyOf": [
+              {
+                "required": [
+                  "start"
+                ],
+                "not": {
+                  "required": [
+                    "end"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "end"
+                ],
+                "not": {
+                  "required": [
+                    "start"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "WindowOption": {
+          "description": "CHAOS-3900 W1: one server-offered window choice, minted onto a stored result so a later turn can confirm it via winr_ receipt redemption. Start/end are the FROZEN absolute bounds computed at offer time.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256,
+              "pattern": "^winr_"
+            },
+            "option_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "relative_id": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/RelativeWindowID"
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "option_id",
+            "label"
+          ],
+          "allOf": [
+            {
+              "description": "CHAOS-3900 W1: a non-all_time relative_id's bounds are the FROZEN offer-time computation, so both must be present -- mirrors window.validate() lines 33-52's non-all_time branch (via WindowOption.Validate's own additional relative_id-non-all_time-requires-bounds check, validate_context_fabric_window.go:115-117).",
+              "if": {
+                "properties": {
+                  "relative_id": {
+                    "not": {
+                      "const": "all_time"
+                    }
+                  }
+                },
+                "required": [
+                  "relative_id"
+                ]
+              },
+              "then": {
+                "required": [
+                  "start",
+                  "end"
+                ]
+              }
+            },
+            {
+              "description": "CHAOS-3900 W1 (codex round 7): all_time forbids any bound -- mirrors window.validate() lines 37-40, which the original if/then above never encoded because its own 'if' matches only the non-all_time direction. Deliberately does NOT also fire when relative_id is absent: an option with no relative_id and BOTH bounds present is a legal explicit-bounds-only shape (window.validate() lines 43-52), which this clause must not forbid.",
+              "if": {
+                "properties": {
+                  "relative_id": {
+                    "const": "all_time"
+                  }
+                },
+                "required": [
+                  "relative_id"
+                ]
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "start"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "end"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "anyOf": [
+            {
+              "description": "CHAOS-3900 W1 (codex round 7): baseline presence -- an option with neither relative_id nor any bound satisfies neither if/then above (both require relative_id to fire) and so previously passed schema validation despite window.validate() lines 43-47 rejecting it ('requires a relative_id or explicit bounds').",
+              "required": [
+                "relative_id"
+              ]
+            },
+            {
+              "required": [
+                "start",
+                "end"
+              ]
+            }
+          ],
+          "not": {
+            "description": "CHAOS-3900 W1 (codex round 7): completeness guard, identical to RequestedEvidenceWindow's own -- the anyOf above is satisfied by a relative_id present alongside only ONE bound (it does not check the bound pair for completeness), which window.validate() line 49 rejects regardless of relative_id. Forbids exactly-one-of-start/end unconditionally.",
+            "anyOf": [
+              {
+                "required": [
+                  "start"
+                ],
+                "not": {
+                  "required": [
+                    "end"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "end"
+                ],
+                "not": {
+                  "required": [
+                    "start"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "WindowClarification": {
+          "description": "CHAOS-3900 W1: every window option a stored result offered. RESIDUAL, SERVER-SIDE-ONLY INVARIANT (codex round 7): options.uniqueItems below rejects two options that are structurally identical in EVERY field, but standard JSON Schema (draft 2020-12) has no keyword to express uniqueness on a DERIVED SUBSET of fields -- so two options differing only in, say, label but sharing the same receipt_id or option_id pass this schema even though ContextFabricWindowClarification.Validate (validate_context_fabric_window.go, the design brief's own 'm5' invariant) rejects them. That per-field uniqueness is enforced by Go alone; it is not expressible here.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/WindowOption"
+              },
+              "minItems": 1,
+              "maxItems": 20,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "options"
+          ]
+        },
+        "StructureNeedKind": {
+          "description": "CHAOS-3900 P1: the closed enum for which intent-frame member is missing or ambiguous (pivot-intent design brief section 2.1).",
+          "type": "string",
+          "enum": [
+            "expected_kind",
+            "subject_anchor",
+            "subject_handle",
+            "window"
+          ]
+        },
+        "StructureOfferSource": {
+          "description": "CHAOS-3900 P1: closed vocabulary distinguishing an engine-derived offer from a Bridge-proposed one (design brief section 2.1/2.4).",
+          "type": "string",
+          "enum": [
+            "engine",
+            "prior"
+          ]
+        },
+        "StructureSource": {
+          "description": "CHAOS-3900 P1: closed vocabulary for how a ConfirmedStructureEntry's value entered (design brief section 2.1's echo).",
+          "type": "string",
+          "enum": [
+            "receipt",
+            "explicit",
+            "explicit_unattributed"
+          ]
+        },
+        "StructureProvenance": {
+          "description": "CHAOS-3900 P1: closed authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently.",
+          "type": "string",
+          "enum": [
+            "inferred_default",
+            "question_stated",
+            "clarification_confirmed"
+          ]
+        },
+        "StructureDisposition": {
+          "description": "CHAOS-3900 P1: closed vocabulary for what happened to one carried structure member (design brief section 2.1's silent-drop closure).",
+          "type": "string",
+          "enum": [
+            "applied",
+            "vetoed_unresolved",
+            "vetoed_conflict",
+            "vetoed_stale"
+          ]
+        },
+        "KindOption": {
+          "description": "CHAOS-3900 P1: one server-offered census-kind choice, minted onto a stored result so a later turn can confirm it via kindr_ receipt redemption.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256,
+              "pattern": "^kindr_"
+            },
+            "option_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "kind": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectKind"
+            },
+            "offer_source": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureOfferSource"
+            },
+            "prior_version_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "prior_entry_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "receipt_id",
+            "option_id",
+            "label",
+            "kind",
+            "offer_source"
+          ]
+        },
+        "AnchorOption": {
+          "description": "CHAOS-3900 P1: one server-offered unique-claimant anchor candidate, minted onto a stored result so a later turn can confirm it via ancr_ receipt redemption. Re-verification identity is (kind, canonical_id, matched_term_hash) -- see internal/contextfabric's verifyAnchorClaimantUnique. matched_term_hash is the SHA-256 digest of the normalized matched term, never the raw term.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256,
+              "pattern": "^ancr_"
+            },
+            "option_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "kind": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectKind"
+            },
+            "canonical_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "matched_term_hash": {
+              "type": "string",
+              "minLength": 24,
+              "maxLength": 24,
+              "pattern": "^[0-9a-f]{24}$"
+            },
+            "offer_source": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureOfferSource"
+            },
+            "prior_version_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "prior_entry_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "receipt_id",
+            "option_id",
+            "label",
+            "kind",
+            "canonical_id",
+            "matched_term_hash",
+            "offer_source"
+          ]
+        },
+        "HandleOption": {
+          "description": "CHAOS-3900 P1: one server-offered grammar-valid handle candidate, minted onto a stored result so a later turn can confirm it via handr_ receipt redemption. pattern_id names the closed handle-grammar registry pattern -- never regex text on the wire.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256,
+              "pattern": "^handr_"
+            },
+            "option_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "kind": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectKind"
+            },
+            "pattern_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "source_column": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "offer_source": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureOfferSource"
+            },
+            "prior_version_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "prior_entry_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "receipt_id",
+            "option_id",
+            "label",
+            "kind",
+            "pattern_id",
+            "value",
+            "source_column",
+            "offer_source"
+          ]
+        },
+        "AcceptedGrammar": {
+          "description": "CHAOS-3900 P1: discloses one grammar the engine accepts for explicit supply (design brief section 2.1). pattern_id is registry-pinned, never regex text.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "member": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureNeedKind"
+            },
+            "kind": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectKind"
+            },
+            "pattern_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "member",
+            "pattern_id"
+          ]
+        },
+        "StructureNeeds": {
+          "description": "CHAOS-3900 P1: the disclosure block -- present whenever an investigation round ends short of decisive. relation_family and cohort_shape are unrepresentable here by design (design brief section 1.1's demotion).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "missing": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureNeedKind"
+              },
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true
+            },
+            "kind_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/KindOption"
+              },
+              "maxItems": 20
+            },
+            "anchor_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/AnchorOption"
+              },
+              "maxItems": 20
+            },
+            "handle_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/HandleOption"
+              },
+              "maxItems": 20
+            },
+            "window_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/WindowOption"
+              },
+              "maxItems": 20
+            },
+            "accepted_grammars": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/AcceptedGrammar"
+              },
+              "maxItems": 20
+            }
+          },
+          "required": [
+            "missing"
+          ]
+        },
+        "ConfirmedStructureEntry": {
+          "description": "CHAOS-3900 P1: the wire-visible disposition for one carried structure member -- one entry per carried member, including vetoed ones.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "member": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureNeedKind"
+            },
+            "applied_value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "source": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureSource"
+            },
+            "prior_result_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            },
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            },
+            "offer_source": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureOfferSource"
+            },
+            "prior_version_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "prior_entry_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "provenance": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureProvenance"
+            },
+            "disposition": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/StructureDisposition"
+            }
+          },
+          "required": [
+            "member",
+            "applied_value",
+            "source",
+            "provenance",
+            "disposition"
+          ],
+          "if": {
+            "properties": {
+              "source": {
+                "const": "receipt"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "required": [
+              "prior_result_id",
+              "receipt_id"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "prior_result_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "receipt_id"
+                  ]
+                }
+              ]
+            }
+          }
         }
       }
     },
@@ -2400,6 +3072,40 @@
             "explicit_unattributed"
           ]
         },
+        "WindowConfirmationMode": {
+          "description": "CHAOS-3900 W2, design brief section 4/DW3: closed vocabulary for how a caller wants an INFERRED (non-confirmed) evidence window disclosed. Both modes carry the same WindowClarification/EffectiveEvidenceWindow data; the mode only controls whether the disclosure is also nudged through Warnings. The empty string is the caller's own 'not set' state, mapped to headless by the engine.",
+          "type": "string",
+          "enum": [
+            "",
+            "headless",
+            "nudge"
+          ]
+        },
+        "RequestedHandle": {
+          "description": "CHAOS-3972 P3, design brief section 2.3: one caller-supplied explicit subject_handle value -- a typed (kind, pattern_id, value) triple the engine grammar-validates before it may become a receipt-bound HandleOption offer.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
+            },
+            "pattern_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "kind",
+            "pattern_id",
+            "value"
+          ]
+        },
         "StructureProvenance": {
           "description": "CHAOS-3900 P1: closed authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently.",
           "type": "string",
@@ -2625,6 +3331,9 @@
             },
             "include_debug": {
               "type": "boolean"
+            },
+            "window_confirmation_mode": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/WindowConfirmationMode"
             }
           },
           "required": [

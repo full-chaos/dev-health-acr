@@ -64,27 +64,48 @@ var structureOfferKinds = map[contractsv1.ContextFabricSubjectKind]bool{
 // kindOfferMaterial builds the expected_kind disclosure from the pool of
 // SubjectCandidate a resolution already assembled (design brief §1.2
 // reading 1: "kind disambiguation is the cheapest, highest-leverage
-// elicitation... a closed enum a human can pick in one tap"). Offered
-// ONLY when the pool spans MORE THAN ONE distinct offerable kind -- a
-// single-kind (or empty) pool has nothing to disambiguate on this axis,
-// so offering it would disclose a choice the question does not actually
-// present.
-func kindOfferMaterial(candidates []contextfabric.SubjectCandidate) contextfabric.StructureOfferMaterial {
-	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(candidates))
-	var distinct []contractsv1.ContextFabricSubjectKind
+// elicitation... a closed enum a human can pick in one tap"), PLUS
+// (CHAOS-3972 P3) any caller-supplied explicitKinds
+// (contextfabric.InvestigationRequest.ExpectedKinds) -- ranked FIRST
+// (design brief §2.3: "an explicit value the engine can verify becomes a
+// top-ranked, receipt-bound offer"), pool-derived kinds after, deduped.
+// Offered when EITHER the pool spans more than one distinct offerable
+// kind OR the caller named at least one explicit kind -- a single-kind
+// (or empty) pool with NO explicit hint has nothing to disambiguate on
+// this axis, so offering it would disclose a choice the question does not
+// actually present; a caller-named kind is always worth offering back
+// (it may be wrong, and the receipt-bound offer is exactly how a caller
+// finds out).
+func kindOfferMaterial(candidates []contextfabric.SubjectCandidate, explicitKinds []contractsv1.ContextFabricSubjectKind) contextfabric.StructureOfferMaterial {
+	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(candidates)+len(explicitKinds))
+	var ranked []contractsv1.ContextFabricSubjectKind
+	for _, kind := range explicitKinds {
+		if seen[kind] || !structureOfferKinds[kind] {
+			continue
+		}
+		seen[kind] = true
+		ranked = append(ranked, kind)
+	}
+	explicitCount := len(ranked)
+	var poolDistinct []contractsv1.ContextFabricSubjectKind
 	for _, candidate := range candidates {
 		kind := candidate.Subject.Kind
 		if seen[kind] || !structureOfferKinds[kind] {
 			continue
 		}
 		seen[kind] = true
-		distinct = append(distinct, kind)
+		poolDistinct = append(poolDistinct, kind)
 	}
-	if len(distinct) < 2 {
+	ranked = append(ranked, poolDistinct...)
+	// The pool alone still needs >=2 DISTINCT kinds (its own kinds plus
+	// whatever explicit kinds already claimed) to be worth disambiguating
+	// on its own; an explicit kind is ALWAYS worth offering regardless of
+	// pool cardinality.
+	if explicitCount == 0 && len(ranked) < 2 {
 		return contextfabric.StructureOfferMaterial{}
 	}
-	options := make([]contractsv1.ContextFabricKindOption, 0, len(distinct))
-	for _, kind := range distinct {
+	options := make([]contractsv1.ContextFabricKindOption, 0, len(ranked))
+	for _, kind := range ranked {
 		options = append(options, contractsv1.ContextFabricKindOption{
 			Kind:        kind,
 			Label:       kindOfferLabel(kind),
@@ -153,6 +174,38 @@ func filterCandidatesByConfirmedKind(candidatesBySubject map[string]contextfabri
 	return filtered
 }
 
+// narrowPooledKindsByExplicitKinds (CHAOS-3972 P3, design brief §2.0/§2.3)
+// intersects pooled with explicitKinds, order-preserving over pooled.
+// Returns nil (meaning "no narrowing applied") when explicitKinds is
+// empty, when NONE of pooled's kinds survive the intersection (an
+// explicit hint that disagrees with the whole pool is not treated as
+// authoritative enough to force a no-hypothesis round -- the ordinary
+// pooled set stays in force, and the mismatch is simply not a narrowing
+// event), or when EVERY pooled kind survives (intersecting changed
+// nothing, so there is nothing to prove insensitive against). Callers
+// pass a non-nil result as ShadowEvidenceRoundInput.PooledKinds AND the
+// UNnarrowed pooled slice as PreNarrowingExplicitKinds together -- see
+// runShadowEvidenceRoundForResolution (resolve.go).
+func narrowPooledKindsByExplicitKinds(pooled []CensusKind, explicitKinds []contractsv1.ContextFabricSubjectKind) []CensusKind {
+	if len(explicitKinds) == 0 {
+		return nil
+	}
+	allow := make(map[CensusKind]bool, len(explicitKinds))
+	for _, kind := range explicitKinds {
+		allow[CensusKind(kind)] = true
+	}
+	var narrowed []CensusKind
+	for _, kind := range pooled {
+		if allow[kind] {
+			narrowed = append(narrowed, kind)
+		}
+	}
+	if len(narrowed) == 0 || len(narrowed) == len(pooled) {
+		return nil
+	}
+	return narrowed
+}
+
 // kindInsensitivityOutcome is the closed vocabulary CHAOS-3900 P1.D's
 // insensitivity proof reports (design brief §2.0/§4's kind_sensitive_outcome
 // degradation reason, split into its three concrete verdicts here).
@@ -184,25 +237,64 @@ const (
 // registry-miss split -- the identical primitive
 // chaos3899_evidence_round.go already established for this exact shape).
 //
-// STANDALONE, PURE (besides the injected CensusFunc), and UNIT-TESTED --
-// but DELIBERATELY UNWIRED into any decisive-path gate today (P1.D
-// scoping, confirmed by repo-wide grep: no inferred-tier or
-// explicit-unattributed kind-narrowing mechanism exists anywhere in this
-// codebase yet, so there is no live branch for such a gate to guard).
-// Wiring this into an actual decisive-path check is a HARD PRECONDITION
-// of introducing any such kind source (tracked on CHAOS-3927 and the
-// P3/P5 commissioning checklists) -- see ConfirmedExpectedKind's own doc
-// comment (internal/contextfabric/ports.go) for the type-level half of
-// this same guard.
-func kindInsensitivityProof(ctx context.Context, orgID string, preNarrowingKinds []CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool, census CensusFunc) kindInsensitivityOutcome {
+// WIRED (CHAOS-3972 P3): consulted from RunShadowEvidenceRound's own
+// decisive switch whenever a round's PooledKinds was narrowed at the
+// explicit (non-receipt) tier -- see that function's own call site. P1.D's
+// original scoping named wiring this into a live decisive-path gate a
+// HARD PRECONDITION of introducing any inferred-tier kind source (tracked
+// on CHAOS-3927 and the P3/P5 commissioning checklists) -- see
+// ConfirmedExpectedKind's own doc comment (internal/contextfabric/ports.go)
+// for the type-level half of this same guard.
+//
+// handleKind/handleValue/handleBound and anchorKind/anchorCanonicalID/
+// anchorBound describe ONE round-wide discriminator D, exactly like
+// RunShadowEvidenceRound's own main census loop -- and, exactly like that
+// loop, a keyed predicate applies to a given censused kind ONLY when it is
+// actually valid for that kind (codex xhigh review, CHAOS-3972 round 1,
+// finding 1: applying handleBound/anchorBound GLOBALLY to every kind --
+// the original, unreviewed version of this function -- let a handle bound
+// to one kind masquerade as a valid predicate for an unrelated kind, e.g.
+// querying pull_request with a ci_pipeline_run handle's own numeric value
+// as if it were a PR number). handleApplies is gated by kind==handleKind;
+// anchorApplies is gated by kindHasAnchorFK, the SAME per-kind anchor-FK
+// registry check the main loop uses. A censused kind neither predicate
+// reaches at all cannot be proven anything about -- exactly the
+// NonCensusedSurvivor gap the main loop's own §3(2) rule names -- so it
+// poisons the whole proof (kindInsensitivitySensitive), never silently
+// skipped.
+func kindInsensitivityProof(ctx context.Context, orgID string, preNarrowingKinds []CensusKind, handleKind CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool, census CensusFunc) kindInsensitivityOutcome {
 	censused, nonCensusedSurvivor := splitCensusKinds(preNarrowingKinds)
 	if nonCensusedSurvivor || census == nil || len(censused) == 0 {
 		return kindInsensitivitySensitive
 	}
 	total := 0
 	for _, kind := range censused {
-		outcome, err := census(ctx, orgID, kind, handleValue, handleBound, anchorKind, anchorCanonicalID, anchorBound)
+		handleApplies := handleBound && kind == handleKind
+		anchorApplies := anchorBound && kindHasAnchorFK(kind, anchorKind)
+		if !handleApplies && !anchorApplies {
+			// No keyed predicate reaches this pre-narrowing kind at all --
+			// the proof cannot speak for a kind it cannot query, so it
+			// cannot certify insensitivity across the whole set.
+			return kindInsensitivitySensitive
+		}
+		value := ""
+		if handleApplies {
+			value = handleValue
+		}
+		outcome, err := census(ctx, orgID, kind, value, handleApplies, anchorKind, anchorCanonicalID, anchorApplies)
 		if err != nil {
+			return kindInsensitivitySensitive
+		}
+		// codex xhigh review, CHAOS-3972 round 1, finding 2: a census
+		// outcome that could not PROVE closure (ClosureMismatch /
+		// SatisfierSetClosureMismatch) is exactly as untrustworthy here as
+		// it is everywhere else this package reads a CensusOutcome (see
+		// VerifyHandle's own identical check, this file, and
+		// RunShadowEvidenceRound's own `mismatch` handling) -- a bare
+		// Count from an outcome that could not prove closure must never
+		// feed this proof's total, in either direction (a false
+		// commit_sound OR a false no_match_sound).
+		if outcome.ClosureMismatch || outcome.SatisfierSetClosureMismatch {
 			return kindInsensitivitySensitive
 		}
 		total += outcome.Count
@@ -478,9 +570,41 @@ func anchorOfferLabel(label string) string {
 // same known, accepted scope gap kindOfferMaterial already carries), with
 // HandleOptions holding however many grammar-valid values were found --
 // possibly zero, never an absent block.
-func handleOfferMaterial(question string) contextfabric.StructureOfferMaterial {
+//
+// handleOfferMaterial additionally takes explicitHandles
+// (contextfabric.InvestigationRequest.SubjectHandles, CHAOS-3972 P3) and
+// checker (the engine's own offer-time HandleGrammarChecker dependency):
+// each explicit entry that checker validates against the closed registry
+// becomes a top-ranked HandleOption, ahead of anything BindHandles finds
+// in the question text (design brief §2.3's same top-ranked upgrade-turn
+// rule kindOfferMaterial's own doc comment describes). checker == nil
+// (the dependency was never wired) means NO explicit handle can ever
+// become an offer -- HandleGrammarChecker's own doc comment names this
+// the safe degradation, never a veto.
+func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextFabricRequestedHandle, checker contextfabric.HandleGrammarChecker) contextfabric.StructureOfferMaterial {
+	var explicitOptions []contractsv1.ContextFabricHandleOption
+	if checker != nil {
+		explicitSeen := make(map[contractsv1.ContextFabricHandleOption]struct{}, len(explicitHandles))
+		for _, h := range explicitHandles {
+			sourceColumn, ok := checker(h.Kind, h.PatternID, h.Value)
+			if !ok {
+				continue
+			}
+			opt := contractsv1.ContextFabricHandleOption{
+				Kind: h.Kind, PatternID: h.PatternID, Value: h.Value, SourceColumn: sourceColumn,
+				Label:       handleOfferLabel(h.Kind, h.Value),
+				OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}
+			if _, exists := explicitSeen[opt]; exists {
+				continue
+			}
+			explicitSeen[opt] = struct{}{}
+			explicitOptions = append(explicitOptions, opt)
+		}
+	}
 	bound := BindHandles(question)
-	options := make([]contractsv1.ContextFabricHandleOption, 0, len(bound))
+	options := make([]contractsv1.ContextFabricHandleOption, 0, len(explicitOptions)+len(bound))
+	options = append(options, explicitOptions...)
 	// Codex xhigh review (chaos-pivot-p1, round 2, finding 1): BindHandles
 	// reports every regex occurrence, so the SAME handle text repeated in
 	// one question (or matched by more than one registry entry) would
@@ -490,7 +614,14 @@ func handleOfferMaterial(question string) contextfabric.StructureOfferMaterial {
 	// Validate() rejects as a duplicate. Dedup by that exact content tuple,
 	// keeping BindHandles' own already-deterministic first-occurrence
 	// order (no map iteration involved), before the offer even exists.
-	seen := make(map[contractsv1.ContextFabricHandleOption]struct{}, len(bound))
+	// Seeded from explicitOptions' own content (CHAOS-3972 P3): an explicit
+	// handle already offered above must not ALSO appear via question-text
+	// scanning below -- same identical-content dedup rule, extended to
+	// cover both sources.
+	seen := make(map[contractsv1.ContextFabricHandleOption]struct{}, len(bound)+len(explicitOptions))
+	for _, opt := range explicitOptions {
+		seen[opt] = struct{}{}
+	}
 	for _, b := range bound {
 		sourceColumn, ok := HandleSourceColumn(b.Kind, b.Grammar)
 		if !ok {

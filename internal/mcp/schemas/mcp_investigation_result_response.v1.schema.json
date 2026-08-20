@@ -1370,6 +1370,40 @@
             "explicit_unattributed"
           ]
         },
+        "WindowConfirmationMode": {
+          "description": "CHAOS-3900 W2, design brief section 4/DW3: closed vocabulary for how a caller wants an INFERRED (non-confirmed) evidence window disclosed. Both modes carry the same WindowClarification/EffectiveEvidenceWindow data; the mode only controls whether the disclosure is also nudged through Warnings. The empty string is the caller's own 'not set' state, mapped to headless by the engine.",
+          "type": "string",
+          "enum": [
+            "",
+            "headless",
+            "nudge"
+          ]
+        },
+        "RequestedHandle": {
+          "description": "CHAOS-3972 P3, design brief section 2.3: one caller-supplied explicit subject_handle value -- a typed (kind, pattern_id, value) triple the engine grammar-validates before it may become a receipt-bound HandleOption offer.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
+            },
+            "pattern_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "kind",
+            "pattern_id",
+            "value"
+          ]
+        },
         "StructureProvenance": {
           "description": "CHAOS-3900 P1: closed authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently.",
           "type": "string",
@@ -1595,6 +1629,9 @@
             },
             "include_debug": {
               "type": "boolean"
+            },
+            "window_confirmation_mode": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/WindowConfirmationMode"
             }
           },
           "required": [

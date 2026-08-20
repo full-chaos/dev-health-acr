@@ -237,6 +237,17 @@ type ShadowEvidenceRoundInput struct {
 	AliasClaimants      map[string][]IdentityMatch
 	AliasLookupComplete bool
 	CensusFunc          CensusFunc
+	// PreNarrowingExplicitKinds (CHAOS-3972 P3, design brief §2.0) is the
+	// PRE-narrowing hypothesis kind-set the caller captured BEFORE
+	// applying an EXPLICIT (non-receipt) kind narrowing to PooledKinds --
+	// nil/empty whenever no such narrowing was applied this round (the
+	// overwhelming common case, and what keeps this an exact no-op for
+	// every existing caller: RECEIPT-confirmed narrowing, this field
+	// unset, behaves byte-identically to before this ticket). Non-empty
+	// requires this round's own would_commit/would_no_match outcome to
+	// ADDITIONALLY pass kindInsensitivityProof re-run over this set before
+	// it may stand -- see the decisive switch in RunShadowEvidenceRound.
+	PreNarrowingExplicitKinds []CensusKind
 }
 
 // splitCensusKinds partitions kinds into the subset the closed census
@@ -492,6 +503,58 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		// ambiguous, no single closed-vocabulary reason token names this
 		// case.
 		base.Outcome = ShadowWouldClarify
+	}
+	// CHAOS-3972 P3 (design brief §2.0's kind-insensitivity rule -- the
+	// P1.D hard precondition, wired here): a would_commit/would_no_match
+	// outcome reached under EXPLICIT (non-receipt) kind narrowing
+	// (input.PreNarrowingExplicitKinds non-empty) is trustworthy only if
+	// the SAME census, re-run over the PRE-narrowing kind set, agrees --
+	// exactly the hazard the rule exists to catch: a wrong narrowing
+	// collapsing N>1 satisfiers to 1, or hiding a real satisfier the
+	// narrowed set excluded. A RECEIPT-confirmed kind never reaches this
+	// branch (PreNarrowingExplicitKinds stays empty for it, by
+	// construction -- see runShadowEvidenceRoundForResolution, resolve.go):
+	// caller authority may narrow without this extra proof, exactly like a
+	// confirmed window.
+	if len(input.PreNarrowingExplicitKinds) > 0 && (base.Outcome == ShadowWouldCommit || base.Outcome == ShadowWouldNoMatch) {
+		// handleKind (codex xhigh review, CHAOS-3972 round 1, finding 1):
+		// the SAME per-kind applicability gate the main census loop above
+		// already applies (handleApplies := handle.Kind == kind) -- the
+		// proof must never apply this handle's value to a kind it was
+		// never bound to.
+		var handleKind CensusKind
+		// preNarrowingKinds (codex xhigh review, CHAOS-3972 round 2,
+		// finding 1): input.PreNarrowingExplicitKinds is the caller's own
+		// PRE-narrowing CANDIDATE-POOL kinds (resolve.go), captured before
+		// this function ever ran -- it structurally cannot know about the
+		// registered-handle-kind APPEND the main census loop above just
+		// performed (censusKinds = appendUniqueCensusKind(...)), because a
+		// bound handle can name a kind that was never in the pool at all
+		// (design brief: a handle is decisive alone, independent of
+		// pooling). Omitting that kind here would let the proof certify
+		// soundness over an INCOMPLETE hypothesis set -- exactly the class
+		// of gap this whole mechanism exists to close -- so the identical
+		// append is mirrored onto the pre-narrowing set too, before it
+		// reaches the proof.
+		preNarrowingKinds := input.PreNarrowingExplicitKinds
+		if handle != nil {
+			handleKind = handle.Kind
+			if IsCensusKindRegistered(handle.Kind) {
+				preNarrowingKinds = appendUniqueCensusKind(preNarrowingKinds, handle.Kind)
+			}
+		}
+		proof := kindInsensitivityProof(ctx, input.OrgID, preNarrowingKinds,
+			handleKind, valueOr(handle != nil, handle), handle != nil, anchor.Kind, anchor.CanonicalID, anchorOK, input.CensusFunc)
+		sound := (base.Outcome == ShadowWouldCommit && proof == kindInsensitivityCommitSound) ||
+			(base.Outcome == ShadowWouldNoMatch && proof == kindInsensitivityNoMatchSound)
+		if !sound {
+			base.Outcome = ShadowWouldClarify
+			base.Reason = ReasonKindSensitiveOutcome
+			// PreconditionUnproven's own doc comment: "True whenever
+			// Outcome==ShadowWouldCommit" -- this branch just left that
+			// outcome, so the invariant requires resetting it.
+			base.PreconditionUnproven = false
+		}
 	}
 	return emit(base)
 }

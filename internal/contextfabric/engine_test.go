@@ -271,6 +271,9 @@ type recordingTelemetry struct {
 	structureNeedsDisclosed []contractsv1.ContextFabricStructureNeedKind
 	structureOfferCounts    []structureOfferCountRecord
 	structureReceipts       []structureReceiptRecord
+	// structureExplicit (CHAOS-3972 P3) mirrors structureReceipts' own
+	// list-not-count discipline.
+	structureExplicit []structureExplicitRecord
 }
 
 type structureOfferCountRecord struct {
@@ -282,6 +285,11 @@ type structureOfferCountRecord struct {
 type structureReceiptRecord struct {
 	member  contractsv1.ContextFabricStructureNeedKind
 	outcome StructureReceiptOutcome
+}
+
+type structureExplicitRecord struct {
+	member  contractsv1.ContextFabricStructureNeedKind
+	outcome StructureExplicitOutcome
 }
 
 type priorSubjectReceiptSkipReasonRecord struct {
@@ -342,6 +350,10 @@ func (r *recordingTelemetry) RecordStructureOfferCount(_ context.Context, _ stor
 
 func (r *recordingTelemetry) RecordStructureReceipt(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome) {
 	r.structureReceipts = append(r.structureReceipts, structureReceiptRecord{member, outcome})
+}
+
+func (r *recordingTelemetry) RecordStructureExplicit(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureExplicitOutcome) {
+	r.structureExplicit = append(r.structureExplicit, structureExplicitRecord{member, outcome})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {

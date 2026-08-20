@@ -317,6 +317,45 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 		Warnings:        []string{"a warning"},
 		EvidenceRefIDs:  []string{"evidence_inject01"},
 		SubjectReceipts: []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_injection1", ReceiptID: "receipt_injection1"}},
+		// CHAOS-3972 P3+W2: populated so the reflection-based planting walk
+		// below can reach every declared structure_needs/confirmed_structure/
+		// window_clarification leaf -- a nil block here is exactly the "path
+		// could not be resolved and planted" failure this test exists to
+		// catch.
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{
+				contractsv1.ContextFabricStructureNeedExpectedKind, contractsv1.ContextFabricStructureNeedSubjectHandle,
+			},
+			KindOptions: []contractsv1.ContextFabricKindOption{{
+				ReceiptID: "kindr_injection00000000", OptionID: "opt_kind1", Label: "a kind label",
+				Kind: contractsv1.ContextFabricSubjectPullRequest, OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}},
+			AnchorOptions: []contractsv1.ContextFabricAnchorOption{{
+				ReceiptID: "ancr_injection000000000", OptionID: "opt_anchor1", Label: "an anchor label",
+				Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repo_x",
+				MatchedTermHash: "abcdef0123456789abcdef0", OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}},
+			HandleOptions: []contractsv1.ContextFabricHandleOption{{
+				ReceiptID: "handr_injection00000000", OptionID: "opt_handle1", Label: "a handle label",
+				Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number",
+				Value: "a handle value", SourceColumn: "a source column", OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}},
+			WindowOptions: []contractsv1.ContextFabricWindowOption{{
+				ReceiptID: "winr_injection000000000", OptionID: "opt_window1", Label: "a window label",
+				RelativeID: contractsv1.ContextFabricRelativeWindowTrailing90D,
+			}},
+		},
+		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{{
+			Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "a confirmed value",
+			Source: contractsv1.ContextFabricStructureSourceExplicitUnattributed, Provenance: contractsv1.ContextFabricStructureInferredDefault,
+			Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+		}},
+		WindowClarification: &contractsv1.ContextFabricWindowClarification{
+			Options: []contractsv1.ContextFabricWindowOption{{
+				ReceiptID: "winr_injection100000000", OptionID: "opt_window2", Label: "a second window label",
+				RelativeID: contractsv1.ContextFabricRelativeWindowTrailing30D,
+			}},
+		},
 		Versions: contractsv1.ContextFabricVersionSet{
 			ServiceVersion: "acr-v1", ContractVersion: contractsv1.ContextFabricAnswerProjectionSchema, Backend: "graph",
 			ProjectionVersion: "p", QueryVersion: "q", InterpretationVersion: "i",

@@ -62,6 +62,16 @@ const (
 	ReasonGraphMissingSatisfier     DegradationReason = "graph_missing_satisfier"
 	ReasonProbeError                DegradationReason = "probe_error"
 	ReasonBudgetExhausted           DegradationReason = "budget_exhausted"
+	// ReasonKindSensitiveOutcome (CHAOS-3972 P3, pivot-intent design brief
+	// §2.0/§4: "kind_sensitive_outcome") demotes a would_commit/would_no_match
+	// outcome reached under EXPLICIT (non-receipt) kind narrowing when the
+	// §2.0 kind-insensitivity proof, re-run over the pre-narrowing kind
+	// set, does not agree -- the beside-window_sensitive_outcome sibling
+	// the brief names explicitly. See kindInsensitivityProof
+	// (chaos3900_structure_offers.go) for the proof itself, and
+	// RunShadowEvidenceRound's own decisive switch for where it is
+	// consulted.
+	ReasonKindSensitiveOutcome DegradationReason = "kind_sensitive_outcome"
 	// ReasonAnchorCollision is CHAOS-3898 S3's addition (design brief v4.1
 	// §1.4: "anchor_collision typed non-decisive census outcome at BIND
 	// time"), not yet in 3896 brief v6's own §4 vocabulary table -- 3898

@@ -304,6 +304,117 @@ func TestInvestigateQuestionRespectsExplicitClarificationOptOut(t *testing.T) {
 	}
 }
 
+// TestInvestigateQuestionMapsStructureAndWindowRequestFields (CHAOS-3972 P3
+// + W2) proves the tool's own request fields map straight through to the
+// hosted contract's fields of the same name, exactly as
+// investigate_question.go's own construction comment describes -- the
+// receipt arrays into their own PriorKindReceipts/.../PriorWindowReceipts
+// fields, ExpectedKinds/SubjectHandles verbatim, EvidenceWindow into
+// TimeContext.EvidenceWindow (legal only on this tool's fixed current
+// axis), and WindowConfirmationMode into Options.
+func TestInvestigateQuestionMapsStructureAndWindowRequestFields(t *testing.T) {
+	var seen contractsv1.ContextFabricInvestigationRequest
+	boot := answerFixtureBootstrap(t, parityResult(), &seen)
+
+	kindReceipts := []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "kindr_" + strings.Repeat("a", 24)}}
+	anchorReceipts := []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "ancr_" + strings.Repeat("b", 24)}}
+	handleReceipts := []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "handr_" + strings.Repeat("c", 24)}}
+	windowReceipts := []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "winr_" + strings.Repeat("d", 24)}}
+	expectedKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}
+	subjectHandles := []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+	windowStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+
+	callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{
+		Question:               "Which teams need attention?",
+		PriorKindReceipts:      kindReceipts,
+		PriorAnchorReceipts:    anchorReceipts,
+		PriorHandleReceipts:    handleReceipts,
+		PriorWindowReceipts:    windowReceipts,
+		ExpectedKinds:          expectedKinds,
+		SubjectHandles:         subjectHandles,
+		EvidenceWindow:         &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &windowStart, End: &windowEnd},
+		WindowConfirmationMode: contractsv1.ContextFabricWindowConfirmationNudge,
+	})
+
+	if !reflect.DeepEqual(seen.PriorKindReceipts, kindReceipts) {
+		t.Errorf("prior_kind_receipts = %+v, want %+v", seen.PriorKindReceipts, kindReceipts)
+	}
+	if !reflect.DeepEqual(seen.PriorAnchorReceipts, anchorReceipts) {
+		t.Errorf("prior_anchor_receipts = %+v, want %+v", seen.PriorAnchorReceipts, anchorReceipts)
+	}
+	if !reflect.DeepEqual(seen.PriorHandleReceipts, handleReceipts) {
+		t.Errorf("prior_handle_receipts = %+v, want %+v", seen.PriorHandleReceipts, handleReceipts)
+	}
+	if !reflect.DeepEqual(seen.PriorWindowReceipts, windowReceipts) {
+		t.Errorf("prior_window_receipts = %+v, want %+v", seen.PriorWindowReceipts, windowReceipts)
+	}
+	if !reflect.DeepEqual(seen.ExpectedKinds, expectedKinds) {
+		t.Errorf("expected_kinds = %+v, want %+v", seen.ExpectedKinds, expectedKinds)
+	}
+	if !reflect.DeepEqual(seen.SubjectHandles, subjectHandles) {
+		t.Errorf("subject_handles = %+v, want %+v", seen.SubjectHandles, subjectHandles)
+	}
+	if seen.TimeContext.EvidenceWindow == nil || !seen.TimeContext.EvidenceWindow.Start.Equal(windowStart) || !seen.TimeContext.EvidenceWindow.End.Equal(windowEnd) {
+		t.Errorf("time_context.evidence_window = %+v, want start=%v end=%v", seen.TimeContext.EvidenceWindow, windowStart, windowEnd)
+	}
+	if seen.Options.WindowConfirmationMode != contractsv1.ContextFabricWindowConfirmationNudge {
+		t.Errorf("options.window_confirmation_mode = %q, want %q", seen.Options.WindowConfirmationMode, contractsv1.ContextFabricWindowConfirmationNudge)
+	}
+}
+
+// TestInvestigateQuestionProjectsStructureAndWindowDisclosure (CHAOS-3972
+// P3+W2) proves the response's projection carries structure_needs/
+// confirmed_structure/effective_evidence_window/window_clarification
+// verbatim from the canonical result, through the SAME answerprojection.Project
+// function the hosted API uses -- the P3 disclosure surface this whole
+// ticket exists to reach.
+func TestInvestigateQuestionProjectsStructureAndWindowDisclosure(t *testing.T) {
+	result := parityResult()
+	result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+		Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+		KindOptions: []contractsv1.ContextFabricKindOption{{
+			ReceiptID: "kindr_" + strings.Repeat("a", 24), OptionID: "opt_kind1", Label: "a pull request",
+			Kind: contractsv1.ContextFabricSubjectPullRequest, OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+		}},
+	}
+	result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+		Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: "532",
+		Source: contractsv1.ContextFabricStructureSourceExplicitUnattributed, Provenance: contractsv1.ContextFabricStructureInferredDefault,
+		Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}}
+	result.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: contractsv1.ContextFabricRelativeWindowTrailing90D, Provenance: contractsv1.ContextFabricWindowInferredDefault,
+	}
+	windowOptionStart, windowOptionEnd := time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC), time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+	result.WindowClarification = &contractsv1.ContextFabricWindowClarification{
+		Options: []contractsv1.ContextFabricWindowOption{{
+			ReceiptID: "winr_" + strings.Repeat("d", 24), OptionID: "opt_window1", Label: "the last 90 days",
+			RelativeID: contractsv1.ContextFabricRelativeWindowTrailing90D, Start: &windowOptionStart, End: &windowOptionEnd,
+		}},
+	}
+
+	var seen contractsv1.ContextFabricInvestigationRequest
+	boot := answerFixtureBootstrap(t, result, &seen)
+	response := callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{Question: "What is PR 532?"})
+
+	if response.Structured.StructureNeeds == nil || len(response.Structured.StructureNeeds.KindOptions) != 1 {
+		t.Fatalf("structured.structure_needs did not carry the result's kind options: %+v", response.Structured.StructureNeeds)
+	}
+	if len(response.Structured.ConfirmedStructure) != 1 || response.Structured.ConfirmedStructure[0].AppliedValue != "532" {
+		t.Fatalf("structured.confirmed_structure did not carry the result's entry: %+v", response.Structured.ConfirmedStructure)
+	}
+	if response.Structured.EffectiveEvidenceWindow == nil || response.Structured.EffectiveEvidenceWindow.RelativeID != contractsv1.ContextFabricRelativeWindowTrailing90D {
+		t.Fatalf("structured.effective_evidence_window did not carry the result's window: %+v", response.Structured.EffectiveEvidenceWindow)
+	}
+	if response.Structured.WindowClarification == nil || len(response.Structured.WindowClarification.Options) != 1 {
+		t.Fatalf("structured.window_clarification did not carry the result's options: %+v", response.Structured.WindowClarification)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response failed contract validation: %v", err)
+	}
+}
+
 // TestIncludeFullResultDropsWholeResultWhenOverBudget is the Directive 1
 // probe: the byte budget bounds the TOTAL content, and an over-budget full
 // result is dropped whole with the drop declared, never truncated into a

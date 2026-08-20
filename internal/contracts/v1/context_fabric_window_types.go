@@ -203,6 +203,46 @@ type ContextFabricEffectiveEvidenceWindow struct {
 	Confidence  ContextFabricWindowConfidence `json:"confidence,omitempty"`
 }
 
+// ContextFabricWindowConfirmationMode (CHAOS-3900 W2, design brief §4/DW3)
+// is the closed vocabulary selecting how a caller wants an INFERRED
+// (non-confirmed) evidence window disclosed. Both modes carry the SAME
+// WindowClarification/EffectiveEvidenceWindow data -- the mode only
+// controls whether the disclosure is ALSO nudged through Warnings; it never
+// changes Status or blocks an otherwise-decisive answer (design brief §5's
+// own acceptance pin: "answer-rate unchanged -- nudge adds to EXISTING
+// clarifications only").
+type ContextFabricWindowConfirmationMode string
+
+const (
+	// ContextFabricWindowConfirmationHeadless is the DW3-ruled default:
+	// never blocks or reshapes a response for a caller that does not set
+	// this field. An inferred window is still disclosed structurally
+	// (EffectiveEvidenceWindow.Provenance, WindowClarification), just
+	// without an additional Warnings sentence.
+	ContextFabricWindowConfirmationHeadless ContextFabricWindowConfirmationMode = "headless"
+	// ContextFabricWindowConfirmationNudge additionally appends a fixed,
+	// closed-vocabulary disclosure sentence to Warnings whenever the
+	// effective window is inferred_default -- "answering with the last 90
+	// days by default; confirm a window to change it" -- so a caller
+	// rendering only Warnings (never Structured directly) still sees the
+	// nudge.
+	ContextFabricWindowConfirmationNudge ContextFabricWindowConfirmationMode = "nudge"
+)
+
+// ValidContextFabricWindowConfirmationMode reports whether value is a
+// member of the closed registry. The empty value is deliberately valid
+// here (unlike most closed enums in this contract): it is the wire's own
+// "caller did not say" state, mapped to ContextFabricWindowConfirmationHeadless
+// by the engine, never a value the wire itself must reject.
+func ValidContextFabricWindowConfirmationMode(value ContextFabricWindowConfirmationMode) bool {
+	switch value {
+	case "", ContextFabricWindowConfirmationHeadless, ContextFabricWindowConfirmationNudge:
+		return true
+	default:
+		return false
+	}
+}
+
 // ContextFabricWindowOptionReceiptPrefix is the CLOSED winr_ receipt
 // namespace prefix (design brief §5, pivot brief §2's closed
 // kindr_/ancr_/handr_/winr_ set) -- every WindowOption.ReceiptID and every

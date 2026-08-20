@@ -20,9 +20,9 @@ func candidateOf(kind contractsv1.ContextFabricSubjectKind, id string) contextfa
 
 func TestKindOfferMaterial_EmptyPoolOffersNothing(t *testing.T) {
 	t.Parallel()
-	material := kindOfferMaterial(nil)
+	material := kindOfferMaterial(nil, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
-		t.Errorf("kindOfferMaterial(nil) = %+v, want empty (nothing to disambiguate)", material)
+		t.Errorf("kindOfferMaterial(nil, nil) = %+v, want empty (nothing to disambiguate)", material)
 	}
 }
 
@@ -32,7 +32,7 @@ func TestKindOfferMaterial_SingleKindPoolOffersNothing(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_2"),
 	}
-	material := kindOfferMaterial(candidates)
+	material := kindOfferMaterial(candidates, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(single-kind pool) = %+v, want empty: nothing to disambiguate when every candidate is the same kind", material)
 	}
@@ -48,7 +48,7 @@ func TestKindOfferMaterial_MultiKindPoolOffersDisambiguation(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material := kindOfferMaterial(candidates)
+	material := kindOfferMaterial(candidates, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
 		t.Fatalf("material.Missing = %v, want exactly [expected_kind]", material.Missing)
 	}
@@ -87,7 +87,7 @@ func TestKindOfferMaterial_DuplicateKindsCollapseToOneOption(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_3"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material := kindOfferMaterial(candidates)
+	material := kindOfferMaterial(candidates, nil)
 	if len(material.KindOptions) != 2 {
 		t.Fatalf("len(material.KindOptions) = %d, want 2 (one per DISTINCT kind, not one per candidate)", len(material.KindOptions))
 	}
@@ -104,7 +104,7 @@ func TestKindOfferMaterial_NonOfferableKindsAreIgnoredForDisambiguation(t *testi
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectDocument, "doc_1"),
 	}
-	material := kindOfferMaterial(candidates)
+	material := kindOfferMaterial(candidates, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(pull_request + document) = %+v, want empty: document is not in the offerable expected_kind vocabulary", material)
 	}
@@ -186,14 +186,21 @@ func fakeCensusFn(counts map[CensusKind]int, err error) CensusFunc {
 func TestKindInsensitivityProof(t *testing.T) {
 	t.Parallel()
 
+	// pull_request and ci_pipeline_run both accept a repository anchor
+	// (KindHasAnchorFK: pull_request explicitly, ci_pipeline_run via the
+	// default case) -- the ONE anchor kind that reaches both pooled kinds
+	// in these tests, so anchorApplies is true for every censused kind.
+	const anchorKind = contextfabric.SubjectRepository
+	const anchorCanonicalID = "repository:r-1"
+
 	t.Run("single all-kinds satisfier is commit-sound", func(t *testing.T) {
 		census := fakeCensusFn(map[CensusKind]int{
 			contractsv1.ContextFabricSubjectPullRequest: 1,
-			contractsv1.ContextFabricSubjectWorkItem:    0,
+			contractsv1.ContextFabricSubjectCIRun:       0,
 		}, nil)
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectWorkItem},
-			"", false, "", "", false, census)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivityCommitSound {
 			t.Errorf("kindInsensitivityProof() = %q, want %q", got, kindInsensitivityCommitSound)
 		}
@@ -201,11 +208,11 @@ func TestKindInsensitivityProof(t *testing.T) {
 	t.Run("zero all-kinds satisfiers is no-match-sound", func(t *testing.T) {
 		census := fakeCensusFn(map[CensusKind]int{
 			contractsv1.ContextFabricSubjectPullRequest: 0,
-			contractsv1.ContextFabricSubjectWorkItem:    0,
+			contractsv1.ContextFabricSubjectCIRun:       0,
 		}, nil)
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectWorkItem},
-			"", false, "", "", false, census)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivityNoMatchSound {
 			t.Errorf("kindInsensitivityProof() = %q, want %q", got, kindInsensitivityNoMatchSound)
 		}
@@ -213,11 +220,11 @@ func TestKindInsensitivityProof(t *testing.T) {
 	t.Run("more than one all-kinds satisfier is kind_sensitive_outcome", func(t *testing.T) {
 		census := fakeCensusFn(map[CensusKind]int{
 			contractsv1.ContextFabricSubjectPullRequest: 1,
-			contractsv1.ContextFabricSubjectWorkItem:    1,
+			contractsv1.ContextFabricSubjectCIRun:       1,
 		}, nil)
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectWorkItem},
-			"", false, "", "", false, census)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q", got, kindInsensitivitySensitive)
 		}
@@ -226,7 +233,7 @@ func TestKindInsensitivityProof(t *testing.T) {
 		census := fakeCensusFn(map[CensusKind]int{contractsv1.ContextFabricSubjectPullRequest: 1}, nil)
 		got := kindInsensitivityProof(context.Background(), "org_1",
 			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectDocument},
-			"", false, "", "", false, census)
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q (registry-miss poison)", got, kindInsensitivitySensitive)
 		}
@@ -234,22 +241,108 @@ func TestKindInsensitivityProof(t *testing.T) {
 	t.Run("a census error fails safe, not open", func(t *testing.T) {
 		census := fakeCensusFn(nil, errors.New("boom"))
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest}, "", false, "", "", false, census)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest}, "", "", false, anchorKind, anchorCanonicalID, true, census)
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q on census error", got, kindInsensitivitySensitive)
 		}
 	})
 	t.Run("nil census is sensitive, not a panic", func(t *testing.T) {
 		got := kindInsensitivityProof(context.Background(), "org_1",
-			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest}, "", false, "", "", false, nil)
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest}, "", "", false, anchorKind, anchorCanonicalID, true, nil)
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q on nil census", got, kindInsensitivitySensitive)
 		}
 	})
 	t.Run("empty pre-narrowing kind set is sensitive", func(t *testing.T) {
-		got := kindInsensitivityProof(context.Background(), "org_1", nil, "", false, "", "", false, fakeCensusFn(nil, nil))
+		got := kindInsensitivityProof(context.Background(), "org_1", nil, "", "", false, anchorKind, anchorCanonicalID, true, fakeCensusFn(nil, nil))
 		if got != kindInsensitivitySensitive {
 			t.Errorf("kindInsensitivityProof() = %q, want %q on empty kind set", got, kindInsensitivitySensitive)
+		}
+	})
+	// codex xhigh review, CHAOS-3972 round 1, finding 1's own regression
+	// pin: a handle bound to ONE kind must never be applied to another
+	// pooled kind as if it were valid there too.
+	t.Run("a handle bound to one kind is never applied to another pooled kind", func(t *testing.T) {
+		calls := map[CensusKind]struct {
+			value       string
+			handleBound bool
+			anchorBound bool
+		}{}
+		census := func(_ context.Context, _ string, kind CensusKind, value string, handleBound bool, _ contextfabric.SubjectKind, _ string, anchorBound bool) (CensusOutcome, error) {
+			calls[kind] = struct {
+				value       string
+				handleBound bool
+				anchorBound bool
+			}{value, handleBound, anchorBound}
+			if kind == contractsv1.ContextFabricSubjectCIRun {
+				return CensusOutcome{Count: 1}, nil
+			}
+			return CensusOutcome{Count: 0}, nil
+		}
+		// A repository anchor reaches BOTH pooled kinds (pull_request
+		// explicitly, ci_pipeline_run via the default KindHasAnchorFK
+		// case), so pull_request is still legitimately censused -- via the
+		// anchor, never the ci_pipeline_run handle.
+		got := kindInsensitivityProof(context.Background(), "org_1",
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			contractsv1.ContextFabricSubjectCIRun, "18234567", true, anchorKind, anchorCanonicalID, true, census)
+		if got != kindInsensitivityCommitSound {
+			t.Fatalf("kindInsensitivityProof() = %q, want %q", got, kindInsensitivityCommitSound)
+		}
+		if pr := calls[contractsv1.ContextFabricSubjectPullRequest]; pr.handleBound || pr.value != "" {
+			t.Errorf("pull_request census call carried handleBound=%v value=%q -- the ci_pipeline_run handle must never apply to a kind it was never bound to", pr.handleBound, pr.value)
+		}
+		if pr := calls[contractsv1.ContextFabricSubjectPullRequest]; !pr.anchorBound {
+			t.Errorf("pull_request census call carried anchorBound=false, want true -- it must still be censused via the anchor")
+		}
+		if ci := calls[contractsv1.ContextFabricSubjectCIRun]; !ci.handleBound || ci.value != "18234567" {
+			t.Errorf("ci_pipeline_run census call = %+v, want handleBound=true value=18234567", ci)
+		}
+	})
+	// codex xhigh review, CHAOS-3972 round 1, finding 2's own regression
+	// pin: a census outcome that could not prove closure must never feed
+	// the total, in either direction.
+	t.Run("closure mismatch poisons the proof even at count 1", func(t *testing.T) {
+		census := func(_ context.Context, _ string, kind CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+			if kind == contractsv1.ContextFabricSubjectPullRequest {
+				return CensusOutcome{Count: 1, ClosureMismatch: true}, nil
+			}
+			return CensusOutcome{Count: 0}, nil
+		}
+		got := kindInsensitivityProof(context.Background(), "org_1",
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
+		if got != kindInsensitivitySensitive {
+			t.Errorf("kindInsensitivityProof() = %q, want %q -- a ClosureMismatch outcome must never certify commit_sound", got, kindInsensitivitySensitive)
+		}
+	})
+	t.Run("a pooled kind no keyed predicate reaches poisons the proof", func(t *testing.T) {
+		// work_item's own anchor FK is project, not repository -- the
+		// shared anchorKind above (repository) does not reach it, and no
+		// handle is bound, so nothing censuses it.
+		census := fakeCensusFn(map[CensusKind]int{contractsv1.ContextFabricSubjectPullRequest: 1}, nil)
+		got := kindInsensitivityProof(context.Background(), "org_1",
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectWorkItem},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
+		if got != kindInsensitivitySensitive {
+			t.Errorf("kindInsensitivityProof() = %q, want %q -- work_item has no reachable keyed predicate here", got, kindInsensitivitySensitive)
+		}
+	})
+	// codex xhigh review, CHAOS-3972 round 2 coverage gap: a direct
+	// SatisfierSetClosureMismatch pin, distinct from ClosureMismatch above
+	// -- CHAOS-3896 Slice B's own second closure flag must be checked too.
+	t.Run("satisfier set closure mismatch poisons the proof even at count 1", func(t *testing.T) {
+		census := func(_ context.Context, _ string, kind CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+			if kind == contractsv1.ContextFabricSubjectPullRequest {
+				return CensusOutcome{Count: 1, SatisfierSetClosureMismatch: true}, nil
+			}
+			return CensusOutcome{Count: 0}, nil
+		}
+		got := kindInsensitivityProof(context.Background(), "org_1",
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
+		if got != kindInsensitivitySensitive {
+			t.Errorf("kindInsensitivityProof() = %q, want %q -- a SatisfierSetClosureMismatch outcome must never certify commit_sound", got, kindInsensitivitySensitive)
 		}
 	})
 }
@@ -702,7 +795,7 @@ func TestAnchorOfferMaterial_MoreThanMaxCandidatesIsCapped(t *testing.T) {
 // the wire Validate() rejects as a duplicate).
 func TestHandleOfferMaterial_DuplicateOccurrencesAreDeduped(t *testing.T) {
 	t.Parallel()
-	material := handleOfferMaterial("PR 532 relates to PR 532 which also mentions PR 532")
+	material := handleOfferMaterial("PR 532 relates to PR 532 which also mentions PR 532", nil, nil)
 	if len(material.HandleOptions) != 1 {
 		t.Fatalf("len(material.HandleOptions) = %d, want 1 (three identical occurrences deduped)", len(material.HandleOptions))
 	}
@@ -721,7 +814,7 @@ func TestHandleOfferMaterial_MoreThanMaxDistinctMatchesIsCapped(t *testing.T) {
 	for i := 0; i < structureOfferMaxOptions+5; i++ {
 		question += fmt.Sprintf(" PR %d", 1000+i)
 	}
-	material := handleOfferMaterial(question)
+	material := handleOfferMaterial(question, nil, nil)
 	if len(material.HandleOptions) != structureOfferMaxOptions {
 		t.Fatalf("len(material.HandleOptions) = %d, want %d (capped)", len(material.HandleOptions), structureOfferMaxOptions)
 	}
@@ -729,7 +822,7 @@ func TestHandleOfferMaterial_MoreThanMaxDistinctMatchesIsCapped(t *testing.T) {
 
 func TestHandleOfferMaterial_NoGrammarMatchStillMissingWithEmptyOptions(t *testing.T) {
 	t.Parallel()
-	material := handleOfferMaterial("how healthy is the payments team")
+	material := handleOfferMaterial("how healthy is the payments team", nil, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectHandle {
 		t.Fatalf("material.Missing = %v, want [subject_handle]", material.Missing)
 	}
@@ -740,7 +833,7 @@ func TestHandleOfferMaterial_NoGrammarMatchStillMissingWithEmptyOptions(t *testi
 
 func TestHandleOfferMaterial_GrammarMatchOffersHandle(t *testing.T) {
 	t.Parallel()
-	material := handleOfferMaterial("what is the status of PR 532?")
+	material := handleOfferMaterial("what is the status of PR 532?", nil, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectHandle {
 		t.Fatalf("material.Missing = %v, want [subject_handle]", material.Missing)
 	}
@@ -761,7 +854,7 @@ func TestHandleOfferMaterial_GrammarMatchOffersHandle(t *testing.T) {
 
 func TestHandleOfferMaterial_MultipleGrammarMatchesOfferAll(t *testing.T) {
 	t.Parallel()
-	material := handleOfferMaterial("does PR 532 relate to CHAOS-3896?")
+	material := handleOfferMaterial("does PR 532 relate to CHAOS-3896?", nil, nil)
 	if len(material.HandleOptions) != 2 {
 		t.Fatalf("len(material.HandleOptions) = %d, want 2", len(material.HandleOptions))
 	}
@@ -794,5 +887,89 @@ func TestCombineStructureOfferMaterial(t *testing.T) {
 	}
 	if len(combined.KindOptions) != 1 || len(combined.AnchorOptions) != 1 || len(combined.HandleOptions) != 0 {
 		t.Errorf("combined = %+v, want 1 kind option, 1 anchor option, 0 handle options", combined)
+	}
+}
+
+// TestNarrowPooledKindsByExplicitKinds (CHAOS-3972 P3) pins
+// narrowPooledKindsByExplicitKinds' own three no-narrowing cases (empty
+// explicit set, zero survivors, every pooled kind survives) alongside the
+// genuine-narrowing case, since runShadowEvidenceRoundForResolution's own
+// PreNarrowingExplicitKinds gating depends on telling them apart.
+func TestNarrowPooledKindsByExplicitKinds(t *testing.T) {
+	t.Parallel()
+	pooled := []CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun}
+
+	if got := narrowPooledKindsByExplicitKinds(pooled, nil); got != nil {
+		t.Errorf("empty explicit set: got %v, want nil (no narrowing applied)", got)
+	}
+	if got := narrowPooledKindsByExplicitKinds(pooled, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}); got != nil {
+		t.Errorf("zero survivors: got %v, want nil (explicit hint disagreeing with the whole pool is not authoritative)", got)
+	}
+	if got := narrowPooledKindsByExplicitKinds(pooled, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun}); got != nil {
+		t.Errorf("every pooled kind survives: got %v, want nil (intersecting changed nothing)", got)
+	}
+	got := narrowPooledKindsByExplicitKinds(pooled, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectCIRun})
+	want := []CensusKind{contractsv1.ContextFabricSubjectCIRun}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("genuine narrowing: got %v, want %v", got, want)
+	}
+}
+
+// TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool
+// (CHAOS-3972 P3, design brief §2.3) pins the asymmetry explicit kinds
+// introduce: the pool-derived >=2-distinct-kinds gate stays in force for
+// the pool alone, but ANY non-empty explicit kind list is offered
+// regardless of pool cardinality -- a caller's own named kind is always
+// worth offering back, receipt-bound, for the deterministic upgrade turn.
+func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testing.T) {
+	t.Parallel()
+	// Empty pool, one explicit kind: still offered.
+	material := kindOfferMaterial(nil, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest})
+	if len(material.KindOptions) != 1 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectPullRequest {
+		t.Fatalf("material.KindOptions = %+v, want exactly the one explicit kind", material.KindOptions)
+	}
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Errorf("material.Missing = %v, want [expected_kind]", material.Missing)
+	}
+	// Explicit kind ranked FIRST, ahead of pool-derived kinds.
+	candidates := []contextfabric.SubjectCandidate{
+		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem}},
+		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest}},
+	}
+	material = kindOfferMaterial(candidates, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem})
+	if len(material.KindOptions) != 2 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectWorkItem {
+		t.Fatalf("material.KindOptions = %+v, want the explicit kind ranked first", material.KindOptions)
+	}
+}
+
+// TestHandleOfferMaterial_ExplicitHandleRequiresAWiredChecker (CHAOS-3972
+// P3) pins HandleGrammarChecker's own documented safe-degradation contract:
+// nil checker means NO explicit handle ever becomes an offer, never a
+// panic and never a veto.
+func TestHandleOfferMaterial_ExplicitHandleRequiresAWiredChecker(t *testing.T) {
+	t.Parallel()
+	explicit := []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+	material := handleOfferMaterial("no handles in this question text", explicit, nil)
+	if len(material.HandleOptions) != 0 {
+		t.Fatalf("material.HandleOptions = %+v, want empty (nil checker degrades safely)", material.HandleOptions)
+	}
+
+	checker := func(kind contractsv1.ContextFabricSubjectKind, patternID, value string) (string, bool) {
+		if kind == contractsv1.ContextFabricSubjectPullRequest && patternID == "pull_request_number" {
+			return "git_pull_requests.number", true
+		}
+		return "", false
+	}
+	material = handleOfferMaterial("no handles in this question text", explicit, checker)
+	if len(material.HandleOptions) != 1 || material.HandleOptions[0].Value != "532" || material.HandleOptions[0].SourceColumn != "git_pull_requests.number" {
+		t.Fatalf("material.HandleOptions = %+v, want the one explicit handle validated and offered", material.HandleOptions)
+	}
+
+	// An invalid explicit value (checker returns ok=false) is silently
+	// omitted, never offered.
+	invalid := []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectWorkItem, PatternID: "bogus_pattern", Value: "x"}}
+	material = handleOfferMaterial("", invalid, checker)
+	if len(material.HandleOptions) != 0 {
+		t.Fatalf("material.HandleOptions = %+v, want empty (checker rejected the explicit value)", material.HandleOptions)
 	}
 }

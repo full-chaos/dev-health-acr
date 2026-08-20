@@ -538,10 +538,51 @@ type ContextFabricInvestigationRequest struct {
 	PriorKindReceipts   []ContextFabricBoundSubjectReceipt `json:"prior_kind_receipts,omitempty"`
 	PriorAnchorReceipts []ContextFabricBoundSubjectReceipt `json:"prior_anchor_receipts,omitempty"`
 	PriorHandleReceipts []ContextFabricBoundSubjectReceipt `json:"prior_handle_receipts,omitempty"`
-	RequestedScope      ContextFabricRequestedScope        `json:"requested_scope,omitempty"`
-	TimeContext         ContextFabricTimeContext           `json:"time_context"`
-	Options             ContextFabricInvestigationOptions  `json:"options"`
-	Consumer            ContextFabricConsumerInfo          `json:"consumer"`
+	// ExpectedKinds and SubjectHandles (CHAOS-3972 P3, pivot-intent design
+	// brief §2.3/§2.0) are the caller's own EXPLICIT structure fields --
+	// the wire concept structure.go's own P1.B scope note deferred to this
+	// ticket. Per the DP12(b) uniform surface split, a value here NEVER
+	// mints question_stated by itself: on the MCP surface it enters at
+	// inferred_default/explicit_unattributed (drives census-narrowing and
+	// offer-shaping only; a decisive outcome still requires the matching
+	// kindr_/handr_ receipt, or -- for kind -- the §2.0 kind-insensitivity
+	// proof); on every other surface (panel/web_assertion) an explicit
+	// value keeps 3900 v5.2's ordinary question_stated rule, mirroring
+	// EvidenceWindow's own per-surface split exactly (windowExplicitProvenance,
+	// window.go). See canonicalizeStructure (structure.go) for the
+	// resolution mechanics and the explicit-vs-receipt conflict rule.
+	ExpectedKinds []ContextFabricSubjectKind `json:"expected_kinds,omitempty"`
+	// SubjectHandles names grammar-typed handle values the caller already
+	// knows (design brief §2.3: "a grammar-VALID handle that keys a unique
+	// source row is still redeemed via its offered receipt, one turn").
+	// PatternID must name one of the closed handle-grammar registry
+	// entries this deployment discloses via StructureNeeds.AcceptedGrammars
+	// -- never free text or a caller-supplied regex.
+	SubjectHandles []ContextFabricRequestedHandle    `json:"subject_handles,omitempty"`
+	RequestedScope ContextFabricRequestedScope       `json:"requested_scope,omitempty"`
+	TimeContext    ContextFabricTimeContext          `json:"time_context"`
+	Options        ContextFabricInvestigationOptions `json:"options"`
+	Consumer       ContextFabricConsumerInfo         `json:"consumer"`
+}
+
+// ContextFabricExpectedKindsMaxCount bounds ExpectedKinds -- the closed
+// ContextFabricSubjectKind vocabulary's own size (15 members), so this
+// bound can never reject a caller naming every kind at once while still
+// rejecting a malformed, unbounded list.
+const ContextFabricExpectedKindsMaxCount = 15
+
+// ContextFabricRequestedHandle is one caller-supplied explicit subject_handle
+// value (CHAOS-3972 P3, design brief §2.3): a typed (kind, pattern_id, value)
+// triple the engine grammar-validates before it may become a receipt-bound
+// HandleOption offer. Mirrors ContextFabricHandleOption's own Kind/PatternID/
+// Value fields exactly -- deliberately NOT SourceColumn or the offer
+// identity fields, which are things the SERVER computes, never something a
+// caller sends (the same asymmetry ContextFabricRequestedEvidenceWindow
+// draws against ContextFabricEffectiveEvidenceWindow).
+type ContextFabricRequestedHandle struct {
+	Kind      ContextFabricSubjectKind `json:"kind"`
+	PatternID string                   `json:"pattern_id"`
+	Value     string                   `json:"value"`
 }
 
 type ContextFabricConversationTurn struct {
@@ -703,6 +744,14 @@ type ContextFabricInvestigationOptions struct {
 	MaxSerializedBytes   int  `json:"max_serialized_bytes"`
 	AllowClarification   bool `json:"allow_clarification"`
 	IncludeDebug         bool `json:"include_debug"`
+	// WindowConfirmationMode (CHAOS-3900 W2, design brief §4) selects
+	// whether an INFERRED (non-confirmed) evidence window additionally
+	// nudges the caller via a disclosed Warnings sentence, beside the
+	// WindowClarification data every inferred window already carries
+	// regardless of mode. Empty means the DW3-ruled default: headless
+	// (never blocks or reshapes a response for a caller that does not set
+	// this field).
+	WindowConfirmationMode ContextFabricWindowConfirmationMode `json:"window_confirmation_mode,omitempty"`
 }
 
 type ContextFabricConsumerInfo struct {

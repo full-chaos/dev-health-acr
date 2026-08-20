@@ -227,6 +227,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// round on "stalled resolution only" and adds the 3s deadline +
 		// panic recovery, so nothing extra is needed here.
 		CensusFunc: a.config.CensusFunc,
+		// CHAOS-3972 P3: nil unless the composition root sets
+		// Config.HandleGrammarChecker -- see that field's own doc comment.
+		HandleGrammarChecker: a.config.HandleGrammarChecker,
 	}
 	// CHAOS-3884 (Option C): AliasLookup is left nil (deps' own zero value)
 	// when this deployment has no identity-universe reader configured --

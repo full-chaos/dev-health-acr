@@ -149,6 +149,12 @@ type Config struct {
 	// (chaos3884_replay_harness_test.go) also wires this, independently,
 	// through its own separate composition (buildReplayGraphReader).
 	CensusFunc graphrank.CensusFunc
+	// HandleGrammarChecker (CHAOS-3972 P3) is optional (nil-safe), same
+	// convention as CensusFunc above: a nil value means an explicit
+	// subject_handle can never become a receipt-bound offer (see that
+	// type's own doc comment, internal/contextfabric/structure.go).
+	// Threaded straight through to graphrank.ResolveDeps.HandleGrammarChecker.
+	HandleGrammarChecker contextfabric.HandleGrammarChecker
 	// EpochResolver (CHAOS-3898 S2a, design brief §3.1) is optional
 	// (nil-safe), same convention as IdentityUniverse/CensusFunc above: the
 	// composition root's pglifecycle.Resolver (or a bounded-lease

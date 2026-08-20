@@ -188,6 +188,11 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ConfirmedStructureEntry.properties.applied_value.minLength": 1,
 		"common#$defs.ConfirmedStructureEntry.properties.applied_value.maxLength": 256,
 		"common#$defs.StructureOfferSnapshotEntry.properties.rank.minimum":        0,
+		// CHAOS-3972 P3: ContextFabricRequestedHandle.Validate's own
+		// stringLengthBetween(h.Value, 1, 256) bound -- same reasoning
+		// as HandleOption.value above (mapped explicitly, not probed).
+		"common#$defs.RequestedHandle.properties.value.minLength": 1,
+		"common#$defs.RequestedHandle.properties.value.maxLength": 256,
 	}
 
 	discovered := schemaBounds(t, documents)

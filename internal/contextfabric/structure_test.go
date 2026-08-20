@@ -1442,3 +1442,256 @@ func TestRecordStructureNeedsTelemetry_NilNeedsRecordsNothing(t *testing.T) {
 		t.Error("nil StructureNeeds recorded a non-empty telemetry call")
 	}
 }
+
+// TestCHAOS3972_ExplicitKind_MCPSurface_EntersInferredDefault is the
+// DP12(b) surface-split pin for CHAOS-3972 P3's own explicit fields: an
+// MCP-surface request.ExpectedKinds value NEVER mints question_stated by
+// itself -- it enters at inferred_default/explicit_unattributed, and does
+// NOT bypass tryReuse (only Confirmed does, per DP11).
+func TestCHAOS3972_ExplicitKind_MCPSurface_EntersInferredDefault(t *testing.T) {
+	t.Parallel()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoNone {
+		t.Fatalf("canon.Veto = %q, want structureVetoNone", canon.Veto)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("canon.Confirmed = %+v, want empty -- an explicit field is never receipt-confirmed", canon.Confirmed)
+	}
+	if len(canon.Explicit) != 1 {
+		t.Fatalf("canon.Explicit = %+v, want exactly 1 entry", canon.Explicit)
+	}
+	entry := canon.Explicit[0]
+	if entry.Member != contractsv1.ContextFabricStructureNeedExpectedKind || entry.AppliedValue != string(SubjectPullRequest) {
+		t.Errorf("canon.Explicit[0] = %+v, want member=expected_kind applied_value=pull_request", entry)
+	}
+	if entry.Source != contractsv1.ContextFabricStructureSourceExplicitUnattributed {
+		t.Errorf("entry.Source = %q, want explicit_unattributed (MCP surface)", entry.Source)
+	}
+	if entry.Provenance != contractsv1.ContextFabricStructureInferredDefault {
+		t.Errorf("entry.Provenance = %q, want inferred_default -- DP12(b): MCP never mints question_stated from a bare explicit field", entry.Provenance)
+	}
+}
+
+// TestCHAOS3972_ExplicitKind_NonMCPSurface_EntersQuestionStated is the
+// other half of the surface split: a panel/web_assertion caller's explicit
+// field keeps 3900 v5.2's ordinary question_stated rule, untouched by
+// DP12(b).
+func TestCHAOS3972_ExplicitKind_NonMCPSurface_EntersQuestionStated(t *testing.T) {
+	t.Parallel()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
+	request := validInvestigationRequest() // Consumer.Surface = "workbench" (model_test.go)
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if len(canon.Explicit) != 1 {
+		t.Fatalf("canon.Explicit = %+v, want exactly 1 entry", canon.Explicit)
+	}
+	entry := canon.Explicit[0]
+	if entry.Source != contractsv1.ContextFabricStructureSourceExplicit {
+		t.Errorf("entry.Source = %q, want explicit (non-MCP surface)", entry.Source)
+	}
+	if entry.Provenance != contractsv1.ContextFabricStructureQuestionStated {
+		t.Errorf("entry.Provenance = %q, want question_stated -- 3900 v5.2's ordinary rule, untouched off MCP", entry.Provenance)
+	}
+}
+
+// TestCHAOS3972_ExplicitKind_MultiValue_NoSingleEcho pins the documented
+// scope decision (resolveExplicitStructure's own doc comment): a
+// multi-valued explicit field has no single applied value to echo, so it
+// produces NO ConfirmedStructureEntry -- it still drives census-narrowing/
+// offer-shaping (ResolveSubjects/kindOfferMaterial), just not this echo.
+// Never a veto, never an error.
+func TestCHAOS3972_ExplicitKind_MultiValue_NoSingleEcho(t *testing.T) {
+	t.Parallel()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest, SubjectWorkItem}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoNone {
+		t.Fatalf("canon.Veto = %q, want structureVetoNone", canon.Veto)
+	}
+	if len(canon.Explicit) != 0 {
+		t.Errorf("canon.Explicit = %+v, want empty -- a multi-valued explicit field echoes nothing", canon.Explicit)
+	}
+}
+
+// TestCHAOS3972_ExplicitKind_AgreesWithReceipt_ReceiptWinsNoDuplicateEcho
+// pins design brief §2.1's explicit-vs-receipt AGREEMENT case: when a
+// kindr_ receipt and an explicit expected_kinds value name the SAME kind,
+// the receipt's own Confirmed entry stands and no separate Explicit entry
+// duplicates it.
+func TestCHAOS3972_ExplicitKind_AgreesWithReceipt_ReceiptWinsNoDuplicateEcho(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0005"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{{
+			ReceiptID: "kindr_confirm00001", OptionID: "opt_kind", Label: "a pull request",
+			Kind: SubjectPullRequest, OfferSource: "engine",
+		}},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm00001"}}
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoNone {
+		t.Fatalf("canon.Veto = %q, want structureVetoNone (agreeing explicit + receipt)", canon.Veto)
+	}
+	if len(canon.Confirmed) != 1 {
+		t.Errorf("canon.Confirmed = %+v, want exactly 1 (the receipt)", canon.Confirmed)
+	}
+	if len(canon.Explicit) != 0 {
+		t.Errorf("canon.Explicit = %+v, want empty -- an agreeing explicit value is not separately echoed", canon.Explicit)
+	}
+}
+
+// TestCHAOS3972_ExplicitKind_ConflictsWithReceipt_Vetoes pins the
+// disagreement half of the same rule: an explicit expected_kinds value
+// that EXCLUDES the receipt-confirmed kind is a conflict, atomically
+// vetoing the whole batch -- mirrors the window's own explicit-vs-receipt
+// conflict rule exactly.
+func TestCHAOS3972_ExplicitKind_ConflictsWithReceipt_Vetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0006"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{{
+			ReceiptID: "kindr_confirm00002", OptionID: "opt_kind", Label: "a pull request",
+			Kind: SubjectPullRequest, OfferSource: "engine",
+		}},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm00002"}}
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectWorkItem}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationConflict {
+		t.Fatalf("canon.Veto = %q, want structureVetoConfirmationConflict", canon.Veto)
+	}
+	if len(canon.Confirmed) != 0 || len(canon.Explicit) != 0 {
+		t.Errorf("a vetoed batch must apply nothing: canon = %+v", canon)
+	}
+}
+
+// TestCHAOS3972_ExplicitHandle_SingleValueEchoed mirrors the kind tests
+// above for subject_handle -- the SAME single-value echo rule.
+func TestCHAOS3972_ExplicitHandle_SingleValueEchoed(t *testing.T) {
+	t.Parallel()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if len(canon.Explicit) != 1 {
+		t.Fatalf("canon.Explicit = %+v, want exactly 1 entry", canon.Explicit)
+	}
+	entry := canon.Explicit[0]
+	if entry.Member != contractsv1.ContextFabricStructureNeedSubjectHandle || entry.AppliedValue != "532" {
+		t.Errorf("canon.Explicit[0] = %+v, want member=subject_handle applied_value=532", entry)
+	}
+}
+
+// TestCHAOS3972_ExplicitHandle_SameValueDifferentKindConflicts is the
+// codex xhigh review round-1 finding 3 regression pin: a stored
+// (pull_request, "532") handr_ receipt must NOT be read as "agreeing"
+// with an explicit (work_item, "532") request naming a DIFFERENT subject
+// that merely shares the same numeric string -- value alone is not a safe
+// agreement test, kind must match too.
+func TestCHAOS3972_ExplicitHandle_SameValueDifferentKindConflicts(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0007"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_handle"},
+		HandleOptions: []HandleOption{{
+			ReceiptID: "handr_confirm00001", OptionID: "opt_handle", Label: "pull request #532",
+			Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532", SourceColumn: "git_pull_requests.number",
+			OfferSource: "engine",
+		}},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		HandleVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason) {
+			return true, HandleVerificationValid
+		},
+	})
+
+	request := validInvestigationRequest()
+	request.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "handr_confirm00001"}}
+	// Same VALUE ("532"), but a DIFFERENT kind -- must conflict, not agree.
+	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectWorkItem, PatternID: "some_other_pattern", Value: "532"}}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationConflict {
+		t.Fatalf("canon.Veto = %q, want structureVetoConfirmationConflict -- same value, different kind, must never be read as agreement", canon.Veto)
+	}
+	if len(canon.Confirmed) != 0 || len(canon.Explicit) != 0 {
+		t.Errorf("a vetoed batch must apply nothing: canon = %+v", canon)
+	}
+}
+
+// TestCHAOS3972_ExplicitHandle_SameKindAndValueAgrees is the positive twin:
+// a receipt and an explicit handle naming the SAME (kind, value) pair
+// genuinely agree, and the receipt's own confirmation stands with no
+// duplicate echo.
+func TestCHAOS3972_ExplicitHandle_SameKindAndValueAgrees(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0008"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_handle"},
+		HandleOptions: []HandleOption{{
+			ReceiptID: "handr_confirm00002", OptionID: "opt_handle", Label: "pull request #532",
+			Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532", SourceColumn: "git_pull_requests.number",
+			OfferSource: "engine",
+		}},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		HandleVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason) {
+			return true, HandleVerificationValid
+		},
+	})
+
+	request := validInvestigationRequest()
+	request.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "handr_confirm00002"}}
+	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoNone {
+		t.Fatalf("canon.Veto = %q, want structureVetoNone (agreeing kind AND value)", canon.Veto)
+	}
+	if len(canon.Confirmed) != 1 {
+		t.Errorf("canon.Confirmed = %+v, want exactly 1 (the receipt)", canon.Confirmed)
+	}
+	if len(canon.Explicit) != 0 {
+		t.Errorf("canon.Explicit = %+v, want empty -- an agreeing explicit value is not separately echoed", canon.Explicit)
+	}
+}

@@ -361,6 +361,17 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 	// Info/Warn level and available the moment an operator raises theirs,
 	// with no separate config knob to remember to flip.
 	graphConfig.ResolutionTracer = graphrank.NewSlogResolutionTracer(request.options.Logger)
+	// CHAOS-3972 P3: wired UNCONDITIONALLY, not gated alongside
+	// wireIdentityUniverse below -- graphrank.ValidateHandleGrammar/
+	// HandleSourceColumn are pure, no-I/O registry lookups (no ClickHouse
+	// client to share or withhold), so there is no "arm A baseline" reason
+	// to leave this off the way CensusFunc/IdentityUniverse are gated.
+	graphConfig.HandleGrammarChecker = func(kind contractsv1.ContextFabricSubjectKind, patternID, value string) (string, bool) {
+		if !graphrank.ValidateHandleGrammar(graphrank.CensusKind(kind), patternID, value) {
+			return "", false
+		}
+		return graphrank.HandleSourceColumn(graphrank.CensusKind(kind), patternID)
+	}
 	if wireIdentityUniverse {
 		// CHAOS-3884 (Option C): closes over the SAME ClickHouse query client
 		// devhealthfacts.NewProviders already uses below, so the identity

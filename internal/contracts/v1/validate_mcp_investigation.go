@@ -42,6 +42,64 @@ func (r MCPInvestigateQuestionRequest) Validate() error {
 		if err := receipt.Validate(); err != nil {
 			return fmt.Errorf("prior_subject_receipts: %w", err)
 		}
+		if err := validateNoStructureReceiptPrefix("prior_subject_receipts", receipt.ReceiptID, ""); err != nil {
+			return err
+		}
+	}
+	// CHAOS-3972 P3+W2: the four structure-receipt fields, sharing the
+	// SAME namespace-prefix-checked validator the hosted contract's own
+	// Validate uses (validateStructureReceiptField) -- this tool's own
+	// shape is ergonomic and question-first, but a malformed or
+	// wrong-namespace receipt must fail HERE, at the tool boundary, not
+	// only after mapping onto the hosted request.
+	if err := validateStructureReceiptField("prior_kind_receipts", r.PriorKindReceipts, ContextFabricKindOptionReceiptPrefix); err != nil {
+		return err
+	}
+	if err := validateStructureReceiptField("prior_anchor_receipts", r.PriorAnchorReceipts, ContextFabricAnchorOptionReceiptPrefix); err != nil {
+		return err
+	}
+	if err := validateStructureReceiptField("prior_handle_receipts", r.PriorHandleReceipts, ContextFabricHandleOptionReceiptPrefix); err != nil {
+		return err
+	}
+	if err := validateStructureReceiptField("prior_window_receipts", r.PriorWindowReceipts, ContextFabricWindowOptionReceiptPrefix); err != nil {
+		return err
+	}
+	if len(r.ExpectedKinds) > ContextFabricExpectedKindsMaxCount {
+		return fmt.Errorf("investigate_question expected_kinds exceeds v1 bounds")
+	}
+	seenExpectedKinds := make(map[ContextFabricSubjectKind]struct{}, len(r.ExpectedKinds))
+	for _, kind := range r.ExpectedKinds {
+		if !validContextFabricSubjectKind(kind) {
+			return fmt.Errorf("investigate_question expected_kinds entry is invalid")
+		}
+		if _, exists := seenExpectedKinds[kind]; exists {
+			return fmt.Errorf("investigate_question expected_kinds entries must be unique")
+		}
+		seenExpectedKinds[kind] = struct{}{}
+	}
+	if len(r.SubjectHandles) > MCPInvestigationReceiptsMaxCount {
+		return fmt.Errorf("investigate_question subject_handles exceeds v1 bounds")
+	}
+	seenHandles := make(map[ContextFabricRequestedHandle]struct{}, len(r.SubjectHandles))
+	for _, handle := range r.SubjectHandles {
+		if err := handle.Validate(); err != nil {
+			return fmt.Errorf("subject_handles: %w", err)
+		}
+		// codex xhigh review, CHAOS-3972 round 1, finding 4: the published
+		// schema declares subject_handles uniqueItems -- Go must enforce
+		// the identical bound at this tool boundary too.
+		if _, exists := seenHandles[handle]; exists {
+			return fmt.Errorf("investigate_question subject_handles entries must be unique")
+		}
+		seenHandles[handle] = struct{}{}
+	}
+	if r.EvidenceWindow != nil {
+		if err := r.EvidenceWindow.validate(); err != nil {
+			return fmt.Errorf("evidence_window: %w", err)
+		}
+	}
+	if !ValidContextFabricWindowConfirmationMode(r.WindowConfirmationMode) {
+		return fmt.Errorf("investigate_question window_confirmation_mode is invalid")
 	}
 	if r.Scope != nil {
 		if err := r.Scope.Validate(); err != nil {

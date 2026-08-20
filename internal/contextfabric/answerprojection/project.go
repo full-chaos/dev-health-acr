@@ -166,6 +166,16 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		EvidenceRefIDs:    evidence,
 		SubjectReceipts:   projectReceipts(result),
 		Versions:          result.Versions,
+		// EffectiveEvidenceWindow, WindowClarification, StructureNeeds, and
+		// ConfirmedStructure (CHAOS-3972 P3+W2) are copied verbatim, joining
+		// the SAME never-dropped discipline Temporal/Limitations already
+		// follow above -- the MCP investigate_question response is the
+		// bounded consumer surface this whole disclosure mechanism exists to
+		// reach, and a projection that dropped it would defeat the point.
+		EffectiveEvidenceWindow: result.EffectiveEvidenceWindow,
+		WindowClarification:     result.WindowClarification,
+		StructureNeeds:          result.StructureNeeds,
+		ConfirmedStructure:      append([]contractsv1.ContextFabricConfirmedStructureEntry(nil), result.ConfirmedStructure...),
 	}
 	projection.ProjectionBudget = contractsv1.ContextFabricProjectionBudget{
 		DriversOmitted:         driversOmitted,

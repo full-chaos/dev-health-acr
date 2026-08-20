@@ -260,6 +260,202 @@ func TestRunShadowEvidenceRound_NonVacuity(t *testing.T) {
 	}
 }
 
+// TestRunShadowEvidenceRound_ExplicitKindNarrowing_SensitiveDemotes is the
+// CHAOS-3972 P3 hard-precondition pin (design brief §2.0, CHAOS-3927/P1.D's
+// own wiring requirement): a would_commit reached under an EXPLICIT
+// (non-receipt) kind narrowing is untrustworthy when the SAME census,
+// re-run over the pre-narrowing kind set, finds a SECOND satisfier the
+// narrowing hid -- exactly the hazard the kind-insensitivity rule exists
+// to catch. The round must demote to would_clarify/kind_sensitive_outcome,
+// never commit.
+func TestRunShadowEvidenceRound_ExplicitKindNarrowing_SensitiveDemotes(t *testing.T) {
+	t.Parallel()
+	input := baseInput()
+	input.Question = "how is this repo's CI doing?"
+	// PooledKinds is the NARROWED set this round actually censuses (an
+	// explicit expected_kinds=[ci_pipeline_run] having already dropped
+	// pull_request from the hypothesis set) -- PreNarrowingExplicitKinds
+	// carries the set BEFORE that narrowing, per
+	// runShadowEvidenceRoundForResolution's own contract.
+	input.PooledKinds = []CensusKind{contractsv1.ContextFabricSubjectCIRun}
+	input.PreNarrowingExplicitKinds = []CensusKind{contextfabric.SubjectPullRequest, contractsv1.ContextFabricSubjectCIRun}
+	input.AliasClaimants = map[string][]IdentityMatch{
+		"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1"}, Mechanism: contextfabric.MatchAlias}},
+	}
+	// CIRun is censused TWICE: once by the round itself (over the narrowed
+	// PooledKinds), once again by kindInsensitivityProof (over the
+	// pre-narrowing set) -- both return count=1. PullRequest is censused
+	// ONLY by the insensitivity proof, and ALSO returns count=1: the
+	// all-kinds total is 2, so the narrowed round's own would-commit
+	// verdict is unsound.
+	f := &fakeCensus{byKind: map[CensusKind][]struct {
+		outcome CensusOutcome
+		err     error
+	}{
+		contractsv1.ContextFabricSubjectCIRun: {
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-1"}},
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-1"}},
+		},
+		contextfabric.SubjectPullRequest: {
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "pr-1"}},
+		},
+	}}
+	input.CensusFunc = f.fn
+	att := RunShadowEvidenceRound(context.Background(), input, nil)
+	if att.Outcome != ShadowWouldClarify || att.Reason != ReasonKindSensitiveOutcome {
+		t.Fatalf("att = %#v, want would_clarify/kind_sensitive_outcome -- the narrowed commit must be demoted, not trusted", att)
+	}
+	if att.PreconditionUnproven {
+		t.Fatalf("att.PreconditionUnproven = true, want false once demoted off would_commit (invariant: true only when Outcome==would_commit)")
+	}
+	if f.calls != 3 {
+		t.Fatalf("census calls = %d, want 3 (1 narrowed round + 2 insensitivity proof)", f.calls)
+	}
+}
+
+// TestRunShadowEvidenceRound_ExplicitKindNarrowing_SoundCommits is the
+// converse of the sensitive-demotion pin: when the all-kinds census, re-run
+// over the pre-narrowing set, agrees there is exactly one satisfier
+// overall, the narrowed round's would_commit stands.
+func TestRunShadowEvidenceRound_ExplicitKindNarrowing_SoundCommits(t *testing.T) {
+	t.Parallel()
+	input := baseInput()
+	input.Question = "how is this repo's CI doing?"
+	input.PooledKinds = []CensusKind{contractsv1.ContextFabricSubjectCIRun}
+	input.PreNarrowingExplicitKinds = []CensusKind{contextfabric.SubjectPullRequest, contractsv1.ContextFabricSubjectCIRun}
+	input.AliasClaimants = map[string][]IdentityMatch{
+		"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1"}, Mechanism: contextfabric.MatchAlias}},
+	}
+	f := &fakeCensus{byKind: map[CensusKind][]struct {
+		outcome CensusOutcome
+		err     error
+	}{
+		contractsv1.ContextFabricSubjectCIRun: {
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-1"}},
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-1"}},
+		},
+		contextfabric.SubjectPullRequest: {
+			{outcome: CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC()}},
+		},
+	}}
+	input.CensusFunc = f.fn
+	att := RunShadowEvidenceRound(context.Background(), input, nil)
+	if att.Outcome != ShadowWouldCommit {
+		t.Fatalf("att = %#v, want would_commit -- the all-kinds proof agrees, the narrowed commit is sound", att)
+	}
+}
+
+// TestRunShadowEvidenceRound_ExplicitKindNarrowing_RegistryMissPoisons pins
+// the kindInsensitivityProof registry-miss rule (design brief §2.0
+// implementation pin (b)) reaching all the way through RunShadowEvidenceRound:
+// a pre-narrowing kind outside the closed census registry makes
+// insensitivity unprovable, demoting even an otherwise-sound narrowed
+// commit.
+func TestRunShadowEvidenceRound_ExplicitKindNarrowing_RegistryMissPoisons(t *testing.T) {
+	t.Parallel()
+	input := baseInput()
+	input.Question = "how is this repo's CI doing?"
+	input.PooledKinds = []CensusKind{contractsv1.ContextFabricSubjectCIRun}
+	// contextfabric.SubjectDocument is not a census-registered kind.
+	input.PreNarrowingExplicitKinds = []CensusKind{contextfabric.SubjectDocument, contractsv1.ContextFabricSubjectCIRun}
+	input.AliasClaimants = map[string][]IdentityMatch{
+		"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1"}, Mechanism: contextfabric.MatchAlias}},
+	}
+	f := withCensus(contractsv1.ContextFabricSubjectCIRun, CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-1"}, nil)
+	input.CensusFunc = f.fn
+	att := RunShadowEvidenceRound(context.Background(), input, nil)
+	if att.Outcome != ShadowWouldClarify || att.Reason != ReasonKindSensitiveOutcome {
+		t.Fatalf("att = %#v, want would_clarify/kind_sensitive_outcome -- a non-censused pre-narrowing kind must poison the proof", att)
+	}
+}
+
+// TestRunShadowEvidenceRound_ReceiptConfirmedKindNeverProofGated proves the
+// OTHER half of the design: PreNarrowingExplicitKinds unset (the receipt-
+// confirmed case -- ConfirmedExpectedKind already narrowed candidatesBySubject
+// upstream, so PooledKinds arrives pre-narrowed with nothing to prove
+// insensitive against) reaches would_commit with NO extra census call,
+// exactly the pre-CHAOS-3972 behavior.
+func TestRunShadowEvidenceRound_ReceiptConfirmedKindNeverProofGated(t *testing.T) {
+	t.Parallel()
+	input := baseInput()
+	input.Question = "how is this repo's CI doing?"
+	input.PooledKinds = []CensusKind{contractsv1.ContextFabricSubjectCIRun}
+	input.AliasClaimants = map[string][]IdentityMatch{
+		"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1"}, Mechanism: contextfabric.MatchAlias}},
+	}
+	f := withCensus(contractsv1.ContextFabricSubjectCIRun, CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-1"}, nil)
+	input.CensusFunc = f.fn
+	att := RunShadowEvidenceRound(context.Background(), input, nil)
+	if att.Outcome != ShadowWouldCommit {
+		t.Fatalf("att = %#v, want would_commit", att)
+	}
+	if f.calls != 1 {
+		t.Fatalf("census calls = %d, want exactly 1 -- no insensitivity proof runs absent PreNarrowingExplicitKinds", f.calls)
+	}
+}
+
+// TestRunShadowEvidenceRound_ExplicitKindNarrowing_HandleAppendedKindJoinsTheProof
+// is the codex xhigh review round-2 regression pin (CHAOS-3972): a bound
+// handle can name a census kind that was NEVER in the pre-narrowing
+// candidate pool at all (design brief: a handle is decisive alone,
+// independent of pooling) -- the main census loop appends that kind via
+// appendUniqueCensusKind, and the insensitivity proof MUST mirror the same
+// append onto its own pre-narrowing kind set, or it certifies soundness
+// over an incomplete hypothesis space.
+//
+// Scenario (exactly codex's own repro): pre-narrowing pool =
+// [pull_request, pull_request_review]; an explicit expected_kinds=[pull_request]
+// narrows PooledKinds to [pull_request] alone; the question ALSO binds a
+// ci_pipeline_run handle -- a kind absent from both the narrowed AND the
+// pre-narrowing pool. The round's own narrowed census (pull_request=0,
+// appended ci_pipeline_run=1 via the handle) reaches would_commit. The
+// TRUE all-kinds union also includes pull_request_review=1 (reachable only
+// via the shared repository anchor) -- two real satisfiers, not one -- so
+// the round's own commit is UNSOUND and must be demoted.
+func TestRunShadowEvidenceRound_ExplicitKindNarrowing_HandleAppendedKindJoinsTheProof(t *testing.T) {
+	t.Parallel()
+	input := baseInput()
+	input.Question = "run 18234567"
+	input.PooledKinds = []CensusKind{contractsv1.ContextFabricSubjectPullRequest}
+	input.PreNarrowingExplicitKinds = []CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectPullRequestReview}
+	input.AliasClaimants = map[string][]IdentityMatch{
+		"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1"}, Mechanism: contextfabric.MatchAlias}},
+	}
+	f := &fakeCensus{byKind: map[CensusKind][]struct {
+		outcome CensusOutcome
+		err     error
+	}{
+		// pull_request: censused twice (round's own narrowed census, then
+		// the proof's all-kinds re-census) -- zero satisfiers both times.
+		contractsv1.ContextFabricSubjectPullRequest: {
+			{outcome: CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC()}},
+			{outcome: CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC()}},
+		},
+		// ci_pipeline_run: censused twice (the round's own handle-appended
+		// census, then the proof's own matching append) -- one satisfier
+		// both times, the SAME satisfier the round's own would_commit
+		// rests on entirely.
+		contractsv1.ContextFabricSubjectCIRun: {
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-18234567"}},
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-18234567"}},
+		},
+		// pull_request_review: censused ONLY by the proof (never by the
+		// round's own narrowed census) -- one satisfier the narrowed round
+		// never saw at all.
+		contractsv1.ContextFabricSubjectPullRequestReview: {
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "review-1"}},
+		},
+	}}
+	input.CensusFunc = f.fn
+	att := RunShadowEvidenceRound(context.Background(), input, nil)
+	if att.Outcome != ShadowWouldClarify || att.Reason != ReasonKindSensitiveOutcome {
+		t.Fatalf("att = %#v, want would_clarify/kind_sensitive_outcome -- the narrowed round's commit rests on a handle-appended kind the proof must also consider, and the true all-kinds union has TWO satisfiers (ci_pipeline_run + pull_request_review), not one", att)
+	}
+	if f.calls != 5 {
+		t.Fatalf("census calls = %d, want 5 (2 pull_request + 2 ci_pipeline_run + 1 pull_request_review)", f.calls)
+	}
+}
+
 // TestRunShadowEvidenceRound_NilTracerStillComputes proves the Attestation
 // is fully computed even with no tracer wired (nil is a valid, common
 // call shape for a direct unit test or a caller that only wants the value).

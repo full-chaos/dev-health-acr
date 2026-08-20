@@ -313,6 +313,16 @@ type ResolveDeps struct {
 	// RunShadowEvidenceRound's own doc comment for what runs when it is
 	// set, and why the round can never influence `resolution` regardless.
 	CensusFunc CensusFunc
+	// HandleGrammarChecker (CHAOS-3972 P3) is contextfabric.Engine's own
+	// offer-time grammar dependency, threaded through unchanged so
+	// explicitHandleOfferMaterial (chaos3900_structure_offers.go) can
+	// validate request.SubjectHandles the SAME way the production
+	// composition root wires it for redemption-time re-verification (see
+	// HandleGrammarChecker's own doc comment, internal/contextfabric/structure.go).
+	// nil means an explicit subject_handle can never become an offer --
+	// the SAME safe degradation HandleGrammarChecker's own doc comment
+	// describes.
+	HandleGrammarChecker contextfabric.HandleGrammarChecker
 }
 
 // ResolutionTracer receives ResolveSubjects' own per-stage trace events.
@@ -1074,7 +1084,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// -- the brief's own cost note ("per stalled resolution... committed
 	// resolutions pay nothing").
 	if deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
-		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps)
+		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
 		// named exactly one satisfier (attestedSatisfier), prove that
@@ -1121,10 +1131,16 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// above, before the gated shadow-evidence-round check, so a stall that
 	// skips that round still gets a real StructureNeeds block (see this
 	// file's own package doc comment, chaos3900_structure_offers.go).
+	// CHAOS-3972 P3: kindOfferMaterial/handleOfferMaterial additionally take
+	// request.ExpectedKinds/SubjectHandles -- the caller's own explicit
+	// structure fields -- so a grammar/registry-valid explicit value
+	// becomes a top-ranked, receipt-bound offer on THIS SAME response
+	// (design brief §2.3's deterministic one-turn upgrade), merged with
+	// whatever the pool/question text itself would have offered.
 	offerMaterial := combineStructureOfferMaterial(
-		kindOfferMaterial(resolution.Candidates),
+		kindOfferMaterial(resolution.Candidates, request.ExpectedKinds),
 		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), aliasIdentityComplete),
-		handleOfferMaterial(request.Question),
+		handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker),
 	)
 	return resolution, offerMaterial, nil
 }
@@ -1334,7 +1350,7 @@ const evidenceRoundDeadline = 3 * time.Second
 // (possibly current) context skip D7's historical-axis-skip refusal and
 // run a current-state census against a historical question, silently on
 // the wrong axis.
-func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps) (attestation Attestation) {
+func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind) (attestation Attestation) {
 	defer func() {
 		if r := recover(); r != nil {
 			if deps.ResolutionTracer != nil {
@@ -1355,11 +1371,30 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 	for _, candidate := range resolution.Candidates {
 		pooledKinds = append(pooledKinds, candidate.Subject.Kind)
 	}
+	// CHAOS-3972 P3 (design brief §2.0/§2.3, the P1.D hard precondition):
+	// an EXPLICIT (non-receipt) request.ExpectedKinds narrows the census's
+	// own pooled hypothesis set -- never candidatesBySubject/pooledKinds'
+	// own SOURCE (that stays receipt-only, ConfirmedExpectedKind's own
+	// tripwire). confirmedKind != nil means a kindr_ receipt ALREADY
+	// narrowed candidatesBySubject upstream (filterCandidatesByConfirmedKind)
+	// -- caller authority, no insensitivity proof needed, so explicit
+	// narrowing is skipped entirely in that case (it would be redundant at
+	// best; resolveExplicitStructure's own conflict check already proved
+	// agreement when both are present).
+	censusKinds := pooledKinds
+	var preNarrowingExplicitKinds []CensusKind
+	if confirmedKind == nil {
+		if narrowed := narrowPooledKindsByExplicitKinds(pooledKinds, request.ExpectedKinds); narrowed != nil {
+			preNarrowingExplicitKinds = pooledKinds
+			censusKinds = narrowed
+		}
+	}
 	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
 		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
-		PooledKinds: pooledKinds, CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
+		PooledKinds: censusKinds, CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
+		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
 	}, deps.ResolutionTracer)
 	return attestation
 }
