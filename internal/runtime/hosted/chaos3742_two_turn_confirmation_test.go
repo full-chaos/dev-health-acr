@@ -71,6 +71,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,16 +124,258 @@ type twoTurnOracleEntry struct {
 	NegativeCommittable bool `json:"negative_committable"`
 }
 
-// twoTurnOracleAnnex is the withheld annex file's top-level shape.
+// twoTurnOracleAnnex is this harness's OWN internal, flat shape -- one
+// entry per (case, member) -- produced by adaptSignedOracleAnnex below.
 // SignedOff is the DP10 mechanism: the artifact -- INCLUDING which
 // negatives are designated committable -- requires chris's sign-off before
 // any run may treat a measurement against it as the acceptance number
 // (design brief matrix DP10: "the sign-off includes the designated
-// committable negatives per the §5 anti-vacuity rule").
+// committable negatives per the §5 anti-vacuity rule"). CorpusSHA256 here
+// carries the annex's own sha8 PREFIX (not a full sha256 -- see
+// signedOracleAnnex's own doc comment), compared against the loaded
+// corpus's hash prefix at the call site.
 type twoTurnOracleAnnex struct {
 	CorpusSHA256 string               `json:"corpus_sha256"`
 	SignedOff    bool                 `json:"signed_off"`
 	Entries      []twoTurnOracleEntry `json:"entries"`
+}
+
+// --- adapting the CHRIS-SIGNED DP10 artifact (.remember/trial-results/oracle-annex-v1.json) ---
+//
+// This is consumption-adaptation of an ALREADY-RATIFIED artifact (chris
+// sign-off dated 2026-08-19 10:57, orchestrator-confirmed 2026-08-20):
+// the instrument adapts to the signed shape; the artifact is never
+// regenerated, edited, or reshaped to fit the instrument.
+//
+// signedOracleAnnex is the real, on-disk schema -- one entry per CASE
+// (keyed by decimal string index, not an array), carrying all FOUR
+// members' oracles unconditionally (null/empty where a member does not
+// apply to that case, e.g. handle for most cases, anchor for
+// existence_probe controls with no true positive).
+type signedOracleAnnex struct {
+	Provenance struct {
+		CorpusPath string `json:"corpus_path"`
+		// CorpusSHA8 is an 8-HEX-CHAR PREFIX of the corpus's sha256, not
+		// a full digest (matches the design brief's own "sha8 7204a2e6"
+		// citation) -- compared against the loaded corpus hash's own
+		// first 8 characters, never the full 64.
+		CorpusSHA8 string `json:"corpus_sha8"`
+		OrgID      string `json:"org_id"`
+		// Ratification/Status are STALE top-level strings that predate
+		// the nested Signoff block below (Ratification still reads
+		// "..._sign_off_pending", Status still reads "DRAFT") -- the
+		// OPERATIVE sign-off signal is Signoff.Status=="APPROVED", per
+		// team-lead/orchestrator confirmation. Read but never trusted for
+		// the gate decision.
+		Ratification string `json:"ratification"`
+		Status       string `json:"status"`
+		Signoff      struct {
+			By     string `json:"by"`
+			AtPT   string `json:"at_pt"`
+			Scope  string `json:"scope"`
+			Status string `json:"status"`
+		} `json:"signoff"`
+	} `json:"provenance"`
+	Cases map[string]signedOracleCase `json:"cases"`
+}
+
+type signedOracleCase struct {
+	QuestionClass string `json:"question_class"`
+	Band          string `json:"band"`
+	Oracles       struct {
+		Kind struct {
+			Positive  string   `json:"positive"`
+			Negatives []string `json:"negatives"`
+		} `json:"kind"`
+		Anchor struct {
+			// PositiveKey/Negatives are COMPOSITE "kind:canonical_id"
+			// strings (e.g. "work_item:linear:CHAOS-2476" -- the
+			// canonical id itself may contain colons, so splitting takes
+			// only the FIRST one). PositiveKey is nil for existence_probe
+			// cases (no true positive subject exists).
+			PositiveKey *string  `json:"positive_key"`
+			Negatives   []string `json:"negatives"`
+		} `json:"anchor"`
+		Window struct {
+			PositiveBand string   `json:"positive_band"`
+			Negatives    []string `json:"negatives"`
+		} `json:"window"`
+		Handle struct {
+			// Positive/Negatives carry the BARE handle value only (e.g.
+			// "CHAOS-2476") -- no pattern_id. handlePatternIDForKind
+			// derives it from the member's own subject kind against the
+			// closed 3-entry handleGrammarRegistry
+			// (graphrank/chaos3899_handle_grammar.go), which is
+			// currently a strict 1:1 kind->pattern mapping.
+			Positive  *string  `json:"positive"`
+			Negatives []string `json:"negatives"`
+		} `json:"handle"`
+	} `json:"oracles"`
+	CommittableNegativeDesignations []struct {
+		Member      string `json:"member"` // kind | anchor | window | handle
+		Value       string `json:"value"`
+		Constructor string `json:"constructor"` // setup_turn | seeded_result
+	} `json:"committable_negative_designations"`
+}
+
+// signedAnnexMember maps the signed artifact's short member names to the
+// closed ContextFabricStructureNeedKind vocabulary this harness uses
+// everywhere else.
+var signedAnnexMember = map[string]string{
+	"kind":   string(contractsv1.ContextFabricStructureNeedExpectedKind),
+	"anchor": string(contractsv1.ContextFabricStructureNeedSubjectAnchor),
+	"window": string(contractsv1.ContextFabricStructureNeedWindow),
+	"handle": string(contractsv1.ContextFabricStructureNeedSubjectHandle),
+}
+
+// handlePatternIDForKind derives the closed handle-grammar pattern_id from
+// a subject kind, per handleGrammarRegistry's current strict 1:1 mapping
+// (graphrank/chaos3899_handle_grammar.go: pull_request_number/
+// work_item_ticket_key/ci_run_id, one pattern per kind, no kind sharing
+// two patterns today). The signed annex carries bare handle VALUES only,
+// never a pattern_id, so this is the one piece of derivation the adapter
+// must supply rather than read verbatim.
+func handlePatternIDForKind(kind string) (string, bool) {
+	switch kind {
+	case string(contractsv1.ContextFabricSubjectPullRequest):
+		return "pull_request_number", true
+	case string(contractsv1.ContextFabricSubjectWorkItem):
+		return "work_item_ticket_key", true
+	case string(contractsv1.ContextFabricSubjectCIRun):
+		return "ci_run_id", true
+	default:
+		return "", false
+	}
+}
+
+// splitAnchorKey splits a signed-annex "kind:canonical_id" composite,
+// taking only the FIRST colon (a canonical id may itself contain colons,
+// e.g. "work_item:linear:CHAOS-2476" -> ("work_item", "linear:CHAOS-2476")).
+func splitAnchorKey(key string) (kind, canonicalID string, ok bool) {
+	parts := strings.SplitN(key, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+// adaptSignedOracleAnnex flattens the signed artifact's per-CASE,
+// all-four-members shape into this harness's own per-(case,member)
+// twoTurnOracleEntry list -- one entry per member that has a positive
+// and/or negative oracle value in that case. A member with neither (e.g.
+// handle for most cases) contributes no entry for that case, matching the
+// design brief's own class-conditional Missing rule (a member outside a
+// question's frame is unconstructible, not offered).
+//
+// GAP, NOT PAPERED OVER (per team-lead's explicit STOP instruction): the
+// signed annex's anchor oracles carry canonical_id only, never the raw
+// alias/label TERM a real identity-universe row would carry. The confirmed-
+// wrong arm's harness-seeded anchor constructor (seedAnchorNegativeResult)
+// needs that term to compute a hash VerifyAnchorClaimantUnique can actually
+// match against a live row -- see NegativeAnchorMatchedTerm's own doc
+// comment. This adapter leaves it empty; seedAnchorNegativeResult will then
+// report ArmInvalidReason for every subject_anchor confirmed_wrong case
+// (its existing, already-honest fallback -- never a fabricated pass), and
+// the anti-vacuity check will correctly fail for subject_anchor until this
+// is resolved. Reported to chris/team-lead alongside this change; not an
+// oversight in this adapter.
+func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
+	annex := twoTurnOracleAnnex{
+		CorpusSHA256: signed.Provenance.CorpusSHA8,
+		SignedOff:    signed.Provenance.Signoff.Status == "APPROVED" && strings.TrimSpace(signed.Provenance.Signoff.By) != "",
+	}
+
+	indices := make([]int, 0, len(signed.Cases))
+	byIndex := map[int]string{}
+	for key := range signed.Cases {
+		n, err := strconv.Atoi(key)
+		if err != nil {
+			continue // non-numeric case key: skip rather than crash on an unexpected shape
+		}
+		indices = append(indices, n)
+		byIndex[n] = key
+	}
+	sort.Ints(indices)
+
+	for _, index := range indices {
+		c := signed.Cases[byIndex[index]]
+		committable := map[string]struct{ value, constructor string }{}
+		for _, d := range c.CommittableNegativeDesignations {
+			committable[d.Member] = struct{ value, constructor string }{d.Value, d.Constructor}
+		}
+
+		// expected_kind
+		if c.Oracles.Kind.Positive != "" || len(c.Oracles.Kind.Negatives) > 0 {
+			entry := twoTurnOracleEntry{Index: index, Member: signedAnnexMember["kind"], PositiveKind: c.Oracles.Kind.Positive}
+			if neg, ok := committable["kind"]; ok {
+				entry.NegativeKind = neg.value
+				entry.NegativeCommittable = true
+			} else if len(c.Oracles.Kind.Negatives) > 0 {
+				entry.NegativeKind = c.Oracles.Kind.Negatives[0]
+			}
+			annex.Entries = append(annex.Entries, entry)
+		}
+
+		// subject_anchor
+		if c.Oracles.Anchor.PositiveKey != nil || len(c.Oracles.Anchor.Negatives) > 0 {
+			entry := twoTurnOracleEntry{Index: index, Member: signedAnnexMember["anchor"]}
+			if c.Oracles.Anchor.PositiveKey != nil {
+				if kind, id, ok := splitAnchorKey(*c.Oracles.Anchor.PositiveKey); ok {
+					entry.PositiveKind, entry.PositiveAnchorCanonicalID = kind, id
+				}
+			}
+			negValue := ""
+			if neg, ok := committable["anchor"]; ok {
+				negValue = neg.value
+				entry.NegativeCommittable = true
+			} else if len(c.Oracles.Anchor.Negatives) > 0 {
+				negValue = c.Oracles.Anchor.Negatives[0]
+			}
+			if negValue != "" {
+				if kind, id, ok := splitAnchorKey(negValue); ok {
+					entry.NegativeKind, entry.NegativeAnchorCanonicalID = kind, id
+				}
+			}
+			// NegativeAnchorMatchedTerm intentionally left empty -- see
+			// this function's own doc comment (the GAP).
+			annex.Entries = append(annex.Entries, entry)
+		}
+
+		// window
+		if c.Oracles.Window.PositiveBand != "" || len(c.Oracles.Window.Negatives) > 0 {
+			entry := twoTurnOracleEntry{Index: index, Member: signedAnnexMember["window"], PositiveWindowBand: c.Oracles.Window.PositiveBand}
+			if neg, ok := committable["window"]; ok {
+				entry.NegativeWindowBand = neg.value
+				entry.NegativeCommittable = true
+			} else if len(c.Oracles.Window.Negatives) > 0 {
+				entry.NegativeWindowBand = c.Oracles.Window.Negatives[0]
+			}
+			annex.Entries = append(annex.Entries, entry)
+		}
+
+		// subject_handle: kind is derived from the SAME case's own
+		// positive expected_kind (the frozen corpus is single-subject-term
+		// dominant -- design brief §0 -- so a case's handle, when present,
+		// is scoped to the case's own primary kind).
+		if (c.Oracles.Handle.Positive != nil && *c.Oracles.Handle.Positive != "") || len(c.Oracles.Handle.Negatives) > 0 {
+			entry := twoTurnOracleEntry{Index: index, Member: signedAnnexMember["handle"]}
+			if patternID, ok := handlePatternIDForKind(c.Oracles.Kind.Positive); ok {
+				entry.PositiveHandlePatternID = patternID
+				entry.NegativeHandlePatternID = patternID
+			}
+			if c.Oracles.Handle.Positive != nil {
+				entry.PositiveHandleValue = *c.Oracles.Handle.Positive
+			}
+			if neg, ok := committable["handle"]; ok {
+				entry.NegativeHandleValue = neg.value
+				entry.NegativeCommittable = true
+			} else if len(c.Oracles.Handle.Negatives) > 0 {
+				entry.NegativeHandleValue = c.Oracles.Handle.Negatives[0]
+			}
+			annex.Entries = append(annex.Entries, entry)
+		}
+	}
+	return annex
 }
 
 var twoTurnStructureMembers = map[string]bool{
@@ -166,16 +409,21 @@ func requireAnnexSignedOff(annex twoTurnOracleAnnex) error {
 	return nil
 }
 
+// loadTwoTurnOracleAnnex reads the CHRIS-SIGNED DP10 artifact (its real,
+// on-disk schema -- signedOracleAnnex) and adapts it into this harness's
+// own internal shape. The artifact itself is read-only input: never
+// rewritten, reshaped, or regenerated by this loader.
 func loadTwoTurnOracleAnnex(t *testing.T, path string) twoTurnOracleAnnex {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read oracle annex %s: %v", path, err)
 	}
-	var annex twoTurnOracleAnnex
-	if err := json.Unmarshal(data, &annex); err != nil {
+	var signed signedOracleAnnex
+	if err := json.Unmarshal(data, &signed); err != nil {
 		t.Fatalf("decode oracle annex %s: %v", path, err)
 	}
+	annex := adaptSignedOracleAnnex(signed)
 	if err := validateTwoTurnOracleAnnex(annex); err != nil {
 		t.Fatalf("oracle annex %s: %v", path, err)
 	}
@@ -417,6 +665,121 @@ func TestValidateTwoTurnOracleAnnex(t *testing.T) {
 		Entries:      []twoTurnOracleEntry{{Index: 0, Member: string(contractsv1.ContextFabricStructureNeedSubjectAnchor)}},
 	}); err != nil {
 		t.Errorf("validateTwoTurnOracleAnnex(valid) = %v, want nil", err)
+	}
+}
+
+// TestAdaptSignedOracleAnnex pins the loader's adapter against a small,
+// synthetic slice of the REAL signed-artifact shape (mirroring
+// .remember/trial-results/oracle-annex-v1.json's own case 0, case 5, and
+// case 30 verbatim in structure) -- sign-off detection from the nested
+// Signoff block (never the stale top-level Ratification/Status strings),
+// sha8 passthrough, per-(case,member) flattening, the anchor "kind:id"
+// split, and handle pattern_id derivation from the case's own kind.
+func TestAdaptSignedOracleAnnex(t *testing.T) {
+	t.Parallel()
+	const raw = `{
+		"provenance": {
+			"corpus_sha8": "7204a2e6",
+			"ratification": "DP10_mechanism_ratified_chris_sign_off_pending",
+			"status": "DRAFT",
+			"signoff": {"by": "chris", "at_pt": "2026-08-19 10:57", "scope": "DP10 artifact sign-off incl. designated committable negatives", "status": "APPROVED"}
+		},
+		"cases": {
+			"0": {
+				"question_class": "subject_status", "band": "paraphrase",
+				"oracles": {
+					"kind": {"positive": "repository", "negatives": ["work_item"]},
+					"anchor": {"positive_key": "repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7", "negatives": ["repository:d29d160a-95fe-5b45-d4c1-fd1f5427b772"]},
+					"window": {"positive_band": "all_time", "negatives": ["trailing_90d"]},
+					"handle": {"positive": null, "negatives": []}
+				},
+				"committable_negative_designations": [
+					{"member": "kind", "value": "work_item", "constructor": "setup_turn"},
+					{"member": "anchor", "value": "repository:d29d160a-95fe-5b45-d4c1-fd1f5427b772", "constructor": "seeded_result"},
+					{"member": "window", "value": "trailing_90d", "constructor": "setup_turn"}
+				]
+			},
+			"5": {
+				"question_class": "subject_status", "band": "paraphrase",
+				"oracles": {
+					"kind": {"positive": "work_item", "negatives": ["repository"]},
+					"anchor": {"positive_key": "work_item:linear:CHAOS-2476", "negatives": ["work_item:linear:CHAOS-2393"]},
+					"window": {"positive_band": "all_time", "negatives": ["trailing_90d"]},
+					"handle": {"positive": "CHAOS-2476", "negatives": ["CHAOS-2393"]}
+				},
+				"committable_negative_designations": [
+					{"member": "handle", "value": "CHAOS-2393", "constructor": "setup_turn"}
+				]
+			},
+			"30": {
+				"question_class": "existence_probe", "band": "false_friend",
+				"oracles": {
+					"kind": {"positive": "ci_pipeline_run", "negatives": ["work_item"]},
+					"anchor": {"positive_key": null, "negatives": ["repository:7b110eba-4183-c29e-53b9-92fb058a29cb"]},
+					"window": {"positive_band": "all_time", "negatives": ["trailing_90d"]},
+					"handle": {"positive": null, "negatives": []}
+				},
+				"committable_negative_designations": []
+			}
+		}
+	}`
+	var signed signedOracleAnnex
+	if err := json.Unmarshal([]byte(raw), &signed); err != nil {
+		t.Fatalf("unmarshal synthetic signed annex: %v", err)
+	}
+	annex := adaptSignedOracleAnnex(signed)
+
+	if !annex.SignedOff {
+		t.Error("SignedOff = false, want true (nested signoff.status=APPROVED, by=chris -- the stale top-level ratification/status strings must NOT gate this)")
+	}
+	if annex.CorpusSHA256 != "7204a2e6" {
+		t.Errorf("CorpusSHA256 = %q, want the sha8 passthrough %q", annex.CorpusSHA256, "7204a2e6")
+	}
+
+	byIndexMember := map[string]twoTurnOracleEntry{}
+	for _, e := range annex.Entries {
+		byIndexMember[fmt.Sprintf("%d/%s", e.Index, e.Member)] = e
+	}
+
+	// Case 0: kind/anchor/window present (handle absent -- both positive
+	// and negatives empty), all three committable.
+	if e, ok := byIndexMember["0/expected_kind"]; !ok || e.PositiveKind != "repository" || e.NegativeKind != "work_item" || !e.NegativeCommittable {
+		t.Errorf("case 0 expected_kind entry = %+v, ok=%v, want positive=repository negative=work_item committable=true", e, ok)
+	}
+	if e, ok := byIndexMember["0/subject_anchor"]; !ok || e.PositiveKind != "repository" || e.PositiveAnchorCanonicalID != "7b9583ee-4d24-2be7-4d09-34f815bebdd7" ||
+		e.NegativeKind != "repository" || e.NegativeAnchorCanonicalID != "d29d160a-95fe-5b45-d4c1-fd1f5427b772" || !e.NegativeCommittable {
+		t.Errorf("case 0 subject_anchor entry = %+v, ok=%v, want split kind:id pairs and committable=true", e, ok)
+	}
+	if _, ok := byIndexMember["0/subject_handle"]; ok {
+		t.Error("case 0 subject_handle entry present, want none (positive=null, negatives=[])")
+	}
+
+	// Case 5: handle present, pattern_id derived from the case's own
+	// positive kind (work_item -> work_item_ticket_key), committable.
+	e, ok := byIndexMember["5/subject_handle"]
+	if !ok {
+		t.Fatal("case 5 subject_handle entry missing")
+	}
+	if e.PositiveHandlePatternID != "work_item_ticket_key" || e.PositiveHandleValue != "CHAOS-2476" {
+		t.Errorf("case 5 subject_handle positive = pattern=%q value=%q, want work_item_ticket_key/CHAOS-2476", e.PositiveHandlePatternID, e.PositiveHandleValue)
+	}
+	if e.NegativeHandlePatternID != "work_item_ticket_key" || e.NegativeHandleValue != "CHAOS-2393" || !e.NegativeCommittable {
+		t.Errorf("case 5 subject_handle negative = pattern=%q value=%q committable=%v, want work_item_ticket_key/CHAOS-2393/true", e.NegativeHandlePatternID, e.NegativeHandleValue, e.NegativeCommittable)
+	}
+
+	// Case 30 (existence_probe control): anchor positive_key is null (no
+	// true positive subject), but a non-committable negative still
+	// produces an entry -- the inferred-tier arm can still exercise it
+	// even though confirmed_wrong's anti-vacuity cannot count it.
+	e, ok = byIndexMember["30/subject_anchor"]
+	if !ok {
+		t.Fatal("case 30 subject_anchor entry missing")
+	}
+	if e.PositiveAnchorCanonicalID != "" {
+		t.Errorf("case 30 subject_anchor positive_anchor_canonical_id = %q, want empty (no true positive)", e.PositiveAnchorCanonicalID)
+	}
+	if e.NegativeAnchorCanonicalID != "7b110eba-4183-c29e-53b9-92fb058a29cb" || e.NegativeCommittable {
+		t.Errorf("case 30 subject_anchor negative = %q committable=%v, want the negative present but NOT committable (no designation)", e.NegativeAnchorCanonicalID, e.NegativeCommittable)
 	}
 }
 
@@ -895,8 +1258,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	}
 
 	corpus, corpusHash := loadTrialCorpus(t, corpusPath)
-	if annex.CorpusSHA256 != corpusHash {
-		t.Fatalf("oracle annex corpus_sha256=%s does not match the loaded corpus hash=%s -- refusing to run against a mismatched annex/corpus pair", annex.CorpusSHA256, corpusHash)
+	// annex.CorpusSHA256 carries the signed artifact's sha8 PREFIX (see
+	// signedOracleAnnex's own doc comment), compared against the loaded
+	// corpus hash's own first 8 characters.
+	if len(corpusHash) < 8 || annex.CorpusSHA256 != corpusHash[:8] {
+		t.Fatalf("oracle annex corpus_sha8=%s does not match the loaded corpus hash prefix=%.8s -- refusing to run against a mismatched annex/corpus pair", annex.CorpusSHA256, corpusHash)
 	}
 	source := requireGitSourceIdentity(t)
 

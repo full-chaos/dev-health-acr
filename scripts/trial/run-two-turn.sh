@@ -9,9 +9,12 @@
 #
 # The oracle annex (design brief DP10) is REQUIRED and is NOT defaulted here
 # -- it is a chris-ratified artifact, never guessed at by a script. Pass the
-# absolute path to a SIGNED-OFF annex (signed_off: true in the JSON); an
-# unsigned draft (e.g. .remember/acr-3742-two-turn-oracle-annex-DRAFT.json)
-# makes the go test itself refuse to run (requireAnnexSignedOff).
+# absolute path to the chris-signed annex, e.g.
+# .remember/trial-results/oracle-annex-v1.json (provenance.signoff.status
+# must be "APPROVED" with a non-empty "by" -- the go test's loader adapts
+# that real, on-disk schema directly; an annex whose nested signoff block
+# is not APPROVED makes the go test itself refuse to run,
+# requireAnnexSignedOff).
 #
 # Mirrors run-replay.sh's exchange-dir lifecycle exactly (start the responder
 # before the go test, wait for the test to finish, signal DONE, wait for the
