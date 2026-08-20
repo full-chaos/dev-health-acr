@@ -139,16 +139,20 @@ fi
 
 random_secret() { openssl rand -base64 36 | tr -d '\n' | tr '/+' '_-' | cut -c1-32; }
 random_base64() { openssl rand -base64 32 | tr -d '\n'; }
-# Mode 644, not 600: most of these files are bind-mounted read-only into the acr-* containers,
-# which run as the distroless nonroot UID 65532 (see the Dockerfile's `USER 65532:65532`) --
-# nothing shared with whatever host UID this script itself runs as. A 600 file bind-mounted
-# from the host keeps the host's owning UID inside the container, so a UID-65532 process gets
-# EACCES reading it: "configuration secret file cannot be read". Docker Desktop's macOS file
-# sharing (grpcfuse/virtiofs) does not enforce this the same way a native Linux bind mount
-# does, so this only reproduces on a real Linux Docker host -- e.g. a GitHub Actions runner,
-# never a local Mac run. These are ephemeral, per-run generated secrets scoped to one throwaway
-# Compose project and torn down at the end of the run, not standing credentials.
-write_secret() { (umask 022; printf '%s' "$2" > "$1"); }
+write_secret() { (umask 077; printf '%s' "$2" > "$1"); }
+# Mode 644, not 600: these specific files are bind-mounted read-only into the acr-* or
+# postgres/clickhouse containers, which run as a UID this script's own process shares nothing
+# with -- most pointedly the distroless nonroot UID 65532 baked into the acr-api/acr-migrate
+# Dockerfile's `USER 65532:65532`. A 600 file bind-mounted from the host keeps the host's
+# owning UID inside the container, so a different-UID process gets EACCES reading it:
+# "configuration secret file cannot be read". Docker Desktop's macOS file sharing
+# (grpcfuse/virtiofs) does not enforce this the same way a native Linux bind mount does, so
+# this only reproduces on a real Linux Docker host -- e.g. a GitHub Actions runner, never a
+# local Mac run. fullstack-opencode.sh's own host-read-only credential files (the ACR bearer
+# token driving the host-local acr-mcp process) are NOT container-mounted and explicitly
+# require mode 600 -- see its own "credential file must be mode 0600" assertion -- so they
+# must keep using plain write_secret(), never this one.
+write_container_secret() { (umask 022; printf '%s' "$2" > "$1"); }
 xml_escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"; }
 write_clickhouse_readonly_client_config() {
   local password escaped
@@ -171,12 +175,12 @@ prepare_state() {
   ln -s "$REPO_ROOT/deploy" "$STATE/stage/deploy"
   "$REPO_ROOT/scripts/deploy/local-pki.sh" --out "$STATE/pki" --dns 'localhost,acr-api,acr-tls-proxy,127.0.0.1'
   PORT="$(free_port)"
-  write_secret "$STATE/secrets/postgres-password" "$(random_secret)"
-  write_secret "$STATE/secrets/runtime-password" "$(random_secret)"
-  write_secret "$STATE/secrets/migration-password" "$(random_secret)"
-  write_secret "$STATE/secrets/clickhouse-password" "$(random_secret)"
-  write_secret "$STATE/secrets/evidence-kid" 'acr-e2e-kid'
-  write_secret "$STATE/secrets/evidence-keys" "acr-e2e-kid=$(random_base64)"
+  write_container_secret "$STATE/secrets/postgres-password" "$(random_secret)"
+  write_container_secret "$STATE/secrets/runtime-password" "$(random_secret)"
+  write_container_secret "$STATE/secrets/migration-password" "$(random_secret)"
+  write_container_secret "$STATE/secrets/clickhouse-password" "$(random_secret)"
+  write_container_secret "$STATE/secrets/evidence-kid" 'acr-e2e-kid'
+  write_container_secret "$STATE/secrets/evidence-keys" "acr-e2e-kid=$(random_base64)"
   : > "$STATE/secrets/ops-token"; chmod 600 "$STATE/secrets/ops-token"
   write_clickhouse_readonly_client_config
   cat > "$STATE/nginx-api.conf" <<'EOF'
@@ -202,9 +206,9 @@ render_override() {
   pg="$(<"$STATE/secrets/postgres-password")"; runtime="$(<"$STATE/secrets/runtime-password")"; migration="$(<"$STATE/secrets/migration-password")"; ch="$(<"$STATE/secrets/clickhouse-password")"
   jwt="$(random_secret)"
   db="acr_${PROJECT//-/}_e2e"
-  write_secret "$STATE/secrets/runtime-dsn" "postgres://acr_runtime:${runtime}@postgres:5432/${db}?sslmode=disable"
-  write_secret "$STATE/secrets/migration-dsn" "postgres://acr_migration:${migration}@postgres:5432/${db}?sslmode=disable"
-  write_secret "$STATE/secrets/clickhouse-dsn" "clickhouse://acr_reader:${ch}@clickhouse:9000/${db}"
+  write_container_secret "$STATE/secrets/runtime-dsn" "postgres://acr_runtime:${runtime}@postgres:5432/${db}?sslmode=disable"
+  write_container_secret "$STATE/secrets/migration-dsn" "postgres://acr_migration:${migration}@postgres:5432/${db}?sslmode=disable"
+  write_container_secret "$STATE/secrets/clickhouse-dsn" "clickhouse://acr_reader:${ch}@clickhouse:9000/${db}"
   postgres_port="$(free_port)"
   clickhouse_http_port="$(free_port)"
   clickhouse_native_port="$(free_port)"
