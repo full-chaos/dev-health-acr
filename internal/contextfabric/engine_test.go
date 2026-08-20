@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -265,6 +266,22 @@ type recordingTelemetry struct {
 	// mirror the pair above's own list-not-count discipline.
 	windowBinderOutcomes           []WindowBindReason
 	windowCanonicalizationOutcomes []WindowCanonicalizationOutcome
+	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
+	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
+	structureNeedsDisclosed []contractsv1.ContextFabricStructureNeedKind
+	structureOfferCounts    []structureOfferCountRecord
+	structureReceipts       []structureReceiptRecord
+}
+
+type structureOfferCountRecord struct {
+	member contractsv1.ContextFabricStructureNeedKind
+	source contractsv1.ContextFabricStructureOfferSource
+	count  int
+}
+
+type structureReceiptRecord struct {
+	member  contractsv1.ContextFabricStructureNeedKind
+	outcome StructureReceiptOutcome
 }
 
 type priorSubjectReceiptSkipReasonRecord struct {
@@ -313,6 +330,18 @@ func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ stor
 
 func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ storage.Principal, outcome WindowCanonicalizationOutcome) {
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
+	r.structureNeedsDisclosed = append(r.structureNeedsDisclosed, member)
+}
+
+func (r *recordingTelemetry) RecordStructureOfferCount(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
+	r.structureOfferCounts = append(r.structureOfferCounts, structureOfferCountRecord{member, source, count})
+}
+
+func (r *recordingTelemetry) RecordStructureReceipt(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome) {
+	r.structureReceipts = append(r.structureReceipts, structureReceiptRecord{member, outcome})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {

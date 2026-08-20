@@ -264,6 +264,35 @@ type EngineTelemetry interface {
 	// vocabulary. Called once per call, from Investigate, after
 	// canonicalizeEvidenceWindow/composeEffectiveWindow both run.
 	RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome)
+	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
+	// cf_structure_needs_disclosed{member}) reports one member appearing
+	// in a composed StructureNeeds.Missing -- called once per member,
+	// only on the subjectless-terminal path StructureNeeds is ever
+	// composed on (structure.go's own scope note: never on the main
+	// synthesized-answer path).
+	RecordStructureNeedsDisclosed(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind)
+	// RecordStructureOfferCount (CHAOS-3900 P1.F, design brief §2.1's
+	// cf_structure_offer_count{member,source}) reports how many offers one
+	// member's StructureNeeds carried, split by OfferSource (engine|prior
+	// -- v1 mints only engine; the source axis exists so a future prior
+	// contribution is visible without a schema change to this event).
+	// Called once per (member, source) pair with a NONZERO count -- a
+	// member with zero offers in one source contributes no call, mirroring
+	// RecordPriorSubjectReceiptSkipReason's own "once per non-zero reason"
+	// convention.
+	RecordStructureOfferCount(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int)
+	// RecordStructureReceipt (CHAOS-3900 P1.F, design brief §2.1's
+	// cf_structure_receipt{member,outcome}) reports the OUTCOME of one
+	// structure-receipt-bearing member for one Investigate call --
+	// StructureReceiptOutcome's own doc comment (structure.go) for the
+	// three-value vocabulary and why atomicity makes every receipt-bearing
+	// member share the SAME outcome on a veto. Called unconditionally,
+	// once per member that carried at least one receipt (kindr_/ancr_/
+	// handr_), immediately after canonicalizeStructure returns -- covers
+	// both the veto short-circuit and the eventual success path from one
+	// call site, since the outcome is fully determined by
+	// requestStructureCanonicalization's own Veto/Confirmed fields.
+	RecordStructureReceipt(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -389,6 +418,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// follow-up confirming structure via receipt can never be served a
 	// cached answer generated under unconfirmed inference instead.
 	structureCanon := e.canonicalizeStructure(ctx, principal, request)
+	// CHAOS-3900 P1.F: recorded unconditionally, BEFORE the veto
+	// short-circuit below, so both the veto and success path get exactly
+	// one cf_structure_receipt call per receipt-bearing member -- see
+	// recordStructureReceiptTelemetry's own doc comment for why it never
+	// needs to touch canonicalizeStructure's own tested control flow.
+	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
 	if structureCanon.Veto != structureVetoNone {
 		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, binding)
 	}
@@ -756,6 +791,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// mirrors EffectiveEvidenceWindow's own placement, right beside the
 	// window echo it is the structure-frame sibling of.
 	result.ConfirmedStructure = composeConfirmedStructure(structureCanon.Confirmed)
+	// CHAOS-3900 P1.G (design brief §2.1 B5): a decisive result reached via
+	// structure confirmation still carries the full (offered, selected)
+	// pair the Bridge needs. No guard needed: structureCanon.OfferSnapshot
+	// is only ever non-nil alongside structureCanon.Confirmed (see
+	// requestStructureCanonicalization's own doc comment) -- an empty
+	// Confirmed set means OfferSnapshot is already nil by construction.
+	result.StructureOfferSnapshot = structureCanon.OfferSnapshot
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

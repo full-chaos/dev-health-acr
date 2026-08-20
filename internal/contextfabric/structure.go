@@ -81,6 +81,15 @@ type requestStructureCanonicalization struct {
 	// no_match terminal WITHOUT reuse, WITHOUT interpretation, and
 	// WITHOUT any inference substituted (design brief §2.5 rows 2/3).
 	Veto structureVetoReason
+	// OfferSnapshot (CHAOS-3900 P1.G, design brief §2.1 B5) is the minimal
+	// echoed copy of EVERY offer in the SOURCE offer list for each
+	// confirmed member -- not just the redeemed one -- so a decisive
+	// result reached via confirmation still carries the (offered,
+	// selected) pair the Bridge needs. Populated only alongside Confirmed
+	// (never on a veto: nothing was confirmed, so there is nothing to
+	// snapshot -- matching ConfirmedStructure's own composition, which
+	// composeStructureOfferSnapshot's caller pairs this with 1:1).
+	OfferSnapshot []contractsv1.ContextFabricStructureOfferSnapshotEntry
 }
 
 // HandleVerificationReason is the closed vocabulary Engine's handle
@@ -166,6 +175,13 @@ type structureReceiptMember struct {
 	// this to a non-nil closure over Engine.anchorVerifier/handleVerifier
 	// respectively.
 	reverify func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool
+	// offerSnapshot (P1.G) echoes EVERY offer in stored's own offer list
+	// for this member (not just the redeemed one) as
+	// ContextFabricStructureOfferSnapshotEntry rows, Rank = the offer's
+	// own position in that list -- see requestStructureCanonicalization.
+	// OfferSnapshot's own doc comment for why the full list, not just the
+	// winner.
+	offerSnapshot func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry
 }
 
 // canonicalizeStructure is design brief §2.1's own entry point, called from
@@ -200,6 +216,12 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				}
 				return "", "", "", "", false
 			},
+			offerSnapshot: func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
+				if stored.StructureNeeds == nil {
+					return nil
+				}
+				return kindOptionsSnapshot(stored.StructureNeeds.KindOptions)
+			},
 		},
 		{
 			member:   contractsv1.ContextFabricStructureNeedSubjectAnchor,
@@ -214,6 +236,12 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 					}
 				}
 				return "", "", "", "", false
+			},
+			offerSnapshot: func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
+				if stored.StructureNeeds == nil {
+					return nil
+				}
+				return anchorOptionsSnapshot(stored.StructureNeeds.AnchorOptions)
 			},
 			// reverify (P1.E, team-lead ruling on the matched_term_hash
 			// contract change): an ancr_ redemption re-proves the offer's
@@ -251,6 +279,12 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				}
 				return "", "", "", "", false
 			},
+			offerSnapshot: func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
+				if stored.StructureNeeds == nil {
+					return nil
+				}
+				return handleOptionsSnapshot(stored.StructureNeeds.HandleOptions)
+			},
 			// reverify (P1.E): a handr_ redemption re-validates the stored
 			// value's grammar AND re-runs the keyed source-row existence
 			// check (design brief §2.1) -- a value that was offerable when
@@ -278,6 +312,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 	}
 
 	var confirmed []confirmedStructureMember
+	var offerSnapshot []contractsv1.ContextFabricStructureOfferSnapshotEntry
 	for _, m := range members {
 		if len(m.receipts) == 0 {
 			continue
@@ -306,8 +341,60 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 			Member: m.member, AppliedValue: value, PriorResultID: resultID, ReceiptID: receiptID,
 			OfferSource: offerSource, PriorVersionID: priorVersionID, PriorEntryID: priorEntryID,
 		})
+		if m.offerSnapshot != nil {
+			offerSnapshot = append(offerSnapshot, m.offerSnapshot(stored.Result)...)
+		}
 	}
-	return requestStructureCanonicalization{Confirmed: confirmed}
+	return requestStructureCanonicalization{Confirmed: confirmed, OfferSnapshot: offerSnapshot}
+}
+
+// kindOptionsSnapshot/anchorOptionsSnapshot/handleOptionsSnapshot (P1.G)
+// each build one member's ContextFabricStructureOfferSnapshotEntry list
+// from its own offer type -- three short, near-identical functions rather
+// than one generic one, matching structureReceiptMember's own established
+// per-member-explicit discipline (never a reflection-based shortcut over
+// the three distinct offer structs). Rank is the offer's own position in
+// its source list -- the SAME order it was disclosed in, never re-sorted.
+func kindOptionsSnapshot(opts []contractsv1.ContextFabricKindOption) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]contractsv1.ContextFabricStructureOfferSnapshotEntry, 0, len(opts))
+	for i, opt := range opts {
+		out = append(out, contractsv1.ContextFabricStructureOfferSnapshotEntry{
+			Member: contractsv1.ContextFabricStructureNeedExpectedKind, OfferID: opt.OptionID, Rank: i,
+			OfferSource: opt.OfferSource, PriorVersionID: opt.PriorVersionID, PriorEntryID: opt.PriorEntryID,
+		})
+	}
+	return out
+}
+
+func anchorOptionsSnapshot(opts []contractsv1.ContextFabricAnchorOption) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]contractsv1.ContextFabricStructureOfferSnapshotEntry, 0, len(opts))
+	for i, opt := range opts {
+		out = append(out, contractsv1.ContextFabricStructureOfferSnapshotEntry{
+			Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, OfferID: opt.OptionID, Rank: i,
+			OfferSource: opt.OfferSource, PriorVersionID: opt.PriorVersionID, PriorEntryID: opt.PriorEntryID,
+		})
+	}
+	return out
+}
+
+func handleOptionsSnapshot(opts []contractsv1.ContextFabricHandleOption) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]contractsv1.ContextFabricStructureOfferSnapshotEntry, 0, len(opts))
+	for i, opt := range opts {
+		out = append(out, contractsv1.ContextFabricStructureOfferSnapshotEntry{
+			Member: contractsv1.ContextFabricStructureNeedSubjectHandle, OfferID: opt.OptionID, Rank: i,
+			OfferSource: opt.OfferSource, PriorVersionID: opt.PriorVersionID, PriorEntryID: opt.PriorEntryID,
+		})
+	}
+	return out
 }
 
 // structureVetoLimitation names the single fixed disclosure a structure
@@ -535,4 +622,110 @@ func confirmedExpectedKind(confirmed []confirmedStructureMember) *ConfirmedExpec
 		}
 	}
 	return nil
+}
+
+// StructureReceiptOutcome is the closed vocabulary RecordStructureReceipt
+// reports (CHAOS-3900 P1.F, design brief §2.1's cf_structure_receipt{member,
+// outcome=applied|unresolved|conflict}).
+//
+// Atomicity (canonicalizeStructure's own all-or-nothing batch veto) means
+// every receipt-bearing member in ONE Investigate call shares the SAME
+// outcome: either the whole batch resolved (every bearing member
+// "applied") or the whole batch vetoed (every bearing member gets the
+// veto's own reason) -- there is no partial-application case to represent,
+// matching §2.5's own "partial batch... impossible by construction" row.
+type StructureReceiptOutcome string
+
+const (
+	StructureReceiptApplied    StructureReceiptOutcome = "applied"
+	StructureReceiptUnresolved StructureReceiptOutcome = "unresolved"
+	StructureReceiptConflict   StructureReceiptOutcome = "conflict"
+)
+
+// structureReceiptOutcomeForVeto maps a structureVetoReason to its own
+// telemetry outcome -- the SAME two-reason closed vocabulary
+// structureVetoLimitation already switches on, kept in sync by construction
+// (both read structureVetoReason's own two named constants, never a third).
+func structureReceiptOutcomeForVeto(veto structureVetoReason) StructureReceiptOutcome {
+	if veto == structureVetoConfirmationConflict {
+		return StructureReceiptConflict
+	}
+	return StructureReceiptUnresolved
+}
+
+// recordStructureReceiptTelemetry (CHAOS-3900 P1.F) is canonicalizeStructure's
+// own telemetry companion, called unconditionally right after it returns
+// (both the veto and success path) -- one RecordStructureReceipt call per
+// member that carried at least one receipt, per structureReceiptMember's
+// own three-field mapping (PriorKindReceipts/PriorAnchorReceipts/
+// PriorHandleReceipts). Never touches canonicalizeStructure's own tested
+// control flow: the outcome is fully recoverable after the fact from
+// requestStructureCanonicalization's own Veto/Confirmed fields, per
+// StructureReceiptOutcome's own atomicity doc comment.
+func recordStructureReceiptTelemetry(ctx context.Context, telemetry EngineTelemetry, principal storage.Principal, request InvestigationRequest, canon requestStructureCanonicalization) {
+	if telemetry == nil {
+		return
+	}
+	bearing := []struct {
+		member   contractsv1.ContextFabricStructureNeedKind
+		receipts []contractsv1.ContextFabricBoundSubjectReceipt
+	}{
+		{contractsv1.ContextFabricStructureNeedExpectedKind, request.PriorKindReceipts},
+		{contractsv1.ContextFabricStructureNeedSubjectAnchor, request.PriorAnchorReceipts},
+		{contractsv1.ContextFabricStructureNeedSubjectHandle, request.PriorHandleReceipts},
+	}
+	outcome := StructureReceiptApplied
+	if canon.Veto != structureVetoNone {
+		outcome = structureReceiptOutcomeForVeto(canon.Veto)
+	}
+	for _, b := range bearing {
+		if len(b.receipts) == 0 {
+			continue
+		}
+		telemetry.RecordStructureReceipt(ctx, principal, b.member, outcome)
+	}
+}
+
+// recordStructureNeedsTelemetry (CHAOS-3900 P1.F) reports
+// cf_structure_needs_disclosed{member} and cf_structure_offer_count{member,
+// source} for one composed StructureNeeds block -- called only where
+// StructureNeeds is ever composed (the subjectless-terminal path,
+// unresolved.go), immediately after it is built. needs==nil (nothing
+// disclosed) records nothing, exactly mirroring composeStructureNeeds' own
+// nil-means-nothing-in-play convention.
+func recordStructureNeedsTelemetry(ctx context.Context, telemetry EngineTelemetry, principal storage.Principal, needs *contractsv1.ContextFabricStructureNeeds) {
+	if telemetry == nil || needs == nil {
+		return
+	}
+	for _, member := range needs.Missing {
+		telemetry.RecordStructureNeedsDisclosed(ctx, principal, member)
+	}
+	counts := map[contractsv1.ContextFabricStructureNeedKind]map[contractsv1.ContextFabricStructureOfferSource]int{}
+	addCount := func(member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource) {
+		if counts[member] == nil {
+			counts[member] = map[contractsv1.ContextFabricStructureOfferSource]int{}
+		}
+		counts[member][source]++
+	}
+	for _, opt := range needs.KindOptions {
+		addCount(contractsv1.ContextFabricStructureNeedExpectedKind, opt.OfferSource)
+	}
+	for _, opt := range needs.AnchorOptions {
+		addCount(contractsv1.ContextFabricStructureNeedSubjectAnchor, opt.OfferSource)
+	}
+	for _, opt := range needs.HandleOptions {
+		addCount(contractsv1.ContextFabricStructureNeedSubjectHandle, opt.OfferSource)
+	}
+	// Deterministic iteration: members in Missing's own disclosure-priority
+	// order, sources in a fixed order -- so a caller comparing telemetry
+	// call sequences across two identical runs sees identical ordering.
+	for _, member := range needs.Missing {
+		for _, source := range []contractsv1.ContextFabricStructureOfferSource{contractsv1.ContextFabricStructureOfferEngine, contractsv1.ContextFabricStructureOfferPrior} {
+			count := counts[member][source]
+			if count == 0 {
+				continue
+			}
+			telemetry.RecordStructureOfferCount(ctx, principal, member, source, count)
+		}
+	}
 }

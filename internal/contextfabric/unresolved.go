@@ -294,6 +294,10 @@ func (e *Engine) terminalResult(
 		// a confirmed kind/anchor/handle narrowed what this round searched
 		// for even when it still ended without a committed subject.
 		ConfirmedStructure: composeConfirmedStructure(structureCanon.Confirmed),
+		// CHAOS-3900 P1.G: no guard needed -- structureCanon.OfferSnapshot
+		// is only ever non-nil alongside structureCanon.Confirmed, see
+		// requestStructureCanonicalization's own doc comment (structure.go).
+		StructureOfferSnapshot: structureCanon.OfferSnapshot,
 		// CHAOS-3900 P1.C: the disclosure block itself -- present exactly
 		// on this subjectless-terminal path (design brief §2.1: "present
 		// whenever an investigation round ends short of decisive"),
@@ -308,6 +312,11 @@ func (e *Engine) terminalResult(
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}
+	// CHAOS-3900 P1.F: StructureNeeds is only ever composed on this
+	// subjectless-terminal path (result.StructureNeeds above), so this is
+	// the ONLY call site for cf_structure_needs_disclosed/
+	// cf_structure_offer_count.
+	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

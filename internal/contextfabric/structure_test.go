@@ -74,6 +74,94 @@ func TestCHAOS3900_StructureOrderingPin_ConfirmedKindNeverHitsReuseGate(t *testi
 	}
 }
 
+// TestCHAOS3900_StructureOfferSnapshot_EchoesTheWholeOfferListNotJustTheWinner
+// is P1.G's own acceptance pin (design brief §2.1 B5): a decisive result
+// reached via structure confirmation carries structure_offer_snapshot --
+// and it echoes EVERY offer the confirmed member's own source list carried,
+// not just the one the receipt redeemed, so the Bridge can learn from the
+// full (offered, selected) pair.
+func TestCHAOS3900_StructureOfferSnapshot_EchoesTheWholeOfferListNotJustTheWinner(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0005"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+			{ReceiptID: "kindr_confirm0002", OptionID: "opt_wi", Label: "a work item", Kind: SubjectWorkItem, OfferSource: "engine"},
+		},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+	})
+
+	request := validInvestigationRequest()
+	// Redeems ONLY the first option -- kindr_confirm0002 (the second
+	// offer) is never named by any receipt.
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(result.StructureOfferSnapshot) != 2 {
+		t.Fatalf("len(result.StructureOfferSnapshot) = %d, want 2 (BOTH offers, not just the redeemed one)", len(result.StructureOfferSnapshot))
+	}
+	seenRanks := map[int]string{}
+	for _, entry := range result.StructureOfferSnapshot {
+		if entry.Member != "expected_kind" {
+			t.Errorf("snapshot entry %+v: member = %q, want expected_kind", entry, entry.Member)
+		}
+		if entry.OfferSource != "engine" {
+			t.Errorf("snapshot entry %+v: offer_source = %q, want engine", entry, entry.OfferSource)
+		}
+		seenRanks[entry.Rank] = entry.OfferID
+	}
+	if seenRanks[0] != "opt_pr" || seenRanks[1] != "opt_wi" {
+		t.Errorf("snapshot ranks = %+v, want rank 0 -> opt_pr, rank 1 -> opt_wi (source list order preserved)", seenRanks)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS3900_StructureOfferSnapshot_EmptyOnVeto pins the negative case:
+// a vetoed structure confirmation carries NO offer snapshot -- nothing was
+// confirmed, so there is nothing to echo.
+func TestCHAOS3900_StructureOfferSnapshot_EmptyOnVeto(t *testing.T) {
+	t.Parallel()
+
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_02", ReceiptID: "kindr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(result.StructureOfferSnapshot) != 0 {
+		t.Errorf("len(result.StructureOfferSnapshot) = %d, want 0 on a vetoed structure confirmation", len(result.StructureOfferSnapshot))
+	}
+}
+
 // TestCHAOS3900_UnresolvedStructureReceiptVetoesTheWholeRequest mirrors
 // TestCHAOS3900_UnresolvedWindowReceiptVetoesTheWholeRequest exactly: a
 // structure receipt naming a prior result that does not exist vetoes the
@@ -599,5 +687,131 @@ func TestCHAOS3900_StructureNeeds_ComposedOnSubjectlessTerminal(t *testing.T) {
 	}
 	if err := result.Validate(); err != nil {
 		t.Errorf("served result fails Validate(): %v", err)
+	}
+}
+
+// TestRecordStructureReceiptTelemetry_Applied pins the success shape: every
+// receipt-bearing member gets exactly one StructureReceiptApplied call.
+func TestRecordStructureReceiptTelemetry_Applied(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "r1", ReceiptID: "kindr_1"}}
+	request.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: "r1", ReceiptID: "handr_1"}}
+	canon := requestStructureCanonicalization{Confirmed: []confirmedStructureMember{
+		{Member: "expected_kind"}, {Member: "subject_handle"},
+	}}
+
+	recordStructureReceiptTelemetry(context.Background(), telemetry, reusePrincipal(), request, canon)
+
+	if len(telemetry.structureReceipts) != 2 {
+		t.Fatalf("len(structureReceipts) = %d, want 2 (kind and handle, both receipt-bearing)", len(telemetry.structureReceipts))
+	}
+	for _, rec := range telemetry.structureReceipts {
+		if rec.outcome != StructureReceiptApplied {
+			t.Errorf("record %+v: outcome = %q, want %q", rec, rec.outcome, StructureReceiptApplied)
+		}
+	}
+}
+
+// TestRecordStructureReceiptTelemetry_VetoAppliesTheSameOutcomeToEveryBearingMember
+// pins the atomicity shape: a veto reports its OWN reason for every
+// receipt-bearing member, never "applied" for any of them, even a member
+// that was not itself the cause.
+func TestRecordStructureReceiptTelemetry_VetoAppliesTheSameOutcomeToEveryBearingMember(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unresolved", func(t *testing.T) {
+		telemetry := &recordingTelemetry{}
+		request := validInvestigationRequest()
+		request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: "r1", ReceiptID: "ancr_1"}}
+		canon := requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
+
+		recordStructureReceiptTelemetry(context.Background(), telemetry, reusePrincipal(), request, canon)
+
+		if len(telemetry.structureReceipts) != 1 || telemetry.structureReceipts[0].outcome != StructureReceiptUnresolved {
+			t.Errorf("structureReceipts = %+v, want exactly one unresolved record", telemetry.structureReceipts)
+		}
+	})
+	t.Run("conflict, multiple bearing members share the veto's own outcome", func(t *testing.T) {
+		telemetry := &recordingTelemetry{}
+		request := validInvestigationRequest()
+		request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "r1", ReceiptID: "kindr_1"}, {ResultID: "r1", ReceiptID: "kindr_2"}}
+		request.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: "r1", ReceiptID: "handr_1"}}
+		canon := requestStructureCanonicalization{Veto: structureVetoConfirmationConflict}
+
+		recordStructureReceiptTelemetry(context.Background(), telemetry, reusePrincipal(), request, canon)
+
+		if len(telemetry.structureReceipts) != 2 {
+			t.Fatalf("len(structureReceipts) = %d, want 2 (kind and handle, both receipt-bearing)", len(telemetry.structureReceipts))
+		}
+		for _, rec := range telemetry.structureReceipts {
+			if rec.outcome != StructureReceiptConflict {
+				t.Errorf("record %+v: outcome = %q, want %q (atomicity: the whole batch shares one outcome)", rec, rec.outcome, StructureReceiptConflict)
+			}
+		}
+	})
+}
+
+// TestRecordStructureReceiptTelemetry_NoReceiptsRecordsNothing pins the
+// common case: a request carrying no structure receipts at all must not
+// emit a spurious call for any member.
+func TestRecordStructureReceiptTelemetry_NoReceiptsRecordsNothing(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	recordStructureReceiptTelemetry(context.Background(), telemetry, reusePrincipal(), validInvestigationRequest(), requestStructureCanonicalization{})
+	if len(telemetry.structureReceipts) != 0 {
+		t.Errorf("structureReceipts = %+v, want empty", telemetry.structureReceipts)
+	}
+}
+
+// TestRecordStructureNeedsTelemetry_DisclosedAndOfferCounts pins the
+// disclosure + per-(member,source) count shape together, including the
+// zero-count-contributes-no-call rule.
+func TestRecordStructureNeedsTelemetry_DisclosedAndOfferCounts(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	needs := &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind", "subject_anchor"},
+		KindOptions: []KindOption{
+			{Kind: SubjectPullRequest, OfferSource: "engine"},
+			{Kind: SubjectWorkItem, OfferSource: "engine"},
+		},
+		AnchorOptions: []AnchorOption{
+			{CanonicalID: "repoA", OfferSource: "engine"},
+		},
+	}
+
+	recordStructureNeedsTelemetry(context.Background(), telemetry, reusePrincipal(), needs)
+
+	if len(telemetry.structureNeedsDisclosed) != 2 {
+		t.Fatalf("len(structureNeedsDisclosed) = %d, want 2", len(telemetry.structureNeedsDisclosed))
+	}
+	if telemetry.structureNeedsDisclosed[0] != "expected_kind" || telemetry.structureNeedsDisclosed[1] != "subject_anchor" {
+		t.Errorf("structureNeedsDisclosed = %v, want [expected_kind subject_anchor] in Missing's own order", telemetry.structureNeedsDisclosed)
+	}
+
+	if len(telemetry.structureOfferCounts) != 2 {
+		t.Fatalf("len(structureOfferCounts) = %d, want 2 (kind/engine and anchor/engine -- handle contributes nothing, it carried no offers)", len(telemetry.structureOfferCounts))
+	}
+	want := map[StructureNeedKind]int{"expected_kind": 2, "subject_anchor": 1}
+	for _, rec := range telemetry.structureOfferCounts {
+		if rec.source != "engine" {
+			t.Errorf("record %+v: source = %q, want engine", rec, rec.source)
+		}
+		if rec.count != want[rec.member] {
+			t.Errorf("record %+v: count = %d, want %d", rec, rec.count, want[rec.member])
+		}
+	}
+}
+
+// TestRecordStructureNeedsTelemetry_NilNeedsRecordsNothing mirrors
+// composeStructureNeeds' own nil-means-nothing-in-play convention.
+func TestRecordStructureNeedsTelemetry_NilNeedsRecordsNothing(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	recordStructureNeedsTelemetry(context.Background(), telemetry, reusePrincipal(), nil)
+	if len(telemetry.structureNeedsDisclosed) != 0 || len(telemetry.structureOfferCounts) != 0 {
+		t.Error("nil StructureNeeds recorded a non-empty telemetry call")
 	}
 }
