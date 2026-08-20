@@ -656,7 +656,16 @@ type twoTurnCaseResult struct {
 }
 
 type twoTurnReport struct {
-	Provenance trialProvenance `json:"provenance"`
+	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
+	// renames are otherwise invisible to a consumer parsing the JSON --
+	// StructureAndWindowDisclosureAbsentCount replaced NoDiscriminatorsCount
+	// under the SAME struct with no version marker). "2" marks this
+	// reshaped report (the rename plus the new controls/anti-vacuity/
+	// single-satisfier fields below); "1" was the shape PR #167 shipped.
+	// Bump this again on any future field rename or removal so a consumer
+	// can detect drift instead of silently reading a stale key.
+	ReportSchemaVersion string          `json:"report_schema_version"`
+	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
 	// (codex round-3 finding #3: the wrapper script already exports
 	// ACR_TEST_TRIAL_BASE_SHA -- required provenance, team-lead ruling
@@ -1661,6 +1670,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
+		ReportSchemaVersion: "2",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -1730,6 +1740,16 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			t.Fatalf("oracle annex entry names index %d, corpus has %d cases", entry.Index, len(corpus))
 		}
 		tc := corpus[entry.Index]
+		// Recorded BEFORE the call, from the corpus alone -- never gated
+		// on success (codex round-1 finding: the prior version only added
+		// a control to the denominator AFTER a successful turn 1, so an
+		// investigator error on a control case silently shrank
+		// ControlsTotal instead of counting as unwitnessed. A limited or
+		// partially-erroring run must not be able to report a
+		// vacuously-true X/X).
+		if tc.ExpectID == "" {
+			controlSeen[entry.Index] = true
+		}
 
 		turn1Req := twoTurnRequest(entry.Index, tc, "turn1")
 		turn1Ctx, turn1Cancel := context.WithTimeout(ctx, caseTimeout)
@@ -1741,7 +1761,6 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		report.CasesRun++
 		if tc.ExpectID == "" {
-			controlSeen[entry.Index] = true
 			if turn1.Status == contractsv1.ContextFabricInvestigationNoMatch {
 				controlWitnessed[entry.Index] = true
 			}
