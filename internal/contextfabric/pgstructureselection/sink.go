@@ -319,8 +319,49 @@ func validateEvent(event contextfabric.StructureSelectionEvent) error {
 	if _, known := knownSelectionProvenanceValues[event.SelectionProvenance]; !known {
 		return fmt.Errorf("pgstructureselection: selection_provenance %q is not in the closed vocabulary", event.SelectionProvenance)
 	}
+	if event.Consensus != nil {
+		if event.SelectionMode != structureSelectionModeAgentReceiptValue {
+			return fmt.Errorf("pgstructureselection: consensus evidence requires selection_mode %q, got %q", structureSelectionModeAgentReceiptValue, event.SelectionMode)
+		}
+		// >= 2, not >= 1: a "panel" (design brief §2.4/§B5's own word,
+		// echoed in §3.1's "multi-model panel") is plural by definition --
+		// a single-entry payload cannot represent agreement OR
+		// disagreement between panel members, so it can never be genuine
+		// ConsensusEvidence (codex adversarial review, round 1: tightens,
+		// but does not by itself close, the provenance-authenticity gap
+		// this field's own doc comment names -- see
+		// contextfabric.ConsensusEvidence's doc comment for why closing it
+		// fully needs request-level wiring this migration deliberately
+		// does not add).
+		if len(event.Consensus.PanelModelIdentities) < 2 {
+			return errors.New("pgstructureselection: consensus evidence requires at least two panel model identities (a panel is plural by definition)")
+		}
+		if len(event.Consensus.PanelModelIdentities) != len(event.Consensus.AgreementBits) {
+			return errors.New("pgstructureselection: consensus evidence panel_model_identities and agreement_bits must be the same length")
+		}
+		seenIdentity := make(map[string]struct{}, len(event.Consensus.PanelModelIdentities))
+		for _, identity := range event.Consensus.PanelModelIdentities {
+			trimmed := strings.TrimSpace(identity)
+			if trimmed == "" {
+				return errors.New("pgstructureselection: consensus evidence panel model identity must not be blank")
+			}
+			if _, duplicate := seenIdentity[trimmed]; duplicate {
+				return fmt.Errorf("pgstructureselection: consensus evidence panel model identity %q is duplicated -- a panel's members must be distinct", trimmed)
+			}
+			seenIdentity[trimmed] = struct{}{}
+		}
+	}
 	return nil
 }
+
+// structureSelectionModeAgentReceiptValue mirrors
+// contextfabric.structureSelectionModeAgentReceipt's own literal (that
+// constant is unexported outside its package) -- this is the ONLY
+// SelectionMode a 3860 panel run reaches through today (P6 speaks the
+// hosted contract as a credentialed non-panel caller, same as any other
+// agent_receipt confirmation), matching migration 0026's own CHECK
+// constraint exactly.
+const structureSelectionModeAgentReceiptValue = "agent_receipt"
 
 func (s *Sink) insertContext(ctx context.Context, event contextfabric.StructureSelectionEvent) error {
 	if err := validateEvent(event); err != nil {
@@ -346,13 +387,24 @@ func (s *Sink) insertContext(ctx context.Context, event contextfabric.StructureS
 	if err != nil {
 		return fmt.Errorf("pgstructureselection: marshal pipeline context: %w", err)
 	}
+	// consensusJSON stays nil (-> SQL NULL, migration 0026's default) for
+	// every event outside a 3860 panel run, mirroring
+	// pginvestigation.Store's own nil-[]byte-means-NULL precedent for
+	// source_watermarks rather than a sentinel sql.NullString wrapper.
+	var consensusJSON []byte
+	if event.Consensus != nil {
+		consensusJSON, err = json.Marshal(event.Consensus)
+		if err != nil {
+			return fmt.Errorf("pgstructureselection: marshal consensus evidence: %w", err)
+		}
+	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_structure_selections
-    (selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    (selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context, consensus_evidence)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		selectionID, event.OrgID, event.CapturedAt, event.QuestionHash, event.PriorResultID, event.Member,
 		event.Selected.ReceiptID, event.Selected.AppliedValue, event.Accepted,
-		event.SelectionMode, event.SelectionProvenance, offeredJSON, pipelineJSON)
+		event.SelectionMode, event.SelectionProvenance, offeredJSON, pipelineJSON, consensusJSON)
 	if err != nil {
 		return fmt.Errorf("pgstructureselection: insert selection: %w", err)
 	}
