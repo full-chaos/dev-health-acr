@@ -40,8 +40,11 @@ import (
 // claim table. 0024 is that same ticket's structure-selection capture
 // table. 0025 is its supersession backfill. 0026 is CHAOS-3977 P5's
 // structure-prior store (versioned snapshots + active-version pointer +
-// pointer history + per-entry revocations).
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26}
+// pointer history + per-entry revocations). 0027 is that same ticket's own
+// one-time cleanup: clear reuse-key columns on pre-existing structure-
+// bearing rows a pre-P5 binary wrote before reuseColumnsFor's own source-
+// ineligibility fix existed.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

@@ -120,6 +120,36 @@ func TestCurate_Deterministic_SameInputSameOutput(t *testing.T) {
 	require.Equal(t, 1, a[1].Rank)
 }
 
+// TestCurate_HumanSupportDominatesRankingRegardlessOfAgentVolume is the
+// codex adversarial review round 3 pin (medium finding, repro-confirmed
+// and fixed): design brief §3.2's own "single-model support alone can
+// propose only at the lowest weight" names a WEIGHT ordering, not only a
+// promotion GATE -- a candidate with overwhelming human support must
+// outrank one with minimal human support plus ANY volume of agent
+// receipts, additive SUM ranking or not.
+func TestCurate_HumanSupportDominatesRankingRegardlessOfAgentVolume(t *testing.T) {
+	t.Parallel()
+	var events []SelectionEvent
+	// "work_item": 100 human selections, 0 agent.
+	for i := 0; i < 100; i++ {
+		events = append(events, SelectionEvent{OrgID: "org-1", QuestionHash: "q1", Member: "expected_kind", SelectedAppliedValue: "work_item", SelectionMode: "human_panel", SelectionProvenance: "web_assertion"})
+	}
+	// "pull_request": 1 human selection (meets the promotion gate) plus
+	// 100 agent receipts -- a SUM ranking (1+100=101) would outrank
+	// work_item's 100.
+	events = append(events, SelectionEvent{OrgID: "org-1", QuestionHash: "q1", Member: "expected_kind", SelectedAppliedValue: "pull_request", SelectionMode: "human_panel", SelectionProvenance: "web_assertion"})
+	for i := 0; i < 100; i++ {
+		events = append(events, SelectionEvent{OrgID: "org-1", QuestionHash: "q1", Member: "expected_kind", SelectedAppliedValue: "pull_request", SelectionMode: "agent_receipt", SelectionProvenance: "credential_mcp"})
+	}
+
+	entries := Curate(events, nil)
+	require.Len(t, entries, 2)
+	require.Equal(t, "work_item", entries[0].Value, "100 human selections must rank first regardless of the other candidate's agent-receipt volume")
+	require.Equal(t, 0, entries[0].Rank)
+	require.Equal(t, "pull_request", entries[1].Value)
+	require.Equal(t, 1, entries[1].Rank)
+}
+
 func TestCurate_OrgIsolation(t *testing.T) {
 	t.Parallel()
 	events := []SelectionEvent{

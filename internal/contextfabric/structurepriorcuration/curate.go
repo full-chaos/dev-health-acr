@@ -222,11 +222,25 @@ func Curate(events []SelectionEvent, frozenQuestionHashes map[string]bool) []con
 
 	var out []contextfabric.StructurePriorEntry
 	for gk, members := range groups {
+		// Ranked by HUMAN support first, agent-receipt support only as a
+		// tiebreaker (codex adversarial review round 3, medium finding,
+		// repro-confirmed and fixed): a prior SUM ranking let a candidate
+		// with 1 human selection plus 100 agent receipts outrank one with
+		// 100 human selections plus 0 agent receipts, contradicting design
+		// brief §3.2's own "single-model support alone can propose only at
+		// the lowest weight" -- that sentence names a WEIGHT ordering, and
+		// the promotion GATE alone (>=1 human_panel event required) never
+		// enforced it for RANK, only for inclusion. Lexicographic
+		// (supportHumanPanel, supportAgentReceipt, value) makes human
+		// support the dominant dimension unconditionally: no volume of
+		// agent receipts can ever outrank a candidate with strictly more
+		// human support.
 		sort.SliceStable(members, func(i, j int) bool {
-			si := members[i].supportHumanPanel + members[i].supportAgentReceipt
-			sj := members[j].supportHumanPanel + members[j].supportAgentReceipt
-			if si != sj {
-				return si > sj
+			if members[i].supportHumanPanel != members[j].supportHumanPanel {
+				return members[i].supportHumanPanel > members[j].supportHumanPanel
+			}
+			if members[i].supportAgentReceipt != members[j].supportAgentReceipt {
+				return members[i].supportAgentReceipt > members[j].supportAgentReceipt
 			}
 			return members[i].key.value < members[j].key.value
 		})

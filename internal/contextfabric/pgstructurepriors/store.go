@@ -435,6 +435,20 @@ SELECT active_version FROM acr.context_fabric_structure_prior_pointer WHERE org_
 		s.telemetry().RecordFlipCASConflict(ctx, orgID)
 		return fmt.Errorf("%w: org %s active version changed since read", contextfabric.ErrPriorPointerConflict, orgID)
 	}
+	// Self-flip guard (codex adversarial review round 3, medium finding,
+	// repro-confirmed and fixed): flipping to the version ALREADY active
+	// is a legitimate sequential call the CAS check above cannot itself
+	// catch (expectedCurrent correctly matches reality). Without this
+	// guard the UPDATE below would still fire and overwrite
+	// previous_version with the CURRENT (== new) version, destroying the
+	// real rollback target -- e.g. (active=v2, previous=v1) flipped to v2
+	// again becomes (active=v2, previous=v2), silently losing v1 as
+	// anything RollbackActiveVersion could ever recover. A true no-op:
+	// commit the (empty) transaction and return, touching neither the
+	// pointer nor its history.
+	if rowExists && currentPtr != nil && *currentPtr == newVersion {
+		return tx.Commit()
+	}
 
 	now := time.Now().UTC()
 	if rowExists {

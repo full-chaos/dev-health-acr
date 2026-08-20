@@ -432,6 +432,44 @@ func TestFlipActiveVersion_ConcurrentColdStart_OneWinsOneConflicts(t *testing.T)
 	require.True(t, set.Version == v1 || set.Version == v2)
 }
 
+// TestFlipActiveVersion_SelfFlip_PreservesRollbackTarget is the codex
+// adversarial review round 3 pin (medium finding, repro-confirmed and
+// fixed): flipping to the version ALREADY active is a legitimate call the
+// CAS check alone cannot refuse (expectedCurrent correctly matches
+// reality) -- but it must be a true no-op, never overwriting
+// previous_version with the current (== new) version and silently
+// destroying the real rollback target.
+func TestFlipActiveVersion_SelfFlip_PreservesRollbackTarget(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := newPriorsTestDatabase(t, ctx)
+	store, err := NewStore(db)
+	require.NoError(t, err)
+	orgID := "org-priors-self-flip"
+
+	v1, err := store.PublishVersion(ctx, orgID, oneEntry("pull_request"), "wm-1", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	require.NoError(t, store.FlipActiveVersion(ctx, orgID, nil, &v1, "chris"))
+	v2, err := store.PublishVersion(ctx, orgID, oneEntry("work_item"), "wm-2", contextfabric.CurationRuleVersionV1)
+	require.NoError(t, err)
+	require.NoError(t, store.FlipActiveVersion(ctx, orgID, &v1, &v2, "chris"))
+
+	// Self-flip: v2 is already active, flip to v2 again.
+	require.NoError(t, store.FlipActiveVersion(ctx, orgID, &v2, &v2, "chris"))
+
+	set, found, _, err := store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, v2, set.Version, "self-flip must leave the active version unchanged")
+
+	// The real rollback target (v1) must still be recoverable.
+	require.NoError(t, store.RollbackActiveVersion(ctx, orgID, &v2, "chris"))
+	set, found, _, err = store.GetActive(ctx, orgID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, v1, set.Version, "self-flip must never have overwritten the real rollback target")
+}
+
 func TestGetActive_OrgIsolation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

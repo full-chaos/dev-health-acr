@@ -90,12 +90,14 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// (structure_supersession_backfill, claiming pre-0023 confirmed-
 	// structure rows) added 0025, and CHAOS-3977 P5 (structure_priors, the
 	// versioned prior store + active-version pointer + pointer history +
-	// per-entry revocations) added 0026, so the embedded set is now 26
-	// files. A future migration must bump this literal too -- see
-	// expectedMigrationVersions in migrations/postgres/
+	// per-entry revocations) added 0026, and CHAOS-3977 P5's own one-time
+	// reuse-column cleanup (structure_bearing_reuse_cleanup, clearing
+	// pre-existing structure-bearing rows' reuse columns) added 0027, so
+	// the embedded set is now 27 files. A future migration must bump this
+	// literal too -- see expectedMigrationVersions in migrations/postgres/
 	// runner_integration_test.go for the same convention, held in one
 	// place there.
-	require.Equal(t, "applied 26 migrations\n", first.String())
+	require.Equal(t, "applied 27 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }
