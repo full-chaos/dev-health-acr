@@ -54,6 +54,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      # scripts/e2e/compose.sh's ensure_image() references the locally-built ACR image by
+      # digest (repo:tag@sha256:<id>) so Compose never quietly rebuilds or refetches it, but
+      # that Image-ID-as-digest trick only resolves locally under Docker's containerd image
+      # store -- the classic overlay2 graph driver GitHub-hosted runners ship by default has
+      # no local record of that "digest" and falls through to an actual registry pull, which
+      # 404s: "pull access denied for <project>-acr-api, repository does not exist". This must
+      # run before anything else touches Docker in this job.
+      - name: Enable the Docker containerd image store
+        run: |
+          echo '{"features": {"containerd-snapshotter": true}}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}'
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -243,6 +255,13 @@ jobs:
     timeout-minutes: 60
     if: github.event_name == 'pull_request'
     steps:
+      # See the equivalent step in the compose job for why this must run before anything else
+      # touches Docker in this job.
+      - name: Enable the Docker containerd image store
+        run: |
+          echo '{"features": {"containerd-snapshotter": true}}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}'
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
