@@ -166,6 +166,19 @@ const (
 	// a NAMED terminal instead: no answer is synthesized under a window
 	// commitment interpretation itself no longer honors.
 	windowVetoAxisConflict windowVetoReason = "window_axis_conflict"
+	// windowVetoStaleSupersededOffer (CHAOS-4003, mirrors
+	// structureVetoStaleSupersededOffer exactly): the (org, PriorResultID,
+	// "window") claim this winr_ receipt would redeem was already won by a
+	// LATER result that redeemed a window receipt from the SAME prior
+	// result -- detected by the SAME StructureSupersessionChecker pre-flight
+	// consult canonicalizeStructure's own loop uses (structure.go), just
+	// from window's own entry point (resolveWindowReceipts). Prior to
+	// CHAOS-4003, window never consulted the P4 claim table at all, so a
+	// stale winr_ receipt against a since-superseded prior result was
+	// silently honored -- the only one of the four structure-receipt
+	// members with that gap. Recovery is retry against the newer result's
+	// own fresh window offers, never the same receipt again.
+	windowVetoStaleSupersededOffer windowVetoReason = "window_stale_superseded_offer"
 )
 
 // windowBindingOutcome is the closed, counted vocabulary
@@ -205,6 +218,12 @@ const (
 	// comment.
 	WindowCanonicalizationVetoUnresolved WindowCanonicalizationOutcome = "veto_unresolved"
 	WindowCanonicalizationVetoConflict   WindowCanonicalizationOutcome = "veto_conflict"
+	// WindowCanonicalizationVetoStaleSupersededOffer (CHAOS-4003) mirrors
+	// windowVetoStaleSupersededOffer -- its own counted outcome, distinct
+	// from VetoUnresolved/VetoConflict, matching structure's own dedicated
+	// stale_superseded_offer counter (cf_structure_receipt) rather than
+	// folding a distinguishable failure mode into an existing bucket.
+	WindowCanonicalizationVetoStaleSupersededOffer WindowCanonicalizationOutcome = "veto_stale_superseded_offer"
 )
 
 // requestWindowCanonicalization is canonicalizeEvidenceWindow's own
@@ -239,6 +258,30 @@ type requestWindowCanonicalization struct {
 	// window already resolved at this step, so it is available unconditionally
 	// once Interpret returns without a second question-text scan.
 	BinderProposal WindowBindOutcome
+	// ConfirmedMember (CHAOS-4003) is set only when resolveWindowReceipts
+	// redeemed a winr_ receipt (Effective.Provenance == clarification_confirmed)
+	// -- window's own confirmedStructureMember, in the EXACT shape
+	// canonicalizeStructure's kind/anchor/handle loop already produces
+	// (structure.go). Engine merges this into structureCanon's own
+	// Confirmed list (mergeConfirmedMembers) before composing
+	// ConfirmedStructure, so window rides the SAME
+	// composeConfirmedStructure/structureSupersessionClaims/
+	// staleConfirmedStructureEntries pipeline those three members already
+	// use -- giving window the same P4 atomic-claim staleness guard
+	// without inventing a second mechanism. Window's own ELICITATION
+	// (winr_ receipts, WindowOption/WindowClarification, this file's own
+	// precedence rules) stays entirely separate, per the CHAOS-3984
+	// Option A ruling: only this shared storage-layer echo/claim
+	// bookkeeping is reused, never the elicitation flow itself.
+	ConfirmedMember *confirmedStructureMember
+	// StaleEntry (CHAOS-4003) is populated ONLY alongside
+	// Veto==windowVetoStaleSupersededOffer -- the single
+	// vetoed_stale-dispositioned echo entry for the member the pre-flight
+	// StructureSupersessionChecker consult caught, in the exact shape
+	// canonicalizeStructure's own pre-flight consult builds (structure.go).
+	// windowVetoResult sets result.ConfirmedStructure from this, mirroring
+	// structureVetoResult's own echoEntries parameter.
+	StaleEntry *contractsv1.ContextFabricConfirmedStructureEntry
 }
 
 // canonicalizeEvidenceWindow is the design brief §1.2 window-contract
@@ -417,6 +460,35 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 	if option == nil {
 		return veto
 	}
+	// CHAOS-4003 (design brief §2.1 offer-supersession rule, extended to
+	// window): a winr_ receipt that resolves cleanly against its stored
+	// offer can still name an offer a LATER result has already redeemed
+	// for this same (org, prior result, "window") tuple -- the option
+	// lookup above proves the offer's own content still exists, not that
+	// it is still the CURRENT one. Consult the SAME claim table
+	// canonicalizeStructure's own pre-flight consult uses (structure.go),
+	// when the wired store supports it, BEFORE trusting this redemption.
+	// checker is a type assertion, not a required dependency
+	// (StructureSupersessionChecker's own doc comment) -- absent, this
+	// consult is simply skipped and Save's own atomic claim (once this
+	// result's ConfirmedMember reaches it) remains the sole enforcement
+	// point.
+	if checker, ok := e.results.(StructureSupersessionChecker); ok {
+		superseded, err := checker.IsStructureSuperseded(ctx, principal.OrgID, resultID, contractsv1.ContextFabricStructureNeedWindow)
+		if err != nil || superseded {
+			// Fail-closed on an authority-relevant read, exactly like
+			// canonicalizeStructure's own rule: an unreadable claim table
+			// is treated identically to a confirmed-stale claim, never as
+			// "assume fresh."
+			stale := contractsv1.ContextFabricConfirmedStructureEntry{
+				Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: windowConfirmedAppliedValue(*option),
+				Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: resultID, ReceiptID: receiptID,
+				OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+				Provenance:  contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
+			}
+			return requestWindowCanonicalization{Veto: windowVetoStaleSupersededOffer, StaleEntry: &stale, BinderProposal: binderProposal}
+		}
+	}
 	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{
 		Start: option.Start, End: option.End, RelativeID: option.RelativeID,
 		Provenance: WindowClarificationConfirmed,
@@ -431,8 +503,13 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 			return requestWindowCanonicalization{Veto: windowVetoConfirmationConflict, BinderProposal: binderProposal}
 		}
 	}
+	confirmedMember := &confirmedStructureMember{
+		Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: windowConfirmedAppliedValue(*option),
+		PriorResultID: resultID, ReceiptID: receiptID, OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+	}
 	return requestWindowCanonicalization{
-		Effective: &effective,
+		Effective:       &effective,
+		ConfirmedMember: confirmedMember,
 		// windowKeyFrozen, NOT windowKeyRederivable -- codex review finding
 		// (W1 round 4): a receipt confirms one specific, already-minted
 		// option's FROZEN bounds, not a re-derivable-from-RelativeID value;
@@ -443,6 +520,93 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 		KeyEncoding:    windowKeyFrozen,
 		BinderProposal: binderProposal,
 	}
+}
+
+// recordWindowSupersessionRaceTelemetry (CHAOS-4003, codex xhigh review
+// finding) corrects RecordWindowCanonicalization's own outcome when a
+// window redemption that looked confirmed at the point Investigate/
+// terminalResult recorded it (engine.go/unresolved.go's own unconditional
+// pre-Save RecordWindowCanonicalization call) is then discovered, at Save
+// time, to have lost its atomic claim race -- structureSupersessionVetoResult
+// itself stays member-agnostic (it never learns which member is "window"),
+// so this lives at the two call sites that DO know, right where they
+// dispatch to it. Mirrors structure's own members exactly: THEIR
+// confirmation telemetry (recordStructureConfirmationOutcome) is deferred
+// until AFTER Save succeeds specifically so it can never say "confirmed"
+// about a round that was actually discarded; window's own
+// RecordWindowCanonicalization call cannot be deferred the same way (it
+// also covers the non-receipt inferred/stated cases, which have no Save
+// dependency at all), so this is a targeted correction instead of a
+// structural reordering.
+func recordWindowSupersessionRaceTelemetry(ctx context.Context, telemetry EngineTelemetry, principal storage.Principal, superseded *ErrStructureOfferSuperseded) {
+	if telemetry == nil || superseded == nil {
+		return
+	}
+	for _, member := range superseded.Members {
+		if member == contractsv1.ContextFabricStructureNeedWindow {
+			telemetry.RecordWindowCanonicalization(ctx, principal, WindowCanonicalizationVetoStaleSupersededOffer)
+			return
+		}
+	}
+}
+
+// mergeConfirmedMembers (CHAOS-4003) appends windowConfirmed (when
+// non-nil) to structureConfirmed -- the single point every caller composing
+// ConfirmedStructure or resolving a Save-time supersession race merges
+// window's own confirmed member into structure's list, so both ride the
+// SAME composeConfirmedStructure/staleConfirmedStructureEntries functions.
+// Always returns a fresh slice, never appends onto structureConfirmed's own
+// backing array (structureCanon.Confirmed is read again, unmerged, by
+// recordStructureConfirmationOutcome at the SAME call sites -- window
+// deliberately does not participate in that receipt-telemetry/
+// PendingSelections machinery, which stays scoped to kind/anchor/handle;
+// window keeps its own RecordWindowCanonicalization telemetry instead).
+func mergeConfirmedMembers(structureConfirmed []confirmedStructureMember, windowConfirmed *confirmedStructureMember) []confirmedStructureMember {
+	if windowConfirmed == nil {
+		return structureConfirmed
+	}
+	merged := make([]confirmedStructureMember, 0, len(structureConfirmed)+1)
+	merged = append(merged, structureConfirmed...)
+	return append(merged, *windowConfirmed)
+}
+
+// windowConfirmedAppliedValue (CHAOS-4003) is the confirmedStructureMember/
+// ContextFabricConfirmedStructureEntry AppliedValue for a redeemed window
+// receipt -- the schema-required (minLength 1) echo of "what value this
+// member confirmed," mirroring expected_kind's own AppliedValue (the kind
+// string itself).
+//
+// option.RelativeID is non-empty for every option THIS binary's own
+// composeWindowClarification mints (it iterates the closed
+// ContextFabricRelativeWindowIDVocabulary, so every minted option carries
+// one) -- but option here is read back from a PRIOR persisted result's own
+// stored WindowClarification (resolveWindowReceipts' own e.results.Get
+// call), which the wire contract does NOT require to have come from
+// composeWindowClarification: WindowOption.Validate legally admits an
+// explicit-bounds-only option carrying NO relative_id (mirroring
+// RequestedEvidenceWindow's own "explicit bounds alone" legality;
+// schema_go_bound_agreement_test.go pins this as a valid control). Falling
+// back to RelativeID alone would return "" for that shape, and
+// ConfirmedStructureEntry.Validate rejects an empty applied_value --
+// turning a legally-redeemable receipt into a StageValidation error instead
+// of a clean confirm. Fall back to the SAME "abs:start:end" bounds
+// encoding windowKeyComponent's own frozen-bounds branch uses, so the
+// echo is never empty regardless of which shape minted the stored option.
+// Start/End are both non-nil here by construction whenever RelativeID is
+// empty (WindowOption.Validate's own "RelativeID empty implies BOTH bounds
+// present" rule, already enforced on this option before it could ever have
+// been persisted) -- defensively re-checked rather than trusted blindly.
+func windowConfirmedAppliedValue(option contractsv1.ContextFabricWindowOption) string {
+	if option.RelativeID != "" {
+		return string(option.RelativeID)
+	}
+	if option.Start != nil && option.End != nil {
+		return "abs:" + formatUnixNano(*option.Start) + ":" + formatUnixNano(*option.End)
+	}
+	// Unreachable given WindowOption.Validate's own invariant -- defensive
+	// fallback only, matching this file's own "skipped/handled defensively
+	// rather than offered with an invalid shape" precedent.
+	return "abs:unbounded"
 }
 
 // windowsAgree reports whether a receipt-confirmed effective window agrees
@@ -710,6 +874,7 @@ var windowVetoLimitations = map[windowVetoReason]string{
 	windowVetoConfirmationUnresolved: "A referenced evidence-window confirmation could not be resolved, so no canonical facts were read. Retry with the same receipt, or re-ask with an explicit evidence window.",
 	windowVetoConfirmationConflict:   "The evidence-window confirmation conflicted with another window signal on this request, so no canonical facts were read. Resend a single, agreeing window confirmation.",
 	windowVetoAxisConflict:           "The confirmed evidence window no longer applies once the question was understood to be about a different time axis, so no canonical facts were read. Re-ask without a window confirmation, or confirm the window for a current-state question.",
+	windowVetoStaleSupersededOffer:   "A referenced evidence-window confirmation names an offer a newer result has already superseded, so no canonical facts were read. Re-ask without a window confirmation to receive fresh window offers.",
 }
 
 func windowVetoLimitation(veto windowVetoReason) string {
@@ -723,6 +888,8 @@ func windowCanonicalizationOutcomeForVeto(veto windowVetoReason) WindowCanonical
 	switch veto {
 	case windowVetoConfirmationConflict, windowVetoAxisConflict:
 		return WindowCanonicalizationVetoConflict
+	case windowVetoStaleSupersededOffer:
+		return WindowCanonicalizationVetoStaleSupersededOffer
 	default:
 		return WindowCanonicalizationVetoUnresolved
 	}
@@ -850,7 +1017,7 @@ func appendUniqueWarning(warnings []string, sentence string) []string {
 	return append(warnings, sentence)
 }
 
-func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, binding ResolvedGraphBinding) (InvestigationResult, error) {
+func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, staleEntry *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding) (InvestigationResult, error) {
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))
 	}
@@ -909,6 +1076,15 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 		Versions:            e.terminalVersions(),
 		DeterministicAnswer: limitation,
 		Warnings:            []string{},
+	}
+	// CHAOS-4003: mirrors structureVetoResult's own echoEntries handling --
+	// present only on the windowVetoStaleSupersededOffer veto (the one
+	// reason this exists for), so a caller can tell "member window is why
+	// the whole request was rejected" from the response, matching the
+	// disclosure discipline every other structure-receipt member's own
+	// stale veto already carries.
+	if staleEntry != nil {
+		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{*staleEntry}
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))

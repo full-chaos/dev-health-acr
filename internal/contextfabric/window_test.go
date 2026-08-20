@@ -925,6 +925,465 @@ func TestComposeWindowClarification_InferredWindowOffersTheClosedRegistry(t *tes
 	}
 }
 
+// TestCHAOS4003_SupersededWindowReceiptVetoesAsStale is CHAOS-4003's own
+// acceptance pin, window's analogue of
+// TestCHAOS3927P4_SupersededKindReceiptVetoesAsStale (structure_test.go): a
+// winr_ receipt that resolves cleanly against its stored offer must STILL
+// veto if a StructureSupersessionChecker reports the (org, prior_result_id,
+// "window") tuple already claimed by a newer result -- closing the gap the
+// ticket names ("window never consulted the P4 supersession-claim
+// machinery"). supersedingResultStore is the SAME test double
+// canonicalizeStructure's own P4 tests use (structure_test.go); its
+// IsStructureSuperseded is member-generic, so no new fake is needed.
+func TestCHAOS4003_SupersededWindowReceiptVetoesAsStale(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_window_0005"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm0005", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	principal := reusePrincipal()
+	store := &supersedingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}},
+		superseded:        map[string]bool{supersessionKey(principal.OrgID, priorResult.ResultID, contractsv1.ContextFabricStructureNeedWindow): true},
+	}
+	telemetry := &recordingTelemetry{}
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results:   store,
+		Telemetry: telemetry,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("reuse gate must not be called on a window-veto request")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0005"}}
+
+	result, err := engine.Investigate(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if len(store.checkCalls) == 0 {
+		t.Fatal("IsStructureSuperseded was never consulted -- window never reached the P4 pre-flight consult")
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 1 (the stale echo entry)", len(result.ConfirmedStructure))
+	}
+	entry := result.ConfirmedStructure[0]
+	if entry.Member != contractsv1.ContextFabricStructureNeedWindow || entry.Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
+		t.Errorf("result.ConfirmedStructure[0] = %+v, want member=window disposition=vetoed_stale", entry)
+	}
+	if entry.PriorResultID != priorResult.ResultID || entry.ReceiptID != "winr_confirm0005" {
+		t.Errorf("result.ConfirmedStructure[0] receipt identity = (%q, %q), want (%q, %q)", entry.PriorResultID, entry.ReceiptID, priorResult.ResultID, "winr_confirm0005")
+	}
+	if entry.AppliedValue != string(RelativeWindowTrailing90D) {
+		t.Errorf("result.ConfirmedStructure[0].AppliedValue = %q, want %q", entry.AppliedValue, RelativeWindowTrailing90D)
+	}
+	found := false
+	for _, outcome := range telemetry.windowCanonicalizationOutcomes {
+		if outcome == WindowCanonicalizationVetoStaleSupersededOffer {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("telemetry.windowCanonicalizationOutcomes = %v, want it to contain %q", telemetry.windowCanonicalizationOutcomes, WindowCanonicalizationVetoStaleSupersededOffer)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS4003_FreshWindowReceiptStillResolves proves the pre-flight
+// consult is a pure fail-CLOSED guard, never a fail-OPEN one: a winr_
+// receipt against a prior result NO checker reports as superseded must
+// still resolve exactly as before CHAOS-4003 -- AND now also echoes a
+// member=window, disposition=applied ConfirmedStructure entry (window
+// riding the SAME echo/claim pipeline kind/anchor/handle already use,
+// mergeConfirmedMembers), so a Save-time supersession claim actually gets
+// written for it (structureSupersessionClaims scans ConfirmedStructure
+// generically -- this is what makes a LATER redemption of the SAME offer
+// detectable at all).
+func TestCHAOS4003_FreshWindowReceiptStillResolves(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_window_0006"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm0006", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	principal := reusePrincipal()
+	// supersedingResultStore with an EMPTY superseded map: the checker IS
+	// wired (proving the consult ran) but reports nothing stale, so this is
+	// a genuine fail-closed-guard-says-fresh case, not merely "no checker".
+	store := &supersedingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}},
+		superseded:        map[string]bool{},
+	}
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return InvestigationResult{}, false, nil // miss: proceed to Interpret/Synthesize
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0006"}}
+
+	result, err := engine.Investigate(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(store.checkCalls) == 0 {
+		t.Fatal("IsStructureSuperseded was never consulted")
+	}
+	if result.EffectiveEvidenceWindow == nil || result.EffectiveEvidenceWindow.Provenance != WindowClarificationConfirmed {
+		t.Fatalf("result.EffectiveEvidenceWindow = %+v, want a clarification_confirmed window", result.EffectiveEvidenceWindow)
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 1 (the applied window echo)", len(result.ConfirmedStructure))
+	}
+	entry := result.ConfirmedStructure[0]
+	if entry.Member != contractsv1.ContextFabricStructureNeedWindow || entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied || entry.Source != contractsv1.ContextFabricStructureSourceReceipt {
+		t.Errorf("result.ConfirmedStructure[0] = %+v, want member=window disposition=applied source=receipt", entry)
+	}
+	if entry.PriorResultID != priorResult.ResultID || entry.ReceiptID != "winr_confirm0006" {
+		t.Errorf("result.ConfirmedStructure[0] receipt identity = (%q, %q), want (%q, %q)", entry.PriorResultID, entry.ReceiptID, priorResult.ResultID, "winr_confirm0006")
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS4003_MixedKindAndWindowReceipts_BothConfirmIndependently is the
+// "other three members' behavior is unchanged" pin: a single request
+// redeeming BOTH a kindr_ receipt (canonicalizeStructure's own loop) and a
+// winr_ receipt (resolveWindowReceipts) confirms BOTH, independently, with
+// window's entry correctly APPENDED after structure's own via
+// mergeConfirmedMembers -- proves the merge neither drops nor reorders
+// structure's own confirmed members.
+func TestCHAOS4003_MixedKindAndWindowReceipts_BothConfirmIndependently(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_mixed_0001"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+	}
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm0001", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+	})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(result.ConfirmedStructure) != 2 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 2 (kind AND window, both confirmed)", len(result.ConfirmedStructure))
+	}
+	if result.ConfirmedStructure[0].Member != "expected_kind" {
+		t.Errorf("result.ConfirmedStructure[0].Member = %q, want expected_kind (structure's own members first)", result.ConfirmedStructure[0].Member)
+	}
+	if result.ConfirmedStructure[1].Member != contractsv1.ContextFabricStructureNeedWindow {
+		t.Errorf("result.ConfirmedStructure[1].Member = %q, want window (appended after structure's own)", result.ConfirmedStructure[1].Member)
+	}
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
+			t.Errorf("entry %+v: disposition = %q, want applied", entry, entry.Disposition)
+		}
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS4003_SaveTimeRace_WindowLosesConflict mirrors
+// TestCHAOS3927P4_SaveTimeSupersessionConflict_EchoesEveryLostMember
+// (structure_test.go) for window: a winr_ receipt resolves cleanly with NO
+// checker wired (supersessionRacingResultStore embeds staticResultStore
+// only -- no IsStructureSuperseded -- so the pre-flight consult is skipped,
+// exactly the "detected only at Save time" scenario), builds a real
+// ConfirmedMember, and then loses the atomic (org, prior_result_id,
+// "window") claim race on Save -- proving the Save-time veto path
+// (structureSupersessionVetoResult, now taking the MERGED confirmed list)
+// correctly echoes a window-shaped vetoed_stale entry, not just an empty
+// or structure-only echo. Also pins the codex xhigh review fix
+// (recordWindowSupersessionRaceTelemetry): the pre-Save
+// RecordWindowCanonicalization call already reported receipt_confirmed
+// before the race was known -- the FINAL telemetry entry must be the
+// corrected veto_stale_superseded_offer outcome, not a dangling
+// "confirmed" that contradicts the actual no_match result.
+func TestCHAOS4003_SaveTimeRace_WindowLosesConflict(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_window_0007"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm0007", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	store := &supersessionRacingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}},
+		conflictMembers:   []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+	}
+	telemetry := &recordingTelemetry{}
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:   store,
+		Telemetry: telemetry,
+	})
+
+	request := validInvestigationRequest()
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0007"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if result.ResultID == freshResult.ResultID {
+		t.Error("result.ResultID equals the discarded decisive result's own id -- the superseded computation must never be returned")
+	}
+	if len(telemetry.windowCanonicalizationOutcomes) == 0 {
+		t.Fatal("telemetry.windowCanonicalizationOutcomes is empty, want at least the corrective veto_stale_superseded_offer entry")
+	}
+	last := telemetry.windowCanonicalizationOutcomes[len(telemetry.windowCanonicalizationOutcomes)-1]
+	if last != WindowCanonicalizationVetoStaleSupersededOffer {
+		t.Errorf("telemetry.windowCanonicalizationOutcomes = %v, want the LAST entry to be %q (correcting the earlier pre-Save receipt_confirmed record)", telemetry.windowCanonicalizationOutcomes, WindowCanonicalizationVetoStaleSupersededOffer)
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 1 (the raced window member's own vetoed_stale echo)", len(result.ConfirmedStructure))
+	}
+	entry := result.ConfirmedStructure[0]
+	if entry.Member != contractsv1.ContextFabricStructureNeedWindow || entry.Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
+		t.Errorf("result.ConfirmedStructure[0] = %+v, want member=window disposition=vetoed_stale", entry)
+	}
+	if entry.PriorResultID != priorResult.ResultID || entry.ReceiptID != "winr_confirm0007" {
+		t.Errorf("result.ConfirmedStructure[0] receipt identity = (%q, %q), want (%q, %q)", entry.PriorResultID, entry.ReceiptID, priorResult.ResultID, "winr_confirm0007")
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS4003_WindowConfirmedAppliedValue_FallsBackToBoundsWhenNoRelativeID
+// is the codex xhigh review fix for windowConfirmedAppliedValue: the wire
+// contract legally admits a persisted WindowOption carrying explicit
+// bounds with NO relative_id (WindowOption.Validate's own "explicit bounds
+// alone" branch, mirroring RequestedEvidenceWindow) -- this binary's own
+// composeWindowClarification never mints that shape, but resolveWindowReceipts
+// reads back an ARBITRARY prior result's stored option, which is not
+// guaranteed to have come from this binary's own minting. Redeeming such
+// an option must still produce a non-empty AppliedValue (an empty one
+// fails ConfirmedStructureEntry.Validate's own minLength 1 rule), not a
+// StageValidation error on an otherwise-legal redemption.
+func TestCHAOS4003_WindowConfirmedAppliedValue_FallsBackToBoundsWhenNoRelativeID(t *testing.T) {
+	t.Parallel()
+
+	if got := windowConfirmedAppliedValue(contractsv1.ContextFabricWindowOption{RelativeID: RelativeWindowTrailing90D}); got != string(RelativeWindowTrailing90D) {
+		t.Errorf("windowConfirmedAppliedValue(with RelativeID) = %q, want %q", got, RelativeWindowTrailing90D)
+	}
+
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	boundsOnly := contractsv1.ContextFabricWindowOption{Start: &start, End: &end}
+	got := windowConfirmedAppliedValue(boundsOnly)
+	if got == "" {
+		t.Fatal("windowConfirmedAppliedValue(bounds-only, no relative_id) is empty, want a non-empty fallback")
+	}
+	want := "abs:" + formatUnixNano(start) + ":" + formatUnixNano(end)
+	if got != want {
+		t.Errorf("windowConfirmedAppliedValue(bounds-only) = %q, want %q", got, want)
+	}
+
+	// End-to-end: redeeming a bounds-only stored option must still resolve
+	// to a Validate()-passing result, not error out.
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_window_boundsonly_0001"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirmboundsonly1", OptionID: "opt_bounds", Label: "an explicit range", Start: &start, End: &end},
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirmboundsonly1"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(result.ConfirmedStructure) != 1 || result.ConfirmedStructure[0].AppliedValue == "" {
+		t.Fatalf("result.ConfirmedStructure = %+v, want one entry with a non-empty AppliedValue", result.ConfirmedStructure)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS4003_MixedWindowConfirmedAndStructureVetoed_BothEchoed is the
+// codex xhigh review fix for the pre-flight structure-veto dispatch
+// (engine.go): a request whose window receipt resolves cleanly BEFORE
+// canonicalizeStructure ever runs, followed by a kindr_ receipt that
+// canonicalizeStructure itself vetoes (unresolved), must echo BOTH --
+// composeConfirmedStructure's own "one entry per carried member, including
+// vetoed ones" rule applies to window's already-confirmed member too, not
+// only to structure's own vetoed one. Before the fix, this dispatch path
+// built echoEntries from structureCanon alone and silently dropped
+// windowCanon.ConfirmedMember.
+func TestCHAOS4003_MixedWindowConfirmedAndStructureVetoed_BothEchoed(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_mixed_veto_0001"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm0002", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	// AnchorOptions gives canonicalizeStructure a receipt that RESOLVES
+	// cleanly against its stored offer but then fails reverify (no
+	// AnchorVerifier wired below) -- the ONE structureVetoConfirmationUnresolved
+	// sub-case that actually echoes a VetoedEntries entry (structure.go's
+	// own triggeringMemberEntry, reached only on a reverify failure -- a
+	// receipt that never resolves at all, e.g. naming a missing offer,
+	// echoes NOTHING per that function's own doc comment, so it cannot
+	// exercise this window-drop bug on the structure side).
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_anchor"},
+		AnchorOptions: []AnchorOption{
+			{
+				ReceiptID: "ancr_confirm0001", OptionID: "opt_anchor", Label: "the widget-service repository",
+				Kind: SubjectRepository, CanonicalID: "repository_widget_service",
+				MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: "engine",
+			},
+		},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("reuse gate must not be called on a structure-veto request")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0002"}}
+	request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "ancr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if len(result.ConfirmedStructure) != 2 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 2 (window's applied entry AND subject_anchor's vetoed_unresolved entry)", len(result.ConfirmedStructure))
+	}
+	var sawWindowApplied, sawAnchorUnresolved bool
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Member == contractsv1.ContextFabricStructureNeedWindow && entry.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
+			sawWindowApplied = true
+		}
+		if entry.Member == "subject_anchor" && entry.Disposition == contractsv1.ContextFabricStructureDispositionVetoedUnresolved {
+			sawAnchorUnresolved = true
+		}
+	}
+	if !sawWindowApplied {
+		t.Errorf("result.ConfirmedStructure = %+v, want an applied window entry (must not be dropped by the structure veto)", result.ConfirmedStructure)
+	}
+	if !sawAnchorUnresolved {
+		t.Errorf("result.ConfirmedStructure = %+v, want a vetoed_unresolved subject_anchor entry", result.ConfirmedStructure)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
 // TestAppendUniqueWarning (CHAOS-3900 W2) pins the dedup discipline the
 // nudge-mode Warnings append relies on: appending the SAME sentence twice
 // must not duplicate it, and the contract's own Warnings cap must never be

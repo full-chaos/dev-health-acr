@@ -310,7 +310,7 @@ func (e *Engine) terminalResult(
 		// this request confirmed, exactly like the window echo beside it --
 		// a confirmed kind/anchor/handle narrowed what this round searched
 		// for even when it still ended without a committed subject.
-		ConfirmedStructure: composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit),
+		ConfirmedStructure: composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit),
 		// CHAOS-3900 P1.G: no guard needed -- structureCanon.OfferSnapshot
 		// is only ever non-nil alongside structureCanon.Confirmed, see
 		// requestStructureCanonicalization's own doc comment (structure.go).
@@ -358,7 +358,8 @@ func (e *Engine) terminalResult(
 			// site, leaving this one to surface the race as a raw 500).
 			var superseded *ErrStructureOfferSuperseded
 			if errors.As(err, &superseded) {
-				return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon, superseded, binding)
+				recordWindowSupersessionRaceTelemetry(ctx, e.telemetry, principal, superseded)
+				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding)
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}

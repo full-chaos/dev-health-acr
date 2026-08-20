@@ -144,61 +144,74 @@ func resultWithConfirmedStructure(resultID string, member contextfabric.Structur
 // stores must agree, byte for byte in outcome, on the SAME race: two
 // Saves redeeming the identical (org, prior_result_id, member) tuple under
 // different result_ids, the second must lose atomically.
+// CHAOS-4003: table-ified over member -- expected_kind (the pre-existing
+// pin) AND window (the member this ticket closes the staleness hole for),
+// sharing ONE store instance across both t.Run subtests so the SAME
+// assertions also prove the two members' claims are independent of each
+// other, not just individually correct. structureSupersessionClaims itself
+// is member-generic (it scans ConfirmedStructure by Disposition/Source
+// alone, never switching on Member), so this is the direct proof that
+// genericness actually holds for the member CHAOS-4003 newly starts
+// writing claims for.
 func TestStore_structureSupersessionClaims(t *testing.T) {
 	ctx := context.Background()
 	store := memoryinvestigation.NewStore()
 	principal := storage.Principal{OrgID: "org-supersession"}
-	priorResultID := "result-prior-structure-offer-001"
-	const member = contextfabric.StructureNeedKind("expected_kind")
 
-	superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
-	if err != nil {
-		t.Fatalf("IsStructureSuperseded (before any Save): %v", err)
-	}
-	if superseded {
-		t.Fatal("IsStructureSuperseded before any Save must be false")
-	}
+	for _, member := range []contextfabric.StructureNeedKind{"expected_kind", "window"} {
+		t.Run(string(member), func(t *testing.T) {
+			priorResultID := "result-prior-structure-offer-" + string(member)
 
-	winner := resultWithConfirmedStructure("result-supersession-winner-001", member, priorResultID, "kindr_winner00000001")
-	if err := store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
-		t.Fatalf("save winner: %v", err)
-	}
+			superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+			if err != nil {
+				t.Fatalf("IsStructureSuperseded (before any Save): %v", err)
+			}
+			if superseded {
+				t.Fatal("IsStructureSuperseded before any Save must be false")
+			}
 
-	superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
-	if err != nil {
-		t.Fatalf("IsStructureSuperseded (after winning Save): %v", err)
-	}
-	if !superseded {
-		t.Fatal("IsStructureSuperseded after the winning Save must be true")
-	}
+			winner := resultWithConfirmedStructure("result-supersession-winner-"+string(member), member, priorResultID, "kindr_winner00000001")
+			if err := store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
+				t.Fatalf("save winner: %v", err)
+			}
 
-	loser := resultWithConfirmedStructure("result-supersession-loser-0001", member, priorResultID, "kindr_loser000000001")
-	saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
-	if saveErr == nil {
-		t.Fatal("a second Save redeeming the SAME (org, prior_result_id, member) must fail")
-	}
-	var conflict *contextfabric.ErrStructureOfferSuperseded
-	if !errors.As(saveErr, &conflict) {
-		t.Fatalf("saveErr = %v, want *contextfabric.ErrStructureOfferSuperseded", saveErr)
-	}
-	if len(conflict.Members) != 1 || conflict.Members[0] != member {
-		t.Fatalf("conflict.Members = %+v, want [%q]", conflict.Members, member)
-	}
+			superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+			if err != nil {
+				t.Fatalf("IsStructureSuperseded (after winning Save): %v", err)
+			}
+			if !superseded {
+				t.Fatal("IsStructureSuperseded after the winning Save must be true")
+			}
 
-	if _, err := store.Get(ctx, principal, loser.ResultID); !errors.Is(err, memoryinvestigation.ErrNotFound) {
-		t.Fatalf("Get(loser) error = %v, want ErrNotFound (the loser must never persist)", err)
-	}
+			loser := resultWithConfirmedStructure("result-supersession-loser-"+string(member), member, priorResultID, "kindr_loser000000001")
+			saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+			if saveErr == nil {
+				t.Fatal("a second Save redeeming the SAME (org, prior_result_id, member) must fail")
+			}
+			var conflict *contextfabric.ErrStructureOfferSuperseded
+			if !errors.As(saveErr, &conflict) {
+				t.Fatalf("saveErr = %v, want *contextfabric.ErrStructureOfferSuperseded", saveErr)
+			}
+			if len(conflict.Members) != 1 || conflict.Members[0] != member {
+				t.Fatalf("conflict.Members = %+v, want [%q]", conflict.Members, member)
+			}
 
-	stored, err := store.Get(ctx, principal, winner.ResultID)
-	if err != nil {
-		t.Fatalf("get winner: %v", err)
-	}
-	if len(stored.Result.ConfirmedStructure) != 1 || stored.Result.ConfirmedStructure[0].Member != member {
-		t.Fatalf("winner.ConfirmedStructure = %+v, unaffected by the loser expected", stored.Result.ConfirmedStructure)
-	}
+			if _, err := store.Get(ctx, principal, loser.ResultID); !errors.Is(err, memoryinvestigation.ErrNotFound) {
+				t.Fatalf("Get(loser) error = %v, want ErrNotFound (the loser must never persist)", err)
+			}
 
-	// An idempotent replay of the winner itself must still succeed.
-	if err := store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
-		t.Fatalf("idempotent replay of winner: %v", err)
+			stored, err := store.Get(ctx, principal, winner.ResultID)
+			if err != nil {
+				t.Fatalf("get winner: %v", err)
+			}
+			if len(stored.Result.ConfirmedStructure) != 1 || stored.Result.ConfirmedStructure[0].Member != member {
+				t.Fatalf("winner.ConfirmedStructure = %+v, unaffected by the loser expected", stored.Result.ConfirmedStructure)
+			}
+
+			// An idempotent replay of the winner itself must still succeed.
+			if err := store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
+				t.Fatalf("idempotent replay of winner: %v", err)
+			}
+		})
 	}
 }
