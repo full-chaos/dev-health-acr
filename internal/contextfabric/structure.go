@@ -181,6 +181,28 @@ type requestStructureCanonicalization struct {
 	// member past the first, violating the "one entry PER carried member"
 	// wire contract this exists to uphold.
 	StaleMembers []contractsv1.ContextFabricConfirmedStructureEntry
+	// VetoedEntries (CHAOS-3963) closes composeConfirmedStructure's own
+	// former KNOWN GAP comment: on a
+	// structureVetoConfirmationUnresolved/structureVetoConfirmationConflict
+	// veto, this carries one re-dispositioned entry (Disposition swapped
+	// from applied to the veto's own vetoed_unresolved/vetoed_conflict)
+	// for every member the loop had ALREADY resolved before the veto
+	// fired -- the atomic all-or-nothing rule (§2.1) means none of them
+	// were actually applied, so echoing them as "applied" would misreport
+	// the outcome, but dropping them entirely was the silent-drop-reborn
+	// gap CHAOS-3963 exists to close: a caller could not tell "member A
+	// confirmed fine, member B is why the whole batch was rejected" from
+	// the response. When the triggering member itself had a resolved
+	// value at the point of failure (only true of a reverify failure --
+	// every earlier failure mode in the loop has no value to echo, and
+	// ContextFabricConfirmedStructureEntry.Validate requires a non-empty
+	// applied_value, so those genuinely-unresolvable members carry no
+	// entry at all, matching resolveExplicitStructure's own established
+	// "flag rather than silently omit" convention for the analogous
+	// multi-valued-explicit-field gap), that member's own entry is
+	// appended too. Mutually exclusive with StaleMembers: populated only
+	// on the two veto reasons StaleMembers is never populated for.
+	VetoedEntries []contractsv1.ContextFabricConfirmedStructureEntry
 }
 
 // HandleVerificationReason is the closed vocabulary Engine's handle
@@ -488,24 +510,44 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 			continue
 		}
 		if len(m.receipts) > 1 {
-			return requestStructureCanonicalization{Veto: structureVetoConfirmationConflict}
+			return requestStructureCanonicalization{
+				Veto:          structureVetoConfirmationConflict,
+				VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedConflict),
+			}
 		}
 		receipt := m.receipts[0]
 		resultID := strings.TrimSpace(receipt.ResultID)
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
 		if resultID == "" || receiptID == "" {
-			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
+			return requestStructureCanonicalization{
+				Veto:          structureVetoConfirmationUnresolved,
+				VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved),
+			}
 		}
 		stored, err := e.results.Get(ctx, principal, resultID)
 		if err != nil {
-			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
+			return requestStructureCanonicalization{
+				Veto:          structureVetoConfirmationUnresolved,
+				VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved),
+			}
 		}
 		value, kind, offerSource, priorVersionID, priorEntryID, ok := m.appliedValueFor(stored.Result, receiptID)
 		if !ok {
-			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
+			return requestStructureCanonicalization{
+				Veto:          structureVetoConfirmationUnresolved,
+				VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved),
+			}
 		}
 		if m.reverify != nil && !m.reverify(ctx, principal, stored.Result, receiptID) {
-			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
+			// Unlike the failure modes above, appliedValueFor already
+			// resolved a real value here -- reverify rejected it, not the
+			// lookup -- so this member's own attempted state IS echoable
+			// (Validate's non-empty applied_value requirement is
+			// satisfiable), and is appended after the batch's own
+			// already-confirmed members.
+			entries := vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved)
+			entries = append(entries, triggeringMemberEntry(m.member, contractsv1.ContextFabricStructureDispositionVetoedUnresolved, resultID, receiptID, value, offerSource, priorVersionID, priorEntryID))
+			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved, VetoedEntries: entries}
 		}
 		// CHAOS-3927 P4 (design brief §2.1 offer-supersession rule): a
 		// receipt that resolves cleanly against its stored offer can still
@@ -564,7 +606,18 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 	// conflict rule against confirmed.
 	explicit, veto := e.resolveExplicitStructure(request, confirmed)
 	if veto != structureVetoNone {
-		return requestStructureCanonicalization{Veto: veto}
+		// CHAOS-3963: the only veto resolveExplicitStructure ever returns
+		// is an explicit-vs-receipt conflict, and the conflicting member
+		// is by definition already in confirmed (that is the precondition
+		// resolveExplicitStructure's own confirmedMemberValue/
+		// confirmedMemberKindValue lookup requires before it can detect
+		// disagreement) -- so its receipt-confirmed value is exactly what
+		// vetoedConfirmedEntries below echoes; no separate
+		// triggeringMemberEntry is needed for this veto reason.
+		return requestStructureCanonicalization{
+			Veto:          veto,
+			VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedConflict),
+		}
 	}
 	return requestStructureCanonicalization{Confirmed: confirmed, OfferSnapshot: offerSnapshot, PendingSelections: pendingSelections, Explicit: explicit}
 }
@@ -905,19 +958,20 @@ func structureVetoLimitation(veto structureVetoReason) string {
 // Interpret ever runs) -- no post-Interpret axis-conflict analogue exists
 // for structure the way windowVetoAxisConflict does, so this signature
 // carries no *InterpretedQuestion parameter.
-// staleMembers, when non-empty, is composed onto the resulting
+// echoEntries, when non-empty, is composed onto the resulting
 // InvestigationResult.ConfirmedStructure VERBATIM (design brief §2.5's
-// stale-offer row: "echo disposition vetoed_stale") -- callers pass
-// requestStructureCanonicalization.StaleMembers on the
-// veto==structureVetoStaleSupersededOffer path (one entry from the
+// per-veto echo rows). Callers pass requestStructureCanonicalization.StaleMembers
+// on the veto==structureVetoStaleSupersededOffer path (one entry from the
 // pre-flight consult, or every member ErrStructureOfferSuperseded.Members
 // named from the Save-time race -- codex round-3 adversarial review,
 // MEDIUM finding: a single-entry parameter here silently dropped every
 // member past the first when a Save-time race conflicted on more than
-// one), and nil/empty for every other veto reason (the pre-existing
-// conflict/unresolved echo gap, composeConfirmedStructure's own KNOWN GAP
-// comment, unchanged by this function).
-func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, staleMembers []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding) (InvestigationResult, error) {
+// one), and requestStructureCanonicalization.VetoedEntries (CHAOS-3963) on
+// the structureVetoConfirmationUnresolved/structureVetoConfirmationConflict
+// paths -- StaleMembers and VetoedEntries are mutually exclusive by
+// construction (each is populated by different veto reasons), so callers
+// pass whichever one the veto reason actually populated.
+func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, echoEntries []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding) (InvestigationResult, error) {
 	limitation := structureVetoLimitation(veto)
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -953,8 +1007,8 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 		DeterministicAnswer: limitation,
 		Warnings:            []string{},
 	}
-	if len(staleMembers) > 0 {
-		result.ConfirmedStructure = staleMembers
+	if len(echoEntries) > 0 {
+		result.ConfirmedStructure = echoEntries
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
@@ -973,16 +1027,18 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 // resolved via a receipt, so Source/Provenance/Disposition are fixed for
 // every entry this function produces.
 //
-// KNOWN GAP (P1.B, flagged rather than silently absent): a VETOED request
-// (structureVetoResult) does not yet compose per-member vetoed_unresolved/
-// vetoed_conflict echo entries the way design brief §2.5's closed table
-// describes ("ConfirmedStructure... present whenever the request carried
-// ANY structure receipt... including the vetoed ones") -- the atomic veto
-// in canonicalizeStructure above discards which specific member/receipt
-// triggered it once it returns, so structureVetoResult has nothing to
-// compose from yet. The request is still rejected wholesale with a clear
-// Limitations disclosure in the meantime; per-member vetoed echo entries
-// are a follow-up, not a silent omission.
+// CLOSED (P1.B's own former KNOWN GAP, closed by CHAOS-3963): a VETOED
+// request now composes per-member vetoed_unresolved/vetoed_conflict echo
+// entries the way design brief §2.5's closed table describes
+// ("ConfirmedStructure... present whenever the request carried ANY
+// structure receipt... including the vetoed ones") -- canonicalizeStructure's
+// loop now threads `confirmed` (everything already resolved before the
+// veto fired) and, where a value exists to echo, the triggering member's
+// own entry through requestStructureCanonicalization.VetoedEntries (see
+// vetoedConfirmedEntries/triggeringMemberEntry below) instead of
+// discarding them the instant it returns. The request is still rejected
+// wholesale -- the all-or-nothing rule is unchanged, nothing from a
+// vetoed batch is ever applied -- only the DISCLOSURE gap is closed.
 // composeConfirmedStructure merges canonicalizeStructure's own receipt-
 // confirmed members (confirmed) with its explicit (non-receipt) members
 // (explicit -- CHAOS-3972 P3) into the wire-visible echo. The two lists
@@ -1019,6 +1075,66 @@ func composeConfirmedStructure(confirmed []confirmedStructureMember, explicit []
 		})
 	}
 	return entries
+}
+
+// vetoedConfirmedEntries (CHAOS-3963) re-dispositions every member
+// canonicalizeStructure's receipt loop had already resolved into
+// `confirmed` before an atomic veto fired -- Disposition dropped from
+// applied to the veto's own vetoed_unresolved/vetoed_conflict, mirroring
+// staleConfirmedStructureEntries' own re-dispositioning for the
+// supersession case just below. The all-or-nothing rule means none of
+// these members were actually applied, so echoing "applied" would
+// misreport the outcome; nil confirmed (the common case: the very first
+// member evaluated is the one that vetoes) returns nil, same as every
+// other empty-echo path in this file.
+func vetoedConfirmedEntries(confirmed []confirmedStructureMember, disposition contractsv1.ContextFabricStructureDisposition) []contractsv1.ContextFabricConfirmedStructureEntry {
+	if len(confirmed) == 0 {
+		return nil
+	}
+	entries := make([]contractsv1.ContextFabricConfirmedStructureEntry, 0, len(confirmed))
+	for _, c := range confirmed {
+		entries = append(entries, contractsv1.ContextFabricConfirmedStructureEntry{
+			Member:         c.Member,
+			AppliedValue:   c.AppliedValue,
+			Source:         contractsv1.ContextFabricStructureSourceReceipt,
+			PriorResultID:  c.PriorResultID,
+			ReceiptID:      c.ReceiptID,
+			OfferSource:    c.OfferSource,
+			PriorVersionID: c.PriorVersionID,
+			PriorEntryID:   c.PriorEntryID,
+			Provenance:     contractsv1.ContextFabricStructureClarificationConfirmed,
+			Disposition:    disposition,
+		})
+	}
+	return entries
+}
+
+// triggeringMemberEntry (CHAOS-3963) builds the ConfirmedStructure echo
+// entry for the ONE member whose own resolution attempt triggered an
+// atomic veto, for the one loop failure mode that has a real value to
+// echo (a reverify rejection -- appliedValueFor already resolved value
+// before reverify ran). Every earlier failure mode (plural receipts, a
+// malformed receipt, an unloadable prior result, an offer the stored
+// result never actually made) never resolves a value at all, and
+// ContextFabricConfirmedStructureEntry.Validate requires applied_value to
+// be non-empty -- there is no valid entry those modes could construct, so
+// callers do not call this for them (matching resolveExplicitStructure's
+// own "flag rather than silently omit" convention for its analogous
+// multi-valued-explicit-field gap: some source states genuinely have no
+// singular value to echo).
+func triggeringMemberEntry(member contractsv1.ContextFabricStructureNeedKind, disposition contractsv1.ContextFabricStructureDisposition, resultID, receiptID, appliedValue string, offerSource contractsv1.ContextFabricStructureOfferSource, priorVersionID, priorEntryID string) contractsv1.ContextFabricConfirmedStructureEntry {
+	return contractsv1.ContextFabricConfirmedStructureEntry{
+		Member:         member,
+		AppliedValue:   appliedValue,
+		Source:         contractsv1.ContextFabricStructureSourceReceipt,
+		PriorResultID:  resultID,
+		ReceiptID:      receiptID,
+		OfferSource:    offerSource,
+		PriorVersionID: priorVersionID,
+		PriorEntryID:   priorEntryID,
+		Provenance:     contractsv1.ContextFabricStructureClarificationConfirmed,
+		Disposition:    disposition,
+	}
 }
 
 // staleConfirmedStructureEntries (CHAOS-3927 P4) rebuilds the echo entries
