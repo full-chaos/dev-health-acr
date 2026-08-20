@@ -31,7 +31,7 @@ func TestR5_CoordinatorNeverLogsRawSourceErrorText(t *testing.T) {
 		"(dsn=clickhouse://svc_acr:hunter2@warehouse.internal:9440/devhealth?secure=true)"
 
 	var buffer bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewJSONHandler(&buffer, sanitizationTestHandlerOptions()))
 
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"},
@@ -79,7 +79,7 @@ func TestR5_CoordinatorNeverLogsRawLockOrRebuildErrorText(t *testing.T) {
 	const secret = "pq: password authentication failed for user \"acr_projector\" (host=db.internal port=5432)"
 
 	var buffer bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewJSONHandler(&buffer, sanitizationTestHandlerOptions()))
 
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:  []string{"org-1"},
@@ -112,4 +112,29 @@ func rebuildMarkerFailingCheck(err error) *fakeRebuildMarker {
 	marker := newFakeRebuildMarker()
 	marker.checkErr = err
 	return marker
+}
+
+// sanitizationTestHandlerOptions drops slog's own time attribute before
+// either test above scans the serialized buffer for canary substrings.
+//
+// CHAOS-3894: the buffer these tests scan is the whole JSON-serialized log
+// record, including slog's time field -- and a canary as short as "5432"
+// (4 digits) can appear BY COINCIDENCE among a timestamp's nanosecond
+// digits with no sanitization defect involved at all (observed on CI:
+// "time":"2026-08-18T00:31:05.803154325Z" contains "5432" as a plain
+// substring of 803154325). The sanitization contract these tests exist to
+// prove governs the fields the coordinator/observer choose to log, not
+// slog's own clock output, so the clock output is removed from the buffer
+// before the substring scan runs -- the assertion then inspects only what
+// the contract actually governs.
+func sanitizationTestHandlerOptions() *slog.HandlerOptions {
+	return &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if len(groups) == 0 && a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	}
 }

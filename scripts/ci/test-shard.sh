@@ -18,21 +18,62 @@ set -euo pipefail
 # Usage: test-shard.sh <index> <total>
 #   index  1-based shard number to emit packages for (1 <= index <= total)
 #   total  total number of shards
+#
+# Usage: test-shard.sh isolated
+#   Prints the packages in isolated_packages (below) instead of sharding.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 list_err=""
+
+# CHAOS-3974: packages listed here are excluded from the round-robin split
+# below and instead run in their own dedicated CI job with a package-scoped
+# -timeout (the race-devhealthschema job in ci.yml). `test-shard.sh isolated`
+# prints this list so that job and this script's exclusion always read from
+# one source instead of drifting apart.
+#
+# Why: internal/contextfabric/devhealthschema's full-repo declaration sweeps
+# (TestNoSecondPhysicalSourceOutsideTheDeclaration and its sibling) walk
+# every file in the module, so their cost under -race scales with the
+# module's TOTAL .go file count, not with this package's own size -- and
+# whichever shard round-robin happened to draw this package paid rent on
+# that growth out of a timeout budget shared with unrelated packages
+# (including testcontainer-heavy ones). CHAOS-3972 already hit this once:
+# the walk crept past the shared 300s ceiling as the repo grew, and the fix
+# was to raise GOTEST_TIMEOUT for every package in every shard. That is the
+# recurring growth mechanism this isolation removes: the walk keeps costing
+# more as the repo grows, but now only its own dedicated job's timeout has
+# to grow to absorb that -- the shared GOTEST_TIMEOUT other shards run under
+# never has to move again on this package's account.
+isolated_packages=(
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+)
 
 usage() {
   printf 'usage: %s <index> <total>\n' "${0##*/}" >&2
   printf '  index  1-based shard number (1 <= index <= total)\n' >&2
   printf '  total  total number of shards\n' >&2
+  printf 'usage: %s isolated\n' "${0##*/}" >&2
+  printf '  prints the packages excluded from round-robin sharding\n' >&2
 }
 
 is_positive_int() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
 
+is_isolated() {
+  local pkg="$1" candidate
+  for candidate in "${isolated_packages[@]}"; do
+    [ "$pkg" = "$candidate" ] && return 0
+  done
+  return 1
+}
+
 main() {
+  if [ "$#" -eq 1 ] && [ "$1" = "isolated" ]; then
+    printf '%s\n' "${isolated_packages[*]}"
+    return 0
+  fi
+
   if [ "$#" -ne 2 ]; then
     usage
     exit 2
@@ -96,9 +137,32 @@ main() {
     all_packages+=("$pkg")
   done < <(printf '%s\n' "$list_output" | LC_ALL=C sort)
 
+  # CHAOS-3974: every isolated package must actually exist in the module --
+  # a renamed or removed package left in isolated_packages would silently
+  # exclude nothing (already caught below by round-robin as usual) while its
+  # dedicated CI job also tested nothing, dropping the package from CI
+  # coverage entirely without either side raising an error.
+  local isolated found
+  for isolated in "${isolated_packages[@]}"; do
+    found=0
+    for pkg in "${all_packages[@]}"; do
+      if [ "$pkg" = "$isolated" ]; then
+        found=1
+        break
+      fi
+    done
+    if [ "$found" -eq 0 ]; then
+      # shellcheck disable=SC2016  # backticked `go list ./...` is prose, not a shell expansion
+      printf '%s: isolated package not found by `go list ./...`: %s -- update isolated_packages in %s\n' \
+        "${0##*/}" "$isolated" "${0##*/}" >&2
+      exit 1
+    fi
+  done
+
   local -a shard_packages=()
   local pos=0 want=$((index - 1))
   for pkg in "${all_packages[@]}"; do
+    is_isolated "$pkg" && continue
     if [ "$((pos % total))" -eq "$want" ]; then
       shard_packages+=("$pkg")
     fi

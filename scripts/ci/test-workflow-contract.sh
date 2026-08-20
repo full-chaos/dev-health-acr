@@ -157,6 +157,42 @@ check_container_oci_scan_same_job() {
   }
 }
 
+# CHAOS-3974: scripts/ci/test-shard.sh excludes isolated_packages from the
+# round-robin race matrix on the promise that they run in their own
+# dedicated job with their own timeout instead. Nothing else enforces that
+# promise -- a job rename or deletion that forgot to update the isolation
+# list would silently drop the isolated package from CI coverage entirely,
+# the exact failure mode test-shard-closure.sh's runtime proof does not
+# catch (it proves the union is total; it can't tell a genuinely-run job
+# apart from an isolation list edited to match one that no longer exists).
+check_isolated_devhealthschema_job() {
+  local file="$1" isolated job found_job=""
+  isolated="$("$repo_root/scripts/ci/test-shard.sh" isolated)"
+  if [ -z "$isolated" ]; then
+    printf 'scripts/ci/test-shard.sh isolated printed nothing\n' >&2
+    return 1
+  fi
+
+  while IFS= read -r job; do
+    if job_block "$file" "$job" | grep -qF 'test-shard.sh isolated'; then
+      found_job="$job"
+      break
+    fi
+  done < <(list_jobs "$file")
+
+  if [ -z "$found_job" ]; then
+    printf 'no job in %s invokes "scripts/ci/test-shard.sh isolated" to run the isolated package(s): %s\n' \
+      "$file" "$isolated" >&2
+    return 1
+  fi
+
+  job_block "$file" "$found_job" | grep -qE 'GOTEST_TIMEOUT=|-timeout[= ]' || {
+    printf 'job "%s" runs the isolated package(s) without its own explicit timeout override\n' \
+      "$found_job" >&2
+    return 1
+  }
+}
+
 check_go_cache() {
   local file="$1"
   local status=0
@@ -220,6 +256,7 @@ run_all_checks() {
   check_go_cache "$file"
   check_race_shard_agreement "$file"
   check_container_oci_scan_same_job "$file"
+  check_isolated_devhealthschema_job "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -300,5 +337,25 @@ out_of_range_shard="$tmpdir/out-of-range-shard.yml"
 sed 's/shard: \[1, 2, 3, 4\]/shard: [1, 2, 5, 9]/' "$workflow" > "$out_of_range_shard"
 assert_check_fails 'used shard indices outside 1..total' \
   check_race_shard_agreement "$out_of_range_shard"
+
+# (j) remove the isolated-package job so the isolated package's dedicated
+# scope silently disappears while test-shard.sh still excludes it from the
+# round-robin shards.
+isolated_job_removed="$tmpdir/isolated-job-removed.yml"
+awk '
+  /^  race-devhealthschema:/ { skip=1 }
+  skip && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthschema:/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$isolated_job_removed"
+assert_check_fails 'removed the race-devhealthschema job entirely' \
+  check_isolated_devhealthschema_job "$isolated_job_removed"
+
+# (k) keep the job but drop its explicit timeout override, so it would
+# silently fall back to the shared race-matrix default this isolation
+# exists to stop growing.
+isolated_job_no_timeout="$tmpdir/isolated-job-no-timeout.yml"
+sed 's/ GOTEST_TIMEOUT=900s//' "$workflow" > "$isolated_job_no_timeout"
+assert_check_fails 'dropped the isolated job'"'"'s explicit GOTEST_TIMEOUT override' \
+  check_isolated_devhealthschema_job "$isolated_job_no_timeout"
 
 printf 'PASS: all negative controls correctly failed their check\n'

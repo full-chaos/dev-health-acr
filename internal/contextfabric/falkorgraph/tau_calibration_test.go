@@ -812,8 +812,20 @@ func runFakeCalibrationRunner(t *testing.T, report CalibrationReport, opts Calib
 
 // runFakeCalibrationRunnerWithReportPath is runFakeCalibrationRunner with an
 // explicit reportPath, for tests that need to exercise the
-// input-path/output-path collision check (codex round-7 P2).
+// input-path/output-path collision check (codex round-7 P2). reportBytes is
+// nil -- see runFakeCalibrationRunnerWithReportPathAndBytes for the
+// CHAOS-3852 test that specifically needs real on-disk bytes.
 func runFakeCalibrationRunnerWithReportPath(t *testing.T, report CalibrationReport, opts CalibrationOptions, reportPath, outputPath string) *fakeRunnerT {
+	t.Helper()
+	return runFakeCalibrationRunnerWithReportPathAndBytes(t, report, opts, reportPath, nil, outputPath)
+}
+
+// runFakeCalibrationRunnerWithReportPathAndBytes is
+// runFakeCalibrationRunnerWithReportPath with an explicit reportBytes,
+// mirroring margin_calibration_test.go's identical need to hand
+// runMarginCalibrationRunner the real on-disk bytes (CHAOS-3852, porting
+// codex r8 O3's fix to this tool).
+func runFakeCalibrationRunnerWithReportPathAndBytes(t *testing.T, report CalibrationReport, opts CalibrationOptions, reportPath string, reportBytes []byte, outputPath string) *fakeRunnerT {
 	t.Helper()
 	fake := &fakeRunnerT{}
 	func() {
@@ -824,7 +836,7 @@ func runFakeCalibrationRunnerWithReportPath(t *testing.T, report CalibrationRepo
 				}
 			}
 		}()
-		runCalibrationRunner(fake, report, opts, reportPath, outputPath)
+		runCalibrationRunner(fake, report, opts, reportPath, reportBytes, outputPath)
 	}()
 	return fake
 }
@@ -1092,6 +1104,90 @@ func TestCalibrationRunner_WrittenArtifactRoundTripsProvenance(t *testing.T) {
 	}
 	if artifact.Policy.SimilarityFloor == 0 {
 		t.Errorf("Policy.SimilarityFloor = 0 in the round-tripped artifact, want the recommended tau")
+	}
+}
+
+// TestCalibrationRunner_SourceReportSHA256HashesTheActualFileBytes is
+// CHAOS-3852's core pinning test, porting
+// TestMarginCalibrationRunner_SourceReportSHA256HashesTheActualFileBytes
+// (margin_calibration_test.go, codex r8 O3) to this tool: the written
+// artifact's SourceReportSHA256 must equal an INDEPENDENTLY computed sha256
+// of the EXACT bytes on disk at reportPath -- not a hash of a re-marshalled
+// CalibrationReport, which (being a deliberately REDUCED struct, per its
+// own doc comment) silently drops every field a real oracle report carries
+// that CalibrationReport does not declare.
+//
+// The on-disk fixture below is built as a SUPERSET of CalibrationReport
+// (embeds it, adds fields CalibrationReport has no field for at all) --
+// exactly the real "extra fields json.Unmarshal silently drops" shape a
+// genuine oracle report has. If this test built the on-disk bytes by
+// marshalling the SAME reduced report value the runner receives, the two
+// byte sequences would be IDENTICAL by construction and the test would
+// pass whether or not the fix actually hashes the right bytes -- vacuous in
+// exactly the way this fix exists to close. This shape makes the two byte
+// sequences genuinely DIFFER, so only the FIXED code path (hashing
+// reportBytes directly) can pass.
+func TestCalibrationRunner_SourceReportSHA256HashesTheActualFileBytes(t *testing.T) {
+	var cases []CalibrationCase
+	for i := 0; i < 30; i++ {
+		sPlus := 0.80 + float64(i)*(0.15/29.0)
+		sMinus := 0.05 + float64(i)*(0.15/29.0)
+		cases = append(cases, CalibrationCase{
+			Cause: "hit", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+			HardNegativesTruncated: boolPtr(false),
+		})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Tau: 0.55, Cases: cases}
+	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+
+	type onDiskReport struct {
+		CalibrationReport
+		// Fields a REAL oracle report carries that CalibrationReport has NO
+		// field for at all -- json.Unmarshal into CalibrationReport
+		// silently drops these, which is exactly what makes re-marshalling
+		// report diverge from these actual on-disk bytes.
+		Total    int `json:"total"`
+		Hits     int `json:"hits"`
+		TextLoss int `json:"text_loss"`
+	}
+	encoded, err := json.Marshal(onDiskReport{CalibrationReport: report, Total: 50, Hits: 12, TextLoss: 3})
+	if err != nil {
+		t.Fatalf("marshal report fixture: %v", err)
+	}
+	reportPath := filepath.Join(t.TempDir(), "report.json")
+	if err := os.WriteFile(reportPath, encoded, 0o600); err != nil {
+		t.Fatalf("write report fixture: %v", err)
+	}
+	// Read it back exactly like TestCalibrateRetrievalPolicyFromReportFile
+	// does -- the SAME bytes runCalibrationRunner is handed below.
+	onDiskBytes, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report fixture: %v", err)
+	}
+	// Sanity: a re-marshal of the REDUCED report value (what the OLD, buggy
+	// code hashed) must NOT already equal the real on-disk bytes -- if it
+	// did, this fixture would be as vacuous as the rejected draft above.
+	if reducedEncoded, err := json.Marshal(report); err == nil && string(reducedEncoded) == string(onDiskBytes) {
+		t.Fatal("test fixture bug: re-marshalling the reduced report produced the SAME bytes as the on-disk fixture -- this test would not distinguish the fix from the defect it exists to catch")
+	}
+	wantSum := sha256.Sum256(onDiskBytes)
+	wantHex := hex.EncodeToString(wantSum[:])
+
+	outputPath := filepath.Join(t.TempDir(), "policy.json")
+	fake := runFakeCalibrationRunnerWithReportPathAndBytes(t, report, opts, reportPath, onDiskBytes, outputPath)
+	if fake.failed {
+		t.Fatalf("runCalibrationRunner unexpectedly called Fatalf: logs=%v", fake.logs)
+	}
+	written, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read written artifact: %v", err)
+	}
+	var decoded CalibrationArtifact
+	if err := json.Unmarshal(written, &decoded); err != nil {
+		t.Fatalf("decode written artifact: %v", err)
+	}
+	if decoded.SourceReportSHA256 != wantHex {
+		t.Fatalf("decoded.SourceReportSHA256 = %q, want %q (sha256 of the actual on-disk report bytes, independently computed)", decoded.SourceReportSHA256, wantHex)
 	}
 }
 

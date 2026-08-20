@@ -55,7 +55,14 @@ func resolvePathForIdentity(path string) (string, error) {
 // solely so the same-path collision check below has something to compare
 // outputPath against; it is never read again here (the caller already
 // parsed `report` from it).
-func runCalibrationRunner(t runnerT, report CalibrationReport, opts CalibrationOptions, reportPath, outputPath string) {
+//
+// reportBytes is CHAOS-3852's port of codex r8 O3's fix (see
+// NewCalibrationArtifact's doc comment): the RAW bytes the caller actually
+// read from reportPath (nil when report was built in memory, e.g. every
+// non-live test), passed straight through so the written artifact's
+// SourceReportSHA256 hashes the SAME bytes a caller could independently
+// verify with `sha256sum reportPath`.
+func runCalibrationRunner(t runnerT, report CalibrationReport, opts CalibrationOptions, reportPath string, reportBytes []byte, outputPath string) {
 	t.Helper()
 	if outputPath != "" {
 		// codex round-7 P2: input==output would DELETE THE SOURCE REPORT.
@@ -171,7 +178,7 @@ func runCalibrationRunner(t runnerT, report CalibrationReport, opts CalibrationO
 		// comment. Without this, a file swapped between two embedding
 		// spaces (or two TargetRecall values) is silently indistinguishable
 		// from the correct one to whatever reads outputPath back later.
-		artifact := NewCalibrationArtifact(result, report, opts, reportPath)
+		artifact := NewCalibrationArtifact(result, report, opts, reportPath, reportBytes)
 		encodedResult, err := json.MarshalIndent(artifact, "", "  ")
 		if err != nil {
 			t.Fatalf("encode calibration artifact: %v", err)
@@ -255,5 +262,5 @@ func TestCalibrateRetrievalPolicyFromReportFile(t *testing.T) {
 		TargetRecall:        targetRecall,
 		TargetEmbedIdentity: targetEmbedIdentity,
 		TargetDimension:     targetDimension,
-	}, reportPath, os.Getenv("ACR_TEST_CALIBRATION_OUTPUT"))
+	}, reportPath, encoded, os.Getenv("ACR_TEST_CALIBRATION_OUTPUT"))
 }
