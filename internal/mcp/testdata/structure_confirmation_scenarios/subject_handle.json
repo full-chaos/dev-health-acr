@@ -1,0 +1,10 @@
+{
+  "label": "subject_handle",
+  "member": "subject_handle",
+  "question": "synthetic test question, not corpus content",
+  "kind": "pull_request",
+  "pattern_id": "pull_request_number",
+  "value": "532",
+  "source_column": "pull_request_number",
+  "applied_value": "532"
+}
