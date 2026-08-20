@@ -77,8 +77,10 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -103,15 +105,14 @@ type twoTurnOracleEntry struct {
 	PositiveHandleValue       string `json:"positive_handle_value,omitempty"`
 	PositiveWindowBand        string `json:"positive_window_band,omitempty"`
 	NegativeKind              string `json:"negative_kind,omitempty"`
+	// NegativeAnchorCanonicalID names the negative anchor's entity; the
+	// alias/label TERM needed to compute a redemption-passing hash
+	// (codex round-1 finding #2) is looked up LIVE from the identity
+	// universe by this canonical_id at seed time (orchestrator ruling,
+	// 2026-08-20 -- see buildAnchorTermIndex's own doc comment), never
+	// carried on this entry: the signed annex does not supply one, and
+	// the term is graph-derived data, not oracle content.
 	NegativeAnchorCanonicalID string `json:"negative_anchor_canonical_id,omitempty"`
-	// NegativeAnchorMatchedTerm is the RAW alias/label term (never a
-	// question-derived string -- a graph identity term, e.g. a repository
-	// slug) of a REAL, existing identity-universe row for the negative
-	// anchor. The harness hashes it at seed time via graphrank.HashAliasTerm
-	// -- the SAME function VerifyAnchorClaimantUnique re-verifies against
-	// (codex round-1 finding #2: a fabricated hash can never match any live
-	// row, making the anchor confirmed-wrong arm structurally unredeemable).
-	NegativeAnchorMatchedTerm string `json:"negative_anchor_matched_term,omitempty"`
 	NegativeHandlePatternID   string `json:"negative_handle_pattern_id,omitempty"`
 	NegativeHandleValue       string `json:"negative_handle_value,omitempty"`
 	NegativeWindowBand        string `json:"negative_window_band,omitempty"`
@@ -267,18 +268,14 @@ func splitAnchorKey(key string) (kind, canonicalID string, ok bool) {
 // design brief's own class-conditional Missing rule (a member outside a
 // question's frame is unconstructible, not offered).
 //
-// GAP, NOT PAPERED OVER (per team-lead's explicit STOP instruction): the
-// signed annex's anchor oracles carry canonical_id only, never the raw
-// alias/label TERM a real identity-universe row would carry. The confirmed-
-// wrong arm's harness-seeded anchor constructor (seedAnchorNegativeResult)
-// needs that term to compute a hash VerifyAnchorClaimantUnique can actually
-// match against a live row -- see NegativeAnchorMatchedTerm's own doc
-// comment. This adapter leaves it empty; seedAnchorNegativeResult will then
-// report ArmInvalidReason for every subject_anchor confirmed_wrong case
-// (its existing, already-honest fallback -- never a fabricated pass), and
-// the anti-vacuity check will correctly fail for subject_anchor until this
-// is resolved. Reported to chris/team-lead alongside this change; not an
-// oversight in this adapter.
+// RESOLVED GAP: the signed annex's anchor oracles carry canonical_id only,
+// never the raw alias/label TERM a real identity-universe row would carry.
+// Reported to chris/team-lead; orchestrator ruling (2026-08-20): look the
+// term up LIVE from the graph at seed time instead of extending the
+// chris-signed artifact (a fresh authorship+sign-off cycle) -- the term is
+// graph-derived data, not oracle content. See buildAnchorTermIndex's own
+// doc comment for the lookup and seedAnchorNegativeResult for where it is
+// consumed.
 func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
 	annex := twoTurnOracleAnnex{
 		CorpusSHA256: signed.Provenance.CorpusSHA8,
@@ -336,8 +333,9 @@ func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
 					entry.NegativeKind, entry.NegativeAnchorCanonicalID = kind, id
 				}
 			}
-			// NegativeAnchorMatchedTerm intentionally left empty -- see
-			// this function's own doc comment (the GAP).
+			// The alias/label term needed to seed a redeemable negative is
+			// resolved LIVE at run time (buildAnchorTermIndex), not carried
+			// on this entry -- see this function's own doc comment.
 			annex.Entries = append(annex.Entries, entry)
 		}
 
@@ -675,6 +673,67 @@ func TestValidateTwoTurnOracleAnnex(t *testing.T) {
 // Signoff block (never the stale top-level Ratification/Status strings),
 // sha8 passthrough, per-(case,member) flattening, the anchor "kind:id"
 // split, and handle pattern_id derivation from the case's own kind.
+func TestAnchorMatchedTerm(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		row  graphrank.IdentityRow
+		want string
+		ok   bool
+	}{
+		{"label wins", graphrank.IdentityRow{Label: "Ask Dev", Aliases: []string{"askdev"}}, "Ask Dev", true},
+		{"falls back to alias when label blank", graphrank.IdentityRow{Label: "  ", Aliases: []string{"", "askdev"}}, "askdev", true},
+		{"falls back to provider alias when label and aliases blank", graphrank.IdentityRow{ProviderAliases: []string{"gh:ask-dev"}}, "gh:ask-dev", true},
+		{"nothing usable", graphrank.IdentityRow{}, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := anchorMatchedTerm(tc.row)
+			if got != tc.want || ok != tc.ok {
+				t.Errorf("anchorMatchedTerm(%+v) = (%q, %v), want (%q, %v)", tc.row, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestBuildAnchorTermIndex(t *testing.T) {
+	t.Parallel()
+	rows := []graphrank.IdentityRow{
+		{Kind: "repository", CanonicalID: "r1", Label: "Ask Dev"},
+		{Kind: "work_item", CanonicalID: "w1", Aliases: []string{"CHAOS-1"}},
+		{Kind: "repository", CanonicalID: "r2"}, // no usable term -- excluded
+	}
+	fn := func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+		return rows, time.Now(), true, nil
+	}
+	index, err := buildAnchorTermIndex(context.Background(), fn, "org1")
+	if err != nil {
+		t.Fatalf("buildAnchorTermIndex: %v", err)
+	}
+	if got := index[anchorTermIndexKey("repository", "r1")]; got != "Ask Dev" {
+		t.Errorf("index[repository/r1] = %q, want Ask Dev", got)
+	}
+	if got := index[anchorTermIndexKey("work_item", "w1")]; got != "CHAOS-1" {
+		t.Errorf("index[work_item/w1] = %q, want CHAOS-1", got)
+	}
+	if _, ok := index[anchorTermIndexKey("repository", "r2")]; ok {
+		t.Error("index[repository/r2] present, want absent (no usable term)")
+	}
+
+	// Fail-closed on incomplete enumeration (same rule VerifyAnchorClaimantUnique itself applies).
+	incomplete := func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+		return rows, time.Now(), false, nil
+	}
+	if _, err := buildAnchorTermIndex(context.Background(), incomplete, "org1"); err == nil {
+		t.Error("buildAnchorTermIndex(incomplete) = nil error, want an error")
+	}
+
+	// Fail-closed when the identity universe read itself is not wired.
+	if _, err := buildAnchorTermIndex(context.Background(), nil, "org1"); err == nil {
+		t.Error("buildAnchorTermIndex(nil func) = nil error, want an error")
+	}
+}
+
 func TestAdaptSignedOracleAnnex(t *testing.T) {
 	t.Parallel()
 	const raw = `{
@@ -1010,13 +1069,99 @@ type twoTurnResultStoreSaver interface {
 	Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string, contextfabric.ReuseRetrievalIdentity, contextfabric.ReusePromptVersions, contextfabric.ReuseVersionAuthorities, int64) error
 }
 
+// --- live anchor-term lookup (orchestrator ruling, 2026-08-20) ---
+//
+// The signed DP10 annex names negative anchors by canonical_id only, never
+// an alias/label term. seedAnchorNegativeResult needs a REAL term of that
+// SAME entity to compute a hash graphrank.VerifyAnchorClaimantUnique will
+// actually match at redemption time -- looked up LIVE from the org's own
+// identity universe rather than requiring the (chris-signed, not
+// unilaterally extensible) annex to carry it. The term is graph-derived
+// data, not oracle content, so this lookup does not touch the artifact's
+// authority.
+
+// anchorTermIndex maps (kind, canonical_id) -> the term
+// VerifyAnchorClaimantUnique would hash for that row, built ONCE per run
+// from a single identity-universe read (never per-case: the SAME
+// single-snapshot discipline chaos3898's ResolvedGraphBinding uses
+// elsewhere in this codebase -- one consistent read, not N independently
+// stale ones).
+type anchorTermIndex map[string]string
+
+func anchorTermIndexKey(kind, canonicalID string) string { return kind + "\x00" + canonicalID }
+
+// anchorMatchedTerm picks the term identityRowCarriesTermHash
+// (graphrank/chaos3900_structure_offers.go) would itself find FIRST for
+// row: Label, else the first Alias, else the first ProviderAlias -- the
+// SAME precedence order, so the term this harness seeds is provably one
+// redemption-time re-verification will re-derive and match, not a
+// lookalike chosen independently.
+func anchorMatchedTerm(row graphrank.IdentityRow) (string, bool) {
+	if strings.TrimSpace(row.Label) != "" {
+		return row.Label, true
+	}
+	for _, alias := range row.Aliases {
+		if strings.TrimSpace(alias) != "" {
+			return alias, true
+		}
+	}
+	for _, alias := range row.ProviderAliases {
+		if strings.TrimSpace(alias) != "" {
+			return alias, true
+		}
+	}
+	return "", false
+}
+
+// buildAnchorTermIndex reads the org's full identity universe ONCE (fail-
+// closed on error/incompleteness -- the SAME rule VerifyAnchorClaimantUnique
+// itself applies at redemption: design brief 3917's "NO uniqueness proof on
+// an incomplete enumeration") and indexes every row with a usable term.
+func buildAnchorTermIndex(ctx context.Context, identityUniverse graphrank.IdentityUniverseFunc, orgID string) (anchorTermIndex, error) {
+	if identityUniverse == nil {
+		return nil, fmt.Errorf("identity universe read is not wired")
+	}
+	rows, _, complete, err := identityUniverse(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("read identity universe: %w", err)
+	}
+	if !complete {
+		return nil, fmt.Errorf("identity universe read was incomplete -- refusing to seed anchor negatives against a partial enumeration")
+	}
+	index := make(anchorTermIndex, len(rows))
+	for _, row := range rows {
+		term, ok := anchorMatchedTerm(row)
+		if !ok {
+			continue
+		}
+		index[anchorTermIndexKey(string(row.Kind), row.CanonicalID)] = term
+	}
+	return index, nil
+}
+
 // seedAnchorNegativeResult is the harness-seeded STORED-RESULT constructor
 // (design brief §5 head, per-member constructors): seeding is scaffolding
 // for the offer's ORIGIN only -- everything downstream (receipt validation,
 // claimant re-verification, census, gate) is the ordinary production
 // redemption path run against this seeded row exactly as it would run
 // against any engine-produced one.
-func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver, principal storage.Principal, index int, entry twoTurnOracleEntry, receiptID string) (resultID string, err error) {
+//
+// terms supplies the MatchedTermHash input, looked up LIVE from the org's
+// own identity universe by (kind, canonical_id) -- orchestrator ruling
+// (2026-08-20): the signed DP10 annex carries canonical_id only, never an
+// alias/label term, and extending a chris-signed artifact needs a fresh
+// authorship+sign-off cycle; the term itself is graph-derived data, not
+// oracle content, so a live lookup at seed time doesn't touch the
+// artifact's authority. If terms has no entry for this negative -- the
+// canonical_id names no row the identity universe currently carries a
+// usable Label/Alias/ProviderAlias for -- this arm is reported
+// ArmInvalidReason for this case (the existing, already-honest fallback),
+// never a fabricated hash.
+func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver, principal storage.Principal, index int, entry twoTurnOracleEntry, receiptID string, terms anchorTermIndex) (resultID string, err error) {
+	term, ok := terms[anchorTermIndexKey(entry.NegativeKind, entry.NegativeAnchorCanonicalID)]
+	if !ok {
+		return "", fmt.Errorf("no usable alias/label term found in the live identity universe for negative anchor kind=%s canonical_id=%s -- cannot construct a redemption-passing hash", entry.NegativeKind, entry.NegativeAnchorCanonicalID)
+	}
 	resultID = fmt.Sprintf("result_twoturn_seed_anchor%06d", index)
 	result := contextfabric.InvestigationResult{
 		SchemaVersion: contextfabric.InvestigationResultSchemaV1,
@@ -1062,12 +1207,12 @@ func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver
 				// finding #2, confirmed against
 				// graphrank.VerifyAnchorClaimantUnique/identityRowCarriesTermHash):
 				// a fabricated hash can never match any live identity-universe
-				// row, making this arm structurally unredeemable. The annex
-				// must name a REAL alias/label term of an existing, wrong
-				// entity for this to ever succeed -- seeding supplies the
-				// offer's ORIGIN only, never a shortcut around real
-				// re-verification.
-				MatchedTermHash: graphrank.HashAliasTerm(entry.NegativeAnchorMatchedTerm),
+				// row, making this arm structurally unredeemable. term was
+				// looked up LIVE (this function's own doc comment) against a
+				// REAL row this negative's own canonical_id names -- seeding
+				// supplies the offer's ORIGIN only, never a shortcut around
+				// real re-verification.
+				MatchedTermHash: graphrank.HashAliasTerm(term),
 				OfferSource:     contractsv1.ContextFabricStructureOfferEngine,
 			}},
 		},
@@ -1089,14 +1234,14 @@ func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver
 // (explicit field -> receipt-bound offer on the SAME response, the
 // production upgrade path) to mint the negative offer, then redeems it on
 // a third call.
-func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration) twoTurnCaseResult {
+func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, anchorTerms anchorTermIndex) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmConfirmedWrong)}
 
 	var offerResultID, receiptID string
 	if entry.Member == string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
 		receiptID = contractsv1.ContextFabricAnchorOptionReceiptPrefix + "twoturnseed0000000000000"
 		var err error
-		offerResultID, err = seedAnchorNegativeResult(ctx, store, principal, index, entry, receiptID)
+		offerResultID, err = seedAnchorNegativeResult(ctx, store, principal, index, entry, receiptID, anchorTerms)
 		if err != nil {
 			res.ArmInvalidReason = "harness-seeded anchor negative could not be made redeemable: " + contextFabricRejectionClass(err)
 			return res
@@ -1321,6 +1466,31 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		t.Fatal("investigation result store is nil or does not satisfy the harness's Save signature -- the confirmed_wrong arm's anchor constructor cannot run without it")
 	}
 
+	// Independent ClickHouse client for the LIVE anchor-term lookup
+	// (buildAnchorTermIndex's own doc comment) -- mirrors
+	// chaos3884_replay_harness_test.go's own construction exactly; hosted.Open
+	// does not expose its internal ClickHouse client, so this harness builds
+	// its own, same as that harness does for the identical reason.
+	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(cfg.ClickHouseCACertPath)
+	if err != nil {
+		t.Fatalf("clickhouse TLS config: %v", err)
+	}
+	clickhouseClient, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
+		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: cfg.ClickHouseMaxBytesToRead,
+	})
+	if err != nil {
+		t.Fatalf("open clickhouse client: %v", err)
+	}
+	defer func() { _ = clickhouseClient.Close() }()
+	identityUniverse := func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+		return devhealthsource.IdentityUniverse(ctx, clickhouseClient, orgID)
+	}
+	anchorTerms, err := buildAnchorTermIndex(ctx, identityUniverse, orgID)
+	if err != nil {
+		t.Fatalf("build anchor term index: %v -- the subject_anchor confirmed_wrong arm cannot construct a redeemable negative without a live identity-universe read", err)
+	}
+	t.Logf("anchor term index: %d rows indexed", len(anchorTerms))
+
 	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
 
 	// Transport label reflects which transport actually ran (codex round-1
@@ -1418,7 +1588,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		report.Results = append(report.Results, inferred)
 
-		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout)
+		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms)
 		if confirmedWrong.ArmInvalidReason == "" && confirmedWrong.Applied && entry.NegativeCommittable {
 			report.ConfirmedWrongRedeemedCount[entry.Member]++
 		}
