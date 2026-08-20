@@ -111,18 +111,22 @@ jobs:
 
       - name: Install the pinned OpenCode release
         run: |
-          npm install --global --no-fund --no-audit \
-            "opencode-ai@${OPENCODE_PINNED_VERSION}"
-          # Even `opencode --version` initialises ~/.config/opencode and
-          # ~/.local/share/opencode (see docs/fullstack-acceptance.md §6), so this check must
-          # not run against the runner's real HOME -- the later "operator client configuration
-          # is absent" steps assert those paths never exist on this runner at all, and without
-          # this a version check the gate itself performs would be the thing that fails it.
+          # The npm package's own postinstall script (postinstall.mjs) runs the freshly
+          # unpacked binary with `--version` to verify the download -- with no HOME/XDG
+          # override of its own, so `npm install` itself (not just an explicit `opencode
+          # --version` afterward) initialises ~/.config/opencode and ~/.local/share/opencode.
+          # docs/fullstack-acceptance.md §6 already documents that even a bare version check
+          # does this; the later "operator client configuration is absent" steps assert those
+          # paths never exist on this runner at all, so the whole install must run against a
+          # throwaway root, not just this step's own explicit version check.
           preflight="$RUNNER_TEMP/opencode-preflight"
           mkdir -p "$preflight"/{config,data,cache,state}
-          observed="$(HOME="$preflight" XDG_CONFIG_HOME="$preflight/config" \
-            XDG_DATA_HOME="$preflight/data" XDG_CACHE_HOME="$preflight/cache" \
-            XDG_STATE_HOME="$preflight/state" opencode --version)"
+          export HOME="$preflight"
+          export XDG_CONFIG_HOME="$preflight/config" XDG_DATA_HOME="$preflight/data"
+          export XDG_CACHE_HOME="$preflight/cache" XDG_STATE_HOME="$preflight/state"
+          npm install --global --no-fund --no-audit \
+            "opencode-ai@${OPENCODE_PINNED_VERSION}"
+          observed="$(opencode --version)"
           if [ "$observed" != "$OPENCODE_PINNED_VERSION" ]; then
             echo "want OpenCode $OPENCODE_PINNED_VERSION, got $observed" >&2
             exit 1
@@ -329,18 +333,20 @@ jobs:
       - name: Install the pinned OpenCode release
         if: steps.decide.outputs.run == 'true'
         run: |
-          npm install --global --no-fund --no-audit \
-            "opencode-ai@${OPENCODE_PINNED_VERSION}"
-          # See the equivalent step in the compose job: even `opencode --version`
-          # initialises the operator config/data roots, which this job does not otherwise
-          # assert are absent, but doing the check against the runner's real HOME anyway
-          # would be an unforced difference from the compose job's now-isolated version.
+          # See the equivalent step in the compose job: the npm package's own postinstall
+          # script verifies the download by running the binary with `--version` against
+          # whatever HOME the install itself runs under, so the whole `npm install` needs the
+          # throwaway root, not just an explicit version check afterward. This job doesn't
+          # assert the operator's config is absent today, but there's no reason for it to
+          # touch the runner's real HOME either.
           preflight="$RUNNER_TEMP/opencode-preflight"
           mkdir -p "$preflight"/{config,data,cache,state}
-          observed="$(HOME="$preflight" XDG_CONFIG_HOME="$preflight/config" \
-            XDG_DATA_HOME="$preflight/data" XDG_CACHE_HOME="$preflight/cache" \
-            XDG_STATE_HOME="$preflight/state" opencode --version)"
-          test "$observed" = "$OPENCODE_PINNED_VERSION"
+          export HOME="$preflight"
+          export XDG_CONFIG_HOME="$preflight/config" XDG_DATA_HOME="$preflight/data"
+          export XDG_CACHE_HOME="$preflight/cache" XDG_STATE_HOME="$preflight/state"
+          npm install --global --no-fund --no-audit \
+            "opencode-ai@${OPENCODE_PINNED_VERSION}"
+          test "$(opencode --version)" = "$OPENCODE_PINNED_VERSION"
       - name: Pre-warm the provider package into the npm cache
         if: steps.decide.outputs.run == 'true'
         run: npm cache add "$PROVIDER_NPM_SPEC"
