@@ -178,6 +178,73 @@ func TestNewFileExchangeSelector_RejectsWorldWritableParentDirectory(t *testing.
 	}
 }
 
+// TestFileExchangeSelector_RejectsSymlinkedResponseFile is a regression test
+// for codex round-2 finding MEDIUM-3 (the symlink half): a response path
+// that is itself a symlink to a real, valid, appropriately-sized response
+// file elsewhere must still be rejected -- openNoFollowNonBlocking's
+// O_NOFOLLOW closes exactly this TOCTOU/redirection window, distinct from
+// the FIFO-hang half already covered by
+// TestFileExchangeSelector_RejectsFIFOResponsePathWithoutHanging.
+func TestFileExchangeSelector_RejectsSymlinkedResponseFile(t *testing.T) {
+	dir := t.TempDir()
+	selector, err := NewFileExchangeSelector(dir, "anthropic/sol-max", 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewFileExchangeSelector: %v", err)
+	}
+
+	// A hand-rolled responder rather than runFileExchangeResponder: the
+	// response must be a symlink from the very first moment it appears at
+	// the expected path, never a real regular file there first -- publishing
+	// a real file and swapping it for a symlink afterward would race the
+	// selector's own poll loop, which might win and read the valid file
+	// before the swap happens.
+	elsewhere := t.TempDir()
+	go func() {
+		requestsDir := filepath.Join(dir, "requests")
+		deadline := time.Now().Add(4 * time.Second)
+		for time.Now().Before(deadline) {
+			entries, err := os.ReadDir(requestsDir)
+			if err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+						continue
+					}
+					raw, err := os.ReadFile(filepath.Join(requestsDir, entry.Name()))
+					if err != nil {
+						continue
+					}
+					var request exchangeRequest
+					if err := json.Unmarshal(raw, &request); err != nil {
+						continue
+					}
+					output, _ := json.Marshal(structureSelectionOutput{
+						Selections: []struct {
+							Member            string `json:"member"`
+							SelectedReceiptID string `json:"selected_receipt_id"`
+						}{{Member: "expected_kind", SelectedReceiptID: "kindr_aaaaaaaaaaaaaaaaaaaaaaaa"}},
+					})
+					encoded, err := json.Marshal(exchangeResponse{SessionNonce: request.SessionNonce, Output: output})
+					if err != nil {
+						return
+					}
+					realPath := filepath.Join(elsewhere, entry.Name())
+					if err := os.WriteFile(realPath, encoded, 0o644); err != nil {
+						return
+					}
+					_ = os.Symlink(realPath, filepath.Join(dir, "responses", entry.Name()))
+					return
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	_, err = selector.SelectReceipts(context.Background(), "Was Ask Dev ready to ship?", sampleStructureNeeds())
+	if err == nil {
+		t.Fatal("expected an error when the response path is a symlink, even to an otherwise-valid response file")
+	}
+}
+
 func TestFileExchangeSelector_RejectsOversizedResponseFile(t *testing.T) {
 	dir := t.TempDir()
 	selector, err := NewFileExchangeSelector(dir, "anthropic/sol-max", 300*time.Millisecond)

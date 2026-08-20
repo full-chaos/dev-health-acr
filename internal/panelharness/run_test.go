@@ -255,6 +255,31 @@ func TestRun_DecisiveTurn1ContributesNoSelection(t *testing.T) {
 	}
 }
 
+// TestFindConfirmedEntry_RequiresPriorResultIDToMatchNotJustReceiptID is a
+// regression test for the (PriorResultID, ReceiptID) tuple-matching rule:
+// an entry that matches member and receipt but names a DIFFERENT prior
+// result ID must NOT be treated as confirming this panelist's own turn-1
+// offer -- a receipt ID can be reused/coincide across unrelated prior
+// results, so matching on ReceiptID alone would let another result's
+// confirmation be misattributed here.
+func TestFindConfirmedEntry_RequiresPriorResultIDToMatchNotJustReceiptID(t *testing.T) {
+	const member = "expected_kind"
+	const receiptID = "kindr_receipt00000000000001"
+	confirmed := []contractsv1.ContextFabricConfirmedStructureEntry{
+		{
+			Member: member, PriorResultID: "result_from_a_different_turn", ReceiptID: receiptID,
+			Source: contractsv1.ContextFabricStructureSourceReceipt, AppliedValue: "pull_request",
+		},
+	}
+
+	if _, ok := findConfirmedEntry(confirmed, member, "result_turn1", receiptID); ok {
+		t.Error("expected no match when PriorResultID differs, even though Member and ReceiptID both match")
+	}
+	if entry, ok := findConfirmedEntry(confirmed, member, "result_from_a_different_turn", receiptID); !ok || entry.AppliedValue != "pull_request" {
+		t.Errorf("expected a match on the correct PriorResultID tuple, got ok=%v entry=%+v", ok, entry)
+	}
+}
+
 func TestRun_RequiresAtLeastOnePanelist(t *testing.T) {
 	_, err := Run(context.Background(), RunConfig{OrgID: "org-test", Question: "q"})
 	if err == nil {
