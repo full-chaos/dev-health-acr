@@ -41,6 +41,18 @@ type Options struct {
 	// consumer). nil (the zero value) for every real caller, same
 	// discipline as ModelRuntimeOverride above.
 	RawSignalObserver graphrank.RawSignalObserver
+	// ResolutionTracer (CHAOS-3742 acceptance debt follow-up), when set,
+	// REPLACES the default graphrank.NewSlogResolutionTracer(Logger) this
+	// package otherwise wires unconditionally (buildContextFabricGraphReader) --
+	// letting a caller capture ResolutionTraceEvent values in-process (e.g.
+	// the "evidence_round" shadow stage's ShadowOutcome, which reports
+	// kindInsensitivityProof's own verdict) instead of only reaching them by
+	// parsing slog output at Debug level. nil (the zero value) for every
+	// real caller, including cmd/acr-api/main.go -- same
+	// test-only-hook discipline as ModelRuntimeOverride/RawSignalObserver
+	// above; a nil tracer here changes nothing (the SlogResolutionTracer
+	// default still wires exactly as before).
+	ResolutionTracer graphrank.ResolutionTracer
 }
 
 type Runtime struct {

@@ -361,7 +361,16 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 	// at Debug, so it is silent for any deployment running at its usual
 	// Info/Warn level and available the moment an operator raises theirs,
 	// with no separate config knob to remember to flip.
-	graphConfig.ResolutionTracer = graphrank.NewSlogResolutionTracer(request.options.Logger)
+	// CHAOS-3742 acceptance debt follow-up: request.options.ResolutionTracer
+	// overrides this default when set (test-only hook, nil for every real
+	// caller -- see Options.ResolutionTracer's own doc comment) so an
+	// in-process caller can capture trace events directly instead of only
+	// reaching them by parsing Debug-level slog output.
+	if request.options.ResolutionTracer != nil {
+		graphConfig.ResolutionTracer = request.options.ResolutionTracer
+	} else {
+		graphConfig.ResolutionTracer = graphrank.NewSlogResolutionTracer(request.options.Logger)
+	}
 	// CHAOS-3972 P3: wired UNCONDITIONALLY, not gated alongside
 	// wireIdentityUniverse below -- graphrank.ValidateHandleGrammar/
 	// HandleSourceColumn are pure, no-I/O registry lookups (no ClickHouse

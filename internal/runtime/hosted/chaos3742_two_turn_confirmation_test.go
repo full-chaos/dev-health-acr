@@ -313,12 +313,24 @@ func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
 			annex.Entries = append(annex.Entries, entry)
 		}
 
-		// subject_anchor
+		// subject_anchor. CanonicalID keeps the annex's FULL "kind:id"
+		// composite VERBATIM (live-run finding, orchestrator ruling
+		// 2026-08-20): graphrank.IdentityRow.CanonicalID -- what
+		// VerifyAnchorClaimantUnique itself compares against at redemption
+		// -- carries this SAME full composite (confirmed live: a case's
+		// negative "repository:d29d160a-..." matched an identity-universe
+		// row whose own CanonicalID was that exact string), never a bare
+		// id. A prior version of this adapter stripped the kind prefix via
+		// splitAnchorKey before storing CanonicalID, which made every
+		// anchor negative unmatchable regardless of whether a usable term
+		// existed -- splitAnchorKey now runs ONLY to derive the separate
+		// Kind field (typed offer matching), never to reshape CanonicalID.
 		if c.Oracles.Anchor.PositiveKey != nil || len(c.Oracles.Anchor.Negatives) > 0 {
 			entry := twoTurnOracleEntry{Index: index, Member: signedAnnexMember["anchor"]}
 			if c.Oracles.Anchor.PositiveKey != nil {
-				if kind, id, ok := splitAnchorKey(*c.Oracles.Anchor.PositiveKey); ok {
-					entry.PositiveKind, entry.PositiveAnchorCanonicalID = kind, id
+				entry.PositiveAnchorCanonicalID = *c.Oracles.Anchor.PositiveKey
+				if kind, _, ok := splitAnchorKey(*c.Oracles.Anchor.PositiveKey); ok {
+					entry.PositiveKind = kind
 				}
 			}
 			negValue := ""
@@ -329,8 +341,9 @@ func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
 				negValue = c.Oracles.Anchor.Negatives[0]
 			}
 			if negValue != "" {
-				if kind, id, ok := splitAnchorKey(negValue); ok {
-					entry.NegativeKind, entry.NegativeAnchorCanonicalID = kind, id
+				entry.NegativeAnchorCanonicalID = negValue
+				if kind, _, ok := splitAnchorKey(negValue); ok {
+					entry.NegativeKind = kind
 				}
 			}
 			// The alias/label term needed to seed a redeemable negative is
@@ -354,9 +367,20 @@ func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
 		// subject_handle: kind is derived from the SAME case's own
 		// positive expected_kind (the frozen corpus is single-subject-term
 		// dominant -- design brief §0 -- so a case's handle, when present,
-		// is scoped to the case's own primary kind).
+		// is scoped to the case's own primary kind). Live-run finding,
+		// orchestrator ruling 2026-08-20: entry.PositiveKind/NegativeKind
+		// were never set here, leaving Kind="" on every handle request --
+		// ContextFabricRequestedHandle.Validate rejects an empty Kind
+		// before the request reaches production logic at all, and the
+		// SAME empty Kind broke the positive arm's typed offer match
+		// (oracleOfferQuery.kind) too. Both are now set from the case's
+		// own positive kind, matching handlePatternIDForKind's own
+		// assumption exactly.
 		if (c.Oracles.Handle.Positive != nil && *c.Oracles.Handle.Positive != "") || len(c.Oracles.Handle.Negatives) > 0 {
-			entry := twoTurnOracleEntry{Index: index, Member: signedAnnexMember["handle"]}
+			entry := twoTurnOracleEntry{
+				Index: index, Member: signedAnnexMember["handle"],
+				PositiveKind: c.Oracles.Kind.Positive, NegativeKind: c.Oracles.Kind.Positive,
+			}
 			if patternID, ok := handlePatternIDForKind(c.Oracles.Kind.Positive); ok {
 				entry.PositiveHandlePatternID = patternID
 				entry.NegativeHandlePatternID = patternID
@@ -515,6 +539,39 @@ func (entry twoTurnOracleEntry) negativeQuery() oracleOfferQuery {
 	}
 }
 
+// twoTurnTraceCapture is an in-process graphrank.ResolutionTracer
+// (Options.ResolutionTracer), mirroring chaos3884_replay_harness_test.go's
+// own replayTraceCapture exactly. The harness resets it immediately before
+// a call it wants to observe and reads it immediately after -- the SAME
+// sequential single-caller discipline replayTraceCapture uses, valid
+// because this harness runs its calls one at a time (never concurrently).
+type twoTurnTraceCapture struct {
+	events []graphrank.ResolutionTraceEvent
+}
+
+func (c *twoTurnTraceCapture) Trace(event graphrank.ResolutionTraceEvent) {
+	c.events = append(c.events, event)
+}
+
+func (c *twoTurnTraceCapture) reset() {
+	c.events = nil
+}
+
+// singleSatisfierVerified reports whether the captured "evidence_round"
+// shadow-stage event (kindInsensitivityProof's own trace point) recorded a
+// would_commit outcome -- the INDEPENDENT, production-observed proof that
+// the all-kinds census found exactly one satisfier, i.e. that a commit
+// under inferred-tier narrowing is provably sound per design brief §2.0,
+// not merely assumed because a commit happened at all.
+func (c *twoTurnTraceCapture) singleSatisfierVerified() bool {
+	for _, e := range c.events {
+		if e.Stage == "evidence_round" && e.ShadowOutcome == string(graphrank.ShadowWouldCommit) {
+			return true
+		}
+	}
+	return false
+}
+
 // memberApplied reports whether member was actually confirmed/applied on
 // result. Window is a SEPARATE mechanism from every other member (codex
 // round-3 finding, confirmed against engine.go:836-840/window.go:420-423):
@@ -573,11 +630,24 @@ type twoTurnCaseResult struct {
 	// instead landed the value at question_stated could still fail to
 	// commit for an unrelated census reason, silently passing a commit-only
 	// check).
-	TierRoutedCorrectly bool   `json:"tier_routed_correctly,omitempty"`
-	CommittedCount      int    `json:"committed_count"`
-	WrongCommit         bool   `json:"wrong_commit"`
-	MutationProbe       string `json:"mutation_probe,omitempty"`
-	MutationTripped     bool   `json:"mutation_tripped,omitempty"`
+	TierRoutedCorrectly bool `json:"tier_routed_correctly,omitempty"`
+	// SingleSatisfierVerified (inferred_tier arm only, orchestrator ruling
+	// 2026-08-20 post-live-run): whether THIS commit's claim to the design
+	// brief §2.0 kind-insensitivity exception (all-kinds-satisfier-count==1)
+	// was INDEPENDENTLY OBSERVED, not assumed from "production shouldn't
+	// have committed otherwise" (a circular argument if the enforcement
+	// itself has a bug -- precisely the risk an untested-live pivot
+	// carries). Read directly off the SAME "evidence_round" shadow-stage
+	// trace event kindInsensitivityProof itself populates
+	// (graphrank/chaos3899_evidence_round.go), captured in-process via
+	// hosted.Options.ResolutionTracer -- never re-derived by a parallel
+	// census implementation. Only meaningful when CommittedCount>0; false
+	// otherwise (no commit to verify).
+	SingleSatisfierVerified bool   `json:"single_satisfier_verified,omitempty"`
+	CommittedCount          int    `json:"committed_count"`
+	WrongCommit             bool   `json:"wrong_commit"`
+	MutationProbe           string `json:"mutation_probe,omitempty"`
+	MutationTripped         bool   `json:"mutation_tripped,omitempty"`
 	// ArmInvalidReason is a closed-vocabulary classification only (never
 	// raw err.Error() text -- codex round-1 finding #9: an investigator
 	// error can carry upstream detail this outcome-only artifact must not
@@ -586,7 +656,16 @@ type twoTurnCaseResult struct {
 }
 
 type twoTurnReport struct {
-	Provenance trialProvenance `json:"provenance"`
+	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
+	// renames are otherwise invisible to a consumer parsing the JSON --
+	// StructureAndWindowDisclosureAbsentCount replaced NoDiscriminatorsCount
+	// under the SAME struct with no version marker). "2" marks this
+	// reshaped report (the rename plus the new controls/anti-vacuity/
+	// single-satisfier fields below); "1" was the shape PR #167 shipped.
+	// Bump this again on any future field rename or removal so a consumer
+	// can detect drift instead of silently reading a stale key.
+	ReportSchemaVersion string          `json:"report_schema_version"`
+	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
 	// (codex round-3 finding #3: the wrapper script already exports
 	// ACR_TEST_TRIAL_BASE_SHA -- required provenance, team-lead ruling
@@ -602,20 +681,81 @@ type twoTurnReport struct {
 	// report zero wrong commits and pass the anti-vacuity check via
 	// confirmed_wrong alone, having proven NOTHING about ordinary
 	// conversion. The final assertion requires this > 0.
-	PositiveAppliedCount  int            `json:"positive_applied_count"`
-	GateReachableCount    int            `json:"gate_reachable_count"`
-	NoDiscriminatorsCount int            `json:"no_discriminators_count"`
-	OfferMissCount        map[string]int `json:"offer_miss_count"`
-	WrongCommitCount      int            `json:"wrong_commit_count"`
-	InferredTierAnyCommit int            `json:"inferred_tier_any_commit_count"`
+	PositiveAppliedCount int `json:"positive_applied_count"`
+	GateReachableCount   int `json:"gate_reachable_count"`
+	// StructureAndWindowDisclosureAbsentCount (orchestrator ruling,
+	// 2026-08-20, post-live-run: renamed from NoDiscriminatorsCount, which
+	// this run proved gets misread as the P1 acceptance row's
+	// "no_discriminators" bar). This field counts entries where BOTH
+	// StructureNeeds AND WindowClarification were nil on turn 1 -- a much
+	// narrower, purely structural signal than the census's own
+	// no_discriminators REFUSAL REASON (a per-unique-case outcome
+	// classification this harness does not reproduce). NOT COMPARABLE to
+	// the DP9 "no_discriminators 41->=20" bar; report it as its own
+	// number, never as that bar's measurement. Census-manageable-among-
+	// stalls (the DP9 bar's other half) remains OUT OF SCOPE entirely --
+	// not instrumented by this harness at all.
+	StructureAndWindowDisclosureAbsentCount int            `json:"structure_and_window_disclosure_absent_count"`
+	OfferMissCount                          map[string]int `json:"offer_miss_count"`
+	WrongCommitCount                        int            `json:"wrong_commit_count"`
+	InferredTierAnyCommit                   int            `json:"inferred_tier_any_commit_count"`
+	// InferredTierSingleSatisfierVerifiedCount is PER COMMIT (not per
+	// case): how many of InferredTierAnyCommit's own commits carried an
+	// INDEPENDENTLY-OBSERVED (SingleSatisfierVerified) proof that the
+	// design brief §2.0 kind-insensitivity exception actually held for
+	// that commit. If this is LESS than InferredTierAnyCommit, that is a
+	// genuine, more serious finding than the bar violation alone: it means
+	// at least one commit happened WITHOUT the exception's own proof
+	// backing it.
+	InferredTierSingleSatisfierVerifiedCount int `json:"inferred_tier_single_satisfier_verified_count"`
 	// ConfirmedWrongRedeemedCount is PER APPLICABLE MEMBER (codex round-1
 	// finding #4: a global scalar lets one member's success mask another
 	// member's permanently-unredeemable designated negative).
-	ConfirmedWrongRedeemedCount map[string]int      `json:"confirmed_wrong_redeemed_committable_count"`
-	AntiVacuityValid            bool                `json:"anti_vacuity_valid"`
-	MutationProbesTripped       map[string]int      `json:"mutation_probes_tripped"`
-	MutationProbesRun           map[string]int      `json:"mutation_probes_run"`
-	Results                     []twoTurnCaseResult `json:"results"`
+	ConfirmedWrongRedeemedCount map[string]int `json:"confirmed_wrong_redeemed_committable_count"`
+	AntiVacuityValid            bool           `json:"anti_vacuity_valid"`
+	// AnchorAntiVacuityDenominator/AnchorNonEnumerableKindExcludedCount
+	// (orchestrator ruling 2026-08-20): subject_anchor's anti-vacuity
+	// requirement is scoped to negatives whose kind the live identity
+	// universe actually enumerates (buildAnchorTermIndex/anchorMatchedTerm
+	// -- e.g. this deployment's own IdentityUniverse covers repository/
+	// project/team, never work_item/pull_request/ci_pipeline_run). A
+	// negative naming a non-enumerable kind can NEVER be seeded, by
+	// construction, regardless of any bug fix -- that is a SCOPE FACT
+	// about this org's own identity-universe coverage, not a defect to
+	// paper over by excluding it silently. AnchorAntiVacuityDenominator is
+	// how many anchor-committable entries WERE within scope (kind
+	// enumerable); AnchorNonEnumerableKindExcludedCount is how many were
+	// excluded and why many.
+	AnchorAntiVacuityDenominator         int            `json:"anchor_anti_vacuity_denominator"`
+	AnchorNonEnumerableKindExcludedCount int            `json:"anchor_non_enumerable_kind_excluded_count"`
+	MutationProbesTripped                map[string]int `json:"mutation_probes_tripped"`
+	MutationProbesRun                    map[string]int `json:"mutation_probes_run"`
+	// ControlsTotal/ControlsWitnessed: see controlSeen/controlWitnessed's
+	// own doc comment at the call site for the exact definition and its
+	// limits (best-effort Status==no_match proxy, no attestation
+	// visibility).
+	//
+	// TWO SCOPE LIMITS a reader must know before comparing this pair to
+	// the DP9 "controls 19/19" bar (codex round-3, documented rather than
+	// chased further -- neither is a hidden gap, both were already true
+	// of every other bar this harness reports and are called out here
+	// for the same reason StructureAndWindowDisclosureAbsentCount is):
+	//  1. ControlsTotal reflects only the annex entries THIS run actually
+	//     processed -- capped by ACR_TEST_TRIAL_LIMIT when set. It is
+	//     never asserted equal to the full annex's control count; compare
+	//     it to 19 externally, the same way GateReachableCount is
+	//     compared to its own >=10 bar rather than asserted against it.
+	//  2. ControlsWitnessed counts wire-level Status==no_match, which
+	//     ALSO fires on the trivial empty-candidate-pool path
+	//     (subjectlessTerminalReason "empty_pool") -- a path that never
+	//     runs the evidence round and so carries no census attestation at
+	//     all. It is therefore a proxy for "witnessed no_match", not
+	//     proof of the design brief's stronger "attestation present"
+	//     claim; this harness has no wire-level signal that distinguishes
+	//     the two.
+	ControlsTotal     int                 `json:"controls_total"`
+	ControlsWitnessed int                 `json:"controls_witnessed"`
+	Results           []twoTurnCaseResult `json:"results"`
 }
 
 // TestTwoTurnCaseResultCarriesNoQuestionText mirrors
@@ -734,6 +874,26 @@ func TestBuildAnchorTermIndex(t *testing.T) {
 	}
 }
 
+func TestEnumerableAnchorKinds(t *testing.T) {
+	t.Parallel()
+	terms := anchorTermIndex{
+		anchorTermIndexKey("repository", "repository:r1"): "Ask Dev",
+		anchorTermIndexKey("repository", "repository:r2"): "Container",
+		anchorTermIndexKey("project", "project:p1"):       "Fullchaos",
+	}
+	got := enumerableAnchorKinds(terms)
+	want := map[string]bool{"repository": true, "project": true}
+	if len(got) != len(want) || !got["repository"] || !got["project"] {
+		t.Errorf("enumerableAnchorKinds(%v) = %v, want %v", terms, got, want)
+	}
+	if got["work_item"] {
+		t.Error("enumerableAnchorKinds reported work_item as enumerable, want false (not present in the index)")
+	}
+	if empty := enumerableAnchorKinds(nil); len(empty) != 0 {
+		t.Errorf("enumerableAnchorKinds(nil) = %v, want empty", empty)
+	}
+}
+
 func TestAdaptSignedOracleAnnex(t *testing.T) {
 	t.Parallel()
 	const raw = `{
@@ -805,9 +965,9 @@ func TestAdaptSignedOracleAnnex(t *testing.T) {
 	if e, ok := byIndexMember["0/expected_kind"]; !ok || e.PositiveKind != "repository" || e.NegativeKind != "work_item" || !e.NegativeCommittable {
 		t.Errorf("case 0 expected_kind entry = %+v, ok=%v, want positive=repository negative=work_item committable=true", e, ok)
 	}
-	if e, ok := byIndexMember["0/subject_anchor"]; !ok || e.PositiveKind != "repository" || e.PositiveAnchorCanonicalID != "7b9583ee-4d24-2be7-4d09-34f815bebdd7" ||
-		e.NegativeKind != "repository" || e.NegativeAnchorCanonicalID != "d29d160a-95fe-5b45-d4c1-fd1f5427b772" || !e.NegativeCommittable {
-		t.Errorf("case 0 subject_anchor entry = %+v, ok=%v, want split kind:id pairs and committable=true", e, ok)
+	if e, ok := byIndexMember["0/subject_anchor"]; !ok || e.PositiveKind != "repository" || e.PositiveAnchorCanonicalID != "repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7" ||
+		e.NegativeKind != "repository" || e.NegativeAnchorCanonicalID != "repository:d29d160a-95fe-5b45-d4c1-fd1f5427b772" || !e.NegativeCommittable {
+		t.Errorf("case 0 subject_anchor entry = %+v, ok=%v, want CanonicalID to keep the FULL kind:id composite (live-run finding: graphrank.IdentityRow.CanonicalID carries this same composite) and committable=true", e, ok)
 	}
 	if _, ok := byIndexMember["0/subject_handle"]; ok {
 		t.Error("case 0 subject_handle entry present, want none (positive=null, negatives=[])")
@@ -818,6 +978,9 @@ func TestAdaptSignedOracleAnnex(t *testing.T) {
 	e, ok := byIndexMember["5/subject_handle"]
 	if !ok {
 		t.Fatal("case 5 subject_handle entry missing")
+	}
+	if e.PositiveKind != "work_item" || e.NegativeKind != "work_item" {
+		t.Errorf("case 5 subject_handle Kind fields = positive=%q negative=%q, want work_item/work_item (live-run finding: these were never set, failing ContextFabricRequestedHandle.Validate universally)", e.PositiveKind, e.NegativeKind)
 	}
 	if e.PositiveHandlePatternID != "work_item_ticket_key" || e.PositiveHandleValue != "CHAOS-2476" {
 		t.Errorf("case 5 subject_handle positive = pattern=%q value=%q, want work_item_ticket_key/CHAOS-2476", e.PositiveHandlePatternID, e.PositiveHandleValue)
@@ -837,8 +1000,8 @@ func TestAdaptSignedOracleAnnex(t *testing.T) {
 	if e.PositiveAnchorCanonicalID != "" {
 		t.Errorf("case 30 subject_anchor positive_anchor_canonical_id = %q, want empty (no true positive)", e.PositiveAnchorCanonicalID)
 	}
-	if e.NegativeAnchorCanonicalID != "7b110eba-4183-c29e-53b9-92fb058a29cb" || e.NegativeCommittable {
-		t.Errorf("case 30 subject_anchor negative = %q committable=%v, want the negative present but NOT committable (no designation)", e.NegativeAnchorCanonicalID, e.NegativeCommittable)
+	if e.NegativeAnchorCanonicalID != "repository:7b110eba-4183-c29e-53b9-92fb058a29cb" || e.NegativeCommittable {
+		t.Errorf("case 30 subject_anchor negative = %q committable=%v, want the negative present (full kind:id composite) but NOT committable (no designation)", e.NegativeAnchorCanonicalID, e.NegativeCommittable)
 	}
 }
 
@@ -1005,7 +1168,7 @@ func setTwoTurnReceipt(req *contractsv1.ContextFabricInvestigationRequest, membe
 // EXPLICIT field, unconfirmed. Structurally exempt for subject_anchor (see
 // this file's own header comment) -- returns ArmInvalidReason in that case,
 // never a false pass or fail.
-func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration) twoTurnCaseResult {
+func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmInferredTier)}
 	req := twoTurnRequest(index, tc, "inferredtier")
 	switch entry.Member {
@@ -1028,6 +1191,9 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		res.ArmInvalidReason = fmt.Sprintf("unknown member %q", entry.Member)
 		return res
 	}
+	if trace != nil {
+		trace.reset()
+	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	result, err := investigator.Investigate(callCtx, principal, req)
@@ -1038,6 +1204,9 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	}
 	res.Turn2Status = string(result.Status)
 	res.CommittedCount = len(result.SubjectResolution.Committed)
+	if res.CommittedCount > 0 && trace != nil {
+		res.SingleSatisfierVerified = trace.singleSatisfierVerified()
+	}
 	// Positive tier-routing proof (codex round-1 finding #6, codex round-2
 	// finding: window's own echo is a SEPARATE mechanism -- window.go's
 	// windowExplicitProvenance stamps EffectiveEvidenceWindow.Provenance,
@@ -1089,6 +1258,24 @@ type twoTurnResultStoreSaver interface {
 type anchorTermIndex map[string]string
 
 func anchorTermIndexKey(kind, canonicalID string) string { return kind + "\x00" + canonicalID }
+
+// enumerableAnchorKinds extracts the set of subject kinds actually present
+// in an anchorTermIndex -- i.e. the kinds this deployment's own
+// IdentityUniverse read enumerates AT ALL (orchestrator ruling 2026-08-20:
+// "the 31/44 cap is a scope fact, not a bug" -- e.g. this deployment's
+// IdentityUniverse covers repository/project/team, never work_item/
+// pull_request/ci_pipeline_run; computed from the live read itself, never
+// hardcoded, so it stays correct if a future deployment's coverage
+// differs).
+func enumerableAnchorKinds(terms anchorTermIndex) map[string]bool {
+	kinds := map[string]bool{}
+	for key := range terms {
+		if idx := strings.IndexByte(key, 0); idx >= 0 {
+			kinds[key[:idx]] = true
+		}
+	}
+	return kinds
+}
 
 // anchorMatchedTerm picks the term identityRowCarriesTermHash
 // (graphrank/chaos3900_structure_offers.go) would itself find FIRST for
@@ -1429,7 +1616,8 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	options := hosted.Options{ServiceVersion: "chaos-3742-two-turn", Logger: logger, Now: time.Now}
+	traceCapture := &twoTurnTraceCapture{}
+	options := hosted.Options{ServiceVersion: "chaos-3742-two-turn", Logger: logger, Now: time.Now, ResolutionTracer: traceCapture}
 	caseTimeout := 240 * time.Second
 	if exchangeDir != "" {
 		timeout := 10 * time.Minute
@@ -1501,6 +1689,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
+		ReportSchemaVersion: "2",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -1534,16 +1723,52 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// negative for it, and the run is valid only once EVERY applicable
 	// member has actually redeemed one.
 	applicableMembers := map[string]bool{}
+	enumerableKinds := enumerableAnchorKinds(anchorTerms)
 	for _, entry := range entries {
-		if entry.NegativeCommittable {
-			applicableMembers[entry.Member] = true
+		if !entry.NegativeCommittable {
+			continue
 		}
+		if entry.Member == string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
+			// Scoped to enumerable kinds (orchestrator ruling 2026-08-20):
+			// a negative naming a kind IdentityUniverse never enumerates
+			// can NEVER be seeded, by construction -- that is a scope fact
+			// about this deployment's own identity-universe coverage, not
+			// something anti-vacuity should be held to.
+			if !enumerableKinds[entry.NegativeKind] {
+				report.AnchorNonEnumerableKindExcludedCount++
+				continue
+			}
+			report.AnchorAntiVacuityDenominator++
+		}
+		applicableMembers[entry.Member] = true
 	}
+	// controlSeen/controlWitnessed back the DP9 "controls X/19" report
+	// (orchestrator ruling 2026-08-20): a control is a corpus case with no
+	// expected answer (trialCase.ExpectID=="" -- the SAME definition
+	// generative_trial_live_test.go's own IsControl already uses, not a
+	// new band-based one). "Witnessed" here means turn 1's own Status was
+	// no_match -- a best-effort proxy for D0's "no_match remains WITNESSED
+	// (attestation present)": this harness has no visibility into the
+	// internal census attestation bit itself, only the wire-level Status,
+	// and says so explicitly in the report rather than claiming more than
+	// it observed.
+	controlSeen := map[int]bool{}
+	controlWitnessed := map[int]bool{}
 	for _, entry := range entries {
 		if entry.Index < 0 || entry.Index >= len(corpus) {
 			t.Fatalf("oracle annex entry names index %d, corpus has %d cases", entry.Index, len(corpus))
 		}
 		tc := corpus[entry.Index]
+		// Recorded BEFORE the call, from the corpus alone -- never gated
+		// on success (codex round-1 finding: the prior version only added
+		// a control to the denominator AFTER a successful turn 1, so an
+		// investigator error on a control case silently shrank
+		// ControlsTotal instead of counting as unwitnessed. A limited or
+		// partially-erroring run must not be able to report a
+		// vacuously-true X/X).
+		if tc.ExpectID == "" {
+			controlSeen[entry.Index] = true
+		}
 
 		turn1Req := twoTurnRequest(entry.Index, tc, "turn1")
 		turn1Ctx, turn1Cancel := context.WithTimeout(ctx, caseTimeout)
@@ -1554,6 +1779,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			continue
 		}
 		report.CasesRun++
+		if tc.ExpectID == "" {
+			if turn1.Status == contractsv1.ContextFabricInvestigationNoMatch {
+				controlWitnessed[entry.Index] = true
+			}
+		}
 		// codex round-2 finding #1: StructureNeeds and WindowClarification
 		// are composed INDEPENDENTLY on the subjectless-terminal path
 		// (unresolved.go) -- window is never added to
@@ -1563,7 +1793,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// Skipping on StructureNeeds alone would silently drop every
 		// window-only case from every arm.
 		if turn1.StructureNeeds == nil && turn1.WindowClarification == nil {
-			report.NoDiscriminatorsCount++
+			report.StructureAndWindowDisclosureAbsentCount++
 			continue
 		}
 
@@ -1582,9 +1812,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		report.Results = append(report.Results, positive)
 
-		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout)
+		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture)
 		if inferred.ArmInvalidReason == "" && inferred.CommittedCount > 0 {
 			report.InferredTierAnyCommit++
+			if inferred.SingleSatisfierVerified {
+				report.InferredTierSingleSatisfierVerifiedCount++
+			}
 		}
 		report.Results = append(report.Results, inferred)
 
@@ -1638,6 +1871,9 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	sort.Strings(unsatisfiedMembers)
 	report.AntiVacuityValid = len(applicableMembers) > 0 && len(unsatisfiedMembers) == 0
 
+	report.ControlsTotal = len(controlSeen)
+	report.ControlsWitnessed = len(controlWitnessed)
+
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal two-turn report: %v", err)
@@ -1675,6 +1911,16 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if report.InferredTierAnyCommit > 0 {
 		t.Errorf("inferred_tier_any_commit_count=%d, want 0 (any commit under unconfirmed inferred-tier structure fails the run)", report.InferredTierAnyCommit)
 	}
+	// Distinct, LOUDER signal (orchestrator ruling 2026-08-20): an
+	// inferred-tier commit with NO independently-observed single-satisfier
+	// proof backing it is more serious than the bar violation above -- it
+	// means the design brief §2.0 kind-insensitivity exception cannot be
+	// verified for that commit, not merely that the zero-tolerance
+	// instrument bar was violated (which every inferred-tier commit
+	// violates by construction).
+	if unverified := report.InferredTierAnyCommit - report.InferredTierSingleSatisfierVerifiedCount; unverified > 0 {
+		t.Errorf("UNVERIFIED INFERRED-TIER COMMIT: %d of %d inferred-tier commits have NO independently-observed single-satisfier proof (design brief §2.0 kind-insensitivity exception) -- this is a correctness finding, not just a bar violation", unverified, report.InferredTierAnyCommit)
+	}
 	// A run whose mutation arm did not trip every probe it attempted is
 	// INVALID, never silently passing (design brief's own fails-toward-fine
 	// discipline for this arm).
@@ -1691,5 +1937,23 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if r.Arm == string(twoTurnArmInferredTier) && r.ArmInvalidReason == "" && !r.TierRoutedCorrectly {
 			t.Errorf("case %d member %q: inferred-tier injection did not route to explicit_unattributed/inferred_default in the echo -- tier-routing finding", r.Index, r.Member)
 		}
+	}
+	// D0 controls (design brief: "no_match remains WITNESSED (attestation
+	// present)"). ControlsWitnessed is a best-effort Status==no_match
+	// proxy -- see controlSeen/controlWitnessed's own doc comment -- so a
+	// miss here is reported as a finding, never silently passed.
+	//
+	// A zero denominator (codex round-2 finding, HIGH confidence) must
+	// NOT read as a vacuous pass: a limited/truncated run (ACR_TEST_TRIAL_
+	// LIMIT) or an annex that happens to name no control entries can drive
+	// ControlsTotal to 0, and 0 < 0 is false either way -- the old
+	// "ControlsTotal > 0 &&" guard change would not have helped, since the
+	// comparison itself is vacuously satisfied at 0/0. The denominator
+	// being zero is itself the finding: D0 cannot be reported at all, so
+	// the run is INVALID for this check rather than silently green.
+	if report.ControlsTotal == 0 {
+		t.Errorf("controls_total=0: this run recorded NO control cases (entries with no expected answer) -- D0 cannot be reported and the run is INVALID for this check")
+	} else if report.ControlsWitnessed < report.ControlsTotal {
+		t.Errorf("controls_witnessed=%d/%d, want %d/%d (D0: every control case must be witnessed no_match at turn 1)", report.ControlsWitnessed, report.ControlsTotal, report.ControlsTotal, report.ControlsTotal)
 	}
 }

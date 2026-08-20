@@ -31,6 +31,15 @@ if [[ ! -f "$ANNEX_PATH" ]]; then
 fi
 
 trial_wire_common_env
+# ACR_TEST_TRIAL_ARM: the file-exchange runtime uses this value as the
+# Model field in every persisted ModelExecutionReceipt (model_runtime.go);
+# an unset value fails ModelExecutionReceipt.Validate() universally at
+# turn 1 for EVERY case ("model receipt model is invalid" -- the live-run
+# finding this line fixes, orchestrator ruling 2026-08-20). Every sibling
+# script in this directory (run-replay.sh, run-arm5.sh, run-w0.sh, ...)
+# already exports this; this script must be correct standalone, not
+# correct-with-tribal-knowledge.
+export ACR_TEST_TRIAL_ARM="twoturn"
 export ACR_TEST_TWOTURN_ORACLE_ANNEX="$ANNEX_PATH"
 : "${ACR_TEST_TWOTURN_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3742_twoturn-$(date -u +%Y%m%dT%H%M%SZ)-$$.json}"
 export ACR_TEST_TWOTURN_OUT
