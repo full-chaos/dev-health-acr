@@ -259,11 +259,14 @@ func TestInsertContext_RejectsMalformedEventBeforeAnyInsert(t *testing.T) {
 // bypasses validateEvent entirely (no Go-side gate at all) must still be
 // rejected by acr.context_fabric_structure_selections_consensus_is_valid_panel
 // -- proving the DB CHECK, not only the Sink's own Go validation, actually
-// enforces >=2 distinct panel model identities. Exercises exactly the two
-// codex round-2 findings: a single-entry payload, a duplicate-identity
-// payload, and (length-check-only would have missed this) a payload with a
-// well-formed consensus_evidence object that never carries the
-// panel_model_identities key at all.
+// enforces >=2 distinct panel model identities. Exercises codex round 2's
+// findings (single-entry payload, duplicate identities, a missing
+// panel_model_identities key that a naive NULL comparison would have let
+// through) AND round 3's findings (non-string identity elements that
+// jsonb_array_elements_text would silently stringify into "distinct" text,
+// non-boolean agreement bits, and a panel_model_identities/agreement_bits
+// length mismatch -- none of which validateEvent alone would ever reach,
+// since it only runs on values Go itself constructed).
 func TestConsensusPanelSizeCheck_RejectsAtDatabaseLevelDirectly(t *testing.T) {
 	ctx := context.Background()
 	db := newStructureSelectionTestDatabase(t, ctx)
@@ -281,6 +284,11 @@ VALUES (gen_random_uuid()::text, 'org-raw-consensus', now(), repeat('a', 64), $1
 	require.Error(t, insertRaw(t, "raw-single", `{"panel_model_identities": ["anthropic/sol-max"], "agreement_bits": [true]}`), "single-entry payload must be rejected at the DB level")
 	require.Error(t, insertRaw(t, "raw-duplicate", `{"panel_model_identities": ["anthropic/sol-max", "anthropic/sol-max"], "agreement_bits": [true, false]}`), "duplicate identities must be rejected at the DB level")
 	require.Error(t, insertRaw(t, "raw-missing-key", `{"agreement_bits": [true, false]}`), "a missing panel_model_identities key must be rejected, not silently pass a NULL comparison")
+	require.Error(t, insertRaw(t, "raw-non-string-identities", `{"panel_model_identities": [1, 2], "agreement_bits": [true, false]}`), "non-string identity elements must be rejected, not silently stringified into two distinct values")
+	require.Error(t, insertRaw(t, "raw-non-string-object-identities", `{"panel_model_identities": [{"a":1}, {"b":2}], "agreement_bits": [true, false]}`), "JSON object identity elements must be rejected")
+	require.Error(t, insertRaw(t, "raw-non-boolean-bits", `{"panel_model_identities": ["anthropic/sol-max", "anthropic/luna"], "agreement_bits": ["yes", "no"]}`), "non-boolean agreement bits must be rejected")
+	require.Error(t, insertRaw(t, "raw-mismatched-length", `{"panel_model_identities": ["anthropic/sol-max", "anthropic/luna", "anthropic/opus"], "agreement_bits": [true, false]}`), "mismatched panel_model_identities/agreement_bits lengths must be rejected")
+	require.Error(t, insertRaw(t, "raw-missing-bits-key", `{"panel_model_identities": ["anthropic/sol-max", "anthropic/luna"]}`), "a missing agreement_bits key must be rejected")
 	require.NoError(t, insertRaw(t, "raw-valid", `{"panel_model_identities": ["anthropic/sol-max", "anthropic/luna"], "agreement_bits": [true, false]}`), "a genuinely well-formed 2-member payload must still be accepted")
 
 	var count int

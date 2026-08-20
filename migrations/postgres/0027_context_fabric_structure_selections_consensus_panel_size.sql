@@ -30,6 +30,42 @@
 -- (fully legal SQL there), and the CHECK constraint expression itself is
 -- just a single function call, never a subquery.
 --
+-- codex round 3 (session 01a01efe-0778-7b11-8725-4e8050c4d7c3) confirmed
+-- two more real gaps in the round-2 draft of this same migration, fixed
+-- below before this file was ever pushed (so no separate 0028 was needed
+-- for THESE two -- the migration itself had not left this branch yet):
+--
+-- (round-3 P1) `ADD CONSTRAINT` validates every EXISTING row by default.
+-- consensus_evidence is a brand-new column this same PR introduces (0026
+-- never existed on main before this branch), and no production code path
+-- writes StructureSelectionEvent.Consensus (Engine.buildStructureSelectionEvent
+-- never sets it) -- so no row this constraint could ever reject can exist
+-- through any real product code path. But a database that happened to
+-- apply this branch's OWN intermediate history (0026 alone, before this
+-- constraint existed) and picked up a hand-inserted or test-only
+-- single-member row would otherwise wedge on this ALTER, rolling the
+-- whole migration back and leaving that database permanently stuck below
+-- head. `NOT VALID` is Postgres's own standard answer: it skips the
+-- one-time scan of existing rows (so this ALTER can never fail on legacy
+-- data) while still enforcing the CHECK on every INSERT/UPDATE from this
+-- point forward -- exactly the semantics wanted here, not a weaker
+-- constraint. (No follow-up VALIDATE CONSTRAINT is added: validating would
+-- reintroduce the exact same possible failure this migration exists to
+-- avoid, for a legacy row this codebase's own write path cannot produce.)
+--
+-- (round-3 P2) the round-2 predicate counted DISTINCT
+-- jsonb_array_elements_text() output, which stringifies non-string JSON
+-- values -- [1, 2] or [{"a":1},{"b":2}] both "pass" as two distinct
+-- identities even though PanelModelIdentities is documented as []string,
+-- and the predicate never looked at agreement_bits at all, so a raw SQL
+-- writer bypassing the Go sink could insert mismatched-length or
+-- non-boolean agreement_bits with no DB-level objection. Fixed below:
+-- every panel_model_identities element must be a genuine JSON string,
+-- every agreement_bits element must be a genuine JSON boolean, and the two
+-- arrays must be the same length -- THEN the distinct-count check runs,
+-- now safe because every element it counts is already proven to be a real
+-- string (no stringified non-string value can slip in).
+--
 -- No inline BEGIN/COMMIT (migrations/postgres/runner.go's applyMigration
 -- already wraps this file in its own transaction). CREATE OR REPLACE
 -- FUNCTION and ADD CONSTRAINT (after an idempotent DROP IF EXISTS) match
@@ -57,7 +93,23 @@ AS $$
     SELECT payload IS NULL
         OR COALESCE(
             jsonb_typeof(payload -> 'panel_model_identities') = 'array'
+            AND jsonb_typeof(payload -> 'agreement_bits') = 'array'
             AND jsonb_array_length(payload -> 'panel_model_identities') >= 2
+            AND jsonb_array_length(payload -> 'panel_model_identities') = jsonb_array_length(payload -> 'agreement_bits')
+            -- every identity must be a genuine JSON string (round-3 P2:
+            -- jsonb_array_elements_text would otherwise silently stringify
+            -- numbers/objects/booleans into "distinct" text values)
+            AND NOT EXISTS (
+                SELECT 1 FROM jsonb_array_elements(payload -> 'panel_model_identities') AS identity_element
+                WHERE jsonb_typeof(identity_element) <> 'string'
+            )
+            -- every agreement bit must be a genuine JSON boolean
+            AND NOT EXISTS (
+                SELECT 1 FROM jsonb_array_elements(payload -> 'agreement_bits') AS bit_element
+                WHERE jsonb_typeof(bit_element) <> 'boolean'
+            )
+            -- distinct-identity check: safe now, because every element
+            -- counted here was just proven to be a real JSON string above
             AND (
                 SELECT count(*) FROM jsonb_array_elements_text(payload -> 'panel_model_identities')
             ) = (
@@ -71,4 +123,5 @@ ALTER TABLE acr.context_fabric_structure_selections
     DROP CONSTRAINT IF EXISTS ck_acr_cf_structure_selections_consensus_panel_size;
 ALTER TABLE acr.context_fabric_structure_selections
     ADD CONSTRAINT ck_acr_cf_structure_selections_consensus_panel_size
-        CHECK (acr.context_fabric_structure_selections_consensus_is_valid_panel(consensus_evidence));
+        CHECK (acr.context_fabric_structure_selections_consensus_is_valid_panel(consensus_evidence))
+        NOT VALID;

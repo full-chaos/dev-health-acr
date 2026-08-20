@@ -726,6 +726,86 @@ func TestRunner_rejectsNonPrefixHistory_beforeApplyingMigrations(t *testing.T) {
 	require.Equal(t, []int64{2}, storedMigrationVersions(t, ctx, db))
 }
 
+// TestRunner_upgradeTo27ToleratesPreExistingLegacyConsensusRow is CHAOS-3860
+// P6's own codex round-3 finding (session 01a01efe-0778-7b11-8725-4e8050c4d7c3,
+// P1), proved directly: a database that already applied migration 0026 (the
+// consensus_evidence column, with no panel-size CHECK yet) and picked up a
+// single-member legacy row -- the exact shape 0027's CHECK now forbids for
+// NEW rows -- must still be able to upgrade cleanly to 0027 and beyond.
+// 0027's ADD CONSTRAINT ... NOT VALID is what makes this possible: without
+// it, ADD CONSTRAINT would validate every existing row and this exact
+// legacy row would roll the whole migration back, wedging that database
+// below head permanently. Mirrors TestRunner_upgradeTo16CreatesClarification
+// SelectionsTable's own "released fixture through migration 0026, then
+// upgrade with the full embedded set" pattern.
+func TestRunner_upgradeTo27ToleratesPreExistingLegacyConsensusRow(t *testing.T) {
+	// Given a database at the released schema through migration 0026 (the
+	// consensus_evidence column exists; 0027's panel-size CHECK does not
+	// yet)...
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	pre0027Files := fstest.MapFS{}
+	for version := 1; version <= 26; version++ {
+		name := migrationFileNameByVersion(t, int64(version))
+		pre0027Files[name] = &fstest.MapFile{Data: mustReadFile(t, name)}
+	}
+	released, err := NewRunner(pre0027Files)
+	require.NoError(t, err)
+	require.NoError(t, released.Up(ctx, db))
+
+	// ...and a legacy single-member consensus_evidence row already landed
+	// on it (0026 alone had no panel-size CHECK to stop this -- a
+	// hand-inserted or test-only row is the only way one could exist,
+	// since no production code path writes this column, but the upgrade
+	// must tolerate it regardless).
+	_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_structure_selections
+    (selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context, consensus_evidence)
+VALUES ('legacy-consensus-row-0001', 'org-legacy-upgrade', now(), repeat('a', 64), 'result-legacy-0001', 'expected_kind', 'kindr_x', 'pull_request', true, 'agent_receipt', 'credential_mcp', '[]'::jsonb, '{}'::jsonb, '{"panel_model_identities": ["anthropic/sol-max"], "agreement_bits": [true]}'::jsonb)`)
+	require.NoError(t, err)
+
+	// When upgrading to the full (post-CHAOS-3860-P6) migration set.
+	latest, err := Embedded()
+	require.NoError(t, err)
+
+	// Then the upgrade succeeds -- NOT VALID skipped the existing-row scan
+	// that would otherwise have rejected this exact row...
+	require.NoError(t, latest.Up(ctx, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
+
+	// ...the legacy row is grandfathered, untouched...
+	var legacyStillPresent bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM acr.context_fabric_structure_selections WHERE selection_id = 'legacy-consensus-row-0001')`).Scan(&legacyStillPresent))
+	require.True(t, legacyStillPresent, "a legacy row NOT VALID chose not to validate must survive the upgrade untouched")
+
+	// ...and the constraint is nonetheless ENFORCED for every new row from
+	// this point forward (NOT VALID exempts existing rows from the
+	// one-time scan; it does not weaken the constraint for new writes).
+	_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_structure_selections
+    (selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context, consensus_evidence)
+VALUES ('post-upgrade-consensus-row-0001', 'org-legacy-upgrade', now(), repeat('a', 64), 'result-legacy-0002', 'expected_kind', 'kindr_x', 'pull_request', true, 'agent_receipt', 'credential_mcp', '[]'::jsonb, '{}'::jsonb, '{"panel_model_identities": ["anthropic/sol-max"], "agreement_bits": [true]}'::jsonb)`)
+	require.Error(t, err, "a NEW single-member row must still be rejected after the upgrade -- NOT VALID is not a permanently weaker constraint")
+}
+
+// migrationFileNameByVersion resolves the embedded migration file whose
+// numeric version prefix matches version, for tests that need a
+// released-fixture file SET by version number rather than by hand-typed
+// filename (a hand-typed list drifts the moment a migration is renamed;
+// this cannot).
+func migrationFileNameByVersion(t *testing.T, version int64) string {
+	t.Helper()
+	runner, err := Embedded()
+	require.NoError(t, err)
+	for _, migration := range runner.migrations {
+		if migration.Version == version {
+			return migration.Name
+		}
+	}
+	t.Fatalf("no embedded migration with version %d", version)
+	return ""
+}
+
 func TestRunner_backfillsLegacyChecksum_afterCanonicalHistoryValidation(t *testing.T) {
 	// Given
 	ctx := context.Background()
