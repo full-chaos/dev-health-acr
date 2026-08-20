@@ -734,6 +734,25 @@ type twoTurnReport struct {
 	// own doc comment at the call site for the exact definition and its
 	// limits (best-effort Status==no_match proxy, no attestation
 	// visibility).
+	//
+	// TWO SCOPE LIMITS a reader must know before comparing this pair to
+	// the DP9 "controls 19/19" bar (codex round-3, documented rather than
+	// chased further -- neither is a hidden gap, both were already true
+	// of every other bar this harness reports and are called out here
+	// for the same reason StructureAndWindowDisclosureAbsentCount is):
+	//  1. ControlsTotal reflects only the annex entries THIS run actually
+	//     processed -- capped by ACR_TEST_TRIAL_LIMIT when set. It is
+	//     never asserted equal to the full annex's control count; compare
+	//     it to 19 externally, the same way GateReachableCount is
+	//     compared to its own >=10 bar rather than asserted against it.
+	//  2. ControlsWitnessed counts wire-level Status==no_match, which
+	//     ALSO fires on the trivial empty-candidate-pool path
+	//     (subjectlessTerminalReason "empty_pool") -- a path that never
+	//     runs the evidence round and so carries no census attestation at
+	//     all. It is therefore a proxy for "witnessed no_match", not
+	//     proof of the design brief's stronger "attestation present"
+	//     claim; this harness has no wire-level signal that distinguishes
+	//     the two.
 	ControlsTotal     int                 `json:"controls_total"`
 	ControlsWitnessed int                 `json:"controls_witnessed"`
 	Results           []twoTurnCaseResult `json:"results"`
