@@ -144,8 +144,10 @@ type StructureSelectionEvent struct {
 // rationale -- neither field this type carries. Zero value (both slices
 // nil/empty) is invalid wherever Consensus is non-nil; construct only with
 // len(PanelModelIdentities) == len(AgreementBits) >= 2, distinct identities
-// (pgstructureselection.validateEvent and migration 0026's own CHECK
-// constraints both enforce this shape).
+// (pgstructureselection.validateEvent and migration 0027's own CHECK
+// constraint -- ck_acr_cf_structure_selections_consensus_panel_size --
+// both enforce this shape; migration 0026 owns the column itself and the
+// SelectionMode gate).
 //
 // SCOPE NOTE (codex adversarial review, round 1, confirmed): this type and
 // its validators enforce SHAPE only. Nothing here -- nor anywhere in this

@@ -42,8 +42,12 @@ import (
 // backfill of pre-0023 confirmed-structure rows. 0026 is CHAOS-3860 P6's
 // precondition fix: StructureSelectionEvent gains the ConsensusEvidence
 // column the design brief's own §4 P6 row names as a P4 dependency, which
-// P4 shipped without (discovered while activating P6, DP5(b)).
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26}
+// P4 shipped without (discovered while activating P6, DP5(b)). 0027 is
+// that same P6 fix's codex-review follow-up: a panel-size CHECK
+// constraint requiring >=2 distinct panel model identities, added as its
+// own migration rather than editing the already-pushed 0026 in place
+// (this checksum-pinning discipline is exactly why).
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

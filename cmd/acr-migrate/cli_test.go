@@ -91,11 +91,12 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// structure rows) added 0025, and CHAOS-3860 P6's precondition fix
 	// (StructureSelectionEvent's ConsensusEvidence field, the design
 	// brief's own §4 P6 dependency that P4 shipped without) added 0026,
-	// so the embedded set is now 26 files. A future migration must bump
+	// CHAOS-3860 P6's codex-review panel-size CHECK constraint added 0027,
+	// so the embedded set is now 27 files. A future migration must bump
 	// this literal too -- see expectedMigrationVersions in
 	// migrations/postgres/runner_integration_test.go for the same
 	// convention, held in one place there.
-	require.Equal(t, "applied 26 migrations\n", first.String())
+	require.Equal(t, "applied 27 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

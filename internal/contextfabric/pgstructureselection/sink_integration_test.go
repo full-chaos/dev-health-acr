@@ -254,6 +254,40 @@ func TestInsertContext_RejectsMalformedEventBeforeAnyInsert(t *testing.T) {
 	require.Equal(t, 0, count, "a rejected event must never leave a partial row behind")
 }
 
+// TestConsensusPanelSizeCheck_RejectsAtDatabaseLevelDirectly is the
+// defense-in-depth proof migration 0027 exists for: a raw SQL INSERT that
+// bypasses validateEvent entirely (no Go-side gate at all) must still be
+// rejected by acr.context_fabric_structure_selections_consensus_is_valid_panel
+// -- proving the DB CHECK, not only the Sink's own Go validation, actually
+// enforces >=2 distinct panel model identities. Exercises exactly the two
+// codex round-2 findings: a single-entry payload, a duplicate-identity
+// payload, and (length-check-only would have missed this) a payload with a
+// well-formed consensus_evidence object that never carries the
+// panel_model_identities key at all.
+func TestConsensusPanelSizeCheck_RejectsAtDatabaseLevelDirectly(t *testing.T) {
+	ctx := context.Background()
+	db := newStructureSelectionTestDatabase(t, ctx)
+
+	insertRaw := func(t *testing.T, priorResultID, consensusJSON string) error {
+		t.Helper()
+		_, err := db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_structure_selections
+    (selection_id, org_id, captured_at, question_hash, prior_result_id, member, selected_receipt_id, selected_applied_value, accepted, selection_mode, selection_provenance, offered, pipeline_context, consensus_evidence)
+VALUES (gen_random_uuid()::text, 'org-raw-consensus', now(), repeat('a', 64), $1, 'expected_kind', 'kindr_x', 'pull_request', true, 'agent_receipt', 'credential_mcp', '[]'::jsonb, '{}'::jsonb, $2::jsonb)`,
+			priorResultID, consensusJSON)
+		return err
+	}
+
+	require.Error(t, insertRaw(t, "raw-single", `{"panel_model_identities": ["anthropic/sol-max"], "agreement_bits": [true]}`), "single-entry payload must be rejected at the DB level")
+	require.Error(t, insertRaw(t, "raw-duplicate", `{"panel_model_identities": ["anthropic/sol-max", "anthropic/sol-max"], "agreement_bits": [true, false]}`), "duplicate identities must be rejected at the DB level")
+	require.Error(t, insertRaw(t, "raw-missing-key", `{"agreement_bits": [true, false]}`), "a missing panel_model_identities key must be rejected, not silently pass a NULL comparison")
+	require.NoError(t, insertRaw(t, "raw-valid", `{"panel_model_identities": ["anthropic/sol-max", "anthropic/luna"], "agreement_bits": [true, false]}`), "a genuinely well-formed 2-member payload must still be accepted")
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_structure_selections WHERE org_id = 'org-raw-consensus'`).Scan(&count))
+	require.Equal(t, 1, count, "only the one valid raw insert should have landed")
+}
+
 // TestSink_RecordSelectionDeliversThroughTheBackgroundWorker is the
 // end-to-end proof that RecordSelection (the public
 // contextfabric.StructureSelectionSink method) actually reaches Postgres
