@@ -366,6 +366,21 @@ provision_ops_control_plane() {
   token="$(compose exec -T api dev-hops service-credentials create --service acr --scope entitlements:read)"
   [[ "$token" == svc_acr_* ]] || die 'Ops credential provisioning returned an invalid token shape'
   write_secret "$STATE/secrets/ops-token" "$token"
+  # This is the one secret file the entitlement client reads through readRestrictedFile /
+  # isPrivateSecret (internal/entitlements/file_owner_unix.go), not the more common
+  # internal/config.SecretValue path the rest of write_secret()'s files go through.
+  # isPrivateSecret requires BOTH zero group/other bits (600, not this function's usual 644 --
+  # see write_secret()'s own comment for why 644) AND that the file's owning UID equal
+  # acr-api's own euid: the distroless nonroot UID 65532 baked into the Dockerfile's `USER
+  # 65532:65532`, never whatever host UID this script itself runs as. `chown` therefore has to
+  # run as root. GitHub-hosted runners carry passwordless sudo for exactly this; a local
+  # developer's machine may not, so this is best-effort -- the file already had this same
+  # UID-mismatch problem on any real Linux Docker host before write_secret() existed, since
+  # nothing here can make a bind-mounted host file appear owned by a different container UID
+  # without a privileged chown.
+  chmod 600 "$STATE/secrets/ops-token"
+  sudo -n chown 65532:65532 "$STATE/secrets/ops-token" 2>/dev/null \
+    || note 'could not chown ops-token to the acr-api container UID (no passwordless sudo); acr-api may reject it as an unsafe secret file on a real Linux Docker host'
   printf '%s' "$org_id" > "$STATE/org-id"
 }
 
