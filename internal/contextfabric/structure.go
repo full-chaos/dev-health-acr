@@ -607,16 +607,23 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 	explicit, veto := e.resolveExplicitStructure(request, confirmed)
 	if veto != structureVetoNone {
 		// CHAOS-3963: the only veto resolveExplicitStructure ever returns
-		// is an explicit-vs-receipt conflict, and the conflicting member
-		// is by definition already in confirmed (that is the precondition
-		// resolveExplicitStructure's own confirmedMemberValue/
-		// confirmedMemberKindValue lookup requires before it can detect
-		// disagreement) -- so its receipt-confirmed value is exactly what
-		// vetoedConfirmedEntries below echoes; no separate
-		// triggeringMemberEntry is needed for this veto reason.
+		// is an explicit-vs-receipt conflict. The conflicting member
+		// itself is by definition already in confirmed (that is the
+		// precondition confirmedMemberValue/confirmedMemberKindValue
+		// requires before detecting disagreement) -- vetoedConfirmedEntries
+		// echoes it. codex xhigh round-1 finding (MEDIUM): `explicit` can
+		// ALSO carry an earlier member resolveExplicitStructure already
+		// built cleanly before hitting the conflicting one (e.g. an
+		// explicit expected_kind resolved fine, then explicit
+		// subject_handles conflicted with a receipt) -- vetoedExplicitEntries
+		// re-dispositions those too, closing the same silent-drop gap on
+		// the explicit side.
 		return requestStructureCanonicalization{
-			Veto:          veto,
-			VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedConflict),
+			Veto: veto,
+			VetoedEntries: append(
+				vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedConflict),
+				vetoedExplicitEntries(explicit, contractsv1.ContextFabricStructureDispositionVetoedConflict)...,
+			),
 		}
 	}
 	return requestStructureCanonicalization{Confirmed: confirmed, OfferSnapshot: offerSnapshot, PendingSelections: pendingSelections, Explicit: explicit}
@@ -743,7 +750,13 @@ func (e *Engine) resolveExplicitStructure(request InvestigationRequest, confirme
 	if len(request.ExpectedKinds) > 0 {
 		if confirmedValue, ok := confirmedMemberValue(confirmed, contractsv1.ContextFabricStructureNeedExpectedKind); ok {
 			if !containsSubjectKind(request.ExpectedKinds, contractsv1.ContextFabricSubjectKind(confirmedValue)) {
-				return nil, structureVetoConfirmationConflict
+				// codex xhigh review (CHAOS-3963 round 1, MEDIUM finding):
+				// `explicit` is provably empty at this exact point (this is
+				// the FIRST block that can append to it), but return it
+				// rather than nil anyway -- matching the SubjectHandles
+				// block's own fix below and removing any dependence on
+				// block ordering never changing.
+				return explicit, structureVetoConfirmationConflict
 			}
 		} else if len(request.ExpectedKinds) == 1 {
 			explicit = append(explicit, explicitStructureMember{
@@ -762,7 +775,16 @@ func (e *Engine) resolveExplicitStructure(request InvestigationRequest, confirme
 			// merely share a numeric string, and must never be read as
 			// agreement.
 			if !containsHandle(request.SubjectHandles, confirmedKind, confirmedValue) {
-				return nil, structureVetoConfirmationConflict
+				// codex xhigh review (CHAOS-3963 round 1, MEDIUM finding):
+				// this used to `return nil`, silently discarding an
+				// ExpectedKind entry the block above may have already
+				// appended to `explicit` -- the exact "member A confirmed
+				// fine, member B is why the batch was rejected" gap
+				// CHAOS-3963 exists to close, just on the EXPLICIT side
+				// instead of the receipt side. Return what was already
+				// built; the caller re-dispositions it, mirroring
+				// vetoedConfirmedEntries' own treatment of `confirmed`.
+				return explicit, structureVetoConfirmationConflict
 			}
 		} else if len(request.SubjectHandles) == 1 {
 			explicit = append(explicit, explicitStructureMember{
@@ -1104,6 +1126,36 @@ func vetoedConfirmedEntries(confirmed []confirmedStructureMember, disposition co
 			PriorEntryID:   c.PriorEntryID,
 			Provenance:     contractsv1.ContextFabricStructureClarificationConfirmed,
 			Disposition:    disposition,
+		})
+	}
+	return entries
+}
+
+// vetoedExplicitEntries (CHAOS-3963, codex xhigh round-1 finding) is
+// vetoedConfirmedEntries' own twin for the EXPLICIT (non-receipt) side:
+// resolveExplicitStructure can build one explicit member (e.g.
+// expected_kind) cleanly, then veto on a LATER member's explicit-vs-receipt
+// conflict (e.g. subject_handle) -- without this, that already-built
+// explicit member was silently dropped from the echo, the exact "member A
+// was fine, member B is why the batch was rejected" gap CHAOS-3963 exists
+// to close, just on the explicit side instead of the receipt side.
+// Re-dispositions from applied to the veto's own vetoed_conflict (the only
+// veto reason resolveExplicitStructure ever returns); AppliedValue/Source/
+// Provenance come from the explicit member itself, mirroring
+// composeConfirmedStructure's own explicit-entry composition exactly,
+// disposition swapped.
+func vetoedExplicitEntries(explicit []explicitStructureMember, disposition contractsv1.ContextFabricStructureDisposition) []contractsv1.ContextFabricConfirmedStructureEntry {
+	if len(explicit) == 0 {
+		return nil
+	}
+	entries := make([]contractsv1.ContextFabricConfirmedStructureEntry, 0, len(explicit))
+	for _, x := range explicit {
+		entries = append(entries, contractsv1.ContextFabricConfirmedStructureEntry{
+			Member:       x.Member,
+			AppliedValue: x.AppliedValue,
+			Source:       x.Source,
+			Provenance:   x.Provenance,
+			Disposition:  disposition,
 		})
 	}
 	return entries

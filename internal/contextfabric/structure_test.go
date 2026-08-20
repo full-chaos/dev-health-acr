@@ -1770,6 +1770,72 @@ func TestCHAOS3972_ExplicitKind_ConflictsWithReceipt_Vetoes(t *testing.T) {
 	}
 }
 
+// TestCHAOS3963_PartialExplicit_EchoedWhenALaterExplicitMemberConflicts pins
+// codex xhigh review's round-1 MEDIUM finding: resolveExplicitStructure
+// builds its `explicit` slice across TWO independent blocks (expected_kind
+// then subject_handle); a conflict in the SECOND block used to `return
+// nil`, silently discarding a FIRST-block explicit member it had already
+// resolved cleanly -- the exact "member A was fine, member B is why the
+// batch was rejected" gap CHAOS-3963 exists to close, on the explicit side
+// this time. An explicit expected_kind (no matching receipt -> resolves as
+// explicit) must survive a LATER explicit subject_handle's conflict with a
+// receipt-confirmed handle, re-dispositioned to vetoed_conflict alongside
+// the receipt-confirmed member that actually triggered the veto.
+func TestCHAOS3963_PartialExplicit_EchoedWhenALaterExplicitMemberConflicts(t *testing.T) {
+	t.Parallel()
+
+	handlePrior, request := handleReceiptTestSetup() // confirms subject_handle = (pull_request, "532")
+	store := &staticResultStore{results: map[string]InvestigationResult{handlePrior.ResultID: handlePrior}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		HandleVerifier: func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, HandleVerificationReason) {
+			return true, HandleVerificationValid
+		},
+	})
+	// Explicit expected_kind: no PriorKindReceipts sent, so this resolves
+	// as an EXPLICIT member (not receipt-confirmed) -- the first block in
+	// resolveExplicitStructure, and must succeed cleanly.
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest}
+	// Explicit subject_handle DISAGREES with the receipt-confirmed handle
+	// (work_item/999 vs the confirmed pull_request/532) -- the second
+	// block, which must veto as a conflict.
+	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectWorkItem, Value: "999"}}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationConflict {
+		t.Fatalf("canon.Veto = %q, want structureVetoConfirmationConflict", canon.Veto)
+	}
+	if len(canon.VetoedEntries) != 2 {
+		t.Fatalf("len(canon.VetoedEntries) = %d, want 2 (the receipt-confirmed handle that triggered the conflict + the already-built explicit kind): %+v", len(canon.VetoedEntries), canon.VetoedEntries)
+	}
+	var sawHandle, sawKind bool
+	for _, entry := range canon.VetoedEntries {
+		if entry.Disposition != contractsv1.ContextFabricStructureDispositionVetoedConflict {
+			t.Errorf("entry %+v: Disposition = %q, want vetoed_conflict", entry, entry.Disposition)
+		}
+		switch entry.Member {
+		case "subject_handle":
+			sawHandle = true
+			if entry.AppliedValue != "532" || entry.Source != contractsv1.ContextFabricStructureSourceReceipt {
+				t.Errorf("handle entry = %+v, want applied_value=532 source=receipt (the receipt-confirmed value)", entry)
+			}
+		case "expected_kind":
+			sawKind = true
+			if entry.AppliedValue != string(SubjectPullRequest) || entry.Source != contractsv1.ContextFabricStructureSourceExplicit {
+				t.Errorf("kind entry = %+v, want applied_value=%q source=explicit (the already-built explicit member)", entry, SubjectPullRequest)
+			}
+		default:
+			t.Errorf("unexpected entry member %q", entry.Member)
+		}
+		if err := entry.Validate(); err != nil {
+			t.Errorf("entry %+v fails Validate(): %v", entry, err)
+		}
+	}
+	if !sawHandle || !sawKind {
+		t.Errorf("canon.VetoedEntries = %+v, want both subject_handle and expected_kind present", canon.VetoedEntries)
+	}
+}
+
 // TestCHAOS3972_ExplicitHandle_SingleValueEchoed mirrors the kind tests
 // above for subject_handle -- the SAME single-value echo rule.
 func TestCHAOS3972_ExplicitHandle_SingleValueEchoed(t *testing.T) {
