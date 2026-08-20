@@ -1362,7 +1362,15 @@ bootstrap_web_user() {
     printf '%s\n' "$create_output" | redact_log >&2
     fs_die "could not create the isolated web user (dev-hops exited ${create_status})"
   fi
-  compose exec -T api dev-hops admin users update --email "$WEB_EMAIL" --verified --org "$(<"$STATE/org-id")" --role owner >/dev/null
+  # --superuser: dev-health-web's /agent-context/context-packet is now a compatibility alias
+  # for pre-move bookmarks (see its own comment) -- Context Fabric validation moved to its
+  # platform-admin home at /superadmin/context-fabric/validation, gated on
+  # session.user.is_superuser, not on org role or the agent_context_runtime entitlement alone.
+  # Without this the alias silently redirects a non-superuser org owner to /diagnose or /dev
+  # instead, and run_web_agreement_check's wait for the "Context Fabric" heading times out
+  # 30s later with no signal of why. This isolated harness user is torn down with the rest of
+  # the project at the end of the run, so platform-superuser scope here is not a standing grant.
+  compose exec -T api dev-hops admin users update --email "$WEB_EMAIL" --verified --superuser --org "$(<"$STATE/org-id")" --role owner >/dev/null
   assert_acr_entitlement
 }
 
@@ -1445,13 +1453,23 @@ run_web_agreement_check() {
   wait_web_ready
   bootstrap_web_user
   assert_repository_catalog_visible
+  # SVS_TASK_REFERENCE is deliberately empty: task_ref is an exact-match filter on
+  # work_items.v1/work_item_dependencies.v1/work_graph.v1 server side, and the direct-HTTP/MCP
+  # paths this check is compared against never set it. A ticket reference here (e.g.
+  # "CHAOS-3065") does not match this fixture's seeded work items and silently drops those
+  # sources to "unavailable" only on the browser path -- see svs-browser.mjs's optionalValue().
+  # A comment MUST NOT sit inside this backslash-continued env-var chain: bash only escapes
+  # the newline that immediately follows a `\`, so a `#...` line here would silently end the
+  # logical command right there, turning every SVS_* assignment before it into inert local
+  # shell variables that never reach `node` below -- exactly the "SVS_WEB_URL is required"
+  # crash this comment's own first draft caused.
   SVS_WEB_URL="http://127.0.0.1:${WEB_PORT}" \
   SVS_WEB_EMAIL="$WEB_EMAIL" \
   SVS_WEB_PASSWORD="$WEB_PASSWORD" \
   SVS_GOAL="$(task_field "$task_id" '.goal')" \
   SVS_REPOSITORY="$FULLSTACK_REPO_SLUG" \
   SVS_BRANCH="$(task_field "$task_id" '.scope.branch // ""')" \
-  SVS_TASK_REFERENCE="CHAOS-3065" \
+  SVS_TASK_REFERENCE="" \
   SVS_BROWSER_PACKET="$ARTIFACTS/web-packet.json" \
   SVS_BROWSER_EVIDENCE="$ARTIFACTS/web-evidence.json" \
   SVS_BROWSER_SCREENSHOT="$ARTIFACTS/playwright/context-packet.png" \

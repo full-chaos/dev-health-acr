@@ -8,10 +8,13 @@ name: fullstack-acceptance
 # slice, the real acr-api, the real host-local acr-mcp sidecar, and a real
 # headless OpenCode session driven by a deterministic local model.
 #
-# It needs a checkout of the sibling full-chaos/dev-health monorepo for
-# compose.yml, the Ops image and dev-health-web, so it cannot run on forks.
-# Fork pull requests are skipped rather than failed; `make verify` still
-# covers the contract surface there.
+# The product slice is assembled from the PUBLIC full-chaos/dev-health-ops
+# and full-chaos/dev-health-web repositories, checked out tokenlessly into a
+# dev-health/{ops,web} layout, with a minimal CI-only compose file
+# (.github/fullstack/compose.ci.yml, authored from scratch — see that file's
+# header) copied to dev-health/compose.yml. "full-chaos/dev-health" is not a
+# GitHub repository; it is chris's local folder name for that same layout,
+# and DEV_HEALTH_ROOT/E2E_WEB_ROOT below name the CI equivalent of it.
 
 "on":
   pull_request:
@@ -26,7 +29,7 @@ name: fullstack-acceptance
         required: false
         default: full
       web_ref:
-        description: optional full-chaos/dev-health ref to prove; empty uses its default branch
+        description: optional full-chaos/dev-health-web ref to prove; empty uses its default branch
         required: false
         type: string
         default: ""
@@ -46,59 +49,36 @@ env:
   PROVIDER_NPM_SPEC: "@ai-sdk/openai-compatible@3.0.14"
 
 jobs:
-  # This gate boots the product slice, so it needs a token that can read the private sibling
-  # repository. Without one, actions/checkout fails with "Input required and not supplied:
-  # token" — which names neither the missing secret nor the repository it was for. Both jobs
-  # below are gated on this check instead, so an unconfigured repository reports a skip with an
-  # actionable message rather than a red X with a cryptic cause. The `secrets` context is not
-  # available in a job-level `if`, which is why this is a job rather than a condition.
-  preflight:
-    name: preflight
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      product_repo_readable: ${{ steps.token.outputs.present }}
-    steps:
-      - id: token
-        env:
-          PRODUCT_REPO_TOKEN: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${PRODUCT_REPO_TOKEN:-}" ]]; then
-            echo 'present=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'present=false' >> "$GITHUB_OUTPUT"
-            echo "::warning title=Full-stack acceptance skipped::DEV_HEALTH_REPO_TOKEN is not configured on this repository, so full-chaos/dev-health cannot be checked out and the gate cannot boot the product slice. Add a repository secret holding a token with read access to that repository to enable it."
-          fi
-
   compose:
     name: compose acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: preflight
-    # A fork PR has no access to the private sibling repository, and neither does a repository
-    # without the token secret configured.
-    if: >-
-      needs.preflight.outputs.product_repo_readable == 'true' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           path: dev-health-acr
           persist-credentials: false
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0 — public repo, no token needed.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          repository: full-chaos/dev-health
-          path: dev-health
-          ref: ${{ inputs.web_ref }}
-          token: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
+          repository: full-chaos/dev-health-ops
+          path: dev-health/ops
           persist-credentials: false
-      - name: Record the checked-out Dev Health ref
+      # actions/checkout v7.0.0 — public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-web
+          path: dev-health/web
+          ref: ${{ inputs.web_ref }}
+          persist-credentials: false
+      - name: Assemble the product-slice compose file and record checked-out refs
         run: |
-          web_ref="$(git -C dev-health rev-parse HEAD)"
+          set -euo pipefail
+          cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
+          ops_ref="$(git -C dev-health/ops rev-parse HEAD)"
+          web_ref="$(git -C dev-health/web rev-parse HEAD)"
+          echo "E2E_OPS_REF=$ops_ref" >> "$GITHUB_ENV"
           echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
@@ -227,11 +207,7 @@ jobs:
     name: web agreement (contract paths)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: preflight
-    if: >-
-      needs.preflight.outputs.product_repo_readable == 'true' &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request'
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -261,14 +237,24 @@ jobs:
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0 — public repo, no token needed.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         if: steps.decide.outputs.run == 'true'
         with:
-          repository: full-chaos/dev-health
-          path: dev-health
-          token: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
+          repository: full-chaos/dev-health-ops
+          path: dev-health/ops
           persist-credentials: false
+      # actions/checkout v7.0.0 — public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        if: steps.decide.outputs.run == 'true'
+        with:
+          repository: full-chaos/dev-health-web
+          path: dev-health/web
+          ref: ${{ inputs.web_ref }}
+          persist-credentials: false
+      - name: Assemble the product-slice compose file
+        if: steps.decide.outputs.run == 'true'
+        run: cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         if: steps.decide.outputs.run == 'true'

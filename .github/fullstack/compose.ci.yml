@@ -1,0 +1,213 @@
+# CHAOS-3065 fullstack-acceptance gate: minimal CI product-slice compose.
+#
+# scripts/e2e/compose.sh's prepare_state() copies this file to
+# $STATE/stage/compose.yml, then symlinks `ops/` and `web/` into that same
+# stage directory from beside wherever this file lives. In CI the workflow
+# assembles that layout by checking out the PUBLIC full-chaos/dev-health-ops
+# and full-chaos/dev-health-web repositories to dev-health/{ops,web} and
+# copying this file to dev-health/compose.yml — see
+# .github/workflows/fullstack-acceptance.yml.
+#
+# This is NOT a copy of chris's local dev-health/compose.yml (untracked,
+# never committed anywhere, may carry local-only config). It is authored
+# from scratch using only what dev-health-ops's own tracked compose.yml and
+# docker/Dockerfile publicly document: the "api" image target already bakes
+# the app in (no source bind mount needed), dev-hops is its entrypoint, and
+# docker/init-extra-dbs.sh provisions the River roles from POSTGRES_USER/
+# POSTGRES_DB container env. render_override() in compose.sh (the shared
+# E2E driver) replaces postgres/clickhouse/valkey/pgbouncer/api images,
+# ports and some environment keys at run time and exports the resolved
+# credentials as shell vars, which is why api/migrate/pgbouncer below read
+# ${POSTGRES_USER}/${POSTGRES_PASSWORD}/${POSTGRES_DB}/${CLICKHOUSE_*}
+# rather than hardcoding them the way dev-health-ops's own standalone
+# compose.yml does for local dev.
+#
+# Deliberately excluded (not needed to boot ACR + the two MCP tools + the
+# smoke/full task set): billing-edge, worker-*, beat, bugsink, mailpit,
+# SigNoz/observability. Scoped out explicitly rather than faked; see the
+# fullstack-acceptance.yml PR body for what that means for L6/device-login
+# coverage.
+
+name: dev-health
+
+networks:
+  dev-health: {}
+
+volumes:
+  postgres_data: {}
+  clickhouse_data: {}
+
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-devhealth}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      POSTGRES_DB: ${POSTGRES_DB:-devhealth}
+      PGDATA: /var/lib/postgresql/pgdata
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+    volumes:
+      - postgres_data:/var/lib/postgresql/
+      - ./ops/docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-devhealth}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [dev-health]
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-devhealth}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      DB_NAME: ${POSTGRES_DB:-devhealth}
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "200"
+      DEFAULT_POOL_SIZE: "10"
+      ADMIN_USERS: ${POSTGRES_USER:-devhealth}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6432", "-U", "${POSTGRES_USER:-devhealth}", "-d", "${POSTGRES_DB:-devhealth}", "-c", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks: [dev-health]
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5
+    restart: on-failure
+    environment:
+      CLICKHOUSE_LISTEN_HOST: 0.0.0.0
+      CLICKHOUSE_USER: ch
+      CLICKHOUSE_PASSWORD: ch
+      CLICKHOUSE_DB: default
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --host clickhouse --user default --password ch --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks: [dev-health]
+
+  valkey:
+    image: valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks: [dev-health]
+
+  migrate:
+    build:
+      context: ./ops
+      dockerfile: ./docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    restart: "no"
+    entrypoint: ["sh", "-ec", "dev-hops migrate postgres && dev-hops migrate clickhouse"]
+    environment:
+      POSTGRES_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      CLICKHOUSE_URI: clickhouse://default:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks: [dev-health]
+
+  api:
+    build:
+      context: ./ops
+      dockerfile: ./docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    environment:
+      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
+      PYTHONPATH: /app/src
+      GRAPHQL_QUERY_TIMEOUT: "30"
+      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      CLICKHOUSE_URI: clickhouse://default:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      REDIS_URL: redis://valkey:6379/1
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      AUTO_RUN_MIGRATIONS: "false"
+      EMAIL_PROVIDER: console
+      EMAIL_FROM_ADDRESS: noreply@example.com
+      OTEL_ENABLED: "false"
+      SENTRY_DSN: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [dev-health]
+
+  # Structural placeholder only. compose.sh's render_override() unconditionally sets
+  # `traefik: { ports: [] }` (it is a no-op override on the shared local-dev router,
+  # never a service this gate starts by name), which requires SOME valid image/build
+  # to already exist in the base file for the merge to validate. Never started by
+  # prepare_stack/bootstrap_ops, so the pinned image below is never pulled or run;
+  # reusing this repo's own already-vetted nginx digest (see scripts/e2e/compose.sh
+  # NGINX_IMAGE) avoids introducing a new, unrelated pin for a service with no
+  # behavior to verify.
+  traefik:
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    networks: [dev-health]
+
+  # Only started when the web agreement check is enabled (E2E_WEB=on): fullstack-opencode.sh's
+  # render_web_override() adds `web-fullstack` as a depends_on for the Explorer's Sentry-compatible
+  # error sink and overrides container_name/ports/restart here, but supplies no image -- this base
+  # definition is what makes the merge valid. SECRET_KEY has no real secret behind it; this stack
+  # is thrown away at the end of every run.
+  bugsink:
+    image: bugsink/bugsink:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/bugsink
+      SECRET_KEY: ${BUGSINK_SECRET_KEY:-acr-fullstack-ci-only-not-a-secret}
+      BASE_URL: http://localhost:8800
+      PORT: "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [dev-health]
