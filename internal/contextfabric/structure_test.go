@@ -1613,3 +1613,85 @@ func TestCHAOS3972_ExplicitHandle_SingleValueEchoed(t *testing.T) {
 		t.Errorf("canon.Explicit[0] = %+v, want member=subject_handle applied_value=532", entry)
 	}
 }
+
+// TestCHAOS3972_ExplicitHandle_SameValueDifferentKindConflicts is the
+// codex xhigh review round-1 finding 3 regression pin: a stored
+// (pull_request, "532") handr_ receipt must NOT be read as "agreeing"
+// with an explicit (work_item, "532") request naming a DIFFERENT subject
+// that merely shares the same numeric string -- value alone is not a safe
+// agreement test, kind must match too.
+func TestCHAOS3972_ExplicitHandle_SameValueDifferentKindConflicts(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0007"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_handle"},
+		HandleOptions: []HandleOption{{
+			ReceiptID: "handr_confirm00001", OptionID: "opt_handle", Label: "pull request #532",
+			Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532", SourceColumn: "git_pull_requests.number",
+			OfferSource: "engine",
+		}},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		HandleVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason) {
+			return true, HandleVerificationValid
+		},
+	})
+
+	request := validInvestigationRequest()
+	request.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "handr_confirm00001"}}
+	// Same VALUE ("532"), but a DIFFERENT kind -- must conflict, not agree.
+	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectWorkItem, PatternID: "some_other_pattern", Value: "532"}}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoConfirmationConflict {
+		t.Fatalf("canon.Veto = %q, want structureVetoConfirmationConflict -- same value, different kind, must never be read as agreement", canon.Veto)
+	}
+	if len(canon.Confirmed) != 0 || len(canon.Explicit) != 0 {
+		t.Errorf("a vetoed batch must apply nothing: canon = %+v", canon)
+	}
+}
+
+// TestCHAOS3972_ExplicitHandle_SameKindAndValueAgrees is the positive twin:
+// a receipt and an explicit handle naming the SAME (kind, value) pair
+// genuinely agree, and the receipt's own confirmation stands with no
+// duplicate echo.
+func TestCHAOS3972_ExplicitHandle_SameKindAndValueAgrees(t *testing.T) {
+	t.Parallel()
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0008"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_handle"},
+		HandleOptions: []HandleOption{{
+			ReceiptID: "handr_confirm00002", OptionID: "opt_handle", Label: "pull request #532",
+			Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532", SourceColumn: "git_pull_requests.number",
+			OfferSource: "engine",
+		}},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		HandleVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, HandleVerificationReason) {
+			return true, HandleVerificationValid
+		},
+	})
+
+	request := validInvestigationRequest()
+	request.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "handr_confirm00002"}}
+	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	if canon.Veto != structureVetoNone {
+		t.Fatalf("canon.Veto = %q, want structureVetoNone (agreeing kind AND value)", canon.Veto)
+	}
+	if len(canon.Confirmed) != 1 {
+		t.Errorf("canon.Confirmed = %+v, want exactly 1 (the receipt)", canon.Confirmed)
+	}
+	if len(canon.Explicit) != 0 {
+		t.Errorf("canon.Explicit = %+v, want empty -- an agreeing explicit value is not separately echoed", canon.Explicit)
+	}
+}

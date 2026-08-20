@@ -523,10 +523,27 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		// proof must never apply this handle's value to a kind it was
 		// never bound to.
 		var handleKind CensusKind
+		// preNarrowingKinds (codex xhigh review, CHAOS-3972 round 2,
+		// finding 1): input.PreNarrowingExplicitKinds is the caller's own
+		// PRE-narrowing CANDIDATE-POOL kinds (resolve.go), captured before
+		// this function ever ran -- it structurally cannot know about the
+		// registered-handle-kind APPEND the main census loop above just
+		// performed (censusKinds = appendUniqueCensusKind(...)), because a
+		// bound handle can name a kind that was never in the pool at all
+		// (design brief: a handle is decisive alone, independent of
+		// pooling). Omitting that kind here would let the proof certify
+		// soundness over an INCOMPLETE hypothesis set -- exactly the class
+		// of gap this whole mechanism exists to close -- so the identical
+		// append is mirrored onto the pre-narrowing set too, before it
+		// reaches the proof.
+		preNarrowingKinds := input.PreNarrowingExplicitKinds
 		if handle != nil {
 			handleKind = handle.Kind
+			if IsCensusKindRegistered(handle.Kind) {
+				preNarrowingKinds = appendUniqueCensusKind(preNarrowingKinds, handle.Kind)
+			}
 		}
-		proof := kindInsensitivityProof(ctx, input.OrgID, input.PreNarrowingExplicitKinds,
+		proof := kindInsensitivityProof(ctx, input.OrgID, preNarrowingKinds,
 			handleKind, valueOr(handle != nil, handle), handle != nil, anchor.Kind, anchor.CanonicalID, anchorOK, input.CensusFunc)
 		sound := (base.Outcome == ShadowWouldCommit && proof == kindInsensitivityCommitSound) ||
 			(base.Outcome == ShadowWouldNoMatch && proof == kindInsensitivityNoMatchSound)

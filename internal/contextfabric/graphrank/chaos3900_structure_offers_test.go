@@ -328,6 +328,23 @@ func TestKindInsensitivityProof(t *testing.T) {
 			t.Errorf("kindInsensitivityProof() = %q, want %q -- work_item has no reachable keyed predicate here", got, kindInsensitivitySensitive)
 		}
 	})
+	// codex xhigh review, CHAOS-3972 round 2 coverage gap: a direct
+	// SatisfierSetClosureMismatch pin, distinct from ClosureMismatch above
+	// -- CHAOS-3896 Slice B's own second closure flag must be checked too.
+	t.Run("satisfier set closure mismatch poisons the proof even at count 1", func(t *testing.T) {
+		census := func(_ context.Context, _ string, kind CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+			if kind == contractsv1.ContextFabricSubjectPullRequest {
+				return CensusOutcome{Count: 1, SatisfierSetClosureMismatch: true}, nil
+			}
+			return CensusOutcome{Count: 0}, nil
+		}
+		got := kindInsensitivityProof(context.Background(), "org_1",
+			[]CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun},
+			"", "", false, anchorKind, anchorCanonicalID, true, census)
+		if got != kindInsensitivitySensitive {
+			t.Errorf("kindInsensitivityProof() = %q, want %q -- a SatisfierSetClosureMismatch outcome must never certify commit_sound", got, kindInsensitivitySensitive)
+		}
+	})
 }
 
 // TestResolveSubjects_ConfirmedKindNarrowsThePool is the P1.D end-to-end

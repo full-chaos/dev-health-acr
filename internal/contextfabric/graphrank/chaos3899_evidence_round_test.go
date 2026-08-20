@@ -394,6 +394,68 @@ func TestRunShadowEvidenceRound_ReceiptConfirmedKindNeverProofGated(t *testing.T
 	}
 }
 
+// TestRunShadowEvidenceRound_ExplicitKindNarrowing_HandleAppendedKindJoinsTheProof
+// is the codex xhigh review round-2 regression pin (CHAOS-3972): a bound
+// handle can name a census kind that was NEVER in the pre-narrowing
+// candidate pool at all (design brief: a handle is decisive alone,
+// independent of pooling) -- the main census loop appends that kind via
+// appendUniqueCensusKind, and the insensitivity proof MUST mirror the same
+// append onto its own pre-narrowing kind set, or it certifies soundness
+// over an incomplete hypothesis space.
+//
+// Scenario (exactly codex's own repro): pre-narrowing pool =
+// [pull_request, pull_request_review]; an explicit expected_kinds=[pull_request]
+// narrows PooledKinds to [pull_request] alone; the question ALSO binds a
+// ci_pipeline_run handle -- a kind absent from both the narrowed AND the
+// pre-narrowing pool. The round's own narrowed census (pull_request=0,
+// appended ci_pipeline_run=1 via the handle) reaches would_commit. The
+// TRUE all-kinds union also includes pull_request_review=1 (reachable only
+// via the shared repository anchor) -- two real satisfiers, not one -- so
+// the round's own commit is UNSOUND and must be demoted.
+func TestRunShadowEvidenceRound_ExplicitKindNarrowing_HandleAppendedKindJoinsTheProof(t *testing.T) {
+	t.Parallel()
+	input := baseInput()
+	input.Question = "run 18234567"
+	input.PooledKinds = []CensusKind{contractsv1.ContextFabricSubjectPullRequest}
+	input.PreNarrowingExplicitKinds = []CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectPullRequestReview}
+	input.AliasClaimants = map[string][]IdentityMatch{
+		"dev-health-acr": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1"}, Mechanism: contextfabric.MatchAlias}},
+	}
+	f := &fakeCensus{byKind: map[CensusKind][]struct {
+		outcome CensusOutcome
+		err     error
+	}{
+		// pull_request: censused twice (round's own narrowed census, then
+		// the proof's all-kinds re-census) -- zero satisfiers both times.
+		contractsv1.ContextFabricSubjectPullRequest: {
+			{outcome: CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC()}},
+			{outcome: CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC()}},
+		},
+		// ci_pipeline_run: censused twice (the round's own handle-appended
+		// census, then the proof's own matching append) -- one satisfier
+		// both times, the SAME satisfier the round's own would_commit
+		// rests on entirely.
+		contractsv1.ContextFabricSubjectCIRun: {
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-18234567"}},
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "run-18234567"}},
+		},
+		// pull_request_review: censused ONLY by the proof (never by the
+		// round's own narrowed census) -- one satisfier the narrowed round
+		// never saw at all.
+		contractsv1.ContextFabricSubjectPullRequestReview: {
+			{outcome: CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "review-1"}},
+		},
+	}}
+	input.CensusFunc = f.fn
+	att := RunShadowEvidenceRound(context.Background(), input, nil)
+	if att.Outcome != ShadowWouldClarify || att.Reason != ReasonKindSensitiveOutcome {
+		t.Fatalf("att = %#v, want would_clarify/kind_sensitive_outcome -- the narrowed round's commit rests on a handle-appended kind the proof must also consider, and the true all-kinds union has TWO satisfiers (ci_pipeline_run + pull_request_review), not one", att)
+	}
+	if f.calls != 5 {
+		t.Fatalf("census calls = %d, want 5 (2 pull_request + 2 ci_pipeline_run + 1 pull_request_review)", f.calls)
+	}
+}
+
 // TestRunShadowEvidenceRound_NilTracerStillComputes proves the Attestation
 // is fully computed even with no tracer wired (nil is a valid, common
 // call shape for a direct unit test or a caller that only wants the value).
