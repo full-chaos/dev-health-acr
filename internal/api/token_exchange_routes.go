@@ -32,6 +32,12 @@ func (a *App) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	if !a.allowDeviceRequest(w, r, a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
 		return
 	}
+	// ParseForm buffers the whole body in memory before Validate ever
+	// looks at it; an unauthenticated caller must not be able to force an
+	// unbounded read, so this bound applies BEFORE parsing, the same
+	// ceiling decodeJSONBody already applies to the JSON grant on this
+	// same endpoint.
+	r.Body = http.MaxBytesReader(w, r.Body, a.config.MaxRequestBodyBytes)
 	if err := r.ParseForm(); err != nil {
 		a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidRequest, http.StatusBadRequest)
 		return

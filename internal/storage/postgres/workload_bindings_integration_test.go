@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -12,6 +13,43 @@ import (
 )
 
 const workloadBindingTestOrgID = "33333333-3333-3333-3333-333333333333"
+
+// TestCredentialStore_createCredentialRecordsIssuanceProvenanceInPostgresAudit
+// is codex round 1's finding: acr.client_credentials.createCredential built
+// its audit record without ever threading IssuanceProvenance through, so a
+// workload_exchange (or device_authorization) credential's audit_events row
+// silently lost that attribution in production, unlike the memory store's
+// equivalent path.
+func TestCredentialStore_createCredentialRecordsIssuanceProvenanceInPostgresAudit(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	credentials, err := NewCredentialStore(db, audit)
+	require.NoError(t, err)
+	service, err := auth.NewService(credentials, auth.ServiceOptions{})
+	require.NoError(t, err)
+
+	// workload_binding_id is a foreign key onto acr.workload_bindings.
+	_, err = db.ExecContext(ctx, `
+INSERT INTO acr.workload_bindings (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid, role, repository_scopes, created_at, created_by)
+VALUES ('wlb_audit_test', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]'::jsonb, now(), 'test_actor')`, workloadBindingTestOrgID)
+	require.NoError(t, err)
+
+	issued, err := service.Create(ctx, auth.CreateCredentialRequest{
+		OrgID: workloadBindingTestOrgID, Name: "workload:wlb_audit_test", RepositoryScopes: []string{"*"}, Scopes: []string{auth.ScopeContextRead},
+		CreatedBy: "wlb_audit_test", IssuanceProvenance: storage.CredentialIssuanceProvenanceWorkloadExchange, WorkloadBindingID: "wlb_audit_test",
+	})
+	require.NoError(t, err)
+
+	var metadataJSON []byte
+	require.NoError(t, db.QueryRowContext(ctx, `
+SELECT metadata FROM acr.audit_events
+WHERE action = 'credential_created' AND resource_id = $1`, issued.Credential.CredentialID).Scan(&metadataJSON))
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal(metadataJSON, &metadata))
+	require.Equal(t, "workload_exchange", metadata["issuance_provenance"])
+}
 
 func TestWorkloadBindingStore_lookupResolvesAnExactSeededRow(t *testing.T) {
 	ctx := context.Background()

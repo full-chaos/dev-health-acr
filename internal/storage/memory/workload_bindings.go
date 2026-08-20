@@ -25,6 +25,7 @@ func NewWorkloadBindingStore() *WorkloadBindingStore {
 func (s *WorkloadBindingStore) Put(key storage.WorkloadBindingKey, binding storage.WorkloadBinding) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	binding.RepositoryScopes = append([]string(nil), binding.RepositoryScopes...)
 	s.rows[key] = binding
 }
 
@@ -38,5 +39,10 @@ func (s *WorkloadBindingStore) Lookup(ctx context.Context, key storage.WorkloadB
 	if !ok {
 		return storage.WorkloadBinding{}, storage.ErrNotFound
 	}
+	// Defensive copy on the way out too -- codex round 1 finding: without
+	// it, a caller mutating the returned slice would silently mutate this
+	// store's own row, the same aliasing bug postgres's version can't
+	// have (it decodes a fresh slice from JSON on every read).
+	binding.RepositoryScopes = append([]string(nil), binding.RepositoryScopes...)
 	return binding, nil
 }

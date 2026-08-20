@@ -104,7 +104,12 @@ func (s *credentialStore) createCredential(ctx context.Context, input storage.Cr
 		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
 	}
 	credential := credentialFromCreate(input, now)
-	record := storage.CredentialRecord{Metadata: credential, TokenHash: input.TokenHash, CreatedBy: input.ActorID}
+	// Codex round 1 finding: IssuanceProvenance was never threaded into
+	// the audit record here (pre-existing, since before workload_exchange
+	// existed) -- production audit events for a device_authorization or
+	// workload_exchange credential silently omitted issuance_provenance,
+	// unlike the memory store's equivalent path.
+	record := storage.CredentialRecord{Metadata: credential, TokenHash: input.TokenHash, CreatedBy: input.ActorID, IssuanceProvenance: input.IssuanceProvenance}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("begin credential create: %w", sanitizeDatabaseError(err))

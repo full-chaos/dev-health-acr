@@ -236,6 +236,19 @@ URL whenever backing stores are enabled.
 {{- if not (.Values.workloadTokenExchange.trustDomain | default "") -}}
 {{- fail "workload-token-exchange: workloadTokenExchange.trustDomain is required when workloadTokenExchange.enabled=true" -}}
 {{- end -}}
+{{- /*
+Codex round 1 finding: the TokenReview ClusterRoleBinding targets
+acr.serviceAccountName, which defaults to the literal "default" namespace
+ServiceAccount whenever serviceAccount.create=false and no explicit name is
+set. Binding cluster-wide TokenReview capability to a SA shared with other
+workloads is a real privilege-escalation surface, so this fails closed on
+the one case this chart can actually detect: create=false with no explicit
+name. An explicit serviceAccount.name is trusted as the operator's own
+deliberate, out-of-band-provisioned choice.
+*/ -}}
+{{- if and (not .Values.serviceAccount.create) (not (.Values.serviceAccount.name | default "")) -}}
+{{- fail "workload-token-exchange: workloadTokenExchange.enabled=true requires either serviceAccount.create=true or an explicit serviceAccount.name -- the TokenReview ClusterRoleBinding must never land on the namespace's default ServiceAccount" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

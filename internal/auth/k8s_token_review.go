@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -98,6 +100,20 @@ func NewKubernetesTokenReviewValidator(options KubernetesTokenReviewOptions) (*K
 	if strings.TrimSpace(options.APIServerURL) == "" {
 		return nil, errors.New("kubernetes token review: api server url is required")
 	}
+	parsedAPIServerURL, err := url.Parse(options.APIServerURL)
+	if err != nil || parsedAPIServerURL.Host == "" {
+		return nil, errors.New("kubernetes token review: api server url is malformed")
+	}
+	// Both the reviewer token (Authorization header) and the workload's
+	// subject token (request body) cross this connection -- it must never
+	// be plaintext or redirectable to an unexpected origin.
+	loopback := parsedAPIServerURL.Hostname() == "localhost" || func() bool {
+		ip := net.ParseIP(parsedAPIServerURL.Hostname())
+		return ip != nil && ip.IsLoopback()
+	}()
+	if parsedAPIServerURL.Scheme != "https" && !loopback {
+		return nil, errors.New("kubernetes token review: api server url must use https (plain http is only allowed for a loopback origin)")
+	}
 	if options.ReviewerToken == nil {
 		return nil, errors.New("kubernetes token review: reviewer token source is required")
 	}
@@ -109,7 +125,14 @@ func NewKubernetesTokenReviewValidator(options KubernetesTokenReviewOptions) (*K
 	}
 	client := options.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		// The default client refuses redirects -- both the reviewer token
+		// (Authorization header) and the subject token (request body)
+		// must never follow a retargeted host. A caller-supplied
+		// HTTPClient is trusted as-is (never mutated here) rather than
+		// second-guessed.
+		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("kubernetes token review: unexpected redirect refused")
+		}}
 	}
 	now := options.Now
 	if now == nil {

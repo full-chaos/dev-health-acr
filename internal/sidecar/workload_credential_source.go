@@ -65,12 +65,22 @@ func NewWorkloadCredentialSource(options WorkloadCredentialSourceOptions) (Crede
 	if options.TokenEndpoint == nil || options.TokenEndpoint.Host == "" {
 		return nil, errors.New("acr: workload credential source requires a token endpoint")
 	}
+	// The k8s projected ServiceAccount JWT goes in this request's body --
+	// it must never be sendable to a plaintext or unexpected origin, and a
+	// redirect response must never be able to retarget where it lands.
+	if options.TokenEndpoint.Scheme != "https" && !isLoopbackHost(options.TokenEndpoint.Hostname()) {
+		return nil, errors.New("acr: workload token endpoint must use https (plain http is only allowed for a loopback origin)")
+	}
 	if strings.TrimSpace(options.SubjectTokenFile) == "" {
 		return nil, errors.New("acr: workload credential source requires a subject token file")
 	}
 	client := options.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		// The default client refuses redirects -- the subject token in the
+		// request body must never be forwarded to a retargeted host. A
+		// caller-supplied HTTPClient is trusted as-is (never mutated here)
+		// rather than second-guessed.
+		client = &http.Client{CheckRedirect: refuseRedirect}
 	}
 	now := options.Now
 	if now == nil {

@@ -8,6 +8,16 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// minWorkloadAccessTokenLifetime is the shortest lifetime this issuer will
+// mint. Without a floor, a subject token that is merely seconds from its
+// own expiry would still pass the bare ">now" check below, producing a
+// credential row the client-side cache (internal/sidecar's own
+// workloadRefreshMargin) immediately treats as unusable and discards --
+// a wasted issuance and a wasted purge-eligible row for no benefit. Set
+// above that client margin so a token this issuer actually returns is
+// never one the client would reject on arrival.
+const minWorkloadAccessTokenLifetime = time.Minute
+
 type serviceAccessTokenIssuer struct {
 	credentials *Service
 	now         func() time.Time
@@ -34,12 +44,12 @@ func (s *serviceAccessTokenIssuer) Issue(ctx context.Context, binding WorkloadBi
 	if subjectExpiresAt.Before(expiresAt) {
 		expiresAt = subjectExpiresAt
 	}
-	if !expiresAt.After(now) {
-		// The subject token is already expired, or expires so
-		// imminently there is no room left for an access token --
-		// TokenReview validation should already have caught an expired
-		// subject token, so this is a defensive belt-and-suspenders
-		// check, not the primary expiry gate.
+	if expiresAt.Sub(now) < minWorkloadAccessTokenLifetime {
+		// The subject token is already expired, or expires too
+		// imminently to be worth issuing against -- TokenReview
+		// validation should already have caught an outright-expired
+		// subject token, so this is mainly the near-expiry edge (see
+		// minWorkloadAccessTokenLifetime's own doc comment).
 		return IssuedCredential{}, ErrSubjectTokenInvalid
 	}
 	return s.credentials.Create(ctx, CreateCredentialRequest{

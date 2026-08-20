@@ -58,6 +58,20 @@ func TestWorkloadAccessTokenIssuer_usesTheFixedLifetimeWhenSubjectOutlivesIt(t *
 	}
 }
 
+func TestWorkloadAccessTokenIssuer_rejectsASubjectExpiringTooSoonToBeUseful(t *testing.T) {
+	// Codex round 1 finding: a subject token with only, say, 5 seconds of
+	// life left passed the old ">now" check and minted a token the
+	// sidecar's own cache margin (workloadRefreshMargin, 30s) would treat
+	// as immediately stale, wasting the issuance and the purge-eligible
+	// row it created. minWorkloadAccessTokenLifetime closes that gap.
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	issuer := newTestAccessTokenIssuer(t, func() time.Time { return now })
+	binding := WorkloadBinding{BindingID: "wlb_5", OrgID: "11111111-1111-4111-8111-111111111111", Role: "read", RepositoryScopes: []string{"*"}}
+	if _, err := issuer.Issue(context.Background(), binding, RoleScopes("read"), now.Add(5*time.Second)); !errors.Is(err, ErrSubjectTokenInvalid) {
+		t.Fatalf("error = %v, want ErrSubjectTokenInvalid for a subject token expiring in 5s (below minWorkloadAccessTokenLifetime)", err)
+	}
+}
+
 func TestWorkloadAccessTokenIssuer_rejectsAnAlreadyExpiredSubject(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	issuer := newTestAccessTokenIssuer(t, func() time.Time { return now })

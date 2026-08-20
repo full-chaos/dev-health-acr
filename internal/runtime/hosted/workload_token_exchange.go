@@ -116,6 +116,12 @@ func kubernetesAPIHTTPClient(caCertPath string) (*http.Client, error) {
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 		},
+		// The reviewer token and the workload's subject token both cross
+		// this connection -- refuse any redirect rather than following it
+		// to a retargeted host.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("kubernetes api server: unexpected redirect refused")
+		},
 	}, nil
 }
 
