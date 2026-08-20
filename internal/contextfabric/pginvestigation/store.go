@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -212,16 +213,50 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// answer reuse happens to be enabled on this Store.
 	graphEpochColumn := sql.NullInt64{Int64: graphEpoch, Valid: true}
 
-	insertResult, err := s.db.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-ON CONFLICT (result_id) DO NOTHING`,
+	insertArgs := []any{
 		resultID, orgID, payload, result.GeneratedAt,
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
 		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn,
-		windowInferenceVersion)
+		windowInferenceVersion,
+	}
+	const insertResultSQL = `
+INSERT INTO acr.context_fabric_investigation_results
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+ON CONFLICT (result_id) DO NOTHING`
+
+	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
+	// overwhelming majority of Saves (no ConfirmedStructure entry redeemed
+	// a receipt) -- that path stays byte-identical to this method's own
+	// pre-P4 behavior, no transaction opened. A non-empty claims list means
+	// this result must win an atomic (org, prior_result_id, member) claim
+	// for EVERY one, in the SAME transaction as the result row itself
+	// (ErrStructureOfferSuperseded's own doc comment): either both the
+	// result and every claim persist, or neither does.
+	claims := structureSupersessionClaims(result)
+	if len(claims) == 0 {
+		insertResult, err := s.db.ExecContext(ctx, insertResultSQL, insertArgs...)
+		if err != nil {
+			return fmt.Errorf("save investigation result: %w", sanitizeError(err))
+		}
+		rows, err := insertResult.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("save investigation result rows affected: %w", sanitizeError(err))
+		}
+		if rows == 1 {
+			return nil
+		}
+		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("pginvestigation: begin structure supersession transaction: %w", sanitizeError(err))
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds below
+
+	insertResult, err := tx.ExecContext(ctx, insertResultSQL, insertArgs...)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -229,23 +264,73 @@ ON CONFLICT (result_id) DO NOTHING`,
 	if err != nil {
 		return fmt.Errorf("save investigation result rows affected: %w", sanitizeError(err))
 	}
-	if rows == 1 {
-		return nil
+	if rows != 1 {
+		// A row already existed for this result_id -- an idempotent
+		// replay. If it is genuinely the SAME result being re-saved, its
+		// claims were already committed by the ORIGINAL Save's own
+		// transaction (a losing Save never reaches this branch: its whole
+		// transaction, claims included, rolled back below), so there is
+		// nothing left to claim here. Roll back this now-pointless
+		// transaction and fall back to the SAME org/content verification
+		// the claim-free path uses.
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return fmt.Errorf("pginvestigation: rollback idempotent-replay transaction: %w", sanitizeError(rollbackErr))
+		}
+		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload)
 	}
 
-	// A row already existed for this result_id. Immutability requires that
-	// this only succeeds if it is a byte-for-byte replay of the same
-	// content UNDER THE SAME ORGANIZATION (e.g. a retried request); any
-	// divergence in either dimension must error rather than silently keep
-	// or overwrite the original row.
-	//
-	// M1 (Codex adversarial review, CHAOS-3755): the organization check
-	// runs FIRST, independent of content equality. InvestigationResult
-	// carries no organization discriminator of its own, so a
-	// byte-identical replay from a DIFFERENT org would otherwise pass the
-	// content-equality check below and be treated as a successful
-	// idempotent replay, while the row still belongs to whichever org
-	// wrote it first.
+	var conflicted []contractsv1.ContextFabricStructureNeedKind
+	for _, claim := range claims {
+		claimResult, err := tx.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_structure_supersession_claims (org_id, prior_result_id, member, claimed_by_result_id)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (org_id, prior_result_id, member) DO NOTHING`,
+			orgID, claim.priorResultID, string(claim.member), resultID)
+		if err != nil {
+			return fmt.Errorf("pginvestigation: claim structure supersession: %w", sanitizeError(err))
+		}
+		claimRows, err := claimResult.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("pginvestigation: claim structure supersession rows affected: %w", sanitizeError(err))
+		}
+		if claimRows == 0 {
+			conflicted = append(conflicted, claim.member)
+		}
+	}
+	if len(conflicted) > 0 {
+		// A concurrent Save already won at least one of these (org,
+		// prior_result_id, member) claims first. Roll back BOTH the
+		// claims this transaction itself won and the result insert
+		// TOGETHER -- design brief §2.5: "A FAILED Save transaction writes
+		// no claim" -- and report the typed conflict so Engine can
+		// terminate the round stale_superseded_offer instead of
+		// persisting or returning the result it had already computed.
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return fmt.Errorf("pginvestigation: rollback superseded structure claim: %w", sanitizeError(rollbackErr))
+		}
+		return &contextfabric.ErrStructureOfferSuperseded{Members: conflicted}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("pginvestigation: commit investigation result with structure claims: %w", sanitizeError(err))
+	}
+	return nil
+}
+
+// verifyIdempotentReplay is Save's own "a row already existed for this
+// result_id" path, shared by the claim-free fast path and the
+// structure-claim-bearing transactional path above. Immutability requires
+// that a re-save only succeeds if it is a byte-for-byte replay of the same
+// content UNDER THE SAME ORGANIZATION (e.g. a retried request); any
+// divergence in either dimension must error rather than silently keep or
+// overwrite the original row.
+//
+// M1 (Codex adversarial review, CHAOS-3755): the organization check runs
+// FIRST, independent of content equality. InvestigationResult carries no
+// organization discriminator of its own, so a byte-identical replay from a
+// DIFFERENT org would otherwise pass the content-equality check below and
+// be treated as a successful idempotent replay, while the row still
+// belongs to whichever org wrote it first.
+func (s *Store) verifyIdempotentReplay(ctx context.Context, orgID, resultID string, payload []byte) error {
 	row := s.db.QueryRowContext(ctx, `
 SELECT org_id, payload FROM acr.context_fabric_investigation_results WHERE result_id = $1`, resultID)
 	var existingOrgID string
@@ -272,6 +357,71 @@ SELECT org_id, payload FROM acr.context_fabric_investigation_results WHERE resul
 		return fmt.Errorf("pginvestigation: investigation result %q already exists with different content", resultID)
 	}
 	return nil
+}
+
+// structureSupersessionClaim is one (prior_result_id, member) pair a
+// result's own ConfirmedStructure entry requires an atomic claim for --
+// see structureSupersessionClaims' own doc comment for which entries
+// qualify.
+type structureSupersessionClaim struct {
+	priorResultID string
+	member        contractsv1.ContextFabricStructureNeedKind
+}
+
+// structureSupersessionClaims extracts every claim result.Save must win
+// atomically (CHAOS-3927 P4, design brief §2.1): one per ConfirmedStructure
+// entry with Disposition=applied AND Source=receipt -- the only entries
+// that actually redeemed a stored offer from a NAMED prior result. Entries
+// with any other Disposition (vetoed_unresolved/vetoed_conflict/
+// vetoed_stale) or Source (explicit/explicit_unattributed) never redeemed
+// anything, so there is nothing for them to supersede.
+func structureSupersessionClaims(result contextfabric.InvestigationResult) []structureSupersessionClaim {
+	var claims []structureSupersessionClaim
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
+			continue
+		}
+		if entry.Source != contractsv1.ContextFabricStructureSourceReceipt {
+			continue
+		}
+		priorResultID := strings.TrimSpace(entry.PriorResultID)
+		if priorResultID == "" {
+			continue
+		}
+		claims = append(claims, structureSupersessionClaim{priorResultID: priorResultID, member: entry.Member})
+	}
+	return claims
+}
+
+// IsStructureSuperseded implements contextfabric.StructureSupersessionChecker
+// -- a plain, non-atomic read against the SAME claim table Save's own
+// atomic insert writes to (that method's own doc comment covers why a
+// plain read is sufficient here: it is an optimization, not the atomicity
+// guarantee itself). Reports true the moment ANY row exists for (orgID,
+// priorResultID, member), regardless of which result claimed it -- Save
+// never persists a claim without also persisting its owning result (both
+// commit in the SAME transaction, or neither does), so a claim row's mere
+// existence is sufficient proof that a DIFFERENT result already redeemed
+// this exact tuple.
+func (s *Store) IsStructureSuperseded(ctx context.Context, orgID, priorResultID string, member contractsv1.ContextFabricStructureNeedKind) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("pginvestigation: store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	priorResultID = strings.TrimSpace(priorResultID)
+	if orgID == "" || priorResultID == "" {
+		return false, errors.New("pginvestigation: organization and prior result id are required")
+	}
+	var exists bool
+	row := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM acr.context_fabric_structure_supersession_claims
+    WHERE org_id = $1 AND prior_result_id = $2 AND member = $3
+)`, orgID, priorResultID, string(member))
+	if err := row.Scan(&exists); err != nil {
+		return false, fmt.Errorf("pginvestigation: check structure supersession claim: %w", sanitizeError(err))
+	}
+	return exists, nil
 }
 
 // Get returns the InvestigationResult for resultID, scoped to

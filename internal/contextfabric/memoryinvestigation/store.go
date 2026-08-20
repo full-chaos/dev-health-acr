@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -39,15 +40,33 @@ type entry struct {
 	payload []byte
 }
 
+// structureSupersessionClaimKey is the in-memory twin of
+// pginvestigation's own (org_id, prior_result_id, member) primary key --
+// see structureSupersessionClaims' doc comment for which
+// ContextFabricConfirmedStructureEntry rows mint one.
+type structureSupersessionClaimKey struct {
+	orgID         string
+	priorResultID string
+	member        contractsv1.ContextFabricStructureNeedKind
+}
+
 // Store is a mutex-protected, map-backed contextfabric.InvestigationResultStore.
 type Store struct {
 	mu      sync.Mutex
 	results map[string]entry
+	// claims mirrors pginvestigation's acr.context_fabric_structure_
+	// supersession_claims table (CHAOS-3927 P4): Save writes an entry here,
+	// under the SAME mu.Lock() critical section as the result insert, for
+	// every redeemed ConfirmedStructure member -- the mutex is this store's
+	// entire transaction mechanism, so a claim and its owning result are
+	// exactly as atomic here as they are in Postgres's own single
+	// transaction.
+	claims map[structureSupersessionClaimKey]string // -> claimed_by_result_id
 }
 
 // NewStore returns an empty Store.
 func NewStore() *Store {
-	return &Store{results: make(map[string]entry)}
+	return &Store{results: make(map[string]entry), claims: make(map[structureSupersessionClaimKey]string)}
 }
 
 // Save persists an immutable InvestigationResult snapshot. It never
@@ -108,12 +127,93 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 			return fmt.Errorf("memoryinvestigation: investigation result %q already exists under a different organization", resultID)
 		}
 		if bytes.Equal(existing.payload, payload) {
+			// CHAOS-3927 P4: a genuine idempotent replay of an ALREADY
+			// stored result. Its claims (if any) were already recorded by
+			// the original Save call inside this SAME critical section
+			// (a losing Save never reaches this far -- see the fresh-insert
+			// branch below), so there is nothing left to claim.
 			return nil
 		}
 		return fmt.Errorf("memoryinvestigation: investigation result %q already exists with different content", resultID)
 	}
+
+	// CHAOS-3927 P4 (design brief §2.1): every ConfirmedStructure entry
+	// that redeemed a receipt (Disposition=applied, Source=receipt) must
+	// win its own (org, prior_result_id, member) claim before this result
+	// is considered saved -- ATOMICALLY with the result insert below, which
+	// this store's single mu.Lock() critical section already guarantees
+	// (mirrors pginvestigation.Store.Save's own transaction). A claim
+	// already held by an EARLIER result (this store never lets a claim
+	// outlive its owning result, since both are written together) means a
+	// newer result already superseded this one's redemption -- report the
+	// SAME typed conflict pginvestigation reports, and write NEITHER the
+	// result NOR any of this call's own claims (no partial application).
+	claims := structureSupersessionClaims(result)
+	var conflicted []contractsv1.ContextFabricStructureNeedKind
+	for _, claim := range claims {
+		key := structureSupersessionClaimKey{orgID: orgID, priorResultID: claim.priorResultID, member: claim.member}
+		if _, held := s.claims[key]; held {
+			conflicted = append(conflicted, claim.member)
+		}
+	}
+	if len(conflicted) > 0 {
+		return &contextfabric.ErrStructureOfferSuperseded{Members: conflicted}
+	}
+	for _, claim := range claims {
+		key := structureSupersessionClaimKey{orgID: orgID, priorResultID: claim.priorResultID, member: claim.member}
+		s.claims[key] = resultID
+	}
 	s.results[resultID] = entry{orgID: orgID, payload: payload}
 	return nil
+}
+
+// structureSupersessionClaim is the in-memory twin of pginvestigation's
+// own claim row shape -- see that package's structureSupersessionClaims
+// for the identical extraction rule this mirrors (kept as a SEPARATE
+// implementation per package, matching every other Save-time rule this
+// store already duplicates rather than shares, so the two stores' behavior
+// is proved equal by the paritytest table rather than by construction).
+type structureSupersessionClaim struct {
+	priorResultID string
+	member        contractsv1.ContextFabricStructureNeedKind
+}
+
+func structureSupersessionClaims(result contextfabric.InvestigationResult) []structureSupersessionClaim {
+	var claims []structureSupersessionClaim
+	for _, e := range result.ConfirmedStructure {
+		if e.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
+			continue
+		}
+		if e.Source != contractsv1.ContextFabricStructureSourceReceipt {
+			continue
+		}
+		priorResultID := strings.TrimSpace(e.PriorResultID)
+		if priorResultID == "" {
+			continue
+		}
+		claims = append(claims, structureSupersessionClaim{priorResultID: priorResultID, member: e.Member})
+	}
+	return claims
+}
+
+// IsStructureSuperseded implements contextfabric.StructureSupersessionChecker,
+// mirroring pginvestigation.Store's own implementation: true the moment a
+// claim exists for (orgID, priorResultID, member), regardless of which
+// result holds it -- see that method's own doc comment for why mere
+// existence is sufficient proof.
+func (s *Store) IsStructureSuperseded(_ context.Context, orgID, priorResultID string, member contractsv1.ContextFabricStructureNeedKind) (bool, error) {
+	if s == nil {
+		return false, errors.New("memoryinvestigation: store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	priorResultID = strings.TrimSpace(priorResultID)
+	if orgID == "" || priorResultID == "" {
+		return false, errors.New("memoryinvestigation: organization and prior result id are required")
+	}
+	s.mu.Lock()
+	_, held := s.claims[structureSupersessionClaimKey{orgID: orgID, priorResultID: priorResultID, member: member}]
+	s.mu.Unlock()
+	return held, nil
 }
 
 // Get returns the InvestigationResult for resultID, scoped to

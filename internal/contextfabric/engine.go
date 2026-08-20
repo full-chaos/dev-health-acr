@@ -142,6 +142,16 @@ type EngineDependencies struct {
 	// contract as HandleVerifier above, see AnchorVerifier's own doc
 	// comment (structure.go).
 	AnchorVerifier AnchorVerifier
+	// StructureSelectionSink is optional (CHAOS-3927 P4, capture-only
+	// phase, mirroring ClarificationSelectionSink's own contract exactly).
+	// When set, Engine notifies it every time a caller's kindr_/ancr_/
+	// handr_ receipt successfully resolves to a confirmed structure
+	// member -- see StructureSelectionSink's own doc comment for the
+	// fail-open contract this dependency must uphold. Leaving this nil
+	// means no structure selection is ever captured, exactly as if the
+	// feature did not exist -- capture is strictly additive and never
+	// changes canonicalizeStructure's own resolution behavior.
+	StructureSelectionSink StructureSelectionSink
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -314,6 +324,7 @@ type Engine struct {
 	reusePromptVersions        ReusePromptVersions
 	reuseVersionAuthorities    ReuseVersionAuthorities
 	clarificationSelectionSink ClarificationSelectionSink
+	structureSelectionSink     StructureSelectionSink
 	handleVerifier             HandleVerifier
 	anchorVerifier             AnchorVerifier
 	serviceVersion             string
@@ -341,6 +352,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
+		structureSelectionSink:     dependencies.StructureSelectionSink,
 		handleVerifier:             dependencies.HandleVerifier,
 		anchorVerifier:             dependencies.AnchorVerifier,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
@@ -425,7 +437,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// needs to touch canonicalizeStructure's own tested control flow.
 	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
 	if structureCanon.Veto != structureVetoNone {
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, binding)
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, structureCanon.StaleMember, binding)
 	}
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
@@ -814,6 +826,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// same asymmetry from the other side.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
 		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+			// CHAOS-3927 P4 (design brief §2.1): a decisive result carrying
+			// confirmed structure can still lose the atomic (org,
+			// prior_result_id, member) supersession claim to a concurrent
+			// Save that got there first -- the narrow race
+			// canonicalizeStructure's own pre-flight consult cannot fully
+			// close (StructureSupersessionChecker's own doc comment). This
+			// computed result must NEVER reach the caller: the round
+			// terminates stale_superseded_offer instead, the SAME veto
+			// terminal a pre-flight detection would have produced, echoing
+			// whichever confirmed member actually lost the race (never
+			// silently discarding the conflict information Save reported).
+			var superseded *ErrStructureOfferSuperseded
+			if errors.As(err, &superseded) {
+				return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntry(structureCanon.Confirmed, superseded.Members), binding)
+			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)

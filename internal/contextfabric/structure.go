@@ -54,6 +54,17 @@ const (
 	// SAME member -- ambiguous by construction, never first-match-wins
 	// (design brief §2.1, mirroring window's own plural-receipt rule).
 	structureVetoConfirmationConflict structureVetoReason = "structure_confirmation_conflict"
+	// structureVetoStaleSupersededOffer (CHAOS-3927 P4, design brief §2.1's
+	// offer-supersession rule / §2.5's "redeeming a superseded offer" row):
+	// the (org, PriorResultID, member) tuple this receipt would redeem was
+	// already claimed by a LATER result that redeemed a receipt of the
+	// SAME member from the SAME prior result -- either detected up front
+	// by a StructureSupersessionChecker consult (the common case) or
+	// discovered only at Save time when the atomic claim insert itself
+	// lost its race (ErrStructureOfferSuperseded, the rare concurrent
+	// case). Recovery is retry against the NEWER result's own fresh
+	// offers, never the same receipt again.
+	structureVetoStaleSupersededOffer structureVetoReason = "stale_superseded_offer"
 )
 
 // confirmedStructureMember is one member's resolved confirmation --
@@ -91,6 +102,17 @@ type requestStructureCanonicalization struct {
 	// snapshot -- matching ConfirmedStructure's own composition, which
 	// composeStructureOfferSnapshot's caller pairs this with 1:1).
 	OfferSnapshot []contractsv1.ContextFabricStructureOfferSnapshotEntry
+	// StaleMember (CHAOS-3927 P4) is populated ONLY alongside
+	// Veto==structureVetoStaleSupersededOffer -- the single member whose
+	// stored offer was already superseded, composed eagerly here (this is
+	// the one veto class the design brief's §2.5 table explicitly requires
+	// an echo entry for: "echo disposition vetoed_stale") rather than
+	// deferred the way the pre-existing structureVetoConfirmationConflict/
+	// structureVetoConfirmationUnresolved gap is (composeConfirmedStructure's
+	// own KNOWN GAP comment) -- canonicalizeStructure already has every
+	// field the echo needs in scope at the exact moment it detects
+	// staleness, so composing it here costs nothing extra.
+	StaleMember *contractsv1.ContextFabricConfirmedStructureEntry
 }
 
 // HandleVerificationReason is the closed vocabulary Engine's handle
@@ -183,6 +205,15 @@ type structureReceiptMember struct {
 	// OfferSnapshot's own doc comment for why the full list, not just the
 	// winner.
 	offerSnapshot func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry
+	// offeredOptions (CHAOS-3927 P4) builds the SAME full offer list
+	// offerSnapshot does, but as StructureOfferedOption -- carrying each
+	// offer's own typed AppliedValue (a SubjectKind string, a canonical
+	// anchor id, or a handle's literal value), which offerSnapshot's
+	// canonical-storage-only wire echo deliberately omits (ids/ranks/enums
+	// only, never a re-derivable value). captureStructureSelection is the
+	// only caller -- StructureSelectionEvent needs the actual value to be
+	// a useful training signal at all.
+	offeredOptions func(stored InvestigationResult) []StructureOfferedOption
 }
 
 // canonicalizeStructure is design brief §2.1's own entry point, called from
@@ -223,6 +254,12 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				}
 				return kindOptionsSnapshot(stored.StructureNeeds.KindOptions)
 			},
+			offeredOptions: func(stored InvestigationResult) []StructureOfferedOption {
+				if stored.StructureNeeds == nil {
+					return nil
+				}
+				return kindOptionsOffered(stored.StructureNeeds.KindOptions)
+			},
 		},
 		{
 			member:   contractsv1.ContextFabricStructureNeedSubjectAnchor,
@@ -243,6 +280,12 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 					return nil
 				}
 				return anchorOptionsSnapshot(stored.StructureNeeds.AnchorOptions)
+			},
+			offeredOptions: func(stored InvestigationResult) []StructureOfferedOption {
+				if stored.StructureNeeds == nil {
+					return nil
+				}
+				return anchorOptionsOffered(stored.StructureNeeds.AnchorOptions)
 			},
 			// reverify (P1.E, team-lead ruling on the matched_term_hash
 			// contract change): an ancr_ redemption re-proves the offer's
@@ -292,6 +335,12 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 					return nil
 				}
 				return handleOptionsSnapshot(stored.StructureNeeds.HandleOptions)
+			},
+			offeredOptions: func(stored InvestigationResult) []StructureOfferedOption {
+				if stored.StructureNeeds == nil {
+					return nil
+				}
+				return handleOptionsOffered(stored.StructureNeeds.HandleOptions)
 			},
 			// reverify (P1.E): a handr_ redemption re-validates the stored
 			// value's grammar AND re-runs the keyed source-row existence
@@ -351,6 +400,32 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		if m.reverify != nil && !m.reverify(ctx, principal, stored.Result, receiptID) {
 			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
 		}
+		// CHAOS-3927 P4 (design brief §2.1 offer-supersession rule): a
+		// receipt that resolves cleanly against its stored offer can still
+		// name an offer a LATER result has already redeemed for this same
+		// (org, prior result, member) tuple -- reverify above proves the
+		// offer's own content is still valid, not that it is still the
+		// CURRENT one. Consult the claim table, when the wired store
+		// supports it, BEFORE trusting this redemption. checker is a type
+		// assertion, not a required dependency (StructureSupersessionChecker's
+		// own doc comment) -- absent, this consult is simply skipped and
+		// Save's own atomic claim remains the sole (still sufficient)
+		// enforcement point.
+		if checker, ok := e.results.(StructureSupersessionChecker); ok {
+			superseded, err := checker.IsStructureSuperseded(ctx, principal.OrgID, resultID, m.member)
+			if err != nil || superseded {
+				// Fail-closed on an authority-relevant read (design brief
+				// §2.0): an unreadable claim table is treated identically
+				// to a confirmed-stale claim, never as "assume fresh."
+				stale := contractsv1.ContextFabricConfirmedStructureEntry{
+					Member: m.member, AppliedValue: value, Source: contractsv1.ContextFabricStructureSourceReceipt,
+					PriorResultID: resultID, ReceiptID: receiptID, OfferSource: offerSource,
+					PriorVersionID: priorVersionID, PriorEntryID: priorEntryID,
+					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
+				}
+				return requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer, StaleMember: &stale}
+			}
+		}
 		confirmed = append(confirmed, confirmedStructureMember{
 			Member: m.member, AppliedValue: value, PriorResultID: resultID, ReceiptID: receiptID,
 			OfferSource: offerSource, PriorVersionID: priorVersionID, PriorEntryID: priorEntryID,
@@ -358,8 +433,50 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		if m.offerSnapshot != nil {
 			offerSnapshot = append(offerSnapshot, m.offerSnapshot(stored.Result)...)
 		}
+		// CHAOS-3927 P4: a structure receipt just resolved cleanly, passed
+		// reverification, and cleared the supersession consult -- this is
+		// the ONLY point canonicalizeStructure confirms a member, so it is
+		// the ONLY point a StructureSelectionEvent can honestly be
+		// captured from (mirrors captureClarificationSelection's own
+		// "fires only on success" placement).
+		if m.offeredOptions != nil {
+			e.captureStructureSelection(ctx, principal, request.Consumer, m.member, resultID, stored.Result, m.offeredOptions(stored.Result), receiptID)
+		}
 	}
 	return requestStructureCanonicalization{Confirmed: confirmed, OfferSnapshot: offerSnapshot}
+}
+
+// captureStructureSelection builds and hands off a StructureSelectionEvent
+// (CHAOS-3927 P4) for one receipt canonicalizeStructure just confirmed
+// against a real offer in a real prior result -- mirrors
+// Engine.captureClarificationSelection's own structure and fail-open
+// contract exactly (engine.go). A nil structureSelectionSink is the
+// ordinary "capture is off" case and this is a no-op; the sink call is
+// synchronous but MUST return promptly by StructureSelectionSink's own
+// documented contract, so this never adds meaningful latency to
+// Investigate, and it MUST NOT be able to fail this call -- there is no
+// error path back from RecordSelection by design.
+func (e *Engine) captureStructureSelection(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, member contractsv1.ContextFabricStructureNeedKind, priorResultID string, prior InvestigationResult, offered []StructureOfferedOption, receiptID string) {
+	if e.structureSelectionSink == nil {
+		return
+	}
+	var selected StructureOfferedOption
+	for _, opt := range offered {
+		if opt.ReceiptID == receiptID {
+			selected = opt
+			break
+		}
+	}
+	e.structureSelectionSink.RecordSelection(ctx, StructureSelectionEvent{
+		OrgID: principal.OrgID, CapturedAt: e.now().UTC(),
+		QuestionHash: QuestionHash(prior.Question), PriorResultID: priorResultID,
+		Member: string(member), Offered: offered, Selected: selected, Accepted: selected.Rank == 0,
+		SelectionMode:       structureSelectionMode(principal),
+		SelectionProvenance: clarificationSelectionProvenance(principal, consumer),
+		ProjectionVersion:   e.reuseProjectionVersion, ModelIdentities: e.reuseModelIdentities,
+		RetrievalIdentity: e.reuseRetrievalIdentity, PromptVersions: e.reusePromptVersions,
+		VersionAuthorities: e.reuseVersionAuthorities,
+	})
 }
 
 // kindOptionsSnapshot/anchorOptionsSnapshot/handleOptionsSnapshot (P1.G)
@@ -411,6 +528,57 @@ func handleOptionsSnapshot(opts []contractsv1.ContextFabricHandleOption) []contr
 	return out
 }
 
+// kindOptionsOffered/anchorOptionsOffered/handleOptionsOffered (CHAOS-3927
+// P4) each build one member's StructureOfferedOption list from its own
+// offer type -- the offeredOptions twin of
+// kindOptionsSnapshot/anchorOptionsSnapshot/handleOptionsSnapshot above,
+// carrying AppliedValue (the SubjectKind, canonical anchor id, or handle
+// value the wire-facing snapshot deliberately omits) for
+// captureStructureSelection's own use. Same "three short, near-identical
+// functions rather than one generic one" discipline as their snapshot
+// twins.
+func kindOptionsOffered(opts []contractsv1.ContextFabricKindOption) []StructureOfferedOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]StructureOfferedOption, 0, len(opts))
+	for i, opt := range opts {
+		out = append(out, StructureOfferedOption{
+			ReceiptID: opt.ReceiptID, AppliedValue: string(opt.Kind), Rank: i,
+			OfferSource: string(opt.OfferSource), PriorVersionID: opt.PriorVersionID, PriorEntryID: opt.PriorEntryID,
+		})
+	}
+	return out
+}
+
+func anchorOptionsOffered(opts []contractsv1.ContextFabricAnchorOption) []StructureOfferedOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]StructureOfferedOption, 0, len(opts))
+	for i, opt := range opts {
+		out = append(out, StructureOfferedOption{
+			ReceiptID: opt.ReceiptID, AppliedValue: opt.CanonicalID, Rank: i,
+			OfferSource: string(opt.OfferSource), PriorVersionID: opt.PriorVersionID, PriorEntryID: opt.PriorEntryID,
+		})
+	}
+	return out
+}
+
+func handleOptionsOffered(opts []contractsv1.ContextFabricHandleOption) []StructureOfferedOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]StructureOfferedOption, 0, len(opts))
+	for i, opt := range opts {
+		out = append(out, StructureOfferedOption{
+			ReceiptID: opt.ReceiptID, AppliedValue: opt.Value, Rank: i,
+			OfferSource: string(opt.OfferSource), PriorVersionID: opt.PriorVersionID, PriorEntryID: opt.PriorEntryID,
+		})
+	}
+	return out
+}
+
 // structureVetoLimitation names the single fixed disclosure a structure
 // veto attaches, mirroring windowVetoLimitations' own closed map -- both
 // veto reasons currently share one sentence (unlike window's three), so a
@@ -420,6 +588,8 @@ func structureVetoLimitation(veto structureVetoReason) string {
 	switch veto {
 	case structureVetoConfirmationConflict:
 		return "a structure confirmation receipt conflicted with another and could not be applied"
+	case structureVetoStaleSupersededOffer:
+		return "a structure confirmation receipt named an offer a newer result has already superseded"
 	default:
 		return "a structure confirmation receipt could not be resolved"
 	}
@@ -433,7 +603,14 @@ func structureVetoLimitation(veto structureVetoReason) string {
 // Interpret ever runs) -- no post-Interpret axis-conflict analogue exists
 // for structure the way windowVetoAxisConflict does, so this signature
 // carries no *InterpretedQuestion parameter.
-func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, binding ResolvedGraphBinding) (InvestigationResult, error) {
+// staleMember, when non-nil, is composed onto the resulting InvestigationResult.ConfirmedStructure
+// as its sole entry (design brief §2.5's stale-offer row: "echo disposition
+// vetoed_stale") -- callers pass requestStructureCanonicalization.StaleMember
+// on the veto==structureVetoStaleSupersededOffer path, and nil for every
+// other veto reason (the pre-existing conflict/unresolved echo gap,
+// composeConfirmedStructure's own KNOWN GAP comment, unchanged by this
+// function).
+func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, staleMember *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding) (InvestigationResult, error) {
 	limitation := structureVetoLimitation(veto)
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -468,6 +645,9 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 		Versions:            e.terminalVersions(),
 		DeterministicAnswer: limitation,
 		Warnings:            []string{},
+	}
+	if staleMember != nil {
+		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{*staleMember}
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
@@ -516,6 +696,35 @@ func composeConfirmedStructure(confirmed []confirmedStructureMember) []contracts
 		})
 	}
 	return entries
+}
+
+// staleConfirmedStructureEntry (CHAOS-3927 P4) rebuilds the echo entry for
+// the Save-time supersession race (engine.go's own ErrStructureOfferSuperseded
+// handling): confirmed is the SAME structureCanon.Confirmed slice the
+// discarded decisive result was built from, and members is
+// ErrStructureOfferSuperseded.Members -- the subset of those confirmed
+// members whose atomic claim actually lost the race. Returns the first
+// matching entry, Disposition forced to vetoed_stale -- structureVetoResult
+// composes it exactly like a pre-flight-detected stale veto's own
+// StaleMember, so a caller cannot distinguish which detection path caught
+// the staleness from the response alone.
+func staleConfirmedStructureEntry(confirmed []confirmedStructureMember, members []contractsv1.ContextFabricStructureNeedKind) *contractsv1.ContextFabricConfirmedStructureEntry {
+	lost := make(map[contractsv1.ContextFabricStructureNeedKind]bool, len(members))
+	for _, m := range members {
+		lost[m] = true
+	}
+	for _, c := range confirmed {
+		if !lost[c.Member] {
+			continue
+		}
+		return &contractsv1.ContextFabricConfirmedStructureEntry{
+			Member: c.Member, AppliedValue: c.AppliedValue, Source: contractsv1.ContextFabricStructureSourceReceipt,
+			PriorResultID: c.PriorResultID, ReceiptID: c.ReceiptID, OfferSource: c.OfferSource,
+			PriorVersionID: c.PriorVersionID, PriorEntryID: c.PriorEntryID,
+			Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
+		}
+	}
+	return nil
 }
 
 // structureReceiptPrefixForMember maps each closed StructureNeedKind
@@ -712,17 +921,28 @@ const (
 	StructureReceiptApplied    StructureReceiptOutcome = "applied"
 	StructureReceiptUnresolved StructureReceiptOutcome = "unresolved"
 	StructureReceiptConflict   StructureReceiptOutcome = "conflict"
+	// StructureReceiptStale (CHAOS-3927 P4) reports the
+	// stale_superseded_offer veto specifically -- kept distinct from
+	// StructureReceiptUnresolved so an operator can tell "the receipt
+	// itself was malformed/unmatched" apart from "the receipt was fine but
+	// a newer result already redeemed it," which have different recovery
+	// stories (retry the same receipt vs. fetch fresh offers).
+	StructureReceiptStale StructureReceiptOutcome = "stale"
 )
 
 // structureReceiptOutcomeForVeto maps a structureVetoReason to its own
-// telemetry outcome -- the SAME two-reason closed vocabulary
-// structureVetoLimitation already switches on, kept in sync by construction
-// (both read structureVetoReason's own two named constants, never a third).
+// telemetry outcome -- structureVetoLimitation's own switch, extended with
+// the SAME third reason (kept in sync by construction: both read
+// structureVetoReason's own named constants, never an untracked one).
 func structureReceiptOutcomeForVeto(veto structureVetoReason) StructureReceiptOutcome {
-	if veto == structureVetoConfirmationConflict {
+	switch veto {
+	case structureVetoConfirmationConflict:
 		return StructureReceiptConflict
+	case structureVetoStaleSupersededOffer:
+		return StructureReceiptStale
+	default:
+		return StructureReceiptUnresolved
 	}
-	return StructureReceiptUnresolved
 }
 
 // recordStructureReceiptTelemetry (CHAOS-3900 P1.F) is canonicalizeStructure's

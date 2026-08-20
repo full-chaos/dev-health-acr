@@ -241,3 +241,73 @@ VALUES ($1, $2, $3, $4)`, resultID, orgID, payload, time.Date(2026, 1, 15, 9, 30
 		}
 	})
 }
+
+// resultWithConfirmedStructure builds a FULLY VALID InvestigationResult
+// (validResult's own contract) additionally carrying one applied,
+// receipt-sourced ConfirmedStructure entry for member -- CHAOS-3927 P4's
+// own claim-bearing fixture. priorResultID/receiptID must each satisfy
+// ContextFabricConfirmedStructureEntry.Validate()'s 8..256 char bound.
+func resultWithConfirmedStructure(resultID string, member contextfabric.StructureNeedKind, priorResultID, receiptID string) contextfabric.InvestigationResult {
+	result := validResult(resultID)
+	result.ConfirmedStructure = []contextfabric.ConfirmedStructureEntry{
+		{
+			Member: member, AppliedValue: "pull_request", Source: "receipt",
+			PriorResultID: priorResultID, ReceiptID: receiptID,
+			Provenance: "clarification_confirmed", Disposition: "applied",
+		},
+	}
+	return result
+}
+
+// TestStore_structureSupersessionClaims is CHAOS-3927 P4's own acceptance
+// pin for the atomicity guarantee ErrStructureOfferSuperseded's doc
+// comment describes: two Saves redeeming the SAME (org, prior_result_id,
+// member) tuple under DIFFERENT result_ids -- the second must lose,
+// atomically, with neither its result nor its claim persisted, while the
+// first result and its claim remain completely intact.
+func TestStore_structureSupersessionClaims(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+
+	principal := storage.Principal{OrgID: "org-supersession"}
+	priorResultID := "result-prior-structure-offer-001"
+	const member = contextfabric.StructureNeedKind("expected_kind")
+
+	// Before any Save, nothing is claimed.
+	superseded, err := store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+	require.NoError(t, err)
+	require.False(t, superseded, "IsStructureSuperseded before any Save must be false")
+
+	winner := resultWithConfirmedStructure("result-supersession-winner-001", member, priorResultID, "kindr_winner00000001")
+	require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+
+	superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
+	require.NoError(t, err)
+	require.True(t, superseded, "IsStructureSuperseded after the winning Save must be true")
+
+	loser := resultWithConfirmedStructure("result-supersession-loser-0001", member, priorResultID, "kindr_loser000000001")
+	saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+	require.Error(t, saveErr, "a second Save redeeming the SAME (org, prior_result_id, member) must fail")
+	var conflict *contextfabric.ErrStructureOfferSuperseded
+	require.ErrorAs(t, saveErr, &conflict)
+	require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)
+
+	// The loser's result must NOT have been persisted -- the whole
+	// transaction (claim attempt AND result insert) rolled back together.
+	_, getErr := store.Get(ctx, principal, loser.ResultID)
+	require.ErrorIs(t, getErr, pginvestigation.ErrNotFound)
+
+	// The winner is completely unaffected by the loser's failed attempt.
+	stored, err := store.Get(ctx, principal, winner.ResultID)
+	require.NoError(t, err)
+	require.Equal(t, winner.ConfirmedStructure, stored.Result.ConfirmedStructure)
+
+	// A THIRD Save that is a byte-for-byte replay of the winner (an
+	// idempotent retry) must still succeed -- the claim it would attempt
+	// is already held by the SAME result_id, matching the design brief's
+	// own "receipts are NOT consumed by a failed round" symmetry the other
+	// direction: a successful round replaying itself is not a conflict.
+	require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+}
