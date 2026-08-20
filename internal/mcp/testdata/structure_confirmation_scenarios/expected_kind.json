@@ -1,0 +1,7 @@
+{
+  "label": "expected_kind",
+  "member": "expected_kind",
+  "question": "synthetic test question, not corpus content",
+  "kind": "pull_request",
+  "applied_value": "pull_request"
+}

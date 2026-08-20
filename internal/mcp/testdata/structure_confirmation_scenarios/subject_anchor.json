@@ -1,0 +1,8 @@
+{
+  "label": "subject_anchor",
+  "member": "subject_anchor",
+  "question": "synthetic test question, not corpus content",
+  "kind": "repository",
+  "canonical_id": "repository_ask_dev",
+  "applied_value": "repository_ask_dev"
+}
