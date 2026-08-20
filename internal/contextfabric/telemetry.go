@@ -166,3 +166,11 @@ func (t SlogEngineTelemetry) RecordStructureReceipt(ctx context.Context, princip
 	args := append([]any{"org_id", principal.OrgID, "member", string(member), "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure receipt", args...)
 }
+
+// RecordStructureExplicit (CHAOS-3972 P3) mirrors RecordStructureReceipt's
+// own logging shape exactly, for the explicit (non-receipt) structure
+// fields.
+func (t SlogEngineTelemetry) RecordStructureExplicit(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureExplicitOutcome) {
+	args := append([]any{"org_id", principal.OrgID, "member", string(member), "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric structure explicit", args...)
+}

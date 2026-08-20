@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -247,6 +248,20 @@ func (e *Engine) terminalResult(
 	// the literal would mint a result identity StructureNeeds' own
 	// receipts were never keyed against.
 	resultID := e.newResultID()
+	// CHAOS-3900 W1: a subjectless terminal still discloses the window it
+	// would have read evidence against, exactly like any other result --
+	// composeEffectiveWindow's own precedence rules apply identically
+	// regardless of whether a subject was ultimately committed.
+	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, e.now())
+	// CHAOS-3900 W2: same fresh-disclosure/nudge wiring as the decisive
+	// path (engine.go) -- a terminal that stalled on structure is
+	// EXACTLY the case a window nudge (when requested) matters most, an
+	// agent reading a refusal benefits from every disclosure available.
+	windowClarification := composeWindowClarification(effectiveWindow, resultID, e.now())
+	terminalWarnings := []string{}
+	if windowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
+		terminalWarnings = appendUniqueWarning(terminalWarnings, windowConfirmationNudgeSentence)
+	}
 	result := InvestigationResult{
 		SchemaVersion: InvestigationResultSchemaV1,
 		ResultID:      resultID,
@@ -269,31 +284,27 @@ func (e *Engine) terminalResult(
 		// forwarded -- they describe subjects this result never committed
 		// to, and a fact-shaped driver could not close to a ClaimedFact
 		// bundle that was never read.
-		DirectJudgment:       "",
-		CurrentState:         "",
-		StrongestPressures:   []string{},
-		Drivers:              []DriverJudgment{},
-		RemainingWork:        []Finding{},
-		ReadinessGaps:        []Finding{},
-		Paths:                []RelationshipPath{},
-		Conflicts:            []Finding{},
-		Limitations:          limitations,
-		LimitationsDisplaced: degradedDisplaced + temporalDisplaced,
-		EvidenceRefIDs:       []string{},
-		ClaimedFacts:         []ClaimedFact{},
-		Coverage:             coverage,
-		Temporal:             composeTemporalLabel(interpretation, coverage, ""),
-		// CHAOS-3900 W1: a subjectless terminal still discloses the window
-		// it would have read evidence against, exactly like any other
-		// result -- composeEffectiveWindow's own precedence rules apply
-		// identically regardless of whether a subject was ultimately
-		// committed.
-		EffectiveEvidenceWindow: composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, e.now()),
+		DirectJudgment:          "",
+		CurrentState:            "",
+		StrongestPressures:      []string{},
+		Drivers:                 []DriverJudgment{},
+		RemainingWork:           []Finding{},
+		ReadinessGaps:           []Finding{},
+		Paths:                   []RelationshipPath{},
+		Conflicts:               []Finding{},
+		Limitations:             limitations,
+		LimitationsDisplaced:    degradedDisplaced + temporalDisplaced,
+		EvidenceRefIDs:          []string{},
+		ClaimedFacts:            []ClaimedFact{},
+		Coverage:                coverage,
+		Temporal:                composeTemporalLabel(interpretation, coverage, ""),
+		EffectiveEvidenceWindow: effectiveWindow,
+		WindowClarification:     windowClarification,
 		// CHAOS-3900 P1: a subjectless terminal still echoes any structure
 		// this request confirmed, exactly like the window echo beside it --
 		// a confirmed kind/anchor/handle narrowed what this round searched
 		// for even when it still ended without a committed subject.
-		ConfirmedStructure: composeConfirmedStructure(structureCanon.Confirmed),
+		ConfirmedStructure: composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit),
 		// CHAOS-3900 P1.G: no guard needed -- structureCanon.OfferSnapshot
 		// is only ever non-nil alongside structureCanon.Confirmed, see
 		// requestStructureCanonicalization's own doc comment (structure.go).
@@ -307,7 +318,7 @@ func (e *Engine) terminalResult(
 		StructureNeeds:      composeStructureNeeds(structureMaterial, resultID),
 		Versions:            e.terminalVersions(),
 		DeterministicAnswer: answer,
-		Warnings:            []string{},
+		Warnings:            terminalWarnings,
 	}
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))

@@ -229,6 +229,82 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 	}
 
+	// CHAOS-3900 W2 / CHAOS-3972 P3 (design brief §2.3: "structure_needs...
+	// plus a bounded rendered_markdown section flagged untrusted, matching
+	// the existing response discipline"). Structural values (member/kind
+	// enums, receipt/option ids, pattern ids) are inline-escaped; every
+	// server-rendered label, the handle value span, and the source column
+	// name are untrusted-marked (same conservative leaf-name treatment
+	// MCPInvestigateQuestionUntrustedFields itself applies).
+	if we := projection.EffectiveEvidenceWindow; we != nil {
+		b.writeLine("")
+		if !b.writeLine(fmt.Sprintf("- Evidence window: %s (%s)", safeInline(windowBoundsText(we)), safeInline(string(we.Provenance)))) {
+			return b.finishWithTruncation()
+		}
+	}
+	if needs := projection.StructureNeeds; needs != nil {
+		b.writeLine("")
+		if !b.writeLine("## Structure needed") {
+			return b.finishWithTruncation()
+		}
+		for _, member := range needs.Missing {
+			if !b.writeLine("- Missing: " + safeInline(string(member))) {
+				return b.finishWithTruncation()
+			}
+		}
+		for _, opt := range needs.KindOptions {
+			line := fmt.Sprintf("- Kind option `%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+			if !b.writeLine(line) {
+				return b.finishWithTruncation()
+			}
+		}
+		for _, opt := range needs.AnchorOptions {
+			line := fmt.Sprintf("- Anchor option `%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+			if !b.writeLine(line) {
+				return b.finishWithTruncation()
+			}
+		}
+		for _, opt := range needs.HandleOptions {
+			line := fmt.Sprintf("- Handle option `%s`/`%s` (receipt `%s`): %s = %s (source %s)",
+				safeInline(string(opt.Kind)), safeInline(opt.PatternID), safeInline(opt.ReceiptID),
+				untrustedInline(opt.Label), untrustedInline(opt.Value), untrustedInline(opt.SourceColumn))
+			if !b.writeLine(line) {
+				return b.finishWithTruncation()
+			}
+		}
+		for _, opt := range needs.WindowOptions {
+			line := fmt.Sprintf("- Window option (receipt `%s`): %s", safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+			if !b.writeLine(line) {
+				return b.finishWithTruncation()
+			}
+		}
+	}
+	if wc := projection.WindowClarification; wc != nil {
+		b.writeLine("")
+		if !b.writeLine("## Window options") {
+			return b.finishWithTruncation()
+		}
+		for _, opt := range wc.Options {
+			line := fmt.Sprintf("- (receipt `%s`): %s", safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+			if !b.writeLine(line) {
+				return b.finishWithTruncation()
+			}
+		}
+	}
+	if len(projection.ConfirmedStructure) > 0 {
+		b.writeLine("")
+		if !b.writeLine("## Structure confirmed") {
+			return b.finishWithTruncation()
+		}
+		for _, entry := range projection.ConfirmedStructure {
+			line := fmt.Sprintf("- %s = %s (%s, %s)", safeInline(string(entry.Member)), untrustedInline(entry.AppliedValue),
+				safeInline(string(entry.Source)), safeInline(string(entry.Provenance)))
+			if !b.writeLine(line) {
+				return b.finishWithTruncation()
+			}
+		}
+	}
+
 	if omitted := omittedSummary(projection.ProjectionBudget); omitted != "" {
 		b.writeLine("")
 		if !b.writeLine("## Omitted from this answer") {
@@ -359,6 +435,21 @@ func temporalLines(label *contractsv1.ContextFabricTemporalLabel) []string {
 		lines = append(lines, "- At least one source could not answer for this time; see the limitations.")
 	}
 	return lines
+}
+
+// windowBoundsText renders an effective evidence window's own bounds
+// structurally (CHAOS-3900 W2) -- RelativeID/Start/End are all
+// server-computed, closed-vocabulary or RFC3339 instants, never model- or
+// source-derived text, so this is inline-escaped like describeTimeContext
+// rather than wrapped as untrusted data.
+func windowBoundsText(w *contractsv1.ContextFabricEffectiveEvidenceWindow) string {
+	if w.RelativeID == contractsv1.ContextFabricRelativeWindowAllTime {
+		return "all time"
+	}
+	if w.Start == nil || w.End == nil {
+		return "unstated window"
+	}
+	return w.Start.UTC().Format(time.RFC3339) + " to " + w.End.UTC().Format(time.RFC3339)
 }
 
 // describeTimeContext renders the instants of one time context. The axis

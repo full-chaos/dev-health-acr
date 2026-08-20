@@ -2,9 +2,13 @@ package contextfabric
 
 import (
 	"context"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -858,5 +862,85 @@ func TestCHAOS3900_BinderRoleCheckUsesTheSameTerminalPunctuationQuestionHashDoes
 		if got.Reason != WindowBindRoutedInferred {
 			t.Errorf("ProposeWindowFromSpans(%q) = %#v, want WindowBindRoutedInferred (must agree with the bare-phrasing outcome, since all three share one QuestionHash)", question, got)
 		}
+	}
+}
+
+// TestComposeWindowClarification_NilOnNoWindowOrConfirmedWindow (CHAOS-3900
+// W2) pins the two cases NO disclosure is minted: no window in play at all,
+// and a window that is already caller-asserted/confirmed (nothing to
+// disambiguate).
+func TestComposeWindowClarification_NilOnNoWindowOrConfirmedWindow(t *testing.T) {
+	t.Parallel()
+	if got := composeWindowClarification(nil, "result_1", time.Now()); got != nil {
+		t.Errorf("composeWindowClarification(nil) = %+v, want nil", got)
+	}
+	confirmed := &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing90D, Provenance: WindowClarificationConfirmed,
+	}
+	if got := composeWindowClarification(confirmed, "result_1", time.Now()); got != nil {
+		t.Errorf("composeWindowClarification(confirmed window) = %+v, want nil -- nothing to disambiguate", got)
+	}
+}
+
+// TestComposeWindowClarification_InferredWindowOffersTheClosedRegistry
+// (CHAOS-3900 W2) proves an INFERRED effective window mints exactly the
+// closed four-member relative-window registry, receipt-bound (winr_), with
+// frozen absolute bounds on every non-all_time option and deterministic
+// minting (same result id + same content -> same ids on repeat calls).
+func TestComposeWindowClarification_InferredWindowOffersTheClosedRegistry(t *testing.T) {
+	t.Parallel()
+	inferred := &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing90D, Provenance: WindowInferredDefault,
+	}
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	got := composeWindowClarification(inferred, "result_00000001", now)
+	if got == nil {
+		t.Fatal("composeWindowClarification(inferred) = nil, want a disclosure")
+	}
+	if len(got.Options) != 4 {
+		t.Fatalf("len(got.Options) = %d, want 4 (the closed relative-window registry)", len(got.Options))
+	}
+	seenReceipt, seenOption := map[string]bool{}, map[string]bool{}
+	for _, opt := range got.Options {
+		if !strings.HasPrefix(opt.ReceiptID, contractsv1.ContextFabricWindowOptionReceiptPrefix) {
+			t.Errorf("option %+v: receipt_id lacks the winr_ prefix", opt)
+		}
+		if seenReceipt[opt.ReceiptID] || seenOption[opt.OptionID] {
+			t.Errorf("option %+v: duplicate receipt_id/option_id", opt)
+		}
+		seenReceipt[opt.ReceiptID], seenOption[opt.OptionID] = true, true
+		if opt.RelativeID != RelativeWindowAllTime && (opt.Start == nil || opt.End == nil) {
+			t.Errorf("option %+v: non-all_time option must carry frozen start/end bounds", opt)
+		}
+		if opt.RelativeID == RelativeWindowAllTime && (opt.Start != nil || opt.End != nil) {
+			t.Errorf("option %+v: all_time option must carry no bounds", opt)
+		}
+	}
+	if err := got.Validate(); err != nil {
+		t.Errorf("composeWindowClarification result failed Validate(): %v", err)
+	}
+	again := composeWindowClarification(inferred, "result_00000001", now)
+	if !reflect.DeepEqual(got, again) {
+		t.Errorf("composeWindowClarification is not deterministic across repeat calls with identical inputs:\n first = %+v\n second = %+v", got, again)
+	}
+}
+
+// TestAppendUniqueWarning (CHAOS-3900 W2) pins the dedup discipline the
+// nudge-mode Warnings append relies on: appending the SAME sentence twice
+// must not duplicate it, and the contract's own Warnings cap must never be
+// exceeded.
+func TestAppendUniqueWarning(t *testing.T) {
+	t.Parallel()
+	warnings := appendUniqueWarning(nil, "a nudge")
+	warnings = appendUniqueWarning(warnings, "a nudge")
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want exactly 1 (duplicate append must be a no-op)", warnings)
+	}
+	full := make([]string, contractsv1.ContextFabricWarningsMaxCount)
+	for i := range full {
+		full[i] = "existing warning " + strconv.Itoa(i)
+	}
+	if got := appendUniqueWarning(full, "a nudge"); len(got) != len(full) {
+		t.Errorf("appendUniqueWarning at the cap grew the list to %d, want it to stay at %d (never push over the wire bound)", len(got), len(full))
 	}
 }

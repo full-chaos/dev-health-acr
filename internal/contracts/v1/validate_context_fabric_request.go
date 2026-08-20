@@ -65,6 +65,29 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 	if err := validateStructureReceiptField("prior_handle_receipts", r.PriorHandleReceipts, ContextFabricHandleOptionReceiptPrefix); err != nil {
 		return err
 	}
+	// CHAOS-3972 P3 (design brief §2.3): explicit structure fields, bounded
+	// the same order-of-magnitude as their receipt counterparts.
+	if len(r.ExpectedKinds) > ContextFabricExpectedKindsMaxCount {
+		return fmt.Errorf("expected_kinds exceeds v1 bounds")
+	}
+	seenExpectedKinds := make(map[ContextFabricSubjectKind]struct{}, len(r.ExpectedKinds))
+	for _, kind := range r.ExpectedKinds {
+		if !validContextFabricSubjectKind(kind) {
+			return fmt.Errorf("expected_kinds entry is invalid")
+		}
+		if _, exists := seenExpectedKinds[kind]; exists {
+			return fmt.Errorf("expected_kinds entries must be unique")
+		}
+		seenExpectedKinds[kind] = struct{}{}
+	}
+	if len(r.SubjectHandles) > 20 {
+		return fmt.Errorf("subject_handles exceeds v1 bounds")
+	}
+	for _, handle := range r.SubjectHandles {
+		if err := handle.Validate(); err != nil {
+			return fmt.Errorf("subject_handles: %w", err)
+		}
+	}
 	if err := r.RequestedScope.Validate(); err != nil {
 		return fmt.Errorf("requested_scope: %w", err)
 	}
@@ -214,6 +237,28 @@ func (o ContextFabricInvestigationOptions) Validate() error {
 		o.MaxEvidenceRefs < 1 || o.MaxEvidenceRefs > 500 ||
 		o.MaxSerializedBytes < ContextFabricSerializedBytesMin || o.MaxSerializedBytes > ContextFabricSerializedBytesMax {
 		return fmt.Errorf("investigation options violate v1 bounds")
+	}
+	if !ValidContextFabricWindowConfirmationMode(o.WindowConfirmationMode) {
+		return fmt.Errorf("investigation options window_confirmation_mode is invalid")
+	}
+	return nil
+}
+
+// Validate checks h's own wire shape: a closed subject kind, a non-empty
+// pattern_id/value pair. It deliberately does NOT re-validate value against
+// the registry's own grammar for that (kind, pattern_id) pair -- that
+// re-validation needs the closed handle-grammar registry
+// (internal/contextfabric/graphrank), which this package cannot import
+// (the same package-boundary wall every other structure re-verification
+// dependency in this epic works around); the engine's own HandleGrammarChecker
+// dependency (internal/contextfabric/structure.go) performs that check
+// before this value may ever become an offer.
+func (h ContextFabricRequestedHandle) Validate() error {
+	if !validContextFabricSubjectKind(h.Kind) {
+		return fmt.Errorf("requested handle kind is invalid")
+	}
+	if !stringLengthBetween(h.PatternID, 1, 128) || !stringLengthBetween(h.Value, 1, 256) {
+		return fmt.Errorf("requested handle pattern_id or value violates v1 bounds")
 	}
 	return nil
 }

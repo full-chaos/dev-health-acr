@@ -81,6 +81,22 @@ type confirmedStructureMember struct {
 	PriorEntryID   string
 }
 
+// explicitStructureMember is one member's EXPLICIT (non-receipt) value
+// (CHAOS-3972 P3, design brief §2.5's "explicit structure via MCP surface"
+// row) -- canonicalizeStructure's own internal shape for the request's
+// ExpectedKinds/SubjectHandles fields, composed into a
+// ContextFabricConfirmedStructureEntry (Disposition=applied) exactly like
+// confirmedStructureMember is for receipts, but carrying NO receipt
+// identity: there is nothing to redeem, only a caller-supplied value that
+// entered at Provenance (never question_stated on the MCP surface, per
+// DP12(b)).
+type explicitStructureMember struct {
+	Member       contractsv1.ContextFabricStructureNeedKind
+	AppliedValue string
+	Source       contractsv1.ContextFabricStructureSource
+	Provenance   contractsv1.ContextFabricStructureProvenance
+}
+
 // requestStructureCanonicalization is canonicalizeStructure's own result.
 type requestStructureCanonicalization struct {
 	// Confirmed lists every member this request's receipts resolved.
@@ -89,6 +105,16 @@ type requestStructureCanonicalization struct {
 	// is non-empty skips the reuse lookup entirely" -- a bypass, not a
 	// ReuseKey fold-in).
 	Confirmed []confirmedStructureMember
+	// Explicit lists every member CHAOS-3972 P3's own request.ExpectedKinds/
+	// SubjectHandles fields resolved WITHOUT a receipt (design brief §2.5:
+	// "explicit structure via MCP surface... enters inferred_default,
+	// drives narrowing + offer shaping; request proceeds"). Deliberately
+	// separate from Confirmed: an explicit-only member does NOT bypass
+	// tryReuse (only a receipt-confirmed member does, per DP11 -- an
+	// inferred_default value is not caller authority), and does not narrow
+	// the ordinary resolution pool the way a receipt-confirmed kind does
+	// (see ConfirmedExpectedKind's own doc comment, ports.go).
+	Explicit []explicitStructureMember
 	// Veto is non-empty when this request must short-circuit to a
 	// no_match terminal WITHOUT reuse, WITHOUT interpretation, and
 	// WITHOUT any inference substituted (design brief §2.5 rows 2/3).
@@ -212,6 +238,32 @@ const (
 // sense of safety).
 type AnchorVerifier func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason)
 
+// HandleGrammarChecker is the OFFER-TIME (never redemption-time) grammar
+// check for an explicit request.SubjectHandles entry (CHAOS-3972 P3,
+// design brief §2.1: "offered when a grammar-valid value arrived
+// explicit_unattributed"). PURE, no I/O, no org parameter -- unlike
+// HandleVerifier above, this never proves the value keys an existing
+// source row (that existence proof is redemption's own job, via
+// HandleVerifier, once the caller redeems the receipt this check made
+// possible); it only proves the (kind, pattern_id, value) triple is a
+// syntactically valid member of the closed handle-grammar registry, so an
+// invalid explicit value never becomes a receipt-bound offer.
+//
+// Threaded through graphrank.ResolveDeps (not an Engine-level dependency
+// the way HandleVerifier/AnchorVerifier are): the consumer is
+// graphrank.handleOfferMaterial, called from ResolveSubjects at OFFER-BUILD
+// time -- before a result exists for canonicalizeStructure's own
+// redemption path to run against. See ResolveDeps.HandleGrammarChecker's
+// own doc comment (resolve.go). The production implementation
+// (internal/runtime/hosted/open.go) adapts graphrank.ValidateHandleGrammar
+// directly -- a pure function already, no wrapping needed beyond the type
+// conversion. sourceColumn is looked up alongside
+// (graphrank.HandleSourceColumn) so a valid explicit handle can mint a
+// full ContextFabricHandleOption in one call. nil (never wired) means an
+// explicit subject_handle can never become an offer -- the safe
+// degradation, never a veto.
+type HandleGrammarChecker func(kind contractsv1.ContextFabricSubjectKind, patternID, value string) (sourceColumn string, ok bool)
+
 // structureReceiptMember describes one of the three P1.B receipt
 // namespaces uniformly, so canonicalizeStructure resolves all three
 // through ONE loop rather than three hand-copies -- the same DRY
@@ -256,8 +308,20 @@ type structureReceiptMember struct {
 // canonicalizeEvidenceWindow's own reasoning (a canonicalization failure is
 // an ordinary, expected, clarification-shaped outcome).
 func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Principal, request InvestigationRequest) requestStructureCanonicalization {
-	if len(request.PriorKindReceipts) == 0 && len(request.PriorAnchorReceipts) == 0 && len(request.PriorHandleReceipts) == 0 {
+	hasReceipts := len(request.PriorKindReceipts) > 0 || len(request.PriorAnchorReceipts) > 0 || len(request.PriorHandleReceipts) > 0
+	hasExplicit := len(request.ExpectedKinds) > 0 || len(request.SubjectHandles) > 0
+	if !hasReceipts && !hasExplicit {
 		return requestStructureCanonicalization{}
+	}
+	if !hasReceipts {
+		// CHAOS-3972 P3: no receipts at all -- skip straight to explicit
+		// resolution, which needs no result store (there is nothing to
+		// load).
+		explicit, veto := e.resolveExplicitStructure(request, nil)
+		if veto != structureVetoNone {
+			return requestStructureCanonicalization{Veto: veto}
+		}
+		return requestStructureCanonicalization{Explicit: explicit}
 	}
 	if e.results == nil {
 		// No store to resolve against -- cannot confirm, so this cannot
@@ -481,7 +545,19 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 			pendingSelections = append(pendingSelections, e.buildStructureSelectionEvent(principal, request.Consumer, m.member, resultID, stored.Result, m.offeredOptions(stored.Result), receiptID))
 		}
 	}
-	return requestStructureCanonicalization{Confirmed: confirmed, OfferSnapshot: offerSnapshot, PendingSelections: pendingSelections}
+	// CHAOS-3972 P3 (design brief §2.5's "explicit structure via MCP
+	// surface" row): explicit ExpectedKinds/SubjectHandles resolve AFTER
+	// every receipt-bearing member has cleared reverification AND the
+	// CHAOS-3927 P4 supersession pre-flight above (a mid-loop supersession
+	// veto returns before this point is ever reached, so confirmed here
+	// only ever contains members that passed both checks) -- see
+	// resolveExplicitStructure's own doc comment for the agreement/
+	// conflict rule against confirmed.
+	explicit, veto := e.resolveExplicitStructure(request, confirmed)
+	if veto != structureVetoNone {
+		return requestStructureCanonicalization{Veto: veto}
+	}
+	return requestStructureCanonicalization{Confirmed: confirmed, OfferSnapshot: offerSnapshot, PendingSelections: pendingSelections, Explicit: explicit}
 }
 
 // buildStructureSelectionEvent builds (but never sends) a
@@ -532,6 +608,18 @@ func (e *Engine) buildStructureSelectionEvent(principal storage.Principal, consu
 // finding). A future THIRD Save call site that can carry confirmed
 // structure must call this too, not hand-copy its body.
 func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, principal storage.Principal, request InvestigationRequest, structureCanon requestStructureCanonicalization) {
+	// CHAOS-3972 P3: cf_structure_explicit{member,outcome} -- called
+	// UNCONDITIONALLY, ahead of the Confirmed-gated return below, since an
+	// explicit-only request (ExpectedKinds/SubjectHandles with NO receipts
+	// at all) reaches this SAME deferred success-path call with an empty
+	// Confirmed -- the veto path (engine.go, right after
+	// canonicalizeStructure returns a non-nil Veto) already records this
+	// unconditionally for the veto case; this is its success-path twin,
+	// deferred to the SAME point recordStructureReceiptTelemetry's own
+	// success-path call is, for symmetry, even though (unlike receipts)
+	// nothing about an explicit field's own outcome can still change
+	// between canonicalizeStructure returning and Save succeeding.
+	recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, structureCanon)
 	if len(structureCanon.Confirmed) == 0 {
 		return
 	}
@@ -557,8 +645,108 @@ func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, princip
 // terminalResult's own Save call to surface the race as a raw persistence
 // error (500) instead of the handled veto terminal (round-2 finding).
 func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, structureCanon requestStructureCanonicalization, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding) (InvestigationResult, error) {
-	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
+	// CHAOS-3972 P3: cf_structure_explicit{member,outcome} -- the SAME
+	// synthetic Veto:structureVetoStaleSupersededOffer canonicalization
+	// recordStructureReceiptTelemetry's own call above uses, so an
+	// explicit-bearing member on THIS race path is recorded as
+	// non-applied too, never silently left unrecorded or misreported as
+	// "applied" against a round that was actually discarded.
+	recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
 	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntries(structureCanon.Confirmed, superseded.Members), binding)
+}
+
+// resolveExplicitStructure implements design brief §2.5's "explicit
+// structure via MCP surface" row for CHAOS-3972 P3's own request.ExpectedKinds/
+// SubjectHandles fields: each enters at Provenance
+// (structureExplicitAuthority -- inferred_default/explicit_unattributed on
+// MCP, question_stated on every other surface, mirroring
+// windowExplicitProvenance exactly) UNLESS a receipt already confirmed
+// that SAME member, in which case receipt provenance wins and the two
+// values must AGREE (design brief §2.1's explicit-vs-receipt conflict
+// rule) -- disagreement is an atomic batch veto, exactly like a
+// plural-receipt conflict.
+//
+// A multi-valued explicit field (len>1, no single value to state as ONE
+// applied value) drives census-narrowing/offer-shaping only -- see
+// ResolveSubjects/kindOfferMaterial -- and deliberately produces NO
+// ConfirmedStructureEntry echo (there is nothing singular to echo); this
+// is a scoped, flagged gap (this file's own "flag rather than silently
+// omit" convention), not a silent drop: cf_structure_explicit telemetry
+// still fires per member (recordStructureExplicitTelemetry, called from
+// the same site canonicalizeStructure's other telemetry is called from).
+func (e *Engine) resolveExplicitStructure(request InvestigationRequest, confirmed []confirmedStructureMember) ([]explicitStructureMember, structureVetoReason) {
+	source, provenance := structureExplicitAuthority(request.Consumer)
+	var explicit []explicitStructureMember
+
+	if len(request.ExpectedKinds) > 0 {
+		if confirmedValue, ok := confirmedMemberValue(confirmed, contractsv1.ContextFabricStructureNeedExpectedKind); ok {
+			if !containsSubjectKind(request.ExpectedKinds, contractsv1.ContextFabricSubjectKind(confirmedValue)) {
+				return nil, structureVetoConfirmationConflict
+			}
+		} else if len(request.ExpectedKinds) == 1 {
+			explicit = append(explicit, explicitStructureMember{
+				Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(request.ExpectedKinds[0]),
+				Source: source, Provenance: provenance,
+			})
+		}
+	}
+
+	if len(request.SubjectHandles) > 0 {
+		if confirmedValue, ok := confirmedMemberValue(confirmed, contractsv1.ContextFabricStructureNeedSubjectHandle); ok {
+			if !containsHandleValue(request.SubjectHandles, confirmedValue) {
+				return nil, structureVetoConfirmationConflict
+			}
+		} else if len(request.SubjectHandles) == 1 {
+			explicit = append(explicit, explicitStructureMember{
+				Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: request.SubjectHandles[0].Value,
+				Source: source, Provenance: provenance,
+			})
+		}
+	}
+	return explicit, structureVetoNone
+}
+
+// structureExplicitAuthority implements the DP12(b) uniform surface split
+// (pivot-intent design brief, ratified 07:28 08-19) for the kind/handle
+// members, mirroring windowExplicitProvenance's own identical rule
+// exactly: tier is a function of SURFACE alone. MCP's own bare explicit
+// field can never itself grant question_stated -- only receipt redemption
+// can. Every other surface keeps 3900 v5.2's ratified stated-echo
+// semantics, untouched by this ruling.
+func structureExplicitAuthority(consumer ConsumerInfo) (contractsv1.ContextFabricStructureSource, contractsv1.ContextFabricStructureProvenance) {
+	if strings.TrimSpace(consumer.Surface) == "mcp" {
+		return contractsv1.ContextFabricStructureSourceExplicitUnattributed, contractsv1.ContextFabricStructureInferredDefault
+	}
+	return contractsv1.ContextFabricStructureSourceExplicit, contractsv1.ContextFabricStructureQuestionStated
+}
+
+// confirmedMemberValue looks up member's AppliedValue in confirmed, if a
+// receipt confirmed it.
+func confirmedMemberValue(confirmed []confirmedStructureMember, member contractsv1.ContextFabricStructureNeedKind) (string, bool) {
+	for _, c := range confirmed {
+		if c.Member == member {
+			return c.AppliedValue, true
+		}
+	}
+	return "", false
+}
+
+func containsSubjectKind(kinds []contractsv1.ContextFabricSubjectKind, kind contractsv1.ContextFabricSubjectKind) bool {
+	for _, k := range kinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func containsHandleValue(handles []contractsv1.ContextFabricRequestedHandle, value string) bool {
+	for _, h := range handles {
+		if h.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 // kindOptionsSnapshot/anchorOptionsSnapshot/handleOptionsSnapshot (P1.G)
@@ -763,11 +951,18 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 // compose from yet. The request is still rejected wholesale with a clear
 // Limitations disclosure in the meantime; per-member vetoed echo entries
 // are a follow-up, not a silent omission.
-func composeConfirmedStructure(confirmed []confirmedStructureMember) []contractsv1.ContextFabricConfirmedStructureEntry {
-	if len(confirmed) == 0 {
+// composeConfirmedStructure merges canonicalizeStructure's own receipt-
+// confirmed members (confirmed) with its explicit (non-receipt) members
+// (explicit -- CHAOS-3972 P3) into the wire-visible echo. The two lists
+// are disjoint by construction (resolveExplicitStructure never adds a
+// member confirmedMemberValue already found in confirmed), so simple
+// concatenation is correct order: receipt-confirmed members first
+// (matching this function's own pre-P3 order), explicit members after.
+func composeConfirmedStructure(confirmed []confirmedStructureMember, explicit []explicitStructureMember) []contractsv1.ContextFabricConfirmedStructureEntry {
+	if len(confirmed) == 0 && len(explicit) == 0 {
 		return nil
 	}
-	entries := make([]contractsv1.ContextFabricConfirmedStructureEntry, 0, len(confirmed))
+	entries := make([]contractsv1.ContextFabricConfirmedStructureEntry, 0, len(confirmed)+len(explicit))
 	for _, c := range confirmed {
 		entries = append(entries, contractsv1.ContextFabricConfirmedStructureEntry{
 			Member:         c.Member,
@@ -780,6 +975,15 @@ func composeConfirmedStructure(confirmed []confirmedStructureMember) []contracts
 			PriorEntryID:   c.PriorEntryID,
 			Provenance:     contractsv1.ContextFabricStructureClarificationConfirmed,
 			Disposition:    contractsv1.ContextFabricStructureDispositionApplied,
+		})
+	}
+	for _, x := range explicit {
+		entries = append(entries, contractsv1.ContextFabricConfirmedStructureEntry{
+			Member:       x.Member,
+			AppliedValue: x.AppliedValue,
+			Source:       x.Source,
+			Provenance:   x.Provenance,
+			Disposition:  contractsv1.ContextFabricStructureDispositionApplied,
 		})
 	}
 	return entries
@@ -1068,6 +1272,43 @@ func recordStructureReceiptTelemetry(ctx context.Context, telemetry EngineTeleme
 			continue
 		}
 		telemetry.RecordStructureReceipt(ctx, principal, b.member, outcome)
+	}
+}
+
+// StructureExplicitOutcome is the closed vocabulary RecordStructureExplicit
+// reports (CHAOS-3972 P3, design brief §2.1/§2.5's cf_structure_explicit{member,
+// outcome}). Mirrors StructureReceiptOutcome's own atomicity: an explicit
+// field's outcome is the SAME batch-wide veto/no-veto structureCanon
+// already carries (resolveExplicitStructure never partially applies), so
+// there is no "unresolved" member here the way a receipt can be
+// unresolved -- an explicit value is either applied or the whole batch
+// conflicted.
+type StructureExplicitOutcome string
+
+const (
+	StructureExplicitApplied  StructureExplicitOutcome = "applied"
+	StructureExplicitConflict StructureExplicitOutcome = "conflict"
+)
+
+// recordStructureExplicitTelemetry (CHAOS-3972 P3) is
+// canonicalizeStructure's own explicit-field telemetry companion, called
+// unconditionally right after it returns (both the veto and success
+// path) -- mirrors recordStructureReceiptTelemetry's own placement and
+// atomicity reasoning exactly, one call per member that carried at least
+// one explicit value (request.ExpectedKinds/SubjectHandles).
+func recordStructureExplicitTelemetry(ctx context.Context, telemetry EngineTelemetry, principal storage.Principal, request InvestigationRequest, canon requestStructureCanonicalization) {
+	if telemetry == nil {
+		return
+	}
+	outcome := StructureExplicitApplied
+	if canon.Veto != structureVetoNone {
+		outcome = StructureExplicitConflict
+	}
+	if len(request.ExpectedKinds) > 0 {
+		telemetry.RecordStructureExplicit(ctx, principal, contractsv1.ContextFabricStructureNeedExpectedKind, outcome)
+	}
+	if len(request.SubjectHandles) > 0 {
+		telemetry.RecordStructureExplicit(ctx, principal, contractsv1.ContextFabricStructureNeedSubjectHandle, outcome)
 	}
 }
 

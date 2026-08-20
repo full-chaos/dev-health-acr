@@ -719,6 +719,107 @@ func windowCanonicalizationOutcomeForVeto(veto windowVetoReason) WindowCanonical
 // this call (needed only to stamp Save's graphEpoch column honestly, since
 // binding resolution -- a graph read, never a model call -- has already
 // run by the time any window veto is known, pre- or post-Interpret).
+// composeWindowClarification (CHAOS-3900 W2, design brief §4) mints the
+// fresh disclosure W1's own scope note named as NOT YET shipped: "no
+// fresh WindowClarification is minted for a NON-veto ambiguous window
+// (that clarification-offer machinery... is W2/W2b)". Present whenever
+// effective is genuinely INFERRED (Provenance == WindowInferredDefault,
+// regardless of which precedence step produced it -- a request-side
+// explicit_unattributed evidence_window on the MCP surface and a
+// class-table/binder default both qualify), so a caller can confirm a
+// window instead of silently trusting the pick. nil when effective is
+// nil (no window in play) or already caller-asserted/confirmed
+// (Provenance != inferred_default -- nothing to disambiguate).
+//
+// Offers the SAME closed four-member relative-window registry every
+// window mechanism already uses, receipt-bound via structure.go's own
+// member-generic minting primitive (mintStructureReceiptID/
+// mintStructureOptionID -- "extended to window per the team-lead ruling
+// that minting be member-generic so W2's window offers ride this SAME
+// primitive", structure.go's own doc comment).
+func composeWindowClarification(effective *contractsv1.ContextFabricEffectiveEvidenceWindow, resultID string, now time.Time) *contractsv1.ContextFabricWindowClarification {
+	if effective == nil || effective.Provenance != WindowInferredDefault {
+		return nil
+	}
+	registry := contractsv1.ContextFabricRelativeWindowIDVocabulary()
+	options := make([]contractsv1.ContextFabricWindowOption, 0, len(registry))
+	for _, id := range registry {
+		opt := contractsv1.ContextFabricWindowOption{Label: windowOptionLabel(id), RelativeID: id}
+		if id != RelativeWindowAllTime {
+			start, end, ok := relativeWindowBounds(id, now)
+			if !ok {
+				// Unreachable given the registry's own closed membership
+				// (relativeWindowDurations carries an entry for every
+				// non-all_time member) -- skipped defensively rather than
+				// offered with unfrozen bounds.
+				continue
+			}
+			opt.Start, opt.End = &start, &end
+		}
+		content := opt
+		content.ReceiptID, content.OptionID = "", ""
+		contentStr := structureOfferContent(content)
+		opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedWindow, resultID, contentStr)
+		opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedWindow, resultID, contentStr)
+		options = append(options, opt)
+	}
+	if len(options) == 0 {
+		return nil
+	}
+	return &contractsv1.ContextFabricWindowClarification{Options: options}
+}
+
+// windowOptionLabel renders a server-owned, closed-vocabulary label for
+// one window offer -- mirrors graphrank's kindOfferLabel/handleOfferLabel
+// discipline exactly: never model- or source-derived prose, a fixed
+// sentence per closed-enum member.
+func windowOptionLabel(id RelativeWindowID) string {
+	switch id {
+	case RelativeWindowTrailing30D:
+		return "the last 30 days"
+	case RelativeWindowTrailing90D:
+		return "the last 90 days"
+	case RelativeWindowTrailing365D:
+		return "the last 365 days"
+	case RelativeWindowAllTime:
+		return "all time"
+	default:
+		// Unreachable given ContextFabricRelativeWindowIDVocabulary's own
+		// closed membership.
+		return string(id)
+	}
+}
+
+// windowConfirmationNudgeSentence (CHAOS-3900 W2, design brief §4's own
+// "prose pattern") is the ONE fixed, closed-vocabulary disclosure
+// ContextFabricWindowConfirmationNudge mode appends to Warnings whenever
+// the effective window is inferred -- never interpolated with the actual
+// window bounds (those already live in EffectiveEvidenceWindow/
+// WindowClarification, structured; this sentence is a pointer to them,
+// not a restatement).
+const windowConfirmationNudgeSentence = "This answer used a default evidence window because none was confirmed -- see window_clarification to pick one."
+
+// appendUniqueWarning appends sentence to warnings unless it is already
+// present (a caller that redeemed no fresh receipt and re-hit the SAME
+// inferred window on a subsequent turn must not accumulate duplicate
+// copies of the identical fixed sentence), and only while the contract's
+// own bound still has room -- a Warnings list already at
+// ContextFabricWarningsMaxCount from model-authored content must not be
+// pushed over the wire bound by this nudge; Validate() would refuse the
+// result outright rather than silently truncating, so this checks first
+// and simply omits the nudge in that (exceedingly unlikely) case.
+func appendUniqueWarning(warnings []string, sentence string) []string {
+	for _, w := range warnings {
+		if w == sentence {
+			return warnings
+		}
+	}
+	if len(warnings) >= contractsv1.ContextFabricWarningsMaxCount {
+		return warnings
+	}
+	return append(warnings, sentence)
+}
+
 func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, binding ResolvedGraphBinding) (InvestigationResult, error) {
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))

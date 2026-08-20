@@ -91,7 +91,45 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if err := p.Versions.Validate(); err != nil {
 		return fmt.Errorf("versions: %w", err)
 	}
-	return p.ProjectionBudget.Validate()
+	if err := p.ProjectionBudget.Validate(); err != nil {
+		return err
+	}
+	// CHAOS-3900 W2 / CHAOS-3972 P3: mirrors
+	// ContextFabricInvestigationResult.Validate's own block for these SAME
+	// four fields verbatim -- the projection carries them unclamped (see
+	// this type's own doc comment on the field), so the shape rules are
+	// identical; only the axis-legality check is unavailable here (the
+	// projection carries no Interpretation to read the axis from), exactly
+	// the same asymmetry Temporal's own doc comment already states.
+	if p.EffectiveEvidenceWindow != nil {
+		if err := p.EffectiveEvidenceWindow.validate(); err != nil {
+			return fmt.Errorf("effective_evidence_window: %w", err)
+		}
+	}
+	if p.WindowClarification != nil {
+		if err := p.WindowClarification.Validate(); err != nil {
+			return fmt.Errorf("window_clarification: %w", err)
+		}
+	}
+	if p.StructureNeeds != nil {
+		if err := p.StructureNeeds.Validate(); err != nil {
+			return fmt.Errorf("structure_needs: %w", err)
+		}
+	}
+	if len(p.ConfirmedStructure) > ContextFabricStructureNeedKindCount {
+		return fmt.Errorf("confirmed_structure exceeds v1 bounds")
+	}
+	seenConfirmedMembers := make(map[ContextFabricStructureNeedKind]struct{}, len(p.ConfirmedStructure))
+	for i, entry := range p.ConfirmedStructure {
+		if err := entry.Validate(); err != nil {
+			return fmt.Errorf("confirmed_structure[%d]: %w", i, err)
+		}
+		if _, exists := seenConfirmedMembers[entry.Member]; exists {
+			return fmt.Errorf("confirmed_structure[%d]: member %q already carried -- one entry per member", i, entry.Member)
+		}
+		seenConfirmedMembers[entry.Member] = struct{}{}
+	}
+	return nil
 }
 
 func (p ContextFabricAnswerProjection) validateClarification() error {

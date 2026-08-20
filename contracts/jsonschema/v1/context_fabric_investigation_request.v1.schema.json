@@ -70,6 +70,24 @@
       "maxItems": 20,
       "uniqueItems": true
     },
+    "expected_kinds": {
+      "description": "CHAOS-3972 P3, design brief section 2.3/2.0/DP12(b): the caller's own explicit expected_kind guess(es). Per the DP12(b) uniform surface split, this NEVER mints question_stated authority by itself -- on the MCP surface it enters at inferred_default/explicit_unattributed (drives census-narrowing and offer-shaping only); every other surface keeps 3900 v5.2's ordinary question_stated rule.",
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/SubjectKind"
+      },
+      "maxItems": 15,
+      "uniqueItems": true
+    },
+    "subject_handles": {
+      "description": "CHAOS-3972 P3, design brief section 2.3: grammar-typed handle values the caller already knows. pattern_id must name one of the closed handle-grammar registry entries this deployment discloses via StructureNeeds.accepted_grammars -- never free text or a caller-supplied regex.",
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/RequestedHandle"
+      },
+      "maxItems": 20,
+      "uniqueItems": true
+    },
     "requested_scope": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/RequestedScope"
     },

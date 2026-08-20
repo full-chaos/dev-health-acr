@@ -28,6 +28,55 @@
       },
       "maxItems": 20
     },
+    "prior_kind_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/KindBoundReceipt"
+      },
+      "maxItems": 20
+    },
+    "prior_anchor_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AnchorBoundReceipt"
+      },
+      "maxItems": 20
+    },
+    "prior_handle_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HandleBoundReceipt"
+      },
+      "maxItems": 20
+    },
+    "prior_window_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/WindowBoundReceipt"
+      },
+      "maxItems": 20
+    },
+    "expected_kinds": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SubjectKind"
+      },
+      "maxItems": 15,
+      "uniqueItems": true
+    },
+    "subject_handles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RequestedHandle"
+      },
+      "maxItems": 20
+    },
+    "evidence_window": {
+      "$ref": "#/$defs/RequestedEvidenceWindow"
+    },
+    "window_confirmation_mode": {
+      "$ref": "#/$defs/WindowConfirmationMode"
+    },
     "scope": {
       "$ref": "#/$defs/InvestigationScope"
     },
@@ -161,6 +210,241 @@
           "maximum": 1048576
         }
       }
+    },
+    "KindBoundReceipt": {
+      "description": "CHAOS-3900 P1: same shape as BoundSubjectReceipt, but receipt_id is additionally constrained to the closed kindr_ namespace (pivot-intent design brief section 2's closed kindr_/ancr_/handr_/winr_ set) -- mirrors WindowBoundReceipt's own reasoning exactly.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^kindr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "AnchorBoundReceipt": {
+      "description": "CHAOS-3900 P1: same shape as BoundSubjectReceipt, but receipt_id is additionally constrained to the closed ancr_ namespace -- mirrors WindowBoundReceipt's own reasoning exactly.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^ancr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "HandleBoundReceipt": {
+      "description": "CHAOS-3900 P1: same shape as BoundSubjectReceipt, but receipt_id is additionally constrained to the closed handr_ namespace -- mirrors WindowBoundReceipt's own reasoning exactly.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^handr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "WindowBoundReceipt": {
+      "description": "CHAOS-3900 W1: same shape as BoundSubjectReceipt, but receipt_id is additionally constrained to the closed winr_ namespace (design brief section 5, pivot brief section 2's closed kindr_/ancr_/handr_/winr_ set) -- a separate type, not a reuse of BoundSubjectReceipt, so the schema itself rejects a subject-namespaced id in prior_window_receipts the same way validate_context_fabric_request.go does.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^winr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "SubjectKind": {
+      "description": "CHAOS-3900 P1: the closed ContextFabricSubjectKind vocabulary, given its own $def so KindOption/AnchorOption/HandleOption/AcceptedGrammar can $ref it directly rather than each re-duplicating the enum inline the way SubjectRef/SubjectCandidate/etc. still do at their own call sites.",
+      "type": "string",
+      "enum": [
+        "organization",
+        "team",
+        "project",
+        "repository",
+        "work_item",
+        "pull_request",
+        "deployment",
+        "incident",
+        "document",
+        "decision",
+        "episode",
+        "metric",
+        "pull_request_review",
+        "ci_pipeline_run",
+        "work_item_ref"
+      ]
+    },
+    "RequestedHandle": {
+      "description": "CHAOS-3972 P3, design brief section 2.3: one caller-supplied explicit subject_handle value -- a typed (kind, pattern_id, value) triple the engine grammar-validates before it may become a receipt-bound HandleOption offer.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SubjectKind"
+        },
+        "pattern_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "kind",
+        "pattern_id",
+        "value"
+      ]
+    },
+    "RequestedEvidenceWindow": {
+      "description": "CHAOS-3900 W1: the caller's own evidence-window intent. Structurally cannot carry provenance/class/confidence -- those are server-computed. RelativeID all_time requires start/end to both be absent; every other shape requires both.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "relative_id": {
+          "$ref": "#/$defs/RelativeWindowID"
+        }
+      },
+      "if": {
+        "properties": {
+          "relative_id": {
+            "const": "all_time"
+          }
+        },
+        "required": [
+          "relative_id"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "start"
+              ]
+            },
+            {
+              "required": [
+                "end"
+              ]
+            }
+          ]
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "relative_id"
+          ]
+        },
+        {
+          "required": [
+            "start",
+            "end"
+          ]
+        }
+      ],
+      "not": {
+        "description": "CHAOS-3900 W1 (codex round 7): the anyOf above proves AT LEAST ONE of relative_id/start+end is present, but does not by itself forbid a partial bound alongside a relative_id (e.g. relative_id+start with no end) -- that shape satisfies the anyOf's first branch regardless of how incomplete the bounds are. This guard closes exactly that gap: whichever of start/end is present, the other must be too, matching validate_context_fabric_window.go's validate() line 49 (\"requires an ordered start and end\") for every non-all_time shape, independent of whether relative_id is also present.",
+        "anyOf": [
+          {
+            "required": [
+              "start"
+            ],
+            "not": {
+              "required": [
+                "end"
+              ]
+            }
+          },
+          {
+            "required": [
+              "end"
+            ],
+            "not": {
+              "required": [
+                "start"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "RelativeWindowID": {
+      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+      "type": "string",
+      "enum": [
+        "trailing_30d",
+        "trailing_90d",
+        "trailing_365d",
+        "all_time"
+      ]
+    },
+    "WindowConfirmationMode": {
+      "description": "CHAOS-3900 W2, design brief section 4/DW3: closed vocabulary for how a caller wants an INFERRED (non-confirmed) evidence window disclosed. Both modes carry the same WindowClarification/EffectiveEvidenceWindow data; the mode only controls whether the disclosure is also nudged through Warnings. The empty string is the caller's own 'not set' state, mapped to headless by the engine.",
+      "type": "string",
+      "enum": [
+        "",
+        "headless",
+        "nudge"
+      ]
     }
   }
 }

@@ -395,7 +395,24 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	// CHAOS-3900 W1: RelativeWindowID/RequestedEvidenceWindow joined the
 	// intersection deliberately -- TimeContext's new evidence_window field
 	// (legal only on the current axis) pulled both in as reused shapes.
-	expected := []string{"BoundSubjectReceipt", "RelativeWindowID", "RequestedEvidenceWindow", "ScalarValue", "SubjectRef", "TemporalLabel", "TimeContext", "VersionSet"}
+	//
+	// CHAOS-3972 P3+W2: EffectiveEvidenceWindow/WindowClarification/WindowOption
+	// and the structure-frame shapes (StructureNeeds/KindOption/AnchorOption/
+	// HandleOption/AcceptedGrammar/ConfirmedStructureEntry/SubjectKind/
+	// StructureNeedKind/StructureOfferSource/StructureSource/
+	// StructureProvenance/StructureDisposition) join the intersection
+	// deliberately -- the projection gained effective_evidence_window/
+	// window_clarification/structure_needs/confirmed_structure, copied
+	// verbatim from common.v1 into the projection's own self-contained
+	// $defs (design brief §2.3/§4).
+	expected := []string{
+		"AcceptedGrammar", "AnchorOption", "BoundSubjectReceipt", "ConfirmedStructureEntry",
+		"EffectiveEvidenceWindow", "HandleOption", "KindOption", "RelativeWindowID",
+		"RequestedEvidenceWindow", "ScalarValue", "StructureDisposition", "StructureNeedKind",
+		"StructureNeeds", "StructureOfferSource", "StructureProvenance", "StructureSource",
+		"SubjectKind", "SubjectRef", "TemporalLabel", "TimeContext", "VersionSet",
+		"WindowClarification", "WindowOption",
+	}
 	if !reflect.DeepEqual(shared, expected) {
 		t.Fatalf("the set of reused shapes changed: got %v, pinned %v.\nA shape that vanished was renamed or stopped being reused; a new one must be added deliberately.", shared, expected)
 	}

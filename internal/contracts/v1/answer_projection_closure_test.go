@@ -216,7 +216,11 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		untrusted     []string
 		expectedPaths int
 	}{
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 73},
+		// CHAOS-3972 P3+W2: 73 -> 131 -- the projection gained
+		// effective_evidence_window/window_clarification/structure_needs/
+		// confirmed_structure (design brief §2.3/§4), each contributing
+		// their own new string leaves.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 131},
 		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 213},
 	} {
 		t.Run(surface.name, func(t *testing.T) {

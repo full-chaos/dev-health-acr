@@ -310,6 +310,15 @@ type EngineTelemetry interface {
 	// call sites this now comes from, both of which can carry a non-empty
 	// structureCanon.Confirmed.
 	RecordStructureReceipt(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome)
+	// RecordStructureExplicit (CHAOS-3972 P3, design brief §2.1/§2.5's
+	// cf_structure_explicit{member,outcome}) reports the outcome of one
+	// EXPLICIT (non-receipt) structure field -- request.ExpectedKinds/
+	// SubjectHandles -- for one Investigate call. See
+	// StructureExplicitOutcome's own doc comment (structure.go). Called
+	// unconditionally, once per member that carried at least one explicit
+	// value, immediately after canonicalizeStructure returns -- mirrors
+	// RecordStructureReceipt's own call-site discipline exactly.
+	RecordStructureExplicit(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureExplicitOutcome)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -446,6 +455,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// see the deferred call below, right before/after the decisive
 		// Save, for why that one moved.)
 		recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
+		// CHAOS-3972 P3: cf_structure_explicit{member,outcome} -- mirrors
+		// recordStructureReceiptTelemetry's own placement immediately
+		// above, moved here alongside it by the CHAOS-3927 P4 rebase (a
+		// pre-flight veto is final the instant canonicalizeStructure
+		// returns it, for explicit fields exactly as much as for
+		// receipts); the success path is recorded once Save has actually
+		// won, via recordStructureConfirmationOutcome (structure.go).
+		recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, structureCanon)
 		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, structureCanon.StaleMembers, binding)
 	}
 
@@ -807,11 +824,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}
+	// CHAOS-3900 W2 (design brief §4): the fresh disclosure W1's own scope
+	// note deferred -- nil unless the effective window is genuinely
+	// inferred. WindowConfirmationMode==nudge additionally surfaces it
+	// through Warnings; headless (the DW3 default) still carries the SAME
+	// structured data, never blocking or reshaping the response.
+	result.WindowClarification = composeWindowClarification(result.EffectiveEvidenceWindow, result.ResultID, e.now())
+	if result.WindowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
+		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
+	}
 	// CHAOS-3900 P1: the confirmed_structure echo, composed unconditionally
 	// (empty/nil when this request carried no structure receipts) --
 	// mirrors EffectiveEvidenceWindow's own placement, right beside the
 	// window echo it is the structure-frame sibling of.
-	result.ConfirmedStructure = composeConfirmedStructure(structureCanon.Confirmed)
+	result.ConfirmedStructure = composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit)
 	// CHAOS-3900 P1.G (design brief §2.1 B5): a decisive result reached via
 	// structure confirmation still carries the full (offered, selected)
 	// pair the Bridge needs. No guard needed: structureCanon.OfferSnapshot

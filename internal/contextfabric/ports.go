@@ -135,6 +135,16 @@ type QuestionInterpreter interface {
 // to compile.
 type GraphReader interface {
 	ResolveInvestigationBinding(ctx context.Context, principal storage.Principal) (ResolvedGraphBinding, error)
+	// ResolveSubjects' own request parameter already carries ExpectedKinds/
+	// SubjectHandles (CHAOS-3972 P3) -- the MCP surface's explicit
+	// structure fields -- so implementations read the inferred-tier kind/
+	// handle source directly off it, exactly as they already read every
+	// other wire field. Only the RECEIPT-confirmed kind gets its own
+	// dedicated parameter (confirmedKind below): that value does not exist
+	// on the wire request at all, it is canonicalizeStructure's own
+	// derived result, and InferredExpectedKinds' own doc comment
+	// (ConfirmedExpectedKind, this file) is the reason the two must never
+	// share one parameter or one narrowing code path.
 	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
 }
@@ -172,6 +182,34 @@ type GraphReader interface {
 type ConfirmedExpectedKind struct {
 	Kind contractsv1.ContextFabricSubjectKind
 }
+
+// CHAOS-3972 P3 (pivot-intent design brief §2.3/§2.0/DP12(b)) introduces
+// the OTHER kind source this type's own doc comment above names as a HARD
+// PRECONDITION before it may exist at all: request.ExpectedKinds, the MCP
+// surface's own explicit_unattributed kind field (InvestigationRequest,
+// this package). It is DELIBERATELY never threaded through
+// graphrank.filterCandidatesByConfirmedKind or wrapped in this type -- the
+// type-level tripwire ConfirmedExpectedKind's own doc comment describes
+// stays exactly as narrow as it was: only canonicalizeStructure's
+// RECEIPT-confirmation path may construct a ConfirmedExpectedKind, and
+// only that type may narrow the ordinary lexical/vector resolution pool
+// (candidatesBySubject) without an insensitivity proof.
+//
+// request.ExpectedKinds narrows something ELSE, and only there: the
+// EVIDENCE ROUND'S OWN pooled-kind hypothesis set (design brief §2.3:
+// "they drive census-narrowing... shape the offer sets" -- census-
+// narrowing, not candidate-pool narrowing). ResolveSubjects' own request
+// parameter already carries it, so no second parameter or wrapper type is
+// needed -- see graphrank.narrowPooledKindsByExplicitKinds
+// (chaos3900_structure_offers.go) for where the narrowing happens, and
+// runShadowEvidenceRoundForResolution's (resolve.go) own
+// kindInsensitivityProof call for the decisive-path gate this precondition
+// requires: a would_commit/would_no_match outcome the evidence round
+// reached under this narrowing is trustworthy only when the SAME round,
+// re-run over the PRE-narrowing kind set, agrees -- otherwise the round
+// demotes to kind_sensitive_outcome (clarify), never a decisive answer.
+// This is the wiring CHAOS-3927/P1.D's own scoping named as the hard
+// precondition for introducing any inferred-tier kind source at all.
 
 // StructureOfferMaterial is CHAOS-3900 P1.C's own return channel: the
 // engine-derived structure-offer candidates ResolveSubjects builds

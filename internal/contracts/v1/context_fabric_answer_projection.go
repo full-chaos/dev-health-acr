@@ -128,6 +128,23 @@ type ContextFabricAnswerProjection struct {
 	SubjectReceipts  []ContextFabricBoundSubjectReceipt `json:"subject_receipts"`
 	Versions         ContextFabricVersionSet            `json:"versions"`
 	ProjectionBudget ContextFabricProjectionBudget      `json:"projection_budget"`
+	// EffectiveEvidenceWindow and WindowClarification (CHAOS-3900 W2,
+	// design brief §4) mirror the canonical result's own fields of the
+	// same name verbatim -- the MCP surface is the ONE bounded consumer
+	// this whole window-disclosure mechanism exists to reach, so the
+	// projection carries them unclamped rather than a narrower, second
+	// copy. Both join the Limitations/StructureNeeds "never dropped"
+	// discipline (§2.1's own never-truncated pin, extended to windows):
+	// the projection budget may drop or bound OTHER content, never these.
+	EffectiveEvidenceWindow *ContextFabricEffectiveEvidenceWindow `json:"effective_evidence_window,omitempty"`
+	WindowClarification     *ContextFabricWindowClarification     `json:"window_clarification,omitempty"`
+	// StructureNeeds and ConfirmedStructure (CHAOS-3972 P3, design brief
+	// §2.1/§2.3) mirror the canonical result's own fields verbatim -- the
+	// MCP investigate_question response is the P3 disclosure/accept
+	// surface this whole block exists to reach. Never dropped, matching
+	// the design brief's own never-truncated pin.
+	StructureNeeds     *ContextFabricStructureNeeds           `json:"structure_needs,omitempty"`
+	ConfirmedStructure []ContextFabricConfirmedStructureEntry `json:"confirmed_structure,omitempty"`
 }
 
 // ContextFabricProjectedClarification carries the ambiguity a caller must

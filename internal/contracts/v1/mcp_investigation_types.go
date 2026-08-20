@@ -51,8 +51,40 @@ type MCPInvestigateQuestionRequest struct {
 	Question             string                             `json:"question"`
 	Conversation         []ContextFabricConversationTurn    `json:"conversation,omitempty"`
 	PriorSubjectReceipts []ContextFabricBoundSubjectReceipt `json:"prior_subject_receipts,omitempty"`
-	Scope                *MCPInvestigationScope             `json:"scope,omitempty"`
-	Budget               *MCPInvestigationBudget            `json:"budget,omitempty"`
+	// PriorKindReceipts, PriorAnchorReceipts, PriorHandleReceipts, and
+	// PriorWindowReceipts (CHAOS-3972 P3+W2, pivot-intent design brief
+	// §2.3; 3900 brief §4/§8 W2 row) name kindr_/ancr_/handr_/winr_
+	// receipts from an earlier investigate_question turn's own
+	// structure_needs/window_clarification offer sets -- per DP12(b),
+	// these are the SOLE decisive transport for every intent-frame member
+	// on this surface. Mapped straight through to the hosted contract's
+	// own four PriorKindReceipts/.../PriorWindowReceipts fields
+	// (internal/mcp/investigate_question.go), never overloaded onto
+	// PriorSubjectReceipts (different match target, same reasoning
+	// PriorSubjectReceipts' own doc comment already gives for windows).
+	PriorKindReceipts   []ContextFabricBoundSubjectReceipt `json:"prior_kind_receipts,omitempty"`
+	PriorAnchorReceipts []ContextFabricBoundSubjectReceipt `json:"prior_anchor_receipts,omitempty"`
+	PriorHandleReceipts []ContextFabricBoundSubjectReceipt `json:"prior_handle_receipts,omitempty"`
+	PriorWindowReceipts []ContextFabricBoundSubjectReceipt `json:"prior_window_receipts,omitempty"`
+	// ExpectedKinds and SubjectHandles (CHAOS-3972 P3) are this surface's
+	// own explicit structure fields -- see
+	// ContextFabricInvestigationRequest.ExpectedKinds/SubjectHandles for
+	// the full DP12(b) authority-tier explanation this tool inherits
+	// unchanged: a value here enters at inferred_default/
+	// explicit_unattributed, never question_stated, on this surface.
+	ExpectedKinds  []ContextFabricSubjectKind     `json:"expected_kinds,omitempty"`
+	SubjectHandles []ContextFabricRequestedHandle `json:"subject_handles,omitempty"`
+	// EvidenceWindow and WindowConfirmationMode (CHAOS-3900 W2) mirror the
+	// hosted contract's own TimeContext.EvidenceWindow/Options.WindowConfirmationMode.
+	// Per DP12(b), an explicit evidence_window on THIS surface enters
+	// inferred_default (explicit_unattributed) and can only become
+	// clarification_confirmed through winr_ receipt redemption -- 3900
+	// v5.2 §4's stated-echo clause is deliberately amended for MCP alone
+	// (chris ruling, design brief §2.0/§2.3).
+	EvidenceWindow         *ContextFabricRequestedEvidenceWindow `json:"evidence_window,omitempty"`
+	WindowConfirmationMode ContextFabricWindowConfirmationMode   `json:"window_confirmation_mode,omitempty"`
+	Scope                  *MCPInvestigationScope                `json:"scope,omitempty"`
+	Budget                 *MCPInvestigationBudget               `json:"budget,omitempty"`
 	// AllowClarification is a tri-state pointer so the sidecar can tell
 	// "caller did not say" (nil, apply the default: allowed) from an
 	// explicit false. An agent that cannot ask its user a follow-up
@@ -147,6 +179,21 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.coverage_summary[].reason",
 	"structured.limitations[]",
 	"structured.warnings[]",
+	// CHAOS-3972 P3+W2: the projection now carries the SAME
+	// structure_needs/confirmed_structure/window_clarification blocks the
+	// canonical result does (MCPInvestigationResultUntrustedFields below
+	// already classifies the identical leaves at their result-rooted
+	// paths) -- same conservative "label"/"value"/"field"/"applied_value"
+	// leaf-name treatment, same reasoning, applied at the projection's own
+	// paths.
+	"structured.structure_needs.kind_options[].label",
+	"structured.structure_needs.anchor_options[].label",
+	"structured.structure_needs.handle_options[].label",
+	"structured.structure_needs.window_options[].label",
+	"structured.structure_needs.handle_options[].value",
+	"structured.structure_needs.handle_options[].source_column",
+	"structured.confirmed_structure[].applied_value",
+	"structured.window_clarification.options[].label",
 	"full_result",
 }
 

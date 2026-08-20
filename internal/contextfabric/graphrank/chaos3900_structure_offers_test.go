@@ -20,9 +20,9 @@ func candidateOf(kind contractsv1.ContextFabricSubjectKind, id string) contextfa
 
 func TestKindOfferMaterial_EmptyPoolOffersNothing(t *testing.T) {
 	t.Parallel()
-	material := kindOfferMaterial(nil)
+	material := kindOfferMaterial(nil, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
-		t.Errorf("kindOfferMaterial(nil) = %+v, want empty (nothing to disambiguate)", material)
+		t.Errorf("kindOfferMaterial(nil, nil) = %+v, want empty (nothing to disambiguate)", material)
 	}
 }
 
@@ -32,7 +32,7 @@ func TestKindOfferMaterial_SingleKindPoolOffersNothing(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_2"),
 	}
-	material := kindOfferMaterial(candidates)
+	material := kindOfferMaterial(candidates, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(single-kind pool) = %+v, want empty: nothing to disambiguate when every candidate is the same kind", material)
 	}
@@ -48,7 +48,7 @@ func TestKindOfferMaterial_MultiKindPoolOffersDisambiguation(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material := kindOfferMaterial(candidates)
+	material := kindOfferMaterial(candidates, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
 		t.Fatalf("material.Missing = %v, want exactly [expected_kind]", material.Missing)
 	}
@@ -87,7 +87,7 @@ func TestKindOfferMaterial_DuplicateKindsCollapseToOneOption(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_3"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material := kindOfferMaterial(candidates)
+	material := kindOfferMaterial(candidates, nil)
 	if len(material.KindOptions) != 2 {
 		t.Fatalf("len(material.KindOptions) = %d, want 2 (one per DISTINCT kind, not one per candidate)", len(material.KindOptions))
 	}
@@ -104,7 +104,7 @@ func TestKindOfferMaterial_NonOfferableKindsAreIgnoredForDisambiguation(t *testi
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectDocument, "doc_1"),
 	}
-	material := kindOfferMaterial(candidates)
+	material := kindOfferMaterial(candidates, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(pull_request + document) = %+v, want empty: document is not in the offerable expected_kind vocabulary", material)
 	}
@@ -702,7 +702,7 @@ func TestAnchorOfferMaterial_MoreThanMaxCandidatesIsCapped(t *testing.T) {
 // the wire Validate() rejects as a duplicate).
 func TestHandleOfferMaterial_DuplicateOccurrencesAreDeduped(t *testing.T) {
 	t.Parallel()
-	material := handleOfferMaterial("PR 532 relates to PR 532 which also mentions PR 532")
+	material := handleOfferMaterial("PR 532 relates to PR 532 which also mentions PR 532", nil, nil)
 	if len(material.HandleOptions) != 1 {
 		t.Fatalf("len(material.HandleOptions) = %d, want 1 (three identical occurrences deduped)", len(material.HandleOptions))
 	}
@@ -721,7 +721,7 @@ func TestHandleOfferMaterial_MoreThanMaxDistinctMatchesIsCapped(t *testing.T) {
 	for i := 0; i < structureOfferMaxOptions+5; i++ {
 		question += fmt.Sprintf(" PR %d", 1000+i)
 	}
-	material := handleOfferMaterial(question)
+	material := handleOfferMaterial(question, nil, nil)
 	if len(material.HandleOptions) != structureOfferMaxOptions {
 		t.Fatalf("len(material.HandleOptions) = %d, want %d (capped)", len(material.HandleOptions), structureOfferMaxOptions)
 	}
@@ -729,7 +729,7 @@ func TestHandleOfferMaterial_MoreThanMaxDistinctMatchesIsCapped(t *testing.T) {
 
 func TestHandleOfferMaterial_NoGrammarMatchStillMissingWithEmptyOptions(t *testing.T) {
 	t.Parallel()
-	material := handleOfferMaterial("how healthy is the payments team")
+	material := handleOfferMaterial("how healthy is the payments team", nil, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectHandle {
 		t.Fatalf("material.Missing = %v, want [subject_handle]", material.Missing)
 	}
@@ -740,7 +740,7 @@ func TestHandleOfferMaterial_NoGrammarMatchStillMissingWithEmptyOptions(t *testi
 
 func TestHandleOfferMaterial_GrammarMatchOffersHandle(t *testing.T) {
 	t.Parallel()
-	material := handleOfferMaterial("what is the status of PR 532?")
+	material := handleOfferMaterial("what is the status of PR 532?", nil, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectHandle {
 		t.Fatalf("material.Missing = %v, want [subject_handle]", material.Missing)
 	}
@@ -761,7 +761,7 @@ func TestHandleOfferMaterial_GrammarMatchOffersHandle(t *testing.T) {
 
 func TestHandleOfferMaterial_MultipleGrammarMatchesOfferAll(t *testing.T) {
 	t.Parallel()
-	material := handleOfferMaterial("does PR 532 relate to CHAOS-3896?")
+	material := handleOfferMaterial("does PR 532 relate to CHAOS-3896?", nil, nil)
 	if len(material.HandleOptions) != 2 {
 		t.Fatalf("len(material.HandleOptions) = %d, want 2", len(material.HandleOptions))
 	}
@@ -794,5 +794,89 @@ func TestCombineStructureOfferMaterial(t *testing.T) {
 	}
 	if len(combined.KindOptions) != 1 || len(combined.AnchorOptions) != 1 || len(combined.HandleOptions) != 0 {
 		t.Errorf("combined = %+v, want 1 kind option, 1 anchor option, 0 handle options", combined)
+	}
+}
+
+// TestNarrowPooledKindsByExplicitKinds (CHAOS-3972 P3) pins
+// narrowPooledKindsByExplicitKinds' own three no-narrowing cases (empty
+// explicit set, zero survivors, every pooled kind survives) alongside the
+// genuine-narrowing case, since runShadowEvidenceRoundForResolution's own
+// PreNarrowingExplicitKinds gating depends on telling them apart.
+func TestNarrowPooledKindsByExplicitKinds(t *testing.T) {
+	t.Parallel()
+	pooled := []CensusKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun}
+
+	if got := narrowPooledKindsByExplicitKinds(pooled, nil); got != nil {
+		t.Errorf("empty explicit set: got %v, want nil (no narrowing applied)", got)
+	}
+	if got := narrowPooledKindsByExplicitKinds(pooled, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}); got != nil {
+		t.Errorf("zero survivors: got %v, want nil (explicit hint disagreeing with the whole pool is not authoritative)", got)
+	}
+	if got := narrowPooledKindsByExplicitKinds(pooled, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectCIRun}); got != nil {
+		t.Errorf("every pooled kind survives: got %v, want nil (intersecting changed nothing)", got)
+	}
+	got := narrowPooledKindsByExplicitKinds(pooled, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectCIRun})
+	want := []CensusKind{contractsv1.ContextFabricSubjectCIRun}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("genuine narrowing: got %v, want %v", got, want)
+	}
+}
+
+// TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool
+// (CHAOS-3972 P3, design brief §2.3) pins the asymmetry explicit kinds
+// introduce: the pool-derived >=2-distinct-kinds gate stays in force for
+// the pool alone, but ANY non-empty explicit kind list is offered
+// regardless of pool cardinality -- a caller's own named kind is always
+// worth offering back, receipt-bound, for the deterministic upgrade turn.
+func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testing.T) {
+	t.Parallel()
+	// Empty pool, one explicit kind: still offered.
+	material := kindOfferMaterial(nil, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest})
+	if len(material.KindOptions) != 1 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectPullRequest {
+		t.Fatalf("material.KindOptions = %+v, want exactly the one explicit kind", material.KindOptions)
+	}
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Errorf("material.Missing = %v, want [expected_kind]", material.Missing)
+	}
+	// Explicit kind ranked FIRST, ahead of pool-derived kinds.
+	candidates := []contextfabric.SubjectCandidate{
+		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem}},
+		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest}},
+	}
+	material = kindOfferMaterial(candidates, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem})
+	if len(material.KindOptions) != 2 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectWorkItem {
+		t.Fatalf("material.KindOptions = %+v, want the explicit kind ranked first", material.KindOptions)
+	}
+}
+
+// TestHandleOfferMaterial_ExplicitHandleRequiresAWiredChecker (CHAOS-3972
+// P3) pins HandleGrammarChecker's own documented safe-degradation contract:
+// nil checker means NO explicit handle ever becomes an offer, never a
+// panic and never a veto.
+func TestHandleOfferMaterial_ExplicitHandleRequiresAWiredChecker(t *testing.T) {
+	t.Parallel()
+	explicit := []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+	material := handleOfferMaterial("no handles in this question text", explicit, nil)
+	if len(material.HandleOptions) != 0 {
+		t.Fatalf("material.HandleOptions = %+v, want empty (nil checker degrades safely)", material.HandleOptions)
+	}
+
+	checker := func(kind contractsv1.ContextFabricSubjectKind, patternID, value string) (string, bool) {
+		if kind == contractsv1.ContextFabricSubjectPullRequest && patternID == "pull_request_number" {
+			return "git_pull_requests.number", true
+		}
+		return "", false
+	}
+	material = handleOfferMaterial("no handles in this question text", explicit, checker)
+	if len(material.HandleOptions) != 1 || material.HandleOptions[0].Value != "532" || material.HandleOptions[0].SourceColumn != "git_pull_requests.number" {
+		t.Fatalf("material.HandleOptions = %+v, want the one explicit handle validated and offered", material.HandleOptions)
+	}
+
+	// An invalid explicit value (checker returns ok=false) is silently
+	// omitted, never offered.
+	invalid := []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectWorkItem, PatternID: "bogus_pattern", Value: "x"}}
+	material = handleOfferMaterial("", invalid, checker)
+	if len(material.HandleOptions) != 0 {
+		t.Fatalf("material.HandleOptions = %+v, want empty (checker rejected the explicit value)", material.HandleOptions)
 	}
 }

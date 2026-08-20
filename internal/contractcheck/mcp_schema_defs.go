@@ -73,6 +73,12 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/StructureSource":      "#/$defs/context_fabric_common.v1/$defs/StructureSource",
 	"#/$defs/StructureProvenance":  "#/$defs/context_fabric_common.v1/$defs/StructureProvenance",
 	"#/$defs/StructureDisposition": "#/$defs/context_fabric_common.v1/$defs/StructureDisposition",
+	// CHAOS-3900 W2: InvestigationOptions.window_confirmation_mode's own
+	// local ref, embedded here too even though the response schema never
+	// reaches InvestigationOptions itself -- the WHOLE common.v1 document
+	// is embedded verbatim, so every one of its own internal refs must
+	// resolve correctly within the embedded copy, reachable or not.
+	"#/$defs/WindowConfirmationMode": "#/$defs/context_fabric_common.v1/$defs/WindowConfirmationMode",
 }
 
 // contextFabricResultDefsRewrites relocates the cross-file pointers
@@ -123,6 +129,26 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	// locally refs these two new defs.
 	"#/$defs/RequestedEvidenceWindow": "#/$defs/context_fabric_answer_projection.v1/$defs/RequestedEvidenceWindow",
 	"#/$defs/RelativeWindowID":        "#/$defs/context_fabric_answer_projection.v1/$defs/RelativeWindowID",
+	// CHAOS-3972 P3+W2: the projection gained its own self-contained
+	// copies of the window/structure disclosure defs (design brief
+	// §2.3/§4) -- mirrors contextFabricCommonDefsRewrites' own entries for
+	// these SAME defs, rewritten to this file's own local
+	// context_fabric_answer_projection.v1 root instead.
+	"#/$defs/EffectiveEvidenceWindow": "#/$defs/context_fabric_answer_projection.v1/$defs/EffectiveEvidenceWindow",
+	"#/$defs/WindowOption":            "#/$defs/context_fabric_answer_projection.v1/$defs/WindowOption",
+	"#/$defs/WindowClarification":     "#/$defs/context_fabric_answer_projection.v1/$defs/WindowClarification",
+	"#/$defs/SubjectKind":             "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectKind",
+	"#/$defs/StructureOfferSource":    "#/$defs/context_fabric_answer_projection.v1/$defs/StructureOfferSource",
+	"#/$defs/StructureNeedKind":       "#/$defs/context_fabric_answer_projection.v1/$defs/StructureNeedKind",
+	"#/$defs/KindOption":              "#/$defs/context_fabric_answer_projection.v1/$defs/KindOption",
+	"#/$defs/AnchorOption":            "#/$defs/context_fabric_answer_projection.v1/$defs/AnchorOption",
+	"#/$defs/HandleOption":            "#/$defs/context_fabric_answer_projection.v1/$defs/HandleOption",
+	"#/$defs/AcceptedGrammar":         "#/$defs/context_fabric_answer_projection.v1/$defs/AcceptedGrammar",
+	"#/$defs/StructureNeeds":          "#/$defs/context_fabric_answer_projection.v1/$defs/StructureNeeds",
+	"#/$defs/StructureSource":         "#/$defs/context_fabric_answer_projection.v1/$defs/StructureSource",
+	"#/$defs/StructureProvenance":     "#/$defs/context_fabric_answer_projection.v1/$defs/StructureProvenance",
+	"#/$defs/StructureDisposition":    "#/$defs/context_fabric_answer_projection.v1/$defs/StructureDisposition",
+	"#/$defs/ConfirmedStructureEntry": "#/$defs/context_fabric_answer_projection.v1/$defs/ConfirmedStructureEntry",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

@@ -53,6 +53,22 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		Question:             input.Question,
 		Conversation:         input.Conversation,
 		PriorSubjectReceipts: input.PriorSubjectReceipts,
+		// PriorKindReceipts/PriorAnchorReceipts/PriorHandleReceipts/
+		// PriorWindowReceipts and ExpectedKinds/SubjectHandles (CHAOS-3972
+		// P3+W2) map straight through to the hosted contract's own fields
+		// of the same name -- no translation needed, this tool's own
+		// shape mirrors the hosted one exactly for these. Per DP12(b),
+		// receipts are this surface's SOLE decisive transport for every
+		// intent-frame member; the explicit fields enter at
+		// inferred_default/explicit_unattributed (sidecar.Client.Investigate
+		// stamps Consumer.Surface="mcp" below, which is what
+		// structureExplicitAuthority/windowExplicitProvenance key on).
+		PriorKindReceipts:   input.PriorKindReceipts,
+		PriorAnchorReceipts: input.PriorAnchorReceipts,
+		PriorHandleReceipts: input.PriorHandleReceipts,
+		PriorWindowReceipts: input.PriorWindowReceipts,
+		ExpectedKinds:       input.ExpectedKinds,
+		SubjectHandles:      input.SubjectHandles,
 		// Fixed rather than caller-driven because the tool schema
 		// deliberately exposes no axis field -- a SURFACE decision, not a
 		// capability one. CHAOS-3781 made all three historical axes
@@ -62,8 +78,12 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		// choosing its scope, not reporting a limit. See
 		// contractsv1.MCPInvestigateQuestionRequest for what adding the
 		// field would take.
-		TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
-		Options:     hostedOptions(budget, input.AllowClarification),
+		//
+		// EvidenceWindow (CHAOS-3900 W2) is legal only on this fixed
+		// current axis, which this tool always sends -- no conflict is
+		// possible from this mapping.
+		TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent, EvidenceWindow: input.EvidenceWindow},
+		Options:     hostedOptions(budget, input.AllowClarification, input.WindowConfirmationMode),
 	}
 	if input.Scope != nil {
 		hosted.RequestedScope = contractsv1.ContextFabricRequestedScope{
@@ -168,7 +188,7 @@ func answerBudget(requested *contractsv1.MCPInvestigationBudget, limits contract
 // The hosted contract requires every option field, so the ones MCP does not
 // expose take fixed safe values rather than being left zero (which the
 // hosted validator would reject).
-func hostedOptions(budget contractsv1.MCPInvestigationBudget, allowClarification *bool) contractsv1.ContextFabricInvestigationOptions {
+func hostedOptions(budget contractsv1.MCPInvestigationBudget, allowClarification *bool, windowConfirmationMode contractsv1.ContextFabricWindowConfirmationMode) contractsv1.ContextFabricInvestigationOptions {
 	// Clarification is allowed unless the caller explicitly opted out. An
 	// agent that cannot ask its user a follow-up may prefer a
 	// best-effort answer to a question it cannot relay.
@@ -185,5 +205,9 @@ func hostedOptions(budget contractsv1.MCPInvestigationBudget, allowClarification
 		MaxSerializedBytes:   budget.MaxSerializedBytes,
 		AllowClarification:   allow,
 		IncludeDebug:         false,
+		// WindowConfirmationMode (CHAOS-3900 W2) maps straight through --
+		// empty means the DW3-ruled headless default (the caller's own
+		// omitted-field state, mapped, not the tool choosing a mode).
+		WindowConfirmationMode: windowConfirmationMode,
 	}
 }

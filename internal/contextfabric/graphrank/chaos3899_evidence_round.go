@@ -237,6 +237,17 @@ type ShadowEvidenceRoundInput struct {
 	AliasClaimants      map[string][]IdentityMatch
 	AliasLookupComplete bool
 	CensusFunc          CensusFunc
+	// PreNarrowingExplicitKinds (CHAOS-3972 P3, design brief §2.0) is the
+	// PRE-narrowing hypothesis kind-set the caller captured BEFORE
+	// applying an EXPLICIT (non-receipt) kind narrowing to PooledKinds --
+	// nil/empty whenever no such narrowing was applied this round (the
+	// overwhelming common case, and what keeps this an exact no-op for
+	// every existing caller: RECEIPT-confirmed narrowing, this field
+	// unset, behaves byte-identically to before this ticket). Non-empty
+	// requires this round's own would_commit/would_no_match outcome to
+	// ADDITIONALLY pass kindInsensitivityProof re-run over this set before
+	// it may stand -- see the decisive switch in RunShadowEvidenceRound.
+	PreNarrowingExplicitKinds []CensusKind
 }
 
 // splitCensusKinds partitions kinds into the subset the closed census
@@ -492,6 +503,32 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		// ambiguous, no single closed-vocabulary reason token names this
 		// case.
 		base.Outcome = ShadowWouldClarify
+	}
+	// CHAOS-3972 P3 (design brief §2.0's kind-insensitivity rule -- the
+	// P1.D hard precondition, wired here): a would_commit/would_no_match
+	// outcome reached under EXPLICIT (non-receipt) kind narrowing
+	// (input.PreNarrowingExplicitKinds non-empty) is trustworthy only if
+	// the SAME census, re-run over the PRE-narrowing kind set, agrees --
+	// exactly the hazard the rule exists to catch: a wrong narrowing
+	// collapsing N>1 satisfiers to 1, or hiding a real satisfier the
+	// narrowed set excluded. A RECEIPT-confirmed kind never reaches this
+	// branch (PreNarrowingExplicitKinds stays empty for it, by
+	// construction -- see runShadowEvidenceRoundForResolution, resolve.go):
+	// caller authority may narrow without this extra proof, exactly like a
+	// confirmed window.
+	if len(input.PreNarrowingExplicitKinds) > 0 && (base.Outcome == ShadowWouldCommit || base.Outcome == ShadowWouldNoMatch) {
+		proof := kindInsensitivityProof(ctx, input.OrgID, input.PreNarrowingExplicitKinds,
+			valueOr(handle != nil, handle), handle != nil, anchor.Kind, anchor.CanonicalID, anchorOK, input.CensusFunc)
+		sound := (base.Outcome == ShadowWouldCommit && proof == kindInsensitivityCommitSound) ||
+			(base.Outcome == ShadowWouldNoMatch && proof == kindInsensitivityNoMatchSound)
+		if !sound {
+			base.Outcome = ShadowWouldClarify
+			base.Reason = ReasonKindSensitiveOutcome
+			// PreconditionUnproven's own doc comment: "True whenever
+			// Outcome==ShadowWouldCommit" -- this branch just left that
+			// outcome, so the invariant requires resetting it.
+			base.PreconditionUnproven = false
+		}
 	}
 	return emit(base)
 }
