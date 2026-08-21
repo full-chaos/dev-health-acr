@@ -19,6 +19,8 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/invopop/jsonschema"
+	orderedmap "github.com/wk8/go-ordered-map/v2"
 )
 
 const SDKVersion = "v1.11.0"
@@ -221,7 +223,19 @@ const (
 	// bind a lookup to the SAME deployment-current value this defaulting
 	// uses, before either model call ever runs -- see
 	// contextfabric.ReuseKey.ModelOutputSchemaVersion's doc comment.
-	DefaultSchemaVersion    = "context-fabric-model-output.v1"
+	//
+	// v1 -> v2 (CHAOS-3742 RUN 3 follow-up, codex adversarial review,
+	// 2026-08-21): outputTimeContext.JSONSchema's new per-axis if/then
+	// conditional is a MATERIAL tightening of the actual model-output
+	// contract (a range axis without start/end, schema-valid under v1, is
+	// schema-INVALID under v2) -- leaving this constant at v1 would let
+	// answer reuse serve a v1-era decisive result (interpreted before this
+	// schema existed) as though it were produced under the SAME contract
+	// as a v2 call, which is exactly the version-drift class this field
+	// exists to prevent (its own doc comment above). Bumping it is the
+	// only change requested by this constant's own contract -- no
+	// caller-visible behavior changes beyond reuse eligibility.
+	DefaultSchemaVersion    = "context-fabric-model-output.v2"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 )
 
@@ -1000,6 +1014,84 @@ type outputTimeContext struct {
 	AsOf  *time.Time `json:"as_of,omitempty"`
 	Start *time.Time `json:"start,omitempty"`
 	End   *time.Time `json:"end,omitempty"`
+}
+
+// JSONSchema hand-authors outputTimeContext's schema (invopop/jsonschema's
+// Marshaler convention, respected by genkit's own core.InferSchemaMap --
+// see InterpretationOutputSchema's doc comment) instead of the
+// struct-tag-derived default, to encode the axis-shape rules no jsonschema
+// struct tag can express: each of the four axes allows a DIFFERENT,
+// mutually exclusive set of the as_of/start/end fields, matching
+// contractsv1.ContextFabricTimeContext.Validate() exactly (the SAME
+// function contextfabric.InterpretedQuestion.Validate wraps as
+// "time_context: %w", the actual production check this schema exists to
+// front-run):
+//
+//   - current:                    none of as_of/start/end.
+//   - valid_time/observed_time:   as_of required, start/end absent.
+//   - range:                      start+end required together, as_of absent.
+//
+// A struct-tag reflection leaves Start/End/AsOf (Go *time.Time,
+// `omitempty`) as merely optional properties regardless of axis, so any
+// responder -- including CHAOS-3742's own file-exchange codex responder,
+// which found the range-without-bounds gap on live run 3 -- can satisfy
+// the schema with {"axis":"range"} alone (or {"axis":"current","as_of":
+// ...}, or {"axis":"valid_time"} with no as_of): every one of these is an
+// output Validate() correctly rejects downstream, but that this schema
+// should have refused to accept from the model in the first place.
+// codex adversarial review (2026-08-21) confirmed the range-only version
+// of this schema left the other three shapes open; this closes all four.
+//
+// Ordering (range's end >= start) is deliberately NOT encoded here: JSON
+// Schema has no native date-time comparison, and Validate() already
+// catches it -- this schema's job is presence/absence of fields per axis,
+// not a full reimplementation of domain validation.
+func (outputTimeContext) JSONSchema() *jsonschema.Schema {
+	properties := orderedmap.New[string, *jsonschema.Schema]()
+	properties.Set("axis", &jsonschema.Schema{
+		Type: "string",
+		Enum: []any{"current", "valid_time", "observed_time", "range"},
+	})
+	properties.Set("as_of", &jsonschema.Schema{Type: "string", Format: "date-time"})
+	properties.Set("start", &jsonschema.Schema{Type: "string", Format: "date-time"})
+	properties.Set("end", &jsonschema.Schema{Type: "string", Format: "date-time"})
+
+	axisIs := func(value string) *jsonschema.Schema {
+		axis := orderedmap.New[string, *jsonschema.Schema]()
+		axis.Set("axis", &jsonschema.Schema{Const: value})
+		return &jsonschema.Schema{Properties: axis}
+	}
+	axisIn := func(values ...any) *jsonschema.Schema {
+		axis := orderedmap.New[string, *jsonschema.Schema]()
+		axis.Set("axis", &jsonschema.Schema{Enum: values})
+		return &jsonschema.Schema{Properties: axis}
+	}
+	// noneOf builds the "not(any of these fields present)" clause for a
+	// Then schema's own Not field -- a bare "required" lists fields that
+	// MUST be present, so forbidding presence needs its negation.
+	noneOf := func(fields ...string) *jsonschema.Schema {
+		anyOf := make([]*jsonschema.Schema, len(fields))
+		for i, field := range fields {
+			anyOf[i] = &jsonschema.Schema{Required: []string{field}}
+		}
+		return &jsonschema.Schema{AnyOf: anyOf}
+	}
+
+	return &jsonschema.Schema{
+		Type:                 "object",
+		Properties:           properties,
+		Required:             []string{"axis"},
+		AdditionalProperties: jsonschema.FalseSchema,
+		AllOf: []*jsonschema.Schema{
+			{If: axisIs("current"), Then: &jsonschema.Schema{Not: noneOf("as_of", "start", "end")}},
+			{If: axisIn("valid_time", "observed_time"), Then: &jsonschema.Schema{
+				Required: []string{"as_of"}, Not: noneOf("start", "end"),
+			}},
+			{If: axisIs("range"), Then: &jsonschema.Schema{
+				Required: []string{"start", "end"}, Not: noneOf("as_of"),
+			}},
+		},
+	}
 }
 
 type factRequirementOutput struct {
