@@ -287,6 +287,60 @@ func TestSynthesisPromptCategoryListIsTheWholeVocabulary(t *testing.T) {
 	}
 }
 
+// TestSynthesisPromptGroundingKindsMapToValidDerivationTokens pins CHAOS-4059's
+// fix: the prompt's four-kinds-of-grounding sentence names each grounding
+// kind's derivation token inline, and specifically kills the same-spelling
+// collision between derivation and epistemic_status that caused it.
+//
+// Root cause (CHAOS-4059, comment 490b28c5): the prompt described one
+// grounding kind as "a source assertion" without ever saying which
+// derivation token it maps to. derivation's closed vocabulary has no
+// source_asserted member, but epistemic_status DOES -- so a model reading
+// "source assertion" reached for the identically-spelled token from the
+// WRONG vocabulary, wrote derivation=source_asserted, and had its whole
+// synthesis draft rejected (ContextFabricDriverJudgment.validate ->
+// ErrSynthesisRejected). This is a prompt-clarity fix only: no schema,
+// validator, or vocabulary change. See prompt_golden_test.go's golden for
+// the byte-exact rendered sentence.
+func TestSynthesisPromptGroundingKindsMapToValidDerivationTokens(t *testing.T) {
+	const groundingSentence = `Distinguish four kinds of grounding and do not blur them, and set each driver's derivation to match its own grounding kind: a canonical observation is a claimed_facts entry restating a canonical_facts value (derivation=canonical_structured); a graph association is a relationship path (derivation=graph_associated); a source assertion is a citation to a document or episode (derivation=model_extracted -- the word "source_asserted" is spelled identically to a valid epistemic_status value but is NEVER a valid derivation value; never write it into derivation); anything else is inference and must not be presented as observed fact (derivation=rule_inferred for a stated rule or heuristic, model_extracted for any other inference).`
+
+	if !strings.Contains(synthesisSystemPrompt, groundingSentence) {
+		t.Fatal("the synthesis prompt no longer states the pinned grounding-kind-to-derivation mapping sentence; this assertion must be updated deliberately, and the golden regenerated, if the wording changes")
+	}
+
+	// The mapping the diagnosis actually prescribed: source assertion ->
+	// model_extracted, never source_asserted.
+	if !strings.Contains(groundingSentence, `a source assertion is a citation to a document or episode (derivation=model_extracted`) {
+		t.Error(`the prompt no longer maps "source assertion" to derivation=model_extracted, which was CHAOS-4059's fix`)
+	}
+	if !strings.Contains(groundingSentence, `is NEVER a valid derivation value`) {
+		t.Error(`the prompt no longer explicitly warns the model that "source_asserted" is not a valid derivation value; that explicit warning is what kills the collision`)
+	}
+
+	// Every token the sentence tells the model to write for a grounding kind
+	// must itself be a validator-accepted derivation, or the "fix" would
+	// just relocate the rejection.
+	for _, term := range []string{"canonical_structured", "graph_associated", "model_extracted", "rule_inferred"} {
+		driver := probeDriver()
+		driver.Derivation = contractsv1.ContextFabricDerivationMethod(term)
+		if err := driver.Validate(); err != nil {
+			t.Errorf("the grounding-kind sentence tells the model to write derivation=%q, which the validator rejects: %v", term, err)
+		}
+	}
+
+	// And the collision this fix closes must still be real: source_asserted
+	// (a valid epistemic_status member) must still be REJECTED as a
+	// derivation value. If this ever starts passing, the collision this
+	// prompt sentence warns against no longer exists and the warning (and
+	// this test) should be reconsidered, not left stale.
+	driver := probeDriver()
+	driver.Derivation = contractsv1.ContextFabricDerivationMethod("source_asserted")
+	if err := driver.Validate(); err == nil {
+		t.Error(`"source_asserted" validates as a derivation value; CHAOS-4059's diagnosed same-spelling collision no longer reproduces, so the prompt's explicit warning against it should be reviewed`)
+	}
+}
+
 // TestSynthesisPromptFirstFourteenClaimHolds pins a sentence the prompt makes
 // about the vocabulary's SHAPE rather than its members: "The first fourteen
 // are canonical-fact-shaped".
