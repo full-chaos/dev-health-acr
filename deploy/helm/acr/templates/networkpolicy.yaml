@@ -51,6 +51,16 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.clickhousePort }}
     {{- end }}
+    {{- /* CHAOS-4055: acr-api's optional Investigator dials FalkorDB on the
+         same endpoint contract as acr-projector; without this rule a
+         configured contextFabric.falkor.addr was unreachable from the API
+         pods under this default-deny policy. Rendered only when Context
+         Fabric is actually wired, mirroring the entitlement gate below. */}}
+    {{- if and .Values.contextFabric.falkor.addr .Values.networkPolicy.egress.falkorPort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.falkorPort }}
+    {{- end }}
     {{- if and (include "acr.remoteEntitlement" .) .Values.networkPolicy.egress.entitlementPort }}
     - ports:
         - protocol: TCP

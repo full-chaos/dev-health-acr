@@ -1,0 +1,39 @@
+{{- /*
+Default-deny NetworkPolicy for the optional in-release FalkorDB workload
+(CHAOS-4055), matching the posture of the API and migration policies: ingress
+is limited to this release's own pods on the redis port, and the store needs
+no egress at all (empty egress list denies everything, the same convention as
+the migration policy's empty ingress).
+*/ -}}
+{{- if and .Values.contextFabric.falkordb.enabled .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "acr.fullname" . }}-falkordb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.falkordbLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "acr.falkordbSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- /* Only the two actual FalkorDB consumers: acr-api's optional
+         Investigator and acr-projector. The migration Job is deliberately
+         NOT in the graph backend's trust set. */}}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "acr.selectorLabels" . | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "acr.projectorSelectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.contextFabric.falkordb.service.port }}
+  # The graph store initiates no outbound connections.
+  egress: []
+{{- end }}

@@ -1,0 +1,176 @@
+# Per-shard isolated Postgres + FalkorDB pair (CHAOS-4055, consumed by the
+# CHAOS-4033 parallel trial harness). Rendered by deploy/local/shard.sh, which
+# substitutes every __PLACEHOLDER__. One namespace per shard; teardown is
+# `kubectl delete namespace` -- nothing in here leaks outside the namespace.
+#
+# Images are the exact digests the compose overlay pins
+# (deploy/compose/acr.compose.yml): postgres:18-alpine and
+# FalkorDB 4.20.2 / module 42002 / Redis 8.6.3.
+#
+# Ephemeral by design: no PersistentVolumeClaims. A shard's data lives exactly
+# as long as its pods; the harness reseeds per trial.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-shard-harness
+    dev-health.io/acr-shard: "__SHARD_INDEX__"
+---
+# Dev-only credential for an ephemeral, host-local trial shard. The harness
+# owns/overrides it via shard.sh; this is not a production secret contract.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: shard-postgres
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-shard-harness
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "__PG_PASSWORD__"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shard-postgres
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-shard-harness
+    app.kubernetes.io/component: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: acr-shard-harness
+        app.kubernetes.io/component: postgres
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44
+          env:
+            - name: POSTGRES_USER
+              value: acr
+            - name: POSTGRES_DB
+              value: acr
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: shard-postgres
+                  key: POSTGRES_PASSWORD
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          # Declared readiness contract: pg_isready (CHAOS-4033).
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "acr", "-d", "acr"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "acr", "-d", "acr"]
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shard-postgres
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-shard-harness
+    app.kubernetes.io/component: postgres
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      nodePort: __PG_NODEPORT__
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shard-falkordb
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-shard-harness
+    app.kubernetes.io/component: falkordb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: falkordb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: acr-shard-harness
+        app.kubernetes.io/component: falkordb
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: falkordb
+          image: falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3
+          env:
+            # Headless: the image's bundled browser UI is never exposed here.
+            - name: BROWSER
+              value: "0"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          # A real GRAPH.QUERY, not PING alone: proves the graph module is
+          # loaded and executing Cypher (same vocabulary as the compose
+          # healthcheck). The harness-side liveness signal over the declared
+          # endpoint is redis-cli PING (CHAOS-4033 contract).
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          startupProbe:
+            exec:
+              command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shard-falkordb
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-shard-harness
+    app.kubernetes.io/component: falkordb
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: falkordb
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      nodePort: __FALKOR_NODEPORT__
+      protocol: TCP

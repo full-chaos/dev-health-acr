@@ -75,6 +75,36 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: dev-health-acr
 {{- end -}}
 
+{{- define "acr.falkordbSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "acr.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: falkordb
+{{- end -}}
+
+{{- define "acr.falkordbLabels" -}}
+helm.sh/chart: {{ include "acr.chart" . }}
+{{ include "acr.falkordbSelectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: dev-health-acr
+{{- end -}}
+
+{{/*
+FalkorDB workload image guard (CHAOS-4055). Always digest-pinned: the graph
+backend was verified against one exact FalkorDB build (see
+docs/design/context-fabric-falkordb-adapter.md), so no development/test tag
+escape hatch exists here.
+*/}}
+{{- define "acr.falkordbImage" -}}
+{{- $ref := .Values.contextFabric.falkordb.image | default "" -}}
+{{- if not (regexMatch "@sha256:[0-9a-f]{64}$" $ref) -}}
+{{- fail "mutable-image: contextFabric.falkordb.image must be an immutable @sha256 digest reference" -}}
+{{- end -}}
+{{- $ref -}}
+{{- end -}}
+
 {{- define "acr.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "acr.fullname" .) .Values.serviceAccount.name -}}

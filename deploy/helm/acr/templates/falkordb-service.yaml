@@ -1,0 +1,25 @@
+{{- /*
+ClusterIP Service for the optional in-release FalkorDB workload (CHAOS-4055).
+Also serves as the StatefulSet's serviceName. Consumers (acr-projector,
+acr-api's optional Investigator) are wired explicitly via
+contextFabric.falkor.addr = <fullname>-falkordb:6379; enabling the workload
+never auto-configures them.
+*/ -}}
+{{- if .Values.contextFabric.falkordb.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "acr.fullname" . }}-falkordb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.falkordbLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: redis
+      port: {{ .Values.contextFabric.falkordb.service.port }}
+      targetPort: redis
+      protocol: TCP
+  selector:
+    {{- include "acr.falkordbSelectorLabels" . | nindent 4 }}
+{{- end }}

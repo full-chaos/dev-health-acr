@@ -8,6 +8,13 @@ Boundary reminders (ADR-0004):
     Job. No MCP workload is deployed; acr-mcp remains host-local.
   - Postgres and ClickHouse are external, pre-existing dependencies. This chart
     provisions neither of them.
+  {{- if .Values.contextFabric.falkordb.enabled }}
+  - The optional in-release FalkorDB workload is ENABLED: single-instance
+    StatefulSet {{ include "acr.fullname" . }}-falkordb serving
+    {{ include "acr.fullname" . }}-falkordb:{{ .Values.contextFabric.falkordb.service.port }}.
+    Consumers are not auto-wired; set contextFabric.falkor.addr to that
+    Service (tls=false, allowInsecure=true for in-cluster plaintext) to use it.
+  {{- end }}
   {{- if include "acr.remoteEntitlement" . }}
   - Remote entitlement is enabled; Dev Health Ops is an external dependency.
   {{- else }}

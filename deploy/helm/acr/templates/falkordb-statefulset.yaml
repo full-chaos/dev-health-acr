@@ -1,0 +1,134 @@
+{{- /*
+Optional in-release FalkorDB workload (CHAOS-4055). Values-gated and disabled
+by default: production keeps the externally-provisioned posture documented on
+contextFabric.falkor, exactly like the profile-gated `falkordb` service in
+deploy/compose/acr.compose.yml that this StatefulSet mirrors (same digest,
+same GRAPH.QUERY health vocabulary, port 6379, persistent data volume).
+
+Single replica by design: FalkorDB here is a single-node store; this chart
+provides no graph HA topology, so no replica knob exists.
+
+The data volume mounts at /var/lib/falkordb/data -- the image's
+FALKORDB_DATA_PATH, which its run.sh entrypoint passes to redis-server as
+--dir. (The compose service's /data mount point predates that image layout
+and does not capture the dump files.)
+*/ -}}
+{{- if .Values.contextFabric.falkordb.enabled }}
+{{- $falkordb := .Values.contextFabric.falkordb -}}
+{{- $image := include "acr.falkordbImage" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "acr.fullname" . }}-falkordb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.falkordbLabels" . | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ include "acr.fullname" . }}-falkordb
+  selector:
+    matchLabels:
+      {{- include "acr.falkordbSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- /* podLabels first so the selector labels always win on key
+             collision -- an operator label must never detach the pod from
+             the StatefulSet/Service/NetworkPolicy selectors. */}}
+        {{- with $falkordb.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- include "acr.falkordbSelectorLabels" . | nindent 8 }}
+      {{- with $falkordb.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with $falkordb.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $falkordb.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $falkordb.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: falkordb
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $falkordb.imagePullPolicy }}
+          # The upstream image runs redis-server as root via its run.sh
+          # entrypoint (no USER directive), so the restricted
+          # acr.containerSecurityContext (runAsNonRoot, uid 65532, read-only
+          # root filesystem) cannot apply to this vendored image. Everything
+          # that can be constrained without patching the image is.
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # Keep the workload headless: the image's bundled browser UI is
+            # an extra node server this deployment never exposes.
+            - name: BROWSER
+              value: "0"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          # A real GRAPH.QUERY, not PING: proves the graph module is loaded
+          # and actually executing Cypher, not just that Redis itself is up
+          # (verified necessary -- PING succeeding is not sufficient, see
+          # docs/design/context-fabric-falkordb-adapter.md). Same vocabulary
+          # as the compose service healthcheck.
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          startupProbe:
+            exec:
+              command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          # Liveness only needs the server process to answer; a restart on a
+          # missing graph module would loop without fixing anything.
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "PING"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml $falkordb.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/falkordb/data
+  {{- if $falkordb.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $falkordb.persistence.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $falkordb.persistence.size | quote }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+{{- end }}

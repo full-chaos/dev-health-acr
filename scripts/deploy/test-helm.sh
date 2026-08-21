@@ -529,4 +529,117 @@ for path in '/var/run/acr/postgres-ca/ca.crt' '/var/run/acr/clickhouse-ca/ca.crt
 done
 pass "secret-projection: custom Secret keys map to canonical projected filenames"
 
+# Gate 19 (CHAOS-4055): optional in-release FalkorDB workload. Off by default;
+# when enabled it must render a non-empty digest-pinned StatefulSet + Service
+# with the compose service's GRAPH.QUERY health vocabulary, mount the image's
+# real data path, and stay under the default-deny NetworkPolicy posture.
+# Literals like acr-test-falkordb and 6379 are intentional: this gate asserts
+# THIS harness's fixed release name and the chart's default (compose-parity)
+# port, the same convention as gate 13's hard-coded approval URL -- it does
+# not claim fullnameOverride/service.port overrides are invalid.
+if grep -qE '^\s*kind:\s*StatefulSet\s*$' "$rendered" || grep -q 'component: falkordb' "$rendered"; then
+  fail_gate "falkordb-workload: default render must not contain the FalkorDB workload"
+fi
+pass "falkordb-workload: disabled by default (no StatefulSet in default render)"
+
+falkordb_render="$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set-string contextFabric.falkor.addr=acr-test-falkordb:6379)"
+[[ -n "$falkordb_render" ]] || fail_gate "falkordb-workload: enabled render produced no output"
+
+# Doc-scoped extraction: the assertions below must hold inside the specific
+# rendered document, not anywhere in the concatenated output (a comment or an
+# unrelated doc must not satisfy them). Line-based document accumulation (a
+# line that is exactly "---" separates documents) rather than a regex RS,
+# which POSIX awk does not guarantee.
+extract_doc() {
+  # extract_doc <kind> <must-match-regex> [must-not-match-regex]
+  # Note: doc is cleared before exit -- awk runs END on exit, and END calls
+  # flush() again, which would otherwise emit the matched document twice.
+  awk -v kind="$1" -v want="$2" -v veto="${3:-}" '
+    function flush() {
+      if (doc ~ "(^|\n)kind: "kind"\n" && doc ~ want && (veto == "" || doc !~ veto)) {
+        printf "%s", doc; doc = ""; exit
+      }
+      doc = ""
+    }
+    /^---$/ { flush(); next }
+    { doc = doc $0 "\n" }
+    END { flush() }
+  '
+}
+extract_falkordb_doc() {
+  extract_doc "$1" 'component: falkordb' <<<"$falkordb_render"
+}
+
+falkordb_sts="$(extract_falkordb_doc StatefulSet)"
+[[ -n "$falkordb_sts" ]] || fail_gate "falkordb-workload: enabled render is missing the falkordb StatefulSet"
+grep -qE '^\s+image: "[^"]*falkordb/falkordb@sha256:[0-9a-f]{64}"' <<<"$falkordb_sts" \
+  || fail_gate "falkordb-workload: StatefulSet image is not digest-pinned"
+grep -qF 'GRAPH.QUERY' <<<"$falkordb_sts" || fail_gate "falkordb-workload: StatefulSet probes must use the GRAPH.QUERY vocabulary, not PING alone"
+grep -qE '^\s+mountPath: /var/lib/falkordb/data\s*$' <<<"$falkordb_sts" \
+  || fail_gate "falkordb-workload: data volume must mount the image FALKORDB_DATA_PATH"
+grep -qE '^\s+volumeClaimTemplates:' <<<"$falkordb_sts" \
+  || fail_gate "falkordb-workload: default persistence must render volumeClaimTemplates"
+
+falkordb_svc="$(extract_falkordb_doc Service)"
+[[ -n "$falkordb_svc" ]] || fail_gate "falkordb-workload: enabled render is missing the falkordb Service"
+# Name and port are derived from the render, not hard-coded: the harness
+# accepts arbitrary values files, and fullnameOverride/service.port are valid
+# operator inputs. What the gate owns is the shape: a -falkordb Service on
+# the falkordb component, and (below) the NetworkPolicy pinned to the SAME
+# port the Service exposes. The 6379 compose-parity default itself lives in
+# values.yaml and is exercised by the shipped values files.
+grep -qE '^  name: \S+-falkordb\s*$' <<<"$falkordb_svc" || fail_gate "falkordb-workload: Service name must be <fullname>-falkordb"
+falkordb_svc_port="$(grep -E '^\s+port: [0-9]+\s*$' <<<"$falkordb_svc" | head -1 | awk '{print $2}')"
+[[ "$falkordb_svc_port" =~ ^[0-9]+$ ]] || fail_gate "falkordb-workload: Service must expose a numeric port"
+grep -qE '^\s+app.kubernetes.io/component: falkordb\s*$' <<<"$falkordb_svc" \
+  || fail_gate "falkordb-workload: Service selector must target the falkordb component"
+
+falkordb_np="$(extract_falkordb_doc NetworkPolicy)"
+[[ -n "$falkordb_np" ]] || fail_gate "falkordb-workload: no NetworkPolicy selects the falkordb component"
+grep -qE "^\s+port: ${falkordb_svc_port}\s*\$" <<<"$falkordb_np" \
+  || fail_gate "falkordb-workload: falkordb NetworkPolicy ingress port must equal the Service port ($falkordb_svc_port)"
+grep -qE '^\s+app.kubernetes.io/component: api\s*$' <<<"$falkordb_np" \
+  || fail_gate "falkordb-workload: falkordb NetworkPolicy ingress must admit the api component"
+grep -qE '^\s+app.kubernetes.io/component: projector\s*$' <<<"$falkordb_np" \
+  || fail_gate "falkordb-workload: falkordb NetworkPolicy ingress must admit the projector component"
+if grep -qE 'component: migration' <<<"$falkordb_np"; then
+  fail_gate "falkordb-workload: the migration Job must not be in the falkordb trust set"
+fi
+grep -qE '^\s+egress: \[\]\s*$' <<<"$falkordb_np" \
+  || fail_gate "falkordb-workload: falkordb NetworkPolicy must deny all egress (egress: [])"
+
+# The falkor egress rule must appear on the API policy when addr is set:
+# structural check (one additional egress port stanza vs the default render's
+# API policy, where addr is unset), so a values-file falkorPort override
+# cannot false-fail the gate.
+falkordb_api_np="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <<<"$falkordb_render")"
+default_api_np="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <"$rendered")"
+falkor_egress_stanzas="$(grep -cE '^\s+- ports:\s*$' <<<"$falkordb_api_np" || true)"
+default_egress_stanzas="$(grep -cE '^\s+- ports:\s*$' <<<"$default_api_np" || true)"
+(( falkor_egress_stanzas == default_egress_stanzas + 1 )) \
+  || fail_gate "falkordb-workload: setting contextFabric.falkor.addr must add exactly one API egress rule (got $falkor_egress_stanzas vs $default_egress_stanzas)"
+
+# Operator podLabels must never detach the pod from the selectors: the last
+# (winning) occurrence of the component label must stay falkordb.
+falkordb_override="$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set-json 'contextFabric.falkordb.podLabels={"app.kubernetes.io/component":"bogus"}')"
+falkordb_override_sts="$(extract_doc StatefulSet 'component: falkordb' <<<"$falkordb_override")"
+[[ "$(grep -E '^\s+app.kubernetes.io/component:' <<<"$falkordb_override_sts" | tail -1 | awk '{print $2}')" == "falkordb" ]] \
+  || fail_gate "falkordb-workload: podLabels must not be able to override the component selector label"
+pass "falkordb-workload: enabled render has digest-pinned StatefulSet, Service, PVC, GRAPH.QUERY readiness, scoped NetworkPolicies"
+
+set +e
+falkordb_mutable="$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set-string contextFabric.falkordb.image=falkordb/falkordb:latest 2>&1)"
+falkordb_mutable_status=$?
+set -e
+[[ $falkordb_mutable_status -ne 0 ]] || fail_gate "falkordb-workload: a mutable falkordb image tag must fail closed"
+grep -qF 'mutable-image: contextFabric.falkordb.image' <<<"$falkordb_mutable" \
+  || fail_gate "falkordb-workload: mutable falkordb image failure did not name the violation"
+pass "falkordb-workload: mutable falkordb image reference fails closed naming the violation"
+
 printf 'RESULT: happy path passed all gates\n'
