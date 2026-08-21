@@ -47,7 +47,32 @@ if ! [[ "$SHARD_COUNT" =~ ^[0-9]+$ ]] || [[ "$SHARD_COUNT" -lt 1 ]]; then
   exit 1
 fi
 
+# require_outside_repo_tree (codex round-1 finding on the TMPDIR fix
+# below): validates a directory an operator-controlled env var points at
+# is NOT inside this repo's own working tree -- an operator setting
+# TMPDIR (or ACR_TRIAL_RESULTS_DIR) to a relative or in-repo path would
+# silently reopen the exact untracked-file source-identity-digest race
+# this fix exists to close (requireGitSourceIdentity hashes every
+# untracked file under repo_root). Validates the RESOLVED absolute path
+# (the RESULT), not the mechanics that produced it -- same philosophy as
+# common.sh's own resolve_dev_health_root.
+require_outside_repo_tree() {
+  local label="$1" dir="$2" resolved
+  if ! resolved="$(cd "$dir" 2>/dev/null && pwd -P)"; then
+    echo "run-two-turn-parallel.sh: $label=$dir does not exist or is not a directory" >&2
+    exit 1
+  fi
+  case "$resolved" in
+  "$repo_root" | "$repo_root"/*)
+    echo "run-two-turn-parallel.sh: $label resolves to $resolved, INSIDE this repo's working tree ($repo_root) -- refusing; this would corrupt every shard's own source-identity digest (requireGitSourceIdentity)" >&2
+    exit 1
+    ;;
+  esac
+}
+require_outside_repo_tree "TMPDIR" "${TMPDIR:-/tmp}"
+
 trial_wire_common_env
+require_outside_repo_tree "ACR_TRIAL_RESULTS_DIR" "$ACR_TRIAL_RESULTS_DIR"
 export ACR_TEST_TWOTURN_ORACLE_ANNEX="$ANNEX_PATH"
 if [[ -n "$LIMIT" ]]; then
   export ACR_TEST_TRIAL_LIMIT="$LIMIT"
