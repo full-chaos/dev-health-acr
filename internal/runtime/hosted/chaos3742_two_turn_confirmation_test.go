@@ -2809,6 +2809,21 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 			AnchorMembershipOffersEnabled: cfg.AnchorMembershipOffersEnabled,
+			// ExecutionShape (CHAOS-4033 follow-up, team-lead ruling
+			// 2026-08-21): defaults to "sequential" here -- an unsharded run
+			// WRITES this explicitly rather than relying on absence-means-
+			// sequential (the field's own omitempty tag previously left it
+			// out of the JSON entirely for every run before sharding
+			// existed). Absence was unambiguous under schema v6 in
+			// practice (every artifact so far predates sharding, or is
+			// itself the sharded case, which always sets "parallel" below),
+			// but an implicit default is a fails-toward-fine SHAPE -- a
+			// future consumer reading an old field name or a stale schema
+			// version could silently treat a missing key as "assume
+			// sequential" for the WRONG reason. Overwritten to "parallel"
+			// by the ACR_TEST_TRIAL_SHARD_COUNT block below when sharding
+			// is active.
+			ExecutionShape: "sequential",
 		},
 		BaseSHA:         requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
 		OracleAnnexPath: annexPath, OracleAnnexCorpusSHA: annex.CorpusSHA256, OracleAnnexSignedOff: annex.SignedOff,
