@@ -753,7 +753,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// case) so ResolveSubjects can narrow its pool to it. See
 	// ConfirmedExpectedKind's own doc comment for why this is a dedicated
 	// type and why that matters.
-	resolution, structureMaterial, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed))
+	resolution, structureMaterial, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
 	if err != nil {
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}

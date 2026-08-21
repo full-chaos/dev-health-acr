@@ -871,10 +871,10 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		outcome.Axis = string(interpreted.TimeContext.Axis)
 		traceCapture.reset()
 		baselineStart := time.Now()
-		baselineRes, _, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+		baselineRes, _, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 		outcome.BaselineElapsedMS = time.Since(baselineStart).Milliseconds()
 		wiredStart := time.Now()
-		wiredRes, wiredOfferMaterial, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+		wiredRes, wiredOfferMaterial, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 		outcome.WiredElapsedMS = time.Since(wiredStart).Milliseconds()
 		cancelCase()
 

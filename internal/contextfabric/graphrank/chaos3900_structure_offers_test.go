@@ -358,7 +358,7 @@ func TestResolveSubjects_ConfirmedKindNarrowsThePool(t *testing.T) {
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Ask Dev": {pr, wi}}}
 
 	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps(),
-		&contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectWorkItem})
+		&contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectWorkItem}, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -384,7 +384,7 @@ func TestResolveSubjects_NilConfirmedKindIsByteIdenticalToPreP1D(t *testing.T) {
 	wi := candidateNode(contractsv1.ContextFabricSubjectWorkItem, "wi_1", "WI 1", 0.5, "*")
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Ask Dev": {pr, wi}}}
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps(), nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -420,7 +420,7 @@ func TestResolveSubjects_AnchorAndHandleOffersEndToEnd(t *testing.T) {
 	request := testRequest()
 	request.Question = "is PR 532 related to widget-service or widget-svc?"
 
-	resolution, material, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("widget-service", "widget-svc"), backend.deps(), nil)
+	resolution, material, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("widget-service", "widget-svc"), backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -493,7 +493,7 @@ func TestResolveSubjects_AnchorOffersExcludeUnauthorizedClaimant(t *testing.T) {
 	request.Question = "is PR 532 related to widget-service, widget-svc, or gadget-svc?"
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"repoA"}}
 
-	_, material, err := ResolveSubjects(context.Background(), principal, request, testInterpreted("widget-service", "widget-svc", "gadget-svc"), backend.deps(), nil)
+	_, material, err := ResolveSubjects(context.Background(), principal, request, testInterpreted("widget-service", "widget-svc", "gadget-svc"), backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}

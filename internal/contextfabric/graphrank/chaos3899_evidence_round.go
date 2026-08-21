@@ -200,7 +200,17 @@ type Attestation struct {
 	DIdentity            string
 	HandleGrammarBound   bool
 	AnchorUniqueClaimant bool
-	Kinds                []KindAttestation
+	// AnchorReceiptConfirmed (CHAOS-4042, sol-max ruling) is true when the
+	// round's own anchor discriminator came from ShadowEvidenceRoundInput.
+	// ConfirmedAnchor (a redeemed ancr_ receipt), not from BindAnchor's
+	// own question-derived unique-claimant scan. Deliberately a SEPARATE
+	// field from AnchorUniqueClaimant, never both true at once for the
+	// same round: AnchorUniqueClaimant asserts a specific proof (BindAnchor
+	// ran and found exactly one claimant) a receipt-confirmed selection
+	// never performs, so setting it here would be telemetry that lies
+	// about which proof actually backed this round's outcome.
+	AnchorReceiptConfirmed bool
+	Kinds                  []KindAttestation
 	// KindInsensitivityEvaluated/KindInsensitivityOutcome (CHAOS-4039/
 	// sol-max ruling 2026-08-20): whether kindInsensitivityProof was
 	// consulted this round, and its verdict when it was. See
@@ -256,6 +266,21 @@ type ShadowEvidenceRoundInput struct {
 	// ADDITIONALLY pass kindInsensitivityProof re-run over this set before
 	// it may stand -- see the decisive switch in RunShadowEvidenceRound.
 	PreNarrowingExplicitKinds []CensusKind
+	// ConfirmedAnchor (CHAOS-4042, sol-max ruling) is a redeemed ancr_
+	// receipt's own resolved claimant -- nil for the common case (no
+	// anchor receipt confirmed this round), which keeps this an exact
+	// no-op for every existing caller: the round falls through to
+	// BindAnchor's own question-derived scan exactly as it always has.
+	// Non-nil TAKES PRIORITY over BindAnchor: the caller's own confirmed
+	// selection already supplies the disambiguation term-exclusivity was
+	// standing in for (the ruling's own membership-verify rationale),
+	// so this round must not re-derive a possibly-different answer from
+	// question text when a confirmed one exists. Only Kind/CanonicalID are
+	// read; Term is left empty (redemption never has the raw term text --
+	// only its hash survives past offer time, the repo's own
+	// term-identity-via-hash rule) and is safe to leave empty here since
+	// AnchorBinding.Term is in-process/never-traced provenance only.
+	ConfirmedAnchor *AnchorBinding
 }
 
 // splitCensusKinds partitions kinds into the subset the closed census
@@ -320,6 +345,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 				ShadowNonCensusedSurvivor:        a.NonCensusedSurvivor,
 				ShadowHandleGrammarBound:         a.HandleGrammarBound,
 				ShadowAnchorUniqueClaimant:       a.AnchorUniqueClaimant,
+				ShadowAnchorReceiptConfirmed:     a.AnchorReceiptConfirmed,
 				ShadowKindsCensused:              len(a.Kinds),
 				ShadowKindInsensitivityEvaluated: a.KindInsensitivityEvaluated,
 				ShadowKindInsensitivityOutcome:   string(a.KindInsensitivityOutcome),
@@ -380,7 +406,24 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		h := bound[0]
 		handle = &h
 	}
-	anchor, anchorOK := BindAnchor(input.AliasClaimants, input.AliasLookupComplete)
+	// CHAOS-4042 (sol-max ruling): a confirmed anchor selection TAKES
+	// PRIORITY over BindAnchor's own question-derived scan -- see
+	// ShadowEvidenceRoundInput.ConfirmedAnchor's own doc comment. anchorOK
+	// is unconditionally true here (a confirmed selection was already
+	// re-verified at redemption -- structure.go's canonicalizeStructure
+	// reverify hook -- before it could ever reach this round), and
+	// anchorReceiptConfirmed records that this round's own anchor did NOT
+	// come from BindAnchor, so AnchorUniqueClaimant below stays false
+	// rather than asserting a proof that never ran.
+	var anchor AnchorBinding
+	var anchorOK, anchorReceiptConfirmed bool
+	if input.ConfirmedAnchor != nil {
+		anchor = *input.ConfirmedAnchor
+		anchorOK = true
+		anchorReceiptConfirmed = true
+	} else {
+		anchor, anchorOK = BindAnchor(input.AliasClaimants, input.AliasLookupComplete)
+	}
 
 	censusKinds, nonCensusedSurvivor := splitCensusKinds(input.PooledKinds)
 	if handle != nil && IsCensusKindRegistered(handle.Kind) {
@@ -389,7 +432,8 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 
 	base := Attestation{
 		UnscopedVisibility: true, NonCensusedSurvivor: nonCensusedSurvivor,
-		HandleGrammarBound: handle != nil, AnchorUniqueClaimant: anchorOK,
+		HandleGrammarBound: handle != nil, AnchorUniqueClaimant: anchorOK && !anchorReceiptConfirmed,
+		AnchorReceiptConfirmed: anchorReceiptConfirmed,
 	}
 
 	if handle == nil && !anchorOK {

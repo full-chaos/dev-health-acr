@@ -35,7 +35,7 @@ func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Pr
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error) {
 	return g.resolution, g.material, nil
 }
 
@@ -114,10 +114,11 @@ func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID
 // caller's request into (e.g. prior-subject-receipt hints) without the
 // GraphReader itself needing to know about receipts.
 type capturingGraphReader struct {
-	resolution      SubjectResolution
-	context         GraphContext
-	resolveRequests []InvestigationRequest
-	discoverHints   [][]SubjectHint
+	resolution       SubjectResolution
+	context          GraphContext
+	resolveRequests  []InvestigationRequest
+	confirmedAnchors []*ConfirmedAnchorSelection
+	discoverHints    [][]SubjectHint
 	// bindingEpochs (CHAOS-3898 §5b), when non-empty, is consumed one
 	// value per ResolveInvestigationBinding call, in order -- the LAST
 	// value repeats once exhausted -- so a test can simulate a build/flip
@@ -144,8 +145,9 @@ func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, stor
 	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: g.bindingEpochs[index]}, nil
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
+	g.confirmedAnchors = append(g.confirmedAnchors, confirmedAnchor)
 	return g.resolution, StructureOfferMaterial{}, nil
 }
 
@@ -651,6 +653,103 @@ func TestEngineResolvesPriorSubjectReceiptIntoSubjectHint(t *testing.T) {
 	// The receipt survived graph resolution, so nothing was skipped.
 	if len(telemetry.priorSubjectReceiptsSkipped) != 0 {
 		t.Fatalf("telemetry = %#v, want no skip recorded when the receipt resolved successfully", telemetry.priorSubjectReceiptsSkipped)
+	}
+}
+
+// TestEngineConfirmedAnchorReachesResolveSubjects is CHAOS-4042's own
+// engine-plumbing proof, one level up from TestCHAOS4042_AnchorMembership-
+// Reverification_VerifierAcceptsConfirms (structure_test.go): that test
+// proves canonicalizeStructure produces a Confirmed entry once a wired
+// AnchorMembershipVerifier accepts a redeemed v2 anchor receipt; this test
+// proves the REST of the chain -- that confirmedAnchorSelection's own
+// conversion of that entry actually reaches GraphReader.ResolveSubjects as
+// its ConfirmedAnchorSelection argument (engine.go's ResolveSubjects call
+// site), which is what lets a redeemed claimant become the shadow evidence
+// round's own census discriminator (RunShadowEvidenceRound's ConfirmedAnchor
+// input) instead of BindAnchor's own re-derivation from question text.
+func TestEngineConfirmedAnchorReachesResolveSubjects(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_anchor_1"
+	priorResult.SchemaVersion = InvestigationResultSchemaV2
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_anchor"},
+		AnchorOptions: []AnchorOption{
+			{
+				ReceiptID: "ancr_confirm0001", OptionID: "opt_anchor", Label: "the widget-service repository",
+				Kind: SubjectRepository, CanonicalID: "repository_widget_service",
+				MatchedTermHash: "aa11bb22cc33dd44ee55ff66",
+				OfferSource:     "engine",
+			},
+		},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	verifierCalls := 0
+	interpretation := InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent},
+		FactRequirements: []FactRequirement{{Kind: FactStatus}},
+	}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return interpretation, nil
+		}),
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Ask Dev is on track.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
+				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Ask Dev is on track based on available context.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results: store,
+		AnchorMembershipVerifier: func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason) {
+			verifierCalls++
+			return true, AnchorVerificationValid
+		},
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() }, NewResultID: func() string { return "result_99999999" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	request := validInvestigationRequest()
+	request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "ancr_confirm0001"}}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if verifierCalls != 1 {
+		t.Fatalf("AnchorMembershipVerifier called %d times, want 1", verifierCalls)
+	}
+	if len(graph.confirmedAnchors) != 1 {
+		t.Fatalf("confirmedAnchors = %#v, want exactly one ResolveSubjects call recorded", graph.confirmedAnchors)
+	}
+	got := graph.confirmedAnchors[0]
+	if got == nil {
+		t.Fatal("confirmedAnchors[0] = nil, want the redeemed receipt's own kind/canonical_id -- a nil here means the confirmed anchor never reached ResolveSubjects, so it could never reach the shadow evidence round's census discriminator either")
+	}
+	if got.Kind != SubjectRepository || got.CanonicalID != "repository_widget_service" {
+		t.Fatalf("confirmedAnchors[0] = %+v, want {Kind: repository, CanonicalID: repository_widget_service} -- the redeemed offer's own content, not a re-derivation", got)
 	}
 }
 
@@ -1352,7 +1451,7 @@ func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, stora
 	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
 }
 
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error) {
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error) {
 	g.resolveCalls++
 	return SubjectResolution{
 		Candidates: []SubjectCandidate{},

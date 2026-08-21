@@ -58,7 +58,7 @@ func TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution(t *testing.T)
 				return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "repo-1:532"}, nil
 			}
 		}
-		resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
+		resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, nil)
 		if err != nil {
 			t.Fatalf("ResolveSubjects(nil) error = %v", err)
 		}
@@ -84,6 +84,48 @@ func TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution(t *testing.T)
 	decision := tracerWith.eventsForStage("evidence_round")[0]
 	if decision.ShadowOutcome != string(ShadowWouldCommit) {
 		t.Fatalf("shadow outcome = %q, want %q (proving the round genuinely reached a would-commit verdict it was still forbidden from acting on)", decision.ShadowOutcome, ShadowWouldCommit)
+	}
+}
+
+// TestResolveSubjects_ConfirmedAnchorReachesShadowRoundThroughResolveSubjects
+// is CHAOS-4042's own wiring proof at the exported ResolveSubjects boundary
+// (codex xhigh review round 1 finding, confirmed and addressed: no test
+// previously exercised a non-nil *contextfabric.ConfirmedAnchorSelection
+// through this function's own conversion into *AnchorBinding --
+// runShadowEvidenceRoundForResolution's `if confirmedAnchor != nil { ... }`
+// block, resolve.go -- a regression dropping that conversion would leave
+// every existing test green). This scenario deliberately sets NO
+// AliasClaimants at all, so BindAnchor alone would find nothing (anchorOK
+// stays false, no anchor FK ever applies to the census call) -- any
+// anchor-bound census call in this test can only be explained by the
+// CONFIRMED anchor's own override, never by a coincidental BindAnchor
+// derivation.
+func TestResolveSubjects_ConfirmedAnchorReachesShadowRoundThroughResolveSubjects(t *testing.T) {
+	t.Parallel()
+	target := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:532", "PR #532", 0.6, "*")
+	backend := &fakeGraphBackend{
+		searchResults:   map[string][]CandidateNode{"PR 532": {target}},
+		searchTruncated: true,
+	}
+	request := testRequest()
+	request.Question = "why did PR 532 fail?"
+	deps := backend.deps()
+
+	var gotAnchorKind contextfabric.SubjectKind
+	var gotAnchorCanonicalID string
+	var gotAnchorBound bool
+	deps.CensusFunc = func(_ context.Context, _ string, _ CensusKind, _ string, _ bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool) (CensusOutcome, error) {
+		gotAnchorKind, gotAnchorCanonicalID, gotAnchorBound = anchorKind, anchorCanonicalID, anchorBound
+		return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "repo-1:532"}, nil
+	}
+	confirmedAnchor := &contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectRepository, CanonicalID: "repository_widget_service"}
+
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, confirmedAnchor); err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+
+	if !gotAnchorBound || gotAnchorKind != contextfabric.SubjectRepository || gotAnchorCanonicalID != "repository_widget_service" {
+		t.Fatalf("census anchor discriminator = (kind=%q, canonical_id=%q, bound=%v), want the CONFIRMED anchor selection (repository_widget_service) -- BindAnchor alone (no AliasClaimants wired) could never have produced a bound anchor here, so this proves confirmedAnchor's own conversion into the shadow round's AnchorBinding actually happened", gotAnchorKind, gotAnchorCanonicalID, gotAnchorBound)
 	}
 }
 
@@ -123,7 +165,7 @@ func TestResolveSubjects_SurvivorsFirstOrderReordersLiveThroughResolveSubjects(t
 	// ever reaching CensusFunc at all.
 	request := testRequest()
 	request.Question = "Why did PR #2 fail?"
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -176,7 +218,7 @@ func TestResolveSubjects_SurvivorsFirstOrderReordersLiveViaSatisfierSet(t *testi
 	}
 	request := testRequest()
 	request.Question = "Why did PR #2 fail?"
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Which PR"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -230,7 +272,7 @@ func TestResolveSubjects_ShadowEvidenceRoundUsesInterpretedAxisNotRequestAxis(t 
 	interpreted := testInterpreted("PR 532")
 	interpreted.TimeContext.Axis = contextfabric.TemporalValidTime // ...but the INTERPRETED axis (what the engine actually treats as authoritative) is historical.
 
-	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted, deps, nil); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted, deps, nil, nil); err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	events := tracer.eventsForStage("evidence_round")
@@ -257,7 +299,7 @@ func TestResolveSubjects_ShadowEvidenceRoundPanicIsolation(t *testing.T) {
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v, want the panic to be isolated, not propagated as an error either", err)
 	}
@@ -286,7 +328,7 @@ func TestResolveSubjects_ShadowEvidenceRoundSkipsNonStalledResolutions(t *testin
 		censusCalls++
 		return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC()}, nil
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}

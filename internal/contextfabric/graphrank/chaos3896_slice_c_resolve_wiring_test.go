@@ -40,7 +40,7 @@ func TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate(t *testing.T) {
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestResolveSubjects_EvidenceCensusRefusesOnGraphMissingSatisfier(t *testing
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestResolveSubjects_EvidenceCensusSkipsWhenGateInvalid(t *testing.T) {
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -196,7 +196,7 @@ func TestResolveSubjects_EvidenceCensusRecoversATruncatedAwayReferent(t *testing
 	request := testRequest()
 	request.Question = "why did PR 532 fail?"
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}

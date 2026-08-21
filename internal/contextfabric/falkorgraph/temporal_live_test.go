@@ -130,7 +130,7 @@ func TestLiveTemporalAdmissionExcludesClosedWindows(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalValidTime, AsOf: &asOf,
 	})
-	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -200,7 +200,7 @@ func TestLiveTemporalAdmissionBeforeAnythingExisted(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalValidTime, AsOf: &asOf,
 	})
-	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -235,7 +235,7 @@ func TestLiveTemporalAdmissionIsHalfOpen(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalValidTime, AsOf: &boundary,
 	})
-	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -276,7 +276,7 @@ func TestLiveTemporalRangeAdmitsOverlap(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalRange, Start: &start, End: &end,
 	})
-	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -310,7 +310,7 @@ func TestLiveCurrentAxisIsUnaffected(t *testing.T) {
 	}
 
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
-	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -388,7 +388,7 @@ func TestLiveReferencedStubsCarryNoValidityWindow(t *testing.T) {
 	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
 		Axis: contextfabric.TemporalValidTime, AsOf: &outside,
 	})
-	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+	resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}

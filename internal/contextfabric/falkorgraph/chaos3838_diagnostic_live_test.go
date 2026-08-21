@@ -65,7 +65,7 @@ func TestAmbiguityBenchmarkDiagnosesWhyNoCommitDominates(t *testing.T) {
 			Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
 		}
 		interpreted := contextfabric.InterpretedQuestion{SubjectTerms: testCase.effectiveSubjectTerms()}
-		resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil)
+		resolution, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 		if err != nil {
 			t.Fatalf("ResolveSubjects: %v", err)
 		}

@@ -520,8 +520,9 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// reuse-bypass (engine.go) means tryReuse is NEVER called at all
 	// once a request has confirmed structure. A non-nil
 	// ConfirmedExpectedKind reaching this call site would mean the
-	// bypass itself had broken.
-	resolution, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil)
+	// bypass itself had broken. CHAOS-4042: ConfirmedAnchorSelection is
+	// nil here for the identical reason.
+	resolution, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil)
 	if err != nil {
 		return false, AnswerReuseMissAuthorization
 	}
