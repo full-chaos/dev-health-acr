@@ -53,9 +53,15 @@ func TestResolveSubjects_InferredTierExpectedKindCommitSkipsCensus(t *testing.T)
 	t.Parallel()
 	// Ordinary search finds the TRUE subject (a repository) with enough
 	// relevance to commit on its own -- unrelated to the kind the caller's
-	// explicit (unconfirmed) ExpectedKinds names.
+	// explicit (unconfirmed) ExpectedKinds names. searchTruncated:true
+	// (codex xhigh review finding, confirmed) isolates the EXACT gate
+	// resolve.go:1086 checks (`len(resolution.Committed)==0 &&
+	// searchTruncated`): without it, the scenario proves nothing about
+	// that specific gate, since a live run's search is truncated far more
+	// often than not and an untruncated fixture could pass this test
+	// merely by never reaching the gate's OTHER precondition either.
 	exact := candidateNode(contextfabric.SubjectRepository, "repository:acme/widgets", "acme/widgets", 0.9, "*")
-	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"acme/widgets": {exact}}}
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"acme/widgets": {exact}}, searchTruncated: true}
 	deps := backend.deps()
 	tracer := &captureResolutionTracer{}
 	deps.ResolutionTracer = tracer
