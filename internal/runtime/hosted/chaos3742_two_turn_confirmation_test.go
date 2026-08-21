@@ -20,8 +20,12 @@ package hosted_test
 //     (explicit field, Consumer.Surface="mcp" so it lands at
 //     inferred_default/explicit_unattributed, never question_stated).
 //     CHAOS-4039 v4 measurement contract (sol-max ruling 2026-08-20):
-//     window retains the ORIGINAL "ANY commit fails" bar (WindowCommitCount)
-//     -- W4 window-insensitivity is unimplemented (CHAOS-4040). kind/handle
+//     window retains the ORIGINAL "ANY commit fails" bar (WindowCommitCount).
+//     CHAOS-4040 (sol-max ruling 2026-08-21, PR #181) shipped an
+//     unconditional gate over every inferred window instead of a
+//     kind/handle-style noninterference proof -- see WindowGatedCount's own
+//     doc comment (twoTurnReport) for the non-vacuity proof this harness
+//     needed on top of that. kind/handle
 //     commits are no longer an unconditional failure: each DECISIVE commit
 //     is classified baseline_equivalent (a paired no-hint request reaches
 //     an identical interpretation/decision) or kind_insensitivity_attested
@@ -865,6 +869,16 @@ type twoTurnCaseResult struct {
 	Turn2Status string `json:"turn2_status"`
 	OfferMiss   bool   `json:"offer_miss"`
 	Applied     bool   `json:"applied"`
+	// Reused (CHAOS-4040 harness follow-up, codex round 3, confirmed):
+	// this arm's own turn 2 InvestigationResult.Reused, so a caller can
+	// tell a fresh decisive answer from a replayed stored row. Needed
+	// because answer-reuse only rejects DECISIVE candidates carrying an
+	// INFERRED window (answer_reuse.go) -- a confirmed-window decisive row
+	// is fully reuse-eligible, so the positive arm's own "confirmed AND
+	// decisive" claim could otherwise be satisfied by a stale row this
+	// run's redemption code never actually produced. See
+	// WindowPositiveAppliedCount's own doc comment (twoTurnReport).
+	Reused bool `json:"reused"`
 	// TierRoutedCorrectly (inferred_tier arm only) asserts the injected
 	// explicit value actually landed at Source=explicit_unattributed,
 	// Provenance=inferred_default in the echo -- not merely "did not
@@ -889,8 +903,9 @@ type twoTurnCaseResult struct {
 	// own), or "unjustified" (neither -- an immediate run failure, see
 	// InferredUnjustifiedCount). Empty for a non-decisive outcome (nothing
 	// to classify) and for window (window keeps the OLD literal zero-commit
-	// bar, sol-max ruling: W4 window-insensitivity is unimplemented, so no
-	// noninterference proof exists for window yet -- see WindowCommitCount).
+	// bar unconditionally -- CHAOS-4040's gate is structural, not a
+	// per-commit noninterference proof, so there is nothing for this 3-way
+	// partition to classify; see WindowCommitCount/WindowGatedCount).
 	InferredClassification string `json:"inferred_classification,omitempty"`
 	// PairInvalid (inferred_tier arm, kind/handle members only) is true
 	// when the PAIRED no-hint baseline request itself errored/timed out,
@@ -933,13 +948,19 @@ type twoTurnReport struct {
 	// fields below -- kind/handle commits are no longer an unconditional
 	// failure, judged instead against the new baseline_equivalent/
 	// kind_insensitivity_attested/unjustified partition; window keeps the
-	// OLD literal zero-commit bar unchanged (WindowCommitCount), since W4
-	// window-insensitivity remains unimplemented (CHAOS-4040). "3" marked
-	// the rename plus the controls/anti-vacuity/single-satisfier fields
-	// below; "1" was the shape PR #167 shipped. Bump this again on any
-	// future field rename, removal, or meaning change so a consumer can
-	// detect drift instead of silently reading a stale key under a new
-	// meaning.
+	// OLD literal zero-commit bar unchanged (WindowCommitCount). "5" marks
+	// the CHAOS-4040 harness follow-up (PR #181's own companion, sol-max
+	// ruling 2026-08-21): CHAOS-4040 shipped an unconditional window gate
+	// (not the kind/handle-style noninterference proof), which makes
+	// WindowCommitCount alone a VACUOUS bar (structurally always 0 now) --
+	// WindowInferredTierRanCount/WindowArmErrorCount/WindowGatedCount/
+	// WindowClassDefaultGatedCount were added to prove the gate itself is
+	// what produced that zero, not an unmeasured or broken arm; see their
+	// own doc comments. "3" marked the rename plus the controls/anti-
+	// vacuity/single-satisfier fields below; "1" was the shape PR #167
+	// shipped. Bump this again on any future field rename, removal, or
+	// meaning change so a consumer can detect drift instead of silently
+	// reading a stale key under a new meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
 	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
@@ -958,7 +979,33 @@ type twoTurnReport struct {
 	// confirmed_wrong alone, having proven NOTHING about ordinary
 	// conversion. The final assertion requires this > 0.
 	PositiveAppliedCount int `json:"positive_applied_count"`
-	GateReachableCount   int `json:"gate_reachable_count"`
+	// WindowPositiveAppliedCount (CHAOS-4040 harness follow-up, team-lead
+	// ruling 2026-08-21, reconciling against sol's full non-vacuity list)
+	// is the winr_ positive-control proof PositiveAppliedCount alone
+	// cannot give: that field is POOLED across every member, so a run
+	// where window's own receipt-redemption path is silently broken could
+	// still read PositiveAppliedCount>0 entirely from kind/handle/anchor
+	// conversions -- never proving window's own escape hatch out of the
+	// gate actually works. Counted when the window member's positive arm
+	// BOTH confirms (memberApplied's own Provenance==clarification_confirmed
+	// check) AND reaches a real decisive path (CommittedCount>0) --
+	// team-lead's own two-part bar, not confirmation alone. The
+	// complementary half of the proof ("removing that receipt returns to
+	// the gate") needs no separate call: the offer this positive-arm call
+	// redeems can only exist because THIS SAME case's own turn 1 call (no
+	// receipt) was gated in the first place (turn1's WindowClarification,
+	// selectOracleOffer's own precondition) -- the paired evidence already
+	// lives in this run, not a new one.
+	//
+	// Also requires BOTH calls fresh (!turn1.Reused && !positive.Reused,
+	// codex round 3, confirmed): answer-reuse only rejects DECISIVE
+	// candidates carrying an INFERRED window, never a confirmed-window
+	// decisive row -- unguarded, a stale replayed row (either call) could
+	// satisfy this bar without this run's redemption code ever actually
+	// running, the same reuse-vacuity class WindowClassDefaultGatedCount's
+	// own doc comment describes. Non-vacuity bar: must be > 0.
+	WindowPositiveAppliedCount int `json:"window_positive_applied_count"`
+	GateReachableCount         int `json:"gate_reachable_count"`
 	// StructureAndWindowDisclosureAbsentCount (orchestrator ruling,
 	// 2026-08-20, post-live-run: renamed from NoDiscriminatorsCount, which
 	// this run proved gets misread as the P1 acceptance row's
@@ -981,16 +1028,77 @@ type twoTurnReport struct {
 	FalseNoMatchCount int `json:"false_no_match_count"`
 	// WindowCommitCount (CHAOS-4039 v4 contract) is the window member's OWN
 	// retained bar: window keeps the pre-v4 "ANY commit fails" rule
-	// unconditionally (sol-max ruling: W4 window-insensitivity is
-	// unimplemented -- window.go:21,258 -- so no noninterference proof
-	// exists for an inferred/unconfirmed window the way one now does for
-	// kind/handle; explicit windows also reach TimeContext/interpretation/
-	// reuse/synthesis differently, CHAOS-4040 owns closing this gap).
-	// Reported and gated SEPARATELY from the kind/handle fields below --
-	// never pooled with them the way the pre-v4 InferredTierAnyCommit was
-	// (that pooling is what hid the run-1/run-2 window/kind-handle
-	// breakdown sol-max's ruling had to reconstruct from scratch).
+	// unconditionally. CHAOS-4040 (sol-max ruling 2026-08-21, PR #181)
+	// shipped the mechanism this comment used to call missing: EVERY
+	// inferred/unconfirmed window is now gated to a confirmation-required
+	// terminal before it can reach resolution at all (internal/contextfabric/
+	// window.go's windowConfirmationRequiredResult) -- but as an
+	// UNCONDITIONAL structural gate, not the kind/handle-style
+	// per-commit noninterference PROOF (baseline_equivalent/
+	// kind_insensitivity_attested) window still has none of. That
+	// distinction is exactly why WindowCommitCount alone is no longer a
+	// meaningful bar: it is now STRUCTURALLY always 0 (the gate returns
+	// before a commit is even possible), so it can no longer tell "the
+	// gate fired correctly" from "the arm never ran" or "every case
+	// errored". WindowInferredTierRanCount/WindowArmErrorCount/
+	// WindowGatedCount below exist to close exactly that gap; see their
+	// own doc comments. Reported and gated SEPARATELY from the kind/handle
+	// fields further below -- never pooled with them the way the pre-v4
+	// InferredTierAnyCommit was (that pooling is what hid the run-1/run-2
+	// window/kind-handle breakdown sol-max's ruling had to reconstruct
+	// from scratch).
 	WindowCommitCount int `json:"window_commit_count"`
+	// WindowInferredTierRanCount/WindowArmErrorCount/WindowGatedCount
+	// (CHAOS-4040 harness follow-up, PR #181's own companion) are the
+	// window arm's non-vacuity proof, mirroring InferredKindHandleDecisiveCount's
+	// role for kind/handle (both guard the SAME failure shape: a bar that
+	// reads "pass" because nothing was ever measured, not because the
+	// thing being measured behaved correctly).
+	//
+	// WindowInferredTierRanCount counts every window inferred_tier case
+	// whose Investigate() call did not itself error (ArmInvalidReason=="").
+	// Non-vacuity bar: must be > 0 -- a run where the window arm never
+	// once completed proves nothing about the gate, however clean
+	// WindowCommitCount reads.
+	WindowInferredTierRanCount int `json:"window_inferred_tier_ran_count"`
+	// WindowArmErrorCount counts window inferred_tier cases where
+	// Investigate() itself errored (ArmInvalidReason != "" -- for window
+	// specifically this ALWAYS means the investigate error branch, window
+	// has no PairInvalid/structural-exemption path of its own to
+	// conflate it with, see runTwoTurnInferredTierArm). Reported for
+	// visibility, not independently gated to 0 (transient errors happen)
+	// -- but WindowInferredTierRanCount's own >0 bar already prevents a
+	// 100%-erroring run from reading as a vacuous pass.
+	WindowArmErrorCount int `json:"window_arm_error_count"`
+	// WindowGatedCount counts, of WindowInferredTierRanCount, how many
+	// cases show the ACTUAL CHAOS-4040 gate signature: Turn2Status ==
+	// clarification_required, TierRoutedCorrectly (already proves
+	// EffectiveEvidenceWindow.Provenance == inferred_default), and
+	// CommittedCount == 0 together -- not merely "did not commit for
+	// whatever reason". Pass condition: WindowGatedCount ==
+	// WindowInferredTierRanCount -- EVERY window inferred-tier case that
+	// ran must show the gate's own signature, proving the gate is what
+	// produced the zero-commit outcome, not an unrelated resolution
+	// failure that would also read as WindowCommitCount==0.
+	WindowGatedCount int `json:"window_gated_count"`
+	// WindowClassDefaultGatedCount (gate 2 coverage, CHAOS-4040) counts
+	// turn 1 results (ANY member, the full corpus -- turn 1's own
+	// twoTurnRequest never sets an explicit evidence_window field) whose
+	// WindowClarification is non-nil. For a windowless MCP request,
+	// composeWindowClarification's only possible source is gate 2
+	// (windowConfirmationRequiredResult's class-default branch, engine.go)
+	// -- gate 1 requires an explicit field turn 1 never sets, and the
+	// decisive-path call to composeWindowClarification (engine.go, see its
+	// own comment) is permanently unreachable post-gate-2 by construction.
+	// This is gate 2's ONLY live-corpus coverage: the inferred_tier arm
+	// above always injects an explicit field, which can only ever exercise
+	// gate 1, never gate 2 -- the two gates are otherwise entirely
+	// disjoint in what a live corpus request can reach. Non-vacuity bar:
+	// must be > 0 (corpus-dependent how HIGH it runs -- not every question
+	// classifies to a window class, see composeEffectiveWindow's own
+	// ClassifyWindow/DefaultRelativeID refusal path -- so no exact-count
+	// bar, matching InferredKindHandleDecisiveCount's own >0-only shape).
+	WindowClassDefaultGatedCount int `json:"window_class_default_gated_count"`
 	// InferredKindHandleDecisiveCount/InferredBaselineEquivalentCount/
 	// InferredKindInsensitivityAttestedCount/InferredUnjustifiedCount/
 	// InferredPairInvalidCount (CHAOS-4039 v4 contract, kind/handle members
@@ -1652,6 +1760,7 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 	res.CommittedCount = len(turn2.SubjectResolution.Committed)
 	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
+	res.Reused = turn2.Reused
 	return res
 }
 
@@ -2332,7 +2441,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "4",
+		ReportSchemaVersion: "5",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -2454,6 +2563,33 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// skip-to-next-entry check below -- the same disclosure fact
 		// either way.
 		disclosurePresent := turn1.StructureNeeds != nil || turn1.WindowClarification != nil
+		// WindowClassDefaultGatedCount (CHAOS-4040 harness follow-up, gate
+		// 2 coverage -- see twoTurnReport's own doc comment for why turn
+		// 1's WindowClarification can ONLY originate from gate 2). Counted
+		// on EVERY case, control or not: gate 2 is question-content-driven
+		// (composeEffectiveWindow's own ClassifyWindow), not member/arm-
+		// scoped, so a control case classifying to a window is just as
+		// much gate-2 evidence as any other.
+		//
+		// !turn1.Reused is required (codex xhigh review round 2, confirmed
+		// HIGH-confidence): tryReuse runs BEFORE gate 2 in Investigate
+		// (engine.go), and answer_reuse.go's FindReusable only rejects
+		// DECISIVE (Complete/Partial/Degraded) candidates carrying an
+		// inferred window -- it says nothing about a clarification_required
+		// row, which pre-#181 could ALREADY carry a non-nil
+		// WindowClarification (the old, now-permanently-dead decisive-path
+		// composeWindowClarification call, engine.go) and was saved with a
+		// real (non-nil) watermark/epoch under the pre-#181 rules, so it
+		// stays reuse-eligible today. Without this guard, a persistent
+		// store carrying pre-#181 rows (a long-lived trial Postgres
+		// instance, not a fresh-per-run store) could let this bar pass by
+		// REPLAYING an old row, proving nothing about gate 2 actually
+		// running on THIS call -- exactly the causal gap this whole field
+		// exists to close for the gate-1 arm, reintroduced through reuse
+		// on this gate-2 signal if unguarded.
+		if turn1.WindowClarification != nil && !turn1.Reused {
+			report.WindowClassDefaultGatedCount++
+		}
 		if tc.ExpectID == "" {
 			if len(turn1.SubjectResolution.Committed) == 0 && disclosurePresent {
 				controlOK[entry.Index] = true
@@ -2474,7 +2610,31 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			report.OfferMissCount[entry.Member]++
 		}
 		if positive.Applied {
+			// PositiveAppliedCount (pre-existing, pooled across every
+			// member) does NOT check turn1.Reused/positive.Reused --
+			// unchanged by this follow-up, since its own bar only ever
+			// claimed "conversion happened", never "gate 2 ran fresh" the
+			// way the window-specific counters below do.
 			report.PositiveAppliedCount++
+			// WindowPositiveAppliedCount (see its own doc comment): the
+			// winr_ positive-control proof, scoped to window specifically
+			// so it cannot hide behind kind/handle/anchor conversions the
+			// way the pooled PositiveAppliedCount bar above can.
+			//
+			// !turn1.Reused && !positive.Reused (codex xhigh review round
+			// 3, confirmed HIGH confidence): answer-reuse only rejects
+			// DECISIVE candidates carrying an INFERRED window
+			// (answer_reuse.go) -- a CONFIRMED-window decisive row is
+			// fully reuse-eligible. Without both guards, this bar could be
+			// satisfied by a stale row (turn 1's offer replayed, or turn
+			// 2's own confirmed decisive answer replayed) that this run's
+			// redemption code never actually produced -- the same
+			// reuse-vacuity class round 2 found on WindowClassDefaultGatedCount,
+			// reapplied here to both calls this arm makes.
+			if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) &&
+				positive.CommittedCount > 0 && !turn1.Reused && !positive.Reused {
+				report.WindowPositiveAppliedCount++
+			}
 		}
 		if positive.CommittedCount > 0 {
 			report.GateReachableCount++
@@ -2494,23 +2654,44 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if inferred.WrongCommit {
 			report.WrongCommitCount++
 		}
-		if inferred.ArmInvalidReason == "" && inferred.CommittedCount > 0 {
-			if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
-				report.WindowCommitCount++
-			} else if !inferred.PairInvalid {
-				// PairInvalid outcomes are excluded from the partition
-				// entirely (InferredClassification is deliberately left
-				// empty for them, never defaulted into "unjustified" --
-				// see runTwoTurnInferredTierArm's own comment on why).
-				report.InferredKindHandleDecisiveCount++
-				switch inferred.InferredClassification {
-				case "baseline_equivalent":
-					report.InferredBaselineEquivalentCount++
-				case "kind_insensitivity_attested":
-					report.InferredKindInsensitivityAttestedCount++
-				default:
-					report.InferredUnjustifiedCount++
+		if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+			// CHAOS-4040 harness follow-up (non-vacuity, see
+			// twoTurnReport's own doc comments on these fields): window
+			// gets its OWN counting block, not the CommittedCount>0-gated
+			// one below -- WindowInferredTierRanCount/WindowGatedCount
+			// need to be computed for EVERY ran case, not only the
+			// (should-be-nonexistent, post-gate) ones that committed.
+			//
+			// For window specifically, ArmInvalidReason is set ONLY by
+			// runTwoTurnInferredTierArm's investigate-error branch (window
+			// has no PairInvalid/structural-exemption path of its own to
+			// conflate it with -- that function's own doc comment), so
+			// ArmInvalidReason != "" here always means the call errored.
+			if inferred.ArmInvalidReason != "" {
+				report.WindowArmErrorCount++
+			} else {
+				report.WindowInferredTierRanCount++
+				if inferred.CommittedCount > 0 {
+					report.WindowCommitCount++
 				}
+				if inferred.Turn2Status == string(contractsv1.ContextFabricInvestigationClarificationRequired) &&
+					inferred.TierRoutedCorrectly && inferred.CommittedCount == 0 {
+					report.WindowGatedCount++
+				}
+			}
+		} else if inferred.ArmInvalidReason == "" && inferred.CommittedCount > 0 && !inferred.PairInvalid {
+			// PairInvalid outcomes are excluded from the partition
+			// entirely (InferredClassification is deliberately left
+			// empty for them, never defaulted into "unjustified" --
+			// see runTwoTurnInferredTierArm's own comment on why).
+			report.InferredKindHandleDecisiveCount++
+			switch inferred.InferredClassification {
+			case "baseline_equivalent":
+				report.InferredBaselineEquivalentCount++
+			case "kind_insensitivity_attested":
+				report.InferredKindInsensitivityAttestedCount++
+			default:
+				report.InferredUnjustifiedCount++
 			}
 		}
 		report.Results = append(report.Results, inferred)
@@ -2607,12 +2788,45 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// CHAOS-4039 v4 measurement contract (sol-max ruling 2026-08-20,
 	// option (c) -- amend the bar BY MEMBER, never widen resolve.go's
 	// stalled-only census gate). window RETAINS the pre-v4 literal
-	// zero-commit bar unconditionally: W4 window-insensitivity is
-	// unimplemented (CHAOS-4040 owns it), so no noninterference proof
-	// exists yet for an inferred/unconfirmed window the way one now does
-	// for kind/handle.
+	// zero-commit bar unconditionally -- kept as a cheap belt-and-suspenders
+	// check even though WindowGatedCount below is now the bar that actually
+	// PROVES why it reads zero.
 	if report.WindowCommitCount > 0 {
-		t.Errorf("window_commit_count=%d, want 0 (any commit under unconfirmed inferred-tier window fails the run -- W4 window-insensitivity is unimplemented, CHAOS-4040)", report.WindowCommitCount)
+		t.Errorf("window_commit_count=%d, want 0 (any commit under unconfirmed inferred-tier window fails the run)", report.WindowCommitCount)
+	}
+	// CHAOS-4040 harness follow-up (PR #181's own companion, sol-max
+	// ruling 2026-08-21): WindowCommitCount==0 is now STRUCTURALLY
+	// guaranteed by the gate (see that field's own doc comment), so on its
+	// own it can no longer distinguish "the gate fired" from "the arm
+	// never ran" or "every case errored" -- these three bars close that
+	// gap. Checked in this order: non-vacuity first (mirrors
+	// PositiveAppliedCount's own ordering above), then the causal proof.
+	if report.WindowInferredTierRanCount == 0 {
+		t.Errorf("window_inferred_tier_ran_count=0 -- the window inferred-tier arm never once completed across %d cases, so window_commit_count=0 proves nothing about the CHAOS-4040 gate (non-vacuity)", report.CasesRun)
+	}
+	if report.WindowGatedCount != report.WindowInferredTierRanCount {
+		t.Errorf("window_gated_count=%d, want %d (== window_inferred_tier_ran_count): every window inferred-tier case that ran must show the CHAOS-4040 gate's own signature (clarification_required, inferred_default provenance, zero commits) -- a case reaching zero commits any other way means window_commit_count's own zero is not actually proof the gate is what stopped it", report.WindowGatedCount, report.WindowInferredTierRanCount)
+	}
+	if report.WindowArmErrorCount > 0 {
+		t.Logf("window_arm_error_count=%d (informational, not gated -- see that field's own doc comment)", report.WindowArmErrorCount)
+	}
+	// Gate 2 (class-default) coverage: the arm above only ever exercises
+	// gate 1 (it always injects an explicit field) -- this is gate 2's
+	// only live-corpus signal, see WindowClassDefaultGatedCount's own doc
+	// comment for why turn 1 alone proves it.
+	if report.WindowClassDefaultGatedCount == 0 {
+		t.Errorf("window_class_default_gated_count=0 across %d cases -- gate 2 (the engine's own class-table default, CHAOS-4040) never fired once on turn 1's windowless requests, so this run has zero live-corpus evidence gate 2 works at all (non-vacuity)", report.CasesRun)
+	}
+	// winr_ positive control (team-lead ruling 2026-08-21, reconciling
+	// against sol's full CHAOS-4040 non-vacuity list): proves the escape
+	// hatch out of the gate -- a confirmed receipt reaching a real
+	// decisive answer -- actually works, scoped to window specifically so
+	// it cannot hide behind PositiveAppliedCount's own pooled kind/handle/
+	// anchor conversions. See WindowPositiveAppliedCount's own doc comment
+	// for why "removing the receipt returns to the gate" needs no separate
+	// call here.
+	if report.WindowPositiveAppliedCount == 0 {
+		t.Errorf("window_positive_applied_count=0 across %d cases -- window's own winr_ receipt redemption never once reached a confirmed, decisive answer this run, so this run has zero live-corpus evidence the escape hatch out of the CHAOS-4040 gate actually works (non-vacuity)", report.CasesRun)
 	}
 	if report.FalseNoMatchCount > 0 {
 		t.Errorf("false_no_match_count=%d, want 0 (a case with a real expected answer resolved to literal no_match -- the no-match-direction mirror of a wrong commit)", report.FalseNoMatchCount)
