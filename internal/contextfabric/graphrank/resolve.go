@@ -328,14 +328,16 @@ type ResolveDeps struct {
 	// ever mint a v2 (membership-verify) ambiguous-claimant AnchorOption.
 	// false (every production deployment today) is byte-identical to
 	// pre-CHAOS-4042 behavior -- no request can mint a v2 anchor offer.
-	// The interim production verifier (graphrank.VerifyAnchorClaimantMembership)
-	// does not yet reconcile against the graph under a pinned binding
-	// epoch or re-authorize at redemption (see that function's own doc
-	// comment); this flag stays false until PR3 lands both and a
-	// deployment explicitly opts in via
-	// ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED. Tests that exercise
-	// the v2 offer path set this to true directly, bypassing the env
-	// gate entirely -- see anchorOfferMaterial's own doc comment.
+	// PR3 landed the production verifier's remaining two pieces --
+	// graphrank.VerifyAnchorClaimantMembership now reconciles against the
+	// graph under the redemption request's own pinned binding AND
+	// re-authorizes the selected claimant (see that function's own doc
+	// comment) -- but this flag STILL stays false in every PR3 commit: the
+	// flip to enabled-by-default is a separate, human-ratified
+	// per-deployment decision (ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED),
+	// never bundled into a code change. Tests that exercise the v2 offer
+	// path set this to true directly, bypassing the env gate entirely --
+	// see anchorOfferMaterial's own doc comment.
 	AnchorMembershipOffersEnabled bool
 }
 

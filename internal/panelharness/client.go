@@ -235,7 +235,7 @@ func (c *Client) Investigate(ctx context.Context, requestID string, request cont
 	// (validateStoredInvestigationResult, unexported to that package) after
 	// every decode; this client applies the identical gate rather than
 	// inventing a second one.
-	if err := result.ValidateStored(); err != nil {
+	if err := contractsv1.ValidateStoredResult(result); err != nil {
 		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: hosted API returned an invalid investigation result: %w", err)
 	}
 	return result, nil

@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // CHAOS-3900 P1.C (pivot-intent design brief §2.1). ResolveSubjects
@@ -411,7 +412,75 @@ const (
 	// NO uniqueness proof on an incomplete enumeration. Fail closed, never
 	// assume the unseen rows would not have contested the claim.
 	AnchorVerificationIncompleteEnumeration AnchorVerificationReason = "incomplete_enumeration"
+	// AnchorVerificationUnauthorized (CHAOS-4042 PR3, sol-max ruling) is
+	// VerifyAnchorClaimantMembership's own reason for "the selected
+	// claimant's graph node exists under the pinned binding, but the
+	// caller's own principal/scope is no longer authorized to see it" --
+	// INTERNAL/telemetry only. The ruling: "generic unresolved veto; do not
+	// expose whether it still exists" -- the caller-visible effect is
+	// IDENTICAL to AnchorVerificationClaimLost (structure_confirmation_
+	// unresolved), so this value must never itself be surfaced on the wire;
+	// it exists only so an operator reading telemetry can distinguish "the
+	// claim vanished" from "the principal lost visibility" without that
+	// distinction ever reaching a caller. Mirrored in
+	// contextfabric.AnchorVerificationUnauthorized (structure.go).
+	AnchorVerificationUnauthorized AnchorVerificationReason = "anchor_claim_unauthorized"
+	// AnchorVerificationGraphUnverifiable (CHAOS-4042 PR3, sol-max ruling,
+	// team-lead's own cf_binding_epoch_delta mapping correction) is the
+	// CANNOT-VERIFY reason: the pinned ResolvedGraphBinding's own graph key
+	// does not exist at all (its epoch was already retired -- a race with
+	// the retire executor, DeleteEpochGraph never touches the ACTIVE
+	// epoch, so this can only happen to a binding that has gone stale), or
+	// the graph-side read itself errored. Deliberately distinct from
+	// AnchorVerificationClaimLost: a retired epoch or a read error proves
+	// NOTHING about whether the claimant still exists in a LIVE epoch --
+	// asserting "lost" here would be a false claim the ruling forbids
+	// (a wrong-epoch read must never manufacture a claim-vanished verdict).
+	// Maps to the SAME generic vetoed_unresolved structure disposition as
+	// AnchorVerificationIncompleteEnumeration -- the wire stays generic per
+	// the existing veto-collapse design; only internal telemetry
+	// distinguishes a graph-side cannot-verify from a ClickHouse-side one.
+	AnchorVerificationGraphUnverifiable AnchorVerificationReason = "graph_binding_unverifiable"
 )
+
+// GraphAnchorMemberResult is the pinned-epoch graph-side half of CHAOS-4042
+// PR3's own redemption-time re-verification (the sol-max ruling's
+// authorized_B(...) term) -- what GraphAnchorMemberFunc reports about ONE
+// (kind, canonicalID) node read under a specific ResolvedGraphBinding.
+// Unverifiable and Exists/Authorized are mutually exclusive in meaning:
+// Unverifiable==true means the binding's own graph key could not be read
+// at all (a retired epoch), so Exists/Authorized carry no information and
+// must be ignored -- never treated as "false".
+type GraphAnchorMemberResult struct {
+	// Exists reports whether the node was found in the graph identified by
+	// binding.GraphKey. Meaningless when Unverifiable is true.
+	Exists bool
+	// Authorized reports the SAME AuthorizedAttributes check every ordinary
+	// NodeCandidate result already passes, applied to the found node's own
+	// attributes. Meaningless when Exists is false or Unverifiable is true.
+	Authorized bool
+	// Unverifiable reports that binding's own graph key does not exist at
+	// all (ErrNotFound on the WHOLE graph, not merely the one node) -- see
+	// AnchorVerificationGraphUnverifiable's own doc comment for why this
+	// must never be folded into "claim lost".
+	Unverifiable bool
+}
+
+// GraphAnchorMemberFunc is CHAOS-4042 PR3's own pinned-epoch, single-node
+// graph read + re-authorization dependency -- mirrors IdentityUniverseFunc/
+// CensusFunc's existing narrow-dependency-function convention (never a
+// GraphReader interface addition: a new interface method would ripple
+// through every fake GraphReader implementation PR3a already had to touch,
+// for a capability only VerifyAnchorClaimantMembership needs). The
+// production implementation (internal/contextfabric/falkorgraph) composes
+// the adapter's own existing effectiveKey (binding.GraphKey is already the
+// pinned epoch's own distinct graph namespace -- CHAOS-3898's own
+// graphKeyForEpoch build-aside-and-swap design -- so a read via
+// binding.GraphKey is epoch-addressed BY CONSTRUCTION; no separate
+// epoch-comparison mechanism is needed) with the SAME node-by-kind-id read
+// and AuthorizedAttributes check every ordinary candidate/edge resolution
+// already uses.
+type GraphAnchorMemberFunc func(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, binding contextfabric.ResolvedGraphBinding, kind contextfabric.SubjectKind, canonicalID string) (GraphAnchorMemberResult, error)
 
 // IdentityUniverseFunc mirrors falkorgraph.Config.IdentityUniverse's own
 // shape exactly (CHAOS-3884 Option C) -- the SAME complete, per-organization
@@ -500,29 +569,52 @@ func identityRowCarriesTermHash(row IdentityRow, termHash string) bool {
 // Deliberately works HASH-side only, same reasoning as
 // VerifyAnchorClaimantUnique: the raw term never needs to exist here.
 //
-// INTERIM SCOPE (PR2 of CHAOS-4042's three-PR slice): this reads the SAME
-// ClickHouse-backed identity universe VerifyAnchorClaimantUnique already
-// does. It does NOT yet reconcile against the graph's own node/alias
-// properties under a PINNED ResolvedGraphBinding epoch, and does NOT
-// re-authorize the selected claimant at redemption -- both require a new
-// graph-adapter primitive (a pinned-epoch single-node read) that does not
-// exist anywhere in this codebase yet. PR3 adds it alongside real epoch
-// enforcement (the ruling's own "Epoch enforcement" integration point,
-// which needs the identical capability).
-func VerifyAnchorClaimantMembership(ctx context.Context, orgID string, kind contextfabric.SubjectKind, canonicalID, matchedTermHash string, identityUniverse IdentityUniverseFunc) (bool, AnchorVerificationReason) {
+// PR3 of CHAOS-4042's three-PR slice adds the graph-side half: after the
+// ClickHouse-backed membership check above passes, the selected claimant's
+// graph node must ALSO be found and re-authorized under the PINNED
+// binding B -- the ruling's own membership rule, `valid = complete(C_B(h))
+// && e in C_B(h) && authorized_B(...)`. ClickHouse alone is checked FIRST
+// and short-circuits on its own negative (a lost/contested claim never
+// needs a graph read to already be invalid -- also proves the "ClickHouse
+// says lost" direction of the ruling's fail-closed-both-directions
+// requirement without the graph dependency even needing to agree). A
+// nil graphAnchorMember is NOT "trust ClickHouse alone" -- same
+// fail-CLOSED default as every other reverify dependency in this package.
+func VerifyAnchorClaimantMembership(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, binding contextfabric.ResolvedGraphBinding, kind contextfabric.SubjectKind, canonicalID, matchedTermHash string, identityUniverse IdentityUniverseFunc, graphAnchorMember GraphAnchorMemberFunc) (bool, AnchorVerificationReason) {
 	if identityUniverse == nil {
 		return false, AnchorVerificationIncompleteEnumeration
 	}
-	rows, _, complete, err := identityUniverse(ctx, orgID)
+	rows, _, complete, err := identityUniverse(ctx, principal.OrgID)
 	if err != nil || !complete {
 		return false, AnchorVerificationIncompleteEnumeration
 	}
+	clickhouseValid := false
 	for _, row := range rows {
 		if row.Kind == kind && row.CanonicalID == canonicalID && identityRowCarriesTermHash(row, matchedTermHash) {
-			return true, AnchorVerificationValid
+			clickhouseValid = true
+			break
 		}
 	}
-	return false, AnchorVerificationClaimLost
+	if !clickhouseValid {
+		return false, AnchorVerificationClaimLost
+	}
+	if graphAnchorMember == nil {
+		return false, AnchorVerificationGraphUnverifiable
+	}
+	result, err := graphAnchorMember(ctx, principal, scope, binding, kind, canonicalID)
+	if err != nil {
+		return false, AnchorVerificationGraphUnverifiable
+	}
+	if result.Unverifiable {
+		return false, AnchorVerificationGraphUnverifiable
+	}
+	if !result.Exists {
+		return false, AnchorVerificationClaimLost
+	}
+	if !result.Authorized {
+		return false, AnchorVerificationUnauthorized
+	}
+	return true, AnchorVerificationValid
 }
 
 // anchorOfferMaterial builds the subject_anchor disclosure (CHAOS-3900

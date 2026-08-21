@@ -740,6 +740,14 @@ func TestVerifyAnchorClaimantUnique(t *testing.T) {
 	})
 }
 
+// validGraphAnchorMember is a GraphAnchorMemberFunc test double that always
+// reports the node exists and is authorized -- used wherever a test wants
+// the ClickHouse-side check to be the ONLY thing under test, with the
+// graph-side check trivially agreeing.
+func validGraphAnchorMember(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contextfabric.SubjectKind, string) (GraphAnchorMemberResult, error) {
+	return GraphAnchorMemberResult{Exists: true, Authorized: true}, nil
+}
+
 // TestVerifyAnchorClaimantMembership_RivalsDoNotInvalidateTheSelectedClaimant
 // is CHAOS-4042's (sol-max ruling) own defining-difference proof: the SAME
 // scenario TestVerifyAnchorClaimantUnique_CaseFortyFiveTwinRepoShape treats
@@ -756,28 +764,28 @@ func TestVerifyAnchorClaimantMembership_RivalsDoNotInvalidateTheSelectedClaimant
 
 	t.Run("selected remains, rival added: still valid", func(t *testing.T) {
 		universe := fakeIdentityUniverseFn([]IdentityRow{repoA, repoB}, true, nil)
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, validGraphAnchorMember)
 		if !valid || reason != AnchorVerificationValid {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (true, %q)", valid, reason, AnchorVerificationValid)
 		}
 	})
 	t.Run("selected remains, rival removed: still valid", func(t *testing.T) {
 		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, validGraphAnchorMember)
 		if !valid || reason != AnchorVerificationValid {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (true, %q)", valid, reason, AnchorVerificationValid)
 		}
 	})
 	t.Run("selected remains among THREE claimants: still valid, never contested", func(t *testing.T) {
 		universe := fakeIdentityUniverseFn([]IdentityRow{repoA, repoB, repoC}, true, nil)
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoB", hash, universe)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoB", hash, universe, validGraphAnchorMember)
 		if !valid || reason != AnchorVerificationValid {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (true, %q) -- multiplicity is never an error under membership semantics", valid, reason, AnchorVerificationValid)
 		}
 	})
 	t.Run("incomplete enumeration still applies membership's fail-closed rule", func(t *testing.T) {
 		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, false, nil)
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, nil)
 		if valid || reason != AnchorVerificationIncompleteEnumeration {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
 		}
@@ -791,7 +799,7 @@ func TestVerifyAnchorClaimantMembership(t *testing.T) {
 
 	t.Run("selected claimant removed: claim lost", func(t *testing.T) {
 		universe := fakeIdentityUniverseFn(nil, true, nil)
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, nil)
 		if valid || reason != AnchorVerificationClaimLost {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
 		}
@@ -799,7 +807,7 @@ func TestVerifyAnchorClaimantMembership(t *testing.T) {
 	t.Run("selected claimant re-keyed to a different canonical id: claim lost", func(t *testing.T) {
 		renamed := identityRow(contractsv1.ContextFabricSubjectRepository, "repoZ", "repoZ", term)
 		universe := fakeIdentityUniverseFn([]IdentityRow{renamed}, true, nil)
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, nil)
 		if valid || reason != AnchorVerificationClaimLost {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
 		}
@@ -810,22 +818,131 @@ func TestVerifyAnchorClaimantMembership(t *testing.T) {
 		// not the bare (kind, canonical_id) existence check alone.
 		driftedAway := IdentityRow{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repoA", Label: "repoA", Aliases: []string{"a-completely-different-alias"}}
 		universe := fakeIdentityUniverseFn([]IdentityRow{driftedAway}, true, nil)
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, nil)
 		if valid || reason != AnchorVerificationClaimLost {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
 		}
 	})
 	t.Run("identity universe error fails closed, not open", func(t *testing.T) {
 		universe := fakeIdentityUniverseFn(nil, true, errors.New("boom"))
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, nil)
 		if valid || reason != AnchorVerificationIncompleteEnumeration {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
 		}
 	})
 	t.Run("nil identity universe dependency fails closed, not open", func(t *testing.T) {
-		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, contextfabric.ResolvedGraphBinding{}, contractsv1.ContextFabricSubjectRepository, "repoA", hash, nil, nil)
 		if valid || reason != AnchorVerificationIncompleteEnumeration {
 			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
+		}
+	})
+}
+
+// TestVerifyAnchorClaimantMembership_GraphSideReconciliation is CHAOS-4042
+// PR3's own graph-side proof (the sol-max ruling's "8 targeted redemption
+// tests" #5, #7, and the graph-vs-ClickHouse disagreement class,
+// team-lead's own enumeration): ClickHouse alone is no longer sufficient --
+// the selected claimant's graph node must ALSO be found and re-authorized
+// under the pinned binding.
+func TestVerifyAnchorClaimantMembership_GraphSideReconciliation(t *testing.T) {
+	t.Parallel()
+	const term = "widget-service"
+	hash := HashAliasTerm(term)
+	repoA := identityRow(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA", term)
+	principal := storage.Principal{OrgID: "org_1"}
+	scope := contextfabric.RequestedScope{}
+	binding := contextfabric.ResolvedGraphBinding{GraphKey: "graph_org_1_epoch_7", Epoch: 7}
+
+	t.Run("graph agrees: exists and authorized -> valid", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), principal, scope, binding, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, validGraphAnchorMember)
+		if !valid || reason != AnchorVerificationValid {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (true, %q)", valid, reason, AnchorVerificationValid)
+		}
+	})
+
+	// Test #5 (sol-max ruling): authorization loss -> unresolved WITHOUT
+	// identity disclosure. AnchorVerificationUnauthorized was UNREACHABLE
+	// in production before this PR (nothing produced it) -- this is the
+	// first test to actually reach it, proving the wired dependency chain
+	// makes it live, not merely a defined-but-dead constant.
+	t.Run("ClickHouse agrees but graph says unauthorized: unresolved, no disclosure", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
+		graphFn := func(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contextfabric.SubjectKind, string) (GraphAnchorMemberResult, error) {
+			return GraphAnchorMemberResult{Exists: true, Authorized: false}, nil
+		}
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), principal, scope, binding, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, graphFn)
+		if valid || reason != AnchorVerificationUnauthorized {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationUnauthorized)
+		}
+	})
+
+	// Disagreement class, direction 1: ClickHouse says the claimant is
+	// still there, but a LIVE-epoch graph read says the node does not
+	// exist. Must fail closed -- ClickHouse alone is never sufficient
+	// after this PR.
+	t.Run("ClickHouse says found but graph (live epoch) says not found: claim lost", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
+		graphFn := func(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contextfabric.SubjectKind, string) (GraphAnchorMemberResult, error) {
+			return GraphAnchorMemberResult{Exists: false}, nil
+		}
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), principal, scope, binding, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, graphFn)
+		if valid || reason != AnchorVerificationClaimLost {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
+		}
+	})
+
+	// Disagreement class, direction 2: ClickHouse ALREADY says the claim is
+	// lost. The graph dependency must never even be consulted -- a
+	// ClickHouse-side negative is sufficient on its own to fail closed,
+	// proven here by wiring a graph fake that would say "valid" if it were
+	// ever called, and asserting it never was.
+	t.Run("ClickHouse says lost: fails closed without ever consulting the graph", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn(nil, true, nil)
+		called := false
+		graphFn := func(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contextfabric.SubjectKind, string) (GraphAnchorMemberResult, error) {
+			called = true
+			return GraphAnchorMemberResult{Exists: true, Authorized: true}, nil
+		}
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), principal, scope, binding, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, graphFn)
+		if valid || reason != AnchorVerificationClaimLost {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
+		}
+		if called {
+			t.Error("graphAnchorMember was called even though ClickHouse already reported the claim lost -- a ClickHouse-side negative must short-circuit, never need graph agreement")
+		}
+	})
+
+	// Test #7 (sol-max ruling, team-lead's cf_binding_epoch_delta mapping
+	// correction): a retired epoch's graph key is CANNOT-VERIFY, never
+	// claim-lost -- a stale binding proves nothing about a live epoch.
+	t.Run("pinned binding's graph key does not exist (retired epoch): cannot verify, not claim lost", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
+		graphFn := func(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contextfabric.SubjectKind, string) (GraphAnchorMemberResult, error) {
+			return GraphAnchorMemberResult{Unverifiable: true}, nil
+		}
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), principal, scope, binding, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, graphFn)
+		if valid || reason != AnchorVerificationGraphUnverifiable {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationGraphUnverifiable)
+		}
+	})
+
+	t.Run("graph read itself errors: fails closed as cannot-verify, not claim lost", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
+		graphFn := func(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contextfabric.SubjectKind, string) (GraphAnchorMemberResult, error) {
+			return GraphAnchorMemberResult{}, errors.New("graph backend unavailable")
+		}
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), principal, scope, binding, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, graphFn)
+		if valid || reason != AnchorVerificationGraphUnverifiable {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationGraphUnverifiable)
+		}
+	})
+
+	t.Run("nil graphAnchorMember with a valid ClickHouse read still fails closed", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), principal, scope, binding, contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe, nil)
+		if valid || reason != AnchorVerificationGraphUnverifiable {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q) -- a nil graph dependency is NOT \"trust ClickHouse alone\"", valid, reason, AnchorVerificationGraphUnverifiable)
 		}
 	})
 }
