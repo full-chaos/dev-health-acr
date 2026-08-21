@@ -2384,6 +2384,50 @@ func buildAnchorTermIndex(ctx context.Context, identityUniverse graphrank.Identi
 	return index, nil
 }
 
+// errAnchorKindNotEnumerable/errAnchorTermNotFound (CHAOS-3742 stop-order
+// closure argument, 2026-08-21, third round of the same defect class):
+// seedAnchorNegativeResult's caller used to feed EVERY failure here through
+// contextFabricRejectionClass -- an ENGINE-error classifier (its own
+// sentinel list is context.Canceled/ErrModelOutput/etc., internal/
+// contextfabric errors) applied to a plain, harness-native fmt.Errorf that
+// matches NONE of those sentinels, so it fell to "unclassified" every
+// single time regardless of WHICH of three structurally different causes
+// actually fired: (1) the negative's kind is outside this deployment's
+// enumerable set (project/repository/team only -- a documented "scope
+// fact, not a bug", ~25/45 subject_anchor cases every run), (2) the kind
+// IS enumerable but no row carries a usable term for this specific
+// canonical_id (a real, rare gap), or (3) Validate/Save genuinely failed.
+// All three produced the IDENTICAL "unclassified" string, which is exactly
+// why the flag-wiring bug (run 3) and the stale-collision bug (run 3, same
+// run) and the routine 25/45 structural exclusion (run 3-prime) were
+// indistinguishable from the artifact alone -- every prior diagnosis
+// required a live code+DB archaeology pass to tell them apart. These two
+// sentinels close that: (1) and (2) now get distinct, closed-vocabulary
+// reasons; only a genuine Validate/Save failure still falls to
+// "unclassified", where it belongs (rare and actually worth chasing).
+var (
+	errAnchorKindNotEnumerable = errors.New("anchor kind not enumerable by this deployment's identity universe")
+	errAnchorTermNotFound      = errors.New("no usable alias/label term found for this negative's canonical_id")
+)
+
+// anchorSeedRejectionClass classifies a seedAnchorNegativeResult error into
+// the closed vocabulary above -- the harness-native counterpart to
+// contextFabricRejectionClass (that function's own sentinels are all
+// engine/context errors and correctly never match anything this function
+// returns).
+func anchorSeedRejectionClass(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errAnchorKindNotEnumerable):
+		return "kind_not_enumerable"
+	case errors.Is(err, errAnchorTermNotFound):
+		return "term_not_found"
+	default:
+		return "unclassified"
+	}
+}
+
 // seedAnchorNegativeResult is the harness-seeded STORED-RESULT constructor
 // (design brief §5 head, per-member constructors): seeding is scaffolding
 // for the offer's ORIGIN only -- everything downstream (receipt validation,
@@ -2403,9 +2447,12 @@ func buildAnchorTermIndex(ctx context.Context, identityUniverse graphrank.Identi
 // ArmInvalidReason for this case (the existing, already-honest fallback),
 // never a fabricated hash.
 func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver, principal storage.Principal, index int, entry twoTurnOracleEntry, receiptID string, terms anchorTermIndex, runToken string) (resultID string, err error) {
+	if !enumerableAnchorKinds(terms)[entry.NegativeKind] {
+		return "", fmt.Errorf("%w: kind=%s", errAnchorKindNotEnumerable, entry.NegativeKind)
+	}
 	term, ok := terms[anchorTermIndexKey(entry.NegativeKind, entry.NegativeAnchorCanonicalID)]
 	if !ok {
-		return "", fmt.Errorf("no usable alias/label term found in the live identity universe for negative anchor kind=%s canonical_id=%s -- cannot construct a redemption-passing hash", entry.NegativeKind, entry.NegativeAnchorCanonicalID)
+		return "", fmt.Errorf("%w: kind=%s canonical_id=%s", errAnchorTermNotFound, entry.NegativeKind, entry.NegativeAnchorCanonicalID)
 	}
 	// result_id is run-scoped (runToken, this test's own per-invocation
 	// random token -- see its own doc comment) -- acr.context_fabric_
@@ -2484,6 +2531,79 @@ func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver
 // (explicit field -> receipt-bound offer on the SAME response, the
 // production upgrade path) to mint the negative offer, then redeems it on
 // a third call.
+// preflightAnchorCausalChain (CHAOS-3742 stop-order closure argument,
+// 2026-08-21, third round of the same defect class -- team-lead ruling:
+// "the invariant gets measured at run start from now on, not predicted
+// from merged fixes"): a cheap, single-case, fail-fast proof that the
+// FULL anchor causal chain is live BEFORE a multi-hour run is allowed to
+// start -- flag reached config.Load(), a seeded negative is actually
+// redeemable, and that redemption lands as a receipt-sourced applied
+// ConfirmedStructure entry (the same observable event proves "a seeded
+// negative is redeemable" and "an anchor offer can apply" -- redemption
+// IS an offer being applied; see the diagnosis report's own note on why
+// this is one check, not two, and why it is NOT scoped to the positive
+// arm's independent, pre-existing, separately-ticketed offer_miss issue).
+//
+// This exists because RUN 3 and RUN 3-prime both burned hours of
+// wall-clock/token cost before the SAME class of defect (something in the
+// anchor causal chain was dead) was discovered from full-run evidence.
+// Every one of those failure modes -- the flag not reaching config, the
+// stale-collision seeding bug, and a genuinely broken redemption path --
+// is detectable from ONE case, in seconds, without running the other 49.
+//
+// requireAnchorFlag should be true whenever the caller requested the flag
+// (ACR_TEST_TRIAL_ANCHOR_MEMBERSHIP_ENABLED set) -- refusing to spend
+// hours measuring a flag that silently never took effect is the whole
+// point of this gate (see item 1 of the RUN 3 diagnosis).
+func preflightAnchorCausalChain(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, cfg config.Config, requireAnchorFlag bool, anchorTerms anchorTermIndex, annex twoTurnOracleAnnex, corpus []trialCase, timeout time.Duration, runToken string) error {
+	if requireAnchorFlag && !cfg.AnchorMembershipOffersEnabled {
+		return errors.New("preflight: ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED was requested but did not reach config.Load() -- refusing to start a multi-hour run measuring a flag that is not actually active")
+	}
+
+	enumerable := enumerableAnchorKinds(anchorTerms)
+	var probe *twoTurnOracleEntry
+	for i := range annex.Entries {
+		e := annex.Entries[i]
+		if e.Member != string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
+			continue
+		}
+		if !enumerable[e.NegativeKind] {
+			continue
+		}
+		if _, ok := anchorTerms[anchorTermIndexKey(e.NegativeKind, e.NegativeAnchorCanonicalID)]; !ok {
+			continue
+		}
+		probe = &e
+		break
+	}
+	if probe == nil {
+		return errors.New("preflight: no enumerable-kind, term-available subject_anchor case exists in this annex/identity-universe combination -- the anchor causal chain cannot be exercised at all this run")
+	}
+
+	receiptID := contractsv1.ContextFabricAnchorOptionReceiptPrefix + "preflightprobe000000000000"
+	resultID, seedErr := seedAnchorNegativeResult(ctx, store, principal, probe.Index, *probe, receiptID, anchorTerms, "preflight-"+runToken)
+	if seedErr != nil {
+		return fmt.Errorf("preflight: seeding a known-good anchor negative (case %d) failed: %s -- the anchor arm cannot function this run", probe.Index, anchorSeedRejectionClass(seedErr))
+	}
+
+	req := twoTurnRequest(probe.Index, corpus[probe.Index], "preflightanchorredeem")
+	setTwoTurnReceipt(&req, probe.Member, contractsv1.ContextFabricBoundSubjectReceipt{ResultID: resultID, ReceiptID: receiptID})
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	result, investigateErr := investigator.Investigate(callCtx, principal, req)
+	cancel()
+	if investigateErr != nil {
+		return fmt.Errorf("preflight: redeeming the probe anchor negative (case %d) failed: %s", probe.Index, contextFabricRejectionClass(investigateErr))
+	}
+	for _, cs := range result.ConfirmedStructure {
+		if cs.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor &&
+			cs.Disposition == contractsv1.ContextFabricStructureDispositionApplied &&
+			cs.Source == contractsv1.ContextFabricStructureSourceReceipt {
+			return nil // causal chain proven live: flag on, seed redeemable, offer applied
+		}
+	}
+	return fmt.Errorf("preflight: the probe anchor redemption (case %d) did not apply (no receipt-sourced ConfirmedStructure entry for subject_anchor) -- the anchor causal chain is not live this run", probe.Index)
+}
+
 func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, anchorTerms anchorTermIndex, runToken string) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmConfirmedWrong)}
 
@@ -2493,7 +2613,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		var err error
 		offerResultID, err = seedAnchorNegativeResult(ctx, store, principal, index, entry, receiptID, anchorTerms, runToken)
 		if err != nil {
-			res.ArmInvalidReason = "harness-seeded anchor negative could not be made redeemable: " + contextFabricRejectionClass(err)
+			res.ArmInvalidReason = "harness-seeded anchor negative could not be made redeemable: " + anchorSeedRejectionClass(err)
 			return res
 		}
 	} else {
@@ -2795,6 +2915,18 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	t.Logf("anchor term index: %d rows indexed", len(anchorTerms))
 
 	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
+
+	// preflightAnchorCausalChain (CHAOS-3742 stop-order closure argument,
+	// 2026-08-21): fail fast, in one case, before spending hours on the
+	// other 49 -- see that function's own doc comment for the full
+	// rationale. requireAnchorFlag=true whenever the operator asked for
+	// the flag; a flag that was requested but never reached config.Load()
+	// is exactly RUN 3's own root cause, and this run must not silently
+	// repeat it.
+	if err := preflightAnchorCausalChain(ctx, investigator, store, principal, cfg,
+		os.Getenv("ACR_TEST_TRIAL_ANCHOR_MEMBERSHIP_ENABLED") != "", anchorTerms, annex, corpus, caseTimeout, runToken); err != nil {
+		t.Fatalf("%v", err)
+	}
 
 	// Transport label reflects which transport actually ran (codex round-1
 	// finding #10: hard-coding "real_api" while a file-exchange runtime is
