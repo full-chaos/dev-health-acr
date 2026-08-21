@@ -1122,7 +1122,18 @@ type twoTurnReport struct {
 	// finding #4: a global scalar lets one member's success mask another
 	// member's permanently-unredeemable designated negative).
 	ConfirmedWrongRedeemedCount map[string]int `json:"confirmed_wrong_redeemed_committable_count"`
-	AntiVacuityValid            bool           `json:"anti_vacuity_valid"`
+	// ApplicableMembers (CHAOS-4033 parallel-shard support) is the sorted
+	// set backing THIS process's own AntiVacuityValid below -- every member
+	// this process's own entries designated at least one committable
+	// negative for. Stored (not just derived-and-discarded) so a sharded
+	// run's merge step can recompute anti-vacuity over the UNION of
+	// shards' entries: a shard sharded by corpus case can legitimately see
+	// zero cases for a member the corpus assigns to a different shard, so
+	// per-shard AntiVacuityValid is not the authoritative signal for a
+	// parallel run -- the merge of ApplicableMembers and
+	// ConfirmedWrongRedeemedCount across every shard is.
+	ApplicableMembers []string `json:"applicable_members"`
+	AntiVacuityValid  bool     `json:"anti_vacuity_valid"`
 	// AnchorAntiVacuityDenominator/AnchorNonEnumerableKindExcludedCount
 	// (orchestrator ruling 2026-08-20): subject_anchor's anti-vacuity
 	// requirement is scoped to negatives whose kind the live identity
@@ -2454,11 +2465,53 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		ConfirmedWrongRedeemedCount: map[string]int{},
 	}
 
-	// ACR_TEST_TRIAL_LIMIT bounds how many annex entries this run processes
-	// (codex round-1 finding #11: run-two-turn.sh already exports this, but
-	// nothing read it). Mirrors TestGenerativeTrialCorpus's own limit
-	// semantics: cap, never reorder.
+	// ACR_TEST_TRIAL_SHARD_COUNT/ACR_TEST_TRIAL_SHARD_INDEX (CHAOS-4033):
+	// split annex.Entries across N independent processes, one per isolated
+	// environment, so the CASE axis parallelizes safely. This is
+	// deliberately NOT arm-level parallelism: the four twoTurnArm values
+	// run sequentially in-process for every entry and have real same-case
+	// data dependencies (confirmed_wrong reads back a result positive
+	// wrote via seedAnchorNegativeResult; mutation's
+	// stale_superseded_offer probe needs positive's redeemed offer from
+	// the SAME entry) -- there is no per-arm invocation knob to isolate,
+	// and building one would mean re-running turn 1 independently per arm
+	// or serializing result state across process boundaries. Corpus
+	// entries, by contrast, are independent of each other once each
+	// isolated environment gets its own fresh org/DB.
+	//
+	// Round-robin by POSITION in annex.Entries (not by entry.Index, which
+	// can already be a non-contiguous corpus index) so shards stay
+	// balanced regardless of how entries cluster in the annex. Applied
+	// BEFORE ACR_TEST_TRIAL_LIMIT below so a limited dry run bounds EACH
+	// shard independently, not the pre-shard total.
 	entries := annex.Entries
+	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT"); raw != "" {
+		shardCount, cerr := strconv.Atoi(raw)
+		if cerr != nil || shardCount <= 0 {
+			t.Fatalf("ACR_TEST_TRIAL_SHARD_COUNT must be a positive integer, got %q", raw)
+		}
+		indexRaw := requireEnv(t, "ACR_TEST_TRIAL_SHARD_INDEX")
+		shardIndex, ierr := strconv.Atoi(indexRaw)
+		if ierr != nil || shardIndex < 0 || shardIndex >= shardCount {
+			t.Fatalf("ACR_TEST_TRIAL_SHARD_INDEX must be an integer in [0, %d), got %q", shardCount, indexRaw)
+		}
+		sharded := make([]twoTurnOracleEntry, 0, (len(entries)+shardCount-1)/shardCount)
+		for i, entry := range entries {
+			if i%shardCount == shardIndex {
+				sharded = append(sharded, entry)
+			}
+		}
+		entries = sharded
+		report.Provenance.ExecutionShape = "parallel"
+		report.Provenance.ShardIndex = &shardIndex
+		report.Provenance.ShardCount = &shardCount
+	}
+
+	// ACR_TEST_TRIAL_LIMIT bounds how many annex entries THIS PROCESS'S
+	// share of the run (the whole annex when unsharded, or this shard's
+	// own slice above) processes (codex round-1 finding #11: run-two-turn.sh
+	// already exports this, but nothing read it). Mirrors
+	// TestGenerativeTrialCorpus's own limit semantics: cap, never reorder.
 	if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
 		limit, lerr := strconv.Atoi(raw)
 		if lerr != nil || limit <= 0 {
@@ -2740,10 +2793,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// least one.
 	var unsatisfiedMembers []string
 	for member := range applicableMembers {
+		report.ApplicableMembers = append(report.ApplicableMembers, member)
 		if report.ConfirmedWrongRedeemedCount[member] < 1 {
 			unsatisfiedMembers = append(unsatisfiedMembers, member)
 		}
 	}
+	sort.Strings(report.ApplicableMembers)
 	sort.Strings(unsatisfiedMembers)
 	report.AntiVacuityValid = len(applicableMembers) > 0 && len(unsatisfiedMembers) == 0
 

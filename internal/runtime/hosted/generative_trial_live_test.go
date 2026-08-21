@@ -1320,6 +1320,19 @@ type trialProvenance struct {
 	SourceDirty      bool   `json:"source_dirty"`
 	SourceDiffDigest string `json:"source_diff_digest,omitempty"`
 	RunStartedAt     string `json:"run_started_at"`
+	// ExecutionShape/ShardIndex/ShardCount (CHAOS-4033) mark whether this
+	// artifact came from the standard single-process run ("sequential",
+	// the zero value -- every report before this field existed and every
+	// run that does not shard) or from one shard of a corpus split across
+	// N isolated per-shard environments ("parallel"). A merge-step-authored
+	// artifact combining every shard is ALSO "parallel", never silently
+	// relabeled "sequential" -- see the methodology guard in
+	// scripts/trial/run-two-turn-parallel.sh: a parallel-shape artifact
+	// must never substitute for a ratified sequential pair without its own
+	// validation-run comparison on the same corpus/SHA.
+	ExecutionShape string `json:"execution_shape,omitempty"`
+	ShardIndex     *int   `json:"shard_index,omitempty"`
+	ShardCount     *int   `json:"shard_count,omitempty"`
 	// ControlsContinue (CHAOS-3858 scorecard mode) records whether this run
 	// was launched with ACR_TEST_TRIAL_CONTROLS_CONTINUE=true -- i.e.
 	// whether a control-violation outcome recorded and continued instead of
