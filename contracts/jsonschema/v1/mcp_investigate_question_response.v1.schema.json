@@ -3186,7 +3186,7 @@
           ]
         },
         "WindowConfirmationMode": {
-          "description": "CHAOS-3900 W2, design brief section 4/DW3: closed vocabulary for how a caller wants an INFERRED (non-confirmed) evidence window disclosed. Both modes carry the same WindowClarification/EffectiveEvidenceWindow data; the mode only controls whether the disclosure is also nudged through Warnings. The empty string is the caller's own 'not set' state, mapped to headless by the engine.",
+          "description": "CHAOS-3900 W2, design brief section 4/DW3: closed vocabulary for how a caller wants an INFERRED (non-confirmed) evidence window disclosed. Both modes carry the same WindowClarification/EffectiveEvidenceWindow data; the mode only controls whether the disclosure is also nudged through Warnings. The empty string is the caller's own 'not set' state, mapped to headless by the engine. CHAOS-4040 (sol-max ruling 2026-08-21): every inferred window is gated out of decisive terminals regardless of this field, so the mode selects the nudge sentence on that confirmation-required terminal, not between a nudge and an otherwise-decisive answer.",
           "type": "string",
           "enum": [
             "",

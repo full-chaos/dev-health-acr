@@ -27,9 +27,11 @@ import (
 // no fresh WindowClarification is minted for a NON-veto ambiguous window
 // (that clarification-offer machinery, EvidenceWindow-on-projection,
 // WindowConfirmationMode, and the MCP explicit-value same-response
-// receipt-bound echo are W2/W2b), and §3/W4's window-insensitivity
-// decisive-gating consumes Provenance but is not implemented here -- W1
-// only sets Provenance correctly for W4 to consume later.
+// receipt-bound echo are W2/W2b). §3/W4's window-insensitivity
+// decisive-gating, which consumes Provenance, WAS added to this file later
+// by CHAOS-4040 (sol-max ruling 2026-08-21, windowConfirmationRequiredResult
+// below) -- W1 itself still only sets Provenance correctly; it does not
+// gate on it.
 
 // WindowInferenceVersion (CHAOS-3900 W1) is the ReuseKey.WindowInferenceVersion
 // conjunctive dimension's own deployment-current value -- composition wires

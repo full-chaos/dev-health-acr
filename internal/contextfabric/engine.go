@@ -939,9 +939,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	// CHAOS-3900 W2 (design brief §4): the fresh disclosure W1's own scope
 	// note deferred -- nil unless the effective window is genuinely
-	// inferred. WindowConfirmationMode==nudge additionally surfaces it
-	// through Warnings; headless (the DW3 default) still carries the SAME
-	// structured data, never blocking or reshaping the response.
+	// inferred. CHAOS-4040 (sol-max ruling 2026-08-21) makes this call
+	// permanently a no-op ON THIS DECISIVE PATH: composeWindowClarification
+	// only returns non-nil for Provenance==inferred_default, and the gate
+	// above (windowConfirmationRequiredResult) already intercepts every
+	// such window before this line -- see result.EffectiveEvidenceWindow's
+	// own assignment comment above ("every path reaching this line carries
+	// a confirmed/stated window or none at all"). Left in place rather
+	// than removed: it stays correct (nil) if that invariant ever changes,
+	// and matches windowConfirmationRequiredResult's own identical call
+	// for the SAME data, on the gate terminal instead of this one.
 	result.WindowClarification = composeWindowClarification(result.EffectiveEvidenceWindow, result.ResultID, e.now())
 	if result.WindowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
