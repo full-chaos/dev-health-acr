@@ -1669,6 +1669,74 @@ func TestNormalizedDecisionFingerprint(t *testing.T) {
 	}
 }
 
+// TestWindowBoundsAgree covers windowBoundsAgree's own doc comment cases
+// (team-lead verification request, 2026-08-21): all_time (nil/nil) must
+// agree with ZERO tolerance -- checked here by passing tolerance=0, so a
+// pass proves the all_time path never depends on the drift bound at all,
+// only bounded bands do.
+func TestWindowBoundsAgree(t *testing.T) {
+	t.Parallel()
+	confirmed := contractsv1.ContextFabricWindowClarificationConfirmed
+	allTime := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: "all_time", Provenance: confirmed},
+	}
+	t2 := time.Unix(2000, 0)
+	t2Plus5m := t2.Add(5 * time.Minute)
+	t2Plus2h := t2.Add(2 * time.Hour)
+	bounded := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: "trailing_90d", End: &t2, Provenance: confirmed},
+	}
+	boundedDriftedWithin := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: "trailing_90d", End: &t2Plus5m, Provenance: confirmed},
+	}
+	boundedDriftedBeyond := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: "trailing_90d", End: &t2Plus2h, Provenance: confirmed},
+	}
+
+	if !windowBoundsAgree(allTime, allTime, 0) {
+		t.Error("windowBoundsAgree(all_time, all_time, tolerance=0) = false, want true -- nil/nil must agree exactly, never via the drift tolerance")
+	}
+	if windowBoundsAgree(allTime, bounded, 24*time.Hour) {
+		t.Error("windowBoundsAgree(all_time, bounded) = true, want false -- one nil End and one non-nil is a genuinely different commitment, not a drift question")
+	}
+	if !windowBoundsAgree(bounded, boundedDriftedWithin, 10*time.Minute) {
+		t.Error("windowBoundsAgree(bounded, bounded+5m, tolerance=10m) = false, want true -- within tolerance")
+	}
+	if windowBoundsAgree(bounded, boundedDriftedBeyond, 10*time.Minute) {
+		t.Error("windowBoundsAgree(bounded, bounded+2h, tolerance=10m) = true, want false -- beyond tolerance")
+	}
+	noWindow := contractsv1.ContextFabricInvestigationResult{}
+	if windowBoundsAgree(noWindow, allTime, 24*time.Hour) {
+		t.Error("windowBoundsAgree(no EffectiveEvidenceWindow, all_time) = true, want false")
+	}
+}
+
+func TestWindowConfirmedAsBand(t *testing.T) {
+	t.Parallel()
+	confirmed := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{
+			RelativeID: "all_time", Provenance: contractsv1.ContextFabricWindowClarificationConfirmed,
+		},
+	}
+	if !windowConfirmedAsBand(confirmed, "all_time") {
+		t.Error("windowConfirmedAsBand(confirmed all_time, \"all_time\") = false, want true")
+	}
+	if windowConfirmedAsBand(confirmed, "trailing_90d") {
+		t.Error("windowConfirmedAsBand(confirmed all_time, \"trailing_90d\") = true, want false -- wrong band")
+	}
+	inferred := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{
+			RelativeID: "all_time", Provenance: contractsv1.ContextFabricWindowInferredDefault,
+		},
+	}
+	if windowConfirmedAsBand(inferred, "all_time") {
+		t.Error("windowConfirmedAsBand(inferred_default all_time, \"all_time\") = true, want false -- not receipt-confirmed")
+	}
+	if windowConfirmedAsBand(contractsv1.ContextFabricInvestigationResult{}, "all_time") {
+		t.Error("windowConfirmedAsBand(no EffectiveEvidenceWindow, \"all_time\") = true, want false")
+	}
+}
+
 // TestTwoTurnTraceCapture_KindInsensitivityResult pins the CHAOS-4039
 // trace-reading contract: ShadowKindInsensitivityEvaluated gates whether
 // the outcome is reported at all, mirroring resolve.go's own zero-value
@@ -1829,6 +1897,74 @@ func setTwoTurnReceipt(req *contractsv1.ContextFabricInvestigationRequest, membe
 // A pair failing either check is PairInvalid, never silently classified --
 // see this function's own PairInvalid assignment below for why that
 // classification is skipped entirely rather than defaulted to "unjustified".
+//
+// windowConfirmedAsBand reports whether r landed a receipt-confirmed
+// evidence window at exactly band -- never inferred from a bare successful
+// call (a stale or superseded receipt echo would not necessarily surface
+// as a Go error).
+func windowConfirmedAsBand(r contractsv1.ContextFabricInvestigationResult, band string) bool {
+	return r.EffectiveEvidenceWindow != nil &&
+		r.EffectiveEvidenceWindow.Provenance == contractsv1.ContextFabricWindowClarificationConfirmed &&
+		string(r.EffectiveEvidenceWindow.RelativeID) == band
+}
+
+// windowBoundsAgree reports whether a and b's own EffectiveEvidenceWindow
+// bounds represent the SAME window (codex adversarial review, 2026-08-21,
+// round 2, HIGH -- confirmed against window.go's own
+// composeWindowClarification/relativeWindowBounds): two INDEPENDENT setup
+// calls necessarily land at two DIFFERENT wall-clock instants --
+// composeWindowClarification always recomputes a band's Start/End fresh
+// from the engine's live now() for every call, with NO request-level way
+// to pin an explicit value (deriveRequestedWindow only uses caller-supplied
+// Start/End as a SKEW-TOLERANT sanity check against its own fresh
+// derivation, never as an override) -- so byte-identical bounds across two
+// separate Investigate() calls are not obtainable through the existing
+// production request surface at all, only same-RelativeID bounds that
+// differ by however long the intervening call(s) took.
+//
+// tolerance accepts that drift explicitly rather than silently: the
+// caller passes the same per-call timeout already in scope (no single call
+// can take longer before erroring), which is a rounding error against a
+// 30/90/365-day window -- a few minutes' difference in where "trailing 90
+// days" starts cannot plausibly move evidence across the window edge in a
+// way that would explain a classification difference between the two
+// legs, so tolerating it does not weaken the pair's isolation property in
+// practice. What this still catches (a stale or superseded receipt echo,
+// or a wrong-band redemption) is a GROSS mismatch: no confirmation at all,
+// a different RelativeID, or a wrong-direction multi-day-scale drift.
+//
+// all_time (codex adversarial review, 2026-08-21, round 3, HIGH --
+// confirmed against the ratified annex's own frozen data: its positive
+// window band IS all_time for all 50 corpus cases) is compared with ZERO
+// tolerance, never the drift bound above: RelativeWindowAllTime carries no
+// Start/End at all (deriveRequestedWindow's own early-return, window.go),
+// by design, on EVERY call -- nil on both sides means the two legs agree
+// EXACTLY, not that either failed to confirm a window. See
+// TestWindowBoundsAgree for the all_time/bounded/mismatched-shape cases
+// this function must get right, and team-lead's 2026-08-21 verification
+// request (this tolerance must never reach canonicalInterpretationHash/
+// normalizedDecisionFingerprint's own comparison -- it doesn't: neither
+// function references EffectiveEvidenceWindow/Start/End at all).
+func windowBoundsAgree(a, b contractsv1.ContextFabricInvestigationResult, tolerance time.Duration) bool {
+	if a.EffectiveEvidenceWindow == nil || b.EffectiveEvidenceWindow == nil {
+		return false
+	}
+	aEnd, bEnd := a.EffectiveEvidenceWindow.End, b.EffectiveEvidenceWindow.End
+	if aEnd == nil && bEnd == nil {
+		return true
+	}
+	if aEnd == nil || bEnd == nil {
+		// One leg landed a bounded window, the other all_time -- genuinely
+		// different commitments, not a drift question.
+		return false
+	}
+	drift := aEnd.Sub(*bEnd)
+	if drift < 0 {
+		drift = -drift
+	}
+	return drift <= tolerance
+}
+
 func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmInferredTier)}
 	req := twoTurnRequest(index, tc, "inferredtier")
@@ -2061,46 +2197,27 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		// or hinted Investigate() call runs (see below), specifically to
 		// keep this drift as small as achievable rather than merely
 		// tolerated.
-		windowDriftTolerance := timeout
-		windowConfirmedAsBand := func(r contractsv1.ContextFabricInvestigationResult) bool {
-			return r.EffectiveEvidenceWindow != nil &&
-				r.EffectiveEvidenceWindow.Provenance == contractsv1.ContextFabricWindowClarificationConfirmed &&
-				string(r.EffectiveEvidenceWindow.RelativeID) == windowBand
-		}
-		windowBoundsAgree := func(a, b contractsv1.ContextFabricInvestigationResult) bool {
-			if a.EffectiveEvidenceWindow == nil || b.EffectiveEvidenceWindow == nil {
-				return false
-			}
-			aEnd, bEnd := a.EffectiveEvidenceWindow.End, b.EffectiveEvidenceWindow.End
-			// all_time (codex adversarial review, 2026-08-21, round 3, HIGH
-			// -- confirmed against the ratified annex's own frozen data:
-			// its positive window band IS all_time): RelativeWindowAllTime
-			// carries no Start/End at all (deriveRequestedWindow's own
-			// early-return, window.go), by design, on EVERY call -- nil on
-			// both sides here means the two legs agree exactly, not that
-			// either failed to confirm a window.
-			if aEnd == nil && bEnd == nil {
-				return true
-			}
-			if aEnd == nil || bEnd == nil {
-				// One leg landed a bounded window, the other all_time --
-				// genuinely different commitments, not a drift question.
-				return false
-			}
-			drift := aEnd.Sub(*bEnd)
-			if drift < 0 {
-				drift = -drift
-			}
-			return drift <= windowDriftTolerance
-		}
 		// pairInvalid (team-lead ruling, widening sol's own list): errors
 		// are handled above (return before this point); what remains to
 		// check here is exactly the preconditions that are NOT guaranteed
 		// by this function's own single-process, same-investigator
 		// construction -- see this function's own doc comment for the full
 		// precondition list and why the rest are held by construction.
+		// windowConfirmedAsBand/windowBoundsAgree are standalone (below,
+		// unit-tested by TestWindowBoundsAgree) rather than closures, so
+		// the all_time-vs-drift-tolerance split team-lead asked to verify
+		// (2026-08-21: "confirm the drift tolerance does NOT leak into the
+		// interpretation-hash/decision-fingerprint comparison for the
+		// all_time path") has a test surface independent of a live run.
+		// It doesn't: canonicalInterpretationHash/normalizedDecisionFingerprint
+		// (above) serialize Interpretation.TimeContext (the question's own
+		// temporal AXIS framing) and the decision/candidate/commit fields
+		// respectively -- neither references EffectiveEvidenceWindow, Start,
+		// or End at all, so this tolerance cannot reach either hash by
+		// construction, not merely by observation.
 		pairInvalid := baseline.Reused || result.Reused || baseline.Versions != result.Versions ||
-			!windowConfirmedAsBand(baseline) || !windowConfirmedAsBand(result) || !windowBoundsAgree(baseline, result)
+			!windowConfirmedAsBand(baseline, windowBand) || !windowConfirmedAsBand(result, windowBand) ||
+			!windowBoundsAgree(baseline, result, timeout)
 		if pairInvalid {
 			// Classification SKIPPED entirely, not defaulted to
 			// "unjustified": a reused or drifted pair proves nothing about
