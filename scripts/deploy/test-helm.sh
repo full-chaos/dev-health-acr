@@ -533,6 +533,10 @@ pass "secret-projection: custom Secret keys map to canonical projected filenames
 # when enabled it must render a non-empty digest-pinned StatefulSet + Service
 # with the compose service's GRAPH.QUERY health vocabulary, mount the image's
 # real data path, and stay under the default-deny NetworkPolicy posture.
+# Literals like acr-test-falkordb and 6379 are intentional: this gate asserts
+# THIS harness's fixed release name and the chart's default (compose-parity)
+# port, the same convention as gate 13's hard-coded approval URL -- it does
+# not claim fullnameOverride/service.port overrides are invalid.
 if grep -qE '^\s*kind:\s*StatefulSet\s*$' "$rendered" || grep -q 'component: falkordb' "$rendered"; then
   fail_gate "falkordb-workload: default render must not contain the FalkorDB workload"
 fi
@@ -545,10 +549,23 @@ falkordb_render="$(render \
 
 # Doc-scoped extraction: the assertions below must hold inside the specific
 # rendered document, not anywhere in the concatenated output (a comment or an
-# unrelated doc must not satisfy them).
+# unrelated doc must not satisfy them). Line-based document accumulation (a
+# line that is exactly "---" separates documents) rather than a regex RS,
+# which POSIX awk does not guarantee.
+extract_doc() {
+  # extract_doc <kind> <must-match-regex> [must-not-match-regex]
+  awk -v kind="$1" -v want="$2" -v veto="${3:-}" '
+    function flush() {
+      if (doc ~ "\nkind: "kind"\n" && doc ~ want && (veto == "" || doc !~ veto)) { printf "%s", doc; exit }
+      doc = ""
+    }
+    /^---$/ { flush(); next }
+    { doc = doc $0 "\n" }
+    END { flush() }
+  '
+}
 extract_falkordb_doc() {
-  local kind="$1"
-  awk -v kind="$kind" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: "kind"\n" && /component: falkordb/ {print; exit}' <<<"$falkordb_render"
+  extract_doc "$1" 'component: falkordb' <<<"$falkordb_render"
 }
 
 falkordb_sts="$(extract_falkordb_doc StatefulSet)"
@@ -582,7 +599,7 @@ grep -qE '^\s+egress: \[\]\s*$' <<<"$falkordb_np" \
   || fail_gate "falkordb-workload: falkordb NetworkPolicy must deny all egress (egress: [])"
 
 # The falkor egress rule must appear on the API policy when addr is set.
-falkordb_api_np="$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: NetworkPolicy\n" && /component: api/ && !/component: falkordb/ {print; exit}' <<<"$falkordb_render")"
+falkordb_api_np="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <<<"$falkordb_render")"
 grep -qE '^\s+port: 6379\s*$' <<<"$falkordb_api_np" \
   || fail_gate "falkordb-workload: API NetworkPolicy must gain falkor egress port 6379 when contextFabric.falkor.addr is set"
 
@@ -591,7 +608,7 @@ grep -qE '^\s+port: 6379\s*$' <<<"$falkordb_api_np" \
 falkordb_override="$(render \
   --set contextFabric.falkordb.enabled=true \
   --set-json 'contextFabric.falkordb.podLabels={"app.kubernetes.io/component":"bogus"}')"
-falkordb_override_sts="$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: StatefulSet\n" && /component: falkordb/ {print; exit}' <<<"$falkordb_override")"
+falkordb_override_sts="$(extract_doc StatefulSet 'component: falkordb' <<<"$falkordb_override")"
 [[ "$(grep -E '^\s+app.kubernetes.io/component:' <<<"$falkordb_override_sts" | tail -1 | awk '{print $2}')" == "falkordb" ]] \
   || fail_gate "falkordb-workload: podLabels must not be able to override the component selector label"
 pass "falkordb-workload: enabled render has digest-pinned StatefulSet, Service, PVC, GRAPH.QUERY readiness, scoped NetworkPolicies"
