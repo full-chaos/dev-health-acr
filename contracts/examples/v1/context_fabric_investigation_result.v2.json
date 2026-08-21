@@ -1,0 +1,90 @@
+{
+  "schema_version": "context_fabric_investigation_result.v2",
+  "result_id": "result_87654321",
+  "request_id": "request_87654321",
+  "generated_at": "2026-08-21T04:00:00Z",
+  "status": "clarification_required",
+  "question": "Is widget-service healthy?",
+  "interpretation": {
+    "shape": "single_subject",
+    "requested_judgment": "status",
+    "subject_terms": [
+      "widget-service"
+    ],
+    "comparison_terms": [],
+    "time_context": {
+      "axis": "current"
+    },
+    "fact_requirements": [
+      {
+        "kind": "status",
+        "subjects": []
+      }
+    ],
+    "clarification_needed": true,
+    "clarification_reason": "The term \"widget-service\" names more than one repository in the identity universe."
+  },
+  "subject_resolution": {
+    "candidates": [],
+    "committed": [],
+    "clarification_prompt": "Multiple repositories claim the term \"widget-service\". Which one did you mean?"
+  },
+  "direct_judgment": "",
+  "current_state": "",
+  "strongest_pressures": [],
+  "drivers": [],
+  "remaining_work": [],
+  "readiness_gaps": [],
+  "paths": [],
+  "conflicts": [],
+  "limitations": [
+    "The term \"widget-service\" names more than one repository; select which one this question is about."
+  ],
+  "evidence_ref_ids": [],
+  "claimed_facts": [],
+  "coverage": {
+    "sources": [],
+    "partial": false,
+    "degraded_reasons": []
+  },
+  "versions": {
+    "service_version": "0.2.0",
+    "contract_version": "context_fabric_investigation_result.v2",
+    "backend": "graph",
+    "backend_version": "v3",
+    "projection_version": "projection-v1",
+    "query_version": "query-v1",
+    "interpretation_version": "interpretation-v1",
+    "synthesis_version": "synthesis-v1",
+    "canonical_service_version": "ops-v1",
+    "model_identity": "openai-compatible/gpt-5-nano"
+  },
+  "deterministic_answer": "clarification_required: the term \"widget-service\" names more than one repository.",
+  "warnings": [],
+  "reused": false,
+  "structure_needs": {
+    "missing": [
+      "subject_anchor"
+    ],
+    "anchor_options": [
+      {
+        "receipt_id": "ancr_widgetsvc0001",
+        "option_id": "opt_widget_svc_repoa",
+        "label": "repoA",
+        "kind": "repository",
+        "canonical_id": "repository_widget_svc_a",
+        "matched_term_hash": "3d7230afdda8d5a6296073a5",
+        "offer_source": "engine"
+      },
+      {
+        "receipt_id": "ancr_widgetsvc0002",
+        "option_id": "opt_widget_svc_repob",
+        "label": "repoB",
+        "kind": "repository",
+        "canonical_id": "repository_widget_svc_b",
+        "matched_term_hash": "3d7230afdda8d5a6296073a5",
+        "offer_source": "engine"
+      }
+    ]
+  }
+}

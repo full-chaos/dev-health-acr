@@ -624,8 +624,39 @@ func (r ContextFabricInvestigationResult) ValidateStored() error {
 	return r.validate(contextFabricLegacyBounds)
 }
 
+// ValidateV2 enforces the CHAOS-4042 context_fabric_investigation_result.v2
+// contract on a result being produced or accepted -- identical to Validate()
+// in every field shape (see validateAgainstSchemaVersion), except
+// schema_version must equal ContextFabricInvestigationResultSchemaV2, not
+// the v1 constant. A result carrying the v1 schema_version is REJECTED here,
+// and a result carrying the v2 schema_version is REJECTED by Validate(): the
+// two entrypoints are deliberately never interchangeable, so nothing that
+// goes through the v1 path can ever admit v2 (membership) semantics, or vice
+// versa (the ruling's "a v1 offer must never acquire v2 membership
+// semantics" / "do not reinterpret old persisted v1 receipts").
+func (r ContextFabricInvestigationResult) ValidateV2() error {
+	return r.validateAgainstSchemaVersion(contextFabricWriteBounds, ContextFabricInvestigationResultSchemaV2)
+}
+
+// ValidateStoredV2 is ValidateV2's ValidateStored counterpart -- see
+// ValidateStored's own doc comment for the legacy-bounds rationale, which
+// applies identically here.
+func (r ContextFabricInvestigationResult) ValidateStoredV2() error {
+	return r.validateAgainstSchemaVersion(contextFabricLegacyBounds, ContextFabricInvestigationResultSchemaV2)
+}
+
 func (r ContextFabricInvestigationResult) validate(bounds contextFabricBounds) error {
-	if r.SchemaVersion != ContextFabricInvestigationResultSchema || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !boundedText(r.Question, 1, 8000, bounds) || !validInvestigationStatus(r.Status) {
+	return r.validateAgainstSchemaVersion(bounds, ContextFabricInvestigationResultSchema)
+}
+
+// validateAgainstSchemaVersion is the shared field-shape check both the v1
+// and v2 (CHAOS-4042) entrypoints run -- every field below is IDENTICAL
+// between the two majors (the ruling's "JSON fields may remain identical");
+// only the expected schema_version const differs, which is why this exists
+// as a parameter rather than two near-duplicate ~150-line functions that
+// could silently drift from each other.
+func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds contextFabricBounds, expectedSchemaVersion string) error {
+	if r.SchemaVersion != expectedSchemaVersion || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !boundedText(r.Question, 1, 8000, bounds) || !validInvestigationStatus(r.Status) {
 		return fmt.Errorf("result identity or status violates v1 bounds")
 	}
 	if err := r.Interpretation.validate(bounds); err != nil {

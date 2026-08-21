@@ -23,6 +23,12 @@ var AllSchemaVersions = []string{
 	ErrorSchema,
 	ContextFabricInvestigationRequestSchema,
 	ContextFabricInvestigationResultSchema,
+	// CHAOS-4042: the anchor membership-verify semantic major, reserved
+	// alongside v1 -- a result issued under this schema_version is only
+	// ever produced when the offer-generation/redemption wiring in the
+	// follow-up PR actually mints one; advertising it here now keeps a
+	// client's capability discovery ahead of that, not behind it.
+	ContextFabricInvestigationResultSchemaV2,
 	ContextFabricAnswerProjectionSchema,
 	ContextFabricProjectionBatchSchema,
 	ContextFabricOrgModelConfigSchema,

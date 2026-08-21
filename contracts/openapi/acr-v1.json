@@ -446,11 +446,18 @@
         },
         "responses": {
           "200": {
-            "description": "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match",
+            "description": "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+                  "oneOf": [
+                    {
+                      "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+                    },
+                    {
+                      "$ref": "../jsonschema/v1/context_fabric_investigation_result.v2.schema.json"
+                    }
+                  ]
                 }
               }
             }
@@ -527,7 +534,7 @@
             "name": "view",
             "in": "query",
             "required": false,
-            "description": "Representation to return. 'canonical' (default) returns the full context_fabric_investigation_result.v1. 'projection' returns the bounded context_fabric_answer_projection.v1, produced by the SAME projection code the MCP answer tool uses, so the two surfaces cannot disagree about what an answer says.",
+            "description": "Representation to return. 'canonical' (default) returns the full context_fabric_investigation_result.v1 or .v2 (CHAOS-4042). 'projection' returns the bounded context_fabric_answer_projection.v1, produced by the SAME projection code the MCP answer tool uses, so the two surfaces cannot disagree about what an answer says.",
             "schema": {
               "type": "string",
               "enum": [
@@ -572,13 +579,16 @@
         ],
         "responses": {
           "200": {
-            "description": "Persisted immutable investigation result. The canonical snapshot by default, or its bounded consumer projection when view=projection.",
+            "description": "Persisted immutable investigation result. The canonical snapshot by default (schema_version context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer -- see CHAOS-4042), or its bounded consumer projection when view=projection.",
             "content": {
               "application/json": {
                 "schema": {
                   "oneOf": [
                     {
                       "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+                    },
+                    {
+                      "$ref": "../jsonschema/v1/context_fabric_investigation_result.v2.schema.json"
                     },
                     {
                       "$ref": "../jsonschema/v1/context_fabric_answer_projection.v1.schema.json"

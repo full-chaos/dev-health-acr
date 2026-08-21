@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 08ce1dbcc27d5b4ed5142ab408b22e539b3df7dedd49940601d1374cc3ef06b2
+# canonical-content-sha256: 32a6fb609ada0922d3d48ece289e4ed53f7c5984b343dea6c2cf0b28a26234a5
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -322,8 +322,12 @@ paths:
           content:
             application/json:
               schema:
-                "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
-          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match"
+                oneOf:
+                  -
+                    "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+                  -
+                    "$ref": "../jsonschema/v1/context_fabric_investigation_result.v2.schema.json"
+          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042)."
         "400":
           "$ref": "#/components/responses/Error"
         "401":
@@ -371,7 +375,7 @@ paths:
             minLength: 8
             type: "string"
         -
-          description: "Representation to return. 'canonical' (default) returns the full context_fabric_investigation_result.v1. 'projection' returns the bounded context_fabric_answer_projection.v1, produced by the SAME projection code the MCP answer tool uses, so the two surfaces cannot disagree about what an answer says."
+          description: "Representation to return. 'canonical' (default) returns the full context_fabric_investigation_result.v1 or .v2 (CHAOS-4042). 'projection' returns the bounded context_fabric_answer_projection.v1, produced by the SAME projection code the MCP answer tool uses, so the two surfaces cannot disagree about what an answer says."
           in: "query"
           name: "view"
           required: false
@@ -416,8 +420,10 @@ paths:
                   -
                     "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
                   -
+                    "$ref": "../jsonschema/v1/context_fabric_investigation_result.v2.schema.json"
+                  -
                     "$ref": "../jsonschema/v1/context_fabric_answer_projection.v1.schema.json"
-          description: "Persisted immutable investigation result. The canonical snapshot by default, or its bounded consumer projection when view=projection."
+          description: "Persisted immutable investigation result. The canonical snapshot by default (schema_version context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer -- see CHAOS-4042), or its bounded consumer projection when view=projection."
         "400":
           "$ref": "#/components/responses/Error"
         "401":

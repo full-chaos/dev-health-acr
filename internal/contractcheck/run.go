@@ -65,6 +65,12 @@ var exampleSchemaPairs = map[string]string{
 	"context_fabric_projection_batch.v1.json":               "context_fabric_projection_batch.v1.schema.json",
 	"context_fabric_org_model_config.v1.json":               "context_fabric_org_model_config.v1.schema.json",
 	"context_fabric_org_model_config_write_request.v1.json": "context_fabric_org_model_config_write_request.v1.schema.json",
+	// CHAOS-4042: the anchor membership-verify semantic major. Wire fields
+	// are identical to v1's investigation result; only structure_needs'
+	// anchor_options meaning differs (membership, not unique-claimant) --
+	// see context_fabric_investigation_result.v2.schema.json's own
+	// description.
+	"context_fabric_investigation_result.v2.json": "context_fabric_investigation_result.v2.schema.json",
 }
 
 // Options configures repository contract validation.

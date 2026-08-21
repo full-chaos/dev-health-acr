@@ -37,6 +37,7 @@
   "error.v1",
   "context_fabric_investigation_request.v1",
   "context_fabric_investigation_result.v1",
+  "context_fabric_investigation_result.v2",
   "context_fabric_answer_projection.v1",
   "context_fabric_projection_batch.v1",
   "context_fabric_org_model_config.v1",

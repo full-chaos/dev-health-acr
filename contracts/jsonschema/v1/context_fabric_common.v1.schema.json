@@ -913,6 +913,65 @@
         "offer_source"
       ]
     },
+    "AnchorOptionV2": {
+      "description": "CHAOS-4042 (sol-max ruling): one server-offered anchor candidate under MEMBERSHIP-VERIFY semantics -- the claimant set is NOT required to be unique. Redemption re-verifies that (kind, canonical_id) remains a member of the term's complete claimant set at the pinned ResolvedGraphBinding epoch, matched by (matched_term_hash, kind, canonical_id) together, never id or hash alone. Wire shape is identical to v1 AnchorOption; only the meaning differs, which is why this is a distinct, permanently-separate contract rather than a v1 revision. Only ever carried on a result whose schema_version is context_fabric_investigation_result.v2 -- a v1 result (context_fabric_investigation_result.v1) uses AnchorOption and stays unique-claimant permanently.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^ancr_"
+        },
+        "option_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "kind": {
+          "$ref": "#/$defs/SubjectKind"
+        },
+        "canonical_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "matched_term_hash": {
+          "type": "string",
+          "minLength": 24,
+          "maxLength": 24,
+          "pattern": "^[0-9a-f]{24}$"
+        },
+        "offer_source": {
+          "$ref": "#/$defs/StructureOfferSource"
+        },
+        "prior_version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "prior_entry_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "receipt_id",
+        "option_id",
+        "label",
+        "kind",
+        "canonical_id",
+        "matched_term_hash",
+        "offer_source"
+      ]
+    },
     "HandleOption": {
       "description": "CHAOS-3900 P1: one server-offered grammar-valid handle candidate, minted onto a stored result so a later turn can confirm it via handr_ receipt redemption. pattern_id names the closed handle-grammar registry pattern -- never regex text on the wire.",
       "type": "object",
@@ -1024,6 +1083,60 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/AnchorOption"
+          },
+          "maxItems": 20
+        },
+        "handle_options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HandleOption"
+          },
+          "maxItems": 20
+        },
+        "window_options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowOption"
+          },
+          "maxItems": 20
+        },
+        "accepted_grammars": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcceptedGrammar"
+          },
+          "maxItems": 20
+        }
+      },
+      "required": [
+        "missing"
+      ]
+    },
+    "StructureNeedsV2": {
+      "description": "CHAOS-4042: the disclosure block carried on a context_fabric_investigation_result.v2 result -- identical to StructureNeeds except anchor_options items are AnchorOptionV2 (membership-verify semantics) rather than AnchorOption (unique-claimant). kind_options/handle_options/window_options/accepted_grammars are unchanged from v1.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "missing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StructureNeedKind"
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true
+        },
+        "kind_options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KindOption"
+          },
+          "maxItems": 20
+        },
+        "anchor_options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnchorOptionV2"
           },
           "maxItems": 20
         },
