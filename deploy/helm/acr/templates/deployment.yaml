@@ -7,6 +7,7 @@ least-privilege runtime credentials and never runs acr-mcp.
 {{- include "acr.validateNoMcp" . -}}
 {{- include "acr.validateDeviceVerificationURL" . -}}
 {{- include "acr.validateEntitlementOrigin" . -}}
+{{- include "acr.validateWorkloadTokenExchange" . -}}
 {{- $image := include "acr.image" . -}}
 {{- $remoteEntitlement := include "acr.remoteEntitlement" . -}}
 apiVersion: apps/v1
@@ -208,6 +209,11 @@ spec:
               mountPath: {{ .Values.config.webAssertion.mountPath | quote }}
               readOnly: true
             {{- end }}
+            {{- if .Values.workloadTokenExchange.enabled }}
+            - name: kubernetes-api-reviewer-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            {{- end }}
       # deployment.extraContainers is intentionally never rendered; the
       volumes:
         - name: tmp
@@ -257,4 +263,29 @@ spec:
             items:
               - key: {{ .Values.config.webAssertion.key | quote }}
                 path: {{ .Values.config.webAssertion.key | quote }}
+        {{- end }}
+        {{- if .Values.workloadTokenExchange.enabled }}
+        # Explicit projected token for acr-api's OWN TokenReview calls
+        # (CHAOS-4013) -- deliberately NOT automountServiceAccountToken
+        # (see this pod's spec.automountServiceAccountToken: false above);
+        # this is the ONE token this deployment mounts for itself, scoped
+        # to the default apiserver audience TokenReview expects the
+        # caller's own credential to carry. No subPath: a subPath mount
+        # never receives kubelet's live token rotation.
+        - name: kubernetes-api-reviewer-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
         {{- end }}

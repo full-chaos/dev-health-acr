@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 1b63bc63ce7bfba3d5caa7ef42948ce52e2f862c4aaf5cbe8f6fdb63aabeb889
+# canonical-content-sha256: 08ce1dbcc27d5b4ed5142ab408b22e539b3df7dedd49940601d1374cc3ef06b2
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -619,26 +619,56 @@ paths:
       security: []
   "/api/v1/oauth/token":
     post:
+      description: "Dispatches by Content-Type (CHAOS-4013): application/json is the pre-existing RFC 8628 device-code grant, unchanged; application/x-www-form-urlencoded is the RFC 8693 workload token-exchange grant."
       operationId: "exchangeDeviceToken"
       requestBody:
         content:
           application/json:
             schema:
               "$ref": "../jsonschema/v1/device_token_request.v1.schema.json"
+          application/x-www-form-urlencoded:
+            schema:
+              additionalProperties: false
+              properties:
+                grant_type:
+                  const: "urn:ietf:params:oauth:grant-type:token-exchange"
+                requested_token_type:
+                  const: "urn:ietf:params:oauth:token-type:access_token"
+                scope:
+                  description: "Space-delimited requested scope; may only narrow the resolved binding's grant, never widen it."
+                  type: "string"
+                subject_token:
+                  description: "The k8s projected ServiceAccount JWT, validated via Kubernetes TokenReview."
+                  type: "string"
+                subject_token_type:
+                  const: "urn:ietf:params:oauth:token-type:jwt"
+              required:
+                - "grant_type"
+                - "subject_token"
+                - "subject_token_type"
+              type: "object"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                "$ref": "../jsonschema/v1/device_token_response.v1.schema.json"
-          description: "Device grant redeemed once"
+                oneOf:
+                  -
+                    "$ref": "../jsonschema/v1/device_token_response.v1.schema.json"
+                  -
+                    "$ref": "../jsonschema/v1/token_exchange_response.v1.schema.json"
+          description: "Device grant redeemed once, or a workload token successfully exchanged"
         "400":
           content:
             application/json:
               schema:
-                "$ref": "../jsonschema/v1/oauth_device_error.v1.schema.json"
-          description: "Pinned RFC device grant error"
+                oneOf:
+                  -
+                    "$ref": "../jsonschema/v1/oauth_device_error.v1.schema.json"
+                  -
+                    "$ref": "../jsonschema/v1/oauth_token_exchange_error.v1.schema.json"
+          description: "Pinned RFC device grant error, or an RFC 8693 token-exchange error"
         "429":
           "$ref": "#/components/responses/Error"
         "500":

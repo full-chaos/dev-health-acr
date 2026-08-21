@@ -33,6 +33,10 @@ type CredentialIssuanceProvenance = credentiallifecycle.IssuanceProvenance
 
 const CredentialIssuanceProvenanceDeviceAuthorization = credentiallifecycle.IssuanceProvenanceDeviceAuthorization
 
+// CredentialIssuanceProvenanceWorkloadExchange marks a credential row
+// minted by RFC 8693 workload token exchange (CHAOS-4013).
+const CredentialIssuanceProvenanceWorkloadExchange = credentiallifecycle.IssuanceProvenanceWorkloadExchange
+
 type DeviceCodeHash struct{ value [sha256.Size]byte }
 
 func HashDeviceCode(code string) DeviceCodeHash {

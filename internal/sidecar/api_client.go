@@ -101,7 +101,7 @@ func buildTransport(cfg Config) (*http.Transport, error) {
 	}
 
 	proxyFunc := http.ProxyFromEnvironment
-	if cfg.APIBaseURL.Scheme == "http" && isLoopbackHost(cfg.APIBaseURL.Hostname()) {
+	if cfg.APIBaseURL.Scheme == "http" && (isLoopbackHost(cfg.APIBaseURL.Hostname()) || cfg.AllowInsecureInternalHTTP) {
 		proxyFunc = nil
 	} else if cfg.ProxyURL != nil {
 		fixed := cfg.ProxyURL

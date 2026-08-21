@@ -228,6 +228,39 @@ URL whenever backing stores are enabled.
 {{- end -}}
 {{- end -}}
 
+{{- define "acr.validateWorkloadTokenExchange" -}}
+{{- if .Values.workloadTokenExchange.enabled -}}
+{{- if not (.Values.workloadTokenExchange.audience | default "") -}}
+{{- fail "workload-token-exchange: workloadTokenExchange.audience is required when workloadTokenExchange.enabled=true" -}}
+{{- end -}}
+{{- if not (.Values.workloadTokenExchange.trustDomain | default "") -}}
+{{- fail "workload-token-exchange: workloadTokenExchange.trustDomain is required when workloadTokenExchange.enabled=true" -}}
+{{- end -}}
+{{- /*
+Codex round 1 finding: the TokenReview ClusterRoleBinding targets
+acr.serviceAccountName, which defaults to the literal "default" namespace
+ServiceAccount whenever serviceAccount.create=false and no explicit name is
+set. Binding cluster-wide TokenReview capability to a SA shared with other
+workloads is a real privilege-escalation surface, so this fails closed on
+the one case this chart can actually detect: create=false with no explicit
+name. An explicit serviceAccount.name is trusted as the operator's own
+deliberate, out-of-band-provisioned choice -- EXCEPT the literal name
+"default", which this chart still rejects explicitly: that name can never
+be a deliberately dedicated choice, since it is the one every namespace's
+built-in ServiceAccount already carries and is almost always shared with
+whatever workloads never set their own. This chart cannot detect sharing
+with any OTHER explicitly named pre-existing SA -- that remains the
+operator's own responsibility (codex round 2 finding 2).
+*/ -}}
+{{- if not .Values.serviceAccount.create -}}
+{{- $name := .Values.serviceAccount.name | default "" -}}
+{{- if or (not $name) (eq $name "default") -}}
+{{- fail "workload-token-exchange: workloadTokenExchange.enabled=true requires either serviceAccount.create=true or an explicit, non-\"default\" serviceAccount.name -- the TokenReview ClusterRoleBinding must never land on a namespace's shared default ServiceAccount" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Remote entitlement is selected automatically when an origin is supplied. Local
 allow-all entitlement is restricted to development/test and must not retain

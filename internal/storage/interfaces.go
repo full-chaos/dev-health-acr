@@ -191,6 +191,37 @@ type AuditStore interface {
 	Record(ctx context.Context, event AuditEvent) error
 }
 
+// WorkloadBindingKey is the exact tuple a validated k8s ServiceAccount
+// identity is resolved against (CHAOS-4013, RFC 8693 workload token
+// exchange). It is never accepted from a request field; it is built
+// entirely from a Kubernetes TokenReview result.
+type WorkloadBindingKey struct {
+	TrustDomain        string
+	Namespace          string
+	ServiceAccountName string
+	ServiceAccountUID  string
+}
+
+// WorkloadBinding is the declarative server-side grant a WorkloadBindingKey
+// resolves to. There is deliberately no CRUD HTTP surface for this table
+// (design brief's "do NOT build" list) -- rows are provisioned out of band
+// (migration seed or a direct operator write), matching the "keep the
+// surface minimal" instruction on the parent ticket.
+type WorkloadBinding struct {
+	BindingID        string
+	OrgID            string
+	Role             string
+	RepositoryScopes []string
+	DisabledAt       *time.Time
+}
+
+// WorkloadBindingStore is a read-only lookup by the exact validated
+// identity tuple. Implementations must never resolve from anything else
+// (see WorkloadBindingKey's doc comment).
+type WorkloadBindingStore interface {
+	Lookup(ctx context.Context, key WorkloadBindingKey) (WorkloadBinding, error)
+}
+
 func IsCredentialLifecycleAuditAction(action string) bool {
 	switch action {
 	case AuditActionCredentialCreated, AuditActionCredentialRotated, AuditActionCredentialRevoked:

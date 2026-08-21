@@ -69,8 +69,9 @@ func TestSidecarCeilingClearsTheServingBudget(t *testing.T) {
 // matches a real site fails too. An audited exemption that quietly stopped
 // describing the code would be worse than no list at all.
 var auditedBoundedBodyReads = map[string]string{
-	"callPublic#redirectDrainBytes":      "unexpected-redirect drain: the body is discarded into io.Discard, never parsed and never returned, and the request fails immediately afterwards. Bounded rather than read through the operator ceiling because nothing is kept. Best-effort reuse: a body within the bound is read to EOF and the connection survives; a larger one forfeits the connection rather than being read unbounded, which costs a reconnect and nothing else.",
-	"callWithHeaders#redirectDrainBytes": "the same drain on the transport path, for the same reason.",
+	"callPublic#redirectDrainBytes":          "unexpected-redirect drain: the body is discarded into io.Discard, never parsed and never returned, and the request fails immediately afterwards. Bounded rather than read through the operator ceiling because nothing is kept. Best-effort reuse: a body within the bound is read to EOF and the connection survives; a larger one forfeits the connection rather than being read unbounded, which costs a reconnect and nothing else.",
+	"callWithHeaders#redirectDrainBytes":     "the same drain on the transport path, for the same reason.",
+	"exchange#maxTokenExchangeResponseBytes": "CHAOS-4013 RFC 8693 token exchange response, read before a Client (and its configured MaxResponseBytes) exists -- this call resolves the bearer credential a Client will use. A real response is well under 1 KiB; fixed and small for the same reason redirectDrainBytes is.",
 }
 
 // auditedBoundValues pins the VALUE behind each audited bound, not only
@@ -81,7 +82,7 @@ var auditedBoundedBodyReads = map[string]string{
 // and any number satisfied that. The exemption is only justified while the
 // bound stays negligible against the ceiling it sidesteps, so the value is
 // asserted too.
-var auditedBoundValues = map[string]int{"redirectDrainBytes": redirectDrainBytes}
+var auditedBoundValues = map[string]int{"redirectDrainBytes": redirectDrainBytes, "maxTokenExchangeResponseBytes": maxTokenExchangeResponseBytes}
 
 // maxAuditedBoundBytes is how large an audited non-ceiling bound may be
 // before it stops being negligible and has to be justified again on its

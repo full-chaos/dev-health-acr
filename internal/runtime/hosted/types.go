@@ -167,6 +167,10 @@ type postgresComponents struct {
 	audit       storage.AuditStore
 	packets     storage.PacketStore
 	episodes    storage.EpisodeStore
+	// workloadBindings is CHAOS-4013's read-only lookup store; see
+	// storage.WorkloadBindingStore's doc comment for why it has no write
+	// path here.
+	workloadBindings storage.WorkloadBindingStore
 	// db is the raw pool, exposed so hosted.open can build additional
 	// caller-owned adapters (e.g. pginvestigation.Store) on it directly --
 	// this package never opens a second PostgreSQL connection.

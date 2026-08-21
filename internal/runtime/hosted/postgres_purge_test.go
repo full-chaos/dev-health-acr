@@ -28,7 +28,7 @@ func TestRunPurgeTickLoop_invokesBoundedPurgeOnEachTick(t *testing.T) {
 	// When
 	go func() {
 		defer close(loopDone)
-		runPurgeTickLoop(ctx, tick, time.Now, purge, 7, nil)
+		runPurgeTickLoop(ctx, tick, time.Now, purge, 7, packetPurgeFailureMessage, nil)
 	}()
 	tick <- time.Now()
 	tick <- time.Now()
@@ -51,7 +51,7 @@ func TestRunPurgeTickLoop_returnsPromptlyWhenCancelled_noLeak(t *testing.T) {
 	loopDone := make(chan struct{})
 	go func() {
 		defer close(loopDone)
-		runPurgeTickLoop(ctx, tick, time.Now, purge, 1, nil)
+		runPurgeTickLoop(ctx, tick, time.Now, purge, 1, packetPurgeFailureMessage, nil)
 	}()
 
 	// When
@@ -82,7 +82,7 @@ func TestRunPurgeTickLoop_toleratesPurgeFailureAndKeepsRunning(t *testing.T) {
 	// When
 	go func() {
 		defer close(loopDone)
-		runPurgeTickLoop(ctx, tick, time.Now, purge, 1, nil)
+		runPurgeTickLoop(ctx, tick, time.Now, purge, 1, packetPurgeFailureMessage, nil)
 	}()
 	tick <- time.Now()
 	tick <- time.Now()
@@ -116,7 +116,7 @@ func TestRunPurgeTickLoop_notifiesObserverWithRedactedMessage_onPurgeFailure(t *
 	// When
 	go func() {
 		defer close(loopDone)
-		runPurgeTickLoop(ctx, tick, time.Now, purge, 1, observe)
+		runPurgeTickLoop(ctx, tick, time.Now, purge, 1, packetPurgeFailureMessage, observe)
 	}()
 	tick <- time.Now()
 	tick <- time.Now()
@@ -185,7 +185,7 @@ func TestRunPurgeTickLoop_notifiesOnceForEachIndependentFailure(t *testing.T) {
 	// When
 	go func() {
 		defer close(loopDone)
-		runPurgeTickLoop(ctx, tick, time.Now, purge, defaultPacketPurgeBatchLimit, observe)
+		runPurgeTickLoop(ctx, tick, time.Now, purge, defaultPacketPurgeBatchLimit, packetPurgeFailureMessage, observe)
 	}()
 	tick <- time.Now()
 	cancel()

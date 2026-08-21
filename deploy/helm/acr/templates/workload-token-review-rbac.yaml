@@ -1,0 +1,34 @@
+{{- /*
+CHAOS-4013: the minimal RBAC acr-api's own ServiceAccount needs to validate
+a workload's subject_token via Kubernetes TokenReview -- create on
+tokenreviews.authentication.k8s.io ONLY (design brief). tokenreviews is a
+cluster-scoped resource, so this is a ClusterRole/ClusterRoleBinding rather
+than a namespaced Role/RoleBinding; it grants nothing else.
+*/ -}}
+{{- if .Values.workloadTokenExchange.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "acr.fullname" . }}-token-review
+  labels:
+    {{- include "acr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "acr.fullname" . }}-token-review
+  labels:
+    {{- include "acr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "acr.fullname" . }}-token-review
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "acr.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

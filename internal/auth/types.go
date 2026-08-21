@@ -9,6 +9,7 @@ import (
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 const (
@@ -51,6 +52,12 @@ type CreateCredentialRequest struct {
 	Scopes           []string
 	CreatedBy        string
 	ExpiresAt        *time.Time
+	// IssuanceProvenance and WorkloadBindingID are set only by the
+	// workload token-exchange issuance path (see AccessTokenIssuer);
+	// every other caller leaves both zero, unchanged from pre-CHAOS-4013
+	// behavior.
+	IssuanceProvenance storage.CredentialIssuanceProvenance
+	WorkloadBindingID  string
 }
 
 type RotateCredentialRequest struct {

@@ -68,7 +68,17 @@ func normalizeCreate(input CreateInput) (CreateInput, error) {
 	if err != nil {
 		return CreateInput{}, err
 	}
-	if input.IssuanceProvenance != "" && input.IssuanceProvenance != IssuanceProvenanceDeviceAuthorization {
+	switch input.IssuanceProvenance {
+	case "", IssuanceProvenanceDeviceAuthorization:
+		if input.WorkloadBindingID != "" {
+			return CreateInput{}, invalid("workload binding id")
+		}
+	case IssuanceProvenanceWorkloadExchange:
+		input.WorkloadBindingID, err = normalizeText("workload binding id", input.WorkloadBindingID, 200)
+		if err != nil {
+			return CreateInput{}, err
+		}
+	default:
 		return CreateInput{}, invalid("issuance provenance")
 	}
 	return input, nil

@@ -104,7 +104,12 @@ func (s *credentialStore) createCredential(ctx context.Context, input storage.Cr
 		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
 	}
 	credential := credentialFromCreate(input, now)
-	record := storage.CredentialRecord{Metadata: credential, TokenHash: input.TokenHash, CreatedBy: input.ActorID}
+	// Codex round 1 finding: IssuanceProvenance was never threaded into
+	// the audit record here (pre-existing, since before workload_exchange
+	// existed) -- production audit events for a device_authorization or
+	// workload_exchange credential silently omitted issuance_provenance,
+	// unlike the memory store's equivalent path.
+	record := storage.CredentialRecord{Metadata: credential, TokenHash: input.TokenHash, CreatedBy: input.ActorID, IssuanceProvenance: input.IssuanceProvenance}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("begin credential create: %w", sanitizeDatabaseError(err))
@@ -206,7 +211,7 @@ WHERE org_id = $1 AND credential_id = $2
 func lockedCredential(ctx context.Context, tx *sql.Tx, orgID, credentialID string) (contractsv1.ClientCredential, error) {
 	row := tx.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id
 FROM acr.client_credentials WHERE org_id = $1 AND credential_id = $2 FOR UPDATE`, orgID, credentialID)
 	credential, err := scanCredential(row)
 	if err != nil {
@@ -266,6 +271,9 @@ func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent 
 	if record.IssuanceProvenance != "" {
 		metadata["issuance_provenance"] = string(record.IssuanceProvenance)
 	}
+	if credential.WorkloadBindingID != nil {
+		metadata["workload_binding_id"] = *credential.WorkloadBindingID
+	}
 	return storage.AuditEvent{
 		OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy,
 		Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID,
@@ -295,7 +303,21 @@ func credentialRevokedEvent(credential contractsv1.ClientCredential, actorID str
 }
 
 func credentialFromCreate(input storage.CredentialCreateInput, createdAt time.Time) contractsv1.ClientCredential {
-	return contractsv1.ClientCredential{SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: input.CredentialID, OrgID: input.OrgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: append([]string(nil), input.RepositoryScopes...), Scopes: append([]string(nil), input.Scopes...), CreatedAt: createdAt, ExpiresAt: cloneTime(input.ExpiresAt)}
+	return contractsv1.ClientCredential{
+		SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: input.CredentialID, OrgID: input.OrgID, Name: input.Name, TokenPrefix: input.TokenPrefix,
+		RepositoryScopes: append([]string(nil), input.RepositoryScopes...), Scopes: append([]string(nil), input.Scopes...), CreatedAt: createdAt, ExpiresAt: cloneTime(input.ExpiresAt),
+		WorkloadBindingID: nonEmptyPtr(input.WorkloadBindingID),
+	}
+}
+
+// nonEmptyPtr returns nil for an empty string and a pointer to value
+// otherwise, matching ClientCredential.WorkloadBindingID's "nil means not a
+// workload credential" convention.
+func nonEmptyPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time) contractsv1.ClientCredential {

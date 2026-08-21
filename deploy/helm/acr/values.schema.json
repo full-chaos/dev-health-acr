@@ -292,7 +292,27 @@
             "dns": { "type": "boolean" },
             "postgresPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "clickhousePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
-            "entitlementPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "entitlementPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "kubernetesAPIPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        }
+      }
+    },
+    "workloadTokenExchange": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "audience": { "type": "string" },
+        "trustDomain": { "type": "string" },
+        "consumerServiceAccounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" }
+            }
           }
         }
       }
