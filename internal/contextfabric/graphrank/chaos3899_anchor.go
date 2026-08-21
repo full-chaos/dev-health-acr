@@ -1,6 +1,44 @@
 package graphrank
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// authorizedClaimantNodes filters a raw AliasLookup claimant map down to
+// what principal may see under scope, per node -- the SAME
+// AuthorizedAttributes check every ordinary NodeCandidate result already
+// passes (candidate.go). CHAOS-4042 (sol-max ruling): aliasClaimantsByTerm
+// itself is org-scoped but was never authorization-filtered before feeding
+// anchor OFFER material (unlike candidatesBySubject, which always goes
+// through AuthorizedAttributes via NodeCandidate/mergeSearchResults) --
+// narrowly exposed while every anchor term was still required to be
+// globally unique, broadly exposed the moment an ambiguous term can name
+// multiple claimants in a disclosed offer.
+//
+// Callers MUST keep using the raw, unfiltered map as the source of TRUTH
+// for BindAnchor and the shadow evidence round's own re-verification --
+// authorization must never be allowed to manufacture uniqueness by hiding
+// rivals from the completeness/uniqueness proof itself. This filtered view
+// exists ONLY to build what a caller is shown.
+func authorizedClaimantNodes(principal storage.Principal, scope contextfabric.RequestedScope, claimantsByTerm map[string][]CandidateNode) map[string][]CandidateNode {
+	if claimantsByTerm == nil {
+		return nil
+	}
+	out := make(map[string][]CandidateNode, len(claimantsByTerm))
+	for term, nodes := range claimantsByTerm {
+		visible := make([]CandidateNode, 0, len(nodes))
+		for _, node := range nodes {
+			if AuthorizedAttributes(principal, scope, node.Attributes) {
+				visible = append(visible, node)
+			}
+		}
+		out[term] = visible
+	}
+	return out
+}
 
 // claimantsFromCandidateNodes adapts deps.AliasLookup's own return shape
 // (map[string][]CandidateNode) to BindAnchor's IdentityMatch shape, via
