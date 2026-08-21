@@ -2836,16 +2836,35 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	t.Logf("two-turn report written to %s: cases_run=%d gate_reachable=%d wrong_commits=%d anti_vacuity_valid=%v",
 		outPath, report.CasesRun, report.GateReachableCount, report.WrongCommitCount, report.AntiVacuityValid)
 
+	// sharded (codex round-2 finding, BLOCK): every non-vacuity/coverage
+	// gate below assumes THIS PROCESS ran the whole corpus. A shard split
+	// by corpus case can legitimately see zero cases of a given category
+	// -- no window member, no control case, no kind/handle inferred-tier
+	// commit, an applicable member whose OTHER committable entries landed
+	// in a different shard -- while the overall sharded run's UNION covers
+	// it fine. Those coverage bars are therefore SKIPPED per shard here
+	// and re-evaluated ONLY by the merge step over every shard's combined
+	// data (ApplicableMembers ∪ ConfirmedWrongRedeemedCount, summed
+	// CasesRun/PositiveAppliedCount/etc -- see
+	// scripts/trial/run-two-turn-parallel.sh's merge step, CHAOS-4033).
+	// Genuine correctness bars (a wrong commit, a false no_match, an
+	// unjustified inferred-tier commit, a mutation probe that ran but
+	// never tripped) are NEVER skipped: a real per-case violation is real
+	// regardless of how small the shard is. sharded is false (every check
+	// below unconditional, byte-identical to before this field existed)
+	// whenever ACR_TEST_TRIAL_SHARD_COUNT is unset.
+	sharded := report.Provenance.ExecutionShape == "parallel"
+
 	// Fail-open guard (codex round-3 finding #2): a run where every case
 	// offer-missed or errored could otherwise pass -- zero wrong commits
 	// and a satisfied anti-vacuity check prove nothing when NOTHING ever
 	// actually converted. This is checked BEFORE anti-vacuity so a
 	// completely broken harness fails on the more fundamental signal
 	// first, not last.
-	if report.PositiveAppliedCount == 0 {
+	if !sharded && report.PositiveAppliedCount == 0 {
 		t.Errorf("positive_applied_count=0 across %d cases -- the positive arm never converted a single case, so this run proves nothing about conversion (fails open otherwise: zero wrong commits and a vacuously-true anti-vacuity check would not catch a harness that never actually confirms anything)", report.CasesRun)
 	}
-	if !report.AntiVacuityValid {
+	if !sharded && !report.AntiVacuityValid {
 		t.Errorf("confirmed_wrong arm anti-vacuity check failed: members %v redeemed zero designated committable negatives (design brief v4/sol-r3 #4) -- the arm is INVALID for this run", unsatisfiedMembers)
 	}
 	if report.WrongCommitCount > 0 {
@@ -2867,7 +2886,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// never ran" or "every case errored" -- these three bars close that
 	// gap. Checked in this order: non-vacuity first (mirrors
 	// PositiveAppliedCount's own ordering above), then the causal proof.
-	if report.WindowInferredTierRanCount == 0 {
+	if !sharded && report.WindowInferredTierRanCount == 0 {
 		t.Errorf("window_inferred_tier_ran_count=0 -- the window inferred-tier arm never once completed across %d cases, so window_commit_count=0 proves nothing about the CHAOS-4040 gate (non-vacuity)", report.CasesRun)
 	}
 	if report.WindowGatedCount != report.WindowInferredTierRanCount {
@@ -2880,7 +2899,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// gate 1 (it always injects an explicit field) -- this is gate 2's
 	// only live-corpus signal, see WindowClassDefaultGatedCount's own doc
 	// comment for why turn 1 alone proves it.
-	if report.WindowClassDefaultGatedCount == 0 {
+	if !sharded && report.WindowClassDefaultGatedCount == 0 {
 		t.Errorf("window_class_default_gated_count=0 across %d cases -- gate 2 (the engine's own class-table default, CHAOS-4040) never fired once on turn 1's windowless requests, so this run has zero live-corpus evidence gate 2 works at all (non-vacuity)", report.CasesRun)
 	}
 	// winr_ positive control (team-lead ruling 2026-08-21, reconciling
@@ -2891,7 +2910,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// anchor conversions. See WindowPositiveAppliedCount's own doc comment
 	// for why "removing the receipt returns to the gate" needs no separate
 	// call here.
-	if report.WindowPositiveAppliedCount == 0 {
+	if !sharded && report.WindowPositiveAppliedCount == 0 {
 		t.Errorf("window_positive_applied_count=0 across %d cases -- window's own winr_ receipt redemption never once reached a confirmed, decisive answer this run, so this run has zero live-corpus evidence the escape hatch out of the CHAOS-4040 gate actually works (non-vacuity)", report.CasesRun)
 	}
 	if report.FalseNoMatchCount > 0 {
@@ -2918,7 +2937,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// nothing about whether this new bar can distinguish justified from
 	// unjustified -- InferredPairInvalidCount==0 && InferredUnjustifiedCount==0
 	// would otherwise pass vacuously.
-	if report.InferredKindHandleDecisiveCount == 0 {
+	if !sharded && report.InferredKindHandleDecisiveCount == 0 {
 		t.Errorf("inferred_kind_handle_decisive_count=0 -- kind/handle inferred-tier never committed a single case this run, so the v4 measurement contract proves nothing (non-vacuity)")
 	}
 	// A run whose mutation arm did not trip every probe it attempted is
@@ -2958,7 +2977,9 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// being zero is itself the finding: D0 cannot be reported at all, so
 	// the run is INVALID for this check rather than silently green.
 	if report.ControlsTotal == 0 {
-		t.Errorf("controls_total=0: this run recorded NO control cases (entries with no expected answer) -- D0 cannot be reported and the run is INVALID for this check")
+		if !sharded {
+			t.Errorf("controls_total=0: this run recorded NO control cases (entries with no expected answer) -- D0 cannot be reported and the run is INVALID for this check")
+		}
 	} else if report.ControlsWitnessed < report.ControlsTotal {
 		t.Errorf("controls_witnessed=%d/%d, want %d/%d (D0: every control case must commit nothing and disclose structure at turn 1)", report.ControlsWitnessed, report.ControlsTotal, report.ControlsTotal, report.ControlsTotal)
 	}
