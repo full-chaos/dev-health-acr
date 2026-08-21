@@ -504,6 +504,26 @@ type ResolutionTraceEvent struct {
 	ShadowHandleGrammarBound   bool
 	ShadowAnchorUniqueClaimant bool
 	ShadowKindsCensused        int
+	// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome
+	// (evidence_round stage ONLY, CHAOS-4039/sol-max ruling 2026-08-20,
+	// adopted plan of record): whether kindInsensitivityProof
+	// (chaos3900_structure_offers.go) was actually CONSULTED this round --
+	// true only when the round reached a would_commit/would_no_match
+	// outcome under an EXPLICIT (non-receipt) kind narrowing
+	// (input.PreNarrowingExplicitKinds non-empty) -- and, when it was, the
+	// proof's own closed-vocabulary verdict ("commit_sound" |
+	// "no_match_sound" | "kind_sensitive_outcome"). Distinct from
+	// ShadowOutcome==would_commit alone: that field cannot tell a reader
+	// whether an inferred-tier commit was actually PROVEN kind-insensitive
+	// (this proof ran and returned commit_sound) or merely reached that
+	// outcome for an unrelated reason (the proof was never evaluated at
+	// all, ShadowKindInsensitivityEvaluated==false) -- exactly the gap
+	// CHAOS-4039's v4 measurement contract's kind_insensitivity_attested
+	// classification needs a production-observed signal for, replacing
+	// the prior generic-would_commit-is-good-enough proxy
+	// (singleSatisfierVerified) sol-max's ruling found insufficient.
+	ShadowKindInsensitivityEvaluated bool
+	ShadowKindInsensitivityOutcome   string
 	// CensusKind/CensusComplete/CensusCount/CensusReadAtUnix/CensusProtocol/
 	// CensusClosureMismatch/CensusStatementCount/CensusRowsRead/
 	// CensusHandleApplied/CensusAnchorApplied (evidence_probe stage ONLY,

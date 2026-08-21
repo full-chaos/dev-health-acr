@@ -201,6 +201,14 @@ type Attestation struct {
 	HandleGrammarBound   bool
 	AnchorUniqueClaimant bool
 	Kinds                []KindAttestation
+	// KindInsensitivityEvaluated/KindInsensitivityOutcome (CHAOS-4039/
+	// sol-max ruling 2026-08-20): whether kindInsensitivityProof was
+	// consulted this round, and its verdict when it was. See
+	// ResolutionTraceEvent.ShadowKindInsensitivityEvaluated's own doc
+	// comment (resolve.go) for why this is traced as a field distinct
+	// from Outcome itself.
+	KindInsensitivityEvaluated bool
+	KindInsensitivityOutcome   kindInsensitivityOutcome
 }
 
 // ShadowEvidenceRoundInput is everything RunShadowEvidenceRound needs,
@@ -306,13 +314,15 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: input.RequestID, Stage: "evidence_round",
 				ShadowOutcome: string(a.Outcome), ShadowReason: string(a.Reason),
-				ShadowDIdentityHash:        a.DIdentity,
-				ShadowPreconditionUnproven: a.PreconditionUnproven,
-				ShadowUnscopedVisibility:   a.UnscopedVisibility,
-				ShadowNonCensusedSurvivor:  a.NonCensusedSurvivor,
-				ShadowHandleGrammarBound:   a.HandleGrammarBound,
-				ShadowAnchorUniqueClaimant: a.AnchorUniqueClaimant,
-				ShadowKindsCensused:        len(a.Kinds),
+				ShadowDIdentityHash:              a.DIdentity,
+				ShadowPreconditionUnproven:       a.PreconditionUnproven,
+				ShadowUnscopedVisibility:         a.UnscopedVisibility,
+				ShadowNonCensusedSurvivor:        a.NonCensusedSurvivor,
+				ShadowHandleGrammarBound:         a.HandleGrammarBound,
+				ShadowAnchorUniqueClaimant:       a.AnchorUniqueClaimant,
+				ShadowKindsCensused:              len(a.Kinds),
+				ShadowKindInsensitivityEvaluated: a.KindInsensitivityEvaluated,
+				ShadowKindInsensitivityOutcome:   string(a.KindInsensitivityOutcome),
 			})
 			for _, k := range a.Kinds {
 				// readAtUnix stays 0 (never time.Time{}.Unix()'s large
@@ -545,6 +555,11 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		}
 		proof := kindInsensitivityProof(ctx, input.OrgID, preNarrowingKinds,
 			handleKind, valueOr(handle != nil, handle), handle != nil, anchor.Kind, anchor.CanonicalID, anchorOK, input.CensusFunc)
+		// Recorded regardless of soundness -- CHAOS-4039's own point is
+		// distinguishing "evaluated and sound" from "evaluated and
+		// unsound" from "never evaluated at all", not just the sound half.
+		base.KindInsensitivityEvaluated = true
+		base.KindInsensitivityOutcome = proof
 		sound := (base.Outcome == ShadowWouldCommit && proof == kindInsensitivityCommitSound) ||
 			(base.Outcome == ShadowWouldNoMatch && proof == kindInsensitivityNoMatchSound)
 		if !sound {

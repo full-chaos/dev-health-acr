@@ -311,6 +311,9 @@ func TestRunShadowEvidenceRound_ExplicitKindNarrowing_SensitiveDemotes(t *testin
 	if f.calls != 3 {
 		t.Fatalf("census calls = %d, want 3 (1 narrowed round + 2 insensitivity proof)", f.calls)
 	}
+	if !att.KindInsensitivityEvaluated || att.KindInsensitivityOutcome != kindInsensitivitySensitive {
+		t.Fatalf("att.KindInsensitivityEvaluated/Outcome = %v/%q, want true/kind_sensitive_outcome (CHAOS-4039)", att.KindInsensitivityEvaluated, att.KindInsensitivityOutcome)
+	}
 }
 
 // TestRunShadowEvidenceRound_ExplicitKindNarrowing_SoundCommits is the
@@ -343,6 +346,9 @@ func TestRunShadowEvidenceRound_ExplicitKindNarrowing_SoundCommits(t *testing.T)
 	if att.Outcome != ShadowWouldCommit {
 		t.Fatalf("att = %#v, want would_commit -- the all-kinds proof agrees, the narrowed commit is sound", att)
 	}
+	if !att.KindInsensitivityEvaluated || att.KindInsensitivityOutcome != kindInsensitivityCommitSound {
+		t.Fatalf("att.KindInsensitivityEvaluated/Outcome = %v/%q, want true/commit_sound (CHAOS-4039)", att.KindInsensitivityEvaluated, att.KindInsensitivityOutcome)
+	}
 }
 
 // TestRunShadowEvidenceRound_ExplicitKindNarrowing_RegistryMissPoisons pins
@@ -366,6 +372,9 @@ func TestRunShadowEvidenceRound_ExplicitKindNarrowing_RegistryMissPoisons(t *tes
 	att := RunShadowEvidenceRound(context.Background(), input, nil)
 	if att.Outcome != ShadowWouldClarify || att.Reason != ReasonKindSensitiveOutcome {
 		t.Fatalf("att = %#v, want would_clarify/kind_sensitive_outcome -- a non-censused pre-narrowing kind must poison the proof", att)
+	}
+	if !att.KindInsensitivityEvaluated || att.KindInsensitivityOutcome != kindInsensitivitySensitive {
+		t.Fatalf("att.KindInsensitivityEvaluated/Outcome = %v/%q, want true/kind_sensitive_outcome (CHAOS-4039)", att.KindInsensitivityEvaluated, att.KindInsensitivityOutcome)
 	}
 }
 
@@ -391,6 +400,9 @@ func TestRunShadowEvidenceRound_ReceiptConfirmedKindNeverProofGated(t *testing.T
 	}
 	if f.calls != 1 {
 		t.Fatalf("census calls = %d, want exactly 1 -- no insensitivity proof runs absent PreNarrowingExplicitKinds", f.calls)
+	}
+	if att.KindInsensitivityEvaluated {
+		t.Fatalf("att.KindInsensitivityEvaluated = true, want false -- the proof must never be consulted absent PreNarrowingExplicitKinds (CHAOS-4039)")
 	}
 }
 

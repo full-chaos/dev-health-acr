@@ -100,7 +100,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"shadow_non_censused_survivor", event.ShadowNonCensusedSurvivor,
 			"shadow_handle_grammar_bound", event.ShadowHandleGrammarBound,
 			"shadow_anchor_unique_claimant", event.ShadowAnchorUniqueClaimant,
-			"shadow_kinds_censused", event.ShadowKindsCensused)
+			"shadow_kinds_censused", event.ShadowKindsCensused,
+			"shadow_kind_insensitivity_evaluated", event.ShadowKindInsensitivityEvaluated,
+			"shadow_kind_insensitivity_outcome", event.ShadowKindInsensitivityOutcome)
 	case "evidence_probe":
 		// CHAOS-3899: ONE per-kind census receipt (brief §1.3(3), "Per-kind,
 		// never aggregated across kinds").
