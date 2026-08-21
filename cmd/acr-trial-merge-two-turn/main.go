@@ -309,26 +309,40 @@ func mismatchErr(path, firstPath, field, got, want string) error {
 // each other too. Empty for the other three arms, which never repeat.
 type resultKey struct {
 	Index         int
+	Member        string
 	Arm           string
 	MutationProbe string
 }
 
-// validateResultUniqueness (codex round-3 finding, MEDIUM): validateShardSet
-// checks shard_index/shard_count HEADERS are complete and consistent, but
-// never checked the Results PAYLOAD actually partitions the corpus
-// disjointly -- a stale artifact, a re-run shard reusing an old
-// shard_index, or a future bug in the round-robin selection could silently
-// double-count a case's results into the merged sums/gates without this.
-// Checked across ALL shards together (not per-shard) so a duplicate
-// spanning two different shard files is caught, not just one repeated
-// within a single file.
+// validateResultUniqueness (codex round-3 finding, MEDIUM; Member added
+// after a live 4-way dry-run finding): validateShardSet checks
+// shard_index/shard_count HEADERS are complete and consistent, but never
+// checked the Results PAYLOAD actually partitions the corpus disjointly --
+// a stale artifact, a re-run shard reusing an old shard_index, or a future
+// bug in the round-robin selection could silently double-count results
+// into the merged sums/gates without this. Checked across ALL shards
+// together (not per-shard) so a duplicate spanning two different shard
+// files is caught, not just one repeated within a single file.
+//
+// Member is REQUIRED in the key, not just Index/Arm/MutationProbe: the
+// oracle annex expands each on-disk corpus case into one twoTurnOracleEntry
+// PER MEMBER it tests (kind/anchor/window/handle -- loadTwoTurnOracleAnnex),
+// so annex.Entries positions 4k..4k+3 typically share the SAME Index with
+// four DIFFERENT Members. Sharding round-robins by POSITION
+// (chaos3742_two_turn_confirmation_test.go's own shard-selection comment),
+// so with shard_count==4 this can align exactly with that 4-member
+// expansion -- every shard then legitimately processes the SAME case
+// index, one member each. A live dry run against the real annex hit this
+// exactly: case index=0 arm=positive appeared in all 4 shards, each for a
+// DIFFERENT member, which an Index-only (or Index+Arm) key wrongly reports
+// as a duplicate.
 func validateResultUniqueness(shards []twoTurnReport, paths []string) error {
 	seen := map[resultKey]string{}
 	for i, s := range shards {
 		for _, r := range s.Results {
-			k := resultKey{Index: r.Index, Arm: r.Arm, MutationProbe: r.MutationProbe}
+			k := resultKey{Index: r.Index, Member: r.Member, Arm: r.Arm, MutationProbe: r.MutationProbe}
 			if prior, dup := seen[k]; dup {
-				return fmt.Errorf("duplicate result for case index=%d arm=%q mutation_probe=%q: reported by both %s and %s -- shards must partition the corpus disjointly; refusing to merge an overlapping or relabeled shard set", k.Index, k.Arm, k.MutationProbe, prior, paths[i])
+				return fmt.Errorf("duplicate result for case index=%d member=%q arm=%q mutation_probe=%q: reported by both %s and %s -- shards must partition the corpus disjointly; refusing to merge an overlapping or relabeled shard set", k.Index, k.Member, k.Arm, k.MutationProbe, prior, paths[i])
 			}
 			seen[k] = paths[i]
 		}
