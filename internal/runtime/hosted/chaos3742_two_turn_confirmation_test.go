@@ -958,7 +958,12 @@ type twoTurnReport struct {
 	// what produced that zero, not an unmeasured or broken arm; see their
 	// own doc comments. "3" marked the rename plus the controls/anti-
 	// vacuity/single-satisfier fields below; "1" was the shape PR #167
-	// shipped. Bump this again on any future field rename, removal, or
+	// shipped. "6" marks CHAOS-4033's shard-selection support (codex
+	// round-3 finding): ApplicableMembers is new (the set backing this
+	// process's own AntiVacuityValid, serialized so a sharded run's merge
+	// step can recompute anti-vacuity over the union of shards), and the
+	// shared trialProvenance struct gained ExecutionShape/ShardIndex/
+	// ShardCount. Bump this again on any future field rename, removal, or
 	// meaning change so a consumer can detect drift instead of silently
 	// reading a stale key under a new meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
@@ -2452,7 +2457,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "5",
+		ReportSchemaVersion: "6",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -2478,6 +2483,18 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// or serializing result state across process boundaries. Corpus
 	// entries, by contrast, are independent of each other once each
 	// isolated environment gets its own fresh org/DB.
+	//
+	// SCOPE NOTE (codex round-3 finding, MEDIUM): this commit adds ONLY
+	// the shard-selection knob and the per-shard coverage-gate skip below
+	// (see "sharded" near the end of this function) -- it does NOT ship a
+	// merge tool. A single sharded process's own artifact is therefore NOT
+	// standalone valid evidence of anything: its coverage gates are
+	// intentionally silent, and nothing yet re-checks them over the union
+	// of shards. Do not invoke ACR_TEST_TRIAL_SHARD_COUNT for a real
+	// measurement run until scripts/trial/run-two-turn-parallel.sh (the
+	// CHAOS-4033 follow-up PR) exists and its merge step is what actually
+	// gates validity -- until then this knob is dormant, exercised only by
+	// this package's own shard-selection tests.
 	//
 	// Round-robin by POSITION in annex.Entries (not by entry.Index, which
 	// can already be a non-contiguous corpus index) so shards stay
