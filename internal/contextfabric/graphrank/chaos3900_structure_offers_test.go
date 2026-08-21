@@ -460,6 +460,59 @@ func TestResolveSubjects_AnchorAndHandleOffersEndToEnd(t *testing.T) {
 	}
 }
 
+// TestResolveSubjects_AnchorOffersExcludeUnauthorizedClaimant is CHAOS-4042's
+// auth-gap closure proof (sol-max ruling): aliasClaimantsByTerm was org-scoped
+// but never AuthorizedAttributes-filtered before reaching anchorOfferMaterial
+// (unlike candidatesBySubject, which always passes through NodeCandidate's
+// own AuthorizedAttributes check). A claimant principal cannot see must never
+// surface as a disclosed AnchorOption -- that would leak the existence of an
+// entity the principal has no other way to read.
+func TestResolveSubjects_AnchorOffersExcludeUnauthorizedClaimant(t *testing.T) {
+	t.Parallel()
+	repoA := aliasCandidateNode(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA", -1, []string{"widget-service"}, nil, true)
+	repoA.Attributes["authorization_repositories"] = []string{"repoA"}
+	repoB := aliasCandidateNode(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB", -1, []string{"widget-svc"}, nil, true)
+	repoB.Attributes["authorization_repositories"] = []string{"repoA"}
+	// repoC is a genuine claimant the identity universe read still contains
+	// -- principal simply may not see it. Without the auth-split fix, its
+	// (kind, canonical_id, label) would leak as a third AnchorOption even
+	// though repoA and repoB (on their own, unrelated terms) already
+	// disagree and would be offered regardless of repoC's presence.
+	repoC := aliasCandidateNode(contractsv1.ContextFabricSubjectRepository, "repoC", "repoC", -1, []string{"gadget-svc"}, nil, true)
+	repoC.Attributes["authorization_repositories"] = []string{"repoC"}
+	backend := &fakeGraphBackend{
+		enableAliasLookup: true,
+		aliasLookupClaimants: map[string][]CandidateNode{
+			"widget-service": {repoA},
+			"widget-svc":     {repoB},
+			"gadget-svc":     {repoC},
+		},
+		aliasLookupComplete: true,
+	}
+	request := testRequest()
+	request.Question = "is PR 532 related to widget-service, widget-svc, or gadget-svc?"
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"repoA"}}
+
+	_, material, err := ResolveSubjects(context.Background(), principal, request, testInterpreted("widget-service", "widget-svc", "gadget-svc"), backend.deps(), nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+
+	if len(material.AnchorOptions) != 2 {
+		t.Fatalf("len(material.AnchorOptions) = %d, want 2 (repoA and repoB only; repoC is unauthorized): %+v", len(material.AnchorOptions), material.AnchorOptions)
+	}
+	seenAnchors := map[string]bool{}
+	for _, opt := range material.AnchorOptions {
+		seenAnchors[opt.CanonicalID] = true
+	}
+	if !seenAnchors["repoA"] || !seenAnchors["repoB"] {
+		t.Errorf("material.AnchorOptions = %+v, want repoA AND repoB", material.AnchorOptions)
+	}
+	if seenAnchors["repoC"] {
+		t.Errorf("material.AnchorOptions = %+v, must NOT disclose repoC -- principal is not authorized to see it", material.AnchorOptions)
+	}
+}
+
 func TestValidateHandleGrammar(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

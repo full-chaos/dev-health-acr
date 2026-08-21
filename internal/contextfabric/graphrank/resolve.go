@@ -1137,9 +1137,13 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// becomes a top-ranked, receipt-bound offer on THIS SAME response
 	// (design brief §2.3's deterministic one-turn upgrade), merged with
 	// whatever the pool/question text itself would have offered.
+	// anchorOfferMaterial builds CALLER-VISIBLE offer material: it must see
+	// only what principal is authorized to see (CHAOS-4042 auth-gap
+	// closure), never the raw aliasClaimantsByTerm truth BindAnchor and the
+	// shadow evidence round above already consumed unfiltered.
 	offerMaterial := combineStructureOfferMaterial(
 		kindOfferMaterial(resolution.Candidates, request.ExpectedKinds),
-		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), aliasIdentityComplete),
+		anchorOfferMaterial(claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete),
 		handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker),
 	)
 	return resolution, offerMaterial, nil
