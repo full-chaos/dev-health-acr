@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -42,22 +43,41 @@ func TestRun_RequiresAllFlags(t *testing.T) {
 // panelist must be rejected explicitly and up front (not indirectly, via
 // Run's fingerprint-based duplicate-credential guard, which a workload
 // token's own re-exchange behavior can make unsound -- see this
-// rejection's own doc comment in run()). No panelist's requests/
-// subdirectory should even get created, so this must fail before any
-// httptest server or file-exchange directory is needed.
+// rejection's own doc comment in run()).
+//
+// codex xhigh review round 2 (MEDIUM): an earlier version of this test
+// only checked err != nil, which would ALSO pass if the explicit
+// rejection were deleted entirely -- run() would still fail later (e.g.
+// a real token-exchange attempt against a nonexistent endpoint), so the
+// test proved nothing about the specific guard it claims to cover. This
+// version uses a REAL, working local token-exchange server (so removing
+// the guard would let the run genuinely proceed), and asserts the guard
+// fires before that server ever receives a request, before either
+// panelist's file-exchange directory is created, AND that the returned
+// error names the actual constraint -- so reverting the guard fails this
+// test on all three axes, not just "some error occurred."
 func TestRun_RejectsMultiplePanelistsUnderWorkloadMode(t *testing.T) {
+	var exchangeRequests int
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		exchangeRequests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"` + testValidBearerToken + `","expires_in":3600}`))
+	}))
+	defer tokenServer.Close()
+
 	subjectTokenFile := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(subjectTokenFile, []byte("k8s-projected-sa-jwt"), 0o600); err != nil {
 		t.Fatalf("write subject token file: %v", err)
 	}
 	t.Setenv(sidecar.SubjectTokenFileEnvironment, subjectTokenFile)
-	t.Setenv(sidecar.TokenEndpointEnvironment, "https://acr.example.com/api/v1/oauth/token")
+	t.Setenv(sidecar.TokenEndpointEnvironment, tokenServer.URL)
 
 	dir := t.TempDir()
 	panelistsPath := filepath.Join(dir, "panelists.json")
+	exchangeDirA, exchangeDirB := filepath.Join(dir, "a"), filepath.Join(dir, "b")
 	configs := []panelistConfig{
-		{CanonicalModelIdentity: "anthropic/sol-max", FileExchangeDir: filepath.Join(dir, "a")},
-		{CanonicalModelIdentity: "anthropic/luna", FileExchangeDir: filepath.Join(dir, "b")},
+		{CanonicalModelIdentity: "anthropic/sol-max", FileExchangeDir: exchangeDirA},
+		{CanonicalModelIdentity: "anthropic/luna", FileExchangeDir: exchangeDirB},
 	}
 	encoded, err := json.Marshal(configs)
 	if err != nil {
@@ -74,6 +94,17 @@ func TestRun_RejectsMultiplePanelistsUnderWorkloadMode(t *testing.T) {
 	}, os.Stdout, os.Stderr)
 	if err == nil {
 		t.Fatal("expected an error rejecting >1 panelist under workload mode")
+	}
+	if !strings.Contains(err.Error(), "single-panelist") {
+		t.Errorf("error = %q, want it to name the single-panelist workload constraint", err.Error())
+	}
+	if exchangeRequests != 0 {
+		t.Errorf("token exchange server received %d request(s), want 0 -- the guard must fire before any credential is resolved", exchangeRequests)
+	}
+	for _, dir := range []string{exchangeDirA, exchangeDirB} {
+		if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+			t.Errorf("file-exchange directory %s exists, want absent -- the guard must fire before any panelist is built", dir)
+		}
 	}
 }
 

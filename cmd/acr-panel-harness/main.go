@@ -30,10 +30,10 @@
 // compose/local. This is a process-wide switch, not a per-panelist one: a
 // real deployment provisions exactly one consumer ServiceAccount identity
 // for this harness (deploy/helm/acr's workloadTokenExchange.consumerServiceAccounts
-// "panel-read" entry), so every panelist configured this way shares that
-// one exchanged token -- Run's own duplicate-credential guard will
-// correctly refuse a workload-mode config naming more than one panelist
-// until per-panelist SA projection exists.
+// "panel-read" entry), so every panelist configured this way would share
+// that one exchanged token; run() therefore rejects a workload-mode config
+// naming more than one panelist explicitly, up front, until per-panelist SA
+// projection exists (CHAOS-4063).
 package main
 
 import (
