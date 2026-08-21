@@ -429,6 +429,29 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 			return InvestigationResult{}, false
 		}
 	}
+	// CHAOS-4040 (sol-max ruling 2026-08-21): a DECISIVE candidate carrying
+	// an inferred (unconfirmed) window predates this ticket's gate -- no
+	// FRESH Save can ever produce that combination any more
+	// (windowConfirmationRequiredResult intercepts every inferred window
+	// before a decisive terminal is ever reached, window.go). Rejected
+	// UNCONDITIONALLY, not only inside the windowKey!="" branch above:
+	// windowKey=="" is the ORDINARY no-explicit-window request (the exact
+	// shape most likely to have matched one of these old rows on every
+	// OTHER reuse-key dimension), and that is precisely the case the
+	// windowKey!="" guard above never even inspects the candidate's own
+	// window for. Checked on candidate.Status directly (not re-derived
+	// from any local classification helper this package does not already
+	// have) -- Complete/Partial/Degraded are the three decisive
+	// (answer-bearing) statuses; ClarificationRequired/NoMatch are not,
+	// and a non-decisive candidate could never have been influenced by an
+	// unconfirmed window's own fact-retrieval bound in the first place.
+	if candidate.EffectiveEvidenceWindow != nil && candidate.EffectiveEvidenceWindow.Provenance == WindowInferredDefault {
+		switch candidate.Status {
+		case InvestigationComplete, InvestigationPartial, InvestigationDegraded:
+			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+			return InvestigationResult{}, false
+		}
+	}
 	if holds, missReason := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding); !holds {
 		e.recordReuseOutcome(ctx, principal, missReason)
 		return InvestigationResult{}, false

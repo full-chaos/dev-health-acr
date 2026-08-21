@@ -134,10 +134,19 @@ func ValidContextFabricWindowConfidence(value ContextFabricWindowConfidence) boo
 type ContextFabricWindowProvenance string
 
 const (
-	// ContextFabricWindowInferredDefault: no caller-asserted window --
-	// the class-to-default table or a proposal-only temporal-expression
-	// binder span picked this window. Always disclosed, never decisive
-	// without the §3/W4 window-insensitivity proof.
+	// ContextFabricWindowInferredDefault: the window carries no caller
+	// AUTHORITY, whether or not a caller supplied a VALUE. Covers TWO
+	// distinct origins (CHAOS-4040 fix, doc corrected: this comment
+	// previously said "no caller-asserted window", omitting the second
+	// origin the sibling QuestionStated const below already documented
+	// correctly): the class-to-default table or a proposal-only
+	// temporal-expression binder span picked this window (no caller
+	// input at all), OR a caller's own bare explicit evidence_window on
+	// MCP entered here per DP12(b) -- present on the wire, but carrying
+	// no decisive authority of its own until confirmed. Always disclosed,
+	// never decisive without either a winr_ confirmation or the §3/W4
+	// window-insensitivity proof (CHAOS-4040 gates both origins out of
+	// every decisive terminal pending it).
 	ContextFabricWindowInferredDefault ContextFabricWindowProvenance = "inferred_default"
 	// ContextFabricWindowQuestionStated: the caller's own request carried
 	// an explicit evidence_window this canonicalization accepted. On the

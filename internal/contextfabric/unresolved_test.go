@@ -77,7 +77,7 @@ func TestInvestigateConvertsAmbiguousResolutionToClarificationRequired(t *testin
 	results := newMapResultStore()
 	engine := buildTerminalEngine(t, graph, results)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v, want a clarification_required result, not an error", err)
 	}
@@ -112,7 +112,7 @@ func TestInvestigateAmbiguousResolutionWithoutClarificationAllowedIsNoMatch(t *t
 	t.Parallel()
 	graph := &acceptanceGraphReader{resolution: ambiguousResolution(""), context: emptyGraphContext()}
 	engine := buildTerminalEngine(t, graph, nil)
-	request := validInvestigationRequest()
+	request := validInvestigationRequestWithConfirmedWindow()
 	request.Options.AllowClarification = false
 
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
@@ -141,7 +141,7 @@ func TestInvestigateEmptyResolutionIsNoMatch(t *testing.T) {
 	}
 	engine := buildTerminalEngine(t, graph, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v, want a no_match result, not an error", err)
 	}
@@ -161,7 +161,7 @@ func TestInvestigateSuppliesAClarificationPromptWhenTheBackendLeftItEmpty(t *tes
 	graph := &acceptanceGraphReader{resolution: ambiguousResolution(""), context: emptyGraphContext()}
 	engine := buildTerminalEngine(t, graph, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
@@ -212,7 +212,7 @@ func TestInvestigateStillReadsFactsForASubjectlessCohort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
-	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest()); err == nil {
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow()); err == nil {
 		t.Fatal("Investigate() error = nil, want the fact reader's own error")
 	}
 	if !read {
@@ -264,7 +264,7 @@ func TestTerminalResultCarriesTheSynthesizersStaticVersions(t *testing.T) {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
@@ -286,7 +286,7 @@ func TestTerminalResultFallsBackToUnwiredWithoutAVersionProvider(t *testing.T) {
 	t.Parallel()
 	engine := buildTerminalEngine(t, &acceptanceGraphReader{resolution: ambiguousResolution("Which one?"), context: emptyGraphContext()}, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
@@ -309,7 +309,7 @@ func TestNoMatchProseDoesNotClaimAbsenceWhenCandidatesArePresent(t *testing.T) {
 	t.Parallel()
 	graph := &acceptanceGraphReader{resolution: ambiguousResolution(""), context: emptyGraphContext()}
 	engine := buildTerminalEngine(t, graph, nil)
-	request := validInvestigationRequest()
+	request := validInvestigationRequestWithConfirmedWindow()
 	request.Options.AllowClarification = false
 
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
@@ -356,7 +356,7 @@ func TestNoMatchProseKeepsEmptyPoolWordingWhenNothingMatched(t *testing.T) {
 	}
 	engine := buildTerminalEngine(t, graph, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
@@ -382,7 +382,7 @@ func TestNoMatchLimitationForEmptyPoolIsHonestAboutExhaustiveness(t *testing.T) 
 	}
 	engine := buildTerminalEngine(t, graph, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
@@ -534,7 +534,7 @@ func TestSingleUncommittedCandidateProseIsNotPlural(t *testing.T) {
 			t.Parallel()
 			graph := &acceptanceGraphReader{resolution: singleCandidateResolution(""), context: emptyGraphContext()}
 			engine := buildTerminalEngine(t, graph, nil)
-			request := validInvestigationRequest()
+			request := validInvestigationRequestWithConfirmedWindow()
 			request.Options.AllowClarification = testCase.allowClarification
 
 			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
@@ -618,14 +618,20 @@ func TestTerminalResultLabelsTheTimeAHistoricalAnswerSpeaksFor(t *testing.T) {
 			// The negative control. A current-axis terminal result must
 			// carry NO temporal label and NO historical disclosure -- both
 			// would be false statements about an answer that speaks for now.
-			name: "current", time: TimeContext{Axis: TemporalCurrent}, wantLabel: false,
+			// EvidenceWindow set (CHAOS-4040): a current-axis request with
+			// NO window info at all is now intercepted by the window
+			// confirmation gate BEFORE resolution ever runs (window.go),
+			// which is unrelated to what THIS subcase means to test (a
+			// resolution-level empty pool) -- confirming the window here
+			// keeps this subcase reachable.
+			name: "current", time: TimeContext{Axis: TemporalCurrent, EvidenceWindow: validConfirmedWindow()}, wantLabel: false,
 			wantLimitations: []string{noMatchLimitationUnproven},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			engine := buildHistoricalTerminalEngine(t, testCase.time)
-			request := validInvestigationRequest()
+			request := validInvestigationRequestWithConfirmedWindow()
 			request.TimeContext = testCase.time
 
 			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)

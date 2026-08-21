@@ -481,6 +481,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if windowCanon.Veto != windowVetoNone {
 		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding)
 	}
+	// CHAOS-4040 (sol-max ruling 2026-08-21, "GATE ALL INFERRED WINDOWS
+	// out of decisive terminals"): an MCP bare explicit evidence_window
+	// field resolved here, at precedence step 1, with NO decisive
+	// authority of its own (windowCanon.ExplicitUnconfirmed) -- gated
+	// BEFORE tryReuse and BEFORE Interpret, exactly like a genuine veto
+	// above, so this class of request pays for zero interpreter/graph/
+	// fact/synthesis work (CHAOS-4040's own run-3 acceptance bar). The
+	// OTHER inferred-window origin (no request-side window at all, the
+	// class-table/binder default) cannot be known yet at this point --
+	// see the second gate, after Interpret, below.
+	if windowCanon.ExplicitUnconfirmed {
+		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding)
+	}
 
 	// CHAOS-3900 P1 (pivot-intent design brief §2.1): canonicalize
 	// structure receipts (kindr_/ancr_/handr_) BEFORE tryReuse too, same
@@ -692,6 +705,36 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if windowCanon.Effective != nil && clampedInterpretedTime.Axis != TemporalCurrent {
 		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding)
 	}
+	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
+	// call, shared by BOTH DP4(a) sites (the offer-builder merge below,
+	// and the window slot right here -- and terminalResult's own
+	// subjectless-terminal twin, unresolved.go) -- see fetchPriorEntries'
+	// own doc comment (priors_consult.go) for why this is the sole I/O
+	// call site. Moved up from its PRE-CHAOS-4040 position (immediately
+	// after ResolveSubjects) to right here, post-Interpret, so the window
+	// gate below can run before ResolveSubjects too -- fetchPriorEntries
+	// itself has no dependency on resolution (QuestionHash(request.Question)
+	// alone), so this reordering changes nothing about what it reads, only
+	// when. No-op (returns nil) when e.priorConsultant is nil.
+	priorEntries := e.fetchPriorEntries(ctx, principal, QuestionHash(request.Question))
+	// CHAOS-4040 (sol-max ruling 2026-08-21): precedence step 2 --
+	// windowCanon.Effective is nil here by construction (a non-nil,
+	// ExplicitUnconfirmed Effective already returned at gate 1 above; a
+	// non-nil, confirmed/stated Effective would have kept KeyComponent
+	// non-empty and reached this point unaffected, see the Provenance
+	// switch inside composeEffectiveWindow) -- so ANY inferred_default
+	// this call produces is the class-table/binder default, the SECOND
+	// origin the ruling requires gated, computed EARLY (before
+	// ResolveSubjects/DiscoverContext/ReadFacts/Synthesize) instead of at
+	// its pre-CHAOS-4040 position near the end of this function, so a
+	// gated request pays for interpretation only -- CHAOS-4040's own
+	// run-3 acceptance bar ("class-default cases interpretation-only").
+	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
+	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
+	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
+		confirmedStructureEcho := composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit)
+		return e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, confirmedStructureEcho, WindowCanonicalizationGatedClassDefault, binding)
+	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
 	// investigation -- not later, at Save. A snapshot taken at Save time
@@ -747,14 +790,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if err != nil {
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
-	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
-	// call, shared by BOTH DP4(a) sites (the offer-builder merge just
-	// below, and the inferred-default window slot later in this function --
-	// composeEffectiveWindow's own call site -- and terminalResult's own
-	// subjectless-terminal twin, unresolved.go) -- see fetchPriorEntries'
-	// own doc comment (priors_consult.go) for why this is the sole I/O call
-	// site. No-op (returns nil) when e.priorConsultant is nil.
-	priorEntries := e.fetchPriorEntries(ctx, principal, QuestionHash(request.Question))
+	// priorEntries: fetched ABOVE, before this call (CHAOS-4040 reordering
+	// -- see that call site's own comment for why it moved), reused here
+	// unchanged -- still the SAME single I/O call site fetchPriorEntries'
+	// own doc comment promises, just earlier in the function.
 	// CHAOS-3977 P5 (design brief §2.4/§3.4, DP4(a) site one): merge
 	// prior-sourced offers into the engine-derived material BEFORE
 	// composeStructureNeeds mints any receipt/option id (unresolved.go/
@@ -890,21 +929,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	temporallyLimited, temporalDisplaced := appendTemporalLimitations(result.Limitations, interpretation)
 	result.Limitations = temporallyLimited
 	result.LimitationsDisplaced += temporalDisplaced
-	// CHAOS-3900 W1: composeEffectiveWindow decides precedence steps 2-3
-	// (design brief §1.2) now that Interpret has run -- windowCanon.Effective
-	// (step 1, a confirmed/stated window) always wins unchanged when set;
-	// otherwise this is the ONLY point an INFERRED default can be decided,
-	// since it needs the interpreted Shape and the model's own window
-	// class/confidence pick.
-	// CHAOS-3977 P5 (design brief §2.4/§3.4, DP4(a) site two): consult only
-	// when precedence steps 1-2 both declined to decide (no confirmed/
-	// stated window, no binder-routed span) -- i.e. only at the point
-	// composeEffectiveWindow's own class-table fallback would otherwise run
-	// -- so a prior can never override a caller's own confirmation or the
-	// binder's own deterministic read of the question text. No-op when
-	// e.priorConsultant is nil.
-	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
-	result.EffectiveEvidenceWindow = composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
+	// effectiveWindow: composed ABOVE, before ResolveSubjects (CHAOS-4040
+	// reordering -- see that call site's own comment), reused here
+	// unchanged. By construction it can no longer be Provenance==inferred_default
+	// here (that case already gated and returned above) -- every path
+	// reaching this line carries a confirmed/stated window or none at all.
+	result.EffectiveEvidenceWindow = effectiveWindow
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}

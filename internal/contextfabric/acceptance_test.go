@@ -204,7 +204,7 @@ func TestAcceptanceBootstrapProjectStatusAndCurrentDrivers(t *testing.T) {
 	results := newMapResultStore()
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), results)
 
-	request := validInvestigationRequest()
+	request := validInvestigationRequestWithConfirmedWindow()
 	request.Question = "What is the actual status of Ask Dev and what is driving it?"
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 	if err != nil {
@@ -245,7 +245,7 @@ func TestAcceptanceHeldOutParaphraseFollowsTheSameCodePath(t *testing.T) {
 			context:    bootstrapGraphContext(project),
 		}
 		engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), nil)
-		request := validInvestigationRequest()
+		request := validInvestigationRequestWithConfirmedWindow()
 		request.Question = question
 		result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 		if err != nil {
@@ -301,7 +301,7 @@ func TestAcceptanceNovelFactRequirementCombinationIsMergedNotFixed(t *testing.T)
 	}
 	engine := buildAcceptanceEngine(t, graph, facts, interpretation, draft, nil)
 
-	request := validInvestigationRequest()
+	request := validInvestigationRequestWithConfirmedWindow()
 	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
@@ -349,7 +349,7 @@ func TestAcceptancePartialCanonicalSourceFailureDegradesSafely(t *testing.T) {
 	}
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), draft, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v, want a safe partial result, not an error", err)
 	}
@@ -369,7 +369,7 @@ func TestAcceptanceGraphUnavailabilitySurfacesErrUnavailable(t *testing.T) {
 	})
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), SynthesisDraft{}, nil)
 
-	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Investigate() error = %v, want it to wrap ErrUnavailable", err)
 	}
@@ -399,7 +399,7 @@ func TestAcceptanceNoDataProducesNoMatchNotAnError(t *testing.T) {
 	}
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), draft, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v, want a safe no_match result, not an error", err)
 	}
@@ -438,7 +438,7 @@ func TestAcceptanceStaleDataStillClosesButDegradesCoverage(t *testing.T) {
 	draft.EvidenceRefIDs = []string{"evidence_readiness_0001"}
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), draft, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		// Stale data is still data: a claim restating it must still close
 		// (deep equality doesn't care about staleness), so this must not
@@ -474,7 +474,7 @@ func TestAcceptanceConflictIsPreservedNotResolvedAway(t *testing.T) {
 	}}
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), draft, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
@@ -514,7 +514,7 @@ func TestAcceptanceUnauthorizedSubjectDegradesSilentlyWithoutLeaking(t *testing.
 	}
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), results)
 
-	request := validInvestigationRequest()
+	request := validInvestigationRequestWithConfirmedWindow()
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_unauth1", ReceiptID: priorResult.SubjectResolution.Candidates[0].ReceiptID}}
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 	if err != nil {
@@ -588,7 +588,7 @@ func TestAcceptanceAmbiguousSubjectRequestsClarification(t *testing.T) {
 	// own decision rather than the draft's.
 	engine := buildAcceptanceEngine(t, graph, facts, interpretation, draft, nil)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v, want an ambiguous subject to request clarification, not error", err)
 	}
@@ -619,7 +619,7 @@ func TestAcceptanceResultPersistsAndFollowUpBindsThePriorSubject(t *testing.T) {
 		context: bootstrapGraphContext(project),
 	}
 	firstEngine := buildAcceptanceEngine(t, firstGraph, facts, bootstrapInterpretation(), bootstrapDraft(project), results)
-	first, err := firstEngine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	first, err := firstEngine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("first Investigate() error = %v", err)
 	}
@@ -643,7 +643,7 @@ func TestAcceptanceResultPersistsAndFollowUpBindsThePriorSubject(t *testing.T) {
 		context:    bootstrapGraphContext(project),
 	}
 	secondEngine := buildAcceptanceEngine(t, secondGraph, facts, bootstrapInterpretation(), bootstrapDraft(project), results)
-	followUp := validInvestigationRequest()
+	followUp := validInvestigationRequestWithConfirmedWindow()
 	followUp.Question = "what about now?"
 	followUp.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: first.ResultID, ReceiptID: "receipt_followup_1"}}
 	if _, err := secondEngine.Investigate(context.Background(), acceptancePrincipal(), followUp); err != nil {
