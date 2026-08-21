@@ -491,60 +491,30 @@ func identityRowCarriesTermHash(row IdentityRow, termHash string) bool {
 // P1.C', team-lead ruling) from the SAME per-term unique-claimant scan
 // BindAnchor's own decisive path uses (anchorTermCandidates,
 // chaos3899_anchor.go) -- never a second, divergent notion of "unique
-// claimant" -- WIDENED (CHAOS-4012, team-lead ruling) with the claimant
-// set of any AMBIGUOUS term (anchorAmbiguousTermClaimants,
-// chaos3899_anchor.go): a term whose own read named two-or-more claimants
-// contributes nothing to BindAnchor's decisive path (R4) but its claimant
-// set is exactly the disambiguation an offer should present, and the
-// pre-CHAOS-4012 builder had no path to surface it at all -- offering only
-// ever covered CROSS-term collisions (two different terms each
-// independently unique), never a single term's own multiple claimants,
-// which measurement (CHAOS-4012) found is the dominant real-world shape.
+// claimant."
 //
-// The decisiveness check below stays scoped to the UNIQUE-per-term scan
-// alone (never the widened set) -- BindAnchor's own decisiveness is
-// entirely a function of anchorTermCandidates, so that is the only input
-// this function may consult to decide "is there really nothing to elicit."
-//
-// Four cases, all ruled explicitly (never inferred):
-//  1. EXACTLY ONE distinct (kind, canonical_id) UNIQUE-per-term candidate:
-//     this is already decisive by design brief §1.1/R4 -- BindAnchor
-//     itself would succeed on this same data, so there is nothing to
-//     elicit. Offering it anyway would be a clarification stop with zero
-//     information gain (the exact category error the §1.3 never-elicit
-//     rule targets), and would feed the Bridge a low-information
-//     single-option "confirmation" -- a noise label, not a real one.
-//     Returns an EMPTY StructureOfferMaterial (no Missing entry at all).
-//  2. TWO OR MORE distinct unique-per-term candidates (BindAnchor itself
-//     would refuse, ReasonAnchorNotUnique): genuine ambiguity across
-//     terms -- offer ONE AnchorOption per distinct candidate,
-//     subject_anchor becomes Missing.
-//  3. Any AMBIGUOUS term's own claimants (CHAOS-4012 widening): merged
-//     into the same offered set, deduped by (kind, canonical_id) against
-//     the unique-per-term candidates (which take priority -- a term that
-//     resolves uniquely is stronger evidence than one entry among an
-//     ambiguous term's several claimants) and against each other.
-//  4. ZERO candidates after both scans (no claimant material at all, or an
+// Three cases, all ruled explicitly (never inferred):
+//  1. EXACTLY ONE distinct (kind, canonical_id) candidate: this is already
+//     decisive by design brief §1.1/R4 -- BindAnchor itself would succeed
+//     on this same data, so there is nothing to elicit. Offering it anyway
+//     would be a clarification stop with zero information gain (the exact
+//     category error the §1.3 never-elicit rule targets), and would feed
+//     the Bridge a low-information single-option "confirmation" -- a noise
+//     label, not a real one. Returns an EMPTY StructureOfferMaterial (no
+//     Missing entry at all).
+//  2. TWO OR MORE distinct candidates (BindAnchor itself would refuse,
+//     ReasonAnchorNotUnique): genuine ambiguity across terms -- offer ONE
+//     AnchorOption per distinct candidate, subject_anchor becomes Missing.
+//  3. ZERO candidates (no unique-claimant material at all, or an
 //     incomplete identity-universe read): subject_anchor is STILL
 //     disclosed as Missing, with an EMPTY AnchorOptions list -- "disclosed
 //     as missing-and-helpful, nothing offerable" (team-lead ruling); an
 //     absent block or a silently dropped Missing row is forbidden either
 //     way.
 func anchorOfferMaterial(claimantsByTerm map[string][]IdentityMatch, complete bool) contextfabric.StructureOfferMaterial {
-	unique := anchorTermCandidates(claimantsByTerm, complete)
-	if len(unique) == 1 {
+	candidates := anchorTermCandidates(claimantsByTerm, complete)
+	if len(candidates) == 1 {
 		return contextfabric.StructureOfferMaterial{}
-	}
-	ambiguous := anchorAmbiguousTermClaimants(claimantsByTerm, complete)
-	candidates := make(map[anchorCandidateKey]anchorCandidateInfo, len(unique)+len(ambiguous))
-	for k, v := range unique {
-		candidates[k] = v
-	}
-	for k, v := range ambiguous {
-		if _, exists := candidates[k]; exists {
-			continue
-		}
-		candidates[k] = v
 	}
 	keys := make([]anchorCandidateKey, 0, len(candidates))
 	for k := range candidates {
