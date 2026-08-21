@@ -2485,6 +2485,13 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// BEFORE ACR_TEST_TRIAL_LIMIT below so a limited dry run bounds EACH
 	// shard independently, not the pre-shard total.
 	entries := annex.Entries
+	// codex round-1 finding: ACR_TEST_TRIAL_SHARD_INDEX set with
+	// ACR_TEST_TRIAL_SHARD_COUNT unset used to be silently ignored (ran
+	// the whole annex, unsharded) -- a partially configured parallel run
+	// must fail closed, not fall back to "sequential" without saying so.
+	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_INDEX"); raw != "" && os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT") == "" {
+		t.Fatalf("ACR_TEST_TRIAL_SHARD_INDEX=%q is set but ACR_TEST_TRIAL_SHARD_COUNT is not -- both or neither", raw)
+	}
 	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT"); raw != "" {
 		shardCount, cerr := strconv.Atoi(raw)
 		if cerr != nil || shardCount <= 0 {
@@ -2495,7 +2502,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if ierr != nil || shardIndex < 0 || shardIndex >= shardCount {
 			t.Fatalf("ACR_TEST_TRIAL_SHARD_INDEX must be an integer in [0, %d), got %q", shardCount, indexRaw)
 		}
-		sharded := make([]twoTurnOracleEntry, 0, (len(entries)+shardCount-1)/shardCount)
+		// codex round-1 finding: capacity (len(entries)+shardCount-1)/shardCount
+		// overflows int for a huge shardCount (e.g. MaxInt64), producing a
+		// negative make() capacity and a makeslice panic. len(entries) is
+		// always a safe, overflow-free upper bound regardless of shardCount.
+		sharded := make([]twoTurnOracleEntry, 0, len(entries))
 		for i, entry := range entries {
 			if i%shardCount == shardIndex {
 				sharded = append(sharded, entry)
