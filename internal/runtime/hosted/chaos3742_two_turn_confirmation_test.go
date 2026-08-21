@@ -969,7 +969,25 @@ type twoTurnReport struct {
 	// confirmed_wrong alone, having proven NOTHING about ordinary
 	// conversion. The final assertion requires this > 0.
 	PositiveAppliedCount int `json:"positive_applied_count"`
-	GateReachableCount   int `json:"gate_reachable_count"`
+	// WindowPositiveAppliedCount (CHAOS-4040 harness follow-up, team-lead
+	// ruling 2026-08-21, reconciling against sol's full non-vacuity list)
+	// is the winr_ positive-control proof PositiveAppliedCount alone
+	// cannot give: that field is POOLED across every member, so a run
+	// where window's own receipt-redemption path is silently broken could
+	// still read PositiveAppliedCount>0 entirely from kind/handle/anchor
+	// conversions -- never proving window's own escape hatch out of the
+	// gate actually works. Counted when the window member's positive arm
+	// BOTH confirms (memberApplied's own Provenance==clarification_confirmed
+	// check) AND reaches a real decisive path (CommittedCount>0) --
+	// team-lead's own two-part bar, not confirmation alone. The
+	// complementary half of the proof ("removing that receipt returns to
+	// the gate") needs no separate call: the offer this positive-arm call
+	// redeems can only exist because THIS SAME case's own turn 1 call (no
+	// receipt) was gated in the first place (turn1's WindowClarification,
+	// selectOracleOffer's own precondition) -- the paired evidence already
+	// lives in this run, not a new one. Non-vacuity bar: must be > 0.
+	WindowPositiveAppliedCount int `json:"window_positive_applied_count"`
+	GateReachableCount         int `json:"gate_reachable_count"`
 	// StructureAndWindowDisclosureAbsentCount (orchestrator ruling,
 	// 2026-08-20, post-live-run: renamed from NoDiscriminatorsCount, which
 	// this run proved gets misread as the P1 acceptance row's
@@ -2557,6 +2575,13 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		if positive.Applied {
 			report.PositiveAppliedCount++
+			// WindowPositiveAppliedCount (see its own doc comment): the
+			// winr_ positive-control proof, scoped to window specifically
+			// so it cannot hide behind kind/handle/anchor conversions the
+			// way the pooled PositiveAppliedCount bar above can.
+			if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) && positive.CommittedCount > 0 {
+				report.WindowPositiveAppliedCount++
+			}
 		}
 		if positive.CommittedCount > 0 {
 			report.GateReachableCount++
@@ -2738,6 +2763,17 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// comment for why turn 1 alone proves it.
 	if report.WindowClassDefaultGatedCount == 0 {
 		t.Errorf("window_class_default_gated_count=0 across %d cases -- gate 2 (the engine's own class-table default, CHAOS-4040) never fired once on turn 1's windowless requests, so this run has zero live-corpus evidence gate 2 works at all (non-vacuity)", report.CasesRun)
+	}
+	// winr_ positive control (team-lead ruling 2026-08-21, reconciling
+	// against sol's full CHAOS-4040 non-vacuity list): proves the escape
+	// hatch out of the gate -- a confirmed receipt reaching a real
+	// decisive answer -- actually works, scoped to window specifically so
+	// it cannot hide behind PositiveAppliedCount's own pooled kind/handle/
+	// anchor conversions. See WindowPositiveAppliedCount's own doc comment
+	// for why "removing the receipt returns to the gate" needs no separate
+	// call here.
+	if report.WindowPositiveAppliedCount == 0 {
+		t.Errorf("window_positive_applied_count=0 across %d cases -- window's own winr_ receipt redemption never once reached a confirmed, decisive answer this run, so this run has zero live-corpus evidence the escape hatch out of the CHAOS-4040 gate actually works (non-vacuity)", report.CasesRun)
 	}
 	if report.FalseNoMatchCount > 0 {
 		t.Errorf("false_no_match_count=%d, want 0 (a case with a real expected answer resolved to literal no_match -- the no-match-direction mirror of a wrong commit)", report.FalseNoMatchCount)
