@@ -958,7 +958,12 @@ type twoTurnReport struct {
 	// what produced that zero, not an unmeasured or broken arm; see their
 	// own doc comments. "3" marked the rename plus the controls/anti-
 	// vacuity/single-satisfier fields below; "1" was the shape PR #167
-	// shipped. Bump this again on any future field rename, removal, or
+	// shipped. "6" marks CHAOS-4033's shard-selection support (codex
+	// round-3 finding): ApplicableMembers is new (the set backing this
+	// process's own AntiVacuityValid, serialized so a sharded run's merge
+	// step can recompute anti-vacuity over the union of shards), and the
+	// shared trialProvenance struct gained ExecutionShape/ShardIndex/
+	// ShardCount. Bump this again on any future field rename, removal, or
 	// meaning change so a consumer can detect drift instead of silently
 	// reading a stale key under a new meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
@@ -1122,7 +1127,18 @@ type twoTurnReport struct {
 	// finding #4: a global scalar lets one member's success mask another
 	// member's permanently-unredeemable designated negative).
 	ConfirmedWrongRedeemedCount map[string]int `json:"confirmed_wrong_redeemed_committable_count"`
-	AntiVacuityValid            bool           `json:"anti_vacuity_valid"`
+	// ApplicableMembers (CHAOS-4033 parallel-shard support) is the sorted
+	// set backing THIS process's own AntiVacuityValid below -- every member
+	// this process's own entries designated at least one committable
+	// negative for. Stored (not just derived-and-discarded) so a sharded
+	// run's merge step can recompute anti-vacuity over the UNION of
+	// shards' entries: a shard sharded by corpus case can legitimately see
+	// zero cases for a member the corpus assigns to a different shard, so
+	// per-shard AntiVacuityValid is not the authoritative signal for a
+	// parallel run -- the merge of ApplicableMembers and
+	// ConfirmedWrongRedeemedCount across every shard is.
+	ApplicableMembers []string `json:"applicable_members"`
+	AntiVacuityValid  bool     `json:"anti_vacuity_valid"`
 	// AnchorAntiVacuityDenominator/AnchorNonEnumerableKindExcludedCount
 	// (orchestrator ruling 2026-08-20): subject_anchor's anti-vacuity
 	// requirement is scoped to negatives whose kind the live identity
@@ -2441,7 +2457,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "5",
+		ReportSchemaVersion: "6",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -2454,11 +2470,76 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		ConfirmedWrongRedeemedCount: map[string]int{},
 	}
 
-	// ACR_TEST_TRIAL_LIMIT bounds how many annex entries this run processes
-	// (codex round-1 finding #11: run-two-turn.sh already exports this, but
-	// nothing read it). Mirrors TestGenerativeTrialCorpus's own limit
-	// semantics: cap, never reorder.
+	// ACR_TEST_TRIAL_SHARD_COUNT/ACR_TEST_TRIAL_SHARD_INDEX (CHAOS-4033):
+	// split annex.Entries across N independent processes, one per isolated
+	// environment, so the CASE axis parallelizes safely. This is
+	// deliberately NOT arm-level parallelism: the four twoTurnArm values
+	// run sequentially in-process for every entry and have real same-case
+	// data dependencies (confirmed_wrong reads back a result positive
+	// wrote via seedAnchorNegativeResult; mutation's
+	// stale_superseded_offer probe needs positive's redeemed offer from
+	// the SAME entry) -- there is no per-arm invocation knob to isolate,
+	// and building one would mean re-running turn 1 independently per arm
+	// or serializing result state across process boundaries. Corpus
+	// entries, by contrast, are independent of each other once each
+	// isolated environment gets its own fresh org/DB.
+	//
+	// SCOPE NOTE (codex round-3 finding, MEDIUM): this commit adds ONLY
+	// the shard-selection knob and the per-shard coverage-gate skip below
+	// (see "sharded" near the end of this function) -- it does NOT ship a
+	// merge tool. A single sharded process's own artifact is therefore NOT
+	// standalone valid evidence of anything: its coverage gates are
+	// intentionally silent, and nothing yet re-checks them over the union
+	// of shards. Do not invoke ACR_TEST_TRIAL_SHARD_COUNT for a real
+	// measurement run until scripts/trial/run-two-turn-parallel.sh (the
+	// CHAOS-4033 follow-up PR) exists and its merge step is what actually
+	// gates validity -- until then this knob is dormant, exercised only by
+	// this package's own shard-selection tests.
+	//
+	// Round-robin by POSITION in annex.Entries (not by entry.Index, which
+	// can already be a non-contiguous corpus index) so shards stay
+	// balanced regardless of how entries cluster in the annex. Applied
+	// BEFORE ACR_TEST_TRIAL_LIMIT below so a limited dry run bounds EACH
+	// shard independently, not the pre-shard total.
 	entries := annex.Entries
+	// codex round-1 finding: ACR_TEST_TRIAL_SHARD_INDEX set with
+	// ACR_TEST_TRIAL_SHARD_COUNT unset used to be silently ignored (ran
+	// the whole annex, unsharded) -- a partially configured parallel run
+	// must fail closed, not fall back to "sequential" without saying so.
+	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_INDEX"); raw != "" && os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT") == "" {
+		t.Fatalf("ACR_TEST_TRIAL_SHARD_INDEX=%q is set but ACR_TEST_TRIAL_SHARD_COUNT is not -- both or neither", raw)
+	}
+	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT"); raw != "" {
+		shardCount, cerr := strconv.Atoi(raw)
+		if cerr != nil || shardCount <= 0 {
+			t.Fatalf("ACR_TEST_TRIAL_SHARD_COUNT must be a positive integer, got %q", raw)
+		}
+		indexRaw := requireEnv(t, "ACR_TEST_TRIAL_SHARD_INDEX")
+		shardIndex, ierr := strconv.Atoi(indexRaw)
+		if ierr != nil || shardIndex < 0 || shardIndex >= shardCount {
+			t.Fatalf("ACR_TEST_TRIAL_SHARD_INDEX must be an integer in [0, %d), got %q", shardCount, indexRaw)
+		}
+		// codex round-1 finding: capacity (len(entries)+shardCount-1)/shardCount
+		// overflows int for a huge shardCount (e.g. MaxInt64), producing a
+		// negative make() capacity and a makeslice panic. len(entries) is
+		// always a safe, overflow-free upper bound regardless of shardCount.
+		sharded := make([]twoTurnOracleEntry, 0, len(entries))
+		for i, entry := range entries {
+			if i%shardCount == shardIndex {
+				sharded = append(sharded, entry)
+			}
+		}
+		entries = sharded
+		report.Provenance.ExecutionShape = "parallel"
+		report.Provenance.ShardIndex = &shardIndex
+		report.Provenance.ShardCount = &shardCount
+	}
+
+	// ACR_TEST_TRIAL_LIMIT bounds how many annex entries THIS PROCESS'S
+	// share of the run (the whole annex when unsharded, or this shard's
+	// own slice above) processes (codex round-1 finding #11: run-two-turn.sh
+	// already exports this, but nothing read it). Mirrors
+	// TestGenerativeTrialCorpus's own limit semantics: cap, never reorder.
 	if raw := os.Getenv("ACR_TEST_TRIAL_LIMIT"); raw != "" {
 		limit, lerr := strconv.Atoi(raw)
 		if lerr != nil || limit <= 0 {
@@ -2740,10 +2821,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// least one.
 	var unsatisfiedMembers []string
 	for member := range applicableMembers {
+		report.ApplicableMembers = append(report.ApplicableMembers, member)
 		if report.ConfirmedWrongRedeemedCount[member] < 1 {
 			unsatisfiedMembers = append(unsatisfiedMembers, member)
 		}
 	}
+	sort.Strings(report.ApplicableMembers)
 	sort.Strings(unsatisfiedMembers)
 	report.AntiVacuityValid = len(applicableMembers) > 0 && len(unsatisfiedMembers) == 0
 
@@ -2770,16 +2853,35 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	t.Logf("two-turn report written to %s: cases_run=%d gate_reachable=%d wrong_commits=%d anti_vacuity_valid=%v",
 		outPath, report.CasesRun, report.GateReachableCount, report.WrongCommitCount, report.AntiVacuityValid)
 
+	// sharded (codex round-2 finding, BLOCK): every non-vacuity/coverage
+	// gate below assumes THIS PROCESS ran the whole corpus. A shard split
+	// by corpus case can legitimately see zero cases of a given category
+	// -- no window member, no control case, no kind/handle inferred-tier
+	// commit, an applicable member whose OTHER committable entries landed
+	// in a different shard -- while the overall sharded run's UNION covers
+	// it fine. Those coverage bars are therefore SKIPPED per shard here
+	// and re-evaluated ONLY by the merge step over every shard's combined
+	// data (ApplicableMembers ∪ ConfirmedWrongRedeemedCount, summed
+	// CasesRun/PositiveAppliedCount/etc -- see
+	// scripts/trial/run-two-turn-parallel.sh's merge step, CHAOS-4033).
+	// Genuine correctness bars (a wrong commit, a false no_match, an
+	// unjustified inferred-tier commit, a mutation probe that ran but
+	// never tripped) are NEVER skipped: a real per-case violation is real
+	// regardless of how small the shard is. sharded is false (every check
+	// below unconditional, byte-identical to before this field existed)
+	// whenever ACR_TEST_TRIAL_SHARD_COUNT is unset.
+	sharded := report.Provenance.ExecutionShape == "parallel"
+
 	// Fail-open guard (codex round-3 finding #2): a run where every case
 	// offer-missed or errored could otherwise pass -- zero wrong commits
 	// and a satisfied anti-vacuity check prove nothing when NOTHING ever
 	// actually converted. This is checked BEFORE anti-vacuity so a
 	// completely broken harness fails on the more fundamental signal
 	// first, not last.
-	if report.PositiveAppliedCount == 0 {
+	if !sharded && report.PositiveAppliedCount == 0 {
 		t.Errorf("positive_applied_count=0 across %d cases -- the positive arm never converted a single case, so this run proves nothing about conversion (fails open otherwise: zero wrong commits and a vacuously-true anti-vacuity check would not catch a harness that never actually confirms anything)", report.CasesRun)
 	}
-	if !report.AntiVacuityValid {
+	if !sharded && !report.AntiVacuityValid {
 		t.Errorf("confirmed_wrong arm anti-vacuity check failed: members %v redeemed zero designated committable negatives (design brief v4/sol-r3 #4) -- the arm is INVALID for this run", unsatisfiedMembers)
 	}
 	if report.WrongCommitCount > 0 {
@@ -2801,7 +2903,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// never ran" or "every case errored" -- these three bars close that
 	// gap. Checked in this order: non-vacuity first (mirrors
 	// PositiveAppliedCount's own ordering above), then the causal proof.
-	if report.WindowInferredTierRanCount == 0 {
+	if !sharded && report.WindowInferredTierRanCount == 0 {
 		t.Errorf("window_inferred_tier_ran_count=0 -- the window inferred-tier arm never once completed across %d cases, so window_commit_count=0 proves nothing about the CHAOS-4040 gate (non-vacuity)", report.CasesRun)
 	}
 	if report.WindowGatedCount != report.WindowInferredTierRanCount {
@@ -2814,7 +2916,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// gate 1 (it always injects an explicit field) -- this is gate 2's
 	// only live-corpus signal, see WindowClassDefaultGatedCount's own doc
 	// comment for why turn 1 alone proves it.
-	if report.WindowClassDefaultGatedCount == 0 {
+	if !sharded && report.WindowClassDefaultGatedCount == 0 {
 		t.Errorf("window_class_default_gated_count=0 across %d cases -- gate 2 (the engine's own class-table default, CHAOS-4040) never fired once on turn 1's windowless requests, so this run has zero live-corpus evidence gate 2 works at all (non-vacuity)", report.CasesRun)
 	}
 	// winr_ positive control (team-lead ruling 2026-08-21, reconciling
@@ -2825,7 +2927,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// anchor conversions. See WindowPositiveAppliedCount's own doc comment
 	// for why "removing the receipt returns to the gate" needs no separate
 	// call here.
-	if report.WindowPositiveAppliedCount == 0 {
+	if !sharded && report.WindowPositiveAppliedCount == 0 {
 		t.Errorf("window_positive_applied_count=0 across %d cases -- window's own winr_ receipt redemption never once reached a confirmed, decisive answer this run, so this run has zero live-corpus evidence the escape hatch out of the CHAOS-4040 gate actually works (non-vacuity)", report.CasesRun)
 	}
 	if report.FalseNoMatchCount > 0 {
@@ -2852,7 +2954,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// nothing about whether this new bar can distinguish justified from
 	// unjustified -- InferredPairInvalidCount==0 && InferredUnjustifiedCount==0
 	// would otherwise pass vacuously.
-	if report.InferredKindHandleDecisiveCount == 0 {
+	if !sharded && report.InferredKindHandleDecisiveCount == 0 {
 		t.Errorf("inferred_kind_handle_decisive_count=0 -- kind/handle inferred-tier never committed a single case this run, so the v4 measurement contract proves nothing (non-vacuity)")
 	}
 	// A run whose mutation arm did not trip every probe it attempted is
@@ -2892,7 +2994,9 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// being zero is itself the finding: D0 cannot be reported at all, so
 	// the run is INVALID for this check rather than silently green.
 	if report.ControlsTotal == 0 {
-		t.Errorf("controls_total=0: this run recorded NO control cases (entries with no expected answer) -- D0 cannot be reported and the run is INVALID for this check")
+		if !sharded {
+			t.Errorf("controls_total=0: this run recorded NO control cases (entries with no expected answer) -- D0 cannot be reported and the run is INVALID for this check")
+		}
 	} else if report.ControlsWitnessed < report.ControlsTotal {
 		t.Errorf("controls_witnessed=%d/%d, want %d/%d (D0: every control case must commit nothing and disclose structure at turn 1)", report.ControlsWitnessed, report.ControlsTotal, report.ControlsTotal, report.ControlsTotal)
 	}
