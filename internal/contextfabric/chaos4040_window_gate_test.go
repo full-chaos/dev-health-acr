@@ -121,6 +121,30 @@ func TestWindowGate_ExplicitUnconfirmed_InterceptsBeforeInterpret(t *testing.T) 
 // run (the gate needs the interpreted Shape) and BEFORE subject resolution.
 // CHAOS-4040's own run-3 acceptance bar: "class-default cases
 // interpretation-only".
+//
+// This scenario is also CHAOS-3742's own D0 control shape (a case whose
+// subject the graph would never resolve -- the fake graph's own
+// resolution field is never even consulted here, resolveCalls stays 0,
+// proving the gate does not care what resolution would have found) --
+// team-lead's own pre-PR design check (2026-08-21): since gate 2 fires
+// BEFORE ResolveSubjects, StructureNeeds (composeStructureNeeds's ONLY
+// call site, unresolved.go, takes StructureOfferMaterial -- ResolveSubjects'
+// own second return value) is structurally IMPOSSIBLE to populate here --
+// nil, always, by construction, never merely omitted. Explicitly asserted
+// below alongside WindowClarification's presence: the two-turn harness's
+// own disclosure-presence check (chaos3742_two_turn_confirmation_test.go)
+// is `turn1.StructureNeeds != nil || turn1.WindowClarification != nil` --
+// already OR'd, and already an established, PRE-CHAOS-4040 pattern (that
+// file's own codex round-2 finding #1: "a window-only stalled case can
+// have StructureNeeds==nil while WindowClarification is non-nil") -- so a
+// gate-2 result with WindowClarification-only disclosure satisfies it
+// exactly the same way a naturally window-only-ambiguous case already
+// did before this ticket. Both the harness's arm-skip logic and its
+// corrected controls_witnessed metric (zero commits + disclosure
+// present, CHAOS-3742) read this OR unchanged; CHAOS-4040 does not touch
+// either check, it only changes WHICH corpus cases land in the
+// window-only-disclosure bucket (every windowless one, not only cases
+// where window happened to be independently ambiguous).
 func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *testing.T) {
 	t.Parallel()
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
@@ -138,7 +162,7 @@ func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *tes
 		t.Fatalf("Interpret called %d times, want exactly 1: class-default gating needs the interpreted Shape and must not call it twice", interpreter.calls)
 	}
 	if graph.resolveCalls != 0 || graph.discoverCalls != 0 {
-		t.Fatalf("graph calls (resolve=%d, discover=%d), want 0/0: gated before subject resolution", graph.resolveCalls, graph.discoverCalls)
+		t.Fatalf("graph calls (resolve=%d, discover=%d), want 0/0: gated before subject resolution -- this proves the gate fires REGARDLESS of what resolution would have found, including a D0-control-shaped case whose subject would never resolve", graph.resolveCalls, graph.discoverCalls)
 	}
 	if result.Status != InvestigationClarificationRequired {
 		t.Fatalf("Status = %q, want clarification_required", result.Status)
@@ -147,7 +171,10 @@ func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *tes
 		t.Fatalf("EffectiveEvidenceWindow = %#v, want a disclosed inferred_default window", result.EffectiveEvidenceWindow)
 	}
 	if result.WindowClarification == nil || len(result.WindowClarification.Options) == 0 {
-		t.Fatal("WindowClarification is nil or empty, want real receipt-bound options")
+		t.Fatal("WindowClarification is nil or empty, want real receipt-bound options -- alone sufficient to satisfy the harness's OR'd disclosure-presence check")
+	}
+	if result.StructureNeeds != nil {
+		t.Fatalf("StructureNeeds = %#v, want nil: structurally impossible at gate 2 (resolution, which StructureOfferMaterial derives from, never ran) -- not a regression, a precondition of gating before resolution", result.StructureNeeds)
 	}
 }
 
