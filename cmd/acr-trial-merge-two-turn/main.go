@@ -156,6 +156,9 @@ func run(outPath string, shardPaths []string, stdout io.Writer) error {
 	if err := validateShardSet(shards, shardPaths); err != nil {
 		return err
 	}
+	if err := validateResultUniqueness(shards, shardPaths); err != nil {
+		return err
+	}
 
 	merged := mergeReports(shards)
 
@@ -247,6 +250,42 @@ func validateShardSet(shards []twoTurnReport, paths []string) error {
 
 func mismatchErr(path, firstPath, field, got, want string) error {
 	return fmt.Errorf("%s: %s=%q does not match %s's %q -- shards must come from the SAME run (same corpus, same annex, same source tree) to merge safely", path, field, got, firstPath, want)
+}
+
+// resultKey identifies one twoTurnCaseResult row uniquely. Index alone is
+// NOT unique -- a single case legitimately produces up to 4 rows (one per
+// twoTurnArm value: positive, inferred_tier, confirmed_wrong, mutation --
+// chaos3742_two_turn_confirmation_test.go's 4 report.Results append sites),
+// and the mutation arm itself appends one row PER PROBE it runs for that
+// case (runTwoTurnMutationArm), so MutationProbe distinguishes those from
+// each other too. Empty for the other three arms, which never repeat.
+type resultKey struct {
+	Index         int
+	Arm           string
+	MutationProbe string
+}
+
+// validateResultUniqueness (codex round-3 finding, MEDIUM): validateShardSet
+// checks shard_index/shard_count HEADERS are complete and consistent, but
+// never checked the Results PAYLOAD actually partitions the corpus
+// disjointly -- a stale artifact, a re-run shard reusing an old
+// shard_index, or a future bug in the round-robin selection could silently
+// double-count a case's results into the merged sums/gates without this.
+// Checked across ALL shards together (not per-shard) so a duplicate
+// spanning two different shard files is caught, not just one repeated
+// within a single file.
+func validateResultUniqueness(shards []twoTurnReport, paths []string) error {
+	seen := map[resultKey]string{}
+	for i, s := range shards {
+		for _, r := range s.Results {
+			k := resultKey{Index: r.Index, Arm: r.Arm, MutationProbe: r.MutationProbe}
+			if prior, dup := seen[k]; dup {
+				return fmt.Errorf("duplicate result for case index=%d arm=%q mutation_probe=%q: reported by both %s and %s -- shards must partition the corpus disjointly; refusing to merge an overlapping or relabeled shard set", k.Index, k.Arm, k.MutationProbe, prior, paths[i])
+			}
+			seen[k] = paths[i]
+		}
+	}
+	return nil
 }
 
 // mergeReports combines every shard's counters/maps/sets into one artifact

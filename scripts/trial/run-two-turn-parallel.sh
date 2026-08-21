@@ -73,6 +73,15 @@ EXCHANGE_DIRS=()
 RESPONDER_PIDS=()
 TEST_PIDS=()
 SHARD_OUT=()
+# cleanup_had_issues (codex round-3 finding, LOW): set when a responder had
+# to be force-killed or a scratch container failed to remove -- the
+# measurement can still be fully valid (the artifact was already written
+# to disk before any of this teardown runs), so this never overrides
+# merge_status, but it DOES change a would-be exit 0 into a distinct exit
+# 3 at the very end, so an automated caller can tell "valid, clean" apart
+# from "valid, but needs manual cleanup follow-up" instead of both reading
+# as a silent, identical success.
+cleanup_had_issues=0
 
 # kill_descendants (codex round-2 finding, MEDIUM): a bare `kill "$pid"`
 # only signals that one process. Backgrounded jobs in this NON-interactive
@@ -103,23 +112,42 @@ kill_descendants() {
 # would leave teardown blocked indefinitely and every scratch container
 # running until something kills this script by hand. Bounded instead: wait
 # up to timeout_s, then TERM and (if still alive) KILL the WHOLE process
-# tree via kill_descendants -- run-responder-codex.sh's own EXIT/INT/TERM
-# trap still wipes its private CODEX_HOME either way, so a forced kill
-# here does not leak that.
+# tree via kill_descendants.
+#
+# ACCEPTED RESIDUAL (codex round-3 finding, MEDIUM, deliberately not chased
+# further): kill_descendants snapshots the tree once per signal, so a
+# descendant forking in the ~2s window between the TERM pass and the KILL
+# pass -- or an intermediate process exiting on TERM and reparenting a
+# TERM-ignoring child before that KILL pass -- can theoretically slip
+# through. A fully race-free kill needs OS support this script cannot rely
+# on portably (Linux cgroups, or `setsid`, which macOS does not ship by
+# default) -- out of proportion to the actual risk: this path only runs
+# after an already-exceptional timeout, the trial artifact was already
+# written to disk before any of this runs (see the caller), and the worst
+# case is a leaked subprocess/temp dir, never corrupted measurement data.
+# A forced KILL (as opposed to TERM) also bypasses run-responder-codex.sh's
+# own EXIT/INT/TERM trap, which can leave its private CODEX_HOME scratch
+# dir (under $TMPDIR, never the shared ~/.codex) behind uncleaned.
+#
+# Returns 1 if a forced kill was needed (0 if the process exited on its
+# own) -- callers use this to distinguish a clean run from one that needed
+# manual follow-up, without treating it as a measurement failure.
 wait_with_timeout() {
-  local pid="$1" timeout_s="$2" waited=0
+  local pid="$1" timeout_s="$2" waited=0 killed=0
   while kill -0 "$pid" 2>/dev/null; do
     if ((waited >= timeout_s)); then
       echo "run-two-turn-parallel.sh: pid $pid did not exit within ${timeout_s}s -- killing its process tree" >&2
       kill_descendants "$pid" TERM
       sleep 2
       kill_descendants "$pid" KILL
+      killed=1
       break
     fi
     sleep 1
     waited=$((waited + 1))
   done
   wait "$pid" 2>/dev/null || true
+  return "$killed"
 }
 
 # Safety-net cleanup: reached on ANY exit path (success falls through the
@@ -229,7 +257,7 @@ for exdir in "${EXCHANGE_DIRS[@]}"; do
   touch "$exdir/DONE"
 done
 for pid in "${RESPONDER_PIDS[@]}"; do
-  wait_with_timeout "$pid" 300
+  wait_with_timeout "$pid" 300 || cleanup_had_issues=1
 done
 RESPONDER_PIDS=() # waited above; trap becomes a no-op for these
 
@@ -243,6 +271,7 @@ for c in "${PG_CONTAINERS[@]}"; do
 done
 if [[ "${#failed_containers[@]}" -gt 0 ]]; then
   echo "run-two-turn-parallel.sh: failed to remove ${#failed_containers[@]} scratch container(s) -- clean up manually: ${failed_containers[*]/#/docker rm -f }" >&2
+  cleanup_had_issues=1
 fi
 PG_CONTAINERS=() # torn down above; trap becomes a no-op for these
 
@@ -258,4 +287,18 @@ merge_status=$?
 set -e
 
 echo "PARALLEL run finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) merge_exit=$merge_status merged_out=$merged_out"
-exit "$merge_status"
+
+# codex round-3 finding, LOW: merge_status alone used to be the ENTIRE
+# exit status, so a forced responder kill or a leaked scratch container
+# read identically to a fully clean run -- exit 3 distinguishes "valid
+# measurement, but see the warnings above for manual cleanup follow-up"
+# from a genuine measurement failure (merge_status itself, never
+# overridden here) or a fully clean success.
+if [[ "$merge_status" -ne 0 ]]; then
+  exit "$merge_status"
+fi
+if [[ "$cleanup_had_issues" -eq 1 ]]; then
+  echo "run-two-turn-parallel.sh: measurement VALID but cleanup needed a forced kill or left a container behind -- see warnings above; exiting 3 to flag this distinctly from a clean run" >&2
+  exit 3
+fi
+exit 0
