@@ -572,6 +572,23 @@ func (c *twoTurnTraceCapture) singleSatisfierVerified() bool {
 	return false
 }
 
+// censusRan reports whether the CensusFunc-gated shadow evidence round
+// (RunShadowEvidenceRound) fired at all during the captured call --
+// ControlsWitnessedNoMatchCensusBacked's own "WHERE A CENSUS RAN" half
+// (design brief line 960). RunShadowEvidenceRound unconditionally traces
+// an "evidence_round" event on every path it takes (chaos3899_evidence_round.go's
+// own emit() wrapper), so ANY such event proves the round ran, regardless
+// of its outcome -- unlike singleSatisfierVerified above, which further
+// requires a specific outcome.
+func (c *twoTurnTraceCapture) censusRan() bool {
+	for _, e := range c.events {
+		if e.Stage == "evidence_round" {
+			return true
+		}
+	}
+	return false
+}
+
 // memberApplied reports whether member was actually confirmed/applied on
 // result. Window is a SEPARATE mechanism from every other member (codex
 // round-3 finding, confirmed against engine.go:836-840/window.go:420-423):
@@ -659,11 +676,15 @@ type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
 	// renames are otherwise invisible to a consumer parsing the JSON --
 	// StructureAndWindowDisclosureAbsentCount replaced NoDiscriminatorsCount
-	// under the SAME struct with no version marker). "2" marks this
-	// reshaped report (the rename plus the new controls/anti-vacuity/
-	// single-satisfier fields below); "1" was the shape PR #167 shipped.
-	// Bump this again on any future field rename or removal so a consumer
-	// can detect drift instead of silently reading a stale key.
+	// under the SAME struct with no version marker). "3" marks the CHAOS-3742
+	// run-2 root-cause fix (team-lead ruling 2026-08-20): ControlsWitnessed's
+	// MEANING changed (brief-conformant control-ok, not literal
+	// Status==no_match) and ControlsWitnessedNoMatchCensusBacked was added
+	// to carry the old, narrower signal informationally. "2" marked the
+	// rename plus the controls/anti-vacuity/single-satisfier fields below;
+	// "1" was the shape PR #167 shipped. Bump this again on any future
+	// field rename, removal, or meaning change so a consumer can detect
+	// drift instead of silently reading a stale key under a new meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
 	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
@@ -730,32 +751,57 @@ type twoTurnReport struct {
 	AnchorNonEnumerableKindExcludedCount int            `json:"anchor_non_enumerable_kind_excluded_count"`
 	MutationProbesTripped                map[string]int `json:"mutation_probes_tripped"`
 	MutationProbesRun                    map[string]int `json:"mutation_probes_run"`
-	// ControlsTotal/ControlsWitnessed: see controlSeen/controlWitnessed's
-	// own doc comment at the call site for the exact definition and its
-	// limits (best-effort Status==no_match proxy, no attestation
-	// visibility).
+	// ControlsTotal/ControlsWitnessed: see controlSeen/controlOK's own doc
+	// comment at the call site for the exact definition.
 	//
-	// TWO SCOPE LIMITS a reader must know before comparing this pair to
-	// the DP9 "controls 19/19" bar (codex round-3, documented rather than
-	// chased further -- neither is a hidden gap, both were already true
-	// of every other bar this harness reports and are called out here
-	// for the same reason StructureAndWindowDisclosureAbsentCount is):
-	//  1. ControlsTotal reflects only the annex entries THIS run actually
-	//     processed -- capped by ACR_TEST_TRIAL_LIMIT when set. It is
-	//     never asserted equal to the full annex's control count; compare
-	//     it to 19 externally, the same way GateReachableCount is
-	//     compared to its own >=10 bar rather than asserted against it.
-	//  2. ControlsWitnessed counts wire-level Status==no_match, which
-	//     ALSO fires on the trivial empty-candidate-pool path
-	//     (subjectlessTerminalReason "empty_pool") -- a path that never
-	//     runs the evidence round and so carries no census attestation at
-	//     all. It is therefore a proxy for "witnessed no_match", not
-	//     proof of the design brief's stronger "attestation present"
-	//     claim; this harness has no wire-level signal that distinguishes
-	//     the two.
-	ControlsTotal     int                 `json:"controls_total"`
-	ControlsWitnessed int                 `json:"controls_witnessed"`
-	Results           []twoTurnCaseResult `json:"results"`
+	// ControlsWitnessed is brief-conformant (CHAOS-3742 run-2 root cause,
+	// team-lead ruling 2026-08-20, design brief lines 958/960): a control
+	// is "ok" when it commits NOTHING and the turn 1 terminal DISCLOSED
+	// structure (StructureNeeds or WindowClarification present) -- brief
+	// line 958's "clarify or no_match terminals" are BOTH acceptable
+	// control outcomes. The run-2 proxy this replaced checked literal
+	// Status==no_match only, which is narrower than the ratified bar and
+	// systematically undercounts: real control questions overwhelmingly
+	// retrieve at least one plausible-but-unconfident candidate and
+	// correctly land on clarification_required, never no_match --
+	// unresolved.go's resolveTerminalStatus returns clarification_required
+	// for ANY non-empty candidate pool once AllowClarification=true (every
+	// harness in this package sets it true), and no_match only for a
+	// genuinely EMPTY pool (see
+	// TestInvestigateConvertsAmbiguousResolutionToClarificationRequired /
+	// TestInvestigateEmptyResolutionIsNoMatch, internal/contextfabric/unresolved_test.go).
+	// The old proxy scored every one of those (correct) clarification_required
+	// controls as a miss.
+	//
+	// ONE SCOPE LIMIT a reader must know before comparing this to the DP9
+	// "controls 19/19" bar (codex round-3, documented rather than chased
+	// further): ControlsTotal reflects only the annex entries THIS run
+	// actually processed -- capped by ACR_TEST_TRIAL_LIMIT when set. It is
+	// never asserted equal to the full annex's control count; compare it
+	// to 19 externally, the same way GateReachableCount is compared to
+	// its own >=10 bar rather than asserted against it.
+	ControlsTotal     int `json:"controls_total"`
+	ControlsWitnessed int `json:"controls_witnessed"`
+	// ControlsWitnessedNoMatchCensusBacked is INFORMATIONAL ONLY (no pass/
+	// fail bar): the narrower, stronger claim design brief line 960
+	// separately makes -- "no_match remains WITNESSED (attestation
+	// present) WHERE A CENSUS RAN". True only when turn 1's own Status was
+	// the literal no_match AND the CensusFunc-gated evidence round
+	// actually fired for that specific call (captured via the SAME
+	// hosted.Options.ResolutionTracer hook SingleSatisfierVerified uses,
+	// reset/read around the outer turn 1 call the same sequential-single-
+	// caller way runTwoTurnInferredTierArm already does around its own
+	// call). Expected to be near-zero for a well-designed corpus:
+	// resolveTerminalStatus only reaches no_match on a genuinely EMPTY
+	// candidate pool, while RunShadowEvidenceRound only runs when a
+	// resolution stalled with candidates present (resolve.go:1086,
+	// `len(resolution.Committed)==0 && searchTruncated`) -- the two
+	// preconditions are close to mutually exclusive by construction. See
+	// CHAOS-4039 for the related (distinct) inferred-tier finding this
+	// same "committed/stalled resolutions pay nothing" architecture
+	// produces.
+	ControlsWitnessedNoMatchCensusBacked int                 `json:"controls_witnessed_no_match_censusbacked"`
+	Results                              []twoTurnCaseResult `json:"results"`
 }
 
 // TestTwoTurnCaseResultCarriesNoQuestionText mirrors
@@ -1482,6 +1528,20 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 
 // twoTurnMutationProbe classifies a mutation-arm turn's outcome: tripped
 // means the expected veto/refusal actually happened.
+//
+// The remove_confirmation probe specifically (runTwoTurnMutationArm's probe
+// (i)) re-asks the case's own question with NO receipt attached at all --
+// so committedCount can be >0 here even though `applied` is (correctly)
+// false, whenever ordinary search alone is confident enough to commit the
+// case's true subject without needing ANY structure confirmation. That is
+// CHAOS-4039's own root-cause mechanism ("committed/stalled resolutions
+// pay nothing", resolve.go:1086) showing up a second way: a case whose
+// subject search resolves unassisted was never going to be blocked by
+// removing its confirming receipt, so a 1-untripped-per-run result here is
+// expected for exactly the same reason, not a probe defect to
+// re-investigate -- confirm it is CHAOS-4039's mechanism by checking
+// wrong_commit_count stays 0 for that case (twoTurnCommittedWrong), not by
+// re-deriving the census/receipt-independence chain from scratch.
 func twoTurnMutationProbe(applied bool, status string, committedCount int) (tripped bool) {
 	return !applied && committedCount == 0 && status != string(contractsv1.ContextFabricInvestigationComplete)
 }
@@ -1689,7 +1749,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "2",
+		ReportSchemaVersion: "3",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -1742,18 +1802,37 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		applicableMembers[entry.Member] = true
 	}
-	// controlSeen/controlWitnessed back the DP9 "controls X/19" report
-	// (orchestrator ruling 2026-08-20): a control is a corpus case with no
-	// expected answer (trialCase.ExpectID=="" -- the SAME definition
+	// controlSeen/controlOK back the DP9 "controls X/19" report (CHAOS-3742
+	// run-2 root cause, team-lead ruling 2026-08-20, design brief lines
+	// 958/960). A control is a corpus case with no expected answer
+	// (trialCase.ExpectID=="" -- the SAME definition
 	// generative_trial_live_test.go's own IsControl already uses, not a
-	// new band-based one). "Witnessed" here means turn 1's own Status was
-	// no_match -- a best-effort proxy for D0's "no_match remains WITNESSED
-	// (attestation present)": this harness has no visibility into the
-	// internal census attestation bit itself, only the wire-level Status,
-	// and says so explicitly in the report rather than claiming more than
-	// it observed.
+	// new band-based one).
+	//
+	// "OK" is brief-conformant: zero commits at turn 1 AND turn 1
+	// DISCLOSED structure (StructureNeeds or WindowClarification present)
+	// -- brief line 958's "clarify or no_match terminals" are BOTH
+	// acceptable. The run-2 proxy this replaced required literal turn 1
+	// Status==no_match specifically, which undercounted: real control
+	// questions overwhelmingly surface at least one plausible-but-
+	// unconfident candidate and correctly land on clarification_required
+	// (unresolved.go's resolveTerminalStatus never returns no_match for a
+	// non-empty candidate pool once AllowClarification=true, which every
+	// harness in this package sets), so the old proxy scored every one of
+	// those as a miss even though nothing wrongly committed.
+	//
+	// controlNoMatchCensusBacked separately backs
+	// ControlsWitnessedNoMatchCensusBacked, the narrower/stronger claim
+	// brief line 960 makes on top of "ok": literal no_match AND the
+	// CensusFunc-gated evidence round actually ran for that call
+	// (traceCapture.censusRan(), reset/read around the turn 1 call below
+	// the SAME sequential-single-caller way runTwoTurnInferredTierArm
+	// already does around its own call) -- informational only, no pass/
+	// fail bar; see ControlsWitnessedNoMatchCensusBacked's own doc comment
+	// for why it is expected to be near-zero by construction.
 	controlSeen := map[int]bool{}
-	controlWitnessed := map[int]bool{}
+	controlOK := map[int]bool{}
+	controlNoMatchCensusBacked := map[int]bool{}
 	for _, entry := range entries {
 		if entry.Index < 0 || entry.Index >= len(corpus) {
 			t.Fatalf("oracle annex entry names index %d, corpus has %d cases", entry.Index, len(corpus))
@@ -1771,6 +1850,9 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 
 		turn1Req := twoTurnRequest(entry.Index, tc, "turn1")
+		if traceCapture != nil {
+			traceCapture.reset()
+		}
 		turn1Ctx, turn1Cancel := context.WithTimeout(ctx, caseTimeout)
 		turn1, err := investigator.Investigate(turn1Ctx, principal, turn1Req)
 		turn1Cancel()
@@ -1779,20 +1861,27 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			continue
 		}
 		report.CasesRun++
-		if tc.ExpectID == "" {
-			if turn1.Status == contractsv1.ContextFabricInvestigationNoMatch {
-				controlWitnessed[entry.Index] = true
-			}
-		}
 		// codex round-2 finding #1: StructureNeeds and WindowClarification
 		// are composed INDEPENDENTLY on the subjectless-terminal path
 		// (unresolved.go) -- window is never added to
 		// StructureOfferMaterial.Missing (structure.go's composeStructureNeeds
 		// only tracks kind/anchor/handle), so a window-only stalled case can
 		// have StructureNeeds==nil while WindowClarification is non-nil.
+		// Computed once, shared by the control-ok check above and the
+		// skip-to-next-entry check below -- the same disclosure fact
+		// either way.
+		disclosurePresent := turn1.StructureNeeds != nil || turn1.WindowClarification != nil
+		if tc.ExpectID == "" {
+			if len(turn1.SubjectResolution.Committed) == 0 && disclosurePresent {
+				controlOK[entry.Index] = true
+			}
+			if turn1.Status == contractsv1.ContextFabricInvestigationNoMatch && traceCapture != nil && traceCapture.censusRan() {
+				controlNoMatchCensusBacked[entry.Index] = true
+			}
+		}
 		// Skipping on StructureNeeds alone would silently drop every
 		// window-only case from every arm.
-		if turn1.StructureNeeds == nil && turn1.WindowClarification == nil {
+		if !disclosurePresent {
 			report.StructureAndWindowDisclosureAbsentCount++
 			continue
 		}
@@ -1872,7 +1961,8 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	report.AntiVacuityValid = len(applicableMembers) > 0 && len(unsatisfiedMembers) == 0
 
 	report.ControlsTotal = len(controlSeen)
-	report.ControlsWitnessed = len(controlWitnessed)
+	report.ControlsWitnessed = len(controlOK)
+	report.ControlsWitnessedNoMatchCensusBacked = len(controlNoMatchCensusBacked)
 
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -1938,10 +2028,16 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			t.Errorf("case %d member %q: inferred-tier injection did not route to explicit_unattributed/inferred_default in the echo -- tier-routing finding", r.Index, r.Member)
 		}
 	}
-	// D0 controls (design brief: "no_match remains WITNESSED (attestation
-	// present)"). ControlsWitnessed is a best-effort Status==no_match
-	// proxy -- see controlSeen/controlWitnessed's own doc comment -- so a
-	// miss here is reported as a finding, never silently passed.
+	// D0 controls (design brief lines 958/960: controls carry it on their
+	// "clarify or no_match terminals" -- both acceptable -- and never a
+	// wrong commit). ControlsWitnessed is the brief-conformant control-ok
+	// count (CHAOS-3742 run-2 root cause, team-lead ruling 2026-08-20) --
+	// see controlSeen/controlOK's own doc comment -- so a miss here is
+	// reported as a finding, never silently passed. The narrower literal-
+	// no_match-with-census claim (brief line 960's own stronger half) is
+	// reported separately and informationally as
+	// ControlsWitnessedNoMatchCensusBacked, with no pass/fail bar of its
+	// own -- see that field's own doc comment for why.
 	//
 	// A zero denominator (codex round-2 finding, HIGH confidence) must
 	// NOT read as a vacuous pass: a limited/truncated run (ACR_TEST_TRIAL_
@@ -1954,6 +2050,6 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if report.ControlsTotal == 0 {
 		t.Errorf("controls_total=0: this run recorded NO control cases (entries with no expected answer) -- D0 cannot be reported and the run is INVALID for this check")
 	} else if report.ControlsWitnessed < report.ControlsTotal {
-		t.Errorf("controls_witnessed=%d/%d, want %d/%d (D0: every control case must be witnessed no_match at turn 1)", report.ControlsWitnessed, report.ControlsTotal, report.ControlsTotal, report.ControlsTotal)
+		t.Errorf("controls_witnessed=%d/%d, want %d/%d (D0: every control case must commit nothing and disclose structure at turn 1)", report.ControlsWitnessed, report.ControlsTotal, report.ControlsTotal, report.ControlsTotal)
 	}
 }
