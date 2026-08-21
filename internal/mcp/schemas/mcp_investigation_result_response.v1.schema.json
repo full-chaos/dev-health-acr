@@ -1221,6 +1221,65 @@
             "offer_source"
           ]
         },
+        "AnchorOptionV2": {
+          "additionalProperties": false,
+          "description": "CHAOS-4042 (sol-max ruling): one server-offered anchor candidate under MEMBERSHIP-VERIFY semantics -- the claimant set is NOT required to be unique. Redemption re-verifies that (kind, canonical_id) remains a member of the term's complete claimant set at the pinned ResolvedGraphBinding epoch, matched by (matched_term_hash, kind, canonical_id) together, never id or hash alone. Wire shape is identical to v1 AnchorOption; only the meaning differs, which is why this is a distinct, permanently-separate contract rather than a v1 revision. Only ever carried on a result whose schema_version is context_fabric_investigation_result.v2 -- a v1 result (context_fabric_investigation_result.v1) uses AnchorOption and stays unique-claimant permanently.",
+          "properties": {
+            "canonical_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
+            },
+            "label": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "matched_term_hash": {
+              "maxLength": 24,
+              "minLength": 24,
+              "pattern": "^[0-9a-f]{24}$",
+              "type": "string"
+            },
+            "offer_source": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSource"
+            },
+            "option_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "prior_entry_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "prior_version_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "receipt_id": {
+              "maxLength": 256,
+              "minLength": 8,
+              "pattern": "^ancr_",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "option_id",
+            "label",
+            "kind",
+            "canonical_id",
+            "matched_term_hash",
+            "offer_source"
+          ],
+          "type": "object"
+        },
         "HandleOption": {
           "description": "CHAOS-3900 P1: one server-offered grammar-valid handle candidate, minted onto a stored result so a later turn can confirm it via handr_ receipt redemption. pattern_id names the closed handle-grammar registry pattern -- never regex text on the wire.",
           "type": "object",
@@ -1360,6 +1419,60 @@
           "required": [
             "missing"
           ]
+        },
+        "StructureNeedsV2": {
+          "additionalProperties": false,
+          "description": "CHAOS-4042: the disclosure block carried on a context_fabric_investigation_result.v2 result -- identical to StructureNeeds except anchor_options items are AnchorOptionV2 (membership-verify semantics) rather than AnchorOption (unique-claimant). kind_options/handle_options/window_options/accepted_grammars are unchanged from v1.",
+          "properties": {
+            "accepted_grammars": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/AcceptedGrammar"
+              },
+              "maxItems": 20,
+              "type": "array"
+            },
+            "anchor_options": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/AnchorOptionV2"
+              },
+              "maxItems": 20,
+              "type": "array"
+            },
+            "handle_options": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/HandleOption"
+              },
+              "maxItems": 20,
+              "type": "array"
+            },
+            "kind_options": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/KindOption"
+              },
+              "maxItems": 20,
+              "type": "array"
+            },
+            "missing": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "window_options": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/WindowOption"
+              },
+              "maxItems": 20,
+              "type": "array"
+            }
+          },
+          "required": [
+            "missing"
+          ],
+          "type": "object"
         },
         "StructureSource": {
           "description": "CHAOS-3900 P1: closed vocabulary for how a ConfirmedStructureEntry's value entered (design brief section 2.1's echo).",

@@ -68,6 +68,10 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/StructureNeedKind":    "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind",
 	"#/$defs/KindOption":           "#/$defs/context_fabric_common.v1/$defs/KindOption",
 	"#/$defs/AnchorOption":         "#/$defs/context_fabric_common.v1/$defs/AnchorOption",
+	// CHAOS-4042: the anchor membership-verify semantic major's own two new
+	// common $defs (additive; the v1 entries above are unchanged).
+	"#/$defs/AnchorOptionV2":       "#/$defs/context_fabric_common.v1/$defs/AnchorOptionV2",
+	"#/$defs/StructureNeedsV2":     "#/$defs/context_fabric_common.v1/$defs/StructureNeedsV2",
 	"#/$defs/HandleOption":         "#/$defs/context_fabric_common.v1/$defs/HandleOption",
 	"#/$defs/AcceptedGrammar":      "#/$defs/context_fabric_common.v1/$defs/AcceptedGrammar",
 	"#/$defs/StructureSource":      "#/$defs/context_fabric_common.v1/$defs/StructureSource",

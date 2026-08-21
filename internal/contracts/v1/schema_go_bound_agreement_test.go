@@ -181,8 +181,26 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// probeable in either direction (a minimum probe one below 24 is
 		// also one past the maximum, and vice versa), so mapped explicitly
 		// rather than left for the probe to attempt and misreport.
-		"common#$defs.AnchorOption.properties.matched_term_hash.minLength":        24,
-		"common#$defs.AnchorOption.properties.matched_term_hash.maxLength":        24,
+		"common#$defs.AnchorOption.properties.matched_term_hash.minLength": 24,
+		"common#$defs.AnchorOption.properties.matched_term_hash.maxLength": 24,
+		// CHAOS-4042: AnchorOptionV2/StructureNeedsV2 share the exact same
+		// Go-side bounds as their v1 counterparts above (identical wire
+		// shape, only redemption meaning differs) -- see
+		// ContextFabricAnchorOptionV2.Validate() and
+		// ContextFabricStructureNeeds.Validate() (StructureNeedsV2 has no
+		// separate Go type; the wire slice stays []ContextFabricAnchorOption
+		// for both majors, so the SAME Validate() bounds this file already
+		// proves for v1 apply -- these entries exist only because the JSON
+		// Schema $defs are separate objects the probe walks independently).
+		"common#$defs.AnchorOptionV2.properties.matched_term_hash.minLength":      24,
+		"common#$defs.AnchorOptionV2.properties.matched_term_hash.maxLength":      24,
+		"common#$defs.StructureNeedsV2.properties.kind_options.maxItems":          contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.anchor_options.maxItems":        contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.handle_options.maxItems":        contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.window_options.maxItems":        contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.accepted_grammars.maxItems":     contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.missing.maxItems":               ContextFabricStructureNeedKindCount,
+		"common#$defs.StructureNeedsV2.properties.missing.minItems":               1,
 		"common#$defs.HandleOption.properties.source_column.minLength":            1,
 		"common#$defs.HandleOption.properties.source_column.maxLength":            128,
 		"common#$defs.ConfirmedStructureEntry.properties.applied_value.minLength": 1,
