@@ -65,7 +65,7 @@ deploy/local/shard.sh delete 0  # teardown = namespace delete
 | Postgres endpoint | NodePort `31000 + 2*i` on any node IP; user `acr`, db `acr` |
 | Postgres DSN | `postgres://acr:<password>@<node-ip>:<31000+2i>/acr?sslmode=disable` (printed by `shard.sh dsn <i>`) |
 | FalkorDB endpoint | NodePort `31001 + 2*i` on any node IP; no auth |
-| Password | `ACR_SHARD_PG_PASSWORD` (default `acr-local-dev`, dev-only) |
+| Password | `ACR_SHARD_PG_PASSWORD` (default `acr-local-dev`, dev-only; restricted to `[A-Za-z0-9._~-]`, fail-closed) |
 | Readiness | in-cluster probes: `pg_isready` (postgres) and `GRAPH.QUERY` (falkordb, proves the graph module executes Cypher -- PING alone is insufficient); `shard.sh wait <i>` returns only when both Deployments are fully rolled out. Client-side liveness over the declared endpoints: `pg_isready -d <dsn>` / `redis-cli -h <node-ip> -p <port> PING` |
 | Teardown | `shard.sh delete <i>` = `kubectl delete namespace acr-shard-<i>`; nothing leaks outside the namespace |
 | Persistence | none (ephemeral by design; the harness reseeds per trial) |

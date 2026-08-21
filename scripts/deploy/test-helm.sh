@@ -542,15 +542,59 @@ falkordb_render="$(render \
   --set contextFabric.falkordb.enabled=true \
   --set-string contextFabric.falkor.addr=acr-test-falkordb:6379)"
 [[ -n "$falkordb_render" ]] || fail_gate "falkordb-workload: enabled render produced no output"
-grep -qE '^\s*kind:\s*StatefulSet\s*$' <<<"$falkordb_render" || fail_gate "falkordb-workload: enabled render is missing the StatefulSet"
-grep -q 'name: acr-test-falkordb' <<<"$falkordb_render" || fail_gate "falkordb-workload: enabled render is missing the falkordb Service/StatefulSet name"
-grep -qF 'falkordb/falkordb@sha256:' <<<"$falkordb_render" || fail_gate "falkordb-workload: FalkorDB image is not digest-pinned in the render"
-grep -qF 'GRAPH.QUERY' <<<"$falkordb_render" || fail_gate "falkordb-workload: readiness must use the GRAPH.QUERY vocabulary, not PING alone"
-grep -qF '/var/lib/falkordb/data' <<<"$falkordb_render" || fail_gate "falkordb-workload: data volume must mount the image FALKORDB_DATA_PATH"
-awk 'BEGIN{found=0} /^kind: NetworkPolicy$/{np=1} np && /component: falkordb/{found=1} /^---$/{np=0} END{exit !found}' <<<"$falkordb_render" \
-  || fail_gate "falkordb-workload: no NetworkPolicy selects the falkordb component"
-grep -q 'port: 6379' <<<"$falkordb_render" || fail_gate "falkordb-workload: falkor port 6379 missing from enabled render"
-pass "falkordb-workload: enabled render has digest-pinned StatefulSet+Service, GRAPH.QUERY readiness, real data path, NetworkPolicy"
+
+# Doc-scoped extraction: the assertions below must hold inside the specific
+# rendered document, not anywhere in the concatenated output (a comment or an
+# unrelated doc must not satisfy them).
+extract_falkordb_doc() {
+  local kind="$1"
+  awk -v kind="$kind" 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: "kind"\n" && /component: falkordb/ {print; exit}' <<<"$falkordb_render"
+}
+
+falkordb_sts="$(extract_falkordb_doc StatefulSet)"
+[[ -n "$falkordb_sts" ]] || fail_gate "falkordb-workload: enabled render is missing the falkordb StatefulSet"
+grep -qE '^\s+image: "[^"]*falkordb/falkordb@sha256:[0-9a-f]{64}"' <<<"$falkordb_sts" \
+  || fail_gate "falkordb-workload: StatefulSet image is not digest-pinned"
+grep -qF 'GRAPH.QUERY' <<<"$falkordb_sts" || fail_gate "falkordb-workload: StatefulSet probes must use the GRAPH.QUERY vocabulary, not PING alone"
+grep -qE '^\s+mountPath: /var/lib/falkordb/data\s*$' <<<"$falkordb_sts" \
+  || fail_gate "falkordb-workload: data volume must mount the image FALKORDB_DATA_PATH"
+grep -qE '^\s+volumeClaimTemplates:' <<<"$falkordb_sts" \
+  || fail_gate "falkordb-workload: default persistence must render volumeClaimTemplates"
+
+falkordb_svc="$(extract_falkordb_doc Service)"
+[[ -n "$falkordb_svc" ]] || fail_gate "falkordb-workload: enabled render is missing the falkordb Service"
+grep -q 'name: acr-test-falkordb' <<<"$falkordb_svc" || fail_gate "falkordb-workload: Service name must be <fullname>-falkordb"
+grep -qE '^\s+port: 6379\s*$' <<<"$falkordb_svc" || fail_gate "falkordb-workload: Service must expose port 6379"
+grep -qE '^\s+app.kubernetes.io/component: falkordb\s*$' <<<"$falkordb_svc" \
+  || fail_gate "falkordb-workload: Service selector must target the falkordb component"
+
+falkordb_np="$(extract_falkordb_doc NetworkPolicy)"
+[[ -n "$falkordb_np" ]] || fail_gate "falkordb-workload: no NetworkPolicy selects the falkordb component"
+grep -qE '^\s+port: 6379\s*$' <<<"$falkordb_np" || fail_gate "falkordb-workload: falkordb NetworkPolicy must constrain ingress to port 6379"
+grep -qE '^\s+app.kubernetes.io/component: api\s*$' <<<"$falkordb_np" \
+  || fail_gate "falkordb-workload: falkordb NetworkPolicy ingress must admit the api component"
+grep -qE '^\s+app.kubernetes.io/component: projector\s*$' <<<"$falkordb_np" \
+  || fail_gate "falkordb-workload: falkordb NetworkPolicy ingress must admit the projector component"
+if grep -qE 'component: migration' <<<"$falkordb_np"; then
+  fail_gate "falkordb-workload: the migration Job must not be in the falkordb trust set"
+fi
+grep -qE '^\s+egress: \[\]\s*$' <<<"$falkordb_np" \
+  || fail_gate "falkordb-workload: falkordb NetworkPolicy must deny all egress (egress: [])"
+
+# The falkor egress rule must appear on the API policy when addr is set.
+falkordb_api_np="$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: NetworkPolicy\n" && /component: api/ && !/component: falkordb/ {print; exit}' <<<"$falkordb_render")"
+grep -qE '^\s+port: 6379\s*$' <<<"$falkordb_api_np" \
+  || fail_gate "falkordb-workload: API NetworkPolicy must gain falkor egress port 6379 when contextFabric.falkor.addr is set"
+
+# Operator podLabels must never detach the pod from the selectors: the last
+# (winning) occurrence of the component label must stay falkordb.
+falkordb_override="$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set-json 'contextFabric.falkordb.podLabels={"app.kubernetes.io/component":"bogus"}')"
+falkordb_override_sts="$(awk 'BEGIN{RS="\n---\n"} $0 ~ "\nkind: StatefulSet\n" && /component: falkordb/ {print; exit}' <<<"$falkordb_override")"
+[[ "$(grep -E '^\s+app.kubernetes.io/component:' <<<"$falkordb_override_sts" | tail -1 | awk '{print $2}')" == "falkordb" ]] \
+  || fail_gate "falkordb-workload: podLabels must not be able to override the component selector label"
+pass "falkordb-workload: enabled render has digest-pinned StatefulSet, Service, PVC, GRAPH.QUERY readiness, scoped NetworkPolicies"
 
 set +e
 falkordb_mutable="$(render \

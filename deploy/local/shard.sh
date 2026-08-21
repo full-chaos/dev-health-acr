@@ -23,8 +23,11 @@
 #   deploy/local/shard.sh delete <i>
 #
 # Environment:
-#   ACR_SHARD_PG_PASSWORD  postgres password (default: acr-local-dev; DEV ONLY)
-#   KUBECONFIG             cluster to operate on (required for all but render)
+#   ACR_SHARD_PG_PASSWORD  postgres password (default: acr-local-dev; DEV ONLY;
+#                          restricted to [A-Za-z0-9._~-] -- it is substituted
+#                          into YAML and the DSN verbatim)
+#   KUBECONFIG             cluster to operate on (required for everything but
+#                          render; the ambient default cluster is refused)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,12 +44,28 @@ usage() {
 
 shard_vars() {
   local i="$1"
-  [[ "$i" =~ ^[0-9]+$ ]] || die "shard index must be a non-negative integer, got: $i"
+  # Strict decimal (no leading zeros -- bash arithmetic would read them as
+  # octal; bounded length -- unbounded digits overflow 64-bit arithmetic and
+  # would bypass the NodePort budget check below).
+  [[ "$i" =~ ^(0|[1-9][0-9]{0,2})$ ]] || die "shard index must be a plain decimal 0-883, got: $i"
   # NodePort range is 30000-32767; 31000 + 2*i stays inside it for i <= 883.
   (( i <= 883 )) || die "shard index $i exceeds the NodePort budget (max 883)"
+  # The password lands in a sed replacement, a YAML scalar, and a PostgreSQL
+  # URL. Restrict it to characters that are inert in all three rather than
+  # attempting three different escapings (dev-only credential; fail closed).
+  [[ "$PG_PASSWORD" =~ ^[A-Za-z0-9._~-]+$ ]] \
+    || die "ACR_SHARD_PG_PASSWORD may only contain [A-Za-z0-9._~-] (it is substituted into YAML and a DSN verbatim)"
   NAMESPACE="acr-shard-$i"
   PG_NODEPORT=$(( 31000 + 2 * i ))
   FALKOR_NODEPORT=$(( 31001 + 2 * i ))
+}
+
+require_kubeconfig() {
+  # Refuse to operate on whatever ambient cluster the user's default
+  # kubeconfig points at: every mutating/reading command requires an explicit
+  # KUBECONFIG (normally the isolated path from kiac.sh kubeconfig).
+  [[ -n "${KUBECONFIG:-}" && -f "$KUBECONFIG" ]] \
+    || die "KUBECONFIG must be set to an existing file (e.g. \$(deploy/local/kiac.sh kubeconfig)); refusing to use the ambient default cluster"
 }
 
 render() {
@@ -66,17 +85,20 @@ node_ip() {
 cmd_render() { render "$1"; }
 
 cmd_apply() {
+  require_kubeconfig
   render "$1" | kubectl apply -f -
   log "shard $1 applied to namespace $NAMESPACE"
 }
 
 cmd_wait() {
+  require_kubeconfig
   kubectl -n "$NAMESPACE" rollout status deployment/shard-postgres --timeout=180s
   kubectl -n "$NAMESPACE" rollout status deployment/shard-falkordb --timeout=180s
   log "shard $1 ready: postgres and falkordb rolled out in $NAMESPACE"
 }
 
 cmd_dsn() {
+  require_kubeconfig
   local ip
   ip="$(node_ip)"
   [[ -n "$ip" ]] || die "could not resolve a node InternalIP from KUBECONFIG"
@@ -85,6 +107,7 @@ cmd_dsn() {
 }
 
 cmd_delete() {
+  require_kubeconfig
   kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=120s
   log "shard $1 torn down (namespace $NAMESPACE deleted)"
 }

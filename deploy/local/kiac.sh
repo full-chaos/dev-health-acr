@@ -74,7 +74,11 @@ check_versions() {
 }
 
 cluster_exists() {
-  kiac get clusters 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$CLUSTER_NAME"
+  # Exact string match on the name column (not a regex), and a failed
+  # `kiac get clusters` is an error rather than silently reading as "absent".
+  local out
+  out="$(kiac get clusters 2>&1)" || die "kiac get clusters failed: $out"
+  awk -v n="$CLUSTER_NAME" 'NR>1 && $1==n {found=1} END {exit !found}' <<<"$out"
 }
 
 cmd_doctor() {

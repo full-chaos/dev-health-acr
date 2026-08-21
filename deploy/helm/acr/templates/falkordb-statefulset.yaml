@@ -32,10 +32,13 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "acr.falkordbSelectorLabels" . | nindent 8 }}
+        {{- /* podLabels first so the selector labels always win on key
+             collision -- an operator label must never detach the pod from
+             the StatefulSet/Service/NetworkPolicy selectors. */}}
         {{- with $falkordb.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- include "acr.falkordbSelectorLabels" . | nindent 8 }}
       {{- with $falkordb.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}

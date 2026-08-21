@@ -21,14 +21,19 @@ spec:
     - Ingress
     - Egress
   ingress:
+    {{- /* Only the two actual FalkorDB consumers: acr-api's optional
+         Investigator and acr-projector. The migration Job is deliberately
+         NOT in the graph backend's trust set. */}}
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: {{ include "acr.name" . }}
-              app.kubernetes.io/instance: {{ .Release.Name }}
+              {{- include "acr.selectorLabels" . | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "acr.projectorSelectorLabels" . | nindent 14 }}
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ .Values.contextFabric.falkordb.service.port }}
   # The graph store initiates no outbound connections.
   egress: []
 {{- end }}

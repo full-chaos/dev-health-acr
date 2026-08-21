@@ -329,7 +329,10 @@ networkPolicy:
     # FalkorDB graph backend port. Rendered into the API egress only when
     # contextFabric.falkor.addr is set (acr-api's optional Investigator and
     # acr-projector share the same endpoint contract); an unconfigured
-    # Context Fabric adds no egress.
+    # Context Fabric adds no egress. Same convention as the ports above:
+    # override this to match the port in the addr you configured (including
+    # contextFabric.falkordb.service.port when using the in-release
+    # workload on a non-default port).
     falkorPort: 6379
     # Kubernetes API server port, needed only when workloadTokenExchange.enabled
     # (acr-api calls TokenReview). Ports-only, same convention as the other
