@@ -38,25 +38,33 @@ type trialCommitGateProvenance struct {
 }
 
 type trialProvenance struct {
-	CorpusSHA256          string                    `json:"corpus_sha256"`
-	Model                 string                    `json:"model,omitempty"`
-	ModelFallback         string                    `json:"model_fallback,omitempty"`
-	Transport             string                    `json:"transport"`
-	ExchangeModelName     string                    `json:"exchange_model_name,omitempty"`
-	ExchangeSessionID     string                    `json:"exchange_session_id,omitempty"`
-	SourceCommit          string                    `json:"source_commit"`
-	SourceDirty           bool                      `json:"source_dirty"`
-	SourceDiffDigest      string                    `json:"source_diff_digest,omitempty"`
-	RunStartedAt          string                    `json:"run_started_at"`
-	ExecutionShape        string                    `json:"execution_shape,omitempty"`
-	ShardIndex            *int                      `json:"shard_index,omitempty"`
-	ShardCount            *int                      `json:"shard_count,omitempty"`
-	ControlsContinue      bool                      `json:"controls_continue"`
-	ResolvedActiveEpoch   int64                     `json:"resolved_active_epoch"`
-	GraphLifecycleEnabled bool                      `json:"graph_lifecycle_enabled"`
-	CommitGate            trialCommitGateProvenance `json:"commit_gate"`
-	CostMethodology       string                    `json:"cost_methodology,omitempty"`
-	SandboxMode           string                    `json:"sandbox_mode,omitempty"`
+	CorpusSHA256          string `json:"corpus_sha256"`
+	Model                 string `json:"model,omitempty"`
+	ModelFallback         string `json:"model_fallback,omitempty"`
+	Transport             string `json:"transport"`
+	ExchangeModelName     string `json:"exchange_model_name,omitempty"`
+	ExchangeSessionID     string `json:"exchange_session_id,omitempty"`
+	SourceCommit          string `json:"source_commit"`
+	SourceDirty           bool   `json:"source_dirty"`
+	SourceDiffDigest      string `json:"source_diff_digest,omitempty"`
+	RunStartedAt          string `json:"run_started_at"`
+	ExecutionShape        string `json:"execution_shape,omitempty"`
+	ShardIndex            *int   `json:"shard_index,omitempty"`
+	ShardCount            *int   `json:"shard_count,omitempty"`
+	ControlsContinue      bool   `json:"controls_continue"`
+	ResolvedActiveEpoch   int64  `json:"resolved_active_epoch"`
+	GraphLifecycleEnabled bool   `json:"graph_lifecycle_enabled"`
+	// AnchorMembershipOffersEnabled (codex round-3 finding, pre-existing
+	// mirror drift unrelated to CHAOS-4058's own timing fields, fixed here
+	// while already touching this struct for the schema bump): the
+	// producer's trialProvenance (generative_trial_live_test.go) has
+	// carried this field since CHAOS-3742 RUN 3 -- without it here,
+	// json.Unmarshal silently dropped a sharded run's own anchor-membership
+	// provenance on every merge.
+	AnchorMembershipOffersEnabled bool                      `json:"anchor_membership_offers_enabled"`
+	CommitGate                    trialCommitGateProvenance `json:"commit_gate"`
+	CostMethodology               string                    `json:"cost_methodology,omitempty"`
+	SandboxMode                   string                    `json:"sandbox_mode,omitempty"`
 }
 
 type twoTurnCaseResult struct {

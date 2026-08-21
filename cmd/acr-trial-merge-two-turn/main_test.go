@@ -9,7 +9,9 @@ package main
 // expectedSchemaVersion="6").
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,7 @@ func shardReport(shardIndex, shardCount int, timings []twoTurnCaseTiming) twoTur
 			CorpusSHA256: "abc123", Transport: "file_exchange", SourceCommit: "deadbeef",
 			RunStartedAt: "2026-08-21T00:00:00Z", ExecutionShape: "parallel",
 			ShardIndex: &idx, ShardCount: &count,
+			AnchorMembershipOffersEnabled: true,
 		},
 		BaseSHA: "deadbeef", OracleAnnexPath: "annex.json", OracleAnnexCorpusSHA: "abc123", OracleAnnexSignedOff: true,
 		CasesRun: 1, PositiveAppliedCount: 1, WindowPositiveAppliedCount: 1, GateReachableCount: 1,
@@ -70,6 +73,79 @@ func TestMergeReportsConcatenatesTimingsAndRecomputesSummary(t *testing.T) {
 	}
 	if turn1.ResponderCallCount != 2 || turn1.ResponderCallTotalMS != 350 || turn1.ResponderCallMaxMS != 250 {
 		t.Errorf("merged turn1 responder-call summary = %+v, want {count:2 total:350 max:250}", turn1)
+	}
+}
+
+// TestRunEndToEndMergesValidV7Shards is the real JSON round-trip codex
+// round-3 review demanded: TestMergeReportsConcatenatesTimingsAndRecomputesSummary
+// above calls mergeReports directly on in-memory structs, which never
+// proves this tool's actual entrypoint -- json.Unmarshal of a real shard
+// file, run()'s validation gates, json.Marshal of the merged output, and a
+// second independent decode of what landed on disk -- handles a valid v7
+// artifact at all. Two real shard files go in; the written merged file is
+// read back and its Timings/TimingSummary/Provenance are asserted against
+// what mergeReports alone would compute, closing the gap between "the
+// merge function is correct" and "the tool as actually invoked is
+// correct".
+func TestRunEndToEndMergesValidV7Shards(t *testing.T) {
+	dir := t.TempDir()
+	shard0 := shardReport(0, 2, []twoTurnCaseTiming{
+		{Index: 0, Member: "expected_kind", Arms: []twoTurnArmTiming{
+			{Arm: "turn1", WallDurationMS: 100, ResponderCallCount: 1, ResponderCallTotalMS: 100, ResponderCallMaxMS: 100},
+		}},
+	})
+	shard1 := shardReport(1, 2, []twoTurnCaseTiming{
+		{Index: 1, Member: "expected_kind", Arms: []twoTurnArmTiming{
+			{Arm: "turn1", WallDurationMS: 300, ResponderCallCount: 1, ResponderCallTotalMS: 250, ResponderCallMaxMS: 250},
+		}},
+	})
+
+	var shardPaths []string
+	for i, shard := range []twoTurnReport{shard0, shard1} {
+		raw, err := json.Marshal(shard)
+		if err != nil {
+			t.Fatalf("marshal shard %d: %v", i, err)
+		}
+		p := filepath.Join(dir, fmt.Sprintf("shard%d.json", i))
+		if err := os.WriteFile(p, raw, 0o600); err != nil {
+			t.Fatalf("write shard %d: %v", i, err)
+		}
+		shardPaths = append(shardPaths, p)
+	}
+
+	mergedPath := filepath.Join(dir, "merged.json")
+	var stdout bytes.Buffer
+	if err := run(mergedPath, shardPaths, &stdout); err != nil {
+		t.Fatalf("run() on two valid v7 shards = %v, want nil (both shards should satisfy every gate)", err)
+	}
+	if !strings.Contains(stdout.String(), "VALID") {
+		t.Errorf("run() stdout = %q, want it to report VALID", stdout.String())
+	}
+
+	mergedRaw, err := os.ReadFile(mergedPath)
+	if err != nil {
+		t.Fatalf("read merged output: %v", err)
+	}
+	var merged twoTurnReport
+	if err := json.Unmarshal(mergedRaw, &merged); err != nil {
+		t.Fatalf("unmarshal merged output: %v", err)
+	}
+
+	if merged.ReportSchemaVersion != "7" {
+		t.Errorf("merged.ReportSchemaVersion = %q, want \"7\"", merged.ReportSchemaVersion)
+	}
+	if !merged.Provenance.AnchorMembershipOffersEnabled {
+		t.Errorf("merged.Provenance.AnchorMembershipOffersEnabled = false, want true (must survive the real JSON round trip, codex round-3 finding)")
+	}
+	if got := len(merged.Timings); got != 2 {
+		t.Fatalf("merged (on-disk) Timings has %d entries, want 2", got)
+	}
+	if len(merged.TimingSummary) != 1 || merged.TimingSummary[0].Arm != "turn1" {
+		t.Fatalf("merged (on-disk) TimingSummary = %+v, want exactly one \"turn1\" aggregate", merged.TimingSummary)
+	}
+	turn1 := merged.TimingSummary[0]
+	if turn1.SampleCount != 2 || turn1.WallMeanMS != 200 || turn1.WallMaxMS != 300 || turn1.ResponderCallMaxMS != 250 {
+		t.Errorf("merged (on-disk) turn1 summary = %+v, want {count:2 mean:200 max:300 call_max:250}", turn1)
 	}
 }
 
