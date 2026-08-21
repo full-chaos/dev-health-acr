@@ -187,7 +187,7 @@ func (e *Engine) terminalResult(
 	windowCanon requestWindowCanonicalization,
 	structureCanon requestStructureCanonicalization,
 	structureMaterial StructureOfferMaterial,
-	priorEntries []StructurePriorEntry,
+	effectiveWindow *contractsv1.ContextFabricEffectiveEvidenceWindow,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
@@ -253,12 +253,18 @@ func (e *Engine) terminalResult(
 	// would have read evidence against, exactly like any other result --
 	// composeEffectiveWindow's own precedence rules apply identically
 	// regardless of whether a subject was ultimately committed.
-	// CHAOS-3977 P5 (design brief §3.4, DP4(a) site two): shares
-	// Investigate's own gate exactly (resolveWindowPriorProposal), and the
-	// SAME priorEntries Investigate already fetched (fetchPriorEntries) --
-	// no second I/O call here.
-	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
-	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
+	// effectiveWindow: computed ONCE by the caller (CHAOS-4040 fix, codex
+	// xhigh review round 1, confirmed: this function used to recompute it
+	// here via its own resolveWindowPriorProposal call -- harmless before
+	// CHAOS-4040, when Investigate's own composeEffectiveWindow call sat
+	// AFTER the subjects-empty check and so was simply never reached on
+	// this path; CHAOS-4040 moved that computation BEFORE subject
+	// resolution so gate 2 can fire pre-resolution, which means it now
+	// ALWAYS runs before this function is ever reached, making a second,
+	// independent call here a genuine double-count of
+	// resolveWindowPriorProposal's own cf_prior_consulted telemetry
+	// (RecordPriorConsulted), not just wasted CPU) -- reused unchanged,
+	// never recomputed.
 	// CHAOS-3900 W2: same fresh-disclosure/nudge wiring as the decisive
 	// path (engine.go) -- a terminal that stalled on structure is
 	// EXACTLY the case a window nudge (when requested) matters most, an

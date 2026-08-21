@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -1223,7 +1224,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 	request InvestigationRequest,
 	interpretation *InterpretedQuestion,
 	effective contractsv1.ContextFabricEffectiveEvidenceWindow,
-	confirmedStructureEcho []contractsv1.ContextFabricConfirmedStructureEntry,
+	structureCanon *requestStructureCanonicalization,
 	origin WindowCanonicalizationOutcome,
 	binding ResolvedGraphBinding,
 ) (InvestigationResult, error) {
@@ -1239,6 +1240,26 @@ func (e *Engine) windowConfirmationRequiredResult(
 	if interpretation != nil {
 		resolvedInterpretation = *interpretation
 		timeAxisKeySource = interpretation.TimeContext
+	}
+	// structureCanon is nil for gate 1 (this function's own doc comment:
+	// canonicalizeStructure has not run yet at that call site -- there is
+	// nothing to echo, snapshot, or Save-race against, exactly like
+	// windowVetoResult's own pre-Interpret branch). Non-nil for gate 2,
+	// where it mirrors terminalResult's own full structure-aware handling
+	// (codex xhigh review round 1, confirmed: the FIRST version of this
+	// function only echoed ConfirmedStructure and skipped the
+	// supersession-race conversion, recordStructureConfirmationOutcome,
+	// and StructureOfferSnapshot entirely -- reachable whenever a request
+	// carries a valid structure receipt ALONGSIDE an inferred class/binder
+	// window).
+	var confirmedStructureEcho []contractsv1.ContextFabricConfirmedStructureEntry
+	var offerSnapshot []contractsv1.ContextFabricStructureOfferSnapshotEntry
+	if structureCanon != nil {
+		confirmedStructureEcho = composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit)
+		// CHAOS-3900 P1.G: no guard needed -- structureCanon.OfferSnapshot
+		// is only ever non-nil alongside structureCanon.Confirmed, see
+		// requestStructureCanonicalization's own doc comment (structure.go).
+		offerSnapshot = structureCanon.OfferSnapshot
 	}
 	resultID := e.newResultID()
 	windowClarification := composeWindowClarification(&effective, resultID, e.now())
@@ -1292,6 +1313,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 		EffectiveEvidenceWindow: &effective,
 		WindowClarification:     windowClarification,
 		ConfirmedStructure:      confirmedStructureEcho,
+		StructureOfferSnapshot:  offerSnapshot,
 		Versions:                e.terminalVersions(),
 		DeterministicAnswer:     limitation,
 		Warnings:                []string{},
@@ -1304,7 +1326,31 @@ func (e *Engine) windowConfirmationRequiredResult(
 	}
 	if e.results != nil {
 		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+			// CHAOS-3927 P4 (codex xhigh review round 1, confirmed): a
+			// gate-2 Save carrying confirmed structure can lose the SAME
+			// atomic claim race every other structure-bearing Save call
+			// site already handles (engine.go's own decisive path,
+			// terminalResult) -- surfacing it as a raw persistence error
+			// here instead of the established stale_superseded_offer veto
+			// terminal would be the ONE call site round 2's own fix left
+			// unconverted. Unreachable when structureCanon is nil (gate 1
+			// never carries confirmed structure to race over).
+			if structureCanon != nil {
+				var superseded *ErrStructureOfferSuperseded
+				if errors.As(err, &superseded) {
+					recordWindowSupersessionRaceTelemetry(ctx, e.telemetry, principal, superseded)
+					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding)
+				}
+			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+		}
+		if structureCanon != nil {
+			// Mirrors terminalResult's own deferred-until-durable success
+			// telemetry exactly (unresolved.go) -- cf_structure_explicit/
+			// cf_structure_receipt and pending selection events must never
+			// fire for a save this function's own race-conversion above
+			// just discarded.
+			e.recordStructureConfirmationOutcome(ctx, principal, request, *structureCanon)
 		}
 	}
 	return result, nil

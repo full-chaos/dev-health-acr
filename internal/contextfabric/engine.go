@@ -732,8 +732,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
 	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
-		confirmedStructureEcho := composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit)
-		return e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, confirmedStructureEcho, WindowCanonicalizationGatedClassDefault, binding)
+		return e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding)
 	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
@@ -830,7 +829,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, priorEntries)
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow)
 	}
 
 	factRequest := CanonicalFactRequest{

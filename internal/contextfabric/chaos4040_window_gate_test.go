@@ -253,3 +253,48 @@ func TestWindowGate_ReuseRejectsOldDecisiveInferredWindowCandidate(t *testing.T)
 		t.Fatalf("Interpret called %d times, want exactly 1: the reuse miss must fall through to a genuinely fresh (gated) investigation", interpreter.calls)
 	}
 }
+
+// TestWindowGate_ClassDefault_WithConfirmedStructure_EchoesAndPersists pins
+// codex xhigh review round 1's own P1 finding: gate 2 can be reached by a
+// request that ALSO confirmed kind/anchor/handle structure via receipt
+// (structureCanon.Confirmed non-empty) -- the gate must still echo that
+// confirmation on the gated result (ConfirmedStructure), not silently drop
+// it just because window is why the request ultimately stalled, mirroring
+// terminalResult's own identical discipline for the ordinary subjectless
+// terminal.
+func TestWindowGate_ClassDefault_WithConfirmedStructure_EchoesAndPersists(t *testing.T) {
+	t.Parallel()
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_windowgate_0001"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm0001", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	engine := buildWindowGateEngine(t, interpreter, graph, store)
+
+	request := validInvestigationRequest() // no EvidenceWindow -- class-default gate applies
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a confirmation-required result, not an error", err)
+	}
+	if result.Status != InvestigationClarificationRequired {
+		t.Fatalf("Status = %q, want clarification_required", result.Status)
+	}
+	if graph.resolveCalls != 0 {
+		t.Fatalf("graph.resolveCalls = %d, want 0: gated before subject resolution even with confirmed structure in play", graph.resolveCalls)
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 1: the kind confirmation must survive the window gate's own terminal, not be silently dropped", len(result.ConfirmedStructure))
+	}
+	if result.ConfirmedStructure[0].AppliedValue != string(SubjectPullRequest) {
+		t.Fatalf("ConfirmedStructure[0] = %#v, want the confirmed kind pull_request", result.ConfirmedStructure[0])
+	}
+}
