@@ -554,9 +554,13 @@ falkordb_render="$(render \
 # which POSIX awk does not guarantee.
 extract_doc() {
   # extract_doc <kind> <must-match-regex> [must-not-match-regex]
+  # Note: doc is cleared before exit -- awk runs END on exit, and END calls
+  # flush() again, which would otherwise emit the matched document twice.
   awk -v kind="$1" -v want="$2" -v veto="${3:-}" '
     function flush() {
-      if (doc ~ "\nkind: "kind"\n" && doc ~ want && (veto == "" || doc !~ veto)) { printf "%s", doc; exit }
+      if (doc ~ "(^|\n)kind: "kind"\n" && doc ~ want && (veto == "" || doc !~ veto)) {
+        printf "%s", doc; doc = ""; exit
+      }
       doc = ""
     }
     /^---$/ { flush(); next }
@@ -580,14 +584,22 @@ grep -qE '^\s+volumeClaimTemplates:' <<<"$falkordb_sts" \
 
 falkordb_svc="$(extract_falkordb_doc Service)"
 [[ -n "$falkordb_svc" ]] || fail_gate "falkordb-workload: enabled render is missing the falkordb Service"
-grep -q 'name: acr-test-falkordb' <<<"$falkordb_svc" || fail_gate "falkordb-workload: Service name must be <fullname>-falkordb"
-grep -qE '^\s+port: 6379\s*$' <<<"$falkordb_svc" || fail_gate "falkordb-workload: Service must expose port 6379"
+# Name and port are derived from the render, not hard-coded: the harness
+# accepts arbitrary values files, and fullnameOverride/service.port are valid
+# operator inputs. What the gate owns is the shape: a -falkordb Service on
+# the falkordb component, and (below) the NetworkPolicy pinned to the SAME
+# port the Service exposes. The 6379 compose-parity default itself lives in
+# values.yaml and is exercised by the shipped values files.
+grep -qE '^  name: \S+-falkordb\s*$' <<<"$falkordb_svc" || fail_gate "falkordb-workload: Service name must be <fullname>-falkordb"
+falkordb_svc_port="$(grep -E '^\s+port: [0-9]+\s*$' <<<"$falkordb_svc" | head -1 | awk '{print $2}')"
+[[ "$falkordb_svc_port" =~ ^[0-9]+$ ]] || fail_gate "falkordb-workload: Service must expose a numeric port"
 grep -qE '^\s+app.kubernetes.io/component: falkordb\s*$' <<<"$falkordb_svc" \
   || fail_gate "falkordb-workload: Service selector must target the falkordb component"
 
 falkordb_np="$(extract_falkordb_doc NetworkPolicy)"
 [[ -n "$falkordb_np" ]] || fail_gate "falkordb-workload: no NetworkPolicy selects the falkordb component"
-grep -qE '^\s+port: 6379\s*$' <<<"$falkordb_np" || fail_gate "falkordb-workload: falkordb NetworkPolicy must constrain ingress to port 6379"
+grep -qE "^\s+port: ${falkordb_svc_port}\s*\$" <<<"$falkordb_np" \
+  || fail_gate "falkordb-workload: falkordb NetworkPolicy ingress port must equal the Service port ($falkordb_svc_port)"
 grep -qE '^\s+app.kubernetes.io/component: api\s*$' <<<"$falkordb_np" \
   || fail_gate "falkordb-workload: falkordb NetworkPolicy ingress must admit the api component"
 grep -qE '^\s+app.kubernetes.io/component: projector\s*$' <<<"$falkordb_np" \
@@ -598,10 +610,16 @@ fi
 grep -qE '^\s+egress: \[\]\s*$' <<<"$falkordb_np" \
   || fail_gate "falkordb-workload: falkordb NetworkPolicy must deny all egress (egress: [])"
 
-# The falkor egress rule must appear on the API policy when addr is set.
+# The falkor egress rule must appear on the API policy when addr is set:
+# structural check (one additional egress port stanza vs the default render's
+# API policy, where addr is unset), so a values-file falkorPort override
+# cannot false-fail the gate.
 falkordb_api_np="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <<<"$falkordb_render")"
-grep -qE '^\s+port: 6379\s*$' <<<"$falkordb_api_np" \
-  || fail_gate "falkordb-workload: API NetworkPolicy must gain falkor egress port 6379 when contextFabric.falkor.addr is set"
+default_api_np="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <"$rendered")"
+falkor_egress_stanzas="$(grep -cE '^\s+- ports:\s*$' <<<"$falkordb_api_np" || true)"
+default_egress_stanzas="$(grep -cE '^\s+- ports:\s*$' <<<"$default_api_np" || true)"
+(( falkor_egress_stanzas == default_egress_stanzas + 1 )) \
+  || fail_gate "falkordb-workload: setting contextFabric.falkor.addr must add exactly one API egress rule (got $falkor_egress_stanzas vs $default_egress_stanzas)"
 
 # Operator podLabels must never detach the pod from the selectors: the last
 # (winning) occurrence of the component label must stay falkordb.
