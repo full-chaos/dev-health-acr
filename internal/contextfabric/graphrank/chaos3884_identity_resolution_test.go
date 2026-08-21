@@ -367,7 +367,7 @@ func TestResolveSubjects_AliasLookupWiredEndToEnd(t *testing.T) {
 		aliasLookupClaimants: map[string][]CandidateNode{"dev-health-acr": {repoNode}},
 		aliasLookupComplete:  true,
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), backend.deps(), nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -404,7 +404,7 @@ func TestResolveSubjects_AliasLookupCommitsViaMatchAliasWhenOrdinarySearchMisses
 	if interpreted.TimeContext.Axis != contextfabric.TemporalCurrent {
 		t.Fatalf("testInterpreted's own Axis = %v, want TemporalCurrent -- this test's whole claim depends on being present-axis", interpreted.TimeContext.Axis)
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), interpreted, backend.deps(), nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), interpreted, backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -449,7 +449,7 @@ func TestResolveSubjects_TracerObservesAliasLookupReachedThroughWiredComposition
 	request := testRequest()
 	request.RequestID = "request_reachability_diag"
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("dev-health-acr"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("dev-health-acr"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -519,7 +519,7 @@ func TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttrib
 	deps := backend.deps()
 	deps.ResolutionTracer = tracer
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -572,7 +572,7 @@ func TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttrib
 func TestResolveSubjects_AliasLookupErrorAbortsResolution(t *testing.T) {
 	t.Parallel()
 	backend := &fakeGraphBackend{enableAliasLookup: true, aliasLookupErr: context.DeadlineExceeded}
-	_, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), backend.deps(), nil)
+	_, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("dev-health-acr"), backend.deps(), nil, nil)
 	if err == nil {
 		t.Fatal("ResolveSubjects(nil) error = nil, want the AliasLookup error propagated")
 	}
@@ -604,7 +604,7 @@ func TestResolveSubjects_GraphMissingSiblingNeverCommitsViaIdentityTrust(t *test
 		aliasLookupClaimants: map[string][]CandidateNode{"chaos-ops": {repoNode}},
 		aliasLookupComplete:  false, // graphMissing > 0 somewhere in this call
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("chaos-ops"), backend.deps(), nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("chaos-ops"), backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -621,7 +621,7 @@ func TestResolveSubjects_NilAliasLookupIsByteIdenticalToBeforeThisTicket(t *test
 	t.Parallel()
 	node := candidateNode(contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", 0.9, "*")
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Ask Dev": {node}}}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps(), nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}

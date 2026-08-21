@@ -1471,6 +1471,23 @@ func confirmedExpectedKind(confirmed []confirmedStructureMember) *ConfirmedExpec
 	return nil
 }
 
+// confirmedAnchorSelection (CHAOS-4042, sol-max ruling) is
+// confirmedExpectedKind's own sibling for the subject_anchor member: nil
+// when no ancr_ receipt was confirmed this round (the common case, keeping
+// an ordinary request byte-identical to before this ticket). The receipt-
+// confirmation loop (canonicalizeStructure, above) already populates
+// AppliedKind/AppliedValue with the redeemed AnchorOption's own Kind/
+// CanonicalID for the subject_anchor member -- this reads that back, it
+// does not re-derive anything.
+func confirmedAnchorSelection(confirmed []confirmedStructureMember) *ConfirmedAnchorSelection {
+	for _, c := range confirmed {
+		if c.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			return &ConfirmedAnchorSelection{Kind: c.AppliedKind, CanonicalID: c.AppliedValue}
+		}
+	}
+	return nil
+}
+
 // StructureReceiptOutcome is the closed vocabulary RecordStructureReceipt
 // reports (CHAOS-3900 P1.F, design brief §2.1's cf_structure_receipt{member,
 // outcome=applied|unresolved|conflict}).

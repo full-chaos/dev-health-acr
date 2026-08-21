@@ -517,7 +517,12 @@ type ResolutionTraceEvent struct {
 	ShadowNonCensusedSurvivor  bool
 	ShadowHandleGrammarBound   bool
 	ShadowAnchorUniqueClaimant bool
-	ShadowKindsCensused        int
+	// ShadowAnchorReceiptConfirmed (CHAOS-4042, sol-max ruling) mirrors
+	// Attestation.AnchorReceiptConfirmed -- see that field's own doc
+	// comment for why it is traced separately from
+	// ShadowAnchorUniqueClaimant rather than folded into it.
+	ShadowAnchorReceiptConfirmed bool
+	ShadowKindsCensused          int
 	// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome
 	// (evidence_round stage ONLY, CHAOS-4039/sol-max ruling 2026-08-20,
 	// adopted plan of record): whether kindInsensitivityProof
@@ -656,7 +661,7 @@ type RawSignalObserver interface {
 // the exact-hint short-circuit below returns one too (a caller-supplied
 // hint that resolved exactly is already decisive on subject identity, so
 // there is nothing on this axis left to disambiguate).
-func ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+func ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, errors.New("authenticated organization is required")
 	}
@@ -1118,7 +1123,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// -- the brief's own cost note ("per stalled resolution... committed
 	// resolutions pay nothing").
 	if deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
-		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind)
+		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind, confirmedAnchor)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
 		// named exactly one satisfier (attestedSatisfier), prove that
@@ -1392,7 +1397,7 @@ const evidenceRoundDeadline = 3 * time.Second
 // (possibly current) context skip D7's historical-axis-skip refusal and
 // run a current-state census against a historical question, silently on
 // the wrong axis.
-func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind) (attestation Attestation) {
+func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (attestation Attestation) {
 	defer func() {
 		if r := recover(); r != nil {
 			if deps.ResolutionTracer != nil {
@@ -1431,12 +1436,21 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 			censusKinds = narrowed
 		}
 	}
+	// CHAOS-4042 (sol-max ruling): confirmedAnchor threads a redeemed ancr_
+	// receipt's own resolved claimant into the round -- see
+	// ShadowEvidenceRoundInput.ConfirmedAnchor's own doc comment for why
+	// it takes priority over BindAnchor's own question-derived scan.
+	var confirmedAnchorInput *AnchorBinding
+	if confirmedAnchor != nil {
+		confirmedAnchorInput = &AnchorBinding{Kind: confirmedAnchor.Kind, CanonicalID: confirmedAnchor.CanonicalID}
+	}
 	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
 		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
 		PooledKinds: censusKinds, CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
+		ConfirmedAnchor:           confirmedAnchorInput,
 	}, deps.ResolutionTracer)
 	return attestation
 }

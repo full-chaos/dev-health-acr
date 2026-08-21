@@ -77,7 +77,7 @@ func TestResolveSubjects_InferredTierExpectedKindCommitSkipsCensus(t *testing.T)
 	// match what search will actually find, and no receipt confirming it.
 	request.ExpectedKinds = []contextfabric.SubjectKind{contextfabric.SubjectWorkItem}
 
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("acme/widgets"), deps, nil)
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("acme/widgets"), deps, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects error = %v", err)
 	}

@@ -483,6 +483,49 @@ func TestRunShadowEvidenceRound_NilTracerStillComputes(t *testing.T) {
 	}
 }
 
+// TestRunShadowEvidenceRound_ConfirmedAnchorOverridesBindAnchor is CHAOS-4042's
+// (sol-max ruling) own proof that a redeemed anchor receipt actually becomes
+// the census discriminator, closing the finding-#3 gap the ruling named:
+// "confirmed anchor receipts today are reverified and echoed but never
+// become the census discriminator". input.AliasClaimants is set up so
+// BindAnchor would derive a DIFFERENT unique claimant (a decoy) than
+// input.ConfirmedAnchor names -- proving the confirmed value TAKES
+// PRIORITY over BindAnchor's own re-derivation (chaos3899_evidence_round.go's
+// own doc comment on ConfirmedAnchor), not merely that it is consulted
+// alongside it.
+func TestRunShadowEvidenceRound_ConfirmedAnchorOverridesBindAnchor(t *testing.T) {
+	t.Parallel()
+	input := baseInput()
+	input.PooledKinds = []CensusKind{contextfabric.SubjectPullRequest}
+	input.AliasClaimants = map[string][]IdentityMatch{
+		"decoy-repo": {{Row: IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:decoy-1"}, Mechanism: contextfabric.MatchAlias}},
+	}
+	input.ConfirmedAnchor = &AnchorBinding{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:confirmed-1"}
+
+	var gotAnchorKind contextfabric.SubjectKind
+	var gotAnchorCanonicalID string
+	var gotAnchorBound bool
+	f := withCensus(contextfabric.SubjectPullRequest, CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierNaturalKey: "pr-1"}, nil)
+	input.CensusFunc = func(ctx context.Context, orgID string, kind CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool) (CensusOutcome, error) {
+		gotAnchorKind, gotAnchorCanonicalID, gotAnchorBound = anchorKind, anchorCanonicalID, anchorBound
+		return f.fn(ctx, orgID, kind, handleValue, handleBound, anchorKind, anchorCanonicalID, anchorBound)
+	}
+
+	tracer := &captureResolutionTracer{}
+	att := RunShadowEvidenceRound(context.Background(), input, tracer)
+
+	if !gotAnchorBound || gotAnchorKind != contextfabric.SubjectRepository || gotAnchorCanonicalID != "repository:confirmed-1" {
+		t.Fatalf("census anchor discriminator = (kind=%q, canonical_id=%q, bound=%v), want the CONFIRMED anchor (repository:confirmed-1), not BindAnchor's own decoy derivation", gotAnchorKind, gotAnchorCanonicalID, gotAnchorBound)
+	}
+	if !att.AnchorReceiptConfirmed {
+		t.Errorf("att.AnchorReceiptConfirmed = false, want true")
+	}
+	if att.AnchorUniqueClaimant {
+		t.Errorf("att.AnchorUniqueClaimant = true, want false -- a confirmed receipt is a DIFFERENT proof than BindAnchor's own uniqueness scan, never both true for the same round")
+	}
+	assertSingleEvidenceRoundEvent(t, tracer)
+}
+
 func assertSingleEvidenceRoundEvent(t *testing.T, tracer *captureResolutionTracer) {
 	t.Helper()
 	if got := len(tracer.eventsForStage("evidence_round")); got != 1 {

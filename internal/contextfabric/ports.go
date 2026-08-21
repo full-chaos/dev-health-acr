@@ -145,7 +145,10 @@ type GraphReader interface {
 	// derived result, and InferredExpectedKinds' own doc comment
 	// (ConfirmedExpectedKind, this file) is the reason the two must never
 	// share one parameter or one narrowing code path.
-	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind) (SubjectResolution, StructureOfferMaterial, error)
+	// confirmedAnchor (CHAOS-4042) is ConfirmedExpectedKind's own sibling
+	// for the subject_anchor member -- see ConfirmedAnchorSelection's own
+	// doc comment.
+	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
 }
 
@@ -183,6 +186,32 @@ type GraphReader interface {
 // ticket introduces) rather than a kindr_ receipt.
 type ConfirmedExpectedKind struct {
 	Kind contractsv1.ContextFabricSubjectKind
+}
+
+// ConfirmedAnchorSelection (CHAOS-4042, sol-max ruling) is a caller-
+// CONFIRMED ancr_ receipt's own resolved claimant, threaded into
+// ResolveSubjects so the shadow evidence round's FK predicate can use it
+// as the anchor discriminator INSTEAD of BindAnchor's own question-derived,
+// strict unique-claimant scan -- the ruling's own gap: "confirmed anchor
+// receipts today are reverified and echoed but never become the census
+// discriminator." A receipt-confirmed selection supplies caller INTENT
+// authority (the same authority a confirmed kind already narrows the
+// census with, see ConfirmedExpectedKind's own doc comment) -- it does
+// NOT set graphrank.Attestation.AnchorUniqueClaimant=true: that field
+// asserts BindAnchor's own term-uniqueness proof specifically, which a
+// receipt-confirmed selection never runs. See
+// graphrank.Attestation.AnchorReceiptConfirmed for the separate,
+// non-lying provenance this path sets instead.
+//
+// DELIBERATELY a dedicated type, not a bare (kind, canonical_id) pair --
+// the SAME P1.D tripwire ConfirmedExpectedKind's own doc comment
+// describes: only canonicalizeStructure's own RECEIPT-confirmation path
+// (structure.go) may construct one, so a future inferred-tier anchor
+// source cannot drive the census discriminator through this same channel
+// without a reviewer visibly widening this type.
+type ConfirmedAnchorSelection struct {
+	Kind        contractsv1.ContextFabricSubjectKind
+	CanonicalID string
 }
 
 // CHAOS-3972 P3 (pivot-intent design brief §2.3/§2.0/DP12(b)) introduces
