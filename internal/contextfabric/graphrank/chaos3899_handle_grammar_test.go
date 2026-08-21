@@ -54,6 +54,34 @@ func TestBindHandles_PRVariants(t *testing.T) {
 	}
 }
 
+// TestBindHandles_PullRequestSpelledOut pins the CHAOS-4012 widening: the
+// spelled-out "pull request" keyword must bind exactly like "PR" already
+// did, sourced from the kind's own name/base table (chaos3899_handle_grammar.go
+// doc comment), not an invented synonym.
+func TestBindHandles_PullRequestSpelledOut(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		question string
+		want     string
+	}{
+		{"pull request 532 failed", "532"},
+		{"pull request #532 failed", "532"},
+		{"Pull Request 532", "532"},
+	}
+	for _, tc := range cases {
+		bound := BindHandles(tc.question)
+		found := false
+		for _, h := range bound {
+			if h.Kind == contextfabric.SubjectPullRequest && h.Value == tc.want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("BindHandles(%q) = %#v, want a pull_request handle with value %q", tc.question, bound, tc.want)
+		}
+	}
+}
+
 func TestBindHandles_WorkItemTicketKey(t *testing.T) {
 	t.Parallel()
 	bound := BindHandles("what's the status of CHAOS-3896?")
@@ -67,6 +95,57 @@ func TestBindHandles_CIRunID(t *testing.T) {
 	bound := BindHandles("did CI run 18234567890 pass?")
 	if len(bound) != 1 || bound[0].Kind != contractsv1.ContextFabricSubjectCIRun || bound[0].Value != "18234567890" {
 		t.Fatalf("BindHandles = %#v, want one ci_pipeline_run handle", bound)
+	}
+}
+
+// TestBindHandles_CIPipelineVariants pins the CHAOS-4012 widening: GitLab's
+// own product terminology for this table's concept is "pipeline" (the base
+// table is ci_pipeline_runs, chaos3899_census_registry.go; gitlab.com is a
+// confirmed live provider, providerQualifiedNamePattern in
+// chaos3899_source_native_grammar.go) -- "pipeline"/"CI pipeline"/"pipeline
+// run" must bind exactly like "run"/"CI run" already did.
+func TestBindHandles_CIPipelineVariants(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		question string
+		want     string
+	}{
+		{"did pipeline 18234567 pass?", "18234567"},
+		{"did CI pipeline #18234567 pass?", "18234567"},
+		{"did pipeline run 18234567 pass?", "18234567"},
+	}
+	for _, tc := range cases {
+		bound := BindHandles(tc.question)
+		found := false
+		for _, h := range bound {
+			if h.Kind == contractsv1.ContextFabricSubjectCIRun && h.Value == tc.want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("BindHandles(%q) = %#v, want a ci_pipeline_run handle with value %q", tc.question, bound, tc.want)
+		}
+	}
+}
+
+// TestBindHandles_CIPipelineGrammarNeverBindsOrdinaryEnglish is the
+// "pipeline" keyword's own companion to TestBindHandles_CIRunGrammarNeverBindsOrdinaryEnglish
+// -- the SAME word-boundary discipline that fix pinned for "run"/"running"
+// must hold for "pipeline"/"pipelining" too.
+func TestBindHandles_CIPipelineGrammarNeverBindsOrdinaryEnglish(t *testing.T) {
+	t.Parallel()
+	questions := []string{
+		"who is pipelining the deploy?",
+		"the pipeline is broken again",
+		"can you pipeline this analysis?",
+	}
+	for _, question := range questions {
+		bound := BindHandles(question)
+		for _, h := range bound {
+			if h.Grammar == "ci_run_id" {
+				t.Fatalf("BindHandles(%q) bound a ci_run_id handle %#v from ordinary English -- R3 violated", question, h)
+			}
+		}
 	}
 }
 
