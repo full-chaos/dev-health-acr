@@ -217,7 +217,19 @@ for ((i = 0; i < SHARD_COUNT; i++)); do
   ( cd "$repo_root" && ACR_POSTGRES_MIGRATION_DSN="$shard_dsn" ACR_POSTGRES_CONNECTION_KIND=direct \
       go run ./cmd/acr-migrate up )
 
-  exdir="$repo_root/.trial-exchange-twoturn-parallel-${RUN_TAG}-${i}"
+  # ${TMPDIR:-/tmp}, not $repo_root (codex-round-4 dry-run finding): every
+  # process this exchange dir/log path is visible to runs
+  # requireGitSourceIdentity (generative_trial_live_test.go), which hashes
+  # `git status --porcelain` PLUS every untracked file's own content. An
+  # exchange dir living inside the repo tree is itself untracked, so N
+  # shards launched moments apart each see a DIFFERENT set of
+  # already-created exchange dirs/logs from earlier shards in the same
+  # loop -- producing a genuinely different source_diff_digest per shard
+  # and tripping the merge tool's (correct) cross-shard consistency check.
+  # Mirrors run-responder-codex.sh's own existing precedent (its private
+  # CODEX_HOME already lives under ${TMPDIR:-/tmp}, never the repo tree)
+  # for exactly this class of scratch operational state.
+  exdir="${TMPDIR:-/tmp}/acr-trial-exchange-twoturn-parallel-${RUN_TAG}-${i}"
   mkdir -p "$exdir/requests" "$exdir/responses"
   EXCHANGE_DIRS+=("$exdir")
   "$(dirname "${BASH_SOURCE[0]}")/run-responder-codex.sh" "$exdir" >"$exdir/_responder_driver.log" 2>&1 &
