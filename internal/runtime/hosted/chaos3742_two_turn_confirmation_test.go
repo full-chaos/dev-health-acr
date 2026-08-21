@@ -1769,6 +1769,17 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
 		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
+		// codex xhigh review round 1 (HIGH, confirmed): a hinted-call
+		// error is exactly as much "this pairing could not be evaluated
+		// AT ALL" as a baseline-call error is (this function's own doc
+		// comment) -- window is exempt, it was never paired to begin
+		// with. Without this, a hinted error would be silently excluded
+		// via ArmInvalidReason alone, undercounting InferredPairInvalidCount
+		// and letting a mixed run report pair_invalid=0 despite an
+		// unevaluable pair.
+		if !isWindow {
+			res.PairInvalid = true
+		}
 		return res
 	}
 	res.Turn2Status = string(result.Status)
