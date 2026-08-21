@@ -740,6 +740,96 @@ func TestVerifyAnchorClaimantUnique(t *testing.T) {
 	})
 }
 
+// TestVerifyAnchorClaimantMembership_RivalsDoNotInvalidateTheSelectedClaimant
+// is CHAOS-4042's (sol-max ruling) own defining-difference proof: the SAME
+// scenario TestVerifyAnchorClaimantUnique_CaseFortyFiveTwinRepoShape treats
+// as CONTESTED under v1's unique-claimant rule must stay VALID here -- a
+// rival gaining (or losing) the term is not, by itself, a reason to refuse
+// the selected claimant's own membership.
+func TestVerifyAnchorClaimantMembership_RivalsDoNotInvalidateTheSelectedClaimant(t *testing.T) {
+	t.Parallel()
+	const term = "widget-service"
+	hash := HashAliasTerm(term)
+	repoA := identityRow(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA", term)
+	repoB := identityRow(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB", term)
+	repoC := identityRow(contractsv1.ContextFabricSubjectRepository, "repoC", "repoC", term)
+
+	t.Run("selected remains, rival added: still valid", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA, repoB}, true, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if !valid || reason != AnchorVerificationValid {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (true, %q)", valid, reason, AnchorVerificationValid)
+		}
+	})
+	t.Run("selected remains, rival removed: still valid", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, true, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if !valid || reason != AnchorVerificationValid {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (true, %q)", valid, reason, AnchorVerificationValid)
+		}
+	})
+	t.Run("selected remains among THREE claimants: still valid, never contested", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA, repoB, repoC}, true, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoB", hash, universe)
+		if !valid || reason != AnchorVerificationValid {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (true, %q) -- multiplicity is never an error under membership semantics", valid, reason, AnchorVerificationValid)
+		}
+	})
+	t.Run("incomplete enumeration still applies membership's fail-closed rule", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn([]IdentityRow{repoA}, false, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationIncompleteEnumeration {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
+		}
+	})
+}
+
+func TestVerifyAnchorClaimantMembership(t *testing.T) {
+	t.Parallel()
+	const term = "widget-service"
+	hash := HashAliasTerm(term)
+
+	t.Run("selected claimant removed: claim lost", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn(nil, true, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationClaimLost {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
+		}
+	})
+	t.Run("selected claimant re-keyed to a different canonical id: claim lost", func(t *testing.T) {
+		renamed := identityRow(contractsv1.ContextFabricSubjectRepository, "repoZ", "repoZ", term)
+		universe := fakeIdentityUniverseFn([]IdentityRow{renamed}, true, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationClaimLost {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
+		}
+	})
+	t.Run("selected claimant exists but lost the alias: claim lost", func(t *testing.T) {
+		// repoA still exists in the universe, but no longer carries `term`
+		// (a different label/alias set) -- the term-hash match must fail,
+		// not the bare (kind, canonical_id) existence check alone.
+		driftedAway := IdentityRow{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repoA", Label: "repoA", Aliases: []string{"a-completely-different-alias"}}
+		universe := fakeIdentityUniverseFn([]IdentityRow{driftedAway}, true, nil)
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationClaimLost {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationClaimLost)
+		}
+	})
+	t.Run("identity universe error fails closed, not open", func(t *testing.T) {
+		universe := fakeIdentityUniverseFn(nil, true, errors.New("boom"))
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, universe)
+		if valid || reason != AnchorVerificationIncompleteEnumeration {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
+		}
+	})
+	t.Run("nil identity universe dependency fails closed, not open", func(t *testing.T) {
+		valid, reason := VerifyAnchorClaimantMembership(context.Background(), "org_1", contractsv1.ContextFabricSubjectRepository, "repoA", hash, nil)
+		if valid || reason != AnchorVerificationIncompleteEnumeration {
+			t.Errorf("VerifyAnchorClaimantMembership() = (%v, %q), want (false, %q)", valid, reason, AnchorVerificationIncompleteEnumeration)
+		}
+	})
+}
+
 func identityMatch(kind contractsv1.ContextFabricSubjectKind, id, label string) IdentityMatch {
 	return IdentityMatch{Row: IdentityRow{Kind: kind, CanonicalID: id, Label: label}}
 }
@@ -749,7 +839,7 @@ func TestAnchorOfferMaterial_UniqueClaimantOffersNothing(t *testing.T) {
 	claimants := map[string][]IdentityMatch{
 		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
 	}
-	material := anchorOfferMaterial(claimants, true)
+	material := anchorOfferMaterial(claimants, claimants, true, false)
 	if len(material.Missing) != 0 || len(material.AnchorOptions) != 0 {
 		t.Errorf("material = %+v, want empty: a unique claimant is already decisive, nothing to elicit", material)
 	}
@@ -761,7 +851,7 @@ func TestAnchorOfferMaterial_DisagreementOffersOnePerCandidate(t *testing.T) {
 		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
 		"widget-svc":     {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB")},
 	}
-	material := anchorOfferMaterial(claimants, true)
+	material := anchorOfferMaterial(claimants, claimants, true, false)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
 		t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
 	}
@@ -785,7 +875,7 @@ func TestAnchorOfferMaterial_NoCandidatesStillMissingWithEmptyOptions(t *testing
 	t.Parallel()
 
 	t.Run("zero claimants", func(t *testing.T) {
-		material := anchorOfferMaterial(map[string][]IdentityMatch{}, true)
+		material := anchorOfferMaterial(map[string][]IdentityMatch{}, map[string][]IdentityMatch{}, true, false)
 		if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
 			t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
 		}
@@ -797,7 +887,7 @@ func TestAnchorOfferMaterial_NoCandidatesStillMissingWithEmptyOptions(t *testing
 		claimants := map[string][]IdentityMatch{
 			"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
 		}
-		material := anchorOfferMaterial(claimants, false)
+		material := anchorOfferMaterial(claimants, claimants, false, false)
 		if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
 			t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
 		}
@@ -823,7 +913,7 @@ func TestAnchorOfferMaterial_MoreThanMaxCandidatesIsCapped(t *testing.T) {
 		id := fmt.Sprintf("repo-%02d", i)
 		claimants[term] = []IdentityMatch{identityMatch(contractsv1.ContextFabricSubjectRepository, id, id)}
 	}
-	material := anchorOfferMaterial(claimants, true)
+	material := anchorOfferMaterial(claimants, claimants, true, false)
 	if len(material.AnchorOptions) != structureOfferMaxOptions {
 		t.Fatalf("len(material.AnchorOptions) = %d, want %d (capped)", len(material.AnchorOptions), structureOfferMaxOptions)
 	}
@@ -837,6 +927,219 @@ func TestAnchorOfferMaterial_MoreThanMaxCandidatesIsCapped(t *testing.T) {
 		want := fmt.Sprintf("repo-%02d", i)
 		if !seen[want] {
 			t.Errorf("capped AnchorOptions missing %q, want the first %d ids kept", want, structureOfferMaxOptions)
+		}
+	}
+}
+
+// TestAnchorOfferMaterial_DarkByDefault is the team-lead-mandated proof:
+// PR2 ships the v2 ambiguous-claimant path DARK. Even when a genuinely
+// ambiguous term is present in the read, membershipOffersEnabled=false
+// (every production deployment until PR3 lands pinned-epoch reconciliation
+// and redemption-time re-authorization) must produce EXACTLY the v1
+// behavior for this input -- zero candidates, since neither term has a
+// unique claimant -- never a v2 AnchorOption, never AnchorOptionsRequireV2.
+func TestAnchorOfferMaterial_DarkByDefault(t *testing.T) {
+	t.Parallel()
+	claimants := map[string][]IdentityMatch{
+		"widget-service": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA"),
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
+		},
+	}
+	material := anchorOfferMaterial(claimants, claimants, true, false)
+	if material.AnchorOptionsRequireV2 {
+		t.Error("material.AnchorOptionsRequireV2 = true with membershipOffersEnabled=false; the v2 path must be completely inert when the gate is off")
+	}
+	if len(material.AnchorOptions) != 0 {
+		t.Errorf("material.AnchorOptions = %+v, want empty: with the gate off, an ambiguous term (2+ claimants, no unique claimant anywhere) must fall back to v1's own zero-candidates case, never mint a v2 option", material.AnchorOptions)
+	}
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+		t.Fatalf("material.Missing = %v, want [subject_anchor] (still disclosed as missing-and-helpful, v1's own case-3 shape)", material.Missing)
+	}
+}
+
+// TestAnchorOfferMaterial_HiddenRivalOnOtherwiseUniqueTermNeverLooksUnique
+// is codex xhigh review's round-2 finding (HIGH, confirmed): a term with
+// ONE visible claimant and ONE HIDDEN rival has authorized count 1 -- the
+// exact shape ambiguousAnchorTermClaimants (which requires 2+ AUTHORIZED
+// claimants to even notice a term) cannot see, so it silently fell through
+// to the v1 unique-claimant scan, which then treated the visible claimant
+// as genuinely unique and offered it once real ambiguity existed elsewhere
+// (case 2, 2+ distinct candidates). This is exactly "filter the proof
+// universe by authorization then claim uniqueness" -- forbidden regardless
+// of whether the v2 gate is on. The fix applies to v1's OWN candidate scan
+// unconditionally, not only inside the v2 path.
+func TestAnchorOfferMaterial_HiddenRivalOnOtherwiseUniqueTermNeverLooksUnique(t *testing.T) {
+	t.Parallel()
+	raw := map[string][]IdentityMatch{
+		"widget-service": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA"),
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoHidden", "repoHidden"), // hidden from principal
+		},
+		"acr": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoC", "repoC"),
+		},
+	}
+	authorized := map[string][]IdentityMatch{
+		"widget-service": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA"),
+		},
+		"acr": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoC", "repoC"),
+		},
+	}
+
+	t.Run("v1 path (gate off): repoA is never offered as a false-unique candidate", func(t *testing.T) {
+		t.Parallel()
+		material := anchorOfferMaterial(raw, authorized, true, false)
+		for _, opt := range material.AnchorOptions {
+			if opt.CanonicalID == "repoA" {
+				t.Errorf("material.AnchorOptions = %+v, must NOT offer repoA as unique -- it has a hidden rival (repoHidden) on the same term", material.AnchorOptions)
+			}
+		}
+		// repoC is the ONLY genuinely (fully-visible) unique claimant left,
+		// which BindAnchor would independently resolve decisively --
+		// case 1's own "already decisive, nothing to elicit" rationale, so
+		// this must return completely empty, not an offer for repoC either.
+		if len(material.AnchorOptions) != 0 || material.AnchorOptionsRequireV2 {
+			t.Errorf("material = %+v, want a fully empty StructureOfferMaterial (repoC alone is decisive, repoA's term is excluded entirely)", material)
+		}
+	})
+	t.Run("v2 path (gate on): repoA's term is excluded from the ambiguous scan too", func(t *testing.T) {
+		t.Parallel()
+		material := anchorOfferMaterial(raw, authorized, true, true)
+		for _, opt := range material.AnchorOptions {
+			if opt.CanonicalID == "repoA" {
+				t.Errorf("material.AnchorOptions = %+v, must NOT offer repoA -- its term has a hidden rival, not just an authorized ambiguity", material.AnchorOptions)
+			}
+		}
+	})
+}
+
+// TestAnchorOfferMaterial_AmbiguousTermOffersV2PerClaimant is CHAOS-4042's
+// (sol-max ruling) own offer-generation proof: a term with TWO OR MORE
+// claimants -- the exact shape anchorTermCandidates skips -- must offer
+// EVERY claimant as a v2 (membership-verify) option, all sharing that
+// term's own matched_term_hash, and the material must be flagged as
+// requiring the v2 schema major.
+func TestAnchorOfferMaterial_AmbiguousTermOffersV2PerClaimant(t *testing.T) {
+	t.Parallel()
+	claimants := map[string][]IdentityMatch{
+		"widget-service": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA"),
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
+		},
+	}
+	material := anchorOfferMaterial(claimants, claimants, true, true)
+	if !material.AnchorOptionsRequireV2 {
+		t.Error("material.AnchorOptionsRequireV2 = false, want true for an ambiguous term")
+	}
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+		t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
+	}
+	if len(material.AnchorOptions) != 2 {
+		t.Fatalf("len(material.AnchorOptions) = %d, want 2 (one per claimant)", len(material.AnchorOptions))
+	}
+	seen := map[string]bool{}
+	for _, opt := range material.AnchorOptions {
+		seen[opt.CanonicalID] = true
+		if opt.MatchedTermHash != material.AnchorOptions[0].MatchedTermHash {
+			t.Errorf("AnchorOption %+v has a different matched_term_hash than its sibling claimant; both name the SAME term and must share one hash", opt)
+		}
+	}
+	if !seen["repoA"] || !seen["repoB"] {
+		t.Errorf("material.AnchorOptions = %+v, want repoA AND repoB", material.AnchorOptions)
+	}
+}
+
+// TestAnchorOfferMaterial_MixedVisibilitySuppressesWholeGroup proves the
+// ruling's auth-gap closure at the ambiguous-term boundary: when the raw
+// (complete) claimant read for a term differs from the authorized
+// (caller-visible) read for the SAME term, the entire candidate group for
+// that term is suppressed -- never a partial list, never even a claimant
+// count, which would itself disclose that a hidden rival exists.
+func TestAnchorOfferMaterial_MixedVisibilitySuppressesWholeGroup(t *testing.T) {
+	t.Parallel()
+	raw := map[string][]IdentityMatch{
+		"widget-service": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA"),
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoC", "repoC"), // hidden from principal
+		},
+	}
+	authorized := map[string][]IdentityMatch{
+		"widget-service": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA"),
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
+		},
+	}
+	material := anchorOfferMaterial(raw, authorized, true, true)
+	if material.AnchorOptionsRequireV2 {
+		t.Error("material.AnchorOptionsRequireV2 = true, want false: the only ambiguous term is mixed-visibility and must be suppressed entirely")
+	}
+	if len(material.AnchorOptions) != 0 {
+		t.Errorf("material.AnchorOptions = %+v, want empty: a mixed-visibility term must never disclose a partial claimant list", material.AnchorOptions)
+	}
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+		t.Fatalf("material.Missing = %v, want [subject_anchor] (still disclosed as missing-and-helpful)", material.Missing)
+	}
+}
+
+// TestAnchorOfferMaterial_AmbiguousTermCappedAtMaxOptions mirrors
+// TestAnchorOfferMaterial_MoreThanMaxCandidatesIsCapped for the NEW v2
+// path: a single term with more than structureOfferMaxOptions claimants
+// must still cap, deterministically, at structureOfferMaxOptions.
+func TestAnchorOfferMaterial_AmbiguousTermCappedAtMaxOptions(t *testing.T) {
+	t.Parallel()
+	matches := make([]IdentityMatch, 0, structureOfferMaxOptions+5)
+	for i := 0; i < structureOfferMaxOptions+5; i++ {
+		id := fmt.Sprintf("repo-%02d", i)
+		matches = append(matches, identityMatch(contractsv1.ContextFabricSubjectRepository, id, id))
+	}
+	claimants := map[string][]IdentityMatch{"widget-service": matches}
+	material := anchorOfferMaterial(claimants, claimants, true, true)
+	if !material.AnchorOptionsRequireV2 {
+		t.Error("material.AnchorOptionsRequireV2 = false, want true")
+	}
+	if len(material.AnchorOptions) != structureOfferMaxOptions {
+		t.Fatalf("len(material.AnchorOptions) = %d, want %d (capped)", len(material.AnchorOptions), structureOfferMaxOptions)
+	}
+	seen := make(map[string]bool, len(material.AnchorOptions))
+	for _, opt := range material.AnchorOptions {
+		seen[opt.CanonicalID] = true
+	}
+	for i := 0; i < structureOfferMaxOptions; i++ {
+		want := fmt.Sprintf("repo-%02d", i)
+		if !seen[want] {
+			t.Errorf("capped AnchorOptions missing %q, want the first %d ids kept", want, structureOfferMaxOptions)
+		}
+	}
+}
+
+// TestAnchorOfferMaterial_DecisiveCandidateIgnoredWhenAmbiguousTermExists
+// proves the case-1 v1 short-circuit does not silently swallow a genuinely
+// ambiguous SEPARATE term: a decisive unique-claimant candidate needs no
+// disambiguation of its own, so it must NOT be offered, but the unrelated
+// ambiguous term must still be disclosed.
+func TestAnchorOfferMaterial_DecisiveCandidateIgnoredWhenAmbiguousTermExists(t *testing.T) {
+	t.Parallel()
+	claimants := map[string][]IdentityMatch{
+		"acr": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoDecisive", "repoDecisive")},
+		"widget-service": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA"),
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
+		},
+	}
+	material := anchorOfferMaterial(claimants, claimants, true, true)
+	if !material.AnchorOptionsRequireV2 {
+		t.Error("material.AnchorOptionsRequireV2 = false, want true")
+	}
+	if len(material.AnchorOptions) != 2 {
+		t.Fatalf("len(material.AnchorOptions) = %d, want 2 (only the ambiguous term's claimants; the decisive candidate needs no disambiguation)", len(material.AnchorOptions))
+	}
+	for _, opt := range material.AnchorOptions {
+		if opt.CanonicalID == "repoDecisive" {
+			t.Errorf("material.AnchorOptions unexpectedly offered the decisive candidate %+v", opt)
 		}
 	}
 }

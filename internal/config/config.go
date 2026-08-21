@@ -105,6 +105,17 @@ type Config struct {
 	// enabled -- this flag being off during that wait costs nothing (see
 	// this field's own first sentence).
 	StructurePriorsEnabled bool
+	// AnchorMembershipOffersEnabled (CHAOS-4042, team-lead ruling,
+	// ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED) is the anchor
+	// membership-verify feature's own master switch -- default OFF, same
+	// "ships dark" convention StructurePriorsEnabled documents above. The
+	// interim production verifier (graphrank.VerifyAnchorClaimantMembership)
+	// does not yet reconcile against the graph under a pinned binding
+	// epoch or re-authorize the selected claimant at redemption; this
+	// flag must stay false until a follow-up ships both. While false, no
+	// request can mint a v2 (membership-verify) ambiguous-claimant anchor
+	// offer -- byte-identical to pre-CHAOS-4042 behavior.
+	AnchorMembershipOffersEnabled bool
 	// AnswerReuseMaxAge (CHAOS-3782, ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE)
 	// is the staleness window TRD §19.7.3 condition 4 enforces: a stored
 	// investigation result older than this is never reused, regardless of

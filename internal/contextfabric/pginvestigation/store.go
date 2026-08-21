@@ -123,7 +123,7 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// invalid result before it is ever persisted -- an immutable row that
 	// fails the same contract the public API enforces on every returned
 	// result can never be corrected later.
-	if err := result.Validate(); err != nil {
+	if err := contextfabric.ValidateResult(result); err != nil {
 		return fmt.Errorf("pginvestigation: invalid investigation result: %w", err)
 	}
 	payload, err := json.Marshal(result)
@@ -472,7 +472,7 @@ SELECT payload, graph_epoch, created_at FROM acr.context_fabric_investigation_re
 	// binary with different validation, or a row an operator hand-edited)
 	// -- a caller must never receive a result this package cannot vouch
 	// for.
-	if err := result.ValidateStored(); err != nil {
+	if err := contextfabric.ValidateStoredResult(result); err != nil {
 		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	// CHAOS-3898 §2.4: persistence metadata lives ON the carrier, never
@@ -875,7 +875,7 @@ LIMIT 1`,
 	// Lenient: this is a READ of a persisted row, exactly like Get. A row
 	// written by an older, looser binary must stay reusable rather than
 	// turning into a hard failure nobody can migrate away from.
-	if err := result.ValidateStored(); err != nil {
+	if err := contextfabric.ValidateStoredResult(result); err != nil {
 		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, true, "", nil

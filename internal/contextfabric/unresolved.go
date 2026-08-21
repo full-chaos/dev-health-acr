@@ -268,8 +268,19 @@ func (e *Engine) terminalResult(
 	if windowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		terminalWarnings = appendUniqueWarning(terminalWarnings, windowConfirmationNudgeSentence)
 	}
+	// CHAOS-4042 (sol-max ruling): a result whose StructureNeeds carries at
+	// least one membership-verify anchor option is a DIFFERENT semantic
+	// major, not an additive v1 field -- structureMaterial.AnchorOptionsRequireV2
+	// is the ONLY signal that distinguishes it (AnchorOptions itself is
+	// wire-identical either way). This is the sole call site that composes
+	// a result carrying StructureNeeds (composeStructureNeeds has exactly
+	// one caller), so it is the sole place this decision needs to be made.
+	schemaVersion := InvestigationResultSchemaV1
+	if structureMaterial.AnchorOptionsRequireV2 {
+		schemaVersion = InvestigationResultSchemaV2
+	}
 	result := InvestigationResult{
-		SchemaVersion: InvestigationResultSchemaV1,
+		SchemaVersion: schemaVersion,
 		ResultID:      resultID,
 		RequestID:     request.RequestID,
 		GeneratedAt:   e.now().UTC(),
@@ -326,6 +337,13 @@ func (e *Engine) terminalResult(
 		DeterministicAnswer: answer,
 		Warnings:            terminalWarnings,
 	}
+	// CHAOS-4042: terminalVersions() is shared with window.go/structure.go's
+	// own veto paths (which never carry StructureNeeds and so always stay
+	// v1), so it cannot itself decide the contract version -- override it
+	// here, the one call site that can actually mint v2, to the SAME
+	// schemaVersion decided above rather than leaving it permanently
+	// mismatched against a v2 result's own SchemaVersion field.
+	result.Versions.ContractVersion = schemaVersion
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}
@@ -334,7 +352,11 @@ func (e *Engine) terminalResult(
 	// the ONLY call site for cf_structure_needs_disclosed/
 	// cf_structure_offer_count.
 	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
-	if err := result.Validate(); err != nil {
+	// CHAOS-4042: ValidateResult dispatches on result.SchemaVersion (set
+	// above from the SAME structureMaterial.AnchorOptionsRequireV2 signal)
+	// -- a v2 result validates under ValidateV2(), never the v1-only
+	// Validate() this path called unconditionally before this ticket.
+	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {

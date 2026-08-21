@@ -275,7 +275,7 @@ func TestCHAOS3963_ConflictVeto_EchoesAlreadyConfirmedMember(t *testing.T) {
 		{ResultID: "result_prior_structure_3963c", ReceiptID: "handr_confirm0002"},
 	}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationConflict {
 		t.Fatalf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationConflict)
 	}
@@ -331,7 +331,7 @@ func TestCHAOS3963_UnresolvedVeto_EchoesBothTheConfirmedAndTriggeringMember(t *t
 		},
 	})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationUnresolved {
 		t.Fatalf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
 	}
@@ -445,7 +445,7 @@ func TestCHAOS3900_NoStructureReceipts_CanonicalizeStructureIsANoOp(t *testing.T
 	t.Parallel()
 
 	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}})
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), validInvestigationRequest())
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), validInvestigationRequest(), ResolvedGraphBinding{})
 	if canon.Veto != structureVetoNone {
 		t.Errorf("canon.Veto = %q, want structureVetoNone", canon.Veto)
 	}
@@ -601,7 +601,7 @@ func TestCHAOS3927P4_NoCheckerWired_ConfirmationAppliesNormally(t *testing.T) {
 	request := validInvestigationRequest()
 	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm0001"}}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoNone {
 		t.Fatalf("canon.Veto = %q, want structureVetoNone (no checker wired -> nothing to veto on)", canon.Veto)
 	}
@@ -718,7 +718,7 @@ func TestCHAOS3927P4_VetoedReceipt_CapturesNoStructureSelectionEvent(t *testing.
 	request := validInvestigationRequest()
 	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_03", ReceiptID: "kindr_confirm0001"}}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto == structureVetoNone {
 		t.Fatal("expected a veto for a receipt naming a nonexistent prior result")
 	}
@@ -945,7 +945,7 @@ func TestCHAOS3900_AnchorReceiptReverification_NilVerifierVetoes(t *testing.T) {
 	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
 	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationUnresolved {
 		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
 	}
@@ -975,7 +975,7 @@ func TestCHAOS3900_AnchorReceiptReverification_VerifierRejectsVetoes(t *testing.
 		},
 	})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationUnresolved {
 		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
 	}
@@ -1001,7 +1001,7 @@ func TestCHAOS3900_AnchorReceiptReverification_VerifierAcceptsConfirms(t *testin
 		},
 	})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoNone {
 		t.Errorf("canon.Veto = %q, want structureVetoNone", canon.Veto)
 	}
@@ -1034,13 +1034,203 @@ func TestCHAOS3900_AnchorReceiptReverification_InconsistentVerifierVetoes(t *tes
 		},
 	})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationUnresolved {
 		t.Errorf("canon.Veto = %q, want %q (an inconsistent verifier result must fail closed)", canon.Veto, structureVetoConfirmationUnresolved)
 	}
 	if len(canon.Confirmed) != 0 {
 		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
 	}
+}
+
+// anchorMembershipReceiptTestSetup mirrors anchorReceiptTestSetup exactly,
+// except the stored prior result carries CHAOS-4042's v2 (membership-
+// verify) schema_version -- the redemption dispatch's own discriminator.
+func anchorMembershipReceiptTestSetup() (priorResult InvestigationResult, request InvestigationRequest) {
+	priorResult, request = anchorReceiptTestSetup()
+	priorResult.SchemaVersion = InvestigationResultSchemaV2
+	return priorResult, request
+}
+
+// TestCHAOS4042_AnchorMembershipReverification_NilVerifierVetoes mirrors
+// TestCHAOS3900_AnchorReceiptReverification_NilVerifierVetoes for the v2
+// path: an unwired Engine.anchorMembershipVerifier is NOT "trust the
+// stored offer" -- same fail-CLOSED default as every other structure
+// reverify hook.
+func TestCHAOS4042_AnchorMembershipReverification_NilVerifierVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := anchorMembershipReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+}
+
+// TestCHAOS4042_AnchorMembershipReverification_VerifierAcceptsConfirms
+// proves a wired AnchorMembershipVerifier reporting valid confirms the
+// anchor, and that it receives the FULL principal, the request's own
+// RequestedScope, and the pinned binding -- not just an org id, unlike
+// v1's AnchorVerifier (the ruling's own "re-authorize the selected node
+// at redemption under B" requirement).
+func TestCHAOS4042_AnchorMembershipReverification_VerifierAcceptsConfirms(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := anchorMembershipReceiptTestSetup()
+	request.RequestedScope = RequestedScope{RepositorySlugs: []string{"widget-service"}}
+	pinnedBinding := ResolvedGraphBinding{GraphKey: "graph_org_1", Epoch: 42}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	calls := 0
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		AnchorMembershipVerifier: func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason) {
+			calls++
+			if principal.OrgID != reusePrincipal().OrgID {
+				t.Errorf("AnchorMembershipVerifier principal.OrgID = %q, want %q", principal.OrgID, reusePrincipal().OrgID)
+			}
+			if len(scope.RepositorySlugs) != 1 || scope.RepositorySlugs[0] != "widget-service" {
+				t.Errorf("AnchorMembershipVerifier scope = %+v, want the request's own RequestedScope", scope)
+			}
+			if binding != pinnedBinding {
+				t.Errorf("AnchorMembershipVerifier binding = %+v, want %+v (the pinned binding passed to canonicalizeStructure)", binding, pinnedBinding)
+			}
+			if kind != SubjectRepository || canonicalID != "repository_widget_service" || matchedTermHash != "aa11bb22cc33dd44ee55ff66" {
+				t.Errorf("AnchorMembershipVerifier called with (kind=%q, canonical_id=%q, matched_term_hash=%q), want the stored offer's own content", kind, canonicalID, matchedTermHash)
+			}
+			return true, AnchorVerificationValid
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, pinnedBinding)
+	if canon.Veto != structureVetoNone {
+		t.Errorf("canon.Veto = %q, want structureVetoNone", canon.Veto)
+	}
+	if len(canon.Confirmed) != 1 {
+		t.Fatalf("len(canon.Confirmed) = %d, want 1", len(canon.Confirmed))
+	}
+	if calls != 1 {
+		t.Errorf("AnchorMembershipVerifier called %d times, want 1", calls)
+	}
+}
+
+// TestCHAOS4042_AnchorMembershipReverification_VerifierRejectsVetoes is
+// the negative twin: a membership verifier reporting the claim lost (the
+// selected claimant vanished or was re-keyed) vetoes atomically, same
+// discipline as v1's own claim-contested rejection.
+func TestCHAOS4042_AnchorMembershipReverification_VerifierRejectsVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := anchorMembershipReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		AnchorMembershipVerifier: func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason) {
+			return false, AnchorVerificationClaimLost
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+}
+
+// TestCHAOS4042_CrossVersionDispatch proves the ruling's binding
+// constraint made executable: redemption dispatches on the ISSUING STORED
+// result's OWN schema_version, and the two verifiers are NEVER
+// interchangeable -- a v1-stamped stored result must call ONLY
+// AnchorVerifier (never AnchorMembershipVerifier, even when wired), a
+// v2-stamped one must call ONLY AnchorMembershipVerifier (never
+// AnchorVerifier, even when wired), and an unrecognized schema_version
+// must call NEITHER -- an explicit reject, never a silent fallthrough to
+// either verifier's rules.
+func TestCHAOS4042_CrossVersionDispatch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("v1 stored result never calls the membership verifier", func(t *testing.T) {
+		t.Parallel()
+		priorResult, request := anchorReceiptTestSetup() // v1-stamped
+		store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+		v1Calls, v2Calls := 0, 0
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Results: store,
+			AnchorVerifier: func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+				v1Calls++
+				return true, AnchorVerificationValid
+			},
+			AnchorMembershipVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+				v2Calls++
+				return true, AnchorVerificationValid
+			},
+		})
+		canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+		if canon.Veto != structureVetoNone || len(canon.Confirmed) != 1 {
+			t.Fatalf("canon = %+v, want a confirmed anchor via the v1 verifier", canon)
+		}
+		if v1Calls != 1 || v2Calls != 0 {
+			t.Errorf("v1 verifier called %d times (want 1), v2 verifier called %d times (want 0)", v1Calls, v2Calls)
+		}
+	})
+
+	t.Run("v2 stored result never calls the legacy verifier", func(t *testing.T) {
+		t.Parallel()
+		priorResult, request := anchorMembershipReceiptTestSetup() // v2-stamped
+		store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+		v1Calls, v2Calls := 0, 0
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Results: store,
+			AnchorVerifier: func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+				v1Calls++
+				return true, AnchorVerificationValid
+			},
+			AnchorMembershipVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+				v2Calls++
+				return true, AnchorVerificationValid
+			},
+		})
+		canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+		if canon.Veto != structureVetoNone || len(canon.Confirmed) != 1 {
+			t.Fatalf("canon = %+v, want a confirmed anchor via the v2 verifier", canon)
+		}
+		if v2Calls != 1 || v1Calls != 0 {
+			t.Errorf("v2 verifier called %d times (want 1), v1 verifier called %d times (want 0)", v2Calls, v1Calls)
+		}
+	})
+
+	t.Run("unrecognized schema_version calls neither verifier and vetoes", func(t *testing.T) {
+		t.Parallel()
+		priorResult, request := anchorReceiptTestSetup()
+		priorResult.SchemaVersion = "context_fabric_investigation_result.v99"
+		store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+		v1Calls, v2Calls := 0, 0
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Results: store,
+			AnchorVerifier: func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+				v1Calls++
+				return true, AnchorVerificationValid
+			},
+			AnchorMembershipVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+				v2Calls++
+				return true, AnchorVerificationValid
+			},
+		})
+		canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+		if canon.Veto != structureVetoConfirmationUnresolved {
+			t.Errorf("canon.Veto = %q, want %q (an unrecognized schema_version must fail closed)", canon.Veto, structureVetoConfirmationUnresolved)
+		}
+		if v1Calls != 0 || v2Calls != 0 {
+			t.Errorf("v1 verifier called %d times, v2 verifier called %d times, want 0 and 0 -- neither verifier may run for an unrecognized schema_version", v1Calls, v2Calls)
+		}
+	})
 }
 
 // handleReceiptTestSetup builds a prior result carrying one HandleOption
@@ -1079,7 +1269,7 @@ func TestCHAOS3900_HandleReceiptReverification_NilVerifierVetoes(t *testing.T) {
 	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
 	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationUnresolved {
 		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
 	}
@@ -1111,7 +1301,7 @@ func TestCHAOS3900_HandleReceiptReverification_VerifierRejectsVetoes(t *testing.
 		},
 	})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationUnresolved {
 		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
 	}
@@ -1139,7 +1329,7 @@ func TestCHAOS3900_HandleReceiptReverification_VerifierAcceptsConfirms(t *testin
 		},
 	})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoNone {
 		t.Errorf("canon.Veto = %q, want structureVetoNone", canon.Veto)
 	}
@@ -1169,7 +1359,7 @@ func TestCHAOS3900_HandleReceiptReverification_InconsistentVerifierVetoes(t *tes
 		},
 	})
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationUnresolved {
 		t.Errorf("canon.Veto = %q, want %q (an inconsistent verifier result must fail closed)", canon.Veto, structureVetoConfirmationUnresolved)
 	}
@@ -1622,7 +1812,7 @@ func TestCHAOS3972_ExplicitKind_MCPSurface_EntersInferredDefault(t *testing.T) {
 	request.Consumer.Surface = "mcp"
 	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoNone {
 		t.Fatalf("canon.Veto = %q, want structureVetoNone", canon.Veto)
 	}
@@ -1655,7 +1845,7 @@ func TestCHAOS3972_ExplicitKind_NonMCPSurface_EntersQuestionStated(t *testing.T)
 	request := validInvestigationRequest() // Consumer.Surface = "workbench" (model_test.go)
 	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if len(canon.Explicit) != 1 {
 		t.Fatalf("canon.Explicit = %+v, want exactly 1 entry", canon.Explicit)
 	}
@@ -1682,7 +1872,7 @@ func TestCHAOS3972_ExplicitKind_MultiValue_NoSingleEcho(t *testing.T) {
 	request.Consumer.Surface = "mcp"
 	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest, SubjectWorkItem}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoNone {
 		t.Fatalf("canon.Veto = %q, want structureVetoNone", canon.Veto)
 	}
@@ -1715,7 +1905,7 @@ func TestCHAOS3972_ExplicitKind_AgreesWithReceipt_ReceiptWinsNoDuplicateEcho(t *
 	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm00001"}}
 	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectPullRequest}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoNone {
 		t.Fatalf("canon.Veto = %q, want structureVetoNone (agreeing explicit + receipt)", canon.Veto)
 	}
@@ -1751,7 +1941,7 @@ func TestCHAOS3972_ExplicitKind_ConflictsWithReceipt_Vetoes(t *testing.T) {
 	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "kindr_confirm00002"}}
 	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectWorkItem}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationConflict {
 		t.Fatalf("canon.Veto = %q, want structureVetoConfirmationConflict", canon.Veto)
 	}
@@ -1801,7 +1991,7 @@ func TestCHAOS3963_PartialExplicit_EchoedWhenALaterExplicitMemberConflicts(t *te
 	// block, which must veto as a conflict.
 	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectWorkItem, Value: "999"}}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationConflict {
 		t.Fatalf("canon.Veto = %q, want structureVetoConfirmationConflict", canon.Veto)
 	}
@@ -1846,7 +2036,7 @@ func TestCHAOS3972_ExplicitHandle_SingleValueEchoed(t *testing.T) {
 	request.Consumer.Surface = "mcp"
 	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if len(canon.Explicit) != 1 {
 		t.Fatalf("canon.Explicit = %+v, want exactly 1 entry", canon.Explicit)
 	}
@@ -1888,7 +2078,7 @@ func TestCHAOS3972_ExplicitHandle_SameValueDifferentKindConflicts(t *testing.T) 
 	// Same VALUE ("532"), but a DIFFERENT kind -- must conflict, not agree.
 	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectWorkItem, PatternID: "some_other_pattern", Value: "532"}}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoConfirmationConflict {
 		t.Fatalf("canon.Veto = %q, want structureVetoConfirmationConflict -- same value, different kind, must never be read as agreement", canon.Veto)
 	}
@@ -1926,7 +2116,7 @@ func TestCHAOS3972_ExplicitHandle_SameKindAndValueAgrees(t *testing.T) {
 	request.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "handr_confirm00002"}}
 	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
 
-	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request)
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
 	if canon.Veto != structureVetoNone {
 		t.Fatalf("canon.Veto = %q, want structureVetoNone (agreeing kind AND value)", canon.Veto)
 	}

@@ -323,6 +323,20 @@ type ResolveDeps struct {
 	// the SAME safe degradation HandleGrammarChecker's own doc comment
 	// describes.
 	HandleGrammarChecker contextfabric.HandleGrammarChecker
+	// AnchorMembershipOffersEnabled (CHAOS-4042, team-lead ruling: ship
+	// PR2's interim verifier DARK) gates whether anchorOfferMaterial may
+	// ever mint a v2 (membership-verify) ambiguous-claimant AnchorOption.
+	// false (every production deployment today) is byte-identical to
+	// pre-CHAOS-4042 behavior -- no request can mint a v2 anchor offer.
+	// The interim production verifier (graphrank.VerifyAnchorClaimantMembership)
+	// does not yet reconcile against the graph under a pinned binding
+	// epoch or re-authorize at redemption (see that function's own doc
+	// comment); this flag stays false until PR3 lands both and a
+	// deployment explicitly opts in via
+	// ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED. Tests that exercise
+	// the v2 offer path set this to true directly, bypassing the env
+	// gate entirely -- see anchorOfferMaterial's own doc comment.
+	AnchorMembershipOffersEnabled bool
 }
 
 // ResolutionTracer receives ResolveSubjects' own per-stage trace events.
@@ -1157,13 +1171,17 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// becomes a top-ranked, receipt-bound offer on THIS SAME response
 	// (design brief §2.3's deterministic one-turn upgrade), merged with
 	// whatever the pool/question text itself would have offered.
-	// anchorOfferMaterial builds CALLER-VISIBLE offer material: it must see
-	// only what principal is authorized to see (CHAOS-4042 auth-gap
-	// closure), never the raw aliasClaimantsByTerm truth BindAnchor and the
-	// shadow evidence round above already consumed unfiltered.
+	// anchorOfferMaterial builds CALLER-VISIBLE offer material: every
+	// candidate/option it computes must see only what principal is
+	// authorized to see (CHAOS-4042 auth-gap closure), never the raw
+	// aliasClaimantsByTerm truth BindAnchor and the shadow evidence round
+	// above already consumed unfiltered. The raw map is ALSO passed
+	// through (never used for option content) so anchorOfferMaterial can
+	// detect and suppress a mixed-visibility ambiguous term -- see its own
+	// doc comment.
 	offerMaterial := combineStructureOfferMaterial(
 		kindOfferMaterial(resolution.Candidates, request.ExpectedKinds),
-		anchorOfferMaterial(claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete),
+		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled),
 		handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker),
 	)
 	return resolution, offerMaterial, nil

@@ -173,6 +173,15 @@ type Config struct {
 	// value discards both signals, the same "optional dependency, absent
 	// means degrade" convention every sink on this Config already uses.
 	LifecycleTelemetry contextfabric.GraphLifecycleTelemetry
+	// AnchorMembershipOffersEnabled (CHAOS-4042, team-lead ruling: ship the
+	// interim membership verifier DARK) is false by default -- the
+	// composition root (internal/runtime/hosted/open.go) sets it from
+	// config.Config.AnchorMembershipOffersEnabled
+	// (ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED), which itself
+	// defaults false. Threaded straight through to
+	// graphrank.ResolveDeps.AnchorMembershipOffersEnabled -- see that
+	// field's own doc comment for what staying false guarantees.
+	AnchorMembershipOffersEnabled bool
 }
 
 // GraphTelemetry is the graph adapter's operational signal sink.

@@ -72,6 +72,13 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironmen
 	if cfg.StructurePriorsEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED", false); err != nil {
 		return err
 	}
+	// CHAOS-4042 (team-lead ruling): default OFF -- see
+	// Config.AnchorMembershipOffersEnabled's own doc comment for why this
+	// must stay false until a follow-up ships pinned-epoch reconciliation
+	// and redemption-time re-authorization.
+	if cfg.AnchorMembershipOffersEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED", false); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -137,6 +144,7 @@ func (c Config) SafeAttributes() []any {
 		"episode_writeback_enabled", c.EnableEpisodeWriteback,
 		"context_fabric_investigations_enabled", c.EnableContextFabricInvestigations,
 		"context_fabric_structure_priors_enabled", c.StructurePriorsEnabled,
+		"context_fabric_anchor_membership_enabled", c.AnchorMembershipOffersEnabled,
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,
 		"entitlement_mode", string(c.EntitlementMode()),

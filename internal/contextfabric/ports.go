@@ -252,6 +252,16 @@ type StructureOfferMaterial struct {
 	KindOptions   []contractsv1.ContextFabricKindOption
 	AnchorOptions []contractsv1.ContextFabricAnchorOption
 	HandleOptions []contractsv1.ContextFabricHandleOption
+	// AnchorOptionsRequireV2 (CHAOS-4042, sol-max ruling) is true when
+	// AnchorOptions above were minted under membership-verify semantics
+	// (an ambiguous term's claimants, offered without requiring
+	// exclusivity) rather than v1's unique-claimant semantics. The result
+	// this material attaches to (terminalResult, unresolved.go) must then
+	// persist with SchemaVersion == InvestigationResultSchemaV2, not V1 --
+	// AnchorOptions itself stays wire-identical either way (the ruling's
+	// "JSON fields may remain identical"), so this bool is the ONLY signal
+	// that distinguishes the two on this struct.
+	AnchorOptionsRequireV2 bool
 }
 
 type GraphDiscoveryRequest struct {
