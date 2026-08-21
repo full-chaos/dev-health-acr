@@ -74,6 +74,27 @@ RESPONDER_PIDS=()
 TEST_PIDS=()
 SHARD_OUT=()
 
+# kill_descendants (codex round-2 finding, MEDIUM): a bare `kill "$pid"`
+# only signals that one process. Backgrounded jobs in this NON-interactive
+# script (no `set -m`) do NOT get their own process group -- confirmed
+# empirically (a `&`-launched subshell's pgid equals the SCRIPT's own
+# pgid, not a fresh one), so a negative-PID/process-group kill cannot be
+# used to reach a tracked PID's children. run-responder-codex.sh's `codex
+# exec` runs as a direct foreground child of the responder script (not
+# backgrounded), and `go test` execs a separate compiled test binary as
+# its own child -- terminating only the tracked wrapper PID would leave
+# either running. Walks the process tree via `pgrep -P` (standard on both
+# macOS and Linux) and signals bottom-up (children before parents), so a
+# parent dying mid-walk can never orphan/reparent a still-undiscovered
+# child before this reaches it.
+kill_descendants() {
+  local pid="$1" sig="$2" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    kill_descendants "$child" "$sig"
+  done
+  kill "-$sig" "$pid" 2>/dev/null || true
+}
+
 # wait_with_timeout (codex round-1 finding, HIGH): a plain `wait "$pid"`
 # blocks forever if that process never exits -- a responder whose `codex
 # exec` hangs (network stall, an unexpected auth prompt) never writes a
@@ -81,17 +102,18 @@ SHARD_OUT=()
 # never sees pending==0 and never exits, even after DONE is touched. That
 # would leave teardown blocked indefinitely and every scratch container
 # running until something kills this script by hand. Bounded instead: wait
-# up to timeout_s, then TERM and (if still alive) KILL -- run-responder-
-# codex.sh's own EXIT/INT/TERM trap still wipes its private CODEX_HOME
-# either way, so a forced kill here does not leak that.
+# up to timeout_s, then TERM and (if still alive) KILL the WHOLE process
+# tree via kill_descendants -- run-responder-codex.sh's own EXIT/INT/TERM
+# trap still wipes its private CODEX_HOME either way, so a forced kill
+# here does not leak that.
 wait_with_timeout() {
   local pid="$1" timeout_s="$2" waited=0
   while kill -0 "$pid" 2>/dev/null; do
     if ((waited >= timeout_s)); then
-      echo "run-two-turn-parallel.sh: pid $pid did not exit within ${timeout_s}s -- killing it" >&2
-      kill -TERM "$pid" 2>/dev/null || true
+      echo "run-two-turn-parallel.sh: pid $pid did not exit within ${timeout_s}s -- killing its process tree" >&2
+      kill_descendants "$pid" TERM
       sleep 2
-      kill -KILL "$pid" 2>/dev/null || true
+      kill_descendants "$pid" KILL
       break
     fi
     sleep 1
@@ -107,12 +129,15 @@ wait_with_timeout() {
 # populated).
 cleanup() {
   local status=$?
-  # codex round-1 finding, MEDIUM: an early failure (e.g. shard 1's docker
-  # or migration step) used to leave shard 0's already-launched go test
-  # running orphaned, potentially for its full 6h timeout, since nothing
-  # ever killed TEST_PIDS on this path.
+  # codex round-1 finding (MEDIUM) + round-2 follow-up: an early failure
+  # (e.g. a later shard's docker/migration step) used to leave an earlier
+  # shard's already-launched go test running orphaned, potentially for its
+  # full 6h timeout. wait_with_timeout (bounded wait, then TERM/KILL the
+  # whole process tree, not just the go test wrapper) closes this the same
+  # way it closes the responder case -- a 30s bound is generous for a test
+  # binary to notice TERM and exit.
   for pid in "${TEST_PIDS[@]:-}"; do
-    [[ -n "$pid" ]] && kill -TERM "$pid" 2>/dev/null || true
+    [[ -n "$pid" ]] && wait_with_timeout "$pid" 30
   done
   for exdir in "${EXCHANGE_DIRS[@]:-}"; do
     [[ -n "$exdir" ]] && touch "$exdir/DONE" 2>/dev/null || true
@@ -120,9 +145,18 @@ cleanup() {
   for pid in "${RESPONDER_PIDS[@]:-}"; do
     [[ -n "$pid" ]] && wait_with_timeout "$pid" 300
   done
+  # codex round-2 finding, MEDIUM: a failed `docker rm -f` used to be
+  # silently swallowed -- surfaced now so a leaked scratch container is
+  # visible and actionable, never silently dropped.
+  local failed_containers=()
   for c in "${PG_CONTAINERS[@]:-}"; do
-    [[ -n "$c" ]] && docker rm -f "$c" >/dev/null 2>&1 || true
+    if [[ -n "$c" ]] && ! docker rm -f "$c" >/dev/null 2>&1; then
+      failed_containers+=("$c")
+    fi
   done
+  if [[ "${#failed_containers[@]}" -gt 0 ]]; then
+    echo "run-two-turn-parallel.sh: failed to remove ${#failed_containers[@]} scratch container(s) -- clean up manually: ${failed_containers[*]/#/docker rm -f }" >&2
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -199,9 +233,17 @@ for pid in "${RESPONDER_PIDS[@]}"; do
 done
 RESPONDER_PIDS=() # waited above; trap becomes a no-op for these
 
+# codex round-2 finding, MEDIUM: a failed `docker rm -f` used to be
+# silently swallowed here too -- surfaced now, same as cleanup()'s own fix.
+failed_containers=()
 for c in "${PG_CONTAINERS[@]}"; do
-  docker rm -f "$c" >/dev/null 2>&1 || true
+  if ! docker rm -f "$c" >/dev/null 2>&1; then
+    failed_containers+=("$c")
+  fi
 done
+if [[ "${#failed_containers[@]}" -gt 0 ]]; then
+  echo "run-two-turn-parallel.sh: failed to remove ${#failed_containers[@]} scratch container(s) -- clean up manually: ${failed_containers[*]/#/docker rm -f }" >&2
+fi
 PG_CONTAINERS=() # torn down above; trap becomes a no-op for these
 
 if [[ "$overall_status" -ne 0 ]]; then
