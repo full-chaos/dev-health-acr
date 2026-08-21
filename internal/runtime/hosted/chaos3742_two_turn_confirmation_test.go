@@ -3124,11 +3124,34 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// gates validity -- until then this knob is dormant, exercised only by
 	// this package's own shard-selection tests.
 	//
-	// Round-robin by POSITION in annex.Entries (not by entry.Index, which
-	// can already be a non-contiguous corpus index) so shards stay
-	// balanced regardless of how entries cluster in the annex. Applied
-	// BEFORE ACR_TEST_TRIAL_LIMIT below so a limited dry run bounds EACH
-	// shard independently, not the pre-shard total.
+	// Round-robin by entry.Index -- CORPUS CASE index, not the entry's
+	// position in annex.Entries (live 4-way validation-run finding,
+	// CHAOS-4033 follow-up): loadTwoTurnOracleAnnex expands each on-disk
+	// corpus case into one twoTurnOracleEntry PER MEMBER it tests
+	// (kind/anchor/window/handle), so annex.Entries typically has several
+	// consecutive entries sharing the SAME Index. Sharding by POSITION
+	// used to split those sibling entries across DIFFERENT shards --
+	// harmless for simple per-entry sums, but the report's own
+	// controlSeen-style bookkeeping (chaos3742_two_turn_confirmation_test.go,
+	// ControlsTotal/ControlsWitnessed) dedups by corpus Index WITHIN one
+	// process, so a control case whose members landed in N different
+	// shards got counted N times once those shards' scalar counts were
+	// simply summed at merge time -- a live validation run measured this
+	// directly: controls_total 55 (4-way, position-sharded) vs 19
+	// (sequential control), a ~2.9x overcount with zero live-model
+	// dependency to explain it (D0 is a pure corpus-structural fact,
+	// tc.ExpectID=="", so it must be byte-identical across ANY run of the
+	// same corpus). Sharding by entry.Index instead guarantees every
+	// entry belonging to the same corpus case -- all its members --
+	// stays in ONE shard together, which is what the whole isolation
+	// story here always assumed ("each isolated environment gets its own
+	// fresh org/DB" per corpus CASE, not per corpus-case-and-member) and
+	// makes every Index-keyed dedup correct via simple summation again,
+	// closing this bug class at the root rather than patching one metric.
+	// Corpus indices are small dense integers (0..len(corpus)-1), so this
+	// still distributes evenly across shards. Applied BEFORE
+	// ACR_TEST_TRIAL_LIMIT below so a limited dry run bounds EACH shard
+	// independently, not the pre-shard total.
 	entries := annex.Entries
 	// codex round-1 finding: ACR_TEST_TRIAL_SHARD_INDEX set with
 	// ACR_TEST_TRIAL_SHARD_COUNT unset used to be silently ignored (ran
@@ -3152,8 +3175,16 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// negative make() capacity and a makeslice panic. len(entries) is
 		// always a safe, overflow-free upper bound regardless of shardCount.
 		sharded := make([]twoTurnOracleEntry, 0, len(entries))
-		for i, entry := range entries {
-			if i%shardCount == shardIndex {
+		for _, entry := range entries {
+			// Go's % follows the dividend's sign, so a malformed
+			// negative Index would otherwise silently match NO shard
+			// (never a non-negative shardIndex) instead of surfacing at
+			// the existing bounds check below (which only runs on the
+			// post-shard, already-filtered entries) -- normalize into
+			// [0, shardCount) so a bad entry still lands in some shard
+			// and gets caught there with a clear fatal error, not
+			// dropped silently before ever reaching that check.
+			if ((entry.Index%shardCount)+shardCount)%shardCount == shardIndex {
 				sharded = append(sharded, entry)
 			}
 		}
