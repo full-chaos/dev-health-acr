@@ -1303,13 +1303,19 @@ type twoTurnCaseTiming struct {
 // twoTurnArmTimingSummary is one arm's (or turn 1's) run-level timing
 // aggregate over every case that recorded it.
 type twoTurnArmTimingSummary struct {
-	Arm                  string  `json:"arm"`
-	SampleCount          int     `json:"sample_count"`
-	WallMeanMS           float64 `json:"wall_mean_ms"`
-	WallP50MS            int64   `json:"wall_p50_ms"`
-	WallMaxMS            int64   `json:"wall_max_ms"`
-	ResponderCallCount   int     `json:"responder_call_count"`
-	ResponderCallTotalMS int64   `json:"responder_call_total_ms"`
+	Arm         string  `json:"arm"`
+	SampleCount int     `json:"sample_count"`
+	WallMeanMS  float64 `json:"wall_mean_ms"`
+	WallP50MS   int64   `json:"wall_p50_ms"`
+	WallMaxMS   int64   `json:"wall_max_ms"`
+	// ResponderCallMaxMS (codex round-1 finding) is the max over every
+	// per-case twoTurnArmTiming.ResponderCallMaxMS this arm recorded --
+	// the run-level single-slowest-round-trip signal, not merely
+	// recoverable from ResponderCallTotalMS/ResponderCallCount (a mean
+	// hides one outlier case that alone explains a slow run).
+	ResponderCallMaxMS   int64 `json:"responder_call_max_ms"`
+	ResponderCallCount   int   `json:"responder_call_count"`
+	ResponderCallTotalMS int64 `json:"responder_call_total_ms"`
 }
 
 // summarizeTwoTurnTiming reduces per-case timings into one aggregate per
@@ -1333,7 +1339,7 @@ func summarizeTwoTurnTiming(timings []twoTurnCaseTiming) []twoTurnArmTimingSumma
 		wall := make([]int64, len(samples))
 		var totalWall, maxWall int64
 		var callCount int
-		var callTotal int64
+		var callTotal, callMax int64
 		for i, s := range samples {
 			wall[i] = s.WallDurationMS
 			totalWall += s.WallDurationMS
@@ -1342,13 +1348,16 @@ func summarizeTwoTurnTiming(timings []twoTurnCaseTiming) []twoTurnArmTimingSumma
 			}
 			callCount += s.ResponderCallCount
 			callTotal += s.ResponderCallTotalMS
+			if s.ResponderCallMaxMS > callMax {
+				callMax = s.ResponderCallMaxMS
+			}
 		}
 		sort.Slice(wall, func(i, j int) bool { return wall[i] < wall[j] })
 		summaries = append(summaries, twoTurnArmTimingSummary{
 			Arm: arm, SampleCount: len(samples),
 			WallMeanMS: float64(totalWall) / float64(len(samples)),
 			WallP50MS:  wall[len(wall)/2], WallMaxMS: maxWall,
-			ResponderCallCount: callCount, ResponderCallTotalMS: callTotal,
+			ResponderCallCount: callCount, ResponderCallTotalMS: callTotal, ResponderCallMaxMS: callMax,
 		})
 	}
 	return summaries
@@ -3266,8 +3275,28 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		turn1, err := investigator.Investigate(turn1Ctx, principal, turn1Req)
 		turn1Cancel()
 		turn1Timing := buildTwoTurnArmTiming("turn1", turn1Started, modelCallCapture)
+		// positiveTiming/inferredTiming/confirmedWrongTiming/mutationTiming
+		// (CHAOS-4058) default to zero-duration/zero-call records naming
+		// their own arm, declared here (before either early-`continue`
+		// below) so a turn-1 error or a disclosure-absent case still
+		// records a Timings entry for the case -- codex round-1 finding:
+		// the call that actually consumed the time (turn 1) must not go
+		// missing from the timing artifact just because the REST of the
+		// case never ran. Reassigned (never redeclared) at each arm's own
+		// call site below once it actually runs.
+		positiveTiming := twoTurnArmTiming{Arm: string(twoTurnArmPositive)}
+		inferredTiming := twoTurnArmTiming{Arm: string(twoTurnArmInferredTier)}
+		confirmedWrongTiming := twoTurnArmTiming{Arm: string(twoTurnArmConfirmedWrong)}
+		mutationTiming := twoTurnArmTiming{Arm: string(twoTurnArmMutation)}
+		caseTiming := func() twoTurnCaseTiming {
+			return twoTurnCaseTiming{
+				Index: entry.Index, Member: entry.Member,
+				Arms: []twoTurnArmTiming{turn1Timing, positiveTiming, inferredTiming, confirmedWrongTiming, mutationTiming},
+			}
+		}
 		if err != nil {
 			t.Logf("case %d: turn 1 error: %v", entry.Index, err)
+			report.Timings = append(report.Timings, caseTiming())
 			continue
 		}
 		report.CasesRun++
@@ -3320,13 +3349,14 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// window-only case from every arm.
 		if !disclosurePresent {
 			report.StructureAndWindowDisclosureAbsentCount++
+			report.Timings = append(report.Timings, caseTiming())
 			continue
 		}
 
 		modelCallCapture.reset()
 		positiveStarted := time.Now()
 		positive := runTwoTurnPositiveArm(ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout)
-		positiveTiming := buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
+		positiveTiming = buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
 		if positive.OfferMiss {
 			report.OfferMissCount[entry.Member]++
 		}
@@ -3368,7 +3398,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		modelCallCapture.reset()
 		inferredStarted := time.Now()
 		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
-		inferredTiming := buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
+		inferredTiming = buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
 		if inferred.PairInvalid {
 			report.InferredPairInvalidCount++
 		}
@@ -3423,7 +3453,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		modelCallCapture.reset()
 		confirmedWrongStarted := time.Now()
 		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken)
-		confirmedWrongTiming := buildTwoTurnArmTiming(string(twoTurnArmConfirmedWrong), confirmedWrongStarted, modelCallCapture)
+		confirmedWrongTiming = buildTwoTurnArmTiming(string(twoTurnArmConfirmedWrong), confirmedWrongStarted, modelCallCapture)
 		if confirmedWrong.ArmInvalidReason == "" && confirmedWrong.Applied && entry.NegativeCommittable {
 			report.ConfirmedWrongRedeemedCount[entry.Member]++
 		}
@@ -3444,13 +3474,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// Running probe (iii) against window could never trip by
 		// construction, which would misreport as a probe DEFECT rather
 		// than the structural exemption it actually is.
-		// mutationTiming (CHAOS-4058) defaults to a zero-duration/zero-call
-		// record naming the arm -- overwritten below only when the mutation
-		// arm actually runs (positive.Applied, non-window member, and a
-		// redeemable offer found), so a case where it structurally never
-		// ran still reports "mutation" with an honest zero rather than
-		// omitting the arm from Timings entirely.
-		mutationTiming := twoTurnArmTiming{Arm: string(twoTurnArmMutation)}
+		// mutationTiming (CHAOS-4058, declared above alongside turn1Timing)
+		// keeps its zero-duration/zero-call default -- overwritten below
+		// only when the mutation arm actually runs (positive.Applied,
+		// non-window member, and a redeemable offer found), so a case
+		// where it structurally never ran still reports "mutation" with an
+		// honest zero rather than omitting the arm from Timings entirely.
 		if positive.Applied && entry.Member != string(contractsv1.ContextFabricStructureNeedWindow) {
 			receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 			if found {
@@ -3468,10 +3497,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			}
 		}
 
-		report.Timings = append(report.Timings, twoTurnCaseTiming{
-			Index: entry.Index, Member: entry.Member,
-			Arms: []twoTurnArmTiming{turn1Timing, positiveTiming, inferredTiming, confirmedWrongTiming, mutationTiming},
-		})
+		report.Timings = append(report.Timings, caseTiming())
 
 		t.Logf("case %d member=%s: positive(applied=%v miss=%v) inferred(commit=%d class=%q pair_invalid=%v false_no_match=%v invalid=%q) confirmed_wrong(applied=%v wrong=%v invalid=%q) timing(turn1=%dms positive=%dms/%dcalls/%dms_max inferred=%dms/%dcalls/%dms_max confirmed_wrong=%dms/%dcalls/%dms_max mutation=%dms/%dcalls/%dms_max)",
 			entry.Index, entry.Member, positive.Applied, positive.OfferMiss,

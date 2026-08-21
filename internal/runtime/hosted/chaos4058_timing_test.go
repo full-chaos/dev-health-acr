@@ -47,16 +47,27 @@ type chaos4058SleepyModelRuntime struct {
 	synthesizeCalls int
 }
 
+// interpretMarker/synthesizeMarker are distinguishing values stamped onto
+// this fake's return payloads -- codex round-1 finding: a test that only
+// checks error text and call counts would still pass if the wrapper
+// dropped or replaced the underlying's actual result/receipt, so the
+// round-trip test below asserts these exact values survive the wrapper
+// unchanged.
+const (
+	chaos4058InterpretMarker  = "chaos4058-interpret-marker"
+	chaos4058SynthesizeMarker = "chaos4058-synthesize-marker"
+)
+
 func (r *chaos4058SleepyModelRuntime) InterpretQuestion(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	r.interpretCalls++
 	time.Sleep(r.sleep)
-	return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{Provider: "sleepy"}, r.interpretErr
+	return contextfabric.InterpretedQuestion{ClarificationReason: chaos4058InterpretMarker}, contextfabric.ModelExecutionReceipt{Provider: "sleepy"}, r.interpretErr
 }
 
 func (r *chaos4058SleepyModelRuntime) SynthesizeAnswer(ctx context.Context, principal storage.Principal, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
 	r.synthesizeCalls++
 	time.Sleep(r.sleep)
-	return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{Provider: "sleepy"}, r.synthesizeErr
+	return contextfabric.SynthesisDraft{DirectJudgment: chaos4058SynthesizeMarker}, contextfabric.ModelExecutionReceipt{Provider: "sleepy"}, r.synthesizeErr
 }
 
 func TestTwoTurnModelCallCaptureStats(t *testing.T) {
@@ -97,11 +108,30 @@ func TestTwoTurnTimedModelRuntimeRecordsRoundTrips(t *testing.T) {
 	capture := &twoTurnModelCallCapture{}
 	wrapped := &twoTurnTimedModelRuntime{underlying: underlying, capture: capture}
 
-	if _, _, err := wrapped.InterpretQuestion(context.Background(), storage.Principal{}, contextfabric.InvestigationRequest{}); err == nil || err.Error() != "boom" {
+	interpreted, interpretReceipt, err := wrapped.InterpretQuestion(context.Background(), storage.Principal{}, contextfabric.InvestigationRequest{})
+	if err == nil || err.Error() != "boom" {
 		t.Fatalf("InterpretQuestion() error = %v, want the underlying's own \"boom\" passed through unchanged", err)
 	}
-	if _, _, err := wrapped.SynthesizeAnswer(context.Background(), storage.Principal{}, contextfabric.SynthesisInput{}); err != nil {
+	// The underlying still returns a real payload/receipt alongside its
+	// error (production's own InterpretQuestion does the same on a
+	// classified failure -- see fileExchangeRuntime.InterpretQuestion),
+	// so the wrapper must pass those through too, not just the error.
+	if interpreted.ClarificationReason != chaos4058InterpretMarker {
+		t.Errorf("InterpretQuestion() payload = %+v, want ClarificationReason=%q passed through from the underlying unchanged", interpreted, chaos4058InterpretMarker)
+	}
+	if interpretReceipt.Provider != "sleepy" {
+		t.Errorf("InterpretQuestion() receipt = %+v, want Provider=\"sleepy\" passed through from the underlying unchanged", interpretReceipt)
+	}
+
+	draft, synthesizeReceipt, err := wrapped.SynthesizeAnswer(context.Background(), storage.Principal{}, contextfabric.SynthesisInput{})
+	if err != nil {
 		t.Fatalf("SynthesizeAnswer() error = %v, want nil (underlying returns nil)", err)
+	}
+	if draft.DirectJudgment != chaos4058SynthesizeMarker {
+		t.Errorf("SynthesizeAnswer() payload = %+v, want DirectJudgment=%q passed through from the underlying unchanged", draft, chaos4058SynthesizeMarker)
+	}
+	if synthesizeReceipt.Provider != "sleepy" {
+		t.Errorf("SynthesizeAnswer() receipt = %+v, want Provider=\"sleepy\" passed through from the underlying unchanged", synthesizeReceipt)
 	}
 
 	if got := len(capture.samples); got != 2 {
@@ -197,8 +227,8 @@ func TestSummarizeTwoTurnTiming(t *testing.T) {
 	if turn1.SampleCount != 2 || turn1.WallMeanMS != 200 || turn1.WallP50MS != 300 || turn1.WallMaxMS != 300 {
 		t.Errorf("turn1 wall summary = %+v, want {count:2 mean:200 p50:300 max:300}", turn1)
 	}
-	if turn1.ResponderCallCount != 2 || turn1.ResponderCallTotalMS != 350 {
-		t.Errorf("turn1 responder-call summary = %+v, want {count:2 total:350}", turn1)
+	if turn1.ResponderCallCount != 2 || turn1.ResponderCallTotalMS != 350 || turn1.ResponderCallMaxMS != 250 {
+		t.Errorf("turn1 responder-call summary = %+v, want {count:2 total:350 max:250}", turn1)
 	}
 
 	// mutation: case 0 never ran it (zero-value default), case 1 did --
@@ -208,7 +238,7 @@ func TestSummarizeTwoTurnTiming(t *testing.T) {
 	if mutation.SampleCount != 2 || mutation.WallMeanMS != 300 || mutation.WallMaxMS != 600 {
 		t.Errorf("mutation wall summary = %+v, want {count:2 mean:300 max:600}", mutation)
 	}
-	if mutation.ResponderCallCount != 3 || mutation.ResponderCallTotalMS != 900 {
-		t.Errorf("mutation responder-call summary = %+v, want {count:3 total:900} (only case 1's real run contributes calls)", mutation)
+	if mutation.ResponderCallCount != 3 || mutation.ResponderCallTotalMS != 900 || mutation.ResponderCallMaxMS != 400 {
+		t.Errorf("mutation responder-call summary = %+v, want {count:3 total:900 max:400} (only case 1's real run contributes calls)", mutation)
 	}
 }
