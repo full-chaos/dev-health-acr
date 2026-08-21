@@ -24,8 +24,11 @@ import (
 // mirrored structs below -- ReportSchemaVersion's own doc comment
 // (chaos3742_two_turn_confirmation_test.go) is the authority on what
 // changed; a _test.go type cannot be imported by a regular package, so this
-// file is a hand-maintained mirror, not a shared definition.
-const expectedSchemaVersion = "6"
+// file is a hand-maintained mirror, not a shared definition. "7"
+// (CHAOS-4058): Timings/TimingSummary are new, purely additive fields --
+// see twoTurnArmTiming/twoTurnCaseTiming/twoTurnArmTimingSummary below and
+// mergeReports' own handling of them.
+const expectedSchemaVersion = "7"
 
 type trialCommitGateProvenance struct {
 	LoneFloorEnv                   string `json:"lone_floor_env,omitempty"`
@@ -78,6 +81,35 @@ type twoTurnCaseResult struct {
 
 const twoTurnArmInferredTier = "inferred_tier"
 
+// twoTurnArmTiming/twoTurnCaseTiming/twoTurnArmTimingSummary (CHAOS-4058)
+// mirror the identically-named types in
+// chaos3742_two_turn_confirmation_test.go byte-for-byte (JSON tags
+// included) -- see that file's own doc comments for what each field means.
+type twoTurnArmTiming struct {
+	Arm                  string `json:"arm"`
+	WallDurationMS       int64  `json:"wall_duration_ms"`
+	ResponderCallCount   int    `json:"responder_call_count,omitempty"`
+	ResponderCallTotalMS int64  `json:"responder_call_total_ms,omitempty"`
+	ResponderCallMaxMS   int64  `json:"responder_call_max_ms,omitempty"`
+}
+
+type twoTurnCaseTiming struct {
+	Index  int                `json:"index"`
+	Member string             `json:"member"`
+	Arms   []twoTurnArmTiming `json:"arms"`
+}
+
+type twoTurnArmTimingSummary struct {
+	Arm                  string  `json:"arm"`
+	SampleCount          int     `json:"sample_count"`
+	WallMeanMS           float64 `json:"wall_mean_ms"`
+	WallP50MS            int64   `json:"wall_p50_ms"`
+	WallMaxMS            int64   `json:"wall_max_ms"`
+	ResponderCallMaxMS   int64   `json:"responder_call_max_ms"`
+	ResponderCallCount   int     `json:"responder_call_count"`
+	ResponderCallTotalMS int64   `json:"responder_call_total_ms"`
+}
+
 type twoTurnReport struct {
 	ReportSchemaVersion                     string              `json:"report_schema_version"`
 	Provenance                              trialProvenance     `json:"provenance"`
@@ -114,6 +146,14 @@ type twoTurnReport struct {
 	ControlsWitnessed                       int                 `json:"controls_witnessed"`
 	ControlsWitnessedNoMatchCensusBacked    int                 `json:"controls_witnessed_no_match_census_backed"`
 	Results                                 []twoTurnCaseResult `json:"results"`
+	// Timings/TimingSummary (CHAOS-4058, purely additive, observational
+	// only): Timings concatenates across shards exactly like Results
+	// does (each shard's cases are disjoint); TimingSummary is never
+	// trusted from any one shard and is always RECOMPUTED from the
+	// merged Timings, mirroring AntiVacuityValid's own "never trust a
+	// per-shard aggregate" discipline -- see mergeReports.
+	Timings       []twoTurnCaseTiming       `json:"timings,omitempty"`
+	TimingSummary []twoTurnArmTimingSummary `json:"timing_summary,omitempty"`
 }
 
 func main() {
@@ -363,7 +403,9 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 			applicableSeen[m] = true
 		}
 		merged.Results = append(merged.Results, s.Results...)
+		merged.Timings = append(merged.Timings, s.Timings...)
 	}
+	merged.TimingSummary = summarizeTwoTurnTiming(merged.Timings)
 
 	merged.ApplicableMembers = make([]string, 0, len(applicableSeen))
 	for m := range applicableSeen {
@@ -380,6 +422,52 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 	merged.AntiVacuityValid = len(merged.ApplicableMembers) > 0 && unsatisfied == 0
 
 	return merged
+}
+
+// summarizeTwoTurnTiming mirrors chaos3742_two_turn_confirmation_test.go's
+// identically-named function byte-for-byte (see this file's own top-of-type
+// comment on why this is a hand-maintained mirror, not a shared
+// definition): reduces per-case timings into one run-level aggregate per
+// arm, preserving first-seen arm order.
+func summarizeTwoTurnTiming(timings []twoTurnCaseTiming) []twoTurnArmTimingSummary {
+	order := make([]string, 0, 5)
+	byArm := map[string][]twoTurnArmTiming{}
+	for _, ct := range timings {
+		for _, at := range ct.Arms {
+			if _, seen := byArm[at.Arm]; !seen {
+				order = append(order, at.Arm)
+			}
+			byArm[at.Arm] = append(byArm[at.Arm], at)
+		}
+	}
+	summaries := make([]twoTurnArmTimingSummary, 0, len(order))
+	for _, arm := range order {
+		samples := byArm[arm]
+		wall := make([]int64, len(samples))
+		var totalWall, maxWall int64
+		var callCount int
+		var callTotal, callMax int64
+		for i, s := range samples {
+			wall[i] = s.WallDurationMS
+			totalWall += s.WallDurationMS
+			if s.WallDurationMS > maxWall {
+				maxWall = s.WallDurationMS
+			}
+			callCount += s.ResponderCallCount
+			callTotal += s.ResponderCallTotalMS
+			if s.ResponderCallMaxMS > callMax {
+				callMax = s.ResponderCallMaxMS
+			}
+		}
+		sort.Slice(wall, func(i, j int) bool { return wall[i] < wall[j] })
+		summaries = append(summaries, twoTurnArmTimingSummary{
+			Arm: arm, SampleCount: len(samples),
+			WallMeanMS: float64(totalWall) / float64(len(samples)),
+			WallP50MS:  wall[len(wall)/2], WallMaxMS: maxWall,
+			ResponderCallCount: callCount, ResponderCallTotalMS: callTotal, ResponderCallMaxMS: callMax,
+		})
+	}
+	return summaries
 }
 
 // evaluateGates reproduces every assertion
