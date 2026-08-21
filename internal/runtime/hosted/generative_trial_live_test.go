@@ -572,6 +572,22 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	// (ACR_TEST_TRIAL_ prefix exception, clearAmbientACREnv's own
 	// condition) and is explicit, not ambient.
 	set("ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED", os.Getenv("ACR_TEST_TRIAL_GRAPH_LIFECYCLE_ENABLED"))
+	// ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED is DELIBERATELY NOT
+	// wired here (codex adversarial review, 2026-08-21, medium finding on
+	// the first version of this fix-forward): wireProductionEnv is SHARED
+	// by every live trial test (TestGenerativeTrialCorpus's arms, W0, D2B,
+	// chaos3884's replay harness, ...), but only
+	// TestChaos3742TwoTurnConfirmationReplay's own report reads
+	// cfg.AnchorMembershipOffersEnabled into its provenance today. Wiring
+	// the env var HERE would let ACR_TEST_TRIAL_ANCHOR_MEMBERSHIP_ENABLED
+	// silently enable the flag for every OTHER trial script sharing this
+	// function too, while their artifacts have no field to report it in --
+	// an artifact claiming false while the flag was actually on, exactly
+	// the mismeasurement class this whole file exists to prevent. Wired
+	// instead as a two-turn-specific t.Setenv AFTER this function returns
+	// (chaos3742_two_turn_confirmation_test.go, right after its own
+	// wireProductionEnv call) -- scoped to the one test that both sets it
+	// and records it.
 
 	if !modelOverridden {
 		set("ACR_CONTEXT_FABRIC_MODEL_PROVIDER", "openai")
@@ -1354,6 +1370,21 @@ type trialProvenance struct {
 	// values.
 	ResolvedActiveEpoch   int64 `json:"resolved_active_epoch"`
 	GraphLifecycleEnabled bool  `json:"graph_lifecycle_enabled"`
+	// AnchorMembershipOffersEnabled (CHAOS-3742 RUN 3 finding, lane-run3,
+	// 2026-08-21): the SAME structural-proof discipline
+	// ResolvedActiveEpoch/GraphLifecycleEnabled already apply, for a
+	// second flag -- RUN 3 exported ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_
+	// ENABLED=true at the shell, and clearAmbientACREnv silently wiped it
+	// before config.Load() ever ran, so the artifact reported nothing and
+	// an operator's shell export was the only (wrong) record of what
+	// actually happened. Recorded from cfg.AnchorMembershipOffersEnabled
+	// -- the SAME post-config.Load() cfg value the runtime itself acted
+	// on, never the raw env var -- so a future run's artifact is
+	// self-proving instead of depending on an operator's out-of-band
+	// attestation. Only TestChaos3742TwoTurnConfirmationReplay populates
+	// this today; every other trial script's provenance leaves it at its
+	// zero value (false), matching the flag's off-by-default posture.
+	AnchorMembershipOffersEnabled bool `json:"anchor_membership_offers_enabled"`
 	// CommitGate is CHAOS-3857's sweep-cell record: the raw string this
 	// run actually read for each of falkorgraph's four commit-gate env
 	// vars (CommitGatePolicy's three thresholds + the M override), empty

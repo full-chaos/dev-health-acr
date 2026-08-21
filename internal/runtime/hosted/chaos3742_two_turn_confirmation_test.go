@@ -76,6 +76,7 @@ package hosted_test
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1118,6 +1119,19 @@ type twoTurnReport struct {
 	// 958/960-adjacent, sol-max ruling): InferredUnjustifiedCount==0 AND
 	// InferredPairInvalidCount==0 -- an unjustified or unpaired commit is an
 	// immediate run failure, never averaged away by a passing majority.
+	//
+	// CHAOS-4040 window-gate interaction (team-lead ruling, 2026-08-21,
+	// RUN 3 finding): CHAOS-4040's unconditional class-default gate
+	// intercepted EVERY kind/handle inferred-tier request at
+	// clarification_required before any kind/handle decision logic could
+	// run (72/72 valid records, RUN 3, 2026-08-21) -- this field measured
+	// 0 for a purely STRUCTURAL reason, not because kind/handle
+	// classification never fired. Ruled fix: runTwoTurnInferredTierArm now
+	// confirms a window receipt via a setup turn and attaches it to BOTH
+	// the no-hint baseline and the hinted call before applying the
+	// kind/handle hint (see that function's own doc comment for the full
+	// rationale) -- a confirmed window is a legitimate precondition, not a
+	// contamination of the pair's single variable.
 	InferredKindHandleDecisiveCount        int `json:"inferred_kind_handle_decisive_count"`
 	InferredBaselineEquivalentCount        int `json:"inferred_baseline_equivalent_count"`
 	InferredKindInsensitivityAttestedCount int `json:"inferred_kind_insensitivity_attested_count"`
@@ -1671,6 +1685,74 @@ func TestNormalizedDecisionFingerprint(t *testing.T) {
 	}
 }
 
+// TestWindowBoundsAgree covers windowBoundsAgree's own doc comment cases
+// (team-lead verification request, 2026-08-21): all_time (nil/nil) must
+// agree with ZERO tolerance -- checked here by passing tolerance=0, so a
+// pass proves the all_time path never depends on the drift bound at all,
+// only bounded bands do.
+func TestWindowBoundsAgree(t *testing.T) {
+	t.Parallel()
+	confirmed := contractsv1.ContextFabricWindowClarificationConfirmed
+	allTime := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: "all_time", Provenance: confirmed},
+	}
+	t2 := time.Unix(2000, 0)
+	t2Plus5m := t2.Add(5 * time.Minute)
+	t2Plus2h := t2.Add(2 * time.Hour)
+	bounded := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: "trailing_90d", End: &t2, Provenance: confirmed},
+	}
+	boundedDriftedWithin := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: "trailing_90d", End: &t2Plus5m, Provenance: confirmed},
+	}
+	boundedDriftedBeyond := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: "trailing_90d", End: &t2Plus2h, Provenance: confirmed},
+	}
+
+	if !windowBoundsAgree(allTime, allTime, 0) {
+		t.Error("windowBoundsAgree(all_time, all_time, tolerance=0) = false, want true -- nil/nil must agree exactly, never via the drift tolerance")
+	}
+	if windowBoundsAgree(allTime, bounded, 24*time.Hour) {
+		t.Error("windowBoundsAgree(all_time, bounded) = true, want false -- one nil End and one non-nil is a genuinely different commitment, not a drift question")
+	}
+	if !windowBoundsAgree(bounded, boundedDriftedWithin, 10*time.Minute) {
+		t.Error("windowBoundsAgree(bounded, bounded+5m, tolerance=10m) = false, want true -- within tolerance")
+	}
+	if windowBoundsAgree(bounded, boundedDriftedBeyond, 10*time.Minute) {
+		t.Error("windowBoundsAgree(bounded, bounded+2h, tolerance=10m) = true, want false -- beyond tolerance")
+	}
+	noWindow := contractsv1.ContextFabricInvestigationResult{}
+	if windowBoundsAgree(noWindow, allTime, 24*time.Hour) {
+		t.Error("windowBoundsAgree(no EffectiveEvidenceWindow, all_time) = true, want false")
+	}
+}
+
+func TestWindowConfirmedAsBand(t *testing.T) {
+	t.Parallel()
+	confirmed := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{
+			RelativeID: "all_time", Provenance: contractsv1.ContextFabricWindowClarificationConfirmed,
+		},
+	}
+	if !windowConfirmedAsBand(confirmed, "all_time") {
+		t.Error("windowConfirmedAsBand(confirmed all_time, \"all_time\") = false, want true")
+	}
+	if windowConfirmedAsBand(confirmed, "trailing_90d") {
+		t.Error("windowConfirmedAsBand(confirmed all_time, \"trailing_90d\") = true, want false -- wrong band")
+	}
+	inferred := contractsv1.ContextFabricInvestigationResult{
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{
+			RelativeID: "all_time", Provenance: contractsv1.ContextFabricWindowInferredDefault,
+		},
+	}
+	if windowConfirmedAsBand(inferred, "all_time") {
+		t.Error("windowConfirmedAsBand(inferred_default all_time, \"all_time\") = true, want false -- not receipt-confirmed")
+	}
+	if windowConfirmedAsBand(contractsv1.ContextFabricInvestigationResult{}, "all_time") {
+		t.Error("windowConfirmedAsBand(no EffectiveEvidenceWindow, \"all_time\") = true, want false")
+	}
+}
+
 // TestTwoTurnTraceCapture_KindInsensitivityResult pins the CHAOS-4039
 // trace-reading contract: ShadowKindInsensitivityEvaluated gates whether
 // the outcome is reported at all, mirroring resolve.go's own zero-value
@@ -1831,7 +1913,75 @@ func setTwoTurnReceipt(req *contractsv1.ContextFabricInvestigationRequest, membe
 // A pair failing either check is PairInvalid, never silently classified --
 // see this function's own PairInvalid assignment below for why that
 // classification is skipped entirely rather than defaulted to "unjustified".
-func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture) twoTurnCaseResult {
+//
+// windowConfirmedAsBand reports whether r landed a receipt-confirmed
+// evidence window at exactly band -- never inferred from a bare successful
+// call (a stale or superseded receipt echo would not necessarily surface
+// as a Go error).
+func windowConfirmedAsBand(r contractsv1.ContextFabricInvestigationResult, band string) bool {
+	return r.EffectiveEvidenceWindow != nil &&
+		r.EffectiveEvidenceWindow.Provenance == contractsv1.ContextFabricWindowClarificationConfirmed &&
+		string(r.EffectiveEvidenceWindow.RelativeID) == band
+}
+
+// windowBoundsAgree reports whether a and b's own EffectiveEvidenceWindow
+// bounds represent the SAME window (codex adversarial review, 2026-08-21,
+// round 2, HIGH -- confirmed against window.go's own
+// composeWindowClarification/relativeWindowBounds): two INDEPENDENT setup
+// calls necessarily land at two DIFFERENT wall-clock instants --
+// composeWindowClarification always recomputes a band's Start/End fresh
+// from the engine's live now() for every call, with NO request-level way
+// to pin an explicit value (deriveRequestedWindow only uses caller-supplied
+// Start/End as a SKEW-TOLERANT sanity check against its own fresh
+// derivation, never as an override) -- so byte-identical bounds across two
+// separate Investigate() calls are not obtainable through the existing
+// production request surface at all, only same-RelativeID bounds that
+// differ by however long the intervening call(s) took.
+//
+// tolerance accepts that drift explicitly rather than silently: the
+// caller passes the same per-call timeout already in scope (no single call
+// can take longer before erroring), which is a rounding error against a
+// 30/90/365-day window -- a few minutes' difference in where "trailing 90
+// days" starts cannot plausibly move evidence across the window edge in a
+// way that would explain a classification difference between the two
+// legs, so tolerating it does not weaken the pair's isolation property in
+// practice. What this still catches (a stale or superseded receipt echo,
+// or a wrong-band redemption) is a GROSS mismatch: no confirmation at all,
+// a different RelativeID, or a wrong-direction multi-day-scale drift.
+//
+// all_time (codex adversarial review, 2026-08-21, round 3, HIGH --
+// confirmed against the ratified annex's own frozen data: its positive
+// window band IS all_time for all 50 corpus cases) is compared with ZERO
+// tolerance, never the drift bound above: RelativeWindowAllTime carries no
+// Start/End at all (deriveRequestedWindow's own early-return, window.go),
+// by design, on EVERY call -- nil on both sides means the two legs agree
+// EXACTLY, not that either failed to confirm a window. See
+// TestWindowBoundsAgree for the all_time/bounded/mismatched-shape cases
+// this function must get right, and team-lead's 2026-08-21 verification
+// request (this tolerance must never reach canonicalInterpretationHash/
+// normalizedDecisionFingerprint's own comparison -- it doesn't: neither
+// function references EffectiveEvidenceWindow/Start/End at all).
+func windowBoundsAgree(a, b contractsv1.ContextFabricInvestigationResult, tolerance time.Duration) bool {
+	if a.EffectiveEvidenceWindow == nil || b.EffectiveEvidenceWindow == nil {
+		return false
+	}
+	aEnd, bEnd := a.EffectiveEvidenceWindow.End, b.EffectiveEvidenceWindow.End
+	if aEnd == nil && bEnd == nil {
+		return true
+	}
+	if aEnd == nil || bEnd == nil {
+		// One leg landed a bounded window, the other all_time -- genuinely
+		// different commitments, not a drift question.
+		return false
+	}
+	drift := aEnd.Sub(*bEnd)
+	if drift < 0 {
+		drift = -drift
+	}
+	return drift <= tolerance
+}
+
+func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmInferredTier)}
 	req := twoTurnRequest(index, tc, "inferredtier")
 	switch entry.Member {
@@ -1857,6 +2007,107 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 
 	isWindow := entry.Member == string(contractsv1.ContextFabricStructureNeedWindow)
 
+	// CHAOS-4040/CHAOS-3742 window-gate ruling (team-lead, 2026-08-21,
+	// documented here per that ruling's own instruction; see the matching
+	// comment on CHAOS-4039 above InferredKindHandleDecisiveCount's
+	// definition): the kind/handle inferred-tier pair carries NO confirmed
+	// window by construction, so CHAOS-4040's unconditional class-default
+	// gate (window.go) intercepts every one of these requests at
+	// clarification_required before any kind/handle decision logic can
+	// run -- InferredKindHandleDecisiveCount was measured at 0 across a
+	// full 50-case run (RUN 3, 2026-08-21) for exactly this reason: the
+	// partition is STRUCTURALLY unreachable, not a property of the
+	// kind/handle classification logic under test.
+	//
+	// Fix (ruled, not proposed): confirm a window receipt via a SETUP TURN
+	// -- the SAME production upgrade path the confirmed_wrong arm already
+	// uses for kind/handle -- and attach a confirmed window to BOTH the
+	// no-hint baseline and the hinted call, before the kind/handle hint is
+	// applied, both windows carrying the IDENTICAL value (this SAME case's
+	// own POSITIVE window band, sourced from the window-member oracle
+	// entry, never the kind/handle hint under test -- mirrors the
+	// established "subject_handle derives Kind from the case's own
+	// positive expected_kind" precedent, adaptSignedOracleAnnex's own
+	// comment, for the identical reason: the precondition must come from
+	// the case's own facts, never be invented by this function). This is a
+	// legitimate precondition, not contamination: (a) both pair calls
+	// carry the SAME window VALUE, so the kind/handle hint remains the
+	// pair's only variable; (b) window receipts are caller authority by
+	// ratified design (CHAOS-3900), so a confirmed window is no different
+	// in kind from the confirmed receipts the confirmed_wrong arm already
+	// redeems; (c) CHAOS-4040's own non-vacuity design already contemplates
+	// a confirmed-window decisive path as the way out of the class-default
+	// gate.
+	//
+	// codex adversarial review (2026-08-21, HIGH, confirmed against
+	// pginvestigation.Store's structureSupersessionClaims/verifyIdempotentReplay):
+	// the FIRST version of this fix shared ONE receipt across both calls.
+	// Redeeming a receipt is a single-use atomic claim on
+	// (org, prior_result_id, member) -- ON CONFLICT DO NOTHING, whole
+	// transaction rolled back on loss -- so the baseline's redemption wins
+	// the claim and the hinted call's redemption of the SAME receipt
+	// deterministically loses it (vetoed_stale/superseded), making the
+	// hinted leg structurally unreachable and defeating the whole fix.
+	// Each leg therefore mints and redeems its OWN independently-claimable
+	// receipt from its OWN setup call (mintWindowPrecondition, called
+	// twice below) -- the SAME "one setup turn, one redemption" shape the
+	// confirmed_wrong arm's kind/handle members already use, just run once
+	// per leg. Because a clarification_required offer is never a
+	// decisive/reuse-eligible result (answer_reuse.go serves only
+	// Complete/Partial/Degraded candidates), the two setup calls cannot
+	// collapse into the same underlying result via answer-reuse either --
+	// they are genuinely two separate offers.
+	mintWindowPrecondition := func(requestIDSuffix string) (contractsv1.ContextFabricBoundSubjectReceipt, error) {
+		setupReq := twoTurnRequest(index, tc, requestIDSuffix)
+		setupReq.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(windowBand)}
+		setupCtx, setupCancel := context.WithTimeout(ctx, timeout)
+		setupResult, setupErr := investigator.Investigate(setupCtx, principal, setupReq)
+		setupCancel()
+		if setupErr != nil {
+			return contractsv1.ContextFabricBoundSubjectReceipt{}, fmt.Errorf("window precondition setup failed: %s", contextFabricRejectionClass(setupErr))
+		}
+		receiptID, found := selectOracleOffer(setupResult, string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: windowBand})
+		if !found {
+			return contractsv1.ContextFabricBoundSubjectReceipt{}, errors.New("window precondition setup turn did not offer the case's own window back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)")
+		}
+		return contractsv1.ContextFabricBoundSubjectReceipt{ResultID: setupResult.ResultID, ReceiptID: receiptID}, nil
+	}
+
+	if !isWindow && windowBand == "" {
+		// No window-member oracle entry exists for this case (rare: every
+		// case in the frozen corpus is expected to carry one) -- the
+		// precondition this ruling requires cannot be constructed, so the
+		// pair cannot be evaluated. PairInvalid, not a silent skip (this
+		// file's own fails-toward-fine discipline).
+		res.PairInvalid = true
+		res.ArmInvalidReason = "no confirmed-window precondition available for this case (no window oracle entry)"
+		return res
+	}
+
+	// Both preconditions are minted BACK TO BACK, before either the
+	// baseline or hinted Investigate() call runs (codex adversarial
+	// review, 2026-08-21, round 2 -- see windowDriftTolerance's own
+	// comment below for why this ordering, not just the tolerance alone,
+	// matters): this is the smallest achievable gap between the two legs'
+	// window Start/End, since neither call has to wait on the OTHER leg's
+	// full investigation first.
+	var baselineWindow, hintedWindow contractsv1.ContextFabricBoundSubjectReceipt
+	if !isWindow {
+		var windowErr error
+		baselineWindow, windowErr = mintWindowPrecondition("inferredtierwindowsetupbaseline")
+		if windowErr != nil {
+			res.PairInvalid = true
+			res.ArmInvalidReason = windowErr.Error()
+			return res
+		}
+		hintedWindow, windowErr = mintWindowPrecondition("inferredtierwindowsetuphinted")
+		if windowErr != nil {
+			res.PairInvalid = true
+			res.ArmInvalidReason = windowErr.Error()
+			return res
+		}
+	}
+
 	var baseline contractsv1.ContextFabricInvestigationResult
 	var baselineDecision graphrank.ResolutionTraceEvent
 	if !isWindow {
@@ -1864,6 +2115,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			trace.reset()
 		}
 		baselineReq := twoTurnRequest(index, tc, "inferredtierbaseline")
+		baselineReq.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{baselineWindow}
 		baselineCtx, baselineCancel := context.WithTimeout(ctx, timeout)
 		var baselineErr error
 		baseline, baselineErr = investigator.Investigate(baselineCtx, principal, baselineReq)
@@ -1885,6 +2137,14 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		}
 	}
 
+	if !isWindow {
+		// SAME window VALUE as the baseline's own precondition above (a
+		// SEPARATE, independently-claimable receipt minted alongside it
+		// -- see this function's own ruling comment for why one shared
+		// receipt cannot work) -- the pair's only variable remains the
+		// kind/handle hint.
+		req.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{hintedWindow}
+	}
 	if trace != nil {
 		trace.reset()
 	}
@@ -1923,13 +2183,57 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 
 	if !isWindow && res.CommittedCount > 0 {
 		hintedDecision, _ := trace.finalDecisionEvent()
+		// windowConfirmedAsBand (codex adversarial review, 2026-08-21,
+		// round 2, HIGH -- confirmed against window.go's own
+		// composeWindowClarification/relativeWindowBounds): safety net for
+		// the window-precondition fix above. Two INDEPENDENT setup calls
+		// necessarily land at two DIFFERENT wall-clock instants --
+		// composeWindowClarification always recomputes a band's Start/End
+		// fresh from the engine's live now() for every call, with NO
+		// request-level way to pin an explicit value (deriveRequestedWindow
+		// only uses caller-supplied Start/End as a SKEW-TOLERANT sanity
+		// check against its own fresh derivation, never as an override) --
+		// so byte-identical bounds across two separate Investigate() calls
+		// are not obtainable through the existing production request
+		// surface at all, only same-RelativeID bounds that differ by
+		// however long the intervening call(s) took. windowDriftTolerance
+		// accepts that drift explicitly rather than silently: bounded by
+		// timeout (no single call can take longer before erroring above),
+		// which is a rounding error against a 30/90/365-day window -- a
+		// few minutes' difference in where "trailing 90 days" starts
+		// cannot plausibly move evidence across the window edge in a way
+		// that would explain a classification difference between the two
+		// legs, so tolerating it does not weaken the pair's isolation
+		// property in practice. What this check DOES still catch (a stale
+		// or superseded receipt echo, or a wrong-band redemption) is a
+		// GROSS mismatch: no confirmation at all, a different RelativeID,
+		// or a WRONG-DIRECTION multi-day-scale drift -- flagged here as
+		// PairInvalid rather than silently classified. mintWindowPrecondition
+		// is called for both legs BACK TO BACK, before either the baseline
+		// or hinted Investigate() call runs (see below), specifically to
+		// keep this drift as small as achievable rather than merely
+		// tolerated.
 		// pairInvalid (team-lead ruling, widening sol's own list): errors
 		// are handled above (return before this point); what remains to
-		// check here is exactly the two preconditions that are NOT
-		// guaranteed by this function's own single-process, same-investigator
+		// check here is exactly the preconditions that are NOT guaranteed
+		// by this function's own single-process, same-investigator
 		// construction -- see this function's own doc comment for the full
 		// precondition list and why the rest are held by construction.
-		pairInvalid := baseline.Reused || result.Reused || baseline.Versions != result.Versions
+		// windowConfirmedAsBand/windowBoundsAgree are standalone (below,
+		// unit-tested by TestWindowBoundsAgree) rather than closures, so
+		// the all_time-vs-drift-tolerance split team-lead asked to verify
+		// (2026-08-21: "confirm the drift tolerance does NOT leak into the
+		// interpretation-hash/decision-fingerprint comparison for the
+		// all_time path") has a test surface independent of a live run.
+		// It doesn't: canonicalInterpretationHash/normalizedDecisionFingerprint
+		// (above) serialize Interpretation.TimeContext (the question's own
+		// temporal AXIS framing) and the decision/candidate/commit fields
+		// respectively -- neither references EffectiveEvidenceWindow, Start,
+		// or End at all, so this tolerance cannot reach either hash by
+		// construction, not merely by observation.
+		pairInvalid := baseline.Reused || result.Reused || baseline.Versions != result.Versions ||
+			!windowConfirmedAsBand(baseline, windowBand) || !windowConfirmedAsBand(result, windowBand) ||
+			!windowBoundsAgree(baseline, result, timeout)
 		if pairInvalid {
 			// Classification SKIPPED entirely, not defaulted to
 			// "unjustified": a reused or drifted pair proves nothing about
@@ -2098,16 +2402,21 @@ func buildAnchorTermIndex(ctx context.Context, identityUniverse graphrank.Identi
 // usable Label/Alias/ProviderAlias for -- this arm is reported
 // ArmInvalidReason for this case (the existing, already-honest fallback),
 // never a fabricated hash.
-func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver, principal storage.Principal, index int, entry twoTurnOracleEntry, receiptID string, terms anchorTermIndex) (resultID string, err error) {
+func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver, principal storage.Principal, index int, entry twoTurnOracleEntry, receiptID string, terms anchorTermIndex, runToken string) (resultID string, err error) {
 	term, ok := terms[anchorTermIndexKey(entry.NegativeKind, entry.NegativeAnchorCanonicalID)]
 	if !ok {
 		return "", fmt.Errorf("no usable alias/label term found in the live identity universe for negative anchor kind=%s canonical_id=%s -- cannot construct a redemption-passing hash", entry.NegativeKind, entry.NegativeAnchorCanonicalID)
 	}
-	resultID = fmt.Sprintf("result_twoturn_seed_anchor%06d", index)
+	// result_id is run-scoped (runToken, this test's own per-invocation
+	// random token -- see its own doc comment) -- acr.context_fabric_
+	// investigation_results is an IMMUTABLE store keyed on result_id alone,
+	// and a bare case-index key collides with any prior run's row for the
+	// same index forever (RUN 3 finding, 2026-08-21).
+	resultID = fmt.Sprintf("result_twoturn_seed_anchor_%s_%06d", runToken, index)
 	result := contextfabric.InvestigationResult{
 		SchemaVersion: contextfabric.InvestigationResultSchemaV1,
 		ResultID:      resultID,
-		RequestID:     fmt.Sprintf("request_twoturn_seed%06d", index),
+		RequestID:     fmt.Sprintf("request_twoturn_seed_%s_%06d", runToken, index),
 		GeneratedAt:   time.Now().UTC(),
 		Status:        contractsv1.ContextFabricInvestigationClarificationRequired,
 		Question:      "synthetic harness-seeded question, not corpus content",
@@ -2175,14 +2484,14 @@ func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver
 // (explicit field -> receipt-bound offer on the SAME response, the
 // production upgrade path) to mint the negative offer, then redeems it on
 // a third call.
-func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, anchorTerms anchorTermIndex) twoTurnCaseResult {
+func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, anchorTerms anchorTermIndex, runToken string) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmConfirmedWrong)}
 
 	var offerResultID, receiptID string
 	if entry.Member == string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
 		receiptID = contractsv1.ContextFabricAnchorOptionReceiptPrefix + "twoturnseed0000000000000"
 		var err error
-		offerResultID, err = seedAnchorNegativeResult(ctx, store, principal, index, entry, receiptID, anchorTerms)
+		offerResultID, err = seedAnchorNegativeResult(ctx, store, principal, index, entry, receiptID, anchorTerms, runToken)
 		if err != nil {
 			res.ArmInvalidReason = "harness-seeded anchor negative could not be made redeemable: " + contextFabricRejectionClass(err)
 			return res
@@ -2351,6 +2660,26 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		t.Fatalf("stat ACR_TEST_TWOTURN_OUT=%s: %v", outPath, err)
 	}
 	runStartedAt := time.Now().UTC().Format(time.RFC3339)
+	// runToken (lane-run3 RUN 3 finding, 2026-08-21): seedAnchorNegativeResult's
+	// result_id was purely case-index-keyed (result_twoturn_seed_anchor%06d),
+	// with NO run-scoped component, against acr.context_fabric_investigation_results
+	// -- an IMMUTABLE, byte-for-byte idempotent-replay store keyed on result_id
+	// alone (pginvestigation.Store.verifyIdempotentReplay). A stale row from
+	// ANY prior run (RUN 3 found rows dated ~10-12h earlier, from a buggy
+	// harness version that FABRICATED matched_term_hash from the canonical_id
+	// instead of a live term lookup) permanently blocks every subsequent run's
+	// fresh, correctly-computed seed for the same case index with an
+	// unclassified "already exists with different content" error -- masking
+	// the confirmed_wrong subject_anchor arm on both run 2 and run 3
+	// identically, independent of whatever the arm's own logic does. Mixing a
+	// fresh run-scoped token into the id removes the collision at its root
+	// (rather than requiring an operator to remember to clean the table
+	// between runs).
+	runTokenBytes := make([]byte, 8)
+	if _, err := rand.Read(runTokenBytes); err != nil {
+		t.Fatalf("generate run-scoped result id token: %v", err)
+	}
+	runToken := hex.EncodeToString(runTokenBytes)
 
 	annex := loadTwoTurnOracleAnnex(t, annexPath)
 	if err := requireAnnexSignedOff(annex); err != nil {
@@ -2375,6 +2704,24 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// never modelprovider.New's direct, metered API path.
 	exchangeDir := os.Getenv("ACR_TEST_TRIAL_EXCHANGE_DIR")
 	wireProductionEnv(t, exchangeDir != "")
+	// ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED (CHAOS-3742 RUN 3
+	// finding, lane-run3, 2026-08-21; scoping corrected per codex
+	// adversarial review, same date -- see wireProductionEnv's own comment
+	// on why this is wired HERE, two-turn-specific, rather than in that
+	// shared function): wireProductionEnv's clearAmbientACREnv wipes an
+	// operator's own ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED export
+	// before config.Load() below ever runs -- exactly the ambient-env bug
+	// class this whole isolation discipline exists to prevent, which is
+	// precisely why RUN 3 measured the CHAOS-4042 anchor-membership fix
+	// with the flag OFF despite exporting it, identically to runs 1-2. The
+	// trial-prefixed source var is read directly (never wiped -- it
+	// doesn't start with the real flag's name) and is explicit, not
+	// ambient; t.Setenv only fires when the caller actually provided one,
+	// and this line runs AFTER wireProductionEnv's own clear, so nothing
+	// here is subject to being wiped itself.
+	if raw := os.Getenv("ACR_TEST_TRIAL_ANCHOR_MEMBERSHIP_ENABLED"); raw != "" {
+		t.Setenv("ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED", raw)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2461,6 +2808,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
+			AnchorMembershipOffersEnabled: cfg.AnchorMembershipOffersEnabled,
 		},
 		BaseSHA:         requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
 		OracleAnnexPath: annexPath, OracleAnnexCorpusSHA: annex.CorpusSHA256, OracleAnnexSignedOff: annex.SignedOff,
@@ -2547,6 +2895,21 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		if limit < len(entries) {
 			entries = entries[:limit]
+		}
+	}
+
+	// windowBandByIndex sources the confirmed-window PRECONDITION
+	// runTwoTurnInferredTierArm's kind/handle pair now requires (CHAOS-4040/
+	// CHAOS-3742 window-gate ruling, team-lead, 2026-08-21 -- see that
+	// function's own doc comment): each case's window-member oracle entry
+	// carries its own POSITIVE window band, looked up here from the FULL
+	// annex.Entries (never the possibly-ACR_TEST_TRIAL_LIMIT-truncated
+	// entries slice above -- a case's window entry must resolve regardless
+	// of where the limit cut the kind/handle entries list).
+	windowBandByIndex := map[int]string{}
+	for _, entry := range annex.Entries {
+		if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+			windowBandByIndex[entry.Index] = entry.PositiveWindowBand
 		}
 	}
 
@@ -2725,7 +3088,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		report.Results = append(report.Results, positive)
 
-		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture)
+		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
 		if inferred.PairInvalid {
 			report.InferredPairInvalidCount++
 		}
@@ -2777,7 +3140,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		report.Results = append(report.Results, inferred)
 
-		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms)
+		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken)
 		if confirmedWrong.ArmInvalidReason == "" && confirmedWrong.Applied && entry.NegativeCommittable {
 			report.ConfirmedWrongRedeemedCount[entry.Member]++
 		}
