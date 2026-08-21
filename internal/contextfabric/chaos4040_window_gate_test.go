@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -178,6 +179,41 @@ func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *tes
 	}
 }
 
+// TestWindowGate_ClassDefault_NudgeModeAppendsWarning pins codex round 2's
+// own confirmed finding: windowConfirmationRequiredResult must apply the
+// SAME ContextFabricWindowConfirmationNudge handling the decisive/terminal
+// paths already apply (engine.go, terminalResult) -- a caller that asked
+// to be nudged must see the fixed nudge sentence in Warnings on the
+// confirmation-required terminal too, not only on an answer that no
+// longer exists once CHAOS-4040 gates inferred windows out of every
+// decisive terminal.
+func TestWindowGate_ClassDefault_NudgeModeAppendsWarning(t *testing.T) {
+	t.Parallel()
+	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	engine := buildWindowGateEngine(t, interpreter, graph, newMapResultStore())
+
+	request := validInvestigationRequest() // no EvidenceWindow -- class-default gate applies
+	request.Options.WindowConfirmationMode = contractsv1.ContextFabricWindowConfirmationNudge
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a confirmation-required result, not an error", err)
+	}
+	if result.Status != InvestigationClarificationRequired {
+		t.Fatalf("Status = %q, want clarification_required", result.Status)
+	}
+	found := false
+	for _, w := range result.Warnings {
+		if w == windowConfirmationNudgeSentence {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Warnings = %#v, want the nudge sentence: nudge mode must still be honored on the confirmation-required terminal", result.Warnings)
+	}
+}
+
 // TestWindowGate_AllowClarificationFalse_RefusesWithoutOffering pins the
 // "nonliteral/unattested refusal, never D0 absence" branch: a caller that
 // declined clarification gets the closed vocabulary's no_match (the only
@@ -323,5 +359,17 @@ func TestWindowGate_ClassDefault_WithConfirmedStructure_EchoesAndPersists(t *tes
 	}
 	if result.ConfirmedStructure[0].AppliedValue != string(SubjectPullRequest) {
 		t.Fatalf("ConfirmedStructure[0] = %#v, want the confirmed kind pull_request", result.ConfirmedStructure[0])
+	}
+	// Codex round-2 (confirmed): the test's own name promises "AndPersists"
+	// -- prove it, not just that Investigate returned no error. store.saved
+	// is nil until Save records something.
+	if store.saved == nil {
+		t.Fatal("store.saved is nil, want the gated result to have been passed to Save")
+	}
+	if store.saved.ResultID != result.ResultID {
+		t.Fatalf("store.saved.ResultID = %q, want %q: the persisted row must be the SAME result Investigate returned", store.saved.ResultID, result.ResultID)
+	}
+	if len(store.saved.ConfirmedStructure) != 1 || store.saved.ConfirmedStructure[0].AppliedValue != string(SubjectPullRequest) {
+		t.Fatalf("store.saved.ConfirmedStructure = %#v, want the same confirmed kind echo the returned result carries", store.saved.ConfirmedStructure)
 	}
 }

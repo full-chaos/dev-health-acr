@@ -1318,6 +1318,17 @@ func (e *Engine) windowConfirmationRequiredResult(
 		DeterministicAnswer:     limitation,
 		Warnings:                []string{},
 	}
+	// Codex round-2 finding (confirmed): mirrors the decisive/terminal
+	// paths' own ContextFabricWindowConfirmationNudge handling exactly
+	// (engine.go, terminalResult) -- a caller that asked to be nudged must
+	// still see the nudge sentence on THIS terminal, not only on a decisive
+	// one. Guarded the same way those call sites are: nil on the
+	// AllowClarification=false branch (windowClarification already nil
+	// there), so the sentence never appears without the disclosure it
+	// refers to.
+	if windowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
+		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
+	}
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, origin)
 	}

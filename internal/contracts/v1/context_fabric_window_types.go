@@ -216,18 +216,23 @@ type ContextFabricEffectiveEvidenceWindow struct {
 // is the closed vocabulary selecting how a caller wants an INFERRED
 // (non-confirmed) evidence window disclosed. Both modes carry the SAME
 // WindowClarification/EffectiveEvidenceWindow data -- the mode only
-// controls whether the disclosure is ALSO nudged through Warnings; it never
-// changes Status or blocks an otherwise-decisive answer (design brief §5's
-// own acceptance pin: "answer-rate unchanged -- nudge adds to EXISTING
-// clarifications only").
+// controls whether the disclosure is ALSO nudged through Warnings.
+//
+// CHAOS-4040 (sol-max ruling 2026-08-21) superseded design brief §5's
+// original "answer-rate unchanged" pin: every inferred window is now gated
+// out of decisive terminals regardless of this field (windowConfirmationRequiredResult,
+// internal/contextfabric/window.go), so the mode no longer selects between
+// "nudge" and "an otherwise-decisive answer" -- it only decides whether the
+// confirmation-required terminal ALSO carries the nudge sentence in
+// Warnings, exactly as it decided for a decisive answer before this ruling.
 type ContextFabricWindowConfirmationMode string
 
 const (
-	// ContextFabricWindowConfirmationHeadless is the DW3-ruled default:
-	// never blocks or reshapes a response for a caller that does not set
-	// this field. An inferred window is still disclosed structurally
-	// (EffectiveEvidenceWindow.Provenance, WindowClarification), just
-	// without an additional Warnings sentence.
+	// ContextFabricWindowConfirmationHeadless is the DW3-ruled default: an
+	// inferred window is disclosed structurally (EffectiveEvidenceWindow.Provenance,
+	// WindowClarification) without an additional Warnings sentence, on
+	// whichever terminal the window reaches (see the type's own doc
+	// comment for the CHAOS-4040 change to which terminal that is).
 	ContextFabricWindowConfirmationHeadless ContextFabricWindowConfirmationMode = "headless"
 	// ContextFabricWindowConfirmationNudge additionally appends a fixed,
 	// closed-vocabulary disclosure sentence to Warnings whenever the

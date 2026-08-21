@@ -86,9 +86,16 @@ type staticResultStore struct {
 	// CHAOS-3898 §2.2 ingress taint gate unchanged. A test exercising the
 	// taint strip itself sets this to a different value explicitly.
 	graphEpoch *int64
+	// saved (codex round 2, CHAOS-4040): records the LAST result Save
+	// received, so a test exercising a gate/terminal that saves alongside
+	// its keyed Get (prior-subject-receipt resolution) can assert
+	// persistence actually happened, not merely that Save returned no
+	// error -- Save previously discarded its argument entirely.
+	saved *InvestigationResult
 }
 
-func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64) error {
+func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
+	s.saved = &result
 	return nil
 }
 
