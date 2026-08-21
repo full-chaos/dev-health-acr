@@ -572,17 +572,25 @@ func (c *twoTurnTraceCapture) singleSatisfierVerified() bool {
 	return false
 }
 
-// censusRan reports whether the CensusFunc-gated shadow evidence round
-// (RunShadowEvidenceRound) fired at all during the captured call --
+// censusRan reports whether CensusFunc was actually INVOKED (the per-kind
+// census read genuinely ran) during the captured call --
 // ControlsWitnessedNoMatchCensusBacked's own "WHERE A CENSUS RAN" half
-// (design brief line 960). RunShadowEvidenceRound unconditionally traces
-// an "evidence_round" event on every path it takes (chaos3899_evidence_round.go's
-// own emit() wrapper), so ANY such event proves the round ran, regardless
-// of its outcome -- unlike singleSatisfierVerified above, which further
-// requires a specific outcome.
+// (design brief line 960). Deliberately checks for "evidence_probe", NOT
+// "evidence_round" (codex xhigh review round 2, confirmed): every one of
+// RunShadowEvidenceRound's early-return branches (non-current axis, scoped
+// visibility, multi-handle, no discriminators, unregistered census kind,
+// zero census kinds -- chaos3899_evidence_round.go:340-403) ALSO traces an
+// "evidence_round" event via its own emit() wrapper, so that stage alone
+// proves only that the round was ENTERED (resolve.go:1086's outer gate
+// passed), never that CensusFunc was called. "evidence_probe" fires ONLY
+// inside the per-kind loop that actually calls input.CensusFunc
+// (chaos3899_evidence_round.go:426-451, appended to kindAttestations and
+// traced by emit() at line ~328) -- a kind the loop skips via
+// NonCensusedSurvivor's own `continue` never reaches CensusFunc and never
+// produces one.
 func (c *twoTurnTraceCapture) censusRan() bool {
 	for _, e := range c.events {
-		if e.Stage == "evidence_round" {
+		if e.Stage == "evidence_probe" {
 			return true
 		}
 	}
@@ -800,7 +808,7 @@ type twoTurnReport struct {
 	// CHAOS-4039 for the related (distinct) inferred-tier finding this
 	// same "committed/stalled resolutions pay nothing" architecture
 	// produces.
-	ControlsWitnessedNoMatchCensusBacked int                 `json:"controls_witnessed_no_match_censusbacked"`
+	ControlsWitnessedNoMatchCensusBacked int                 `json:"controls_witnessed_no_match_census_backed"`
 	Results                              []twoTurnCaseResult `json:"results"`
 }
 
