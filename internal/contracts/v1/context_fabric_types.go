@@ -748,9 +748,12 @@ type ContextFabricInvestigationOptions struct {
 	// whether an INFERRED (non-confirmed) evidence window additionally
 	// nudges the caller via a disclosed Warnings sentence, beside the
 	// WindowClarification data every inferred window already carries
-	// regardless of mode. Empty means the DW3-ruled default: headless
-	// (never blocks or reshapes a response for a caller that does not set
-	// this field).
+	// regardless of mode. Empty means the DW3-ruled default: headless, no
+	// additional Warnings sentence. CHAOS-4040 (sol-max ruling
+	// 2026-08-21): the mode itself never determines whether the request
+	// blocks -- every inferred window is now gated to a
+	// confirmation-required terminal regardless of this field; see
+	// ContextFabricWindowConfirmationMode's own doc comment.
 	WindowConfirmationMode ContextFabricWindowConfirmationMode `json:"window_confirmation_mode,omitempty"`
 }
 

@@ -182,6 +182,36 @@ func validInvestigationRequest() InvestigationRequest {
 	}
 }
 
+// validConfirmedWindow (CHAOS-4040) is the SAME shape a "workbench"-surface
+// caller's own explicit evidence_window resolves to decisively
+// (windowExplicitProvenance: question_stated, unaffected by DP12(b)'s
+// MCP-only rule) -- for tests that call engine.Investigate() against a
+// REAL Engine and need to opt OUT of the new window-confirmation gate
+// (windowConfirmationRequiredResult, window.go), which now unconditionally
+// intercepts any current-axis request carrying NO window authority at all,
+// before subject resolution even runs. Deliberately NOT baked into
+// validInvestigationRequest() itself (tried, reverted): several existing
+// tests build a request whose OWN axis intentionally diverges from a
+// stubbed interpretation's axis (e.g. engineForDegradationOnAxis) to
+// exercise that divergence -- an EvidenceWindow on such a request trips
+// the PRE-EXISTING windowVetoAxisConflict veto instead, an unrelated
+// mechanism this ticket must not perturb. Opt in per test instead.
+func validConfirmedWindow() *RequestedEvidenceWindow {
+	return &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+}
+
+// validInvestigationRequestWithConfirmedWindow (CHAOS-4040) is
+// validInvestigationRequest() plus validConfirmedWindow() -- the common
+// case for a test that calls engine.Investigate() against a real Engine
+// to exercise something OTHER than window handling itself (subject
+// resolution, coverage, degradation, staging/classification, ...) and
+// needs to opt out of the new window-confirmation gate to reach it.
+func validInvestigationRequestWithConfirmedWindow() InvestigationRequest {
+	request := validInvestigationRequest()
+	request.TimeContext.EvidenceWindow = validConfirmedWindow()
+	return request
+}
+
 func validInvestigationResult() InvestigationResult {
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	return InvestigationResult{

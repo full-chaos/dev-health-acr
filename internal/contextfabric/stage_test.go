@@ -85,7 +85,7 @@ func TestInvestigateValidationFailurePreservesTheContractSentinel(t *testing.T) 
 	})
 	engine := stageTestEngine(t, committedGraphReader(), nil, synthesizer, nil)
 
-	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if err == nil {
 		t.Fatal("Investigate() error = nil, want the result validation to fail")
 	}
@@ -137,7 +137,7 @@ func TestInvestigateTagsTheFailingStage(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := testCase.engine(t).Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+			_, err := testCase.engine(t).Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 			if !errors.Is(err, boom) {
 				t.Fatalf("Investigate() error = %v, want it to wrap the dependency's own error", err)
 			}
@@ -159,7 +159,7 @@ func TestInvestigateNoSubjectsAssertionIsStagedAndClassified(t *testing.T) {
 		return CanonicalFactBundle{}, ErrNoInvestigationSubjects
 	}), nil, nil)
 
-	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 	if !errors.Is(err, ErrNoInvestigationSubjects) {
 		t.Fatalf("Investigate() error = %v, want errors.Is(err, ErrNoInvestigationSubjects)", err)
 	}

@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,9 +27,11 @@ import (
 // no fresh WindowClarification is minted for a NON-veto ambiguous window
 // (that clarification-offer machinery, EvidenceWindow-on-projection,
 // WindowConfirmationMode, and the MCP explicit-value same-response
-// receipt-bound echo are W2/W2b), and §3/W4's window-insensitivity
-// decisive-gating consumes Provenance but is not implemented here -- W1
-// only sets Provenance correctly for W4 to consume later.
+// receipt-bound echo are W2/W2b). §3/W4's window-insensitivity
+// decisive-gating, which consumes Provenance, WAS added to this file later
+// by CHAOS-4040 (sol-max ruling 2026-08-21, windowConfirmationRequiredResult
+// below) -- W1 itself still only sets Provenance correctly; it does not
+// gate on it.
 
 // WindowInferenceVersion (CHAOS-3900 W1) is the ReuseKey.WindowInferenceVersion
 // conjunctive dimension's own deployment-current value -- composition wires
@@ -224,16 +227,62 @@ const (
 	// stale_superseded_offer counter (cf_structure_receipt) rather than
 	// folding a distinguishable failure mode into an existing bucket.
 	WindowCanonicalizationVetoStaleSupersededOffer WindowCanonicalizationOutcome = "veto_stale_superseded_offer"
+	// WindowCanonicalizationGatedExplicitUnconfirmed/GatedClassDefault
+	// (CHAOS-4040, sol-max ruling 2026-08-21: "GATE ALL INFERRED WINDOWS
+	// out of decisive terminals"): the request reached
+	// windowConfirmationRequiredResult -- an inferred window (either
+	// origin) was disclosed and NOT permitted to drive a decisive
+	// terminal. Split by origin, not folded into
+	// WindowCanonicalizationInferredDefault, because that value still
+	// fires on every inferred window regardless of whether the gate
+	// applied (kept for existing consumers) -- these two report
+	// specifically that the gate WAS the reason nothing decisive
+	// happened, and distinguish precedence step 1 (explicit-unconfirmed,
+	// gated before tryReuse/Interpret) from step 2 (class-default, gated
+	// after Interpret) for CHAOS-4040's own run-3 non-vacuity bar
+	// ("at least one explicit-unconfirmed AND one engine-default case
+	// gated").
+	WindowCanonicalizationGatedExplicitUnconfirmed WindowCanonicalizationOutcome = "gated_explicit_unconfirmed"
+	WindowCanonicalizationGatedClassDefault        WindowCanonicalizationOutcome = "gated_class_default"
+	// WindowCanonicalizationGatedRefusedNoClarification (CHAOS-4040) is
+	// windowConfirmationRequiredResult's own AllowClarification=false
+	// path: the caller declined the only thing a confirmation prompt
+	// could ask for (unresolved.go's own established rule, applied here),
+	// so the wire terminal is the closed vocabulary's no_match -- but
+	// this outcome value keeps that refusal TELEMETRY-DISTINGUISHABLE
+	// from a genuine D0 absence (empty candidate pool): the window was
+	// never proven unconfirmable-because-nothing-exists, only
+	// unconfirmable-because-clarification-was-declined. Never reported as
+	// WindowCanonicalizationNone or folded into any veto value -- a
+	// window WAS in play and WOULD have been offered.
+	WindowCanonicalizationGatedRefusedNoClarification WindowCanonicalizationOutcome = "gated_refused_no_clarification"
 )
 
 // requestWindowCanonicalization is canonicalizeEvidenceWindow's own
 // result: the REQUEST-side half of window canonicalization (design brief
 // §1.2 precedence step 1), computed BEFORE tryReuse and BEFORE Interpret.
 type requestWindowCanonicalization struct {
-	// Effective is set only when a question_stated or clarification_confirmed
-	// window fully resolved at this step -- precedence step 1. nil means
-	// step 2 (composeEffectiveWindow, post-Interpret) still decides.
+	// Effective is set whenever precedence step 1 resolved ANY request-side
+	// window -- question_stated, clarification_confirmed, OR an MCP bare
+	// explicit evidence_window entering at inferred_default per DP12(b)
+	// (doc corrected, CHAOS-4040: this previously said "only when
+	// question_stated or clarification_confirmed", omitting the third
+	// case windowCanonicalizationOutcome's own doc comment already
+	// documented correctly -- see that function). nil means step 2
+	// (composeEffectiveWindow, post-Interpret) still decides.
 	Effective *contractsv1.ContextFabricEffectiveEvidenceWindow
+	// ExplicitUnconfirmed (CHAOS-4040) is true iff Effective was resolved
+	// at THIS step (precedence step 1) with Provenance==WindowInferredDefault
+	// -- i.e. the MCP-bare-explicit-field case, never question_stated or
+	// clarification_confirmed. Internal only, no wire/enum exposure (the
+	// closed 3-value ContextFabricWindowProvenance vocabulary is
+	// unchanged -- sol-max ruling: "origin != authority"): distinguishes,
+	// for Investigate's own gating and telemetry, an EXPLICIT-but-
+	// unconfirmed caller window (gated before tryReuse/Interpret) from the
+	// class-table/binder default step 2 alone can produce (gated later,
+	// after Interpret -- see Investigate's own two window-gate call
+	// sites). Always false when Effective is nil.
+	ExplicitUnconfirmed bool
 	// KeyComponent is TimeAxisKeyFor's window fragment for Effective --
 	// "" whenever Effective is nil. An INFERRED default (step 2) never
 	// contributes a KeyComponent; see WindowInferenceVersion's own doc
@@ -344,6 +393,15 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 	}
 	return requestWindowCanonicalization{
 		Effective: &effective,
+		// CHAOS-4040: set purely from the just-derived Provenance -- an
+		// MCP bare explicit field always resolves here (this branch) with
+		// Provenance==inferred_default (windowExplicitProvenance), while a
+		// question_stated/clarification_confirmed value can never reach
+		// this specific branch with that provenance (deriveRequestedWindow
+		// only ever returns inferred_default OR question_stated, and
+		// clarification_confirmed only ever resolves via
+		// resolveWindowReceipts above, a different return path entirely).
+		ExplicitUnconfirmed: effective.Provenance == WindowInferredDefault,
 		// ALWAYS keyed, regardless of Provenance tier -- codex review
 		// finding (W1 round 3), correcting round 1's own fix #5, which had
 		// this backwards. Round 1 reasoned "inferred tier -> no key
@@ -1096,6 +1154,216 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 		// a reusable answer (its own status is a refusal, not a judgment).
 		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+		}
+	}
+	return result, nil
+}
+
+// windowConfirmationRequiredLimitation/windowConfirmationRequiredRefusedLimitation
+// are the fixed, non-interpolated disclosures windowConfirmationRequiredResult
+// uses -- mirroring windowVetoLimitation's own convention (a caller-facing
+// sentence naming no mechanism, provider, or model).
+const (
+	windowConfirmationRequiredLimitation = "This answer requires confirming the evidence window it should read against. Confirm one of the offered options to proceed."
+	// windowConfirmationRequiredRefusedLimitation is DELIBERATELY distinct
+	// prose from an ordinary no_match's own statusSentence output (never
+	// "nothing matched" / absence framing) -- CHAOS-4040 sol-max ruling:
+	// "nonliteral/unattested refusal, never D0 absence". The caller
+	// declined the only mechanism (a clarification prompt) that could
+	// have confirmed the window, so no answer is possible, but that is
+	// NOT the same claim as "no such subject/data exists".
+	windowConfirmationRequiredRefusedLimitation = "This answer requires confirming the evidence window it should read against, and clarification was not permitted for this request."
+)
+
+// windowConfirmationRequiredPlaceholderPrompt is the FIXED, non-interpolated
+// SubjectResolution.ClarificationPrompt value windowConfirmationRequiredResult
+// sets whenever Status==clarification_required -- ContextFabricInvestigationResult.Validate
+// requires a non-empty ClarificationPrompt for that status (the SAME rule
+// unresolved.go's own resolveTerminalStatus satisfies for an ordinary
+// ambiguous-subject clarification), even though THIS clarification is
+// about the evidence window, not the subject -- SubjectResolution carries
+// the ONLY ClarificationPrompt field the contract defines; WindowClarification
+// is a sibling disclosure block, not a substitute value for this one.
+const windowConfirmationRequiredPlaceholderPrompt = "Confirm the evidence window for this answer."
+
+// windowConfirmationRequiredResult (CHAOS-4040, sol-max ruling 2026-08-21,
+// "GATE ALL INFERRED WINDOWS out of decisive terminals") is the shared
+// confirmation-required terminal BOTH of Investigate's own window gates
+// route to: precedence step 1 (explicit-unconfirmed -- an MCP bare
+// evidence_window field, gated before tryReuse/Interpret) and step 2
+// (class-default -- the class-table/binder default, gated after Interpret,
+// before subject resolution/facts/synthesis). Modeled on terminalResult's
+// own shape (unresolved.go) -- NOT windowVetoResult above, which
+// hardcodes Status=no_match and carries no offers at all -- because this
+// IS an ordinary disclosure-bearing non-decisive terminal, structurally
+// identical to "stalled on structure clarification", just for window
+// instead of kind/anchor/handle: real receipt-bound WindowClarification
+// options, zero committed subjects, empty answer-bearing fields, Reused
+// always false, persisted so a follow-up winr_ redemption can confirm it.
+//
+// interpretation is nil for gate 1 (genuinely pre-Interpret -- mirrors
+// windowVetoResult's own pre-Interpret branch, a placeholder Interpretation
+// is synthesized) and non-nil for gate 2 (interpretation already ran).
+// confirmedStructureEcho is nil for gate 1 (structureCanon has not run
+// yet either) and structureCanon-derived for gate 2, mirroring
+// terminalResult's own echo (a confirmed kind/anchor/handle receipt on
+// THIS SAME request must not silently vanish just because window is why
+// the request stalled).
+//
+// Reuse-source-ineligible BY THE SAME MECHANISM windowVetoResult uses
+// above: nil watermark/epoch at Save (see that function's own comment --
+// "the fail-CLOSED outcome for reuse specifically"). Deliberately NOT
+// relying on reuseColumnsFor's existing StructureNeeds/ConfirmedStructure
+// check (pginvestigation/store.go): this result carries neither field set
+// in the general case (window has no StructureNeeds block of its own --
+// window.go's own package doc comment, "window is not part of
+// composeConfirmedStructure at all"), so that check alone would not catch
+// it; the explicit nil/nil is the same simple, local, already-proven
+// pattern windowVetoResult already uses for the identical need.
+func (e *Engine) windowConfirmationRequiredResult(
+	ctx context.Context,
+	principal storage.Principal,
+	request InvestigationRequest,
+	interpretation *InterpretedQuestion,
+	effective contractsv1.ContextFabricEffectiveEvidenceWindow,
+	structureCanon *requestStructureCanonicalization,
+	origin WindowCanonicalizationOutcome,
+	binding ResolvedGraphBinding,
+) (InvestigationResult, error) {
+	resolvedInterpretation := InterpretedQuestion{
+		Shape:             ShapeOpen,
+		RequestedJudgment: windowVetoPlaceholderJudgment,
+		TimeContext:       request.TimeContext,
+		FactRequirements:  []FactRequirement{},
+	}
+	// timeAxisKeySource mirrors windowVetoResult's own choice exactly, for
+	// the identical reason -- see that function's own comment.
+	timeAxisKeySource := request.TimeContext
+	if interpretation != nil {
+		resolvedInterpretation = *interpretation
+		timeAxisKeySource = interpretation.TimeContext
+	}
+	// structureCanon is nil for gate 1 (this function's own doc comment:
+	// canonicalizeStructure has not run yet at that call site -- there is
+	// nothing to echo, snapshot, or Save-race against, exactly like
+	// windowVetoResult's own pre-Interpret branch). Non-nil for gate 2,
+	// where it mirrors terminalResult's own full structure-aware handling
+	// (codex xhigh review round 1, confirmed: the FIRST version of this
+	// function only echoed ConfirmedStructure and skipped the
+	// supersession-race conversion, recordStructureConfirmationOutcome,
+	// and StructureOfferSnapshot entirely -- reachable whenever a request
+	// carries a valid structure receipt ALONGSIDE an inferred class/binder
+	// window).
+	var confirmedStructureEcho []contractsv1.ContextFabricConfirmedStructureEntry
+	var offerSnapshot []contractsv1.ContextFabricStructureOfferSnapshotEntry
+	if structureCanon != nil {
+		confirmedStructureEcho = composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit)
+		// CHAOS-3900 P1.G: no guard needed -- structureCanon.OfferSnapshot
+		// is only ever non-nil alongside structureCanon.Confirmed, see
+		// requestStructureCanonicalization's own doc comment (structure.go).
+		offerSnapshot = structureCanon.OfferSnapshot
+	}
+	resultID := e.newResultID()
+	windowClarification := composeWindowClarification(&effective, resultID, e.now())
+	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
+
+	status := InvestigationClarificationRequired
+	limitation := windowConfirmationRequiredLimitation
+	subjectResolution := SubjectResolution{
+		Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
+		ClarificationPrompt: windowConfirmationRequiredPlaceholderPrompt,
+	}
+	if !request.Options.AllowClarification {
+		// unresolved.go's own established rule, applied here identically:
+		// a caller that declined clarification declined the only thing a
+		// prompt could ask for -- the closed status vocabulary leaves
+		// no_match as the sole non-decisive terminal, but this is NOT a
+		// genuine D0 absence (windowConfirmationRequiredRefusedLimitation's
+		// own doc comment) and carries no clarification-shaped data at
+		// all, exactly like resolveTerminalStatus's AllowClarification=false
+		// branch.
+		status = InvestigationNoMatch
+		limitation = windowConfirmationRequiredRefusedLimitation
+		subjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+		windowClarification = nil
+		origin = WindowCanonicalizationGatedRefusedNoClarification
+	}
+
+	result := InvestigationResult{
+		SchemaVersion:           InvestigationResultSchemaV1,
+		ResultID:                resultID,
+		RequestID:               request.RequestID,
+		GeneratedAt:             e.now().UTC(),
+		Status:                  status,
+		Question:                request.Question,
+		Reused:                  false,
+		Interpretation:          resolvedInterpretation,
+		SubjectResolution:       subjectResolution,
+		DirectJudgment:          "",
+		CurrentState:            "",
+		StrongestPressures:      []string{},
+		Drivers:                 []DriverJudgment{},
+		RemainingWork:           []Finding{},
+		ReadinessGaps:           []Finding{},
+		Paths:                   []RelationshipPath{},
+		Conflicts:               []Finding{},
+		Limitations:             []string{limitation},
+		EvidenceRefIDs:          []string{},
+		ClaimedFacts:            []ClaimedFact{},
+		Coverage:                emptyCoverage,
+		Temporal:                composeTemporalLabel(resolvedInterpretation, emptyCoverage, ""),
+		EffectiveEvidenceWindow: &effective,
+		WindowClarification:     windowClarification,
+		ConfirmedStructure:      confirmedStructureEcho,
+		StructureOfferSnapshot:  offerSnapshot,
+		Versions:                e.terminalVersions(),
+		DeterministicAnswer:     limitation,
+		Warnings:                []string{},
+	}
+	// Codex round-2 finding (confirmed): mirrors the decisive/terminal
+	// paths' own ContextFabricWindowConfirmationNudge handling exactly
+	// (engine.go, terminalResult) -- a caller that asked to be nudged must
+	// still see the nudge sentence on THIS terminal, not only on a decisive
+	// one. Guarded the same way those call sites are: nil on the
+	// AllowClarification=false branch (windowClarification already nil
+	// there), so the sentence never appears without the disclosure it
+	// refers to.
+	if windowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
+		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
+	}
+	if e.telemetry != nil {
+		e.telemetry.RecordWindowCanonicalization(ctx, principal, origin)
+	}
+	if err := result.Validate(); err != nil {
+		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+	}
+	if e.results != nil {
+		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+			// CHAOS-3927 P4 (codex xhigh review round 1, confirmed): a
+			// gate-2 Save carrying confirmed structure can lose the SAME
+			// atomic claim race every other structure-bearing Save call
+			// site already handles (engine.go's own decisive path,
+			// terminalResult) -- surfacing it as a raw persistence error
+			// here instead of the established stale_superseded_offer veto
+			// terminal would be the ONE call site round 2's own fix left
+			// unconverted. Unreachable when structureCanon is nil (gate 1
+			// never carries confirmed structure to race over).
+			if structureCanon != nil {
+				var superseded *ErrStructureOfferSuperseded
+				if errors.As(err, &superseded) {
+					recordWindowSupersessionRaceTelemetry(ctx, e.telemetry, principal, superseded)
+					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding)
+				}
+			}
+			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+		}
+		if structureCanon != nil {
+			// Mirrors terminalResult's own deferred-until-durable success
+			// telemetry exactly (unresolved.go) -- cf_structure_explicit/
+			// cf_structure_receipt and pending selection events must never
+			// fire for a save this function's own race-conversion above
+			// just discarded.
+			e.recordStructureConfirmationOutcome(ctx, principal, request, *structureCanon)
 		}
 	}
 	return result, nil
