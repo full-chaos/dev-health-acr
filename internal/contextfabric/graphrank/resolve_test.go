@@ -70,6 +70,27 @@ type fakeGraphBackend struct {
 	aliasLookupComplete  bool
 	aliasLookupErr       error
 	aliasLookupCalls     [][]string
+
+	// CHAOS-4038 SearchKind fixture. enableSearchKind defaults to false, so
+	// every pre-existing test in this file -- which never sets it -- gets
+	// ResolveDeps.SearchKind == nil, exactly the pre-ticket wiring, mirroring
+	// enableSearchQuestion's own convention above. searchKindResults is keyed
+	// first by term, then by kind (a real backend's own per-(term,kind) query
+	// result); searchKindCalls records every (term, kind) pair actually
+	// queried, in call order.
+	enableSearchKind    bool
+	searchKindResults   map[string]map[contextfabric.SubjectKind][]CandidateNode
+	searchKindCalls     []searchKindCall
+	searchKindErr       error
+	searchKindTruncated bool
+	searchKindDegraded  bool
+}
+
+// searchKindCall records one ResolveDeps.SearchKind(term, kind, ...) call --
+// see fakeGraphBackend.searchKindCalls.
+type searchKindCall struct {
+	term string
+	kind contextfabric.SubjectKind
 }
 
 func (f *fakeGraphBackend) deps() ResolveDeps {
@@ -122,6 +143,15 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 				return nil, false, f.aliasLookupErr
 			}
 			return f.aliasLookupClaimants, f.aliasLookupComplete, nil
+		}
+	}
+	if f.enableSearchKind {
+		deps.SearchKind = func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) ([]CandidateNode, bool, bool, error) {
+			f.searchKindCalls = append(f.searchKindCalls, searchKindCall{term: term, kind: kind})
+			if f.searchKindErr != nil {
+				return nil, false, false, f.searchKindErr
+			}
+			return f.searchKindResults[term][kind], f.searchKindTruncated, f.searchKindDegraded, nil
 		}
 	}
 	return deps

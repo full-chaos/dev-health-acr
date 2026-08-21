@@ -174,6 +174,43 @@ type ResolveDeps struct {
 	// a subject the question-level pass finds competes and corroborates
 	// identically to one a term-level pass finds -- see mergeSearchResults.
 	SearchQuestion func(ctx context.Context, question string, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
+	// SearchKind (CHAOS-4038) is an optional, kind-scoped SUPPLEMENTAL
+	// retrieval call: the SAME term-search semantics as Search, additionally
+	// constrained to return only nodes of exactly kind, at a small fixed
+	// limit -- a coverage FLOOR, never a competing top-K. Nil means this
+	// backend has no such capability, and ResolveSubjects skips the whole
+	// coverage-floor pass, byte-identical to before this ticket -- the same
+	// "not implemented" convention SearchQuestion/AliasLookup already use.
+	//
+	// Search/SearchQuestion share ONE cross-kind top-K budget
+	// (request.Options.MaxSubjectCandidates): a genuinely-present but
+	// comparatively lower-relevance-scored kind can be starved out of
+	// candidatesBySubject entirely by a more common kind filling that same
+	// budget. kindOfferMaterial (chaos3900_structure_offers.go) can then
+	// never offer the starved kind, however it is written, because it is a
+	// pure reducer over whatever pool it is handed -- CHAOS-4038's own
+	// measurement (gen-trial-chaos3742_twoturn) found the oracle kind
+	// missing from the pool in the overwhelming majority of positive-arm
+	// expected_kind cases. applyKindCoverageFloor
+	// (chaos4038_kind_coverage.go) calls this AFTER every other retrieval
+	// pass has already run, ONLY for a kind in kindCoverageFloorKinds still
+	// absent from candidatesBySubject at that point, and ONLY when
+	// confirmedKind is nil (a request that already confirmed a kind has
+	// nothing left to disambiguate on this axis) -- strictly additive,
+	// exactly like SearchQuestion's own union contract: results merge
+	// through the SAME NodeCandidate/MergeCandidates/mergeSearchResults path
+	// every other pass uses, so a coverage-floor find competes and
+	// corroborates identically to one an ordinary pass found, and can only
+	// ever ADD a subject or lose an exact-confidence tie to one an earlier
+	// pass already found (mergeSearchResults' own last-processed-loses-ties
+	// convention).
+	//
+	// Scoped to kindCoverageFloorKinds only (never repository/project/team):
+	// those three already get a COMPLETE, exact-term identity-universe read
+	// via AliasLookup above, which a supplemental generic lexical query
+	// would duplicate, not extend. A backend with no kind-scoped query path
+	// can safely leave this nil.
+	SearchKind func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
 	// VectorMarginCommitThreshold is CHAOS-3829's per-embedder-identity
 	// calibrated M (falkorgraph's retrieval_policy.go RetrievalPolicy.
 	// VectorMarginCommitThreshold): the vector-arm top-1/top-2 similarity
@@ -1017,6 +1054,68 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			capMatchedTermsAfterMerge(candidatesBySubject, questionProvenanceMarker)
 		}
 	}
+	// CHAOS-4038: the kind-coverage floor runs LAST, strictly after every
+	// ordinary retrieval pass above -- same ordering discipline the question
+	// pass itself follows (a per-term or AliasLookup find always wins an
+	// exact-confidence tie against a later pass's find of the SAME subject,
+	// MergeCandidates' documented rule), and only when confirmedKind is nil:
+	// a request that already confirmed a kind (CHAOS-3900 P1.D) has nothing
+	// left to disambiguate on this axis, so spending extra kind-scoped calls
+	// here would be pure waste -- filterCandidatesByConfirmedKind below would
+	// discard their results regardless.
+	//
+	// coverageCandidates (codex CHAOS-4038 review round 1, finding 1) is
+	// retained past this block so the kindOfferMaterial call site below can
+	// union it into the offer's own input -- a coverage-floor find can
+	// still be dropped from resolution.Candidates by
+	// ResolveFromMergedCandidatesWithGate's final ranked-set truncation (a
+	// small MaxSubjectCandidates plus a pool already full of
+	// higher-confidence OTHER-kind candidates), which would otherwise
+	// silently defeat this whole pass for exactly the resolutions it exists
+	// to help. See applyKindCoverageFloor's own doc comment
+	// (chaos4038_kind_coverage.go).
+	//
+	// coverageFloorDegraded is DELIBERATELY a separate variable from
+	// retrievalDegraded, never merged into it before the commit-gate calls
+	// below (codex CHAOS-4038 review round 2, finding 1): searchTruncated
+	// and retrievalDegraded are gate INPUTS -- ResolveFromMergedCandidatesWithGate
+	// reads them to decide whether an otherwise-decisive candidate is safe
+	// to auto-commit. This coverage floor searches a kind that had ZERO
+	// candidates in the pool; its own truncation/degradation says something
+	// about THAT kind's own visibility, never about whether an
+	// ALREADY-decisive candidate of a DIFFERENT kind remains safe to commit.
+	// Folding it into the gate's inputs made an unrelated, previously-clean
+	// commit fall to ambiguous purely because a missing-kind coverage query
+	// happened to find more than kindCoverageQueryLimit rows -- directly
+	// contradicting this pass's own "a coverage floor, never a competing
+	// top-K" design intent (repro: TestResolveSubjects_SearchKindCoverageTruncationNeverBlocksAnUnrelatedCommit).
+	// coverageFloorDegraded is instead OR'd into resolution.RetrievalDegraded
+	// AFTER each gate call below, informationally -- it still reaches the
+	// caller-visible signal, it just never influences the decision.
+	// coverageFloorTruncated has no equivalent wire-facing field
+	// (searchTruncated is gate-input only, see resolution.go), so it is
+	// computed and then deliberately left unused beyond that.
+	var coverageCandidates []contextfabric.SubjectCandidate
+	var coverageFloorDegraded bool
+	if confirmedKind == nil {
+		// aliasLookupTrustworthy (codex CHAOS-4038 review round 1, finding 3):
+		// the SAME two facts that already gate aliasIdentityComplete's own
+		// meaning -- deps.AliasLookup actually ran for this resolution AND
+		// reported complete=true. False (nil AliasLookup, or a historical/
+		// row-budget/existence-check incompleteness) means repository/
+		// project/team got NO complete identity-universe read this call, so
+		// the coverage floor must widen to cover them too -- see
+		// effectiveCoverageFloorKinds' own doc comment.
+		aliasLookupTrustworthy := deps.AliasLookup != nil && aliasIdentityComplete
+		added, coverageTraversalDegraded, coverageAuthzDropped, _, coverageDegraded, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, aliasLookupTrustworthy)
+		if coverageErr != nil {
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, coverageErr
+		}
+		coverageCandidates = added
+		coverageFloorDegraded = coverageDegraded
+		traversalDegraded += coverageTraversalDegraded
+		subjectCandidatesAuthzDropped += coverageAuthzDropped
+	}
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)
 	}
@@ -1108,7 +1207,11 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// non-confirmed narrowing cannot reach this same call.
 	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind)
 	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
-	resolution.RetrievalDegraded = retrievalDegraded
+	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
+	// OR'd in HERE, informationally, AFTER the gate already decided using
+	// the un-widened retrievalDegraded -- see its own declaration above for
+	// why it must never reach the gate call itself.
+	resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
 	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round
 	// for measurement, strictly AFTER resolution's own COMMIT-GATE decision
 	// is already final -- CHAOS-3896 Slice B (below) may reorder
@@ -1142,7 +1245,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if gateValid {
 			if attestedKey, merged := mergeCensusAttestedSatisfier(ctx, principal, request, deps, attestation, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms); merged {
 				resolution = ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey)
-				resolution.RetrievalDegraded = retrievalDegraded
+				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
 			}
 		}
 		// CHAOS-3896 Slice B: presentation only -- SurvivorsFirstOrder's own
@@ -1186,8 +1289,23 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// through (never used for option content) so anchorOfferMaterial can
 	// detect and suppress a mixed-visibility ambiguous term -- see its own
 	// doc comment.
+	// CHAOS-4038 (codex review finding 1): kindOfferMaterial's input is
+	// resolution.Candidates UNIONED with coverageCandidates, never
+	// resolution.Candidates alone -- a coverage-floor find that
+	// ResolveFromMergedCandidatesWithGate's own final ranked-set truncation
+	// dropped (a small MaxSubjectCandidates plus a pool already full of
+	// higher-confidence OTHER-kind candidates) must still reach the offer,
+	// or this whole pass is silently defeated for exactly the resolutions
+	// it exists to help. kindOfferMaterial's own seen-by-kind dedup
+	// (chaos3900_structure_offers.go) makes this union safe regardless of
+	// overlap: a coverage candidate whose kind IS already represented in
+	// resolution.Candidates contributes nothing new. A fresh slice, never an
+	// in-place append to resolution.Candidates' own backing array.
+	kindOfferCandidates := make([]contextfabric.SubjectCandidate, 0, len(resolution.Candidates)+len(coverageCandidates))
+	kindOfferCandidates = append(kindOfferCandidates, resolution.Candidates...)
+	kindOfferCandidates = append(kindOfferCandidates, coverageCandidates...)
 	offerMaterial := combineStructureOfferMaterial(
-		kindOfferMaterial(resolution.Candidates, request.ExpectedKinds),
+		kindOfferMaterial(kindOfferCandidates, request.ExpectedKinds),
 		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled),
 		handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker),
 	)

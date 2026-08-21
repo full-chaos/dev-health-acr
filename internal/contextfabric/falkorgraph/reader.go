@@ -94,6 +94,12 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		SearchQuestion: func(ctx context.Context, question string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 			return a.questionVectorSearchNodes(ctx, key, principal.OrgID, question, limit, fence, temporal)
 		},
+		// CHAOS-4038: the SAME temporal filter this resolution's per-term
+		// Search/SearchQuestion calls already share -- no separate fence
+		// probe needed, this pass is lexical-only.
+		SearchKind: func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
+			return a.kindScopedFulltextSearchNodes(ctx, key, principal.OrgID, term, kind, limit, temporal)
+		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject, allowExactMatch,
 				func(ctx context.Context, uuid string) ([]graphrank.CandidateEdge, error) {
