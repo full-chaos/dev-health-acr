@@ -74,17 +74,51 @@ RESPONDER_PIDS=()
 TEST_PIDS=()
 SHARD_OUT=()
 
+# wait_with_timeout (codex round-1 finding, HIGH): a plain `wait "$pid"`
+# blocks forever if that process never exits -- a responder whose `codex
+# exec` hangs (network stall, an unexpected auth prompt) never writes a
+# response, so run-responder-codex.sh's own poll loop (DONE && pending==0)
+# never sees pending==0 and never exits, even after DONE is touched. That
+# would leave teardown blocked indefinitely and every scratch container
+# running until something kills this script by hand. Bounded instead: wait
+# up to timeout_s, then TERM and (if still alive) KILL -- run-responder-
+# codex.sh's own EXIT/INT/TERM trap still wipes its private CODEX_HOME
+# either way, so a forced kill here does not leak that.
+wait_with_timeout() {
+  local pid="$1" timeout_s="$2" waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if ((waited >= timeout_s)); then
+      echo "run-two-turn-parallel.sh: pid $pid did not exit within ${timeout_s}s -- killing it" >&2
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 2
+      kill -KILL "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid" 2>/dev/null || true
+}
+
 # Safety-net cleanup: reached on ANY exit path (success falls through the
-# manual teardown below first and clears these arrays, so this becomes a
-# no-op; an early failure mid-loop reaches this trap with whatever was
-# actually created still populated).
+# manual teardown below first, waits out TEST_PIDS/RESPONDER_PIDS itself,
+# and clears every array, so this becomes a no-op there; an early failure
+# mid-loop reaches this trap with whatever was actually created still
+# populated).
 cleanup() {
   local status=$?
+  # codex round-1 finding, MEDIUM: an early failure (e.g. shard 1's docker
+  # or migration step) used to leave shard 0's already-launched go test
+  # running orphaned, potentially for its full 6h timeout, since nothing
+  # ever killed TEST_PIDS on this path.
+  for pid in "${TEST_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && kill -TERM "$pid" 2>/dev/null || true
+  done
   for exdir in "${EXCHANGE_DIRS[@]:-}"; do
     [[ -n "$exdir" ]] && touch "$exdir/DONE" 2>/dev/null || true
   done
   for pid in "${RESPONDER_PIDS[@]:-}"; do
-    [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
+    [[ -n "$pid" ]] && wait_with_timeout "$pid" 300
   done
   for c in "${PG_CONTAINERS[@]:-}"; do
     [[ -n "$c" ]] && docker rm -f "$c" >/dev/null 2>&1 || true
@@ -155,12 +189,13 @@ for pid in "${TEST_PIDS[@]}"; do
     overall_status=1
   fi
 done
+TEST_PIDS=() # every shard already reaped above; trap becomes a no-op for these
 
 for exdir in "${EXCHANGE_DIRS[@]}"; do
   touch "$exdir/DONE"
 done
 for pid in "${RESPONDER_PIDS[@]}"; do
-  wait "$pid" 2>/dev/null || true
+  wait_with_timeout "$pid" 300
 done
 RESPONDER_PIDS=() # waited above; trap becomes a no-op for these
 
