@@ -118,6 +118,23 @@ func run(arguments []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return err
 	}
+	// codex xhigh review: relying on Run's fingerprint-based
+	// duplicate-credential guard to reject a >1-panelist workload-mode
+	// config is both indirect (the operator sees a generic "share the same
+	// bearer credential" error) AND unsound in one edge case -- a workload
+	// token whose expires_in leaves no safe refresh margin
+	// (workloadRefreshMargin, internal/sidecar/workload_credential_source.go)
+	// re-exchanges on every resolution, so two panelists' Clients COULD
+	// legitimately record different token fingerprints for the SAME
+	// underlying ServiceAccount identity and slip past that guard
+	// undetected. Reject explicitly and unconditionally here instead,
+	// naming the real constraint: deploy/helm/acr provisions exactly one
+	// "panel-read" ServiceAccount for this whole harness, so every
+	// panelist under workload mode necessarily shares that one identity
+	// (CHAOS-4063 tracks adding per-panelist workload identities).
+	if workloadCredentialSource != nil && len(configs) > 1 {
+		return fmt.Errorf("workload token exchange (ACR_SUBJECT_TOKEN_FILE/ACR_TOKEN_ENDPOINT) is single-panelist only: %d panelists configured share one \"panel-read\" ServiceAccount identity (see CHAOS-4063 for per-panelist workload identity support) -- use the static bearer_token_env path for a multi-panelist run", len(configs))
+	}
 	panelists := make([]panelharness.Panelist, 0, len(configs))
 	for _, config := range configs {
 		panelist, err := buildPanelist(config, *apiBaseURL, *callTimeout, *fileExchangeTimeout, workloadCredentialSource)

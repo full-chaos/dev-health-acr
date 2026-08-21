@@ -36,6 +36,47 @@ func TestRun_RequiresAllFlags(t *testing.T) {
 	}
 }
 
+// TestRun_RejectsMultiplePanelistsUnderWorkloadMode is CHAOS-4034's own
+// regression proof for the codex xhigh review round-1 HIGH finding: when
+// workload token exchange is enabled, a config naming more than one
+// panelist must be rejected explicitly and up front (not indirectly, via
+// Run's fingerprint-based duplicate-credential guard, which a workload
+// token's own re-exchange behavior can make unsound -- see this
+// rejection's own doc comment in run()). No panelist's requests/
+// subdirectory should even get created, so this must fail before any
+// httptest server or file-exchange directory is needed.
+func TestRun_RejectsMultiplePanelistsUnderWorkloadMode(t *testing.T) {
+	subjectTokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(subjectTokenFile, []byte("k8s-projected-sa-jwt"), 0o600); err != nil {
+		t.Fatalf("write subject token file: %v", err)
+	}
+	t.Setenv(sidecar.SubjectTokenFileEnvironment, subjectTokenFile)
+	t.Setenv(sidecar.TokenEndpointEnvironment, "https://acr.example.com/api/v1/oauth/token")
+
+	dir := t.TempDir()
+	panelistsPath := filepath.Join(dir, "panelists.json")
+	configs := []panelistConfig{
+		{CanonicalModelIdentity: "anthropic/sol-max", FileExchangeDir: filepath.Join(dir, "a")},
+		{CanonicalModelIdentity: "anthropic/luna", FileExchangeDir: filepath.Join(dir, "b")},
+	}
+	encoded, err := json.Marshal(configs)
+	if err != nil {
+		t.Fatalf("marshal panelist configs: %v", err)
+	}
+	if err := os.WriteFile(panelistsPath, encoded, 0o644); err != nil {
+		t.Fatalf("write panelists file: %v", err)
+	}
+	outputPath := filepath.Join(dir, "out.json")
+
+	err = run([]string{
+		"-api-base-url=https://acr.example.com", "-org-id=org-1", "-question=q",
+		"-panelists=" + panelistsPath, "-output=" + outputPath,
+	}, os.Stdout, os.Stderr)
+	if err == nil {
+		t.Fatal("expected an error rejecting >1 panelist under workload mode")
+	}
+}
+
 func TestLoadPanelistConfigs_RejectsEmptyArray(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "panelists.json")
@@ -174,6 +215,12 @@ func TestWorkloadCredentialSourceFromEnvironment_DefaultsToNil(t *testing.T) {
 // certainly meant to enable workload mode, so this fails closed rather
 // than silently keeping the static path.
 func TestWorkloadCredentialSourceFromEnvironment_RejectsOnlyOneSet(t *testing.T) {
+	// codex xhigh review: pin ACR_TOKEN_ENDPOINT to blank explicitly rather
+	// than relying on it being absent from the ambient environment -- a
+	// shell that happens to export it (e.g. a developer testing workload
+	// auth manually) would otherwise make this test's outcome depend on
+	// what ran the test, not on this function's own logic.
+	t.Setenv(sidecar.TokenEndpointEnvironment, "")
 	t.Setenv(sidecar.SubjectTokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
 	if _, err := workloadCredentialSourceFromEnvironment(); err == nil {
 		t.Error("expected an error when only ACR_SUBJECT_TOKEN_FILE is set")

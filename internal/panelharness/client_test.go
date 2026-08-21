@@ -9,6 +9,7 @@ import (
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
 func validRequest() contractsv1.ContextFabricInvestigationRequest {
@@ -148,6 +149,60 @@ func TestNewClient_RejectsTokenWithoutTheExpectedShape(t *testing.T) {
 		if _, err := NewClient("https://acr.example.com", token, time.Second); err == nil {
 			t.Errorf("expected token %q (not a real fcacr_ credential shape) to be rejected", token)
 		}
+	}
+}
+
+// TestClient_InvestigateResolvesCredentialFreshOnEveryCall is CHAOS-4034's
+// own proof that NewClientWithCredentialSource's Investigate calls
+// credentialSource() fresh each time -- rather than reusing the token
+// resolved once at construction -- which is what lets a workload token
+// exchange source (internal/sidecar.NewWorkloadCredentialSource) hand back
+// a rotated token mid-run. A fake CredentialSource returns a DIFFERENT
+// valid token on each resolution; the Authorization header on two
+// successive Investigate calls must track each call's own resolution.
+func TestClient_InvestigateResolvesCredentialFreshOnEveryCall(t *testing.T) {
+	var gotAuth []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
+		var body contractsv1.ContextFabricInvestigationRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(minimalValidResult("result_test_rotate", body.RequestID))
+	}))
+	defer server.Close()
+
+	// index 0 is consumed by NewClientWithCredentialSource's own eager
+	// resolve (for TokenFingerprint); indices 1 and 2 are consumed by the
+	// two Investigate calls below, one each.
+	tokens := []string{testBearerToken(10), testBearerToken(11), testBearerToken(12)}
+	call := 0
+	credentialSource := func() (sidecar.CredentialResult, error) {
+		token := tokens[call]
+		call++
+		return sidecar.CredentialResult{Token: token}, nil
+	}
+	client, err := NewClientWithCredentialSource(server.URL, credentialSource, time.Second*5)
+	if err != nil {
+		t.Fatalf("NewClientWithCredentialSource: %v", err)
+	}
+
+	if _, err := client.Investigate(context.Background(), "request_test_rotate_1", validRequest()); err != nil {
+		t.Fatalf("Investigate (1st call): %v", err)
+	}
+	if _, err := client.Investigate(context.Background(), "request_test_rotate_2", validRequest()); err != nil {
+		t.Fatalf("Investigate (2nd call): %v", err)
+	}
+
+	if len(gotAuth) != 2 {
+		t.Fatalf("got %d requests, want 2", len(gotAuth))
+	}
+	if gotAuth[0] == gotAuth[1] {
+		t.Errorf("Authorization headers were identical across two calls (%q), want each call's own resolved credential", gotAuth[0])
+	}
+	if gotAuth[0] == "" || gotAuth[1] == "" {
+		t.Errorf("Authorization headers = %q, %q, want both nonblank", gotAuth[0], gotAuth[1])
 	}
 }
 
