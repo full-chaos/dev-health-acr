@@ -487,13 +487,59 @@ func identityRowCarriesTermHash(row IdentityRow, termHash string) bool {
 	return false
 }
 
+// VerifyAnchorClaimantMembership is CHAOS-4042's (sol-max ruling) own
+// redemption-time re-verification for a v2 (membership-verify) anchor
+// confirmation: re-reads the SAME identity-universe hash-side read
+// VerifyAnchorClaimantUnique uses, and proves the selected (kind,
+// canonicalID) remains ANY member of the term's complete claimant set --
+// never that it is the term's SOLE member. Mere multiplicity is not an
+// error under membership semantics (this function never returns
+// AnchorVerificationClaimContested); a rival gaining or losing the term
+// does not, by itself, invalidate the selected claimant's own standing.
+//
+// Deliberately works HASH-side only, same reasoning as
+// VerifyAnchorClaimantUnique: the raw term never needs to exist here.
+//
+// INTERIM SCOPE (PR2 of CHAOS-4042's three-PR slice): this reads the SAME
+// ClickHouse-backed identity universe VerifyAnchorClaimantUnique already
+// does. It does NOT yet reconcile against the graph's own node/alias
+// properties under a PINNED ResolvedGraphBinding epoch, and does NOT
+// re-authorize the selected claimant at redemption -- both require a new
+// graph-adapter primitive (a pinned-epoch single-node read) that does not
+// exist anywhere in this codebase yet. PR3 adds it alongside real epoch
+// enforcement (the ruling's own "Epoch enforcement" integration point,
+// which needs the identical capability).
+func VerifyAnchorClaimantMembership(ctx context.Context, orgID string, kind contextfabric.SubjectKind, canonicalID, matchedTermHash string, identityUniverse IdentityUniverseFunc) (bool, AnchorVerificationReason) {
+	if identityUniverse == nil {
+		return false, AnchorVerificationIncompleteEnumeration
+	}
+	rows, _, complete, err := identityUniverse(ctx, orgID)
+	if err != nil || !complete {
+		return false, AnchorVerificationIncompleteEnumeration
+	}
+	for _, row := range rows {
+		if row.Kind == kind && row.CanonicalID == canonicalID && identityRowCarriesTermHash(row, matchedTermHash) {
+			return true, AnchorVerificationValid
+		}
+	}
+	return false, AnchorVerificationClaimLost
+}
+
 // anchorOfferMaterial builds the subject_anchor disclosure (CHAOS-3900
 // P1.C', team-lead ruling) from the SAME per-term unique-claimant scan
 // BindAnchor's own decisive path uses (anchorTermCandidates,
 // chaos3899_anchor.go) -- never a second, divergent notion of "unique
-// claimant."
+// claimant." rawClaimantsByTerm is the COMPLETE, unauthorized-filtered
+// per-term read; authorizedClaimantsByTerm is the SAME map with the
+// caller's own AuthorizedAttributes filter already applied (resolve.go).
+// rawClaimantsByTerm is used ONLY to detect mixed claimant visibility
+// (CHAOS-4042 below) -- every candidate/option computation reads
+// authorizedClaimantsByTerm exclusively, so an unauthorized claimant's
+// content never reaches an offer.
 //
-// Three cases, all ruled explicitly (never inferred):
+// v1 cases (unchanged, byte-identical to pre-CHAOS-4042 behavior whenever
+// no term has 2+ AUTHORIZED claimants -- all ruled explicitly, never
+// inferred):
 //  1. EXACTLY ONE distinct (kind, canonical_id) candidate: this is already
 //     decisive by design brief §1.1/R4 -- BindAnchor itself would succeed
 //     on this same data, so there is nothing to elicit. Offering it anyway
@@ -511,8 +557,60 @@ func identityRowCarriesTermHash(row IdentityRow, termHash string) bool {
 //     as missing-and-helpful, nothing offerable" (team-lead ruling); an
 //     absent block or a silently dropped Missing row is forbidden either
 //     way.
-func anchorOfferMaterial(claimantsByTerm map[string][]IdentityMatch, complete bool) contextfabric.StructureOfferMaterial {
-	candidates := anchorTermCandidates(claimantsByTerm, complete)
+//
+// CHAOS-4042 (sol-max ruling) v2 case: if ambiguousAnchorTermClaimants
+// finds any term with 2+ AUTHORIZED claimants, EVERY claimant of every
+// such term (that is not itself mixed-visibility, see below) is offered
+// as a v2 AnchorOptionV2 -- one option per (term, claimant) pair, all
+// sharing that term's own matched_term_hash. This REPLACES the v1 cases
+// above for this call (a result mixes v1 and v2 anchor semantics), because
+// a decisive v1 candidate elsewhere needs no disambiguation of its own,
+// exactly the case-1 rationale already establishes. Mixed-visibility rule:
+// a term whose authorized claimant count is LESS than its raw count had at
+// least one hidden claimant -- disclosing partial claimant content (or
+// even a claimant COUNT) for that term would leak the existence of an
+// entity the principal cannot otherwise read, so that term's ENTIRE
+// candidate group is suppressed, not truncated.
+func anchorOfferMaterial(rawClaimantsByTerm, authorizedClaimantsByTerm map[string][]IdentityMatch, complete bool, membershipOffersEnabled bool) contextfabric.StructureOfferMaterial {
+	// CHAOS-4042 auth-gap closure (codex xhigh review finding, round 2):
+	// a term where authorization hid ANY claimant must never contribute to
+	// candidacy at all -- not just the v2 ambiguous scan, but v1's own
+	// unique-claimant scan too. A term with one visible claimant and one
+	// HIDDEN rival has raw count 2 but authorized count 1; feeding the
+	// authorized view alone into anchorTermCandidates would let it look
+	// like a genuine unique claimant, which is exactly "filter the proof
+	// universe by authorization then claim uniqueness" -- forbidden by the
+	// ruling's do-not list, and it applies to the v1 case-2 offer path
+	// (cross-term disagreement) exactly as much as the v2 path. Build the
+	// fully-visible view ONCE, upfront, unconditionally (not gated by
+	// membershipOffersEnabled): every term where raw and authorized
+	// claimant counts agree, nothing more. Both the v1 candidate scan and
+	// the v2 ambiguous scan read ONLY this view from here on -- neither
+	// ever sees a term authorization could have distorted.
+	fullyVisible := map[string][]IdentityMatch{}
+	for term, claimants := range authorizedClaimantsByTerm {
+		if len(rawClaimantsByTerm[term]) != len(claimants) {
+			continue // some claimant was hidden for this term: exclude entirely
+		}
+		fullyVisible[term] = claimants
+	}
+
+	// CHAOS-4042 (team-lead ruling): the entire v2 ambiguous-claimant path
+	// is gated DARK by default -- membershipOffersEnabled false (every
+	// production deployment until PR3 lands pinned-epoch reconciliation
+	// and redemption-time re-authorization) skips straight to the v1 path
+	// below, byte-identical to before this ticket (modulo the mixed-
+	// visibility fix above, which is a strict narrowing: it can only
+	// EXCLUDE a candidate v1 previously wrongly offered, never add one).
+	// See ResolveDeps.AnchorMembershipOffersEnabled's own doc comment.
+	if membershipOffersEnabled {
+		ambiguous := ambiguousAnchorTermClaimants(fullyVisible, complete)
+		if len(ambiguous) > 0 {
+			return anchorOfferMaterialV2(ambiguous)
+		}
+	}
+
+	candidates := anchorTermCandidates(fullyVisible, complete)
 	if len(candidates) == 1 {
 		return contextfabric.StructureOfferMaterial{}
 	}
@@ -544,6 +642,53 @@ func anchorOfferMaterial(claimantsByTerm map[string][]IdentityMatch, complete bo
 	return contextfabric.StructureOfferMaterial{
 		Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
 		AnchorOptions: options,
+	}
+}
+
+// anchorOfferMaterialV2 mints one ContextFabricAnchorOptionV2 per (term,
+// claimant) pair in visible, converted to the wire ContextFabricAnchorOption
+// shape via ToV1Wire() -- see that method's own doc comment for why the
+// wire slice never forks even though redemption meaning does. Deterministic
+// ordering: terms sorted, then claimants within a term sorted by (kind,
+// canonical_id), matching anchorTermCandidates' own iteration discipline so
+// output never depends on map order. Capped at structureOfferMaxOptions
+// AFTER sorting, same reasoning as the v1 cap above.
+func anchorOfferMaterialV2(visible map[string][]IdentityMatch) contextfabric.StructureOfferMaterial {
+	terms := make([]string, 0, len(visible))
+	for term := range visible {
+		terms = append(terms, term)
+	}
+	sort.Strings(terms)
+
+	var options []contractsv1.ContextFabricAnchorOption
+	for _, term := range terms {
+		claimants := append([]IdentityMatch(nil), visible[term]...)
+		sort.Slice(claimants, func(i, j int) bool {
+			if claimants[i].Row.Kind != claimants[j].Row.Kind {
+				return claimants[i].Row.Kind < claimants[j].Row.Kind
+			}
+			return claimants[i].Row.CanonicalID < claimants[j].Row.CanonicalID
+		})
+		termHash := HashAliasTerm(term)
+		for _, claimant := range claimants {
+			options = append(options, contractsv1.ContextFabricAnchorOptionV2{
+				Kind: claimant.Row.Kind, CanonicalID: claimant.Row.CanonicalID,
+				Label: anchorOfferLabel(claimant.Row.Label), MatchedTermHash: termHash,
+				OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}.ToV1Wire())
+			if len(options) == structureOfferMaxOptions {
+				return contextfabric.StructureOfferMaterial{
+					Missing:                []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+					AnchorOptions:          options,
+					AnchorOptionsRequireV2: true,
+				}
+			}
+		}
+	}
+	return contextfabric.StructureOfferMaterial{
+		Missing:                []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+		AnchorOptions:          options,
+		AnchorOptionsRequireV2: true,
 	}
 }
 
@@ -691,6 +836,7 @@ func combineStructureOfferMaterial(materials ...contextfabric.StructureOfferMate
 		combined.KindOptions = append(combined.KindOptions, m.KindOptions...)
 		combined.AnchorOptions = append(combined.AnchorOptions, m.AnchorOptions...)
 		combined.HandleOptions = append(combined.HandleOptions, m.HandleOptions...)
+		combined.AnchorOptionsRequireV2 = combined.AnchorOptionsRequireV2 || m.AnchorOptionsRequireV2
 	}
 	return combined
 }

@@ -12,8 +12,49 @@ import (
 const (
 	InvestigationRequestSchemaV1 = contractsv1.ContextFabricInvestigationRequestSchema
 	InvestigationResultSchemaV1  = contractsv1.ContextFabricInvestigationResultSchema
-	ProjectionBatchSchemaV1      = contractsv1.ContextFabricProjectionBatchSchema
+	// InvestigationResultSchemaV2 (CHAOS-4042, sol-max ruling) is the
+	// anchor membership-verify semantic major -- see
+	// contractsv1.ContextFabricInvestigationResultSchemaV2's own doc
+	// comment.
+	InvestigationResultSchemaV2 = contractsv1.ContextFabricInvestigationResultSchemaV2
+	ProjectionBatchSchemaV1     = contractsv1.ContextFabricProjectionBatchSchema
 )
+
+// ValidateResult (CHAOS-4042) dispatches a result about to be WRITTEN to
+// the v1 or v2 write-path validator by its own SchemaVersion -- every
+// storage adapter's Save must use this instead of calling result.Validate()
+// directly, or a genuinely valid v2 result would be rejected before it
+// could ever be persisted. See ValidateStoredResult for the read-path
+// counterpart; both fail closed on an unrecognized SchemaVersion.
+func ValidateResult(result InvestigationResult) error {
+	switch result.SchemaVersion {
+	case InvestigationResultSchemaV2:
+		return result.ValidateV2()
+	case InvestigationResultSchemaV1:
+		return result.Validate()
+	default:
+		return fmt.Errorf("investigation result schema_version %q is not a recognized major", result.SchemaVersion)
+	}
+}
+
+// ValidateStoredResult (CHAOS-4042) dispatches a read-back result to the
+// v1 or v2 stored-validator by its OWN persisted SchemaVersion -- every
+// storage adapter's read path (Get/FindReusable) must use this instead of
+// calling result.ValidateStored() directly, or a genuinely valid v2 row
+// would be rejected by the v1-only validator the instant this ticket's
+// offer generation ever mints one. Any other SchemaVersion value fails
+// closed (neither validator ever runs), matching this package's existing
+// "unrecognized value fails loudly" discipline -- never a silent pass.
+func ValidateStoredResult(result InvestigationResult) error {
+	switch result.SchemaVersion {
+	case InvestigationResultSchemaV2:
+		return result.ValidateStoredV2()
+	case InvestigationResultSchemaV1:
+		return result.ValidateStored()
+	default:
+		return fmt.Errorf("investigation result schema_version %q is not a recognized major", result.SchemaVersion)
+	}
+}
 
 type InvestigationStatus = contractsv1.ContextFabricInvestigationStatus
 

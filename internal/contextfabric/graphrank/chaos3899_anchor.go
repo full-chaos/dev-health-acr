@@ -225,3 +225,35 @@ func anchorTermCandidates(claimantsByTerm map[string][]IdentityMatch, complete b
 	}
 	return seen
 }
+
+// ambiguousAnchorTermClaimants is CHAOS-4042's (sol-max ruling) own
+// per-term scan, added BESIDE -- never inside -- anchorTermCandidates:
+// every term anchorTermCandidates itself SKIPS because it has TWO OR MORE
+// claimants (len(matches) != 1). BindAnchor and anchorTermCandidates stay
+// completely unchanged by this ticket -- the no-receipt derived-anchor path
+// remains strictly unique-claimant, per the ruling.
+//
+// Under membership-verify semantics, an ambiguous term still names real,
+// offerable candidates: the caller's own receipt-confirmed selection
+// supplies the disambiguation term-exclusivity used to provide. Every
+// claimant of a qualifying term is returned (never a subset), so a caller
+// can offer one AnchorOption per claimant, all sharing that term's own
+// matched_term_hash -- exactly the wire shape a redemption-time membership
+// check (kind, canonical_id, matched_term_hash) needs.
+//
+// complete=false returns nil, the same fail-closed shape every other scan
+// in this file uses -- an incomplete read proves nothing about ANY term's
+// claimant set, ambiguous or not.
+func ambiguousAnchorTermClaimants(claimantsByTerm map[string][]IdentityMatch, complete bool) map[string][]IdentityMatch {
+	if !complete {
+		return nil
+	}
+	ambiguous := map[string][]IdentityMatch{}
+	for term, matches := range claimantsByTerm {
+		if len(matches) < 2 {
+			continue
+		}
+		ambiguous[term] = matches
+	}
+	return ambiguous
+}

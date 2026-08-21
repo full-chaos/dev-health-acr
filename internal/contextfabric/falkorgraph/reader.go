@@ -230,6 +230,10 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// CHAOS-3972 P3: nil unless the composition root sets
 		// Config.HandleGrammarChecker -- see that field's own doc comment.
 		HandleGrammarChecker: a.config.HandleGrammarChecker,
+		// CHAOS-4042: false unless the composition root sets
+		// Config.AnchorMembershipOffersEnabled -- see that field's own doc
+		// comment (team-lead ruling: ships DARK until PR3).
+		AnchorMembershipOffersEnabled: a.config.AnchorMembershipOffersEnabled,
 	}
 	// CHAOS-3884 (Option C): AliasLookup is left nil (deps' own zero value)
 	// when this deployment has no identity-universe reader configured --

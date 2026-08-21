@@ -44,6 +44,89 @@ func TestInvestigationRequestValidateRejectsInvalidTemporalShape(t *testing.T) {
 	}
 }
 
+// TestValidateResult_DispatchesOnSchemaVersion is CHAOS-4042's own proof
+// that the storage-adapter dispatch helper (ValidateResult, used by every
+// Save call site instead of a bare result.Validate()) genuinely picks the
+// validator matching the result's OWN persisted schema_version, never a
+// fallthrough to the wrong major or a silent no-op on an unrecognized one.
+func TestValidateResult_DispatchesOnSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("v1 result validates under v1", func(t *testing.T) {
+		t.Parallel()
+		result := validInvestigationResult()
+		if err := ValidateResult(result); err != nil {
+			t.Errorf("ValidateResult() error = %v, want nil for a genuine v1 result", err)
+		}
+	})
+	t.Run("v2 result validates under v2, not v1", func(t *testing.T) {
+		t.Parallel()
+		result := validInvestigationResult()
+		result.SchemaVersion = InvestigationResultSchemaV2
+		if err := ValidateResult(result); err != nil {
+			t.Errorf("ValidateResult() error = %v, want nil for a genuine v2 result", err)
+		}
+		// The SAME payload must be REJECTED by the plain v1 Validate() --
+		// proves the dispatch is not accidentally routing everything
+		// through the same (looser) check.
+		if err := result.Validate(); err == nil {
+			t.Error("result.Validate() accepted a v2 schema_version; the v1-only entrypoint must reject it")
+		}
+	})
+	t.Run("v1 result rejected if inspected under v2 semantics directly", func(t *testing.T) {
+		t.Parallel()
+		result := validInvestigationResult()
+		if err := result.ValidateV2(); err == nil {
+			t.Error("result.ValidateV2() accepted a v1 schema_version; the v2-only entrypoint must reject it")
+		}
+	})
+	t.Run("unrecognized schema_version fails closed", func(t *testing.T) {
+		t.Parallel()
+		result := validInvestigationResult()
+		result.SchemaVersion = "context_fabric_investigation_result.v99"
+		if err := ValidateResult(result); err == nil {
+			t.Error("ValidateResult() accepted an unrecognized schema_version; must fail closed, never silently pass")
+		}
+	})
+}
+
+// TestValidateStoredResult_DispatchesOnSchemaVersion mirrors
+// TestValidateResult_DispatchesOnSchemaVersion for the READ-BACK path
+// (memoryinvestigation/pginvestigation Get and FindReusable) -- proves a
+// genuinely persisted v2 row is NOT rejected the instant it is read back,
+// which the pre-CHAOS-4042 unconditional result.ValidateStored() call
+// would have done.
+func TestValidateStoredResult_DispatchesOnSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("v1 stored result validates under v1", func(t *testing.T) {
+		t.Parallel()
+		result := validInvestigationResult()
+		if err := ValidateStoredResult(result); err != nil {
+			t.Errorf("ValidateStoredResult() error = %v, want nil for a genuine v1 stored result", err)
+		}
+	})
+	t.Run("v2 stored result validates under v2, not v1", func(t *testing.T) {
+		t.Parallel()
+		result := validInvestigationResult()
+		result.SchemaVersion = InvestigationResultSchemaV2
+		if err := ValidateStoredResult(result); err != nil {
+			t.Errorf("ValidateStoredResult() error = %v, want nil for a genuine v2 stored result", err)
+		}
+		if err := result.ValidateStored(); err == nil {
+			t.Error("result.ValidateStored() accepted a v2 schema_version; the v1-only stored entrypoint must reject it")
+		}
+	})
+	t.Run("unrecognized schema_version fails closed", func(t *testing.T) {
+		t.Parallel()
+		result := validInvestigationResult()
+		result.SchemaVersion = "context_fabric_investigation_result.v99"
+		if err := ValidateStoredResult(result); err == nil {
+			t.Error("ValidateStoredResult() accepted an unrecognized schema_version; must fail closed, never silently pass")
+		}
+	})
+}
+
 func TestInvestigationResultValidateRequiresDirectAnswerForSupportedResult(t *testing.T) {
 	t.Parallel()
 

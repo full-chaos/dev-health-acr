@@ -33,6 +33,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func Open(ctx context.Context, cfg config.Config, options Options) (*Runtime, error) {
@@ -397,6 +398,11 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 		}
 		return graphrank.HandleSourceColumn(graphrank.CensusKind(kind), patternID)
 	}
+	// CHAOS-4042 (team-lead ruling): default false -- see
+	// config.Config.AnchorMembershipOffersEnabled's own doc comment for
+	// why this stays off until a follow-up ships pinned-epoch
+	// reconciliation and redemption-time re-authorization.
+	graphConfig.AnchorMembershipOffersEnabled = request.config.AnchorMembershipOffersEnabled
 	if wireIdentityUniverse {
 		// CHAOS-3884 (Option C): closes over the SAME ClickHouse query client
 		// devhealthfacts.NewProviders already uses below, so the identity
@@ -498,6 +504,20 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	})
 	anchorVerifier := contextfabric.AnchorVerifier(func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, contextfabric.AnchorVerificationReason) {
 		ok, reason := graphrank.VerifyAnchorClaimantUnique(ctx, orgID, kind, canonicalID, matchedTermHash, identityUniverse)
+		return ok, contextfabric.AnchorVerificationReason(reason)
+	})
+	// anchorMembershipVerifier (CHAOS-4042, sol-max ruling) adapts
+	// graphrank.VerifyAnchorClaimantMembership over the SAME identityUniverse
+	// construction anchorVerifier above uses. See
+	// VerifyAnchorClaimantMembership's own doc comment for this PR's
+	// INTERIM SCOPE: no pinned-epoch graph reconciliation, no redemption-
+	// time re-authorization yet (both need a graph-adapter primitive that
+	// does not exist; PR3 adds it alongside real epoch enforcement).
+	// binding/scope are accepted (the ruling's own required signature) but
+	// not yet read by this implementation -- named _ to make that
+	// explicit rather than silently ignoring named parameters.
+	anchorMembershipVerifier := contextfabric.AnchorMembershipVerifier(func(ctx context.Context, principal storage.Principal, _ contractsv1.ContextFabricRequestedScope, _ contextfabric.ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, contextfabric.AnchorVerificationReason) {
+		ok, reason := graphrank.VerifyAnchorClaimantMembership(ctx, principal.OrgID, kind, canonicalID, matchedTermHash, identityUniverse)
 		return ok, contextfabric.AnchorVerificationReason(reason)
 	})
 	// priorConsultant (CHAOS-3977 P5, design brief §3.4) is nil unless
@@ -687,6 +707,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// CHAOS-3900 P1.E: see anchorVerifier's own construction comment
 		// above.
 		AnchorVerifier: anchorVerifier,
+		// CHAOS-4042: see anchorMembershipVerifier's own construction
+		// comment above.
+		AnchorMembershipVerifier: anchorMembershipVerifier,
 		// CHAOS-3977 P5: nil unless ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED
 		// -- see priorConsultant's own construction comment above.
 		PriorConsultant:           priorConsultant,

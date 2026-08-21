@@ -250,6 +250,17 @@ const (
 	AnchorVerificationClaimContested        AnchorVerificationReason = "anchor_claim_contested"
 	AnchorVerificationClaimLost             AnchorVerificationReason = "anchor_claim_lost"
 	AnchorVerificationIncompleteEnumeration AnchorVerificationReason = "incomplete_enumeration"
+	// AnchorVerificationUnauthorized (CHAOS-4042, sol-max ruling) is
+	// AnchorMembershipVerifier's own reason for "the selected claimant is
+	// no longer authorized under binding/scope B" -- INTERNAL/telemetry
+	// only. The ruling: "Generic unresolved veto; do not expose whether it
+	// still exists" -- the caller-visible effect is IDENTICAL to
+	// AnchorVerificationClaimLost (structure_confirmation_unresolved), so
+	// this value must never itself be surfaced on the wire; it exists only
+	// so an operator reading telemetry can distinguish "the claim vanished"
+	// from "the principal lost visibility" without that distinction ever
+	// reaching a caller.
+	AnchorVerificationUnauthorized AnchorVerificationReason = "anchor_claim_unauthorized"
 )
 
 // AnchorVerifier is canonicalizeStructure's own redemption-time
@@ -268,6 +279,33 @@ const (
 // same reasoning (applying an un-reverified anchor claim would be a false
 // sense of safety).
 type AnchorVerifier func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason)
+
+// AnchorMembershipVerifier is CHAOS-4042's (sol-max ruling) own
+// redemption-time re-verification dependency for a v2 (membership-verify)
+// subject_anchor confirmation: (principal, requestedScope, binding, kind,
+// canonicalID, matchedTermHash) -> valid/invalid + reason.
+//
+// Unlike AnchorVerifier (v1, permanently unique-claimant: EXACTLY ONE row
+// may carry the term), this proves MEMBERSHIP: (kind, canonicalID) remains
+// ANY member of the term's complete claimant set under the PINNED binding
+// epoch B -- rivals gained or lost do not invalidate the claim; only the
+// SELECTED claimant's own loss, re-keying, or an incomplete/unprovable
+// read does (`valid = complete(C_B(h)) && e ∈ C_B(h) && authorized_B(...)`,
+// the ruling's own membership rule). Matched by (matchedTermHash, kind,
+// canonicalID) together, never canonicalID or matchedTermHash alone.
+//
+// Takes the FULL storage.Principal and the caller's own RequestedScope
+// (AnchorVerifier takes only an org id) because membership verification
+// must RE-AUTHORIZE the selected node at redemption under B -- the
+// ruling's explicit "never compute truth from the authorized subset;
+// authorization must not manufacture uniqueness by hiding rivals" applies
+// in reverse here too: redemption must re-check visibility, never assume
+// offer-time authorization still holds.
+//
+// A nil AnchorMembershipVerifier is NOT "trust the stored offer" -- same
+// fail-CLOSED default as AnchorVerifier/HandleVerifier. Production
+// implementation: internal/runtime/hosted/open.go.
+type AnchorMembershipVerifier func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason)
 
 // HandleGrammarChecker is the OFFER-TIME (never redemption-time) grammar
 // check for an explicit request.SubjectHandles entry (CHAOS-3972 P3,
@@ -338,7 +376,7 @@ type structureReceiptMember struct {
 // it recognizes is a VETO, not a Go error, mirroring
 // canonicalizeEvidenceWindow's own reasoning (a canonicalization failure is
 // an ordinary, expected, clarification-shaped outcome).
-func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Principal, request InvestigationRequest) requestStructureCanonicalization {
+func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding) requestStructureCanonicalization {
 	hasReceipts := len(request.PriorKindReceipts) > 0 || len(request.PriorAnchorReceipts) > 0 || len(request.PriorHandleReceipts) > 0
 	hasExplicit := len(request.ExpectedKinds) > 0 || len(request.SubjectHandles) > 0
 	if !hasReceipts && !hasExplicit {
@@ -424,12 +462,28 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 			// hash-side against a fresh identity-universe read.
 			// e.anchorVerifier == nil fails CLOSED, not open -- identical
 			// reasoning to the handle member's own reverify above.
+			// CHAOS-4042 (sol-max ruling): dispatch on the ISSUING STORED
+			// result's OWN schema_version, exactly as persisted -- never on
+			// this request's own structure material, never on any other
+			// signal. A v1-stamped stored result always redeems through
+			// the legacy unique-claimant verifier; a v2-stamped one always
+			// redeems through the membership verifier. Any OTHER
+			// schema_version fails closed (neither branch runs) -- an
+			// explicit reject, never a fallthrough that would let an
+			// unrecognized or future major redeem under today's rules.
 			reverify: func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool {
-				if e.anchorVerifier == nil || stored.StructureNeeds == nil {
+				if stored.StructureNeeds == nil {
 					return false
 				}
 				for _, opt := range stored.StructureNeeds.AnchorOptions {
-					if opt.ReceiptID == receiptID {
+					if opt.ReceiptID != receiptID {
+						continue
+					}
+					switch stored.SchemaVersion {
+					case InvestigationResultSchemaV1:
+						if e.anchorVerifier == nil {
+							return false
+						}
 						// Codex xhigh review (chaos-pivot-p1, first round),
 						// finding 2: ok alone is not trustworthy -- a
 						// misconfigured AnchorVerifier returning
@@ -439,6 +493,14 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 						// own Valid member too, not just a truthy bool.
 						ok, reason := e.anchorVerifier(ctx, principal.OrgID, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
 						return ok && reason == AnchorVerificationValid
+					case InvestigationResultSchemaV2:
+						if e.anchorMembershipVerifier == nil {
+							return false
+						}
+						ok, reason := e.anchorMembershipVerifier(ctx, principal, request.RequestedScope, binding, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
+						return ok && reason == AnchorVerificationValid
+					default:
+						return false
 					}
 				}
 				return false

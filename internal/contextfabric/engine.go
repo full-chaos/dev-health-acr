@@ -142,6 +142,14 @@ type EngineDependencies struct {
 	// contract as HandleVerifier above, see AnchorVerifier's own doc
 	// comment (structure.go).
 	AnchorVerifier AnchorVerifier
+	// AnchorMembershipVerifier is CHAOS-4042's (sol-max ruling) own
+	// redemption-time re-verification dependency for a v2 (membership-
+	// verify) ancr_ structure receipt -- same fail-CLOSED-when-nil
+	// contract as AnchorVerifier above, see AnchorMembershipVerifier's own
+	// doc comment (structure.go). A deployment that never mints v2 anchor
+	// offers never exercises this path regardless, so leaving it nil is
+	// safe ONLY until they exist.
+	AnchorMembershipVerifier AnchorMembershipVerifier
 	// StructureSelectionSink is optional (CHAOS-3927 P4, capture-only
 	// phase, mirroring ClarificationSelectionSink's own contract exactly).
 	// When set, Engine notifies it every time a caller's kindr_/ancr_/
@@ -382,6 +390,7 @@ type Engine struct {
 	structureSelectionSink     StructureSelectionSink
 	handleVerifier             HandleVerifier
 	anchorVerifier             AnchorVerifier
+	anchorMembershipVerifier   AnchorMembershipVerifier
 	priorConsultant            PriorConsultant
 	priorHandleGrammarChecker  HandleGrammarChecker
 	serviceVersion             string
@@ -412,6 +421,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		structureSelectionSink:     dependencies.StructureSelectionSink,
 		handleVerifier:             dependencies.HandleVerifier,
 		anchorVerifier:             dependencies.AnchorVerifier,
+		anchorMembershipVerifier:   dependencies.AnchorMembershipVerifier,
 		priorConsultant:            dependencies.PriorConsultant,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
@@ -488,7 +498,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// above -- resolving them here, before any reuse lookup, means a
 	// follow-up confirming structure via receipt can never be served a
 	// cached answer generated under unconfirmed inference instead.
-	structureCanon := e.canonicalizeStructure(ctx, principal, request)
+	structureCanon := e.canonicalizeStructure(ctx, principal, request, binding)
 	if structureCanon.Veto != structureVetoNone {
 		// CHAOS-3900 P1.F: a PRE-FLIGHT veto is FINAL the instant
 		// canonicalizeStructure returns it -- nothing downstream can still

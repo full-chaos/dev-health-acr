@@ -97,7 +97,7 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// invalid result before it is ever persisted -- an immutable row that
 	// fails the same contract the public API enforces on every returned
 	// result can never be corrected later.
-	if err := result.Validate(); err != nil {
+	if err := contextfabric.ValidateResult(result); err != nil {
 		return fmt.Errorf("memoryinvestigation: invalid investigation result: %w", err)
 	}
 	payload, err := json.Marshal(result)
@@ -260,7 +260,7 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// storage some other way (e.g. written directly, or by a future/older
 	// binary with different validation) -- a caller must never receive a
 	// result this package cannot vouch for.
-	if err := result.ValidateStored(); err != nil {
+	if err := contextfabric.ValidateStoredResult(result); err != nil {
 		return contextfabric.StoredInvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
 	}
 	// CHAOS-3898 §2.4: this store never persists a graph epoch (it does not
