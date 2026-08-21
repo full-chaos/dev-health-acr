@@ -10,7 +10,7 @@ type: application
 # Chart version tracks the packaging revision; appVersion tracks the immutable
 # application image, which is always supplied as a digest reference at deploy
 # time (see values.image.reference).
-version: 0.1.1
+version: 0.1.2
 appVersion: "0.1.0"
 kubeVersion: ">=1.29.0-0"
 home: https://github.com/full-chaos/dev-health-acr

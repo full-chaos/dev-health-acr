@@ -186,9 +186,15 @@ contextFabric:
   # into that Deployment). Empty addr leaves Context Fabric unconfigured --
   # falkorgraph.Configured() then keeps the adapter from ever constructing,
   # matching the "an unset deployment should never fail closed" contract.
-  # FalkorDB is self-hosted -- this chart does not run a FalkorDB workload
-  # itself, the same posture as postgres/clickhouse being externally
-  # provisioned; point addr at wherever it runs. No credential is required
+  # FalkorDB is self-hosted -- by default this chart does not run a FalkorDB
+  # workload, the same posture as postgres/clickhouse being externally
+  # provisioned; point addr at wherever it runs. CHAOS-4055: the optional
+  # `falkordb` workload block below can deploy a single-instance FalkorDB
+  # in-release (values-gated, off by default); enabling it does NOT auto-wire
+  # this addr -- set addr to the rendered Service
+  # (<fullname>-falkordb:6379, with tls=false / allowInsecure=true, matching
+  # the compose overlay's plaintext in-network posture) explicitly, so an
+  # unset deployment still never fails closed. No credential is required
   # by default (FalkorDB has no auth out of the box), so existingSecret is
   # optional and empty by default. acr-api's own optional Investigator (gated
   # by ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED) reads this same env var
@@ -201,6 +207,53 @@ contextFabric:
     graphPrefix: "acr-cf"
     existingSecret: ""
     passwordKey: ACR_CONTEXT_FABRIC_FALKOR_PASSWORD
+  # CHAOS-4055: optional in-release FalkorDB workload so the COMPLETE ACR
+  # topology (api + migration + projector + graph backend) is deployable from
+  # this chart alone on a local cluster. Disabled by default -- production
+  # keeps the externally-provisioned posture above, exactly like the
+  # profile-gated `falkordb` service in deploy/compose/acr.compose.yml.
+  # Vocabulary mirrors that compose service: same digest-pinned image
+  # (FalkorDB 4.20.2 / module 42002 / Redis 8.6.3, the version the
+  # falkorgraph adapter was verified against), same GRAPH.QUERY readiness
+  # probe (PING is not sufficient -- see
+  # docs/design/context-fabric-falkordb-adapter.md), port 6379, persistent
+  # data volume. One deliberate divergence: the volume mounts at
+  # /var/lib/falkordb/data (the image's FALKORDB_DATA_PATH, where
+  # redis-server --dir actually writes) -- the compose service's /data mount
+  # point predates that image layout and does not capture the dump files.
+  falkordb:
+    enabled: false
+    # Immutable digest, identical to deploy/compose/acr.compose.yml.
+    image: "docker.io/falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+    imagePullPolicy: IfNotPresent
+    service:
+      port: 6379
+    # Single instance, fixed: FalkorDB here is a single-node store; a replica
+    # knob would only pretend at an HA topology this chart does not provide.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    persistence:
+      enabled: true
+      size: 1Gi
+      # Empty selects the cluster default StorageClass.
+      storageClassName: ""
+    # The upstream image runs redis-server as root via its run.sh entrypoint
+    # (no USER directive) and its bundled browser UI is disabled below
+    # (BROWSER=0) to keep the workload headless. The restricted
+    # acr.containerSecurityContext (runAsNonRoot, uid 65532, read-only root)
+    # does not apply to this vendored image; the template still drops all
+    # capabilities, forbids privilege escalation, and pins seccomp to
+    # RuntimeDefault.
+    podAnnotations: {}
+    podLabels: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
   projector:
     enabled: false
     replicaCount: 1
@@ -273,6 +326,11 @@ networkPolicy:
     postgresPort: 5432
     clickhousePort: 9000
     entitlementPort: 8000
+    # FalkorDB graph backend port. Rendered into the API egress only when
+    # contextFabric.falkor.addr is set (acr-api's optional Investigator and
+    # acr-projector share the same endpoint contract); an unconfigured
+    # Context Fabric adds no egress.
+    falkorPort: 6379
     # Kubernetes API server port, needed only when workloadTokenExchange.enabled
     # (acr-api calls TokenReview). Ports-only, same convention as the other
     # egress rules above -- NetworkPolicy cannot target the API server by pod

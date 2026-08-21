@@ -529,4 +529,38 @@ for path in '/var/run/acr/postgres-ca/ca.crt' '/var/run/acr/clickhouse-ca/ca.crt
 done
 pass "secret-projection: custom Secret keys map to canonical projected filenames"
 
+# Gate 19 (CHAOS-4055): optional in-release FalkorDB workload. Off by default;
+# when enabled it must render a non-empty digest-pinned StatefulSet + Service
+# with the compose service's GRAPH.QUERY health vocabulary, mount the image's
+# real data path, and stay under the default-deny NetworkPolicy posture.
+if grep -qE '^\s*kind:\s*StatefulSet\s*$' "$rendered" || grep -q 'component: falkordb' "$rendered"; then
+  fail_gate "falkordb-workload: default render must not contain the FalkorDB workload"
+fi
+pass "falkordb-workload: disabled by default (no StatefulSet in default render)"
+
+falkordb_render="$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set-string contextFabric.falkor.addr=acr-test-falkordb:6379)"
+[[ -n "$falkordb_render" ]] || fail_gate "falkordb-workload: enabled render produced no output"
+grep -qE '^\s*kind:\s*StatefulSet\s*$' <<<"$falkordb_render" || fail_gate "falkordb-workload: enabled render is missing the StatefulSet"
+grep -q 'name: acr-test-falkordb' <<<"$falkordb_render" || fail_gate "falkordb-workload: enabled render is missing the falkordb Service/StatefulSet name"
+grep -qF 'falkordb/falkordb@sha256:' <<<"$falkordb_render" || fail_gate "falkordb-workload: FalkorDB image is not digest-pinned in the render"
+grep -qF 'GRAPH.QUERY' <<<"$falkordb_render" || fail_gate "falkordb-workload: readiness must use the GRAPH.QUERY vocabulary, not PING alone"
+grep -qF '/var/lib/falkordb/data' <<<"$falkordb_render" || fail_gate "falkordb-workload: data volume must mount the image FALKORDB_DATA_PATH"
+awk 'BEGIN{found=0} /^kind: NetworkPolicy$/{np=1} np && /component: falkordb/{found=1} /^---$/{np=0} END{exit !found}' <<<"$falkordb_render" \
+  || fail_gate "falkordb-workload: no NetworkPolicy selects the falkordb component"
+grep -q 'port: 6379' <<<"$falkordb_render" || fail_gate "falkordb-workload: falkor port 6379 missing from enabled render"
+pass "falkordb-workload: enabled render has digest-pinned StatefulSet+Service, GRAPH.QUERY readiness, real data path, NetworkPolicy"
+
+set +e
+falkordb_mutable="$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set-string contextFabric.falkordb.image=falkordb/falkordb:latest 2>&1)"
+falkordb_mutable_status=$?
+set -e
+[[ $falkordb_mutable_status -ne 0 ]] || fail_gate "falkordb-workload: a mutable falkordb image tag must fail closed"
+grep -qF 'mutable-image: contextFabric.falkordb.image' <<<"$falkordb_mutable" \
+  || fail_gate "falkordb-workload: mutable falkordb image failure did not name the violation"
+pass "falkordb-workload: mutable falkordb image reference fails closed naming the violation"
+
 printf 'RESULT: happy path passed all gates\n'
