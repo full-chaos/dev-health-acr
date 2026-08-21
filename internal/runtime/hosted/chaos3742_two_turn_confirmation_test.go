@@ -2551,7 +2551,24 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// (composeEffectiveWindow's own ClassifyWindow), not member/arm-
 		// scoped, so a control case classifying to a window is just as
 		// much gate-2 evidence as any other.
-		if turn1.WindowClarification != nil {
+		//
+		// !turn1.Reused is required (codex xhigh review round 2, confirmed
+		// HIGH-confidence): tryReuse runs BEFORE gate 2 in Investigate
+		// (engine.go), and answer_reuse.go's FindReusable only rejects
+		// DECISIVE (Complete/Partial/Degraded) candidates carrying an
+		// inferred window -- it says nothing about a clarification_required
+		// row, which pre-#181 could ALREADY carry a non-nil
+		// WindowClarification (the old, now-permanently-dead decisive-path
+		// composeWindowClarification call, engine.go) and was saved with a
+		// real (non-nil) watermark/epoch under the pre-#181 rules, so it
+		// stays reuse-eligible today. Without this guard, a persistent
+		// store carrying pre-#181 rows (a long-lived trial Postgres
+		// instance, not a fresh-per-run store) could let this bar pass by
+		// REPLAYING an old row, proving nothing about gate 2 actually
+		// running on THIS call -- exactly the causal gap this whole field
+		// exists to close for the gate-1 arm, reintroduced through reuse
+		// on this gate-2 signal if unguarded.
+		if turn1.WindowClarification != nil && !turn1.Reused {
 			report.WindowClassDefaultGatedCount++
 		}
 		if tc.ExpectID == "" {
