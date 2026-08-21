@@ -1,5 +1,16 @@
 -- CHAOS-4013: RFC 8693 workload token exchange for machine auth.
 --
+-- Operational note: this repository never grants runtime-role table
+-- privileges from a migration (grants are managed entirely out of band --
+-- see values.yaml's runtime/migration DSN split). The purge loop in
+-- internal/runtime/hosted/postgres.go only starts when
+-- ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE/ACR_WORKLOAD_TRUST_DOMAIN are set,
+-- so an operator who has not opted into this feature needs no new grants
+-- at all. An operator who DOES opt in must additionally grant the
+-- runtime role INSERT and DELETE on acr.client_credentials (previously
+-- only SELECT/UPDATE was ever needed, for the read and revoke/rotate
+-- paths) and SELECT on acr.workload_bindings.
+--
 -- acr.workload_bindings is the declarative, server-side-only grant map:
 -- {trust domain, namespace, service account name, service account uid} ->
 -- {binding_id, org_id, role, repository_scopes}. There is no HTTP CRUD
