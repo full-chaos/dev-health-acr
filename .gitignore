@@ -9,6 +9,7 @@
 !.env.example
 .tmp/
 /acr-mcp
+/acr-trial-merge-two-turn
 /modeloracle
 /.omo/
 **/.playwright**
