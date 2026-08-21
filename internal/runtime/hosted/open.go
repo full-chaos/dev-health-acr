@@ -321,7 +321,17 @@ func buildGraphLifecycleResolver(db *sql.DB, telemetry contextfabric.GraphLifecy
 // replay harness's "arm A" / baseline: the OLD resolver behavior recovered
 // inside the NEW binary, by construction, because CHAOS-3884's entire
 // commit-path change sits behind this one nil-checked dependency.
-func buildContextFabricGraphReader(request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, wireIdentityUniverse bool) (contextfabric.GraphReader, string, error) {
+// Returns *falkorgraph.Adapter, not the narrower contextfabric.GraphReader
+// interface (CHAOS-4042 PR3): buildContextFabricInvestigator's own
+// anchorMembershipVerifier wiring needs the concrete adapter's AnchorMember
+// method, which is deliberately NOT part of the GraphReader interface (see
+// graphrank.GraphAnchorMemberFunc's own doc comment for why -- a new
+// interface method would ripple through every fake GraphReader
+// implementation in the test suite for a capability only one caller needs).
+// Every other caller of this return value already only needs
+// contextfabric.GraphReader's own methods, which *Adapter satisfies
+// implicitly.
+func buildContextFabricGraphReader(request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, wireIdentityUniverse bool) (*falkorgraph.Adapter, string, error) {
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return nil, "", fmt.Errorf("load context fabric graph configuration: %w", err)
@@ -508,16 +518,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	})
 	// anchorMembershipVerifier (CHAOS-4042, sol-max ruling) adapts
 	// graphrank.VerifyAnchorClaimantMembership over the SAME identityUniverse
-	// construction anchorVerifier above uses. See
-	// VerifyAnchorClaimantMembership's own doc comment for this PR's
-	// INTERIM SCOPE: no pinned-epoch graph reconciliation, no redemption-
-	// time re-authorization yet (both need a graph-adapter primitive that
-	// does not exist; PR3 adds it alongside real epoch enforcement).
-	// binding/scope are accepted (the ruling's own required signature) but
-	// not yet read by this implementation -- named _ to make that
-	// explicit rather than silently ignoring named parameters.
-	anchorMembershipVerifier := contextfabric.AnchorMembershipVerifier(func(ctx context.Context, principal storage.Principal, _ contractsv1.ContextFabricRequestedScope, _ contextfabric.ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, contextfabric.AnchorVerificationReason) {
-		ok, reason := graphrank.VerifyAnchorClaimantMembership(ctx, principal.OrgID, kind, canonicalID, matchedTermHash, identityUniverse)
+	// construction anchorVerifier above uses, PLUS (PR3) graphReader's own
+	// AnchorMember method for the graph-side pinned-epoch reconciliation +
+	// redemption re-authorization half -- binding/scope now actually reach
+	// the graph read they were always threaded here for.
+	anchorMembershipVerifier := contextfabric.AnchorMembershipVerifier(func(ctx context.Context, principal storage.Principal, scope contractsv1.ContextFabricRequestedScope, binding contextfabric.ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, contextfabric.AnchorVerificationReason) {
+		ok, reason := graphrank.VerifyAnchorClaimantMembership(ctx, principal, scope, binding, kind, canonicalID, matchedTermHash, identityUniverse, graphReader.AnchorMember)
 		return ok, contextfabric.AnchorVerificationReason(reason)
 	})
 	// priorConsultant (CHAOS-3977 P5, design brief §3.4) is nil unless

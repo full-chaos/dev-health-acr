@@ -95,6 +95,35 @@ func TestClient_InvestigateRejectsAMalformedSuccessResponse(t *testing.T) {
 	}
 }
 
+// TestClient_InvestigateAcceptsAV2StampedResult is CHAOS-4042 PR3's own
+// regression proof for the codex xhigh review round-1 HIGH finding,
+// confirmed and fixed: this client's Investigate previously called
+// result.ValidateStored() directly, which hardcodes the v1 schema_version
+// constant and would reject a v2-stamped (membership-verify) result the
+// hosted API legitimately served, blocking every panel run touching it.
+func TestClient_InvestigateAcceptsAV2StampedResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		result := minimalValidResult("result_test0002", "request_test0002")
+		result.SchemaVersion = contractsv1.ContextFabricInvestigationResultSchemaV2
+		result.Versions.ContractVersion = contractsv1.ContextFabricInvestigationResultSchemaV2
+		_ = json.NewEncoder(w).Encode(result)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, testBearerToken(4), time.Second*5)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	result, err := client.Investigate(context.Background(), "request_test0002", validRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want nil for a valid v2-stamped result", err)
+	}
+	if result.ResultID != "result_test0002" {
+		t.Errorf("ResultID = %q, want %q", result.ResultID, "result_test0002")
+	}
+}
+
 func TestNewClient_RequiresHTTPSForNonLoopbackHosts(t *testing.T) {
 	if _, err := NewClient("http://acr.example.com", testBearerToken(4), time.Second); err == nil {
 		t.Error("expected plain HTTP to a non-loopback host to be rejected")

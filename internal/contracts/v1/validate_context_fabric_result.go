@@ -645,6 +645,35 @@ func (r ContextFabricInvestigationResult) ValidateStoredV2() error {
 	return r.validateAgainstSchemaVersion(contextFabricLegacyBounds, ContextFabricInvestigationResultSchemaV2)
 }
 
+// ValidateStoredResult (CHAOS-4042 PR3) dispatches a read-back WIRE result
+// to ValidateStoredV2 or ValidateStored by its OWN r.SchemaVersion --
+// mirrors contextfabric.ValidateStoredResult (model.go), which does the
+// identical dispatch for the internal type, but cannot be reused here: this
+// package cannot import contextfabric (contextfabric imports contracts/v1,
+// not the reverse). Every caller that revalidates a result already read
+// back off the wire (MCP tool responses, the sidecar's own transport
+// defense-in-depth check) must use this instead of calling
+// r.ValidateStored() directly -- codex xhigh review finding, confirmed
+// real: all three of internal/sidecar/api_client_investigation.go,
+// internal/contracts/v1/validate_mcp_investigation.go (x2) called
+// ValidateStored() unconditionally, which hardcodes the v1 schema_version
+// constant and REJECTS any v2-stamped result outright. Silent while offer
+// minting stays dark (PR2's own flag), but a flip-blocker: the instant a
+// v2 result exists, every one of those three call sites would 500/fail a
+// retrieval that ValidateStoredV2 would have accepted. Any other
+// SchemaVersion value fails closed, matching this package's existing
+// "unrecognized value fails loudly" discipline -- never a silent pass.
+func ValidateStoredResult(r ContextFabricInvestigationResult) error {
+	switch r.SchemaVersion {
+	case ContextFabricInvestigationResultSchemaV2:
+		return r.ValidateStoredV2()
+	case ContextFabricInvestigationResultSchema:
+		return r.ValidateStored()
+	default:
+		return fmt.Errorf("investigation result schema_version %q is not a recognized major", r.SchemaVersion)
+	}
+}
+
 func (r ContextFabricInvestigationResult) validate(bounds contextFabricBounds) error {
 	return r.validateAgainstSchemaVersion(bounds, ContextFabricInvestigationResultSchema)
 }

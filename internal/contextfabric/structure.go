@@ -261,6 +261,15 @@ const (
 	// from "the principal lost visibility" without that distinction ever
 	// reaching a caller.
 	AnchorVerificationUnauthorized AnchorVerificationReason = "anchor_claim_unauthorized"
+	// AnchorVerificationGraphUnverifiable (CHAOS-4042 PR3, sol-max ruling)
+	// mirrors graphrank.AnchorVerificationGraphUnverifiable's own doc
+	// comment: the pinned binding's own graph key could not be read at all
+	// (a retired epoch) or the graph-side read errored -- CANNOT-VERIFY,
+	// deliberately distinct from AnchorVerificationClaimLost (a stale
+	// binding proves nothing about whether the claimant still exists in a
+	// LIVE epoch). Same generic vetoed_unresolved wire disposition as
+	// AnchorVerificationIncompleteEnumeration; internal telemetry only.
+	AnchorVerificationGraphUnverifiable AnchorVerificationReason = "graph_binding_unverifiable"
 )
 
 // AnchorVerifier is canonicalizeStructure's own redemption-time

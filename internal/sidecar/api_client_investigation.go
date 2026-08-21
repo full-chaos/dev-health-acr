@@ -108,7 +108,7 @@ func (c *Client) InvestigationResult(ctx context.Context, resultID string) (cont
 // answers -- and with answer reuse, even the "fresh" POST can return an
 // immutable row that predates a bound correction (codex round-5 R5-1).
 func validateStoredInvestigationResult(result contractsv1.ContextFabricInvestigationResult) error {
-	if err := result.ValidateStored(); err != nil {
+	if err := contractsv1.ValidateStoredResult(result); err != nil {
 		return fmt.Errorf("%w: investigation result: %w", ErrInvalidResponse, err)
 	}
 	return nil
