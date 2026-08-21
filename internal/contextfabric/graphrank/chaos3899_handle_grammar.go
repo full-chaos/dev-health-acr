@@ -155,37 +155,61 @@ type handleGrammarEntry struct {
 // interpretation -- see BindHandles' own doc comment for the residual this
 // leaves).
 //
-//   - pull_request_number: "PR 532", "PR#532", "pr 532" -> pull_request,
-//     Value is the bare digits ("532").
+//   - pull_request_number: "PR 532", "PR#532", "pr 532", "pull request
+//     532", "pull request #532" -> pull_request, Value is the bare digits
+//     ("532"). The spelled-out "pull request" alternative (CHAOS-4012
+//     widening) is grounded in the kind's own name (ContextFabricSubjectPullRequest)
+//     and base table (git_pull_requests, chaos3899_census_registry.go) --
+//     not a guessed synonym -- and keeps the SAME \b(...)\s*#?\s*(\d+)\b
+//     numeric-suffix shape and word-boundary discipline the "PR" form
+//     already used, so it carries no new false-positive risk: "pull
+//     request" is not a substring any ordinary English sentence produces
+//     immediately followed by a bare number the way "PR" alone could.
 //   - work_item_ticket_key: "CHAOS-3896" -> work_item, Value is the WHOLE
 //     matched ticket key ("CHAOS-3896") -- pinned as the exact source-form
 //     equivalent of embed_fields.go's ticketKeyAlias inversion; see
 //     devhealthsource's chaos3899_census_registry.go and its cross-test
-//     against ticketKeyAlias directly.
-//   - ci_run_id: "run 18234567", "CI run #18234567" -> ci_pipeline_run,
-//     Value is the bound digits. Keyword-anchored ("run"/"CI run") AND
-//     digit-shaped: a bare word after "run" (as in "running", "run
-//     break", "run analysis") must NOT bind -- an earlier version of this
-//     pattern accepted any alphanumeric token here and, lacking a word
-//     boundary between the keyword and the token, matched ordinary English
-//     ("who is running the deploy pipeline?" bound the literal substring
-//     "ning" as a handle VALUE, minting a false census predicate and, with
-//     no other keyed discriminator surviving, a structurally false
-//     would_no_match -- exactly the class D0/§1.2/§3 forbid). The fix is
-//     two-part: \b immediately after the "run" keyword (so "running"'s
-//     "run" prefix can never satisfy it -- the very next character is a
-//     word character, not a boundary) and \d{4,} instead of an
-//     alphanumeric class (so "run break"/"run CHAOS-3896"/"run 532" all
-//     fail to bind here -- a ticket key or PR number can never collide
-//     with this pattern, restoring the disjointness the other two entries
-//     already have by construction). This is the minimal, conservative
-//     slice-1 grammar for this kind -- widening it (e.g. to a
-//     provider-specific run-id shape) is a registry addition, not a
-//     redesign.
+//     against ticketKeyAlias directly. CHAOS-4012 investigated widening
+//     this prefix past the literal "CHAOS-" (embed_fields.go's own
+//     ticketKeyAlias doc comment cites "jira:ABC-1" as an equally valid
+//     stored shape, and "the rule never assumes the prefix set") but
+//     DEFERRED it: a real org's own configured ticket-key prefix is
+//     org-specific data this static, compile-time registry has no way to
+//     read, and relaxing the prefix to a generic uppercase-letter class
+//     (e.g. "[A-Z]{2,10}-\d+") would match ordinary capitalized-hyphenated
+//     English no org ever intended as a ticket key (COVID-19, PG-13) --
+//     exactly the false-discriminator class the ci_run_id "running" fix
+//     below exists to prevent. Widening this entry needs org-scoped
+//     registry data, not a broader static regex; left as a follow-up.
+//   - ci_run_id: "run 18234567", "CI run #18234567", "pipeline 18234567",
+//     "CI pipeline #18234567", "pipeline run 18234567" -> ci_pipeline_run,
+//     Value is the bound digits. The "pipeline"/"CI pipeline"/"pipeline
+//     run" alternatives (CHAOS-4012 widening) are grounded in the base
+//     table's own name (ci_pipeline_runs, chaos3899_census_registry.go) --
+//     GitLab's own product terminology for this concept ("pipeline") is a
+//     confirmed live provider on this table (providerQualifiedNamePattern,
+//     chaos3899_source_native_grammar.go, matches gitlab.com repo slugs),
+//     not a guessed synonym. Keyword-anchored AND digit-shaped: a bare
+//     word after any of these keywords (as in "running", "run break",
+//     "run analysis", "pipelining", "pipeline break") must NOT bind -- an
+//     earlier version of the ORIGINAL "run" pattern accepted any
+//     alphanumeric token here and, lacking a word boundary between the
+//     keyword and the token, matched ordinary English ("who is running
+//     the deploy pipeline?" bound the literal substring "ning" as a handle
+//     VALUE, minting a false census predicate and, with no other keyed
+//     discriminator surviving, a structurally false would_no_match --
+//     exactly the class D0/§1.2/§3 forbid). The fix is two-part, extended
+//     to every keyword alternative here: \b immediately after each keyword
+//     (so "running"'s/"pipelining"'s own keyword prefix can never satisfy
+//     it -- the very next character is a word character, not a boundary)
+//     and \d{4,} instead of an alphanumeric class (so "run break"/"run
+//     CHAOS-3896"/"run 532" all fail to bind here -- a ticket key or PR
+//     number can never collide with this pattern, restoring the
+//     disjointness the other two entries already have by construction).
 var handleGrammarRegistry = []handleGrammarEntry{
-	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\bPR\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
+	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\b(?:PR|pull\s+request)\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
 	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS-\d+\b`), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`), sourceColumn: "work_items.work_item_id"},
-	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+run|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`), sourceColumn: "ci_pipeline_runs.run_id"},
+	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+pipeline|CI\s+run|pipeline\s+run|pipeline|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`), sourceColumn: "ci_pipeline_runs.run_id"},
 }
 
 // ValidateHandleGrammar (CHAOS-3900 P1.E) re-validates a STORED handle

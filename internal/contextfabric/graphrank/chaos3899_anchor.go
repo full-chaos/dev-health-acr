@@ -187,3 +187,67 @@ func anchorTermCandidates(claimantsByTerm map[string][]IdentityMatch, complete b
 	}
 	return seen
 }
+
+// anchorAmbiguousTermClaimants is anchorOfferMaterial's own widening scan
+// (CHAOS-4012): the counterpart to anchorTermCandidates' per-term
+// UNIQUE-claimant read, this one surfaces the claimant SET of a term whose
+// own identity-universe read named two or more claimants -- exactly the
+// term anchorTermCandidates (by design, per its own R4 doc comment) drops
+// entirely and BindAnchor can never resolve. That per-term ambiguity is
+// the dominant real-world shape a subject_anchor need discloses (one term,
+// several candidate entities), and until this function existed it had NO
+// path to become an AnchorOption: the offer builder only ever exposed
+// CROSS-term collisions (two different terms each independently unique),
+// never the claimants of one ambiguous term. Never touches BindAnchor's
+// own decisive path or anchorTermCandidates itself -- purely additive
+// offer material, gathered the SAME fail-closed way (complete=false
+// returns nil, mirroring anchorTermCandidates: an incomplete read proves
+// nothing about any term's claimant set, ambiguous or not).
+func anchorAmbiguousTermClaimants(claimantsByTerm map[string][]IdentityMatch, complete bool) map[anchorCandidateKey]anchorCandidateInfo {
+	if !complete {
+		return nil
+	}
+	terms := make([]string, 0, len(claimantsByTerm))
+	for term := range claimantsByTerm {
+		terms = append(terms, term)
+	}
+	sort.Strings(terms)
+	seen := map[anchorCandidateKey]anchorCandidateInfo{}
+	for _, term := range terms {
+		matches := claimantsByTerm[term]
+		if len(matches) < 2 {
+			continue
+		}
+		// Sort this term's own claimants by (kind, canonical_id) before
+		// scanning -- claimantsByTerm's per-term slice order is whatever
+		// order the upstream AliasLookup returned it in, not itself pinned
+		// deterministic, and first-write-wins below must not depend on it
+		// (the SAME determinism reasoning anchorOfferMaterial's own
+		// post-scan sort already applies to its final output). SliceStable,
+		// not Slice: two rows can (defensively) name the identical (kind,
+		// canonical_id) via two different match mechanisms -- plain Slice
+		// gives no guarantee which of two comparator-equal elements ends up
+		// first, so which row's label survives the seen-map's first-write-
+		// wins below would be UNSPECIFIED, not merely "some" deterministic
+		// choice. Stable sort ties that outcome to the input slice's own
+		// (already-fixed) order instead.
+		rows := make([]IdentityRow, 0, len(matches))
+		for _, m := range matches {
+			rows = append(rows, m.Row)
+		}
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].Kind != rows[j].Kind {
+				return rows[i].Kind < rows[j].Kind
+			}
+			return rows[i].CanonicalID < rows[j].CanonicalID
+		})
+		for _, row := range rows {
+			key := anchorCandidateKey{kind: row.Kind, id: row.CanonicalID}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = anchorCandidateInfo{term: term, label: row.Label}
+		}
+	}
+	return seen
+}
