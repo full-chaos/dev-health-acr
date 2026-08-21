@@ -964,9 +964,14 @@ type twoTurnReport struct {
 	// process's own AntiVacuityValid, serialized so a sharded run's merge
 	// step can recompute anti-vacuity over the union of shards), and the
 	// shared trialProvenance struct gained ExecutionShape/ShardIndex/
-	// ShardCount. Bump this again on any future field rename, removal, or
-	// meaning change so a consumer can detect drift instead of silently
-	// reading a stale key under a new meaning.
+	// ShardCount. "7" marks CHAOS-4058's timing observability follow-up:
+	// Timings/TimingSummary are new (per-case/per-arm wall-clock and
+	// file-exchange responder round-trip cost, plus a run-level
+	// aggregate) -- purely additive, carries no measurement semantics, and
+	// backs none of this file's pass/fail checks. Bump this again on any
+	// future field rename, removal, or meaning change so a consumer can
+	// detect drift instead of silently reading a stale key under a new
+	// meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
 	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
@@ -1221,6 +1226,14 @@ type twoTurnReport struct {
 	// produces.
 	ControlsWitnessedNoMatchCensusBacked int                 `json:"controls_witnessed_no_match_census_backed"`
 	Results                              []twoTurnCaseResult `json:"results"`
+	// Timings/TimingSummary (CHAOS-4058, per-arm + per-model-call timing
+	// observability, purely additive -- see twoTurnArmTiming's own doc
+	// comment): per-case wall-clock and file-exchange responder round-trip
+	// cost for turn 1 and each of the four measured arms, plus a
+	// run-level aggregate over every case. Neither field backs any
+	// pass/fail check in this file -- observational only.
+	Timings       []twoTurnCaseTiming       `json:"timings,omitempty"`
+	TimingSummary []twoTurnArmTimingSummary `json:"timing_summary,omitempty"`
 }
 
 // TestTwoTurnCaseResultCarriesNoQuestionText mirrors
@@ -1238,6 +1251,107 @@ func TestTwoTurnCaseResultCarriesNoQuestionText(t *testing.T) {
 			t.Errorf("twoTurnCaseResult.%s: field name suggests free text reaching the outcome-only artifact", typ.Field(i).Name)
 		}
 	}
+}
+
+// --- CHAOS-4058: per-case/per-arm timing observability (purely additive,
+// no measurement semantics -- these types back none of this file's
+// pass/fail checks; see generative_trial_live_test.go's
+// twoTurnTimedModelRuntime/twoTurnModelCallCapture for the underlying
+// capture mechanism) ---
+
+// twoTurnArmTiming is turn 1's or one arm's wall-clock and file-exchange
+// responder round-trip cost for a single case. Arm is "turn1" for the
+// preliminary disclosure call, or one of twoTurnArm's own string values
+// for the four measured arms.
+type twoTurnArmTiming struct {
+	Arm            string `json:"arm"`
+	WallDurationMS int64  `json:"wall_duration_ms"`
+	// ResponderCallCount/ResponderCallTotalMS/ResponderCallMaxMS are zero
+	// whenever the run used the real_api transport -- twoTurnModelCallCapture
+	// is only wired for the file-exchange transport (see
+	// TestChaos3742TwoTurnConfirmationReplay's own setup) -- and zero for
+	// the mutation arm on a case where it never ran (member==window, the
+	// positive arm did not apply, or no redeemable offer was found; see
+	// mutationTiming's own zero-value default at the call site).
+	ResponderCallCount   int   `json:"responder_call_count,omitempty"`
+	ResponderCallTotalMS int64 `json:"responder_call_total_ms,omitempty"`
+	ResponderCallMaxMS   int64 `json:"responder_call_max_ms,omitempty"`
+}
+
+// buildTwoTurnArmTiming reads elapsed wall time since started plus
+// capture's accumulated model-call samples (reset by the caller
+// immediately before the timed call, per twoTurnModelCallCapture's own
+// reset-before/read-after discipline) into one twoTurnArmTiming record.
+func buildTwoTurnArmTiming(arm string, started time.Time, capture *twoTurnModelCallCapture) twoTurnArmTiming {
+	timing := twoTurnArmTiming{Arm: arm, WallDurationMS: time.Since(started).Milliseconds()}
+	if capture != nil {
+		count, total, max := capture.stats()
+		timing.ResponderCallCount = count
+		timing.ResponderCallTotalMS = total.Milliseconds()
+		timing.ResponderCallMaxMS = max.Milliseconds()
+	}
+	return timing
+}
+
+// twoTurnCaseTiming is one case's full set of turn-1-plus-arm timings.
+type twoTurnCaseTiming struct {
+	Index  int                `json:"index"`
+	Member string             `json:"member"`
+	Arms   []twoTurnArmTiming `json:"arms"`
+}
+
+// twoTurnArmTimingSummary is one arm's (or turn 1's) run-level timing
+// aggregate over every case that recorded it.
+type twoTurnArmTimingSummary struct {
+	Arm                  string  `json:"arm"`
+	SampleCount          int     `json:"sample_count"`
+	WallMeanMS           float64 `json:"wall_mean_ms"`
+	WallP50MS            int64   `json:"wall_p50_ms"`
+	WallMaxMS            int64   `json:"wall_max_ms"`
+	ResponderCallCount   int     `json:"responder_call_count"`
+	ResponderCallTotalMS int64   `json:"responder_call_total_ms"`
+}
+
+// summarizeTwoTurnTiming reduces per-case timings into one aggregate per
+// arm, preserving first-seen arm order (turn1, then whichever order each
+// arm first appears in the run) so the summary reads in the same sequence
+// the per-case loop itself executes.
+func summarizeTwoTurnTiming(timings []twoTurnCaseTiming) []twoTurnArmTimingSummary {
+	order := make([]string, 0, 5)
+	byArm := map[string][]twoTurnArmTiming{}
+	for _, ct := range timings {
+		for _, at := range ct.Arms {
+			if _, seen := byArm[at.Arm]; !seen {
+				order = append(order, at.Arm)
+			}
+			byArm[at.Arm] = append(byArm[at.Arm], at)
+		}
+	}
+	summaries := make([]twoTurnArmTimingSummary, 0, len(order))
+	for _, arm := range order {
+		samples := byArm[arm]
+		wall := make([]int64, len(samples))
+		var totalWall, maxWall int64
+		var callCount int
+		var callTotal int64
+		for i, s := range samples {
+			wall[i] = s.WallDurationMS
+			totalWall += s.WallDurationMS
+			if s.WallDurationMS > maxWall {
+				maxWall = s.WallDurationMS
+			}
+			callCount += s.ResponderCallCount
+			callTotal += s.ResponderCallTotalMS
+		}
+		sort.Slice(wall, func(i, j int) bool { return wall[i] < wall[j] })
+		summaries = append(summaries, twoTurnArmTimingSummary{
+			Arm: arm, SampleCount: len(samples),
+			WallMeanMS: float64(totalWall) / float64(len(samples)),
+			WallP50MS:  wall[len(wall)/2], WallMaxMS: maxWall,
+			ResponderCallCount: callCount, ResponderCallTotalMS: callTotal,
+		})
+	}
+	return summaries
 }
 
 // --- pure-logic tests: no live infra, run unconditionally under `make verify` ---
@@ -2854,6 +2968,16 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	traceCapture := &twoTurnTraceCapture{}
 	options := hosted.Options{ServiceVersion: "chaos-3742-two-turn", Logger: logger, Now: time.Now, ResolutionTracer: traceCapture}
 	caseTimeout := 240 * time.Second
+	// modelCallCapture (CHAOS-4058, observability only) records each
+	// InterpretQuestion/SynthesizeAnswer round-trip's wall-clock duration at
+	// the harness's own wait-for-response site -- see
+	// twoTurnTimedModelRuntime's own doc comment (generative_trial_live_test.go).
+	// Wired into options.ModelRuntimeOverride only for the file-exchange
+	// transport below; a real_api run leaves it empty (no samples ever
+	// recorded), so every twoTurnArmTiming.ResponderCall* field reads zero
+	// for that transport -- documented on that type, never silently
+	// misread as "zero calls made".
+	modelCallCapture := &twoTurnModelCallCapture{}
 	if exchangeDir != "" {
 		timeout := 10 * time.Minute
 		if raw := os.Getenv("ACR_TEST_TRIAL_EXCHANGE_TIMEOUT"); raw != "" {
@@ -2867,7 +2991,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if ferr != nil {
 			t.Fatalf("create file-exchange runtime: %v", ferr)
 		}
-		options.ModelRuntimeOverride = exchangeRuntime
+		options.ModelRuntimeOverride = &twoTurnTimedModelRuntime{underlying: exchangeRuntime, capture: modelCallCapture}
 		caseTimeout = 2*timeout + 30*time.Second
 		t.Logf("using the FILE-EXCHANGE diagnostic transport at %s (case budget %s, session %s)", exchangeDir, caseTimeout, exchangeRuntime.nonce)
 	}
@@ -2936,7 +3060,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "6",
+		ReportSchemaVersion: "7",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -3136,9 +3260,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if traceCapture != nil {
 			traceCapture.reset()
 		}
+		modelCallCapture.reset()
+		turn1Started := time.Now()
 		turn1Ctx, turn1Cancel := context.WithTimeout(ctx, caseTimeout)
 		turn1, err := investigator.Investigate(turn1Ctx, principal, turn1Req)
 		turn1Cancel()
+		turn1Timing := buildTwoTurnArmTiming("turn1", turn1Started, modelCallCapture)
 		if err != nil {
 			t.Logf("case %d: turn 1 error: %v", entry.Index, err)
 			continue
@@ -3196,7 +3323,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			continue
 		}
 
+		modelCallCapture.reset()
+		positiveStarted := time.Now()
 		positive := runTwoTurnPositiveArm(ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout)
+		positiveTiming := buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
 		if positive.OfferMiss {
 			report.OfferMissCount[entry.Member]++
 		}
@@ -3235,7 +3365,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		report.Results = append(report.Results, positive)
 
+		modelCallCapture.reset()
+		inferredStarted := time.Now()
 		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
+		inferredTiming := buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
 		if inferred.PairInvalid {
 			report.InferredPairInvalidCount++
 		}
@@ -3287,7 +3420,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		report.Results = append(report.Results, inferred)
 
+		modelCallCapture.reset()
+		confirmedWrongStarted := time.Now()
 		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken)
+		confirmedWrongTiming := buildTwoTurnArmTiming(string(twoTurnArmConfirmedWrong), confirmedWrongStarted, modelCallCapture)
 		if confirmedWrong.ArmInvalidReason == "" && confirmedWrong.Applied && entry.NegativeCommittable {
 			report.ConfirmedWrongRedeemedCount[entry.Member]++
 		}
@@ -3308,10 +3444,21 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// Running probe (iii) against window could never trip by
 		// construction, which would misreport as a probe DEFECT rather
 		// than the structural exemption it actually is.
+		// mutationTiming (CHAOS-4058) defaults to a zero-duration/zero-call
+		// record naming the arm -- overwritten below only when the mutation
+		// arm actually runs (positive.Applied, non-window member, and a
+		// redeemable offer found), so a case where it structurally never
+		// ran still reports "mutation" with an honest zero rather than
+		// omitting the arm from Timings entirely.
+		mutationTiming := twoTurnArmTiming{Arm: string(twoTurnArmMutation)}
 		if positive.Applied && entry.Member != string(contractsv1.ContextFabricStructureNeedWindow) {
 			receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 			if found {
-				for _, mutationResult := range runTwoTurnMutationArm(ctx, investigator, principal, entry.Index, tc, entry, turn1.ResultID, receiptID, caseTimeout) {
+				modelCallCapture.reset()
+				mutationStarted := time.Now()
+				mutationResults := runTwoTurnMutationArm(ctx, investigator, principal, entry.Index, tc, entry, turn1.ResultID, receiptID, caseTimeout)
+				mutationTiming = buildTwoTurnArmTiming(string(twoTurnArmMutation), mutationStarted, modelCallCapture)
+				for _, mutationResult := range mutationResults {
 					report.MutationProbesRun[mutationResult.MutationProbe]++
 					if mutationResult.MutationTripped {
 						report.MutationProbesTripped[mutationResult.MutationProbe]++
@@ -3321,10 +3468,20 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			}
 		}
 
-		t.Logf("case %d member=%s: positive(applied=%v miss=%v) inferred(commit=%d class=%q pair_invalid=%v false_no_match=%v invalid=%q) confirmed_wrong(applied=%v wrong=%v invalid=%q)",
+		report.Timings = append(report.Timings, twoTurnCaseTiming{
+			Index: entry.Index, Member: entry.Member,
+			Arms: []twoTurnArmTiming{turn1Timing, positiveTiming, inferredTiming, confirmedWrongTiming, mutationTiming},
+		})
+
+		t.Logf("case %d member=%s: positive(applied=%v miss=%v) inferred(commit=%d class=%q pair_invalid=%v false_no_match=%v invalid=%q) confirmed_wrong(applied=%v wrong=%v invalid=%q) timing(turn1=%dms positive=%dms/%dcalls/%dms_max inferred=%dms/%dcalls/%dms_max confirmed_wrong=%dms/%dcalls/%dms_max mutation=%dms/%dcalls/%dms_max)",
 			entry.Index, entry.Member, positive.Applied, positive.OfferMiss,
 			inferred.CommittedCount, inferred.InferredClassification, inferred.PairInvalid, inferred.FalseNoMatch, inferred.ArmInvalidReason,
-			confirmedWrong.Applied, confirmedWrong.WrongCommit, confirmedWrong.ArmInvalidReason)
+			confirmedWrong.Applied, confirmedWrong.WrongCommit, confirmedWrong.ArmInvalidReason,
+			turn1Timing.WallDurationMS,
+			positiveTiming.WallDurationMS, positiveTiming.ResponderCallCount, positiveTiming.ResponderCallMaxMS,
+			inferredTiming.WallDurationMS, inferredTiming.ResponderCallCount, inferredTiming.ResponderCallMaxMS,
+			confirmedWrongTiming.WallDurationMS, confirmedWrongTiming.ResponderCallCount, confirmedWrongTiming.ResponderCallMaxMS,
+			mutationTiming.WallDurationMS, mutationTiming.ResponderCallCount, mutationTiming.ResponderCallMaxMS)
 	}
 	// Per-member anti-vacuity (codex round-1 finding #4): valid only once
 	// EVERY member with a designated committable negative has redeemed at
@@ -3343,6 +3500,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	report.ControlsTotal = len(controlSeen)
 	report.ControlsWitnessed = len(controlOK)
 	report.ControlsWitnessedNoMatchCensusBacked = len(controlNoMatchCensusBacked)
+
+	// CHAOS-4058: run-level timing aggregate, observational only -- see
+	// twoTurnArmTimingSummary's own doc comment.
+	report.TimingSummary = summarizeTwoTurnTiming(report.Timings)
 
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {

@@ -1315,6 +1315,84 @@ func committedMatchesTrial(committed []contractsv1.ContextFabricSubjectRef, tc t
 	return string(committed[0].Kind) == tc.ExpectKind && committed[0].CanonicalID == tc.ExpectID
 }
 
+// --- CHAOS-4058: harness-side model round-trip timing (observability
+// only -- shared plumbing, consumed by chaos3742_two_turn_confirmation_test.go).
+// Motivation (chris, 2026-08-21): trial cases cost ~3.5-4 min each and the
+// quorum/measurement loop is permanent, so before optimizing (CHAOS-4033
+// shard parallelism, CHAOS-4055 kiac shard stacks, the responder protocol
+// itself) this harness needs to SEE where the time goes. Codex process
+// startup is believed negligible (an auth-only base config); this
+// instrumentation exists to confirm the cost is model round-trips, not
+// prove or disprove it by construction -- it changes nothing about what
+// is measured or how an outcome is classified.
+
+// twoTurnModelCallSample is one InterpretQuestion/SynthesizeAnswer round
+// trip's wall-clock duration, captured at the harness's own wait-for-
+// response boundary (fileExchangeRuntime.exchange's request-write-then-
+// poll loop, file_exchange_runtime_test.go). Observational only -- never
+// read by any pass/fail check in this package.
+type twoTurnModelCallSample struct {
+	Operation string
+	Duration  time.Duration
+}
+
+// twoTurnModelCallCapture is an in-process spy in front of a
+// contextfabric.ModelRuntime, mirroring twoTurnTraceCapture's own
+// reset-before/read-after single-caller discipline
+// (chaos3742_two_turn_confirmation_test.go): the harness never issues
+// concurrent model calls, so a caller resets this capture immediately
+// before the Investigate() call it wants to attribute latency to, then
+// reads stats() immediately after.
+type twoTurnModelCallCapture struct {
+	samples []twoTurnModelCallSample
+}
+
+func (c *twoTurnModelCallCapture) reset() {
+	c.samples = nil
+}
+
+// stats reduces the captured samples to the (count, total, max) triple
+// CHAOS-4058 asks the artifact to carry per (case, arm).
+func (c *twoTurnModelCallCapture) stats() (count int, total, max time.Duration) {
+	for _, s := range c.samples {
+		count++
+		total += s.Duration
+		if s.Duration > max {
+			max = s.Duration
+		}
+	}
+	return count, total, max
+}
+
+// twoTurnTimedModelRuntime wraps a contextfabric.ModelRuntime (real or
+// file-exchange) and times each InterpretQuestion/SynthesizeAnswer call at
+// the harness's own wait-for-response site, recording it into capture --
+// purely observational, it never alters the wrapped runtime's inputs,
+// outputs, or errors. The file-exchange envelope (file_exchange_runtime_test.go's
+// own ENVELOPE CONTRACT) carries no separate responder-process-start
+// timestamp a responder could echo back, so this wall-clock duration is
+// the finest-grained "time spent waiting on the model" split available
+// without a responder protocol change -- out of this ticket's scope, the
+// responder script itself is never modified.
+type twoTurnTimedModelRuntime struct {
+	underlying contextfabric.ModelRuntime
+	capture    *twoTurnModelCallCapture
+}
+
+func (w *twoTurnTimedModelRuntime) InterpretQuestion(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	started := time.Now()
+	result, receipt, err := w.underlying.InterpretQuestion(ctx, principal, request)
+	w.capture.samples = append(w.capture.samples, twoTurnModelCallSample{Operation: "interpret", Duration: time.Since(started)})
+	return result, receipt, err
+}
+
+func (w *twoTurnTimedModelRuntime) SynthesizeAnswer(ctx context.Context, principal storage.Principal, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
+	started := time.Now()
+	draft, receipt, err := w.underlying.SynthesizeAnswer(ctx, principal, input)
+	w.capture.samples = append(w.capture.samples, twoTurnModelCallSample{Operation: "synthesize", Duration: time.Since(started)})
+	return draft, receipt, err
+}
+
 // trialProvenance binds a report to exactly what produced it (sol review
 // F2, the CalibrationArtifact discipline): a corpus content hash, the
 // model configuration, which transport ran it, the source commit, and
