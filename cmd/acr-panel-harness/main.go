@@ -18,6 +18,22 @@
 // command (cmd/acr-api/credentials.go) and pass the resulting token via the
 // panelist config file's bearer_token_env, never by inventing a second
 // credential-minting path here.
+//
+// CHAOS-4034: when the process environment carries BOTH
+// internal/sidecar.SubjectTokenFileEnvironment (ACR_SUBJECT_TOKEN_FILE) and
+// internal/sidecar.TokenEndpointEnvironment (ACR_TOKEN_ENDPOINT), every
+// panelist instead authenticates via RFC 8693 workload token exchange
+// (CHAOS-4013, internal/sidecar.NewWorkloadCredentialSource) against the
+// k8s-projected ServiceAccount at that path, and bearer_token_env is not
+// required. Unset (the default), every panelist keeps using its own
+// bearer_token_env -- the static path this binary has always used for
+// compose/local. This is a process-wide switch, not a per-panelist one: a
+// real deployment provisions exactly one consumer ServiceAccount identity
+// for this harness (deploy/helm/acr's workloadTokenExchange.consumerServiceAccounts
+// "panel-read" entry), so every panelist configured this way shares that
+// one exchanged token -- Run's own duplicate-credential guard will
+// correctly refuse a workload-mode config naming more than one panelist
+// until per-panelist SA projection exists.
 package main
 
 import (
@@ -26,6 +42,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -35,6 +52,7 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/panelharness"
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
 // panelistConfig is one entry of the JSON array the --panelists flag names
@@ -47,7 +65,10 @@ type panelistConfig struct {
 	// panelist's own bearer credential -- the token itself is never
 	// accepted as a literal in the config file, so a panelist config
 	// committed to a repo or pasted into a report never carries a live
-	// credential.
+	// credential. Required only on the static-token path (the default);
+	// ignored when the process is running in workload-token-exchange mode
+	// (see this package's own doc comment) since that credential comes from
+	// the projected ServiceAccount, not a per-panelist environment variable.
 	BearerTokenEnv string `json:"bearer_token_env"`
 	// FileExchangeDir, when set, drives this panelist through
 	// internal/panelharness.FileExchangeSelector (a CLI/out-of-process
@@ -90,9 +111,16 @@ func run(arguments []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return err
 	}
+	// CHAOS-4034: resolved ONCE, up front, for the whole process -- see
+	// this package's own doc comment for why this is a process-wide switch
+	// rather than a per-panelist config field.
+	workloadCredentialSource, err := workloadCredentialSourceFromEnvironment()
+	if err != nil {
+		return err
+	}
 	panelists := make([]panelharness.Panelist, 0, len(configs))
 	for _, config := range configs {
-		panelist, err := buildPanelist(config, *apiBaseURL, *callTimeout, *fileExchangeTimeout)
+		panelist, err := buildPanelist(config, *apiBaseURL, *callTimeout, *fileExchangeTimeout, workloadCredentialSource)
 		if err != nil {
 			return fmt.Errorf("panelist %s: %w", config.CanonicalModelIdentity, err)
 		}
@@ -216,20 +244,58 @@ func detectAliasedFileExchangeDirs(configs []panelistConfig) error {
 	return nil
 }
 
-func buildPanelist(config panelistConfig, apiBaseURL string, callTimeout, fileExchangeTimeout time.Duration) (panelharness.Panelist, error) {
+// workloadCredentialSourceFromEnvironment builds the shared RFC 8693
+// workload-token-exchange CredentialSource (CHAOS-4013,
+// internal/sidecar.NewWorkloadCredentialSource) when the process
+// environment carries BOTH ACR_SUBJECT_TOKEN_FILE and ACR_TOKEN_ENDPOINT,
+// and reports nil (no error) when neither is set -- the static
+// bearer_token_env path stays this binary's default. Exactly one of the
+// pair being set is a misconfiguration (an operator who set one but not
+// the other almost certainly meant to enable workload mode) and fails
+// closed rather than silently falling back to the static path.
+func workloadCredentialSourceFromEnvironment() (panelharness.CredentialSource, error) {
+	subjectTokenFile := strings.TrimSpace(os.Getenv(sidecar.SubjectTokenFileEnvironment))
+	rawTokenEndpoint := strings.TrimSpace(os.Getenv(sidecar.TokenEndpointEnvironment))
+	if subjectTokenFile == "" && rawTokenEndpoint == "" {
+		return nil, nil
+	}
+	if subjectTokenFile == "" || rawTokenEndpoint == "" {
+		return nil, fmt.Errorf("%s and %s must both be set to enable workload token exchange (only one is)", sidecar.SubjectTokenFileEnvironment, sidecar.TokenEndpointEnvironment)
+	}
+	tokenEndpoint, err := url.Parse(rawTokenEndpoint)
+	if err != nil || tokenEndpoint.Host == "" {
+		return nil, fmt.Errorf("%s is not a valid absolute URL", sidecar.TokenEndpointEnvironment)
+	}
+	return sidecar.NewWorkloadCredentialSource(sidecar.WorkloadCredentialSourceOptions{
+		TokenEndpoint:    tokenEndpoint,
+		SubjectTokenFile: subjectTokenFile,
+	})
+}
+
+func buildPanelist(config panelistConfig, apiBaseURL string, callTimeout, fileExchangeTimeout time.Duration, workloadCredentialSource panelharness.CredentialSource) (panelharness.Panelist, error) {
 	if strings.TrimSpace(config.CanonicalModelIdentity) == "" {
 		return panelharness.Panelist{}, errors.New("canonical_model_identity is required")
 	}
-	if strings.TrimSpace(config.BearerTokenEnv) == "" {
-		return panelharness.Panelist{}, errors.New("bearer_token_env is required")
-	}
-	token := os.Getenv(config.BearerTokenEnv)
-	if strings.TrimSpace(token) == "" {
-		return panelharness.Panelist{}, fmt.Errorf("environment variable %s is unset or empty", config.BearerTokenEnv)
-	}
-	client, err := panelharness.NewClient(apiBaseURL, token, callTimeout)
-	if err != nil {
-		return panelharness.Panelist{}, err
+	var client *panelharness.Client
+	if workloadCredentialSource != nil {
+		var err error
+		client, err = panelharness.NewClientWithCredentialSource(apiBaseURL, workloadCredentialSource, callTimeout)
+		if err != nil {
+			return panelharness.Panelist{}, err
+		}
+	} else {
+		if strings.TrimSpace(config.BearerTokenEnv) == "" {
+			return panelharness.Panelist{}, errors.New("bearer_token_env is required")
+		}
+		token := os.Getenv(config.BearerTokenEnv)
+		if strings.TrimSpace(token) == "" {
+			return panelharness.Panelist{}, fmt.Errorf("environment variable %s is unset or empty", config.BearerTokenEnv)
+		}
+		var err error
+		client, err = panelharness.NewClient(apiBaseURL, token, callTimeout)
+		if err != nil {
+			return panelharness.Panelist{}, err
+		}
 	}
 	if strings.TrimSpace(config.FileExchangeDir) == "" {
 		return panelharness.Panelist{}, errors.New("file_exchange_dir is required (the only implemented Selector transport in this version)")

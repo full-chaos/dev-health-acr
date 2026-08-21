@@ -2,9 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
 // testValidBearerToken is a shape-valid (auth.IsTokenShapeValid), but
@@ -110,7 +115,7 @@ func TestDetectAliasedFileExchangeDirs_RejectsSymlinkAlias(t *testing.T) {
 		{CanonicalModelIdentity: "anthropic/luna", BearerTokenEnv: tokenEnvB, FileExchangeDir: alias},
 	}
 	for _, config := range configs {
-		if _, err := buildPanelist(config, "https://acr.example.com", 0, 0); err != nil {
+		if _, err := buildPanelist(config, "https://acr.example.com", 0, 0, nil); err != nil {
 			t.Fatalf("buildPanelist(%s): %v", config.CanonicalModelIdentity, err)
 		}
 	}
@@ -123,7 +128,7 @@ func TestDetectAliasedFileExchangeDirs_RejectsSymlinkAlias(t *testing.T) {
 func TestBuildPanelist_RequiresBearerTokenEnvironmentVariableToBeSet(t *testing.T) {
 	config := panelistConfig{CanonicalModelIdentity: "anthropic/sol-max", BearerTokenEnv: "ACR_PANEL_HARNESS_TEST_UNSET_TOKEN", FileExchangeDir: t.TempDir()}
 	os.Unsetenv(config.BearerTokenEnv)
-	if _, err := buildPanelist(config, "https://acr.example.com", 0, 0); err == nil {
+	if _, err := buildPanelist(config, "https://acr.example.com", 0, 0, nil); err == nil {
 		t.Error("expected an error when the named environment variable is unset")
 	}
 }
@@ -132,7 +137,7 @@ func TestBuildPanelist_RequiresFileExchangeDir(t *testing.T) {
 	const tokenEnv = "ACR_PANEL_HARNESS_TEST_TOKEN"
 	t.Setenv(tokenEnv, testValidBearerToken)
 	config := panelistConfig{CanonicalModelIdentity: "anthropic/sol-max", BearerTokenEnv: tokenEnv}
-	if _, err := buildPanelist(config, "https://acr.example.com", 0, 0); err == nil {
+	if _, err := buildPanelist(config, "https://acr.example.com", 0, 0, nil); err == nil {
 		t.Error("expected an error when file_exchange_dir is empty (the only implemented selector transport)")
 	}
 }
@@ -141,11 +146,95 @@ func TestBuildPanelist_BuildsAWorkingPanelist(t *testing.T) {
 	const tokenEnv = "ACR_PANEL_HARNESS_TEST_TOKEN_2"
 	t.Setenv(tokenEnv, testValidBearerToken)
 	config := panelistConfig{CanonicalModelIdentity: "anthropic/sol-max", BearerTokenEnv: tokenEnv, FileExchangeDir: t.TempDir()}
-	panelist, err := buildPanelist(config, "https://acr.example.com", 0, 0)
+	panelist, err := buildPanelist(config, "https://acr.example.com", 0, 0, nil)
 	if err != nil {
 		t.Fatalf("buildPanelist: %v", err)
 	}
 	if panelist.CanonicalModelIdentity != "anthropic/sol-max" || panelist.Client == nil || panelist.Selector == nil {
 		t.Errorf("panelist = %+v, want a fully populated Panelist", panelist)
+	}
+}
+
+// TestWorkloadCredentialSourceFromEnvironment_DefaultsToNil is CHAOS-4034's
+// own proof that the static bearer_token_env path stays this binary's
+// default: with neither ACR_SUBJECT_TOKEN_FILE nor ACR_TOKEN_ENDPOINT set,
+// no workload credential source is built and no error is returned.
+func TestWorkloadCredentialSourceFromEnvironment_DefaultsToNil(t *testing.T) {
+	source, err := workloadCredentialSourceFromEnvironment()
+	if err != nil {
+		t.Fatalf("workloadCredentialSourceFromEnvironment: %v", err)
+	}
+	if source != nil {
+		t.Error("expected a nil CredentialSource when neither env var is set")
+	}
+}
+
+// TestWorkloadCredentialSourceFromEnvironment_RejectsOnlyOneSet guards the
+// half-configured case: an operator who set only one of the pair almost
+// certainly meant to enable workload mode, so this fails closed rather
+// than silently keeping the static path.
+func TestWorkloadCredentialSourceFromEnvironment_RejectsOnlyOneSet(t *testing.T) {
+	t.Setenv(sidecar.SubjectTokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	if _, err := workloadCredentialSourceFromEnvironment(); err == nil {
+		t.Error("expected an error when only ACR_SUBJECT_TOKEN_FILE is set")
+	}
+}
+
+// TestWorkloadCredentialSourceFromEnvironment_BuildsSourceWhenBothSet
+// proves the env pair actually wires internal/sidecar.NewWorkloadCredentialSource
+// (CHAOS-4013) rather than something ad hoc.
+func TestWorkloadCredentialSourceFromEnvironment_BuildsSourceWhenBothSet(t *testing.T) {
+	subjectTokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(subjectTokenFile, []byte("k8s-projected-sa-jwt"), 0o600); err != nil {
+		t.Fatalf("write subject token file: %v", err)
+	}
+	t.Setenv(sidecar.SubjectTokenFileEnvironment, subjectTokenFile)
+	t.Setenv(sidecar.TokenEndpointEnvironment, "https://acr.example.com/api/v1/oauth/token")
+	source, err := workloadCredentialSourceFromEnvironment()
+	if err != nil {
+		t.Fatalf("workloadCredentialSourceFromEnvironment: %v", err)
+	}
+	if source == nil {
+		t.Error("expected a non-nil CredentialSource when both env vars are set")
+	}
+}
+
+// TestBuildPanelist_UsesWorkloadCredentialSourceWhenProvided proves
+// buildPanelist actually authenticates through a supplied workload
+// CredentialSource end to end (against a local httptest token-exchange
+// fixture -- a non-live seam, never a real panel/trial run) rather than
+// requiring bearer_token_env when one is supplied.
+func TestBuildPanelist_UsesWorkloadCredentialSourceWhenProvided(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"` + testValidBearerToken + `","expires_in":3600}`))
+	}))
+	defer tokenServer.Close()
+
+	subjectTokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(subjectTokenFile, []byte("k8s-projected-sa-jwt"), 0o600); err != nil {
+		t.Fatalf("write subject token file: %v", err)
+	}
+	tokenEndpoint, err := url.Parse(tokenServer.URL)
+	if err != nil {
+		t.Fatalf("parse token server URL: %v", err)
+	}
+	workloadSource, err := sidecar.NewWorkloadCredentialSource(sidecar.WorkloadCredentialSourceOptions{
+		TokenEndpoint: tokenEndpoint, SubjectTokenFile: subjectTokenFile,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkloadCredentialSource: %v", err)
+	}
+
+	config := panelistConfig{CanonicalModelIdentity: "anthropic/sol-max", FileExchangeDir: t.TempDir()}
+	panelist, err := buildPanelist(config, "https://acr.example.com", 0, 0, workloadSource)
+	if err != nil {
+		t.Fatalf("buildPanelist: %v", err)
+	}
+	if panelist.Client == nil {
+		t.Fatal("expected a Client to be built from the workload credential source")
+	}
+	if panelist.Client.TokenFingerprint() == "" {
+		t.Error("expected a non-empty TokenFingerprint once the workload source resolved a token")
 	}
 }

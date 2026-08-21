@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
 // investigationsPath mirrors internal/sidecar's own fixed-path constant
@@ -73,15 +74,41 @@ const maxResponseBytes = 8 << 20 // 8 MiB
 // credential -- construct one per panelist, mirroring
 // internal/sidecar.Client's own per-credential-source design.
 type Client struct {
-	http        *http.Client
-	baseURL     *url.URL
-	bearerToken string
-	// tokenFingerprint is a SHA-256 hex digest of bearerToken, computed
-	// once here -- NEVER the token itself -- so a caller (Run's own
-	// duplicate-credential check, codex round 1 HIGH) can detect two
+	http             *http.Client
+	baseURL          *url.URL
+	credentialSource CredentialSource
+	// tokenFingerprint is a SHA-256 hex digest of the credential resolved
+	// at construction time -- NEVER the token itself -- so a caller (Run's
+	// own duplicate-credential check, codex round 1 HIGH) can detect two
 	// panelists sharing the same underlying credential without needing
-	// raw access to it.
+	// raw access to it. It reflects the ONE resolution performed in
+	// NewClientWithCredentialSource; a workload source's later re-exchanges
+	// (see internal/sidecar.NewWorkloadCredentialSource) do not change it,
+	// which is fine -- the duplicate check only ever runs once, up front,
+	// before any panelist makes a call (see run.go's own doc comment).
 	tokenFingerprint string
+}
+
+// CredentialSource resolves the bearer credential for one Investigate
+// call. It is an alias for internal/sidecar's own CredentialSource (CHAOS-
+// 4034: this package consumes that abstraction directly rather than
+// inventing a second one) -- a static token (StaticCredentialSource,
+// below) and internal/sidecar.NewWorkloadCredentialSource's RFC 8693
+// workload token exchange are both valid implementations. It is invoked
+// once per Investigate call, exactly like internal/sidecar.Client's own
+// callWithHeaders, so a workload source's periodic re-exchange is always
+// honored rather than a token being cached for this Client's lifetime.
+type CredentialSource = sidecar.CredentialSource
+
+// StaticCredentialSource returns a CredentialSource that always resolves
+// to the same fixed bearer token -- the "static-token path stays the
+// default for compose/local" (CHAOS-4034) that NewClient still builds
+// when no workload token exchange is configured.
+func StaticCredentialSource(bearerToken string) CredentialSource {
+	trimmed := strings.TrimSpace(bearerToken)
+	return func() (sidecar.CredentialResult, error) {
+		return sidecar.CredentialResult{Token: trimmed, Source: "static"}, nil
+	}
 }
 
 // TokenFingerprint returns a SHA-256 hex digest of this Client's own
@@ -93,12 +120,11 @@ func (c *Client) TokenFingerprint() string {
 }
 
 // NewClient builds a Client against baseURL, authenticating every call with
-// bearerToken. baseURL must be an absolute http(s) URL; https is required
-// unless the host is a loopback address (127.0.0.1/localhost/::1), matching
-// internal/sidecar's own local-development carve-out
-// (internal/sidecar/api_client.go's isLoopbackHost check) -- this harness is
-// meant to run against a real deployment's hosted API, and a real
-// deployment is never plain HTTP over a non-loopback host.
+// the fixed bearerToken via StaticCredentialSource -- the "static-token
+// path stays the default for compose/local" (CHAOS-4034). A caller that
+// instead wants RFC 8693 workload token exchange (CHAOS-4013) builds a
+// CredentialSource with internal/sidecar.NewWorkloadCredentialSource and
+// calls NewClientWithCredentialSource directly.
 func NewClient(baseURL, bearerToken string, timeout time.Duration) (*Client, error) {
 	trimmedToken := strings.TrimSpace(bearerToken)
 	if trimmedToken == "" {
@@ -117,6 +143,33 @@ func NewClient(baseURL, bearerToken string, timeout time.Duration) (*Client, err
 	if !auth.IsTokenShapeValid(trimmedToken) {
 		return nil, errors.New("panelharness: bearer token does not have the expected ACR credential shape (mint one with `acr-api credentials create`, never a license key or unrelated secret)")
 	}
+	return NewClientWithCredentialSource(baseURL, StaticCredentialSource(trimmedToken), timeout)
+}
+
+// NewClientWithCredentialSource builds a Client against baseURL,
+// authenticating every Investigate call by invoking credentialSource fresh
+// each time (CHAOS-4034: this is what lets a workload token exchange
+// source -- internal/sidecar.NewWorkloadCredentialSource -- re-exchange
+// and hand back a rotated token mid-run, exactly like
+// internal/sidecar.Client's own callWithHeaders does for its own callers).
+// baseURL must be an absolute http(s) URL; https is required unless the
+// host is a loopback address (127.0.0.1/localhost/::1), matching
+// internal/sidecar's own local-development carve-out
+// (internal/sidecar/api_client.go's isLoopbackHost check) -- this harness is
+// meant to run against a real deployment's hosted API, and a real
+// deployment is never plain HTTP over a non-loopback host.
+//
+// credentialSource is resolved once, here, before the Client is returned --
+// both to fail fast on a broken credential (a bad subject-token-file path,
+// an unreachable token endpoint, a malformed static token) at construction
+// rather than on the first Investigate call, and to compute
+// TokenFingerprint from an actually-resolved token so Run's own
+// duplicate-credential guard has something to compare before any panelist
+// makes a network call.
+func NewClientWithCredentialSource(baseURL string, credentialSource CredentialSource, timeout time.Duration) (*Client, error) {
+	if credentialSource == nil {
+		return nil, errors.New("panelharness: credential source is required")
+	}
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("panelharness: invalid base URL %q", baseURL)
@@ -133,6 +186,13 @@ func NewClient(baseURL, bearerToken string, timeout time.Duration) (*Client, err
 	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
 		return nil, fmt.Errorf("panelharness: base URL %q must be a bare origin (no path, query, fragment, or userinfo)", baseURL)
 	}
+	result, err := credentialSource()
+	if err != nil {
+		return nil, fmt.Errorf("panelharness: resolve credential: %w", err)
+	}
+	if !auth.IsTokenShapeValid(result.Token) {
+		return nil, errors.New("panelharness: credential does not have the expected ACR credential shape (mint one with `acr-api credentials create`, never a license key or unrelated secret)")
+	}
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
@@ -148,8 +208,8 @@ func NewClient(baseURL, bearerToken string, timeout time.Duration) (*Client, err
 			Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
 		},
 		baseURL:          parsed,
-		bearerToken:      trimmedToken,
-		tokenFingerprint: tokenFingerprint(trimmedToken),
+		credentialSource: credentialSource,
+		tokenFingerprint: tokenFingerprint(result.Token),
 	}, nil
 }
 
@@ -190,6 +250,21 @@ func (c *Client) Investigate(ctx context.Context, requestID string, request cont
 		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: encode investigation request: %w", err)
 	}
 
+	// Resolved fresh on every call (never cached on Client) so a workload
+	// token exchange source (internal/sidecar.NewWorkloadCredentialSource)
+	// re-exchanges once its cached token nears expiry, exactly mirroring
+	// internal/sidecar.Client's own callWithHeaders. The shape check is the
+	// SAME last-mile guard that transport applies: no matter which
+	// CredentialSource produced this value, a bearer token is never sent
+	// unless it matches the ACR API token shape.
+	credential, err := c.credentialSource()
+	if err != nil {
+		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: resolve credential: %w", err)
+	}
+	if !auth.IsTokenShapeValid(credential.Token) {
+		return contractsv1.ContextFabricInvestigationResult{}, errors.New("panelharness: credential does not have the expected ACR credential shape (mint one with `acr-api credentials create`, never a license key or unrelated secret)")
+	}
+
 	endpoint := *c.baseURL
 	endpoint.Path = strings.TrimSuffix(endpoint.Path, "/") + investigationsPath
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(encoded))
@@ -197,7 +272,7 @@ func (c *Client) Investigate(ctx context.Context, requestID string, request cont
 		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: build request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	httpRequest.Header.Set("Authorization", "Bearer "+credential.Token)
 
 	response, err := c.http.Do(httpRequest)
 	if err != nil {
