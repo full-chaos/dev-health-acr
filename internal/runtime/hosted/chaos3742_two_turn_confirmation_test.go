@@ -869,6 +869,16 @@ type twoTurnCaseResult struct {
 	Turn2Status string `json:"turn2_status"`
 	OfferMiss   bool   `json:"offer_miss"`
 	Applied     bool   `json:"applied"`
+	// Reused (CHAOS-4040 harness follow-up, codex round 3, confirmed):
+	// this arm's own turn 2 InvestigationResult.Reused, so a caller can
+	// tell a fresh decisive answer from a replayed stored row. Needed
+	// because answer-reuse only rejects DECISIVE candidates carrying an
+	// INFERRED window (answer_reuse.go) -- a confirmed-window decisive row
+	// is fully reuse-eligible, so the positive arm's own "confirmed AND
+	// decisive" claim could otherwise be satisfied by a stale row this
+	// run's redemption code never actually produced. See
+	// WindowPositiveAppliedCount's own doc comment (twoTurnReport).
+	Reused bool `json:"reused"`
 	// TierRoutedCorrectly (inferred_tier arm only) asserts the injected
 	// explicit value actually landed at Source=explicit_unattributed,
 	// Provenance=inferred_default in the echo -- not merely "did not
@@ -985,7 +995,15 @@ type twoTurnReport struct {
 	// redeems can only exist because THIS SAME case's own turn 1 call (no
 	// receipt) was gated in the first place (turn1's WindowClarification,
 	// selectOracleOffer's own precondition) -- the paired evidence already
-	// lives in this run, not a new one. Non-vacuity bar: must be > 0.
+	// lives in this run, not a new one.
+	//
+	// Also requires BOTH calls fresh (!turn1.Reused && !positive.Reused,
+	// codex round 3, confirmed): answer-reuse only rejects DECISIVE
+	// candidates carrying an INFERRED window, never a confirmed-window
+	// decisive row -- unguarded, a stale replayed row (either call) could
+	// satisfy this bar without this run's redemption code ever actually
+	// running, the same reuse-vacuity class WindowClassDefaultGatedCount's
+	// own doc comment describes. Non-vacuity bar: must be > 0.
 	WindowPositiveAppliedCount int `json:"window_positive_applied_count"`
 	GateReachableCount         int `json:"gate_reachable_count"`
 	// StructureAndWindowDisclosureAbsentCount (orchestrator ruling,
@@ -1742,6 +1760,7 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 	res.CommittedCount = len(turn2.SubjectResolution.Committed)
 	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
+	res.Reused = turn2.Reused
 	return res
 }
 
@@ -2591,12 +2610,29 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			report.OfferMissCount[entry.Member]++
 		}
 		if positive.Applied {
+			// PositiveAppliedCount (pre-existing, pooled across every
+			// member) does NOT check turn1.Reused/positive.Reused --
+			// unchanged by this follow-up, since its own bar only ever
+			// claimed "conversion happened", never "gate 2 ran fresh" the
+			// way the window-specific counters below do.
 			report.PositiveAppliedCount++
 			// WindowPositiveAppliedCount (see its own doc comment): the
 			// winr_ positive-control proof, scoped to window specifically
 			// so it cannot hide behind kind/handle/anchor conversions the
 			// way the pooled PositiveAppliedCount bar above can.
-			if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) && positive.CommittedCount > 0 {
+			//
+			// !turn1.Reused && !positive.Reused (codex xhigh review round
+			// 3, confirmed HIGH confidence): answer-reuse only rejects
+			// DECISIVE candidates carrying an INFERRED window
+			// (answer_reuse.go) -- a CONFIRMED-window decisive row is
+			// fully reuse-eligible. Without both guards, this bar could be
+			// satisfied by a stale row (turn 1's offer replayed, or turn
+			// 2's own confirmed decisive answer replayed) that this run's
+			// redemption code never actually produced -- the same
+			// reuse-vacuity class round 2 found on WindowClassDefaultGatedCount,
+			// reapplied here to both calls this arm makes.
+			if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) &&
+				positive.CommittedCount > 0 && !turn1.Reused && !positive.Reused {
 				report.WindowPositiveAppliedCount++
 			}
 		}
