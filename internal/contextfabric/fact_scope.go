@@ -265,6 +265,12 @@ type FactScopeExpansionEvent struct {
 	TemporalDroppedCount      int
 	MissingNextHopCount       int
 	TargetKindMismatchCount   int
+	// TargetKindMismatchCount is how many targets the expander DROPPED
+	// itself for being the wrong kind. An expander must not both count a
+	// target here and return it: the resolver runs its own defensive filter
+	// and adds what IT drops, so returning a target already counted would
+	// double-count it. The two are disjoint by contract.
+	//
 	// Truncated is the EXPANDER's own report that it hit a cap of its own
 	// (a per-hop bound, a backend page limit). The resolver ORs its own
 	// overflow detection into this rather than replacing it: both are real
@@ -290,10 +296,23 @@ type factScopePolicyRule struct {
 	// FactScopePolicyUnavailable -- see FactReadScopeResolver.Resolve.
 	Enabled bool
 	// Limit overrides maxFactScopeTargets for this policy. Zero means the
-	// default. A per-policy bound exists because the three chains have very
+	// default. A per-policy bound exists because the chains have very
 	// different fan-out: one project reaches few repositories but those
 	// repositories reach many pull requests, and many more reviews.
 	Limit int
+	// Chain cites the typed edges this row's reachability claim rests on,
+	// naming the prod producer that writes them.
+	//
+	// REQUIRED ON EVERY ROW, and load-bearing rather than documentation
+	// (ruling criterion 1: "no chain citation, no row"). A row in this table
+	// asserts that the facts ARE reachable and that the pruner's proof of
+	// absence is therefore false. That assertion is only as good as the
+	// edges behind it, and an uncited row is someone's guess about
+	// reachability wearing the same clothes as a verified one -- which is
+	// how this table would drift back into the global widen option D was
+	// ratified instead of. TestChaos4099_EveryEligibilityRowCitesItsChain
+	// enforces it.
+	Chain string
 }
 
 // limitOrDefault is the cap this rule's traversal is bounded by.
@@ -304,80 +323,213 @@ func (r factScopePolicyRule) limitOrDefault() int {
 	return maxFactScopeTargets
 }
 
-// factScopePolicies is the CLOSED (requirement kind, origin kind) -> rule
-// table. A pair ABSENT from it is not expansion-eligible at all, and keeps
-// CHAOS-3783's honest prune.
+// The three typed chains every row below rests on, verified against prod
+// projection code at 0e662ceb. Named once so a row cites a chain rather than
+// restating edges, and so a chain that moves is corrected in one place.
+const (
+	// factScopeChainWorkItem is the ONE-HOP chain, and the shortest thing in
+	// this table: work_items.project_id / the primary team attribution.
+	//
+	// The team half is epistemically weaker than the project half and that
+	// difference is why CHAOS-4101 exists -- OWNED_BY_TEAM comes from
+	// work_item_team_attributions, an Ops-COMPUTED attribution whose source
+	// enum spans native_team/assignee_membership/issue_project/linked_issue/
+	// manual_fallback. Weak enough that no policy may traverse it without a
+	// product ruling; NOT weak enough to justify telling a reader "nothing is
+	// missing" when the work items are right there.
+	factScopeChainWorkItem = "work_item -BELONGS_TO_PROJECT-> project / work_item -OWNED_BY_TEAM-> team (devhealthsource/teams_projects_edges.go: queryWorkItemProjects, queryWorkItemTeams)"
+	// factScopeChainRepository continues one hop through the work item's own
+	// repository. The zero-UUID sentinel lives on this hop: a Linear-sourced
+	// work item carries repo_id = the zero UUID and is repo-LESS by design,
+	// never an orphan, and must never expand to a fake repository.
+	factScopeChainRepository = factScopeChainWorkItem + "; work_item -BELONGS_TO_REPOSITORY-> repository (devhealthsource/tables.go: queryWorkItems)"
+	// factScopeChainPullRequest reaches the pull requests of those
+	// repositories.
+	factScopeChainPullRequest = factScopeChainRepository + "; pull_request -BELONGS_TO_REPOSITORY-> repository (devhealthsource/tables.go: queryPullRequests)"
+	// factScopeChainReview reaches the reviews on those pull requests.
+	factScopeChainReview = factScopeChainPullRequest + "; pull_request_review -BELONGS_TO_PULL_REQUEST-> pull_request (devhealthsource/tables.go: queryPullRequestReviews)"
+)
+
+// factScopeEligibilityRow is one declared row of the table below. Declared as
+// a list and folded into the map by factScopePoliciesFrom, so the whole
+// eligibility set reads as one auditable block rather than a nested literal
+// nobody checks for gaps.
+type factScopeEligibilityRow struct {
+	Requirement FactKind
+	Origins     []SubjectKind
+	Rule        factScopePolicyRule
+}
+
+// factScopeEligibility is the CLOSED eligibility set: every (requirement
+// kind, origin kind) pair for which a missing capability is a REACHABLE gap
+// rather than a proof of irrelevance. A pair absent from it keeps CHAOS-3783's
+// honest prune.
 //
-// WHY THE TABLE IS THE ELIGIBILITY RULE, AND WHY IT IS THIS SMALL. The
-// tempting generalisation -- "any capability a project/team subject cannot
-// answer directly is a disclosed gap" -- is wrong in both directions. It
-// over-claims: nothing has established a typed path from a project to
-// team-scoped workload/investment/readiness facts, so calling that a gap
-// asserts reachability nobody has shown. And it destroys the signal
-// CHAOS-3783 built: a non-degrading prune is what keeps Coverage.Partial
-// meaningful, and flipping every subject-kind prune to degrading would make
-// every correctly-scoped investigation read as compromised, which is
-// precisely the outcome factStateDegrades' own doc comment argues against.
+// THE ADMISSION CRITERION IS A VERIFIED TYPED CHAIN (ruling, 2026-08-22). A
+// row exists only where the traversal chain exists in prod code AND the row
+// cites it. That is what keeps this a closed table rather than the rule
+// "anything a project cannot answer directly is a gap" -- which would
+// over-claim reachability nobody has shown.
 //
-// So eligibility is exactly the set the design spike VERIFIED against the
-// projection code and the ruling then ratified: the three canonical-fact
-// families whose chain from a project was traced end to end
-// (metrics/pull_requests/reviews), for the two origin kinds confirmed to
-// share the gap. A fourth family earns a row here by someone tracing its
-// chain, not by inheriting one.
+// WHY THIS IS WIDER THAN THE THREE ACTIVATION POLICIES. Invariant 7 is the
+// controlling rule: SourcePruned asserts "proven nothing missing", and on a
+// reachable chain that assertion is FALSE. CHAOS-3783's argument for a
+// non-degrading prune is about not degrading where pruning is genuinely
+// sound; it cannot justify keeping a false proof of absence. Where the two
+// conflict, honesty wins. Concretely: work-item status is ONE typed hop from
+// a project -- shorter than the chain the three named policies use -- so
+// pruning it was the same defect this ticket exists to fix, on a more
+// obviously reachable path.
 //
-// THE TEAM ROWS CARRY FactScopePolicyNone ON PURPOSE. CHAOS-4101 confirmed
-// the identical structural gap for `team` and is the ticket that must name
-// the policy: the team-attribution edge is rule_inferred/source_asserted
-// rather than a typed source-asserted chain, so expanding through it would
-// launder an inference into fact scope. Minting a name here would pre-empt
-// that product ruling. The rows exist anyway because the GAP is real
-// regardless of whether a policy for it is -- disclosing it is acceptance
-// point 9, and it is the whole reason a `none` policy value exists rather
-// than the pairs simply being omitted.
-var factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
-	FactMetrics: {
-		SubjectProject: {
-			Policy:     FactScopePolicyProjectWorkItemRepository,
-			TargetKind: SubjectRepository,
-			Basis:      FactScopeBasisActivityProxy,
-			Enabled:    false, // stage 2
-		},
-		SubjectTeam: {
-			Policy:     FactScopePolicyNone,
-			TargetKind: SubjectRepository,
-			Basis:      FactScopeBasisActivityProxy,
-			Enabled:    false, // CHAOS-4101
+// MEASUREMENT EFFECT, PRE-ADJUDICATED by the ruling: Coverage.Partial fires
+// more often on project- and team-scoped questions than it did. That is
+// disclosure reflecting reality, not a regression.
+//
+// WHAT IS DELIBERATELY ABSENT:
+//
+//   - team-target families from a PROJECT origin (workload, investment,
+//     readiness, operational_deficiencies). The chain would run
+//     project <- work_item -OWNED_BY_TEAM-> team, which laundle-launders the
+//     same computed attribution CHAOS-4101 is holding back -- reaching it
+//     from the other direction does not make it stronger.
+//   - incidents, deployments, continuous_integration. Chains plausibly
+//     exist; none was traced end to end for this ticket, and an uncited row
+//     is exactly what criterion 1 forbids.
+//   - source_health (organization-scoped). No chain.
+//   - health from a TEAM origin: HealthProvider already supports team
+//     directly, so it never prunes and never reaches this table.
+var factScopeEligibility = []factScopeEligibilityRow{
+	// --- The three ACTIVATABLE policies (stage 2, project origin only) ---
+	{
+		Requirement: FactMetrics, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainRepository,
 		},
 	},
-	FactPullRequests: {
-		SubjectProject: {
-			Policy:     FactScopePolicyProjectWorkItemPullRequest,
-			TargetKind: SubjectPullRequest,
-			Basis:      FactScopeBasisActivityProxy,
-			Enabled:    false, // stage 2
-		},
-		SubjectTeam: {
-			Policy:     FactScopePolicyNone,
-			TargetKind: SubjectPullRequest,
-			Basis:      FactScopeBasisActivityProxy,
-			Enabled:    false, // CHAOS-4101
+	{
+		Requirement: FactPullRequests, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectWorkItemPullRequest, TargetKind: SubjectPullRequest,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainPullRequest,
 		},
 	},
-	FactReviews: {
-		SubjectProject: {
+	{
+		Requirement: FactReviews, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
 			Policy:     FactScopePolicyProjectWorkItemPullRequestReview,
 			TargetKind: contractsv1.ContextFabricSubjectPullRequestReview,
-			Basis:      FactScopeBasisActivityProxy,
-			Enabled:    false, // stage 2
-		},
-		SubjectTeam: {
-			Policy:     FactScopePolicyNone,
-			TargetKind: contractsv1.ContextFabricSubjectPullRequestReview,
-			Basis:      FactScopeBasisActivityProxy,
-			Enabled:    false, // CHAOS-4101
+			Basis:      FactScopeBasisActivityProxy, Chain: factScopeChainReview,
 		},
 	},
+
+	// --- Disclosure-only rows: reachable, cited, and never traversed ---
+	//
+	// policy `none` (ruling point 4). These disclose the gap and emit
+	// policy_unavailable telemetry; activating any of them is a follow-on
+	// ticket with its own preconditions, exactly as CHAOS-4101 is for team.
+	{
+		Requirement: FactMetrics, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainRepository,
+		},
+	},
+	{
+		Requirement: FactPullRequests, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectPullRequest,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainPullRequest,
+		},
+	},
+	{
+		Requirement: FactReviews, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy:     FactScopePolicyNone,
+			TargetKind: contractsv1.ContextFabricSubjectPullRequestReview,
+			Basis:      FactScopeBasisActivityProxy, Chain: factScopeChainReview,
+		},
+	},
+	// health is repository-scoped, reached by the SAME chain as metrics.
+	// Project origin only -- see WHAT IS DELIBERATELY ABSENT above.
+	{
+		Requirement: FactHealth, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainRepository,
+		},
+	},
+	// The work-item families: ONE typed hop, the shortest chain in this
+	// table and the clearest case that the old prune asserted a false proof.
+	{
+		Requirement: FactStatus, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactWork, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactActualCompletion, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactBlockers, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactRequiredChildren, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactIdentity, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactMembership, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+		},
+	},
+}
+
+// factScopePolicies is factScopeEligibility folded into the lookup shape.
+// Package-level var rather than a function call per lookup, and reassignable
+// so a test can install a narrow table for one case.
+var factScopePolicies = factScopePoliciesFrom(factScopeEligibility)
+
+func factScopePoliciesFrom(rows []factScopeEligibilityRow) map[FactKind]map[SubjectKind]factScopePolicyRule {
+	table := make(map[FactKind]map[SubjectKind]factScopePolicyRule, len(rows))
+	for _, row := range rows {
+		byOrigin, exists := table[row.Requirement]
+		if !exists {
+			byOrigin = map[SubjectKind]factScopePolicyRule{}
+			table[row.Requirement] = byOrigin
+		}
+		for _, origin := range row.Origins {
+			byOrigin[origin] = row.Rule
+		}
+	}
+	return table
 }
 
 // lookupFactScopePolicy returns the rule for a pair and whether the pair is
@@ -870,6 +1022,11 @@ func (r *FactReadScopeResolver) expand(
 		}
 		admitted = append(admitted, target)
 	}
+	// The expander's own mismatch count and the resolver's are DISJOINT by
+	// contract: an expander reports only targets it dropped ITSELF and never
+	// returns them, so summing cannot double-count (codex review raised the
+	// ambiguity; this is the contract that resolves it, stated on
+	// FactScopeExpansionCounts.TargetKindMismatchCount too).
 	event.TargetKindMismatchCount += mismatched
 	// CAP ENFORCED HERE, from the OVERFLOW row (ruling invariant 8; codex
 	// review finding). The expander is asked for up to Limit+1 targets
@@ -885,19 +1042,40 @@ func (r *FactReadScopeResolver) expand(
 	}
 	event.Truncated = result.Counts.Truncated || overflowed
 	event.AdmittedCount = len(admitted)
+	// OUTCOME LADDER, ORDERED SO THAT NOTHING DEGRADING CAN BE MASKED BY
+	// SOMETHING CLEAN. Both orderings below were wrong on the first pass
+	// (codex review), and both failed in the same direction: an outcome that
+	// meant "evidence is missing" was reported as one that meant "nothing is
+	// missing" -- this ticket's own defect, reintroduced inside its fix.
 	switch {
-	case len(admitted) == 0 && event.TargetKindMismatchCount > 0:
-		// Distinct from attempted_empty on purpose: "the chain produced
-		// things of the wrong kind" is a wiring error, and "the chain
-		// produced nothing" is a fact about the data. Collapsing them would
-		// hide a bug inside a normal outcome.
+	case event.TargetKindMismatchCount > 0:
+		// A wiring error, reported EVEN WHEN some valid targets survived.
+		// Checking len(admitted)==0 first meant a chain returning one good
+		// repository and one wrong-kind work item was reported as a clean
+		// `expanded`: the bad candidate vanished with no gap, no disclosure
+		// and no degradation, and the only trace was a count nobody was
+		// alerted to. Whatever else the traversal got right, it produced
+		// something it could not use, and the answer is short of evidence.
 		event.Outcome = FactScopeTargetKindMismatch
-		return
+		if len(admitted) == 0 {
+			return
+		}
+	case event.Truncated:
+		// BEFORE the empty check, not after. A traversal that hit a cap and
+		// admitted nothing (every candidate on the first page dropped by
+		// authorization, with more pages behind it) is NOT a proof that
+		// there is nothing there -- and attempted_empty says exactly that,
+		// non-degrading, logged at INFO. It is the least-evidence case of
+		// all, so it must be the loudest, not the quietest.
+		event.Outcome = FactScopeExpandedPartial
+		if len(admitted) == 0 {
+			return
+		}
 	case len(admitted) == 0:
+		// The chain genuinely ran to completion and there was nothing there.
+		// The ONE outcome here that is a real proof of absence.
 		event.Outcome = FactScopeAttemptedEmpty
 		return
-	case event.Truncated:
-		event.Outcome = FactScopeExpandedPartial
 	default:
 		event.Outcome = FactScopeExpanded
 	}
@@ -924,7 +1102,12 @@ func (r *FactReadScopeResolver) expand(
 	for _, target := range admitted {
 		if len(existing)+len(kept) >= rule.limitOrDefault() {
 			event.Truncated = true
-			event.Outcome = FactScopeExpandedPartial
+			// Never downgrade a mismatch verdict: both are degrading, but
+			// target_kind_mismatch names a wiring error an operator must fix
+			// and expanded_partial names a bound working as designed.
+			if event.Outcome != FactScopeTargetKindMismatch {
+				event.Outcome = FactScopeExpandedPartial
+			}
 			break
 		}
 		key := canonicalFactSubjectKey(target)
@@ -937,8 +1120,12 @@ func (r *FactReadScopeResolver) expand(
 	event.AdmittedCount = len(kept)
 	if len(kept) == 0 {
 		// Everything this group produced was already in scope from another
-		// origin. Nothing new was reached, and nothing is claimed.
-		event.Outcome = FactScopeAttemptedEmpty
+		// origin. Nothing NEW was reached, and nothing is claimed -- but a
+		// degrading verdict already reached above stands, for the same
+		// reason the ladder is ordered the way it is.
+		if !factScopeGapDegrades(event.Outcome) {
+			event.Outcome = FactScopeAttemptedEmpty
+		}
 		return
 	}
 	scope.DerivedSubjects[event.RequirementKind] = append(existing, kept...)

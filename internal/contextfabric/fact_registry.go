@@ -329,7 +329,14 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				// count cap); "parameter is not allowed" is exactly the
 				// "invalid enum"-shaped business-rule case that comment
 				// says carries ErrInterpretationRejected alone.
-				return CanonicalFactBundle{}, fmt.Errorf("%w: fact capability %s: parameter %q is not allowed", ErrInterpretationRejected, requirement.Kind, key)
+				// The BUNDLE, not a zero value: scope was resolved above and
+				// carries this read's expansion decisions (codex round-2
+				// finding -- this path and the cancellation below were the
+				// two that still discarded them). The engine emits from
+				// facts.Scope before it checks err, so a rejected request
+				// still reports why its fact families were or were not
+				// reachable.
+				return bundle, fmt.Errorf("%w: fact capability %s: parameter %q is not allowed", ErrInterpretationRejected, requirement.Kind, key)
 			}
 		}
 	}
@@ -382,7 +389,10 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		result, err := r.readProvider(ctx, principal, registered, query)
 		if err != nil {
 			if errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) {
-				return CanonicalFactBundle{}, context.Canceled
+				// Same reasoning as the parameter rejection above: the
+				// resolved scope rides out with the error rather than being
+				// discarded.
+				return bundle, context.Canceled
 			}
 			state, reason := classifyFactReadError(err)
 			// Codex round-1 F2: a narrowed capability that then FAILS still
