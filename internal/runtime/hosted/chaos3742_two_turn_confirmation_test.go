@@ -706,6 +706,24 @@ func (c *twoTurnTraceCapture) finalDecisionEvent() (event graphrank.ResolutionTr
 	return event, ok
 }
 
+// kindCoverageFloorEvent returns the LAST captured "kind_coverage_floor"
+// event (CHAOS-4086/CHAOS-4038), the same last-wins rule finalDecisionEvent
+// applies and for the same reason: ResolveSubjects can resolve twice (the
+// evidence-census re-resolve), and the run that produced the served answer is
+// the later one.
+//
+// A SEPARATE reader from finalDecisionEvent because it is a separate stage --
+// see ResolutionTraceEvent's own doc comment for why the floor's state is
+// deliberately not carried on the decision event.
+func (c *twoTurnTraceCapture) kindCoverageFloorEvent() (event graphrank.ResolutionTraceEvent, ok bool) {
+	for _, e := range c.events {
+		if e.Stage == "kind_coverage_floor" {
+			event, ok = e, true
+		}
+	}
+	return event, ok
+}
+
 // memberApplied reports whether member was actually confirmed/applied on
 // result. Window is a SEPARATE mechanism from every other member (codex
 // round-3 finding, confirmed against engine.go:836-840/window.go:420-423):
@@ -869,6 +887,132 @@ func twoTurnSubjectKindIDs(refs []contractsv1.ContextFabricSubjectRef) []twoTurn
 	return out
 }
 
+// ---------------------------------------------------------------------------
+// CHAOS-4086 instant-diagnosis stamping
+// ---------------------------------------------------------------------------
+//
+// Three helpers rather than eleven assignments repeated across four arms.
+// The arms already drifted once on exactly this axis -- the inferred arm
+// grew a trace capture and the other three never did, which is why the gate
+// value was "categorically unreachable on two arms" -- and a per-arm copy of
+// the stamping logic is how that happens again. One definition each means a
+// new arm either calls them or visibly does not.
+
+// twoTurnStampOutcome records what an arm's turn actually committed and what
+// the corpus expected of it.
+//
+// tc.Question is in scope here and is NEVER read: the corpus question is the
+// one thing this artifact may not carry. Only tc.ExpectKind/tc.ExpectID --
+// a closed kind enum and a canonical id -- cross into the row.
+func twoTurnStampOutcome(res *twoTurnCaseResult, tc trialCase, committed []contractsv1.ContextFabricSubjectRef) {
+	if res == nil {
+		return
+	}
+	res.ExpectedKind = tc.ExpectKind
+	res.ExpectedID = tc.ExpectID
+	res.CommittedSubjects = twoTurnSubjectKindIDs(committed)
+}
+
+// twoTurnStampDecision copies the decision-stage trace event's shape onto the
+// row. A trace that captured no decision event leaves every field zero, which
+// is honest: "no decision event was observed" and "the gate was empty" are
+// different facts, and CommitGate=="" alongside TiedStatisticalTop==false is
+// how a reader sees the former.
+//
+// The caller is responsible for having reset the trace immediately before its
+// own Investigate call -- see twoTurnStampDecisionFor's callers.
+func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
+	if res == nil || trace == nil {
+		return
+	}
+	if event, ok := trace.finalDecisionEvent(); ok {
+		res.CommitGate = event.CommitGate
+		res.TiedStatisticalTop = event.TiedStatisticalTop
+		res.SearchTruncated = event.SearchTruncated
+	}
+	if event, ok := trace.kindCoverageFloorEvent(); ok {
+		res.KindCoverageFloorFired = event.KindCoverageFloorFired
+		res.KindCoverageMissingKinds = event.KindCoverageMissingKinds
+		res.KindCoverageFloorTruncated = event.KindCoverageFloorTruncated
+	}
+}
+
+// twoTurnStampArmFailure is the ONE way an error-derived ArmInvalidReason is
+// set (codex xhigh review round 1, P2).
+//
+// The review found the confirmed-wrong arm's SETUP-turn failure setting a
+// reason and no stage/type, so a whole class of arm-invalid row stayed
+// non-diagnosable -- and the anchor-seed failure beside it had the same gap,
+// unreported. Both are the predictable outcome of "remember to call the
+// stamper too" being a second, separate step: seven error sites across four
+// arms, and the two nobody was looking at were the ones that drifted.
+//
+// Pairing them in one call makes the omission unrepresentable rather than
+// merely noticed. TestChaos4086_EveryErrorDerivedReasonIsStamped then refuses
+// any assignment that goes around it.
+//
+// reason must already be closed-vocabulary (a classifier's output or a fixed
+// string) -- this helper never derives it, so it cannot launder raw error
+// text into the field.
+func twoTurnStampArmFailure(res *twoTurnCaseResult, reason string, err error) {
+	if res == nil {
+		return
+	}
+	res.ArmInvalidReason = reason
+	twoTurnStampArmError(res, err)
+}
+
+// twoTurnStampArmError records WHERE a failed Investigate call failed,
+// alongside the closed-vocabulary reason the caller already sets.
+//
+// Both values are corpus-safe by construction: an InvestigationStage is a
+// closed enum contextfabric maintains deliberately (stage.go), and a Go type
+// name is a compile-time identifier, never message text.
+func twoTurnStampArmError(res *twoTurnCaseResult, err error) {
+	if res == nil || err == nil {
+		return
+	}
+	if stage, ok := contextfabric.FailureStage(err); ok {
+		res.ArmInvalidStage = string(stage)
+	}
+	res.ArmInvalidErrorType = twoTurnInnermostErrorType(err)
+}
+
+// twoTurnInnermostErrorType is CHAOS-4088's %T fingerprint, walking BOTH
+// unwrap forms.
+//
+// The single-error form (Unwrap() error) is the one everybody remembers.
+// fmt.Errorf with more than one %w verb returns *fmt.wrapErrors, which
+// implements Unwrap() []error instead -- errors.Unwrap returns nil for it, so
+// a naive loop stops dead and reports "*fmt.wrapErrors", which is pure noise.
+// That is not a hypothetical: engine.go composes exactly that shape when it
+// wraps a validation failure (`fmt.Errorf("%w: %w", ErrInvalidResult, err)`),
+// which is the very error this field exists to fingerprint.
+//
+// On a multi-error node the LAST branch is followed: Go's own convention puts
+// the sentinel first and the specific cause last, so the last branch is the
+// one that says what actually went wrong.
+func twoTurnInnermostErrorType(err error) string {
+	for {
+		switch unwrapped := err.(type) {
+		case interface{ Unwrap() error }:
+			next := unwrapped.Unwrap()
+			if next == nil {
+				return fmt.Sprintf("%T", err)
+			}
+			err = next
+		case interface{ Unwrap() []error }:
+			branches := unwrapped.Unwrap()
+			if len(branches) == 0 {
+				return fmt.Sprintf("%T", err)
+			}
+			err = branches[len(branches)-1]
+		default:
+			return fmt.Sprintf("%T", err)
+		}
+	}
+}
+
 // twoTurnUnjustifiedShadowProbe computes the CHAOS-4062 trace-observability
 // fields for an "unjustified"-classified inferred commit: whether
 // kindInsensitivityProof was evaluated on the hinted call and its verdict
@@ -1014,6 +1158,82 @@ type twoTurnCaseResult struct {
 	// identical commit reached by two independent, kind-insensitive paths.
 	BaselineCommittedSubjects []twoTurnSubjectKindID `json:"baseline_committed_subjects,omitempty"`
 	HintedCommittedSubjects   []twoTurnSubjectKindID `json:"hinted_committed_subjects,omitempty"`
+	// ---------------------------------------------------------------
+	// CHAOS-4086 instant-diagnosis fields
+	// ---------------------------------------------------------------
+	//
+	// THE BAR THESE EXIST FOR: a wrong_commit row must be fully
+	// diagnosable from THIS REPORT ALONE -- which subject was committed,
+	// which was expected, which gate fired, whether the coverage floor was
+	// involved. Before them, every one of those facts was computed in
+	// process and then discarded: Committed was reduced to a bool, the
+	// expected subject lived only in the corpus annex, the gate value was
+	// SHA-256'd into an opaque fingerprint, and the floor's effect was
+	// never returned at all. Diagnosing CHAOS-4085 cost a re-read of raw
+	// model-exchange files off a scratch directory; that is the archaeology
+	// this closes.
+	//
+	// CORPUS-SAFE BY CONSTRUCTION, every one: canonical ids, closed
+	// contract/graphrank enums, booleans and counts. Never a question,
+	// never a label, never model text. trialCase.Question is in scope at
+	// every site that fills these and is deliberately never read.
+
+	// CommittedSubjects is what this arm's turn actually committed
+	// (Kind+CanonicalID), the same shape as Baseline/HintedCommittedSubjects
+	// above. Populated on EVERY arm whenever anything was committed, not
+	// just on the wrong ones: a right commit and a wrong commit are the
+	// same row shape, and only the pairing with ExpectedID below tells
+	// them apart.
+	CommittedSubjects []twoTurnSubjectKindID `json:"committed_subjects,omitempty"`
+	// ExpectedKind/ExpectedID mirror trialCase's own oracle for this case,
+	// so committed-versus-expected sit SIDE BY SIDE on one row.
+	//
+	// Stamped unconditionally, including on rows that committed nothing.
+	// A false_no_match row is exactly as much a correctness finding as a
+	// wrong_commit one (CHAOS-4039), and "expected this, returned no
+	// subject" is unreadable without the left-hand side.
+	ExpectedKind string `json:"expected_kind,omitempty"`
+	ExpectedID   string `json:"expected_id,omitempty"`
+	// CommitGate/TiedStatisticalTop/SearchTruncated mirror the
+	// decision-stage graphrank.ResolutionTraceEvent for this arm's own
+	// turn-2 call -- graphrank's closed gate vocabulary and the two
+	// CHAOS-4085 shape flags.
+	//
+	// Together they make a REFUSAL artifact-attestable, which is what the
+	// rerun proved impossible on v10: an ambiguous outcome with an empty
+	// CommitGate cannot be told apart from a tied-top-under-truncation
+	// refusal without them, and the harness read both in process and then
+	// dropped them on the floor.
+	CommitGate         string `json:"commit_gate,omitempty"`
+	TiedStatisticalTop bool   `json:"tied_statistical_top,omitempty"`
+	SearchTruncated    bool   `json:"search_truncated,omitempty"`
+	// KindCoverageFloorFired/KindCoverageMissingKinds/
+	// KindCoverageFloorTruncated mirror the kind_coverage_floor-stage trace
+	// event (CHAOS-4038's floor; see ResolutionTraceEvent's own doc
+	// comment). Read off a DIFFERENT stage than the three fields above, and
+	// that separation is deliberate rather than incidental -- the floor's
+	// truncation is explicitly not a commit-gate input.
+	KindCoverageFloorFired     bool `json:"kind_coverage_floor_fired,omitempty"`
+	KindCoverageMissingKinds   int  `json:"kind_coverage_missing_kinds,omitempty"`
+	KindCoverageFloorTruncated bool `json:"kind_coverage_floor_truncated,omitempty"`
+	// ArmInvalidStage/ArmInvalidErrorType pair with ArmInvalidReason, whose
+	// closed vocabulary names the error CLASS but not where it came from.
+	//
+	// ArmInvalidStage is contextfabric's own closed InvestigationStage enum
+	// (FailureStage). It is the load-bearing half: CHAOS-4098's defect
+	// presented as a bare "invalid_result" and cost a re-read of raw
+	// exchange files to place, when stage=="validation" would have named
+	// the failing family immediately.
+	//
+	// ArmInvalidErrorType is CHAOS-4088's %T fingerprint of the INNERMOST
+	// unwrapped error -- never .Error() text, which can carry upstream
+	// detail this outcome-only artifact must not persist. Read it as a
+	// hint, not an oracle: a rule written with fmt.Errorf carries no named
+	// type, so this degrades to *errors.errorString for exactly the
+	// validator rules one most wants named. See twoTurnInnermostErrorType
+	// for the multi-%w wrapping that makes even reaching it non-obvious.
+	ArmInvalidStage     string `json:"arm_invalid_stage,omitempty"`
+	ArmInvalidErrorType string `json:"arm_invalid_error_type,omitempty"`
 }
 
 type twoTurnReport struct {
@@ -1100,10 +1320,27 @@ type twoTurnReport struct {
 	// drift. CHAOS-4079 shipped the write-free construction instead: the
 	// verdict is DERIVED from census results the round already collected,
 	// issuing zero additional CensusFunc calls and writing only
-	// observability fields. Bump this again on
-	// any future field rename, removal, or meaning change so a consumer can
-	// detect drift instead of silently reading a stale key under a new
-	// meaning.
+	// observability fields.
+	//
+	// "11" marks CHAOS-4086's instant-diagnosis fields: twoTurnCaseResult
+	// gained CommittedSubjects/ExpectedKind/ExpectedID (populated on ALL
+	// FOUR arms), CommitGate/TiedStatisticalTop/SearchTruncated read off the
+	// decision-stage trace, KindCoverageFloorFired/KindCoverageMissingKinds/
+	// KindCoverageFloorTruncated read off the new kind_coverage_floor stage,
+	// and ArmInvalidStage/ArmInvalidErrorType beside ArmInvalidReason.
+	//
+	// Purely ADDITIVE observability: every one is a new key, no existing
+	// field changed name or meaning, and none of them backs a pass/fail
+	// check in this file. The bar they serve is diagnostic rather than
+	// evaluative -- a wrong_commit row must be readable from this artifact
+	// ALONE (what committed, what was expected, which gate fired, whether
+	// the coverage floor was involved) instead of requiring a re-read of
+	// raw model-exchange files after the run, which is what diagnosing
+	// CHAOS-4085 and CHAOS-4098 actually cost.
+	//
+	// Bump this again on any future field rename, removal, or meaning
+	// change so a consumer can detect drift instead of silently reading a
+	// stale key under a new meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
 	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
@@ -2197,8 +2434,9 @@ func twoTurnRequest(index int, tc trialCase, requestIDSuffix string) contractsv1
 
 // runTwoTurnPositiveArm confirms the oracle-matching offer via receipt and
 // reports whether it converted.
-func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1 contractsv1.ContextFabricInvestigationResult, timeout time.Duration) twoTurnCaseResult {
+func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1 contractsv1.ContextFabricInvestigationResult, timeout time.Duration, trace *twoTurnTraceCapture) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmPositive), Turn1Status: string(turn1.Status)}
+	twoTurnStampOutcome(&res, tc, nil)
 	receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 	if !found {
 		res.OfferMiss = true
@@ -2208,10 +2446,18 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 	setTwoTurnReceipt(&req, entry.Member, contractsv1.ContextFabricBoundSubjectReceipt{ResultID: turn1.ResultID, ReceiptID: receiptID})
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// CHAOS-4086: reset immediately before the call so finalDecisionEvent
+	// below can only ever see THIS call's events. The capture is shared
+	// across arms (one tracer is installed on the investigator for the
+	// whole run), so without the reset a quiet arm would inherit the
+	// previous arm's gate.
+	if trace != nil {
+		trace.reset()
+	}
 	turn2, err := investigator.Investigate(callCtx, principal, req)
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
+		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
 		return res
 	}
 	res.Turn2Status = string(turn2.Status)
@@ -2219,6 +2465,8 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	res.Reused = turn2.Reused
+	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
+	twoTurnStampDecision(&res, trace)
 	return res
 }
 
@@ -2344,6 +2592,11 @@ func windowBoundsAgree(a, b contractsv1.ContextFabricInvestigationResult, tolera
 
 func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmInferredTier)}
+	// CHAOS-4086: stamped up front for the same reason the other arms do
+	// it -- this arm has many early returns (structurally exempt anchor, a
+	// missing window precondition, a failed baseline) and every one of them
+	// produces a row a reader has to interpret.
+	twoTurnStampOutcome(&res, tc, nil)
 	req := twoTurnRequest(index, tc, "inferredtier")
 	switch entry.Member {
 	case string(contractsv1.ContextFabricStructureNeedExpectedKind):
@@ -2418,20 +2671,29 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// Complete/Partial/Degraded candidates), the two setup calls cannot
 	// collapse into the same underlying result via answer-reuse either --
 	// they are genuinely two separate offers.
-	mintWindowPrecondition := func(requestIDSuffix string) (contractsv1.ContextFabricBoundSubjectReceipt, error) {
+	// Returns (receipt, reason, cause). CHAOS-4086: reason is the
+	// closed-vocabulary string for ArmInvalidReason, and cause is the
+	// ORIGINAL investigator error, kept alive so the caller can stamp its
+	// stage and type. Before this, the cause was classified into a string
+	// and dropped here, which is why a window-precondition failure could
+	// name its class but never its stage. cause is nil for the offer-miss
+	// branch, which is an engine-refusal finding rather than a failure with
+	// a stage at all -- and twoTurnStampArmError leaves both fields empty
+	// for a nil error, which is the honest reading.
+	mintWindowPrecondition := func(requestIDSuffix string) (receipt contractsv1.ContextFabricBoundSubjectReceipt, reason string, cause error) {
 		setupReq := twoTurnRequest(index, tc, requestIDSuffix)
 		setupReq.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(windowBand)}
 		setupCtx, setupCancel := context.WithTimeout(ctx, timeout)
 		setupResult, setupErr := investigator.Investigate(setupCtx, principal, setupReq)
 		setupCancel()
 		if setupErr != nil {
-			return contractsv1.ContextFabricBoundSubjectReceipt{}, fmt.Errorf("window precondition setup failed: %s", contextFabricRejectionClass(setupErr))
+			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup failed: " + contextFabricRejectionClass(setupErr), setupErr
 		}
 		receiptID, found := selectOracleOffer(setupResult, string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: windowBand})
 		if !found {
-			return contractsv1.ContextFabricBoundSubjectReceipt{}, errors.New("window precondition setup turn did not offer the case's own window back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)")
+			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup turn did not offer the case's own window back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)", nil
 		}
-		return contractsv1.ContextFabricBoundSubjectReceipt{ResultID: setupResult.ResultID, ReceiptID: receiptID}, nil
+		return contractsv1.ContextFabricBoundSubjectReceipt{ResultID: setupResult.ResultID, ReceiptID: receiptID}, "", nil
 	}
 
 	if !isWindow && windowBand == "" {
@@ -2454,17 +2716,18 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// full investigation first.
 	var baselineWindow, hintedWindow contractsv1.ContextFabricBoundSubjectReceipt
 	if !isWindow {
-		var windowErr error
-		baselineWindow, windowErr = mintWindowPrecondition("inferredtierwindowsetupbaseline")
-		if windowErr != nil {
+		var windowReason string
+		var windowCause error
+		baselineWindow, windowReason, windowCause = mintWindowPrecondition("inferredtierwindowsetupbaseline")
+		if windowReason != "" {
 			res.PairInvalid = true
-			res.ArmInvalidReason = windowErr.Error()
+			twoTurnStampArmFailure(&res, windowReason, windowCause)
 			return res
 		}
-		hintedWindow, windowErr = mintWindowPrecondition("inferredtierwindowsetuphinted")
-		if windowErr != nil {
+		hintedWindow, windowReason, windowCause = mintWindowPrecondition("inferredtierwindowsetuphinted")
+		if windowReason != "" {
 			res.PairInvalid = true
-			res.ArmInvalidReason = windowErr.Error()
+			twoTurnStampArmFailure(&res, windowReason, windowCause)
 			return res
 		}
 	}
@@ -2488,7 +2751,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			// separately so it is never silently absorbed into either
 			// bucket (InferredPairInvalidCount's own doc comment).
 			res.PairInvalid = true
-			res.ArmInvalidReason = "baseline investigate error: " + contextFabricRejectionClass(baselineErr)
+			twoTurnStampArmFailure(&res, "baseline investigate error: "+contextFabricRejectionClass(baselineErr), baselineErr)
 			return res
 		}
 		if trace != nil {
@@ -2514,7 +2777,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	cancel()
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
+		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
 		// codex xhigh review round 1 (HIGH, confirmed): a hinted-call
 		// error is exactly as much "this pairing could not be evaluated
 		// AT ALL" as a baseline-call error is (this function's own doc
@@ -2531,6 +2794,11 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	res.Turn2Status = string(result.Status)
 	res.CommittedCount = len(result.SubjectResolution.Committed)
 	res.WrongCommit = twoTurnCommittedWrong(result.SubjectResolution.Committed, tc)
+	// CHAOS-4086: the HINTED call's own outcome and decision. The trace was
+	// reset immediately before that call above, so the decision event this
+	// reads cannot be the baseline's.
+	twoTurnStampOutcome(&res, tc, result.SubjectResolution.Committed)
+	twoTurnStampDecision(&res, trace)
 	// false_no_match (CHAOS-4039): every inferred-tier case carries a real
 	// expected answer (tc.ExpectID != "" by construction of this harness's
 	// own corpus selection) -- a literal no_match terminal here is as much
@@ -2966,8 +3234,13 @@ func preflightAnchorCausalChain(ctx context.Context, investigator contextfabric.
 	return fmt.Errorf("preflight: the probe anchor redemption (case %d) did not apply (no receipt-sourced ConfirmedStructure entry for subject_anchor) -- the anchor causal chain is not live this run", probe.Index)
 }
 
-func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, anchorTerms anchorTermIndex, runToken string) twoTurnCaseResult {
+func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, anchorTerms anchorTermIndex, runToken string, trace *twoTurnTraceCapture) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmConfirmedWrong)}
+	// Stamped BEFORE the early returns below (a seeded-negative failure, a
+	// missing offer): a row that never reached Investigate still says what
+	// this case expected, which is what makes an arm-invalid row readable
+	// without the corpus annex.
+	twoTurnStampOutcome(&res, tc, nil)
 
 	var offerResultID, receiptID string
 	if entry.Member == string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
@@ -2975,7 +3248,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		var err error
 		offerResultID, err = seedAnchorNegativeResult(ctx, store, principal, index, entry, receiptID, anchorTerms, runToken)
 		if err != nil {
-			res.ArmInvalidReason = "harness-seeded anchor negative could not be made redeemable: " + anchorSeedRejectionClass(err)
+			twoTurnStampArmFailure(&res, "harness-seeded anchor negative could not be made redeemable: "+anchorSeedRejectionClass(err), err)
 			return res
 		}
 	} else {
@@ -2996,7 +3269,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		setupResult, err := investigator.Investigate(setupCtx, principal, setupReq)
 		cancel()
 		if err != nil {
-			res.ArmInvalidReason = "setup turn failed: " + contextFabricRejectionClass(err)
+			twoTurnStampArmFailure(&res, "setup turn failed: "+contextFabricRejectionClass(err), err)
 			return res
 		}
 		offerResultID = setupResult.ResultID
@@ -3012,16 +3285,22 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 	setTwoTurnReceipt(&req, entry.Member, contractsv1.ContextFabricBoundSubjectReceipt{ResultID: offerResultID, ReceiptID: receiptID})
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// CHAOS-4086: see runTwoTurnPositiveArm's own reset comment.
+	if trace != nil {
+		trace.reset()
+	}
 	turn2, err := investigator.Investigate(callCtx, principal, req)
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
+		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
 		return res
 	}
 	res.Turn2Status = string(turn2.Status)
 	res.CommittedCount = len(turn2.SubjectResolution.Committed)
 	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
+	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
+	twoTurnStampDecision(&res, trace)
 	return res
 }
 
@@ -3051,7 +3330,7 @@ func twoTurnMutationProbe(applied bool, status string, committedCount int) (trip
 // records whether the expected veto/refusal actually happened -- a probe
 // that does NOT trip is itself a finding (the run is invalid, per the
 // harness's own fails-toward-fine discipline), never silently ignored.
-func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1ResultID, receiptID string, timeout time.Duration) []twoTurnCaseResult {
+func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1ResultID, receiptID string, timeout time.Duration, trace *twoTurnTraceCapture) []twoTurnCaseResult {
 	// run calls Investigate EXACTLY ONCE per probe (codex round-2 finding
 	// #7: the original stale-probe implementation called Investigate a
 	// SECOND time to inspect the disposition, so an error on the first call
@@ -3063,8 +3342,16 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 	// accept).
 	run := func(probe string, req contractsv1.ContextFabricInvestigationRequest, requireStale bool) twoTurnCaseResult {
 		res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmMutation), MutationProbe: probe}
+		twoTurnStampOutcome(&res, tc, nil)
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
+		// CHAOS-4086: per PROBE, not per arm -- this closure runs three
+		// times against three different requests, and each probe's row
+		// carries its own decision. See runTwoTurnPositiveArm's own reset
+		// comment for why the shared capture must be cleared here.
+		if trace != nil {
+			trace.reset()
+		}
 		result, err := investigator.Investigate(callCtx, principal, req)
 		if err != nil {
 			// codex round-1 finding #7: an investigator error is NOT
@@ -3075,12 +3362,14 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 			// tripped==ran invariant then correctly flags it as a finding
 			// rather than a false pass.
 			res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-			res.ArmInvalidReason = "investigate error (inconclusive, not counted as a trip): " + contextFabricRejectionClass(err)
+			twoTurnStampArmFailure(&res, "investigate error (inconclusive, not counted as a trip): "+contextFabricRejectionClass(err), err)
 			return res
 		}
 		res.Turn2Status = string(result.Status)
 		res.CommittedCount = len(result.SubjectResolution.Committed)
 		res.Applied = memberApplied(result, entry.Member)
+		twoTurnStampOutcome(&res, tc, result.SubjectResolution.Committed)
+		twoTurnStampDecision(&res, trace)
 		staleDisposition := false
 		for _, e := range result.ConfirmedStructure {
 			if string(e.Member) == entry.Member && e.Disposition == contractsv1.ContextFabricStructureDispositionVetoedStale {
@@ -3308,7 +3597,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "10",
+		ReportSchemaVersion: "11",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -3625,7 +3914,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 		modelCallCapture.reset()
 		positiveStarted := time.Now()
-		positive := runTwoTurnPositiveArm(ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout)
+		positive := runTwoTurnPositiveArm(ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture)
 		positiveTiming = buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
 		if positive.OfferMiss {
 			report.OfferMissCount[entry.Member]++
@@ -3722,7 +4011,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 		modelCallCapture.reset()
 		confirmedWrongStarted := time.Now()
-		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken)
+		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken, traceCapture)
 		confirmedWrongTiming = buildTwoTurnArmTiming(string(twoTurnArmConfirmedWrong), confirmedWrongStarted, modelCallCapture)
 		if confirmedWrong.ArmInvalidReason == "" && confirmedWrong.Applied && entry.NegativeCommittable {
 			report.ConfirmedWrongRedeemedCount[entry.Member]++
@@ -3755,7 +4044,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			if found {
 				modelCallCapture.reset()
 				mutationStarted := time.Now()
-				mutationResults := runTwoTurnMutationArm(ctx, investigator, principal, entry.Index, tc, entry, turn1.ResultID, receiptID, caseTimeout)
+				mutationResults := runTwoTurnMutationArm(ctx, investigator, principal, entry.Index, tc, entry, turn1.ResultID, receiptID, caseTimeout, traceCapture)
 				mutationTiming = buildTwoTurnArmTiming(string(twoTurnArmMutation), mutationStarted, modelCallCapture)
 				for _, mutationResult := range mutationResults {
 					report.MutationProbesRun[mutationResult.MutationProbe]++
