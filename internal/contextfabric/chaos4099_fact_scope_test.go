@@ -15,6 +15,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -666,15 +667,20 @@ func TestChaos4099_ARequirementOverrideStaysAuthoritative(t *testing.T) {
 
 func scopeEngine(t *testing.T, telemetry EngineTelemetry, subjects []SubjectRef) (*Engine, InvestigationRequest) {
 	t.Helper()
+	registry, _ := scopeRegistry(t)
+	return scopeEngineWithRegistry(t, telemetry, subjects, registry)
+}
+
+func scopeEngineWithRegistry(t *testing.T, telemetry EngineTelemetry, subjects []SubjectRef, registry *FactCapabilityRegistry) (*Engine, InvestigationRequest) {
+	t.Helper()
 	interpretation := InterpretedQuestion{
 		Shape: ShapeSingleSubject, RequestedJudgment: "release_readiness_and_drivers",
 		TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: caseSixtyRequirements(),
 	}
-	// The REAL registry, over real FactProvider implementations, so the
-	// planner, the scope resolver, the coverage merge and the bundle all run
-	// for real. A CanonicalFactReader double here would let the whole
-	// mechanism under test be skipped.
-	registry, _ := scopeRegistry(t)
+	// The caller supplies a REAL registry, over real FactProvider
+	// implementations, so the planner, the scope resolver, the coverage
+	// merge and the bundle all run for real. A CanonicalFactReader double
+	// here would let the whole mechanism under test be skipped.
 	committed := subjects[0]
 	candidate := affirmationCandidate(ResolutionCommitted)
 	candidate.Subject = committed
@@ -1556,5 +1562,452 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 	)
 	if !reflect.DeepEqual(repeat.DerivedSubjects[FactMetrics], derived) {
 		t.Fatalf("scope is not deterministic: %+v vs %+v", repeat.DerivedSubjects[FactMetrics], derived)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The outcome ladder's ordering (codex round-2 findings)
+// ---------------------------------------------------------------------------
+
+// TestChaos4099_ATruncatedTraversalThatAdmittedNothingIsNotAProofOfAbsence
+// pins the ladder's most dangerous ordering bug, which shipped in the first
+// pass.
+//
+// A traversal that hit a cap and admitted nothing -- every candidate on the
+// first page dropped by authorization, with more pages behind it -- is the
+// LEAST-evidence case of all. Checking "did we admit nothing?" before "were
+// we truncated?" reported it as attempted_empty: non-degrading, no
+// disclosure, logged at INFO. That is this ticket's own defect reintroduced
+// inside its fix, on the one path where the system knows least.
+func TestChaos4099_ATruncatedTraversalThatAdmittedNothingIsNotAProofOfAbsence(t *testing.T) {
+	enableMetricsProjectPolicy(t, 0)
+
+	expander := &recordingScopeExpander{
+		targets: nil,
+		counts: FactScopeExpansionCounts{
+			CandidateCount: 40, AuthorizationDroppedCount: 40, Truncated: true,
+		},
+	}
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(),
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	event := scope.Events[0]
+	if event.Outcome == FactScopeAttemptedEmpty {
+		t.Fatal("a truncated traversal that admitted nothing claimed the chain ran to completion -- it did not")
+	}
+	if event.Outcome != FactScopeExpandedPartial {
+		t.Fatalf("outcome = %q, want expanded_partial", event.Outcome)
+	}
+	if !scope.HasDisclosableGap() {
+		t.Fatal("the least-evidence case must be the loudest, not the quietest")
+	}
+	// The authorization drops stay telemetry-only (ruling invariant 9).
+	if event.AuthorizationDroppedCount != 40 {
+		t.Fatalf("AuthorizationDroppedCount = %d, want 40", event.AuthorizationDroppedCount)
+	}
+	result := scopeServableResult()
+	applyFactScopeDisclosure(&result, &scope)
+	for _, limitation := range result.Limitations {
+		if strings.Contains(limitation, "40") || strings.Contains(strings.ToLower(limitation), "authoriz") {
+			t.Fatalf("limitation %q leaks the authorization drop -- that is an existence side-channel", limitation)
+		}
+	}
+}
+
+// TestChaos4099_AMixedKindTraversalIsNotReportedAsComplete pins the ladder's
+// other ordering bug. A chain returning one good repository and one wrong-kind
+// work item used to be reported as a clean `expanded`: the bad candidate
+// vanished with no gap, no disclosure and no degradation, and the only trace
+// was a count nobody was alerted to. Whatever else the traversal got right,
+// it produced something it could not use.
+func TestChaos4099_AMixedKindTraversalIsNotReportedAsComplete(t *testing.T) {
+	enableMetricsProjectPolicy(t, 0)
+
+	expander := &recordingScopeExpander{
+		targets: []SubjectRef{scopeRepo, subject(SubjectWorkItem, "work_item:linear:ABC-1")},
+		counts:  FactScopeExpansionCounts{CandidateCount: 2},
+	}
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(),
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	event := scope.Events[0]
+	if event.Outcome == FactScopeExpanded {
+		t.Fatal("a traversal that produced an unusable target was reported as complete")
+	}
+	if event.Outcome != FactScopeTargetKindMismatch {
+		t.Fatalf("outcome = %q, want target_kind_mismatch even though a valid target survived", event.Outcome)
+	}
+	// The valid target IS still admitted -- partial evidence beats none.
+	if event.AdmittedCount != 1 || len(scope.DerivedSubjects[FactMetrics]) != 1 {
+		t.Fatalf("event = %+v, derived = %+v, want the valid repository still admitted", event, scope.DerivedSubjects)
+	}
+	if !scope.HasDisclosableGap() {
+		t.Fatal("a mixed-kind traversal must disclose")
+	}
+}
+
+// TestChaos4099_TheExpandersOwnMismatchCountIsNotDoubleCounted pins the
+// arithmetic contract between the two mismatch sources. An expander reports
+// only targets it dropped ITSELF and never returns them; the resolver adds
+// what its own defensive filter drops. Summing is correct exactly because
+// the two are disjoint.
+func TestChaos4099_TheExpandersOwnMismatchCountIsNotDoubleCounted(t *testing.T) {
+	enableMetricsProjectPolicy(t, 0)
+
+	expander := &recordingScopeExpander{
+		// Two dropped by the expander (and NOT returned), one good target,
+		// one wrong-kind target that slipped through to the resolver.
+		targets: []SubjectRef{scopeRepo, subject(SubjectWorkItem, "work_item:linear:ABC-1")},
+		counts:  FactScopeExpansionCounts{CandidateCount: 4, TargetKindMismatchCount: 2},
+	}
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(),
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	if got := scope.Events[0].TargetKindMismatchCount; got != 3 {
+		t.Fatalf("TargetKindMismatchCount = %d, want 3 (2 dropped by the expander + 1 by the resolver's own filter)", got)
+	}
+}
+
+// TestChaos4099_ExactlyTheCapIsNotTruncation is the boundary's other side.
+// Reporting a scope that exactly filled its cap as partial would cry wolf on
+// every well-sized traversal and train readers past the disclosure.
+func TestChaos4099_ExactlyTheCapIsNotTruncation(t *testing.T) {
+	const limit = 2
+	enableMetricsProjectPolicy(t, limit)
+
+	expander := &recordingScopeExpander{
+		targets: []SubjectRef{
+			subject(SubjectRepository, "repo:github:a"),
+			subject(SubjectRepository, "repo:github:b"),
+		},
+		counts: FactScopeExpansionCounts{CandidateCount: limit},
+	}
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(),
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	event := scope.Events[0]
+	if event.Truncated {
+		t.Fatal("exactly the cap is not truncation -- crying wolf here trains readers past the disclosure")
+	}
+	if event.Outcome != FactScopeExpanded {
+		t.Fatalf("outcome = %q, want expanded", event.Outcome)
+	}
+	if scope.HasDisclosableGap() {
+		t.Fatal("a complete traversal must not disclose a gap")
+	}
+	if event.AdmittedCount != limit {
+		t.Fatalf("AdmittedCount = %d, want %d", event.AdmittedCount, limit)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry survives a failed read (codex round-2 finding 6)
+// ---------------------------------------------------------------------------
+
+// TestChaos4099_ScopeTelemetrySurvivesARejectedRequest pins that the two
+// remaining early-return paths in ReadFacts carry the resolved scope out with
+// their error.
+//
+// A fact read that resolved its scope and THEN failed is precisely the run an
+// operator most needs the expansion decisions for. Returning a zero bundle
+// there means the engine sees a nil Scope and emits nothing -- the signal
+// disappears exactly when it matters.
+func TestChaos4099_ScopeTelemetrySurvivesARejectedRequest(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := scopeRegistry(t)
+	// A disallowed parameter: rejected by the pre-pass that runs AFTER scope
+	// resolution.
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeProject},
+			[]FactRequirement{{Kind: FactMetrics, Parameters: map[string]string{"sql": "select *"}}}, TemporalCurrent))
+	if err == nil {
+		t.Fatal("a disallowed parameter must be rejected")
+	}
+	if bundle.Scope == nil {
+		t.Fatal("the resolved scope was discarded with the error -- the engine emits nothing and the run is undiagnosable")
+	}
+	if len(bundle.Scope.Events) != 1 {
+		t.Fatalf("events = %+v, want the expansion decision preserved", bundle.Scope.Events)
+	}
+}
+
+// TestChaos4099_ScopeTelemetrySurvivesACancelledRead covers the second path.
+func TestChaos4099_ScopeTelemetrySurvivesACancelledRead(t *testing.T) {
+	t.Parallel()
+
+	// metrics is answerable for the repository, so the read reaches a
+	// provider; reviews is not, so a scope decision exists to preserve.
+	blocking := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository), wait: true,
+	}
+	reviews := &factProviderStub{
+		capability: planCapability(FactReviews, "reviews", contractsv1.ContextFabricSubjectPullRequestReview),
+		result:     FactProviderResult{State: SourceAvailable},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{blocking, reviews}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go cancel()
+	bundle, err := registry.ReadFacts(ctx, storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeRepo, scopeProject},
+			[]FactRequirement{{Kind: FactMetrics}, {Kind: FactReviews, Subjects: []SubjectRef{scopeProject}}}, TemporalCurrent))
+	if err == nil {
+		t.Skip("the read completed before cancellation landed; the ordering under test did not occur")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if bundle.Scope == nil {
+		t.Fatal("the resolved scope was discarded on cancellation")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The eligibility table's own admission rule
+// ---------------------------------------------------------------------------
+
+// TestChaos4099_EveryEligibilityRowCitesItsChain enforces the ruling's
+// admission criterion: a row enters the table only when the traversal chain
+// exists in prod code AND the row cites it.
+//
+// A row asserts that facts ARE reachable and that the pruner's proof of
+// absence is therefore false. That assertion is only as good as the edges
+// behind it, and an uncited row is someone's guess about reachability wearing
+// the same clothes as a verified one -- which is how this table drifts back
+// into the global widen option D was rejected in favour of.
+func TestChaos4099_EveryEligibilityRowCitesItsChain(t *testing.T) {
+	t.Parallel()
+
+	for _, row := range factScopeEligibility {
+		if strings.TrimSpace(row.Rule.Chain) == "" {
+			t.Fatalf("%s has no chain citation -- no chain citation, no row", row.Requirement)
+		}
+		// A citation names edges and the producer that writes them, so it
+		// can be checked against the code rather than taken on faith.
+		if !strings.Contains(row.Rule.Chain, "->") || !strings.Contains(row.Rule.Chain, "devhealthsource/") {
+			t.Fatalf("%s cites %q, want typed edges and the prod producer that writes them", row.Requirement, row.Rule.Chain)
+		}
+		if len(row.Origins) == 0 {
+			t.Fatalf("%s has no origin kinds", row.Requirement)
+		}
+		if row.Rule.TargetKind == "" {
+			t.Fatalf("%s names no target kind", row.Requirement)
+		}
+		if row.Rule.Basis == "" {
+			t.Fatalf("%s names no epistemic basis", row.Requirement)
+		}
+	}
+}
+
+// TestChaos4099_OnlyTheThreeRuledPoliciesAreEverActivatable is the stage
+// boundary, and the disclosure/activation split the ruling drew.
+//
+// Widening DISCLOSURE is honesty: SourcePruned asserts "proven nothing
+// missing" and on a reachable chain that is false. Widening ACTIVATION is a
+// product commitment about what a fact family MEANS for a subject that does
+// not own it, and every one needs its own preconditions. A row that acquired
+// a policy name without going through that is the failure this pins.
+func TestChaos4099_OnlyTheThreeRuledPoliciesAreEverActivatable(t *testing.T) {
+	t.Parallel()
+
+	named := map[FactScopePolicy]struct{}{
+		FactScopePolicyProjectWorkItemRepository:        {},
+		FactScopePolicyProjectWorkItemPullRequest:       {},
+		FactScopePolicyProjectWorkItemPullRequestReview: {},
+	}
+	for _, row := range factScopeEligibility {
+		if row.Rule.Policy == FactScopePolicyNone {
+			if row.Rule.Enabled {
+				t.Fatalf("%s is enabled with no policy to name it", row.Requirement)
+			}
+			continue
+		}
+		if _, ok := named[row.Rule.Policy]; !ok {
+			t.Fatalf("%s carries unratified policy %q -- activation scope is the 3 ruled policies only", row.Requirement, row.Rule.Policy)
+		}
+		// Stage 1: even the ratified three ship dark.
+		if row.Rule.Enabled {
+			t.Fatalf("%s ships enabled -- stage 1 activates nothing", row.Requirement)
+		}
+		// ...and only from a project origin.
+		for _, origin := range row.Origins {
+			if origin != SubjectProject {
+				t.Fatalf("policy %q is declared for origin %q; the ruled activation scope is project only", row.Rule.Policy, origin)
+			}
+		}
+	}
+}
+
+// TestChaos4099_TeamOriginNeverCarriesAPolicyName is CHAOS-4101's boundary.
+// The team-attribution edge is an Ops-COMPUTED attribution
+// (work_item_team_attributions, source enum spanning native_team through
+// manual_fallback), so traversing it would launder an inference into fact
+// scope. The gap is disclosed; the policy is CHAOS-4101's to name.
+func TestChaos4099_TeamOriginNeverCarriesAPolicyName(t *testing.T) {
+	t.Parallel()
+
+	for _, row := range factScopeEligibility {
+		for _, origin := range row.Origins {
+			if origin == SubjectTeam && row.Rule.Policy != FactScopePolicyNone {
+				t.Fatalf("%s names policy %q for a team origin -- that pre-empts CHAOS-4101's product ruling", row.Requirement, row.Rule.Policy)
+			}
+		}
+	}
+}
+
+// TestChaos4099_ReachableWorkItemFamiliesNoLongerClaimAProofOfAbsence is the
+// ruling's widened half, end to end.
+//
+// Work-item status is ONE typed hop from a project -- a shorter chain than
+// the three named policies use -- so pruning it was the same defect this
+// ticket exists to fix, on a more obviously reachable path.
+func TestChaos4099_ReachableWorkItemFamiliesNoLongerClaimAProofOfAbsence(t *testing.T) {
+	t.Parallel()
+
+	families := []FactKind{
+		FactStatus, FactWork, FactActualCompletion,
+		FactBlockers, FactRequiredChildren, FactIdentity, FactMembership,
+	}
+	providers := make([]FactProvider, 0, len(families))
+	requirements := make([]FactRequirement, 0, len(families))
+	for _, kind := range families {
+		providers = append(providers, &factProviderStub{
+			capability: planCapability(kind, string(kind), SubjectWorkItem),
+			result:     FactProviderResult{State: SourceAvailable},
+		})
+		requirements = append(requirements, FactRequirement{Kind: kind})
+	}
+	registry, err := NewFactCapabilityRegistry(providers, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	for _, origin := range []SubjectRef{scopeProject, scopeTeam} {
+		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+			scopeRequest([]SubjectRef{origin}, requirements, TemporalCurrent))
+		if err != nil {
+			t.Fatalf("origin %s: ReadFacts: %v", origin.Kind, err)
+		}
+		if len(bundle.Scope.Events) != len(families) {
+			t.Fatalf("origin %s: events = %d, want one per family", origin.Kind, len(bundle.Scope.Events))
+		}
+		for _, observation := range bundle.Coverage.Sources {
+			if observation.State == SourcePruned {
+				t.Fatalf("origin %s: %s still claims a proof of absence one typed hop from its own work items",
+					origin.Kind, observation.Source)
+			}
+		}
+		if !bundle.Coverage.Partial {
+			t.Fatalf("origin %s: Coverage.Partial = false over a reachable gap", origin.Kind)
+		}
+	}
+}
+
+// TestChaos4099_TeamScopedFamiliesFromAProjectStayPruned is the widening's
+// upper bound, and the reason the table is a table rather than a rule.
+//
+// Reaching workload/investment/readiness from a project would run
+// project <- work_item -OWNED_BY_TEAM-> team, through the same computed
+// attribution CHAOS-4101 is holding back. Approaching it from the other
+// direction does not make it stronger, so no chain is claimed and
+// CHAOS-3783's proof of absence stands.
+func TestChaos4099_TeamScopedFamiliesFromAProjectStayPruned(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []FactKind{FactWorkload, FactInvestment, FactReadiness, FactOperationalDeficiencies} {
+		provider := &factProviderStub{
+			capability: planCapability(kind, string(kind), SubjectTeam),
+			result:     FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry: %v", err)
+		}
+		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+			scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: kind}}, TemporalCurrent))
+		if err != nil {
+			t.Fatalf("%s: ReadFacts: %v", kind, err)
+		}
+		if got := bundle.Coverage.Sources[0].State; got != SourcePruned {
+			t.Fatalf("%s state = %q, want pruned -- no chain to a team-scoped fact is claimed from a project", kind, got)
+		}
+		if bundle.Coverage.Partial {
+			t.Fatalf("%s degraded the answer -- the widening must stop where the citations stop", kind)
+		}
+	}
+}
+
+// TestChaos4099_TheProxyDisclosureReachesTheAnswerThroughTheEngine is the
+// production-wiring pin for the proxy half.
+//
+// The other proxy tests call applyFactScopeDisclosure directly, which proves
+// the function is correct and proves NOTHING about whether Investigate calls
+// it -- exactly the gap CHAOS-4085 shipped through. This one goes through
+// Investigate, so deleting the engine's call fails here.
+func TestChaos4099_TheProxyDisclosureReachesTheAnswerThroughTheEngine(t *testing.T) {
+	enableMetricsProjectPolicy(t, 0)
+
+	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result: FactProviderResult{
+			State: SourceAvailable, Version: "metrics-v1", ObservedAt: &observed,
+			Facts: []CanonicalFact{{
+				Kind: FactMetrics, Subject: scopeRepo,
+				Fields:      map[string]FactValue{"lead_time_days": NumberFactValue(3.5)},
+				ObservedAt:  &observed,
+				SourceState: SourceAvailable,
+			}},
+		},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+		ScopeExpander: &recordingScopeExpander{targets: []SubjectRef{scopeRepo}},
+	})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	telemetry := &recordingTelemetry{}
+	engine, request := scopeEngineWithRegistry(t, telemetry, []SubjectRef{scopeProject}, registry)
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate: %v", err)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("a proxy-disclosed result must be servable: %v", err)
+	}
+	found := false
+	for _, limitation := range result.Limitations {
+		if limitation == contractsv1.ContextFabricFactScopeActivityProxyLimitation {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("limitations = %v, want the activity-proxy disclosure to reach the ANSWER, not just the helper", result.Limitations)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false on a proxy-derived answer")
+	}
+	// The committed subject is still the project: expansion granted a read
+	// permission, never a second commit (ruling invariants 1 and 2).
+	if len(result.SubjectResolution.Committed) != 1 || result.SubjectResolution.Committed[0] != scopeProject {
+		t.Fatalf("Committed = %+v, want the project unchanged by a successful expansion", result.SubjectResolution.Committed)
+	}
+	// ...and the expansion was reported.
+	if len(telemetry.factScopeExpansions) != 1 || telemetry.factScopeExpansions[0].Outcome != FactScopeExpanded {
+		t.Fatalf("expansion events = %+v, want one expanded", telemetry.factScopeExpansions)
+	}
+	if telemetry.factScopeExpansions[0].Basis != FactScopeBasisActivityProxy {
+		t.Fatalf("basis = %q, want activity_proxy", telemetry.factScopeExpansions[0].Basis)
 	}
 }

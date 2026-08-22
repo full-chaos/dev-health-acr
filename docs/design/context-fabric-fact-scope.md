@@ -108,7 +108,8 @@ keeps its single auditable rule and providers keep their declared
 **Policies** (`FactScopePolicy`): `project_work_item_repository_v1`,
 `project_work_item_pull_request_v1`,
 `project_work_item_pull_request_review_v1`, plus `none` for an
-expansion-eligible pair with no policy defined (every `team` row today).
+expansion-eligible pair with no policy defined — every `team` row, and every
+disclosure-only project row.
 
 **Basis** (`FactScopeBasis`): `direct` | `activity_proxy`.
 
@@ -144,20 +145,65 @@ prefix `unexpanded:<outcome>`, the same discipline CHAOS-3783's own
 
 ## 6. Eligibility is a closed table, not a rule
 
-`factScopePolicies` is keyed by (requirement kind, origin kind). A pair
-**absent** from it is not expansion-eligible and keeps CHAOS-3783's honest
-prune.
+`factScopeEligibility` declares every (requirement kind, origin kind) pair for
+which a missing capability is a **reachable gap** rather than a proof of
+irrelevance. A pair absent from it keeps CHAOS-3783's honest prune.
 
-That bound is deliberate in both directions. The tempting generalisation —
-"any capability a project/team subject cannot answer directly is a disclosed
-gap" — over-claims (nothing has established a path from a project to
-team-scoped workload/investment/readiness facts) and destroys the signal
-CHAOS-3783 built (a non-degrading prune is what keeps `Coverage.Partial`
-meaningful; flipping every subject-kind prune to degrading makes every
-correctly-scoped investigation read as compromised).
+**Admission criterion (ruling, 2026-08-22): a verified typed chain, cited.** A
+row exists only where the traversal chain exists in prod code *and* the row
+cites it — edge names plus the producer that writes them, in the row's `Chain`
+field. No chain citation, no row; `TestChaos4099_EveryEligibilityRowCitesItsChain`
+enforces it. That is what keeps this a closed table rather than the rule
+"anything a project cannot answer directly is a gap," which would over-claim
+reachability nobody has shown.
 
-So the table holds exactly the pairs the design spike traced end to end:
-`{project, team} × {metrics, pull_requests, reviews}`.
+**Why disclosure is wider than the three activation policies.** Invariant 7 is
+controlling: `SourcePruned` asserts "proven nothing missing," and on a
+reachable chain that assertion is **false**. CHAOS-3783's argument for a
+non-degrading prune is about not degrading where pruning is genuinely sound;
+it cannot justify keeping a false proof of absence. Where the two conflict,
+honesty wins. Concretely, work-item status is *one* typed hop from a project —
+a shorter chain than the three named policies use — so pruning it was this
+ticket's own defect on a more obviously reachable path.
+
+**Measurement effect, pre-adjudicated by the ruling:** `Coverage.Partial` fires
+more often on project- and team-scoped questions than it did. That is
+disclosure reflecting reality, not a regression.
+
+The three chains, all verified at `0e662ceb`:
+
+| Chain | Edges | Producer |
+| --- | --- | --- |
+| work item | `work_item -BELONGS_TO_PROJECT-> project`, `work_item -OWNED_BY_TEAM-> team` | `devhealthsource/teams_projects_edges.go` |
+| repository | + `work_item -BELONGS_TO_REPOSITORY-> repository` | `devhealthsource/tables.go` |
+| pull request | + `pull_request -BELONGS_TO_REPOSITORY-> repository` | `devhealthsource/tables.go` |
+| review | + `pull_request_review -BELONGS_TO_PULL_REQUEST-> pull_request` | `devhealthsource/tables.go` |
+
+Rows: `{project} × {metrics, pull_requests, reviews, health}` and
+`{project, team} × {status, work, actual_completion, blockers,
+required_children, identity, membership}`, plus
+`{team} × {metrics, pull_requests, reviews}`.
+
+**Deliberately absent:**
+
+- Team-target families from a *project* origin (workload, investment,
+  readiness, operational_deficiencies). The chain would run
+  `project <- work_item -OWNED_BY_TEAM-> team`, through the same computed
+  attribution CHAOS-4101 is holding back — approaching it from the other
+  direction does not make it stronger.
+- incidents, deployments, continuous_integration. Chains plausibly exist;
+  none was traced end to end, and an uncited row is what the criterion
+  forbids.
+- source_health (organization-scoped). No chain.
+- health from a *team* origin: `HealthProvider` supports team directly, so it
+  never prunes and never reaches the table.
+
+**Disclosure ≠ activation.** Widening disclosure is honesty. Widening
+activation is a product commitment about what a fact family *means* for a
+subject that does not own it, and each needs its own preconditions. Every
+widened row carries policy `none`, never traverses, and emits
+`policy_unavailable`. Activation scope stays the three ruled project policies;
+`TestChaos4099_OnlyTheThreeRuledPoliciesAreEverActivatable` pins it.
 
 ## 7. Telemetry
 
@@ -184,6 +230,27 @@ mismatch is always a wiring error.
 `AuthorizationDroppedCount` is telemetry-**only**. "There were targets you
 cannot see" is an existence side-channel and never reaches the answer or
 public provenance.
+
+## 6a. The outcome ladder is ordered so nothing degrading is masked
+
+Two orderings in `expand()` were wrong on the first pass, and both failed in
+the same direction — an outcome meaning "evidence is missing" was reported as
+one meaning "nothing is missing," i.e. this ticket's own defect reintroduced
+inside its fix:
+
+- A truncated traversal that admitted **nothing** (every candidate on the
+  first page authorization-dropped, more pages behind it) was reported
+  `attempted_empty`: non-degrading, no disclosure, logged at INFO. It is the
+  least-evidence case of all, so it must be the loudest. Truncation is now
+  checked **before** emptiness.
+- A traversal returning one valid target **and** one wrong-kind target was
+  reported `expanded`: the bad candidate vanished with no gap and no
+  degradation. A nonzero mismatch now forces `target_kind_mismatch` even when
+  valid targets survive.
+
+Expander and resolver mismatch counts are **disjoint by contract**: an
+expander reports only targets it dropped itself and never returns them, so
+summing cannot double-count.
 
 ## 7a. Two disclosures, not one
 
