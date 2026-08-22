@@ -359,3 +359,33 @@ func TestChaos4086_EveryErrorDerivedReasonIsStamped(t *testing.T) {
 		return true
 	})
 }
+
+// TestChaos4100_CoverageIsDerivedFromRowsNotFromTheAssignedSet is codex
+// xhigh round 1's P2, closed structurally.
+//
+// The first version derived a shard's coverage from its post-filter ENTRY
+// list, which is what the shard was ASSIGNED. ACR_TEST_TRIAL_LIMIT truncates
+// afterwards, so a deliberately-limited dry run recorded FULL coverage --
+// and because the merge step unions these claims into the merged artifact's
+// authoritative coverage record, a partial run presented itself as a
+// complete one.
+//
+// Deriving from the rows removes the ordering question rather than answering
+// it: a row exists if and only if an arm ran for that case, so no filter
+// added later, in any order, can make this over-report.
+func TestChaos4100_CoverageIsDerivedFromRowsNotFromTheAssignedSet(t *testing.T) {
+	// Three cases assigned; the run produced rows for only two of them,
+	// which is exactly what a limit (or an abort) leaves behind.
+	rows := []twoTurnCaseResult{
+		{Index: 7, Member: "expected_kind", Arm: "positive"},
+		{Index: 7, Member: "expected_kind", Arm: "inferred_tier"},
+		{Index: 2, Member: "window", Arm: "positive"},
+	}
+	got := twoTurnCaseIndicesFromResults(rows)
+	if want := []int{2, 7}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("coverage = %v, want %v -- ascending, de-duplicated, and only what produced rows", got, want)
+	}
+	if len(twoTurnCaseIndicesFromResults(nil)) != 0 {
+		t.Fatal("a shard that produced no rows must report no coverage, not an empty-but-present claim")
+	}
+}

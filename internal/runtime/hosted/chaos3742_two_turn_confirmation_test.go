@@ -1017,6 +1017,38 @@ func twoTurnInnermostErrorType(err error) string {
 // CHAOS-4100 shard selection and provisioning provenance
 // ---------------------------------------------------------------------------
 
+// twoTurnCaseIndicesFromResults derives a shard's covered case set from the
+// ROWS it actually produced (CHAOS-4100, codex xhigh review round 1, P2).
+//
+// The first version read the post-shard-filter entry list, which is what
+// the shard was ASSIGNED rather than what it RAN -- ACR_TEST_TRIAL_LIMIT
+// truncates afterwards, so a deliberately-limited dry run recorded full
+// coverage. Moving the derivation after the limit would have fixed that
+// instance and left the ordering hazard: any future step that drops an
+// entry after the derivation reintroduces it silently.
+//
+// Deriving from report.Results removes the ordering question entirely. A
+// row exists if and only if an arm ran for that case, so this cannot claim
+// a case the shard did not reach, whatever filters are added later or in
+// what order. An empty shard correctly reports no coverage.
+//
+// It is the same property the merged artifact depends on: the union of
+// these sets is the run's own statement of what it covered, and a reader
+// checks that union against the annex to prove nothing was dropped.
+func twoTurnCaseIndicesFromResults(results []twoTurnCaseResult) []int {
+	seen := make(map[int]struct{}, len(results))
+	indices := make([]int, 0, len(results))
+	for _, r := range results {
+		if _, exists := seen[r.Index]; exists {
+			continue
+		}
+		seen[r.Index] = struct{}{}
+		indices = append(indices, r.Index)
+	}
+	sort.Ints(indices)
+	return indices
+}
+
 // twoTurnShardCaseIndices reads ACR_TEST_TRIAL_SHARD_CASE_INDICES -- a
 // comma-separated list of corpus positions this shard should run.
 //
@@ -3795,6 +3827,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_INDEX"); raw != "" && os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT") == "" {
 		t.Fatalf("ACR_TEST_TRIAL_SHARD_INDEX=%q is set but ACR_TEST_TRIAL_SHARD_COUNT is not -- both or neither", raw)
 	}
+	// explicitIndices is declared out here so the post-limit provenance
+	// block below can still consult what the launcher ASKED for after the
+	// shard block's own scope has closed.
+	var explicitIndices []int
 	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT"); raw != "" {
 		shardCount, cerr := strconv.Atoi(raw)
 		if cerr != nil || shardCount <= 0 {
@@ -3822,7 +3858,8 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		//
 		// When the variable is absent the modulo path below runs unchanged,
 		// so every pre-CHAOS-4100 invocation selects byte-identical cases.
-		explicitIndices, explicitSet := twoTurnShardCaseIndices(t)
+		var explicitSet map[int]struct{}
+		explicitIndices, explicitSet = twoTurnShardCaseIndices(t)
 		filtered := make([]twoTurnOracleEntry, 0, len(entries))
 		for _, entry := range entries {
 			if explicitSet != nil {
@@ -3847,39 +3884,17 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		report.Provenance.ExecutionShape = "parallel"
 		report.Provenance.ShardIndex = &shardIndex
 		report.Provenance.ShardCount = &shardCount
-		// The indices this shard ACTUALLY ran, derived from the filtered
-		// entries rather than echoed from the request. An explicit list
-		// naming a case the annex does not carry must not appear in the
-		// artifact as though it ran -- the union check a merged artifact
-		// supports is only worth anything if each side reports what
-		// happened, not what was asked for.
-		report.Provenance.Sharding.CaseIndices = twoTurnDistinctCaseIndices(entries)
+		// CaseIndices is NOT derived here: ACR_TEST_TRIAL_LIMIT can still
+		// truncate `entries` below, and an index recorded before that
+		// truncation is a case this shard claims to have run and did not.
+		// The merge step UNIONS these claims into the merged artifact's
+		// authoritative coverage record, so a limited run would present
+		// itself as full-coverage. Derived after the limit instead -- see
+		// the assignment below it.
 		report.Provenance.Sharding.Granularity = twoTurnEnvInt(t, "ACR_TEST_TRIAL_SHARD_GRANULARITY")
 		report.Provenance.Sharding.ConcurrencyCap = twoTurnEnvInt(t, "ACR_TEST_TRIAL_SHARD_CONCURRENCY_CAP")
 		report.Provenance.Sharding.ProvisioningMode = twoTurnShardProvisioningMode(t)
 		report.Provenance.Sharding.DatabaseProvisionMillis = int64(twoTurnEnvInt(t, "ACR_TEST_TRIAL_SHARD_DB_PROVISION_MS"))
-		// A requested index the annex does not carry is a LAUNCHER/annex
-		// disagreement, and it fails the run rather than shrinking it
-		// silently. The launcher computes each shard's chunk from the annex
-		// itself, so a mismatch means the two read different files -- under
-		// which the union across shards no longer covers the corpus and
-		// every population bar the merge step evaluates is quietly measured
-		// against the wrong denominator.
-		if explicitSet != nil {
-			ran := make(map[int]struct{}, len(report.Provenance.Sharding.CaseIndices))
-			for _, index := range report.Provenance.Sharding.CaseIndices {
-				ran[index] = struct{}{}
-			}
-			missing := make([]int, 0, len(explicitIndices))
-			for _, index := range explicitIndices {
-				if _, ok := ran[index]; !ok {
-					missing = append(missing, index)
-				}
-			}
-			if len(missing) > 0 {
-				t.Fatalf("ACR_TEST_TRIAL_SHARD_CASE_INDICES names %d case index(es) the oracle annex does not carry: %v -- the launcher and this process disagree about the corpus, so the merged union would not cover it", len(missing), missing)
-			}
-		}
 	}
 
 	// ACR_TEST_TRIAL_LIMIT bounds how many annex entries THIS PROCESS'S
@@ -3894,6 +3909,39 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		if limit < len(entries) {
 			entries = entries[:limit]
+		}
+	}
+
+	// CHAOS-4100: the launcher/annex closure check. CaseIndices itself is
+	// NOT derived here -- see twoTurnCaseIndicesFromResults at the report
+	// assembly below for why it comes from the ROWS instead.
+	if report.Provenance.ExecutionShape == "parallel" {
+		plannedIndices := twoTurnDistinctCaseIndices(entries)
+		// A requested index this shard did not run is a LAUNCHER/annex
+		// disagreement, and it fails the run rather than shrinking it
+		// silently: the launcher computes each chunk from the annex
+		// itself, so a mismatch means the two read different files, under
+		// which the merged union no longer covers the corpus and every
+		// population bar is measured against the wrong denominator.
+		//
+		// Checked only when no limit is in force. A limit is an OPERATOR
+		// deliberately running less than the shard was given, which is a
+		// dry run rather than a disagreement -- failing it would make
+		// ACR_TEST_TRIAL_LIMIT unusable with an explicit case list.
+		if explicitIndices != nil && os.Getenv("ACR_TEST_TRIAL_LIMIT") == "" {
+			ran := make(map[int]struct{}, len(plannedIndices))
+			for _, index := range plannedIndices {
+				ran[index] = struct{}{}
+			}
+			missing := make([]int, 0, len(explicitIndices))
+			for _, index := range explicitIndices {
+				if _, ok := ran[index]; !ok {
+					missing = append(missing, index)
+				}
+			}
+			if len(missing) > 0 {
+				t.Fatalf("ACR_TEST_TRIAL_SHARD_CASE_INDICES names %d case index(es) this shard did not run: %v -- the launcher and this process disagree about the corpus, so the merged union would not cover it", len(missing), missing)
+			}
 		}
 	}
 
@@ -4267,6 +4315,14 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// CHAOS-4058: run-level timing aggregate, observational only -- see
 	// twoTurnArmTimingSummary's own doc comment.
 	report.TimingSummary = summarizeTwoTurnTiming(report.Timings)
+
+	// CHAOS-4100: coverage recorded from the rows this shard actually
+	// produced, immediately before the artifact is serialized -- see
+	// twoTurnCaseIndicesFromResults for why it is derived from results
+	// rather than from any earlier entry list.
+	if report.Provenance.ExecutionShape == "parallel" {
+		report.Provenance.Sharding.CaseIndices = twoTurnCaseIndicesFromResults(report.Results)
+	}
 
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {

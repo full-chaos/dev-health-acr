@@ -104,6 +104,56 @@ else
   echo "ok: empty annex refused"
 fi
 
+# 8. The concurrency cap must count TEST processes only (codex xhigh review
+#    round 1, P1). launch_shard starts a responder AND a test; a bare
+#    `wait -n` returns when EITHER exits, so a responder finishing early
+#    would free a slot while its test still runs and the cap would be
+#    exceeded silently -- which is the whole failure mode the cap exists to
+#    prevent.
+#
+#    Pinned at the source level because the alternative is a live run: the
+#    bug is invisible to any offline check of the layout, and reproducing it
+#    needs real shards, real responders and a subscription. This is not a
+#    proof that the scheduler is correct; it is a proof that the specific
+#    shape that was wrong cannot come back unnoticed.
+if grep -qE '^\s*wait -n\s*(\|\||$)' "$launcher"; then
+  echo "FAIL: run-two-turn-parallel.sh contains a bare 'wait -n' -- it returns on ANY child, including responders, so the concurrency cap would count processes that are not shards" >&2
+  failures=$((failures + 1))
+else
+  echo "ok: no bare 'wait -n' (cap counts test processes only)"
+fi
+if ! grep -q 'INFLIGHT+=("${TEST_PIDS\[' "$launcher"; then
+  echo "FAIL: the in-flight set is no longer fed from TEST_PIDS -- the cap must count shard tests, not arbitrary children" >&2
+  failures=$((failures + 1))
+else
+  echo "ok: in-flight set is fed from TEST_PIDS"
+fi
+
+# 9. Plan-only must not require the private ops/.env or a sibling
+#    dev-health checkout (codex xhigh review round 1, P1). This gate runs in
+#    `make verify`, so a plan-only path that sources live credentials would
+#    fail every clean checkout and every CI runner while passing on the one
+#    machine that happens to have them.
+#    Tested by RUNNING it somewhere those files do not exist, not by
+#    grepping for the guard: a grep passes for a guard that has been renamed
+#    into uselessness, which is precisely what a first draft of this check
+#    did. The copy below has no sibling dev-health checkout above it, so
+#    common.sh's own resolve_dev_health_root/ops/.env checks would both fire.
+isolated="$tmp/isolated/repo/scripts/trial"
+mkdir -p "$isolated"
+cp "$launcher" "$script_dir/common.sh" "$isolated/"
+if ! out="$(cd "$tmp/isolated/repo" && ACR_TRIAL_SHARD_PLAN_ONLY=1 ACR_TRIAL_CASES_PER_SHARD=1 \
+  bash scripts/trial/run-two-turn-parallel.sh "$tmp/dense.json" 2>&1)"; then
+  echo "FAIL: plan-only failed in a checkout with no sibling dev-health/ops/.env -- this gate runs in 'make verify', so that is every CI runner" >&2
+  echo "  output: $out" >&2
+  failures=$((failures + 1))
+elif [[ "$out" != *'"shard_count":5'* ]]; then
+  echo "FAIL: plan-only produced no layout without credentials: $out" >&2
+  failures=$((failures + 1))
+else
+  echo "ok: plan-only runs with no dev-health checkout and no ops/.env"
+fi
+
 if [[ "$failures" -gt 0 ]]; then
   echo "shard-plan checks FAILED ($failures)" >&2
   exit 1

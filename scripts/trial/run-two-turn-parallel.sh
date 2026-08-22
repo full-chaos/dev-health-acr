@@ -51,7 +51,31 @@
 # provenance.execution_shape="parallel" so a reader can never mistake it
 # for a ratified sequential pair.
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
+# PLAN-ONLY IS ANSWERED BEFORE ANY LIVE SETUP (codex xhigh review round 1,
+# P1). common.sh hard-exits at SOURCE time when the sibling dev-health
+# checkout or its ops/.env is absent -- correctly, since every other path
+# through this script needs those credentials. Plan-only needs none of it:
+# it reads the annex, computes a layout and prints it. Sourcing first made
+# `make shard-plan` (and therefore `make verify`) depend on a private
+# credentials file that no clean checkout or CI runner has, which would
+# have failed CI while passing on the one machine that happens to have it.
+#
+# The layout logic itself is duplicated below rather than hoisted here on
+# purpose: this branch computes it from the SAME code the live path uses,
+# by re-entering this script with the variables it needs already set.
+plan_only_requested() { [[ "${ACR_TRIAL_SHARD_PLAN_ONLY:-0}" == "1" ]]; }
+if ! plan_only_requested; then
+  source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+else
+  # Minimal stand-ins for the two values the layout code reads. Neither
+  # reaches a database, a model or a credential.
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+  trial_wire_common_env() { :; }
+  trial_secret() { printf 'plan-only'; }
+  require_outside_repo_tree() { :; }
+  ACR_TRIAL_RESULTS_DIR="${ACR_TRIAL_RESULTS_DIR:-${TMPDIR:-/tmp}}"
+fi
 
 ANNEX_PATH="${1:?usage: run-two-turn-parallel.sh <oracle-annex-path> [limit] [shard-count]}"
 LIMIT="${2:-}"
@@ -121,10 +145,10 @@ require_outside_repo_tree() {
     ;;
   esac
 }
-require_outside_repo_tree "TMPDIR" "${TMPDIR:-/tmp}"
+plan_only_requested || require_outside_repo_tree "TMPDIR" "${TMPDIR:-/tmp}"
 
 trial_wire_common_env
-require_outside_repo_tree "ACR_TRIAL_RESULTS_DIR" "$ACR_TRIAL_RESULTS_DIR"
+plan_only_requested || require_outside_repo_tree "ACR_TRIAL_RESULTS_DIR" "$ACR_TRIAL_RESULTS_DIR"
 export ACR_TEST_TWOTURN_ORACLE_ANNEX="$ANNEX_PATH"
 if [[ -n "$LIMIT" ]]; then
   export ACR_TEST_TRIAL_LIMIT="$LIMIT"
@@ -134,7 +158,12 @@ if [[ -n "${ACR_TRIAL_CORPUS_SHA256:-}" ]]; then
 fi
 # ACR_TEST_TRIAL_BASE_SHA/ACR_TEST_TRIAL_ARM: see run-two-turn.sh's own
 # comments for why these are required exactly this way.
-export ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
+if plan_only_requested; then
+  export ACR_TEST_TRIAL_BASE_SHA="plan-only"
+else
+  ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
+  export ACR_TEST_TRIAL_BASE_SHA
+fi
 export ACR_TEST_TRIAL_ARM="twoturn"
 
 # annex_case_indices reads the annex's own DISTINCT case indices, ascending.
@@ -460,7 +489,42 @@ launch_shard() {
 # must not abandon the shards already running, and its non-zero exit still
 # refuses the merge below.
 overall_status=0
-running=0
+
+# INFLIGHT holds the TEST pids currently running -- deliberately not "any
+# child" (codex xhigh review round 1, P1).
+#
+# A bare `wait -n` returns when ANY child exits, and launch_shard starts
+# TWO: a responder and a test. A responder finishing first -- which is
+# exactly what happens when its shard's exchange work is done before the
+# test finishes writing its artifact -- would free a slot while that test
+# is still running, so the advertised cap could be exceeded and the
+# subscription contention this cap exists to bound would recur silently.
+# Only test pids are counted, so the cap means what it says.
+INFLIGHT=()
+
+# wait_for_one_test blocks until at least one IN-FLIGHT TEST finishes, then
+# prunes it from INFLIGHT.
+#
+# `wait -n` with explicit pid arguments needs bash 5.1+. Where it is
+# available a slot is freed by whichever test finishes FIRST, which matters
+# because case durations are long-tailed and waiting on the oldest would
+# idle a slot behind one slow case. Where it is not, the fallback waits on
+# the oldest -- slower in the tail, identical in correctness. The cap is a
+# correctness property; the scheduling order is an optimization.
+wait_for_one_test() {
+  if ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1))); then
+    wait -n "${INFLIGHT[@]}" || overall_status=1
+    local still=()
+    for pid in "${INFLIGHT[@]}"; do
+      kill -0 "$pid" 2>/dev/null && still+=("$pid")
+    done
+    INFLIGHT=("${still[@]}")
+  else
+    wait "${INFLIGHT[0]}" || overall_status=1
+    INFLIGHT=("${INFLIGHT[@]:1}")
+  fi
+}
+
 for ((i = 0; i < SHARD_COUNT; i++)); do
   if [[ -z "${SHARD_CASES[$i]}" ]]; then
     # An empty shard runs no case. It still needs an artifact, because the
@@ -471,19 +535,19 @@ for ((i = 0; i < SHARD_COUNT; i++)); do
     echo "shard $i: no cases assigned (modulo split over a sparse annex)"
   fi
   launch_shard "$i"
-  running=$((running + 1))
-  if [[ "$running" -ge "$MAX_CONCURRENT" ]]; then
-    wait -n || overall_status=1
-    running=$((running - 1))
-  fi
+  INFLIGHT+=("${TEST_PIDS[${#TEST_PIDS[@]} - 1]}")
+  while [[ "${#INFLIGHT[@]}" -ge "$MAX_CONCURRENT" ]]; do
+    wait_for_one_test
+  done
 done
 
 echo "all $SHARD_COUNT shards launched (cap $MAX_CONCURRENT), waiting..."
-for pid in "${TEST_PIDS[@]}"; do
+for pid in "${INFLIGHT[@]}"; do
   if ! wait "$pid"; then
     overall_status=1
   fi
 done
+INFLIGHT=()
 TEST_PIDS=() # every shard already reaped above; trap becomes a no-op for these
 
 for exdir in "${EXCHANGE_DIRS[@]}"; do
