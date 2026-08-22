@@ -245,6 +245,40 @@ type EngineTelemetry interface {
 	// the archaeology CANONICAL ARCHITECTURE's diagnosis-in-artifacts rule
 	// forbids relying on.
 	RecordSynthesisStatusOverride(ctx context.Context, principal storage.Principal, outcome SynthesisStatusOverrideOutcome)
+	// RecordFactScopeExpansion (CHAOS-4099) reports ONE fact-read scope
+	// decision: for a given requirement kind, origin subject kind and named
+	// policy, whether the fact family could be reached from the subjects
+	// this investigation resolved, and if not, why not.
+	//
+	// Declared on THIS interface rather than as an optional side interface,
+	// for the reason RecordSynthesisStatusOverride's own comment above
+	// spells out: CHAOS-4085 shipped telemetry behind an optional interface
+	// that nothing implemented, and every event vanished silently. An
+	// expansion decision that can go missing by omission is the CHAOS-4089
+	// failure mode itself, and this branch is the one the whole ticket
+	// exists to make diagnosable.
+	//
+	// WITHOUT THIS STREAM THE DECISION IS INVISIBLE. The caller receives an
+	// ordinary answer carrying a fixed, deliberately non-specific
+	// disclosure -- it names no fact family, no policy and no subject kind,
+	// because a reader cannot act on any of those. So nothing in the
+	// response distinguishes "the metrics policy is still disabled" from
+	// "the traversal ran and this project genuinely touches no repository"
+	// from "authorization removed every candidate". Those demand three
+	// different operator responses, and this event is the only place they
+	// are told apart.
+	//
+	// Emitted once per (requirement, origin kind, policy) triple that
+	// needed a decision, and NOT AT ALL for a requirement answerable
+	// directly from its own subjects -- a not_needed event on every
+	// ordinary requirement would bury the signal under the base rate.
+	//
+	// Content-safe by construction like every method beside it: closed
+	// enums and counts only. AuthorizationDroppedCount in particular is
+	// telemetry-ONLY and must never reach the answer or public provenance
+	// (ruling invariant 9) -- "there were subjects you may not see" is an
+	// existence side-channel, and this stream is where it is safely said.
+	RecordFactScopeExpansion(ctx context.Context, principal storage.Principal, event FactScopeExpansionEvent)
 	// RecordPriorSubjectReceiptSkipReason (CHAOS-3888) reports the SAME
 	// aggregate this call's RecordPriorSubjectReceiptsSkipped already
 	// reported, split by WHY each receipt in it was skipped -- a closed
@@ -886,6 +920,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
 	}
 	facts, err := e.facts.ReadFacts(ctx, principal, factRequest)
+	// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
+	// this read made is reported here, immediately, whether it expanded,
+	// declined, or failed.
+	//
+	// BEFORE the error check, not after (codex review finding). A fact read
+	// that resolved its scope and THEN failed -- an unbuildable query, a
+	// provider result the merge rejected -- is precisely the run an operator
+	// most needs the expansion decisions for, and emitting after the early
+	// return would drop them exactly then. ReadFacts returns the in-progress
+	// bundle alongside its error so Scope survives; a nil Scope (an error
+	// raised before resolution ran) simply emits nothing.
+	e.recordFactScopeExpansion(ctx, principal, facts.Scope)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("read canonical facts: %w", err))
 	}
@@ -1027,6 +1073,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// resolution, which is CHAOS-4085's own documented residual, neither
 	// widened nor narrowed here.
 	e.recordSynthesisStatusOverride(ctx, principal, applySynthesisStatusOverride(&result))
+	// CHAOS-4099: the answer's own statement that some requested evidence
+	// was never reachable. Placed alongside the other post-synthesis
+	// composers and before the commit-affirmation gate, Validate and Save,
+	// so the disclosure, its Coverage.Partial flag and the answer are one
+	// object throughout.
+	applyFactScopeDisclosure(&result, facts.Scope)
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or
 	// Coverage has run (retrieval degradation, temporal disclosures), and
