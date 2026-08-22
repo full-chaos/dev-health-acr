@@ -160,7 +160,13 @@ func serviceAuthoredLimitations() []string {
 	// candidate subject was deliberately NOT committed, and a reader who
 	// loses it sees an answer that simply never names a subject, with no
 	// account of why.
-	return append(disclosures, commitRetractionLimitation)
+	disclosures = append(disclosures, commitRetractionLimitation)
+	// CHAOS-4098: the clarification-unavailable disclosure. Same standing
+	// and the same reason: it is the only statement in the document that
+	// the synthesis step declined to conclude, and a reader who loses it
+	// sees a plain no_match answer with nothing to distinguish it from one
+	// the evidence genuinely produced.
+	return append(disclosures, synthesisClarificationUnavailableLimitation)
 }
 
 func withRetrievalDegradation(limitations []string) (composed []string, displaced int) {

@@ -223,6 +223,28 @@ type EngineTelemetry interface {
 	// classification and why an authorization-narrowing cause specifically
 	// must stay telemetry-only, never surfacing in the response contract.
 	RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string)
+	// RecordSynthesisStatusOverride (CHAOS-4098) reports that the engine
+	// served a DIFFERENT investigation status than the synthesis step
+	// returned -- today only clarification_required -> no_match, when the
+	// synthesized draft asked for clarification on a path that has none to
+	// offer (applySynthesisStatusOverride).
+	//
+	// Declared on THIS interface rather than as an optional side interface
+	// so every implementation must carry it or fail to compile. CHAOS-4085
+	// shipped its own retraction telemetry behind an optional interface,
+	// nothing in production implemented it, and every retraction vanished
+	// silently until #207 caught it; a decision branch whose telemetry can
+	// go missing by omission is the CHAOS-4089 failure mode itself.
+	//
+	// Without this stream the override is invisible: the caller receives a
+	// perfectly ordinary no_match answer, and nothing distinguishes "the
+	// evidence genuinely supported no match" from "the model declined to
+	// conclude and the engine relabelled it". The defect this exists for
+	// (case 60 of the v9 rerun) was diagnosable ONLY by reading the raw
+	// model-exchange files off a scratch directory after the run -- exactly
+	// the archaeology CANONICAL ARCHITECTURE's diagnosis-in-artifacts rule
+	// forbids relying on.
+	RecordSynthesisStatusOverride(ctx context.Context, principal storage.Principal, outcome SynthesisStatusOverrideOutcome)
 	// RecordPriorSubjectReceiptSkipReason (CHAOS-3888) reports the SAME
 	// aggregate this call's RecordPriorSubjectReceiptsSkipped already
 	// reported, split by WHY each receipt in it was skipped -- a closed
@@ -982,6 +1004,29 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// requestStructureCanonicalization's own doc comment) -- an empty
 	// Confirmed set means OfferSnapshot is already nil by construction.
 	result.StructureOfferSnapshot = structureCanon.OfferSnapshot
+	// CHAOS-4098: the decisive path's synthesized-status override. Placed
+	// HERE, immediately BEFORE the commit-affirmation gate below, for two
+	// reasons that are both ordering constraints rather than preferences.
+	//
+	// AFTER every limitation composer (retrieval degradation, temporal
+	// disclosures) and BEFORE Validate and Save, so its disclosure and its
+	// Coverage.Partial flag are part of the SAME object that is validated,
+	// returned and persisted -- the identical argument the gate below
+	// makes for its own placement.
+	//
+	// BEFORE the gate, not after, because this override RECOMPOSES
+	// DirectJudgment and DeterministicAnswer from the resolution, and the
+	// gate deliberately does NOT recompose them after a retraction (see
+	// its own comment). Running afterwards would silently re-render those
+	// two fields against a post-retraction resolution and change a
+	// decision CHAOS-4085 ruled on, in a ticket that is not about it.
+	// Running first means the override sees exactly the resolution the
+	// original composition saw, so recomposition is a pure status swap.
+	// When BOTH fire on the same result -- the observed case-60 shape --
+	// the prose is therefore composed against the pre-retraction
+	// resolution, which is CHAOS-4085's own documented residual, neither
+	// widened nor narrowed here.
+	e.recordSynthesisStatusOverride(ctx, principal, applySynthesisStatusOverride(&result))
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or
 	// Coverage has run (retrieval degradation, temporal disclosures), and

@@ -316,6 +316,10 @@ type recordingTelemetry struct {
 	// structureExplicit (CHAOS-3972 P3) mirrors structureReceipts' own
 	// list-not-count discipline.
 	structureExplicit []structureExplicitRecord
+	// synthesisStatusOverrides (CHAOS-4098) mirrors the SAME
+	// list-not-count discipline: a test asserts the exact from/to/reason
+	// triple and the committed count, never merely that something fired.
+	synthesisStatusOverrides []SynthesisStatusOverrideOutcome
 	// priorConsulted/priorDegradations (CHAOS-3977 P5) mirror the SAME
 	// list-not-count discipline.
 	priorConsulted    []priorConsultedRecord
@@ -369,6 +373,10 @@ func (r *recordingTelemetry) RecordPriorSubjectReceiptsSkipped(_ context.Context
 
 func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ storage.Principal, reason string) {
 	r.subjectlessTerminalReasons = append(r.subjectlessTerminalReasons, reason)
+}
+
+func (r *recordingTelemetry) RecordSynthesisStatusOverride(_ context.Context, _ storage.Principal, outcome SynthesisStatusOverrideOutcome) {
+	r.synthesisStatusOverrides = append(r.synthesisStatusOverrides, outcome)
 }
 
 func (r *recordingTelemetry) RecordPriorSubjectReceiptSkipReason(_ context.Context, _ storage.Principal, reason string, count int, epochDelta int64) {

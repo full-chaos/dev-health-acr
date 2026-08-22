@@ -209,9 +209,28 @@ const (
 	// each). A prompt version names one exact text, so the merged text --
 	// which is neither branch's v8 -- takes the next number rather than
 	// leaving two different prompts sharing a version string.
+	// v10 (CHAOS-4098) states the one status rule the prompt never had.
+	// The model-output schema offers status "clarification_required", the
+	// prompt said nothing about when any status is admissible, and a draft
+	// that used it on a decisive path produced a result ACR could not
+	// validate at all (see applySynthesisStatusOverride's own doc comment
+	// for the full defect). The engine now handles that draft rather than
+	// failing on it, so this statement is the PREVENTIVE half, not the
+	// load-bearing one: nothing depends on the model obeying it, and the
+	// override stands whether it does or not. Stated anyway because a
+	// model steered away from the status produces the answer the caller
+	// actually wanted instead of a relabelled no_match.
+	//
+	// A version bump cold-caches every reuse-participating row for every
+	// org (the reuse key binds on this exact constant -- see
+	// contextfabric.ReuseKey.SynthesisPromptVersion). That over-
+	// invalidation is the accepted, documented cost of any prompt change,
+	// identical in shape to v6-v9 above; it is not a reason to leave two
+	// different prompt texts sharing one version string.
+	//
 	// Exported for the same CHAOS-3862 reason as
 	// DefaultInterpretationPromptVersion above.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v9"
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v10"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
