@@ -176,6 +176,71 @@ func TestWorkItemAnchorColumns(t *testing.T) {
 	}
 }
 
+// TestBuildCensusDiscriminator_ProjectAnchorTriesBothArms is CHAOS-4108's
+// regression: a SubjectProject anchor on work_item must widen to BOTH arms
+// of the dual project-id space (projects.id directly, OR projects.project_key
+// when non-empty) -- pre-fix, the predicate compared only against
+// canonicalIDValue's raw extraction (projects.id), which matched ZERO
+// gitlab work items live (their project_id column holds project_key, never
+// id). Every OTHER anchor kind (repository) must stay exactly the
+// single-arm equality it always was.
+func TestBuildCensusDiscriminator_ProjectAnchorTriesBothArms(t *testing.T) {
+	t.Parallel()
+	predicate, err := BuildCensusDiscriminator(contextfabric.SubjectWorkItem, "", false, contextfabric.SubjectProject, "project.v2:gitlab:p-1", true)
+	if err != nil {
+		t.Fatalf("BuildCensusDiscriminator: %v", err)
+	}
+	wantSQL := "toString(w.project_id) IN (SELECT join_key FROM (SELECT provider, id, join_key, count() OVER (PARTITION BY join_key) AS key_count FROM" +
+		" (SELECT DISTINCT provider, id, join_key FROM" +
+		" (SELECT provider, id, id AS join_key FROM projects FINAL WHERE org_id = {census_org_id:String}" +
+		" UNION ALL" +
+		" SELECT provider, id, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {census_org_id:String} AND ifNull(project_key, '') != '')))" +
+		" WHERE provider = {census_anchor_provider:String} AND id = {census_anchor_id:String} AND key_count = 1)"
+	if predicate.SQL != wantSQL {
+		t.Fatalf("SQL = %q, want %q", predicate.SQL, wantSQL)
+	}
+	if len(predicate.Bindings) != 2 || predicate.Bindings[0].Name != "census_anchor_id" || predicate.Bindings[0].Value != "p-1" ||
+		predicate.Bindings[1].Name != "census_anchor_provider" || predicate.Bindings[1].Value != "gitlab" {
+		t.Fatalf("Bindings = %#v, want census_anchor_id=p-1 and census_anchor_provider=gitlab", predicate.Bindings)
+	}
+
+	// A repository anchor (pull_request's own FK column) must be entirely
+	// unaffected: no OR, no reference to projects at all.
+	repoPredicate, err := BuildCensusDiscriminator(contextfabric.SubjectPullRequest, "", false, contextfabric.SubjectRepository, "repository:r-1", true)
+	if err != nil {
+		t.Fatalf("BuildCensusDiscriminator (repository anchor): %v", err)
+	}
+	if repoPredicate.SQL != "toString(p.repo_id) = {census_anchor_id:String}" {
+		t.Fatalf("repository anchor SQL = %q, want the untouched single-arm equality", repoPredicate.SQL)
+	}
+}
+
+// TestBuildCensusDiscriminator_ProjectAnchorGroupingSurvivesAHandle is codex
+// xhigh review round-1 finding F1's regression, still pinned after the
+// round-3 rewrite to a single IN(...) expression (no top-level OR of its own
+// -- SQL's IN binds tighter than AND, so composing it with a handle
+// predicate via " AND " is unambiguous by construction). Kept as a
+// regression: this is the first anchor predicate that was EVER anything
+// other than a bare equality, so it is the first to have needed proving at
+// all.
+func TestBuildCensusDiscriminator_ProjectAnchorGroupingSurvivesAHandle(t *testing.T) {
+	t.Parallel()
+	predicate, err := BuildCensusDiscriminator(contextfabric.SubjectWorkItem, "CHAOS-1", true, contextfabric.SubjectProject, "project.v2:gitlab:p-1", true)
+	if err != nil {
+		t.Fatalf("BuildCensusDiscriminator: %v", err)
+	}
+	wantSQL := "position(w.work_item_id, ':') > 0 AND substring(w.work_item_id, position(w.work_item_id, ':') + 1) = {census_handle_ticket_key:String}" +
+		" AND toString(w.project_id) IN (SELECT join_key FROM (SELECT provider, id, join_key, count() OVER (PARTITION BY join_key) AS key_count FROM" +
+		" (SELECT DISTINCT provider, id, join_key FROM" +
+		" (SELECT provider, id, id AS join_key FROM projects FINAL WHERE org_id = {census_org_id:String}" +
+		" UNION ALL" +
+		" SELECT provider, id, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {census_org_id:String} AND ifNull(project_key, '') != '')))" +
+		" WHERE provider = {census_anchor_provider:String} AND id = {census_anchor_id:String} AND key_count = 1)"
+	if predicate.SQL != wantSQL {
+		t.Fatalf("SQL = %q, want %q -- the anchor's IN must stay correctly composed with the handle predicate", predicate.SQL, wantSQL)
+	}
+}
+
 // TestKindHasAnchorFKMatchesCensusRegistry cross-tests
 // graphrank.KindHasAnchorFK (the shadow round's own copy of "which anchor
 // kinds does this census kind's base table have an FK column for") against

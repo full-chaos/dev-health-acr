@@ -337,7 +337,8 @@ var ProductionColumns = map[string][]Column{
 		{Name: "type", Type: "String"},
 		{Name: "status", Type: "String"},
 		// CHAOS-3802: queryWorkItemProjects selects project_id and joins it
-		// to projects.id. Position 10 in production, i.e. before created_at.
+		// to projects (CHAOS-4108: on projects.id OR projects.project_key,
+		// not id alone). Position 10 in production, i.e. before created_at.
 		{Name: "project_id", Type: "String"},
 		// CHAOS-3833: native_team_key (11) and project_name (12) follow
 		// project_id (10) directly in production.

@@ -41,14 +41,22 @@ func attributionProperties(source, confidence string) map[string]contractsv1.Con
 // queryWorkItemProjects projects work_item -> project (BELONGS_TO_PROJECT)
 // from work_items.project_id.
 //
-// project_id is the ONLY usable link. work_items.project_key exists but is
+// project_id is the ONLY usable link -- work_items.project_key exists but is
 // empty on every one of the ground-truth org's 3304 rows (live-verified), so
 // a project_key-based join would silently produce zero edges while looking
-// correct. The INNER JOIN to projects is the same resolvability discipline
-// queryWorkItemHierarchy applies to parent_id: live, 16 of 18 distinct
-// project_id values resolve and 3080 of 3086 rows join, so the join drops 6
-// rows naming a project that no longer exists rather than writing a dangling
-// endpoint into the graph.
+// correct. That claim is true for the COLUMN; it was wrong about which ARM
+// of projects that column joins (CHAOS-4108, corrected). Ops deliberately
+// maintains a dual project-id space (normalize.py:165-176,
+// native_status_change.py:161-220, CHAOS-3380 x3): work_items.project_id
+// holds projects.id for Linear, but projects.project_key (a rename-safe
+// project_full_path, e.g. "full.chaos/dev-health-ops") for gitlab -- never
+// projects.id. An INNER JOIN on p.id = w.project_id alone therefore resolves
+// every Linear row but ZERO gitlab rows, live-verified -- not the "16 of 18
+// distinct project_id values / 3080 of 3086 rows" this comment used to claim
+// (that count never separated the two disjoint populations). The join below
+// widens to BOTH arms, mirroring queryProjectTeams' own "SECOND -- the
+// id-space trap" fix 130 lines below: p.id equals w.project_id, OR a
+// non-empty p.project_key equals w.project_id.
 //
 // Authorization comes from the WORK ITEM's own repo (LEFT JOIN repos), routed
 // through workItemAuthorization -- the CHAOS-3785 zero-UUID discipline. A
@@ -57,12 +65,20 @@ func attributionProperties(source, confidence string) map[string]contractsv1.Con
 //
 // CHAOS-3898 (design brief §1.4): projects.id alone does not name a
 // provider, and project.v2's canonical id needs one. key_resolution_count
-// (count() OVER (PARTITION BY id), the SAME anchor_collision-detection
-// shape queryProjectTeams already uses for project_key) proves whether THIS
-// id resolves to exactly one provider within the organization; live,
-// queryProjects' own doc comment records zero such collisions across every
-// organization checked, so this is a defensive, currently-inert guard, not
-// a live behavior change. An ambiguous id is omitted (never guessed) and
+// (count() OVER (PARTITION BY join_key), the SAME anchor_collision-detection
+// shape queryProjectTeams already uses for project_key) now proves whether
+// THIS specific id-or-project_key VALUE resolves to exactly one project
+// within the organization -- widened from PARTITION BY id alone to cover
+// both arms the join now tries, so an id shared by one project and a
+// project_key shared by another can never be silently conflated either. The
+// projected canonical id is always built from the JOINED project row's own
+// (provider, id) -- p.id, never the raw w.project_id -- so an edge whose
+// gitlab arm matched via project_key still resolves to the SAME canonical
+// id queryProjects mints for that project (teams_projects.go), not a
+// dangling one built from the slug. Live, queryProjects' own doc comment
+// records zero cross-provider id collisions across every organization
+// checked, so this remains a defensive, currently-inert guard, not a live
+// behavior change. An ambiguous value is omitted (never guessed) and
 // counted in the SAME run-scoped ambiguity ledger queryProjectTeams
 // reports through logAmbiguousProjectKeys, via projectTeamsQuery's own
 // closure convention.
@@ -74,19 +90,36 @@ func workItemProjectsQuery(omissions *ambiguityLedger) func(context.Context, con
 
 func queryWorkItemProjects(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(w.repo_id), ':', w.work_item_id)"
-	statement := `SELECT w.work_item_id, w.project_id, toString(w.repo_id), ifNull(r.repo, ''), w.updated_at, p.provider, p.key_resolution_count
+	// The inner subquery flattens each project row into up to TWO candidate
+	// join keys -- its own id (every provider) and, when non-empty, its own
+	// project_key (gitlab) -- via UNION ALL, deduplicated with DISTINCT so a
+	// project whose id and project_key happen to collide is not double
+	// counted. count() OVER (PARTITION BY join_key) then measures, per
+	// DISTINCT key value, how many projects present it -- the same ambiguity
+	// signal key_resolution_count always was, now computed over the widened
+	// key space. p.id (the project's OWN canonical id column, never the join
+	// key) is carried through so the projected relationship always resolves
+	// to the SAME canonical id queryProjects mints, regardless of which arm
+	// matched.
+	statement := `SELECT w.work_item_id, w.project_id, toString(w.repo_id), ifNull(r.repo, ''), w.updated_at, p.provider, p.id, p.key_resolution_count
 FROM work_items AS w FINAL
 INNER JOIN (
-  SELECT id, provider, count() OVER (PARTITION BY id) AS key_resolution_count
-  FROM projects FINAL WHERE org_id = {org_id:String}
-) AS p ON p.id = w.project_id
+  SELECT id, provider, join_key, count() OVER (PARTITION BY join_key) AS key_resolution_count
+  FROM (
+    SELECT DISTINCT id, provider, join_key FROM (
+      SELECT id, provider, id AS join_key FROM projects FINAL WHERE org_id = {org_id:String}
+      UNION ALL
+      SELECT id, provider, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
+    )
+  )
+) AS p ON p.join_key = w.project_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE w.org_id = {org_id:String} AND w.project_id != ''` + sincePredicate(cursor, "w.updated_at", rowKey) + orderBy("w.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var workItemID, projectID, repoID, repoSlug, provider string
+		var workItemID, projectID, repoID, repoSlug, provider, resolvedProjectID string
 		var observedAt time.Time
 		var keyResolutionCount uint64
-		if err := r.Scan(&workItemID, &projectID, &repoID, &repoSlug, &observedAt, &provider, &keyResolutionCount); err != nil {
+		if err := r.Scan(&workItemID, &projectID, &repoID, &repoSlug, &observedAt, &provider, &resolvedProjectID, &keyResolutionCount); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -99,7 +132,13 @@ WHERE w.org_id = {org_id:String} AND w.project_id != ''` + sincePredicate(cursor
 		if err != nil {
 			return nil, err
 		}
-		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+		// The canonical id is always derived from the JOINED project row's
+		// own (provider, id) -- resolvedProjectID (p.id) -- never from
+		// projectID (w.project_id): the latter can be a project_key value
+		// for a gitlab row, which is not the segment shape
+		// identity.Derive(KindProject, ...) expects and would mint an id no
+		// graph node actually carries.
+		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, resolvedProjectID}, nil)
 		if err != nil {
 			return nil, err
 		}

@@ -361,14 +361,19 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 // queryProjects projects the Project subject from `projects`
 // (ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id)).
 //
-// Two live facts drive the shape here. First, projects.id is the ONLY id
-// space work_items.project_id joins (16 of 18 distinct values resolve; 3080
-// of 3086 rows), so the canonical id is projects.id verbatim -- including
-// both id SHAPES that space contains, a provider-composite
-// ("<org>:gitlab:71133891") and a bare Linear UUID. Deriving an id from
-// project_key instead would strand every Linear project, which carries no
-// project_key at all. Second, FINAL matters: the ground-truth org holds 56
-// raw rows that collapse to 20.
+// Two live facts drive the shape here. First, this ENTITY's own canonical id
+// is minted from projects.id verbatim -- including both id SHAPES that space
+// contains, a provider-composite ("<org>:gitlab:71133891") and a bare Linear
+// UUID -- never from project_key, which would strand every Linear project
+// (carries no project_key at all). This is independent of which arm
+// work_items.project_id itself joins on the OTHER end of the BELONGS_TO_PROJECT
+// edge: that is queryWorkItemProjects' own concern (teams_projects_edges.go),
+// which CHAOS-4108 corrected from a false single-arm ("projects.id is the
+// ONLY id space work_items.project_id joins") to the real dual-arm join --
+// this entity's own canonical id is unaffected either way, since
+// queryWorkItemProjects always derives the edge's project endpoint from the
+// JOINED row's own (provider, id), the SAME pair this function uses. Second,
+// FINAL matters: the ground-truth org holds 56 raw rows that collapse to 20.
 //
 // The dedup key includes provider, so projects.id is only unique PER PROVIDER
 // in principle. Checked across every organization in live ClickHouse

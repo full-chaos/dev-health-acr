@@ -140,12 +140,15 @@ func TestTeamSearchTextCarriesTheLexicalHandlesAUserWouldType(t *testing.T) {
 	}
 }
 
-// TestProjectSubjectsProjectAtTheWorkItemJoinIdentity pins project canonical
-// ids to projects.id -- the only id space work_items.project_id joins
-// (live: 16 of 18 distinct values resolve, 3080 of 3086 rows). The two id
-// SHAPES that space contains (provider-composite and bare UUID) must both
-// survive verbatim; deriving an id from project_key instead would strand
-// every Linear project, which has no project_key at all.
+// TestProjectSubjectsProjectAtTheWorkItemJoinIdentity pins the project
+// ENTITY's own canonical id to projects.id verbatim, regardless of which arm
+// of the dual project-id space a given work_item's project_id column joins
+// on the OTHER end of the BELONGS_TO_PROJECT edge (CHAOS-4108: id for
+// Linear, project_key for gitlab -- queryWorkItemProjects' own concern, not
+// this producer's). The two id SHAPES this entity's own id space contains
+// (provider-composite and bare UUID) must both survive verbatim; deriving an
+// id from project_key instead would strand every Linear project, which has
+// no project_key at all.
 func TestProjectSubjectsProjectAtTheWorkItemJoinIdentity(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedTeamsProjectsClient())
@@ -316,11 +319,16 @@ func TestTeamsProjectsFullSnapshotClaimsCompleteEnumeration(t *testing.T) {
 }
 
 // workItemProjectRow mirrors queryWorkItemProjects' SELECT list exactly,
-// trailing provider + key_resolution_count included (CHAOS-3898 D-5: the
-// SAME per-(provider) uniqueness guard queryProjectTeams already uses,
-// applied here since the edge's To endpoint is now project.v2:<provider>:<id>).
-func workItemProjectRow(workItemID, projectID, repoID, repoSlug string, updatedAt time.Time, provider string) []any {
-	return []any{workItemID, projectID, repoID, repoSlug, updatedAt, provider, uint64(1)}
+// trailing provider + p.id (the JOINED project's own canonical id column,
+// CHAOS-4108) + key_resolution_count included (CHAOS-3898 D-5: the SAME
+// per-(provider) uniqueness guard queryProjectTeams already uses, applied
+// here since the edge's To endpoint is now project.v2:<provider>:<id>).
+// resolvedProjectID is p.id -- the JOINED project row's own id, which equals
+// projectID (w.project_id) for a Linear row (the id arm) but differs from it
+// for a gitlab row matched via the project_key arm (CHAOS-4108); pass them
+// separately so a fixture can exercise either.
+func workItemProjectRow(workItemID, projectID, repoID, repoSlug string, updatedAt time.Time, provider, resolvedProjectID string) []any {
+	return []any{workItemID, projectID, repoID, repoSlug, updatedAt, provider, resolvedProjectID, uint64(1)}
 }
 
 func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug string, computedAt time.Time) []any {
@@ -346,7 +354,7 @@ func liveShapedEdgeClient() *fakeClient {
 	client := liveShapedTeamsProjectsClient()
 	client.tables = append(client.tables,
 		fakeTable{match: "FROM work_items AS w FINAL", rows: [][]any{
-			workItemProjectRow("linear:CHAOS-3802", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", zeroRepositoryUUID, "", at, "linear"),
+			workItemProjectRow("linear:CHAOS-3802", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", zeroRepositoryUUID, "", at, "linear", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7"),
 		}},
 		fakeTable{match: "FROM work_item_team_attributions AS a FINAL", rows: [][]any{
 			workItemTeamRow("linear:CHAOS-3802", "CHAOS", "native_team", "high", zeroRepositoryUUID, "", at),

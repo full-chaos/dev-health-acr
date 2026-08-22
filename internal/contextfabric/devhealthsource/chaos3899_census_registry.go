@@ -106,6 +106,133 @@ func canonicalIDValue(anchorKind contextfabric.SubjectKind, canonicalID string) 
 	return raw
 }
 
+// projectAnchorPredicate builds the anchor equality fragment for an anchor
+// column against anchorCanonicalID (CHAOS-4108).
+//
+// For every anchor kind except SubjectProject this is exactly the pre-4108
+// single-arm equality: toString(column) = the raw id canonicalIDValue
+// extracts. Unchanged.
+//
+// For SubjectProject it widens to BOTH arms of the SAME deliberate dual
+// project-id space queryWorkItemProjects' own union-based join fix
+// (CHAOS-4108, teams_projects_edges.go) addresses on the producer side: a
+// gitlab work_item's project_id column holds projects.project_key (its
+// rename-safe project_full_path), never projects.id -- so an anchor
+// predicate built from projects.id alone (the ONLY thing canonicalIDValue
+// can recover from a project.v2 canonical id) matched zero gitlab work
+// items, live-verified.
+//
+// The safe join-key set is resolved via a small SCOPED lookup against
+// `projects` -- the SAME base-table-adjacent pattern AnchorCollision
+// (chaos3898_s3_census_bridge.go) already uses for a project-anchor-specific
+// check -- not a FROM-clause JOIN on the census's own base table: this
+// package's no-join discipline (censusKindRegistryEntry's own doc comment)
+// exists because an INNER JOIN to a delayed/absent PARENT row could erase an
+// already-ingested census SUBJECT row. An OR'd-in subquery on a column that
+// is neither can only ADD a match (when a safe join key resolves) or
+// contribute nothing (when it doesn't) -- it can never cause a work_items
+// row that already satisfies D to be dropped, so the erasure risk the
+// no-join rule guards against does not apply here. Every other anchor kind
+// (SubjectRepository) is unaffected: repos carries no such dual-id-space
+// defect.
+//
+// Four codex xhigh review findings, all fixed here (rounds 1-3):
+//
+// F1 (round 1) -- the whole widened expression is PARENTHESIZED.
+// BuildCensusDiscriminator joins this fragment against a handle predicate
+// (if bound) with " AND "; an unparenthesized "id_arm OR key_arm" would let
+// SQL's AND-binds-tighter-than-OR precedence rewrite "handle AND id_arm OR
+// key_arm" into "(handle AND id_arm) OR key_arm" -- silently dropping the
+// handle requirement for any row that merely satisfies the project_key arm.
+// Every anchor predicate this registry has ever built was a single equality
+// with no internal OR, so this never mattered before; it is the first
+// predicate here that itself disjoins, so it is the first one required to
+// protect its own grouping.
+//
+// F2/F3/round-3 (rounds 1-3) -- three successive collision classes were
+// each fixed with a NARROWER guard before this settled on the producer's own
+// WIDER discipline: F2 was a project_key shared by two projects (project_key
+// is only documented unique WITHIN a provider, teams_projects_edges.go's own
+// THIRD note); F3 was a raw id shared by two providers' projects
+// (AnchorCollision's own doc comment: "the anchor's raw FK value... carries
+// no provider column of its own"); round 3 was the CROSS-space case neither
+// prior guard covered -- one project's own id equal to a DIFFERENT project's
+// own project_key (e.g. target id=P key=K, foreign project id=K with an
+// empty key of its own) -- a value trusted as safe by an id-only or
+// key-only ambiguity count can
+// still collide against the OTHER space. All three are really one problem:
+// id and project_key are not two independently-safe namespaces, they are
+// ONE namespace once both are compared against the SAME column
+// (work_items.project_id). The fix mirrors queryWorkItemProjects' own
+// producer-side structure exactly (teams_projects_edges.go): UNION ALL each
+// project's id AND (if non-empty) its project_key into one flat set of
+// (provider, id, join_key) rows, DISTINCT (so a project whose id equals its
+// own key is not double-counted), then count() OVER (PARTITION BY join_key)
+// across that UNIFIED set, GLOBALLY (every project in the org, not just the
+// anchor's own row) -- a join-key VALUE is trusted only if it names exactly
+// one project ACROSS BOTH SPACES COMBINED, not just within whichever space
+// it happened to originate from. The OUTER filter then narrows to the
+// anchor's own (provider, id) -- never id alone, which is what let F3's raw
+// id collide across providers in the first place; anchorCanonicalID already
+// carries provider (project.v2:<provider>:<id>), so this costs nothing
+// canonicalIDValue's own raw-id extraction did not already require.
+//
+// An ambiguous or foreign-colliding value is omitted, never guessed -- it
+// simply does not appear in the safe set, the IN(...) arm cannot match it,
+// and the anchor falls back to whatever OTHER safe join keys the target
+// project still has (its own id, if that too is unambiguous) rather than
+// risk a false-positive satisfier. If anchorCanonicalID cannot even be
+// parsed for its provider segment (a pre-CHAOS-3898 id, the SAME "not yet
+// migrated" case canonicalIDValue's own Cut fallback exists for), the whole
+// union lookup is skipped and this degrades to the plain pre-4108 id-only
+// equality -- narrower coverage, never a less-safe one.
+func projectAnchorPredicate(anchorKind contextfabric.SubjectKind, column, anchorCanonicalID string) CensusPredicate {
+	rawID := canonicalIDValue(anchorKind, anchorCanonicalID)
+	predicate := CensusPredicate{
+		SQL:      fmt.Sprintf("toString(%s) = {census_anchor_id:String}", column),
+		Bindings: []contextpacket.ClickHouseBinding{{Name: "census_anchor_id", Value: rawID}},
+	}
+	if anchorKind != contextfabric.SubjectProject {
+		return predicate
+	}
+	provider, ok := anchorProviderValue(anchorKind, anchorCanonicalID)
+	if !ok {
+		return predicate
+	}
+	// {census_org_id:String} is safe to reference here even though this
+	// function never receives orgID itself: RunCensus (chaos3899_census.go)
+	// is the ONLY path that ever executes a predicate this package builds,
+	// and it unconditionally prepends a census_org_id binding to every
+	// statement (aggregate, satisfier-set, and decisive row) before this
+	// predicate's SQL is ANDed in.
+	predicate.SQL = fmt.Sprintf(
+		"toString(%s) IN (SELECT join_key FROM (SELECT provider, id, join_key, count() OVER (PARTITION BY join_key) AS key_count FROM"+
+			" (SELECT DISTINCT provider, id, join_key FROM"+
+			" (SELECT provider, id, id AS join_key FROM projects FINAL WHERE org_id = {census_org_id:String}"+
+			" UNION ALL"+
+			" SELECT provider, id, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {census_org_id:String} AND ifNull(project_key, '') != '')))"+
+			" WHERE provider = {census_anchor_provider:String} AND id = {census_anchor_id:String} AND key_count = 1)",
+		column,
+	)
+	predicate.Bindings = append(predicate.Bindings, contextpacket.ClickHouseBinding{Name: "census_anchor_provider", Value: provider})
+	return predicate
+}
+
+// anchorProviderValue recovers the PROVIDER segment of a CHAOS-3898 v2
+// canonical id (project.v2:<provider>:<id>) -- the mirror image of
+// canonicalIDValue, which keeps the LAST segment; this keeps the FIRST. ok
+// is false under the exact same conditions canonicalIDValue's own
+// identity.Segments call can fail (a pre-migration id, a different kind, or
+// a malformed value): callers must treat that as "cannot safely
+// provider-scope," never guess a provider.
+func anchorProviderValue(anchorKind contextfabric.SubjectKind, canonicalID string) (string, bool) {
+	segments, ok := identity.Segments(string(anchorKind), canonicalID)
+	if !ok || len(segments) == 0 {
+		return "", false
+	}
+	return segments[0], true
+}
+
 // pullRequestNumberPredicate is the pull_request handle registry entry's
 // SQL: a direct equality on git_pull_requests.number (UInt32, tables.go's
 // own CHAOS-3789 scan-then-convert note) -- the handle grammar already
@@ -199,10 +326,23 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		// would therefore return 0 for nearly every real Linear work
 		// item, which is exactly the false-would_no_match class D0/§3
 		// forbid -- not a race or an edge case, a near-certain miss on
-		// the dominant provider shape. project_id has no such known
-		// defect for THIS purpose (existence narrowing, not graph
-		// bridging), so it remains the sole work_item anchor column for
-		// Slice A.
+		// the dominant provider shape.
+		//
+		// project_id DOES carry a known defect for THIS purpose
+		// (CHAOS-4108, corrected -- this comment previously claimed
+		// otherwise): projects live in a deliberate DUAL id space
+		// (teams_projects_edges.go's own "SECOND -- the id-space trap"
+		// note), and w.project_id can hold EITHER arm -- projects.id
+		// (Linear, and gitlab pre-CHAOS-4108-fix) or projects.project_key
+		// (gitlab's actual writer output, ops normalize.py:165-176). A
+		// project anchor built from projects.id alone (canonicalIDValue's
+		// raw extraction) therefore matched ZERO gitlab work items,
+		// live-verified: CensusCount for kind work_item on a gitlab
+		// project anchor read 0 before this fix. projectAnchorPredicate
+		// below widens the anchor to try both arms, mirroring
+		// queryWorkItemProjects' own OR predicate fix -- so project_id
+		// remains the sole work_item anchor column for Slice A, but the
+		// predicate built from it no longer silently proves absence.
 		kind: contextfabric.SubjectWorkItem, table: "work_items", alias: "w",
 		// identityColumn is work_items' OWN declared sort key (org_id,
 		// repo_id, work_item_id) -- devhealthschema.go's
@@ -288,8 +428,9 @@ func BuildCensusDiscriminator(kind graphrank.CensusKind, handleValue string, han
 		if !ok {
 			return CensusPredicate{}, fmt.Errorf("devhealthsource: joined_column_discriminator -- %s has no base-table FK column for anchor kind %s", kind, anchorKind)
 		}
-		fragments = append(fragments, fmt.Sprintf("toString(%s) = {census_anchor_id:String}", column))
-		bindings = append(bindings, contextpacket.ClickHouseBinding{Name: "census_anchor_id", Value: canonicalIDValue(anchorKind, anchorCanonicalID)})
+		predicate := projectAnchorPredicate(anchorKind, column, anchorCanonicalID)
+		fragments = append(fragments, predicate.SQL)
+		bindings = append(bindings, predicate.Bindings...)
 	}
 	if len(fragments) == 0 {
 		return CensusPredicate{}, fmt.Errorf("devhealthsource: no discriminator bound for %s census", kind)
