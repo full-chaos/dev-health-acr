@@ -713,3 +713,56 @@ func TestChaos4085_PathIDForAPathTheSubjectIsNotOnDoesNotAffirm(t *testing.T) {
 		t.Fatalf("a path the subject is not on must not affirm it, got %v", result.SubjectResolution.Committed)
 	}
 }
+
+// TestChaos4085_PathGroundedDriverAffirmsRegardlessOfWhichEndpointIsCommitted
+// pins codex round 2's HIGH 1 as ACKNOWLEDGED BEHAVIOUR rather than leaving
+// it undocumented.
+//
+// A driver naming the committed subject and grounding on a relationship
+// path that subject is on affirms -- and it does so for EITHER endpoint of
+// that path, because the two cases are structurally identical: same typed
+// driver, same AffectedSubjects shape, same real engine-gathered evidence
+// in which the named subject genuinely participates. Distinguishing them
+// needs to know which endpoint the question was about, which is exactly
+// what resolution got wrong.
+//
+// This is not a hole left open by oversight. Measured against all 51 commit
+// events in the v9 trial, every one of the 18 legitimate statistical
+// affirmations grounds on path-derived evidence and nothing else, so a rule
+// that refused this shape would retract all of them. The resolution-side
+// rule (graphrank's tiedStatisticalTopUnderTruncation) is what refuses the
+// demonstrated-unsafe population, without consulting model output at all.
+//
+// If a future change makes this shape refuse, that is a DELIBERATE recall
+// decision and this test is the place it gets re-argued -- not a bug fix.
+func TestChaos4085_PathGroundedDriverAffirmsRegardlessOfWhichEndpointIsCommitted(t *testing.T) {
+	pathDriver := func(subject SubjectRef) []DriverJudgment {
+		return []DriverJudgment{{
+			DriverID: "driver_endpoint_001", Standing: DriverPrincipal, Category: "relationship",
+			Title: "Blocks", Summary: "grounded on the relationship path",
+			AffectedSubjects: []SubjectRef{subject},
+			PathIDs:          []string{"path_affirm_0001"},
+			EvidenceRefIDs:   []string{},
+			Derivation:       DerivationGraphAssociated, EpistemicStatus: EpistemicInferred, Confidence: 0.55,
+		}}
+	}
+
+	// Endpoint one: the committed subject, named by its own driver.
+	committedEndpoint := affirmationResult()
+	committedEndpoint.Drivers = pathDriver(affirmationSubject)
+	applyCommitAffirmation(&committedEndpoint, statisticalInputs(affirmationGraphWithPath(), emptyAffirmationFacts(), committedEndpoint))
+	if len(committedEndpoint.SubjectResolution.Committed) != 1 {
+		t.Fatalf("a path-grounded driver naming the committed subject must affirm, got %v", committedEndpoint.SubjectResolution.Committed)
+	}
+
+	// Endpoint two: the OTHER end of the same path is named instead. The
+	// committed subject is no longer the driver's subject at all, so there
+	// is no subject-bound support for it and it must retract -- which is
+	// what keeps this rule from degenerating into "any path mentions it".
+	otherEndpoint := affirmationResult()
+	otherEndpoint.Drivers = pathDriver(affirmationOther)
+	applyCommitAffirmation(&otherEndpoint, statisticalInputs(affirmationGraphWithPath(), emptyAffirmationFacts(), otherEndpoint))
+	if len(otherEndpoint.SubjectResolution.Committed) != 0 {
+		t.Fatalf("a driver about the OTHER endpoint provides no subject-bound support for the committed subject, got %v", otherEndpoint.SubjectResolution.Committed)
+	}
+}

@@ -38,6 +38,35 @@ package contextfabric
 // write plausible supporting prose about it. A signal that can be fooled in
 // the permissive direction is safe as a veto and unsafe as a licence.
 //
+// WHAT THIS GATE DOES NOT CLAIM (codex xhigh review round 2, HIGH 1 --
+// examined, measured, and deliberately not "fixed"). Affirmation is a
+// SECONDARY veto, not a completeness proof, and it cannot distinguish these
+// two by structure:
+//
+//   - a driver naming the CORRECT committed subject and grounding on a
+//     relationship path that subject is on;
+//   - a driver naming a WRONG committed subject and grounding on a
+//     relationship path that wrong subject is also, genuinely, on.
+//
+// Both are contract-valid and structurally identical: a typed driver, the
+// committed subject in AffectedSubjects, and real engine-gathered graph
+// evidence in which that subject participates. Telling them apart requires
+// knowing WHICH endpoint the question was about -- which is precisely what
+// resolution got wrong in the first place, so no amount of inspecting the
+// answer recovers it.
+//
+// Tightening to close it was measured against all 51 commit events in the
+// v9 trial: ALL EIGHTEEN legitimate statistical affirmations ground on
+// path-derived evidence and on nothing else. Excluding paths (or requiring
+// a stronger subject-specific witness) retracts 18 of 18 -- every correct
+// statistical commit in the run -- to close a residual the run never
+// exhibits. That trade is not available.
+//
+// What actually holds the line for this class is the RESOLUTION-side rule
+// (tiedStatisticalTopUnderTruncation), which refuses the demonstrated-unsafe
+// population outright and consults no model output at all. This gate is the
+// second layer, and it is honest about being one.
+//
 // WHAT "AFFIRMED" MEANS (sol@xhigh review, change 1). Not "the answer
 // mentions this id somewhere". The answer must carry a SUBJECT-BOUND
 // SUPPORT RELATIONSHIP: a typed, subject-bearing structure naming the
