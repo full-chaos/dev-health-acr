@@ -105,6 +105,40 @@ MAX_CONCURRENT="${ACR_TRIAL_MAX_CONCURRENT_SHARDS:-8}"
 # only observable by running a full trial.
 PLAN_ONLY="${ACR_TRIAL_SHARD_PLAN_ONLY:-0}"
 
+# PG_HOST/PG_PORT (CHAOS-4116): the standing instance's own host/port,
+# overridable via ACR_TRIAL_PG_HOST/ACR_TRIAL_PG_PORT -- default UNCHANGED
+# (127.0.0.1:5432, every existing invocation byte-identical). Defined here,
+# early and ONCE, so psql_admin/template_dsn/SHARD_DSN below all read the
+# SAME two variables rather than each carrying its own copy of the literal
+# -- before this ticket 127.0.0.1:5432 was hardcoded independently in all
+# three places, so an override could reach two sites and silently miss the
+# third. Set before the PLAN_ONLY exit below (and printed there) so the
+# override is verifiable offline, without a live stack.
+#
+# Exists for the CHAOS-4100 A/B incident's own diagnostic pattern (a
+# same-network relay bypassing a misbehaving Docker Desktop host
+# port-forward -- see the scoped-kill skill) and for future kiac/remote
+# postgres substrates, neither of which should ever need a script edit.
+PG_HOST="${ACR_TRIAL_PG_HOST:-127.0.0.1}"
+PG_PORT="${ACR_TRIAL_PG_PORT:-5432}"
+
+# PG_USER/PG_PASSWORD moved up from their pre-CHAOS-4116 position (just
+# before template provisioning) to sit beside PG_HOST/PG_PORT -- trial_pg_dsn
+# just below needs all four, and the PLAN_ONLY block further down needs to
+# call it. trial_secret is a no-op stand-in (returns "plan-only") in
+# PLAN_ONLY mode, so this costs nothing there; for a live run it is
+# unchanged from before, just executed a few lines earlier.
+PG_USER="$(trial_secret POSTGRES_USER)"
+PG_PASSWORD="$(trial_secret POSTGRES_PASSWORD)"
+
+# trial_pg_dsn (CHAOS-4116) is the ONE place a postgres:// DSN is built --
+# template_dsn and SHARD_DSN below both call this rather than each carrying
+# its own copy of the string template, so a host/port override is
+# structurally incapable of reaching one and missing the other.
+trial_pg_dsn() {
+  printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' "$PG_USER" "$PG_PASSWORD" "$PG_HOST" "$PG_PORT" "$1"
+}
+
 if ! [[ "$MAX_CONCURRENT" =~ ^[0-9]+$ ]] || [[ "$MAX_CONCURRENT" -lt 1 ]]; then
   echo "run-two-turn-parallel.sh: ACR_TRIAL_MAX_CONCURRENT_SHARDS must be a positive integer, got $MAX_CONCURRENT" >&2
   exit 1
@@ -244,8 +278,16 @@ else
 fi
 
 if [[ "$PLAN_ONLY" == "1" ]]; then
-  printf '{"shard_count":%d,"granularity":%s,"concurrency_cap":%d,"case_count":%d,"shards":[' \
-    "$SHARD_COUNT" "${CASES_PER_SHARD:-0}" "$MAX_CONCURRENT" "${#ALL_INDICES[@]}"
+  # pg_host/pg_port/pg_dsn_example (CHAOS-4116): proves the override reaches
+  # the SAME construction every live psql_admin/template_dsn/SHARD_DSN call
+  # uses, offline -- trial_pg_dsn is the ONE function template_dsn and
+  # SHARD_DSN both call below (never a second copy of the DSN template), so
+  # exercising it here is exercising their real code, not a restatement of
+  # it. "EXAMPLE_DB" stands in for the RUN_TAG-derived database name neither
+  # of those has yet at plan time; the DSN shape and the host/port it
+  # carries are identical regardless of which database name fills that slot.
+  printf '{"shard_count":%d,"granularity":%s,"concurrency_cap":%d,"case_count":%d,"pg_host":"%s","pg_port":"%s","pg_dsn_example":"%s","shards":[' \
+    "$SHARD_COUNT" "${CASES_PER_SHARD:-0}" "$MAX_CONCURRENT" "${#ALL_INDICES[@]}" "$PG_HOST" "$PG_PORT" "$(trial_pg_dsn EXAMPLE_DB)"
   for ((i = 0; i < SHARD_COUNT; i++)); do
     [[ "$i" -gt 0 ]] && printf ','
     printf '{"index":%d,"cases":"%s"}' "$i" "${SHARD_CASES[$i]}"
@@ -253,9 +295,6 @@ if [[ "$PLAN_ONLY" == "1" ]]; then
   printf ']}\n'
   exit 0
 fi
-
-PG_USER="$(trial_secret POSTGRES_USER)"
-PG_PASSWORD="$(trial_secret POSTGRES_PASSWORD)"
 
 # PG_DATABASES replaces the pre-CHAOS-4100 PG_CONTAINERS: the resources
 # this script now creates and must drop are DATABASES on the standing
@@ -388,10 +427,65 @@ cleanup() {
 #
 # ON_ERROR_STOP=1 so a failed CREATE is an error rather than a warning
 # followed by a shard that quietly runs against the wrong database.
+#
+# CHAOS-4116 (2026-08-22 A/B incident, see the scoped-kill skill): retries
+# up to PSQL_ADMIN_MAX_ATTEMPTS times, PGCONNECT_TIMEOUT-bounded, ONLY on
+# psql's own exit code 2 ("could not connect to server") -- the exact
+# handshake-hang signature the incident's ad hoc clone-path.log wrapper was
+# built to survive (a stuck Docker Desktop host port-forward proxy, psql
+# alive with zero corresponding pg_stat_activity row). A real SQL error
+# (ON_ERROR_STOP tripping on a genuine statement failure, exit 1) is
+# deterministic -- retrying it would just prove the same failure again more
+# slowly, so only exit 2 is retried. ACR_TRIAL_CLONE_PATH_LOG, when set,
+# records every attempt (ok/failed, attempt number, the statement) -- the
+# incident's own clone-path.log proved this retry-count history IS the
+# diagnostic evidence a proxy flake needs, not merely a courtesy.
+PSQL_ADMIN_MAX_ATTEMPTS="${ACR_TRIAL_PG_CONNECT_RETRIES:-3}"
+PSQL_ADMIN_CONNECT_TIMEOUT="${ACR_TRIAL_PG_CONNECT_TIMEOUT:-15}"
+PSQL_ADMIN_RETRY_BACKOFF_SECONDS="${ACR_TRIAL_PG_CONNECT_RETRY_BACKOFF:-2}"
 psql_admin() {
-  PGPASSWORD="$PG_PASSWORD" psql --no-psqlrc -v ON_ERROR_STOP=1 -qtA \
-    -h 127.0.0.1 -p 5432 -U "$PG_USER" -d acr -c "$1"
+  local attempt=1 rc
+  while true; do
+    # rc is captured INSIDE the else branch, never via "$?" after the
+    # if/fi construct -- the classic bash trap this exact bug hit in
+    # development (codex round 1, confirmed by direct reproduction): when
+    # an `if cmd; then ...; fi` with no `else` takes neither branch's
+    # `return`/exit, "$?" immediately after `fi` is the IF STATEMENT's
+    # own exit status (0, per POSIX -- "no branch taken" is success), NOT
+    # the tested command's real exit code. That silently turned every
+    # psql failure into a reported success and a permanent 0-retry no-op.
+    # Capturing "$?" as the FIRST statement of the else branch is the
+    # only place it still reflects the command that actually ran.
+    if PGPASSWORD="$PG_PASSWORD" PGCONNECT_TIMEOUT="$PSQL_ADMIN_CONNECT_TIMEOUT" psql --no-psqlrc -v ON_ERROR_STOP=1 -qtA \
+      -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d acr -c "$1"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    if [[ "$rc" -eq 0 ]]; then
+      [[ -n "${ACR_TRIAL_CLONE_PATH_LOG:-}" ]] && printf '%s ok attempt=%d/%d stmt=%s\n' "$(date -u +%H:%M:%S)" "$attempt" "$PSQL_ADMIN_MAX_ATTEMPTS" "$1" >>"$ACR_TRIAL_CLONE_PATH_LOG"
+      return 0
+    fi
+    [[ -n "${ACR_TRIAL_CLONE_PATH_LOG:-}" ]] && printf '%s FAILED attempt=%d/%d rc=%d stmt=%s\n' "$(date -u +%H:%M:%S)" "$attempt" "$PSQL_ADMIN_MAX_ATTEMPTS" "$rc" "$1" >>"$ACR_TRIAL_CLONE_PATH_LOG"
+    if [[ "$rc" -ne 2 ]] || ((attempt >= PSQL_ADMIN_MAX_ATTEMPTS)); then
+      return "$rc"
+    fi
+    attempt=$((attempt + 1))
+    sleep "$PSQL_ADMIN_RETRY_BACKOFF_SECONDS"
+  done
 }
+
+# ACR_TRIAL_PSQL_ADMIN_SELFTEST (CHAOS-4116, test-only hook): runs psql_admin
+# once against a real database with a harmless statement, then exits --
+# never reaches template/shard provisioning. Lets an offline test exercise
+# the REAL psql_admin (real retry gating, real -h/-p wiring to PG_HOST/
+# PG_PORT) against a FAKE psql placed first on PATH, without provisioning
+# anything or requiring a live corpus/annex beyond the one this script
+# already validates above. See scripts/trial/test-connect-retry.sh.
+if [[ "${ACR_TRIAL_PSQL_ADMIN_SELFTEST:-0}" == "1" ]]; then
+  psql_admin "SELECT 1"
+  exit $?
+fi
 
 drop_trial_database() {
   local db="$1"
@@ -413,7 +507,7 @@ PG_TEMPLATE="acr_trial_tmpl_${RUN_SLUG}"
 echo "provisioning template database $PG_TEMPLATE (migrating once for the whole run)..."
 template_started="$(date +%s%3N 2>/dev/null || echo 0)"
 psql_admin "CREATE DATABASE \"$PG_TEMPLATE\"" >/dev/null
-template_dsn="postgres://$PG_USER:$PG_PASSWORD@127.0.0.1:5432/$PG_TEMPLATE?sslmode=disable"
+template_dsn="$(trial_pg_dsn "$PG_TEMPLATE")"
 ( cd "$repo_root" && ACR_POSTGRES_MIGRATION_DSN="$template_dsn" ACR_POSTGRES_CONNECTION_KIND=direct \
     go run ./cmd/acr-migrate up )
 template_ms=$(($(date +%s%3N 2>/dev/null || echo 0) - template_started))
@@ -432,7 +526,7 @@ for ((i = 0; i < SHARD_COUNT; i++)); do
   psql_admin "CREATE DATABASE \"$shard_db\" TEMPLATE \"$PG_TEMPLATE\"" >/dev/null
   clone_ms=$(($(date +%s%3N 2>/dev/null || echo 0) - clone_started))
   PG_DATABASES+=("$shard_db")
-  SHARD_DSN+=("postgres://$PG_USER:$PG_PASSWORD@127.0.0.1:5432/$shard_db?sslmode=disable")
+  SHARD_DSN+=("$(trial_pg_dsn "$shard_db")")
   SHARD_CLONE_MS+=("$clone_ms")
 done
 echo "cloned $SHARD_COUNT shard database(s) from $PG_TEMPLATE"

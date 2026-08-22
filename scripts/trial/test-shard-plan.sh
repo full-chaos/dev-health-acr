@@ -58,18 +58,18 @@ JSON
 
 # 1. Granularity 1 over a dense annex: one case per shard, no empties.
 check "granularity=1 dense -> 5 shards of 1" \
-  '{"shard_count":5,"granularity":1,"concurrency_cap":8,"case_count":5,"shards":[{"index":0,"cases":"0"},{"index":1,"cases":"1"},{"index":2,"cases":"2"},{"index":3,"cases":"3"},{"index":4,"cases":"4"}]}' \
+  '{"shard_count":5,"granularity":1,"concurrency_cap":8,"case_count":5,"pg_host":"127.0.0.1","pg_port":"5432","pg_dsn_example":"postgres://plan-only:plan-only@127.0.0.1:5432/EXAMPLE_DB?sslmode=disable","shards":[{"index":0,"cases":"0"},{"index":1,"cases":"1"},{"index":2,"cases":"2"},{"index":3,"cases":"3"},{"index":4,"cases":"4"}]}' \
   "$(ACR_TRIAL_CASES_PER_SHARD=1 plan "$tmp/dense.json")"
 
 # 2. Granularity 2: contiguous chunks, last chunk short. 5 cases -> 3 shards.
 check "granularity=2 dense -> 3 shards (2,2,1)" \
-  '{"shard_count":3,"granularity":2,"concurrency_cap":8,"case_count":5,"shards":[{"index":0,"cases":"0,1"},{"index":1,"cases":"2,3"},{"index":2,"cases":"4"}]}' \
+  '{"shard_count":3,"granularity":2,"concurrency_cap":8,"case_count":5,"pg_host":"127.0.0.1","pg_port":"5432","pg_dsn_example":"postgres://plan-only:plan-only@127.0.0.1:5432/EXAMPLE_DB?sslmode=disable","shards":[{"index":0,"cases":"0,1"},{"index":1,"cases":"2,3"},{"index":2,"cases":"4"}]}' \
   "$(ACR_TRIAL_CASES_PER_SHARD=2 plan "$tmp/dense.json")"
 
 # 3. THE POINT OF GRANULARITY: over a SPARSE annex it produces no empty
 #    shard, where the modulo path below does.
 check "granularity=1 sparse -> 3 shards, none empty" \
-  '{"shard_count":3,"granularity":1,"concurrency_cap":8,"case_count":3,"shards":[{"index":0,"cases":"50"},{"index":1,"cases":"51"},{"index":2,"cases":"64"}]}' \
+  '{"shard_count":3,"granularity":1,"concurrency_cap":8,"case_count":3,"pg_host":"127.0.0.1","pg_port":"5432","pg_dsn_example":"postgres://plan-only:plan-only@127.0.0.1:5432/EXAMPLE_DB?sslmode=disable","shards":[{"index":0,"cases":"50"},{"index":1,"cases":"51"},{"index":2,"cases":"64"}]}' \
   "$(ACR_TRIAL_CASES_PER_SHARD=1 plan "$tmp/sparse.json")"
 
 # 4. BACK-COMPAT: with granularity unset, the layout is the modulo rule the
@@ -77,8 +77,17 @@ check "granularity=1 sparse -> 3 shards, none empty" \
 #    shard on a sparse annex. An existing invocation must select
 #    byte-identical cases, so this is pinned rather than left to inspection.
 check "default sparse -> modulo split, shard 1 empty" \
-  '{"shard_count":4,"granularity":0,"concurrency_cap":8,"case_count":3,"shards":[{"index":0,"cases":"64"},{"index":1,"cases":""},{"index":2,"cases":"50"},{"index":3,"cases":"51"}]}' \
+  '{"shard_count":4,"granularity":0,"concurrency_cap":8,"case_count":3,"pg_host":"127.0.0.1","pg_port":"5432","pg_dsn_example":"postgres://plan-only:plan-only@127.0.0.1:5432/EXAMPLE_DB?sslmode=disable","shards":[{"index":0,"cases":"64"},{"index":1,"cases":""},{"index":2,"cases":"50"},{"index":3,"cases":"51"}]}' \
   "$(plan "$tmp/sparse.json")"
+
+# 4b. CHAOS-4116: ACR_TRIAL_PG_HOST/ACR_TRIAL_PG_PORT reach pg_dsn_example --
+# trial_pg_dsn is the SAME function template_dsn and SHARD_DSN call in the
+# live path (never a second copy of the template), so this is exercising
+# their real construction, not a restatement of it. Default (unset) stays
+# 127.0.0.1:5432, pinned by every check above that never sets the override.
+check "ACR_TRIAL_PG_HOST/PORT override reaches trial_pg_dsn" \
+  '{"shard_count":5,"granularity":1,"concurrency_cap":8,"case_count":5,"pg_host":"pgrelay.internal","pg_port":"15432","pg_dsn_example":"postgres://plan-only:plan-only@pgrelay.internal:15432/EXAMPLE_DB?sslmode=disable","shards":[{"index":0,"cases":"0"},{"index":1,"cases":"1"},{"index":2,"cases":"2"},{"index":3,"cases":"3"},{"index":4,"cases":"4"}]}' \
+  "$(ACR_TRIAL_CASES_PER_SHARD=1 ACR_TRIAL_PG_HOST=pgrelay.internal ACR_TRIAL_PG_PORT=15432 plan "$tmp/dense.json")"
 
 # 5. The concurrency cap is reported in the plan, so an operator can see
 #    what a run WILL do before it does it.
