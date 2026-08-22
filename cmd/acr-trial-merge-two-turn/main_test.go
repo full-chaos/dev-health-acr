@@ -115,10 +115,11 @@ func TestMergeReportsConcatenatesTimingsAndRecomputesSummary(t *testing.T) {
 // above calls mergeReports directly on in-memory structs, which never
 // proves this tool's actual entrypoint -- json.Unmarshal of a real shard
 // file, run()'s validation gates, json.Marshal of the merged output, and a
-// second independent decode of what landed on disk -- handles a valid v9
+// second independent decode of what landed on disk -- handles a valid v10
 // artifact at all. Two real shard files go in; the written merged file is
 // read back and its Timings/TimingSummary/Provenance, plus (CHAOS-4062)
-// each shard's "unjustified" row's Shadow*/*CommittedSubjects fields, are
+// each shard's "unjustified" row's Shadow*/*CommittedSubjects fields
+// (including CHAOS-4079's ShadowKindInsensitivityMode), are
 // asserted against what shardReport built, closing the gap between "the
 // merge function is correct" and "the tool as actually invoked is
 // correct".
@@ -151,7 +152,7 @@ func TestRunEndToEndMergesValidV10Shards(t *testing.T) {
 	mergedPath := filepath.Join(dir, "merged.json")
 	var stdout bytes.Buffer
 	if err := run(mergedPath, shardPaths, &stdout); err != nil {
-		t.Fatalf("run() on two valid v9 shards = %v, want nil (both shards should satisfy every gate)", err)
+		t.Fatalf("run() on two valid v10 shards = %v, want nil (both shards should satisfy every gate)", err)
 	}
 	if !strings.Contains(stdout.String(), "VALID") {
 		t.Errorf("run() stdout = %q, want it to report VALID", stdout.String())

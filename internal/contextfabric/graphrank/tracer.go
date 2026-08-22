@@ -103,7 +103,18 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"shadow_anchor_receipt_confirmed", event.ShadowAnchorReceiptConfirmed,
 			"shadow_kinds_censused", event.ShadowKindsCensused,
 			"shadow_kind_insensitivity_evaluated", event.ShadowKindInsensitivityEvaluated,
-			"shadow_kind_insensitivity_outcome", event.ShadowKindInsensitivityOutcome)
+			"shadow_kind_insensitivity_outcome", event.ShadowKindInsensitivityOutcome,
+			// CHAOS-4079 (codex xhigh review round 2, finding 1): the mode
+			// MUST ride along with the outcome. Since CHAOS-4079 the probe
+			// also evaluates in a write-free observation mode, so
+			// "evaluated=true outcome=commit_sound" alone no longer tells a
+			// log consumer whether the verdict held across an actual census
+			// narrowing ("narrowed") or merely under a hint that narrowed
+			// nothing ("observed_*") -- omitting it here would leave
+			// production telemetry strictly less informative than the
+			// harness's own tracer, reading every observation as an
+			// attestation. Closed enum, no free text.
+			"shadow_kind_insensitivity_mode", event.ShadowKindInsensitivityMode)
 	case "evidence_probe":
 		// CHAOS-3899: ONE per-kind census receipt (brief §1.3(3), "Per-kind,
 		// never aggregated across kinds").

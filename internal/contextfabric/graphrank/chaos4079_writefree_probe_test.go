@@ -58,47 +58,121 @@ func zeroOverlapCensusInput(census CensusFunc) ShadowEvidenceRoundInput {
 func TestObservedKindInsensitivityProbeIsWriteFree(t *testing.T) {
 	t.Parallel()
 	readAt := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
-	outcome := CensusOutcome{Count: 1, CensusReadAt: readAt, SatisfierNaturalKey: "repo-1:532", SatisfierCanonicalID: "pull_request:repo-1:532"}
 
-	off := zeroOverlapCensusInput(withCensus(contextfabric.SubjectPullRequest, outcome, nil).fn)
-	off.ObservedExplicitKindHint = false
-	before := RunShadowEvidenceRound(context.Background(), off, nil)
+	// TWO scenarios, deliberately (codex xhigh review round 2, Angle A): a
+	// single-scenario delta cannot distinguish "never written" from
+	// "rewritten with the value it already had" -- assigning
+	// Outcome=would_commit inside the observation branch would slip past a
+	// would_commit-only test. These two disagree on Outcome,
+	// PreconditionUnproven and KindInsensitivityOutcome, so a same-value
+	// write that is correct for one is wrong for the other.
+	for _, tc := range []struct {
+		name         string
+		census       CensusOutcome
+		wantOutcome  ShadowOutcome
+		wantVerdict  kindInsensitivityOutcome
+		wantUnproven bool
+	}{
+		{
+			name:         "would_commit",
+			census:       CensusOutcome{Count: 1, CensusReadAt: readAt, SatisfierNaturalKey: "repo-1:532", SatisfierCanonicalID: "pull_request:repo-1:532"},
+			wantOutcome:  ShadowWouldCommit,
+			wantVerdict:  kindInsensitivityCommitSound,
+			wantUnproven: true,
+		},
+		{
+			name:        "would_no_match",
+			census:      CensusOutcome{Count: 0, CensusReadAt: readAt},
+			wantOutcome: ShadowWouldNoMatch,
+			wantVerdict: kindInsensitivityNoMatchSound,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			off := zeroOverlapCensusInput(withCensus(contextfabric.SubjectPullRequest, tc.census, nil).fn)
+			off.ObservedExplicitKindHint = false
+			before := RunShadowEvidenceRound(context.Background(), off, nil)
 
-	after := RunShadowEvidenceRound(context.Background(),
-		zeroOverlapCensusInput(withCensus(contextfabric.SubjectPullRequest, outcome, nil).fn), nil)
+			after := RunShadowEvidenceRound(context.Background(),
+				zeroOverlapCensusInput(withCensus(contextfabric.SubjectPullRequest, tc.census, nil).fn), nil)
 
-	if before.Outcome != ShadowWouldCommit {
-		t.Fatalf("precondition: before.Outcome = %v, want would_commit -- the scenario must be decisive or the probe never evaluates", before.Outcome)
+			if before.Outcome != tc.wantOutcome {
+				t.Fatalf("precondition: before.Outcome = %v, want %v -- the scenario must be decisive or the probe never evaluates", before.Outcome, tc.wantOutcome)
+			}
+			if before.PreconditionUnproven != tc.wantUnproven {
+				t.Fatalf("precondition: before.PreconditionUnproven = %v, want %v", before.PreconditionUnproven, tc.wantUnproven)
+			}
+			if before.KindInsensitivityEvaluated {
+				t.Fatalf("precondition: before.KindInsensitivityEvaluated = true, want false -- this is the gap CHAOS-4079 closes")
+			}
+
+			// The complete, closed set of fields the observation path may write.
+			observability := map[string]bool{
+				"KindInsensitivityEvaluated": true,
+				"KindInsensitivityOutcome":   true,
+				"KindInsensitivityMode":      true,
+			}
+			bv, av := reflect.ValueOf(before), reflect.ValueOf(after)
+			for i := 0; i < bv.NumField(); i++ {
+				name := bv.Type().Field(i).Name
+				if observability[name] {
+					continue
+				}
+				if !reflect.DeepEqual(bv.Field(i).Interface(), av.Field(i).Interface()) {
+					t.Errorf("Attestation.%s differs with the observation enabled (%#v -> %#v) -- the observation path must write ONLY the KindInsensitivity* fields; if this field was added to that path deliberately, it is decision-bearing until proven otherwise and needs its own consumer audit",
+						name, bv.Field(i).Interface(), av.Field(i).Interface())
+				}
+			}
+
+			// And the observation itself actually happened (a write-free
+			// no-op would pass the loop above vacuously).
+			if !after.KindInsensitivityEvaluated || after.KindInsensitivityOutcome != tc.wantVerdict ||
+				after.KindInsensitivityMode != explicitKindNarrowingNoOverlap {
+				t.Fatalf("after = evaluated:%v outcome:%q mode:%q, want true/%q/observed_no_overlap",
+					after.KindInsensitivityEvaluated, after.KindInsensitivityOutcome, after.KindInsensitivityMode, tc.wantVerdict)
+			}
+		})
 	}
-	if before.KindInsensitivityEvaluated {
-		t.Fatalf("precondition: before.KindInsensitivityEvaluated = true, want false -- this is the gap CHAOS-4079 closes")
-	}
+}
 
-	// The complete, closed set of fields the observation path may write.
-	observability := map[string]bool{
-		"KindInsensitivityEvaluated": true,
-		"KindInsensitivityOutcome":   true,
-		"KindInsensitivityMode":      true,
-	}
-	bv, av := reflect.ValueOf(before), reflect.ValueOf(after)
-	for i := 0; i < bv.NumField(); i++ {
-		name := bv.Type().Field(i).Name
-		same := reflect.DeepEqual(bv.Field(i).Interface(), av.Field(i).Interface())
-		if observability[name] {
-			continue
+// TestObservedKindInsensitivityProbeIssuesNoExtraCensusReadMultiKind extends
+// the call-count guarantee past the single-kind path (codex xhigh review
+// round 2, Angle A): an extra read introduced only for a multi-kind pool
+// would slip past the one-kind test entirely.
+func TestObservedKindInsensitivityProbeIssuesNoExtraCensusReadMultiKind(t *testing.T) {
+	t.Parallel()
+	// Two pooled kinds, both anchor-reachable from a repository anchor, so
+	// both are actually censused and neither trips NonCensusedSurvivor.
+	census := func(counted *int) CensusFunc {
+		return func(_ context.Context, _ string, _ CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+			*counted++
+			return CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC()}, nil
 		}
-		if !same {
-			t.Errorf("Attestation.%s differs with the observation enabled (%#v -> %#v) -- the observation path must write ONLY the KindInsensitivity* fields; if this field was added to that path deliberately, it is decision-bearing until proven otherwise and needs its own consumer audit",
-				name, bv.Field(i).Interface(), av.Field(i).Interface())
-		}
 	}
+	run := func(observed bool) (Attestation, int) {
+		calls := 0
+		input := baseInput()
+		input.Question = "how did the repository do?"
+		input.PooledKinds = []CensusKind{contextfabric.SubjectPullRequest, contractsv1.ContextFabricSubjectCIRun}
+		// A confirmed anchor rather than BindAnchor's question-derived scan,
+		// so both pooled kinds are reached by a keyed predicate
+		// (KindHasAnchorFK: pull_request and ci_run both anchor on
+		// repository) and neither trips NonCensusedSurvivor.
+		input.ConfirmedAnchor = &AnchorBinding{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acme/widgets"}
+		input.CensusFunc = census(&calls)
+		input.ObservedExplicitKindHint = observed
+		return RunShadowEvidenceRound(context.Background(), input, nil), calls
+	}
+	offAtt, offCalls := run(false)
+	onAtt, onCalls := run(true)
 
-	// And the observation itself actually happened (a write-free no-op would
-	// pass the loop above vacuously).
-	if !after.KindInsensitivityEvaluated || after.KindInsensitivityOutcome != kindInsensitivityCommitSound ||
-		after.KindInsensitivityMode != explicitKindNarrowingNoOverlap {
-		t.Fatalf("after = evaluated:%v outcome:%q mode:%q, want true/commit_sound/observed_no_overlap",
-			after.KindInsensitivityEvaluated, after.KindInsensitivityOutcome, after.KindInsensitivityMode)
+	if offAtt.Outcome != ShadowWouldNoMatch || onAtt.Outcome != ShadowWouldNoMatch {
+		t.Fatalf("precondition: outcomes = %v / %v, want would_no_match in both arms (a non-decisive round never reaches the probe)", offAtt.Outcome, onAtt.Outcome)
+	}
+	if offCalls != 2 || onCalls != 2 {
+		t.Fatalf("CensusFunc calls = %d off / %d on, want exactly 2 each (one per pooled kind, never a re-census)", offCalls, onCalls)
+	}
+	if !onAtt.KindInsensitivityEvaluated || onAtt.KindInsensitivityOutcome != kindInsensitivityNoMatchSound {
+		t.Fatalf("on = evaluated:%v outcome:%q, want true/no_match_sound", onAtt.KindInsensitivityEvaluated, onAtt.KindInsensitivityOutcome)
 	}
 }
 
@@ -117,11 +191,11 @@ func TestObservedKindInsensitivityProbeIssuesNoExtraCensusRead(t *testing.T) {
 	on := withCensus(contextfabric.SubjectPullRequest, outcome, nil)
 	RunShadowEvidenceRound(context.Background(), zeroOverlapCensusInput(on.fn), nil)
 
-	if on.calls != off.calls {
-		t.Fatalf("CensusFunc calls = %d with the observation on, %d with it off -- they must be EQUAL; a second read is the exact hazard that sank the naive fix", on.calls, off.calls)
-	}
-	if on.calls != 1 {
-		t.Fatalf("CensusFunc calls = %d, want exactly 1 (one pooled kind, one census)", on.calls)
+	// EXACT counts on both arms, not merely equal ones (codex xhigh review
+	// round 2, finding 2): an equality-only assertion passes against a
+	// mutation that reads twice in BOTH arms and discards the second result.
+	if off.calls != 1 || on.calls != 1 {
+		t.Fatalf("CensusFunc calls = %d with the observation off, %d with it on -- want exactly 1 each (one pooled kind, one census, never a re-census)", off.calls, on.calls)
 	}
 }
 
@@ -194,8 +268,10 @@ func TestObservedKindInsensitivityProbeReportsSensitiveOnUnclosedSatisfierSet(t 
 	if !att.PreconditionUnproven {
 		t.Fatalf("att.PreconditionUnproven = false, want true -- would_commit's own invariant, which the observation must leave alone")
 	}
-	if att.KindInsensitivityOutcome != kindInsensitivitySensitive {
-		t.Fatalf("att.KindInsensitivityOutcome = %q, want kind_sensitive_outcome", att.KindInsensitivityOutcome)
+	if !att.KindInsensitivityEvaluated || att.KindInsensitivityOutcome != kindInsensitivitySensitive ||
+		att.KindInsensitivityMode != explicitKindNarrowingNoOverlap {
+		t.Fatalf("att = evaluated:%v outcome:%q mode:%q, want true/kind_sensitive_outcome/observed_no_overlap",
+			att.KindInsensitivityEvaluated, att.KindInsensitivityOutcome, att.KindInsensitivityMode)
 	}
 }
 
@@ -228,8 +304,10 @@ func TestGenuineNarrowingProbeStillOverwritesOutcome(t *testing.T) {
 	if att.Outcome != ShadowWouldClarify || att.Reason != ReasonKindSensitiveOutcome {
 		t.Fatalf("att = outcome:%v reason:%q, want would_clarify/kind_sensitive_outcome -- the genuine-narrowing branch's overwrite semantics are unchanged by CHAOS-4079", att.Outcome, att.Reason)
 	}
-	if att.KindInsensitivityMode != explicitKindNarrowingApplied {
-		t.Fatalf("att.KindInsensitivityMode = %q, want %q", att.KindInsensitivityMode, explicitKindNarrowingApplied)
+	if !att.KindInsensitivityEvaluated || att.KindInsensitivityOutcome != kindInsensitivitySensitive ||
+		att.KindInsensitivityMode != explicitKindNarrowingApplied {
+		t.Fatalf("att = evaluated:%v outcome:%q mode:%q, want true/kind_sensitive_outcome/narrowed -- the genuine branch's own observability must survive its demotion",
+			att.KindInsensitivityEvaluated, att.KindInsensitivityOutcome, att.KindInsensitivityMode)
 	}
 	if att.PreconditionUnproven {
 		t.Fatal("att.PreconditionUnproven = true, want false -- the demotion left would_commit")
@@ -390,9 +468,15 @@ func TestResolveSubjects_NoExplicitHintLeavesProbeUnevaluated(t *testing.T) {
 	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, nil); err != nil {
 		t.Fatalf("ResolveSubjects error = %v", err)
 	}
-	for _, e := range tracer.eventsForStage("evidence_round") {
-		if e.ShadowKindInsensitivityEvaluated || e.ShadowKindInsensitivityMode != "" {
-			t.Fatalf("evidence_round probe = evaluated:%v mode:%q, want false/\"\" when no explicit kind hint was supplied at all", e.ShadowKindInsensitivityEvaluated, e.ShadowKindInsensitivityMode)
-		}
+	// Exactly one, never "zero events, loop body never runs" (codex xhigh
+	// review round 2, Angle A: the original range-only form passed vacuously
+	// against a mutation that stopped emitting the round entirely).
+	rounds := tracer.eventsForStage("evidence_round")
+	if len(rounds) != 1 {
+		t.Fatalf("evidence_round events = %d, want exactly 1 -- a vacuous zero would make this test prove nothing", len(rounds))
+	}
+	if rounds[0].ShadowKindInsensitivityEvaluated || rounds[0].ShadowKindInsensitivityOutcome != "" || rounds[0].ShadowKindInsensitivityMode != "" {
+		t.Fatalf("evidence_round probe = evaluated:%v outcome:%q mode:%q, want false/\"\"/\"\" when no explicit kind hint was supplied at all",
+			rounds[0].ShadowKindInsensitivityEvaluated, rounds[0].ShadowKindInsensitivityOutcome, rounds[0].ShadowKindInsensitivityMode)
 	}
 }
