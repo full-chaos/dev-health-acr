@@ -2805,7 +2805,12 @@ func twoTurnRequest(index int, tc trialCase, requestIDSuffix string) contractsv1
 		Question:      tc.Question,
 		TimeContext:   contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
 		Options: contractsv1.ContextFabricInvestigationOptions{
-			MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+			// MaxSubjectCandidates: 20, not the pre-CHAOS-4117 10 -- this
+			// harness IS the truncation-observing mechanism CHAOS-4117's
+			// root-cause finding traced (search_truncated=true on 90/90
+			// decisive arms at 10). 20 is the measured safe ceiling; see
+			// internal/mcp.defaultMaxSubjectCandidates' doc comment.
+			MaxSubjectCandidates: 20, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
 			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true,
 		},
 		Consumer: contractsv1.ContextFabricConsumerInfo{Name: "chaos-3742-two-turn", Version: "0.1.0", Surface: "mcp"},

@@ -445,7 +445,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	if len(candidates) == 0 {
 		resolution.Candidates = candidates
 		if tracer != nil {
-			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated})
+			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated, SearchCandidateLimit: max})
 		}
 		return resolution, bases
 	}
@@ -1210,6 +1210,8 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				// no trace at all.
 				CommitBasis:        string(bases.For(resolution.Committed[0])),
 				TiedStatisticalTop: tiedStatisticalTop,
+				// CHAOS-4117: SearchCandidateLimit's own doc comment.
+				SearchCandidateLimit: max,
 			})
 		case len(resolution.Committed) == 0 && ambiguous:
 			tracer.Trace(ResolutionTraceEvent{
@@ -1223,12 +1225,16 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				// eligibility conjuncts are not on this event. See
 				// ResolutionTraceEvent.TiedStatisticalTop's doc comment.
 				TiedStatisticalTop: tiedStatisticalTop,
+				// CHAOS-4117: SearchCandidateLimit's own doc comment.
+				SearchCandidateLimit: max,
 			})
 		case len(resolution.Committed) == 0:
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Outcome: "no_commit",
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 				SearchTruncated: searchTruncated, TiedStatisticalTop: tiedStatisticalTop,
+				// CHAOS-4117: SearchCandidateLimit's own doc comment.
+				SearchCandidateLimit: max,
 			})
 		}
 	}

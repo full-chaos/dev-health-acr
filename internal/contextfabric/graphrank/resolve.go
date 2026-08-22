@@ -553,6 +553,21 @@ type ResolutionTraceEvent struct {
 	// this event carries). Reporting it as an exact count would overstate
 	// the rule's reach.
 	TiedStatisticalTop bool
+	// SearchCandidateLimit (decision stage, CHAOS-4117): the NOMINAL
+	// request.Options.MaxSubjectCandidates this resolution ran with -- the
+	// same value threaded into deps.Search/deps.SearchQuestion as their
+	// row limit (resolve.go) and into ResolveFromMergedCandidatesWithGate's
+	// own `max` parameter. CHAOS-4117 raised the calibrated default from
+	// 10 to 20 (falkorgraph.RetrievalPolicy.CalibratedTopK's ceiling); a
+	// caller can still request any value the contract allows (1-50), so
+	// this field is what makes "which candidate-limit regime produced this
+	// decision" answerable from a run's own trace artifacts alone, rather
+	// than requiring a reader to cross-reference the request payload (which
+	// telemetry never retains) or assume every resolution shared one
+	// deployment-wide default. Paired with SearchTruncated: a truncated
+	// decision at limit=20 and one at limit=10 are the SAME symptom but
+	// different regimes, and only this field tells them apart.
+	SearchCandidateLimit int
 	// KindCoverageFloorFired/KindCoverageMissingKinds/
 	// KindCoverageFloorTruncated (stage=="kind_coverage_floor" ONLY,
 	// CHAOS-4086) describe CHAOS-4038's kind-coverage floor: how many floor

@@ -52,9 +52,10 @@ func TestChaos4085_ProductionTraceEmitsCommitBasisAndTieFlag(t *testing.T) {
 		Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:linear:SINK-1"},
 		Outcome:    "committed",
 		CommitGate: "lone_floor", WinningMechanism: "lexical",
-		SearchTruncated:    true,
-		CommitBasis:        string(contextfabric.CommitBasisStatistical),
-		TiedStatisticalTop: true,
+		SearchTruncated:      true,
+		CommitBasis:          string(contextfabric.CommitBasisStatistical),
+		TiedStatisticalTop:   true,
+		SearchCandidateLimit: 20,
 	})
 
 	if got, ok := record["commit_basis"]; !ok || got != string(contextfabric.CommitBasisStatistical) {
@@ -72,6 +73,12 @@ func TestChaos4085_ProductionTraceEmitsCommitBasisAndTieFlag(t *testing.T) {
 	if record["commit_gate"] != "lone_floor" {
 		t.Fatalf("commit_gate = %v, want lone_floor", record["commit_gate"])
 	}
+	// CHAOS-4117: the field this ticket adds -- same file-doc-comment
+	// obligation ("If you add a field to ResolutionTraceEvent, assert it
+	// here too") the CHAOS-4085 fields above were added under.
+	if got, ok := record["search_candidate_limit"].(float64); !ok || got != 20 {
+		t.Fatalf("search_candidate_limit = %v, want 20", record["search_candidate_limit"])
+	}
 }
 
 // TestChaos4085_ProductionTraceEmitsTheTieFlagOnANonCommittedOutcome covers
@@ -84,6 +91,7 @@ func TestChaos4085_ProductionTraceEmitsTheTieFlagOnANonCommittedOutcome(t *testi
 	record := captureTraceJSON(t, ResolutionTraceEvent{
 		RequestID: "request_sink_0002", Stage: "decision",
 		Outcome: "ambiguous", SearchTruncated: true, TiedStatisticalTop: true,
+		SearchCandidateLimit: 10,
 	})
 
 	if got, ok := record["tied_statistical_top"].(bool); !ok || !got {
@@ -97,5 +105,11 @@ func TestChaos4085_ProductionTraceEmitsTheTieFlagOnANonCommittedOutcome(t *testi
 	}
 	if got := record["commit_basis"]; got != "" {
 		t.Fatalf("commit_basis = %v, want empty for a non-committed outcome", got)
+	}
+	// CHAOS-4117: a deliberately DIFFERENT limit than the committed-outcome
+	// test above (10, not 20) -- proves this is the request's own value
+	// reaching the sink, not a hardcoded constant that happens to match.
+	if got, ok := record["search_candidate_limit"].(float64); !ok || got != 10 {
+		t.Fatalf("search_candidate_limit = %v, want 10", record["search_candidate_limit"])
 	}
 }

@@ -82,9 +82,22 @@ type Config struct {
 	GraphPrefix    string
 	RequestTimeout time.Duration
 	MaxAttempts    uint
-	MaxResults     int
-	PoolSize       int
-	AllowInsecure  bool // permit TLS=false outside development; see validate()
+	// MaxResults (ACR_CONTEXT_FABRIC_FALKOR_MAX_RESULTS, default 25) is a
+	// SEPARATE, deployment-level ceiling on top of a request's own
+	// Options.MaxSubjectCandidates (CHAOS-4117 calibrated it to 20; see
+	// internal/mcp.defaultMaxSubjectCandidates) -- resolve.go's
+	// effectiveSearchLimit takes the LOWER of the two
+	// (queries.go/vector.go clamp identically). A deployment that has set
+	// this env var below 20 silently re-truncates every search even
+	// though the request asked for the calibrated limit, undoing
+	// CHAOS-4117 without touching a single line this ticket changed. No
+	// deployment manifest in this repo sets it (checked at CHAOS-4117
+	// ship time; the default of 25 is comfortably above 20), but this
+	// field is exactly where that coupling needs to be visible to anyone
+	// who later tunes it down.
+	MaxResults    int
+	PoolSize      int
+	AllowInsecure bool // permit TLS=false outside development; see validate()
 	// IncludeEmbedBodies is the CHAOS-3833 §3 body gate's EFFECTIVE value
 	// (embedprovider.BodiesIncluded): whether free-text body heads (PR
 	// body, incident description) join the ONE shared search-text

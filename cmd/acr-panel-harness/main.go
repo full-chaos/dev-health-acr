@@ -169,7 +169,11 @@ func run(arguments []string, stdout, stderr *os.File) error {
 			},
 			TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
 			Options: contractsv1.ContextFabricInvestigationOptions{
-				MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+				// MaxSubjectCandidates: 20, not the pre-CHAOS-4117 10 --
+				// see internal/mcp.defaultMaxSubjectCandidates' doc comment
+				// for why 20 is the measured safe ceiling (pinned to
+				// falkorgraph.RetrievalPolicy.CalibratedTopK).
+				MaxSubjectCandidates: 20, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
 				MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144,
 				AllowClarification: true,
 			},

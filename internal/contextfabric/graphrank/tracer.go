@@ -79,7 +79,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// vocabularies or booleans -- commit_basis is a CommitBasis enum
 			// value, never an identifier -- so they carry no more than the
 			// fields beside them already do.
-			"commit_basis", event.CommitBasis, "tied_statistical_top", event.TiedStatisticalTop)
+			"commit_basis", event.CommitBasis, "tied_statistical_top", event.TiedStatisticalTop,
+			// CHAOS-4117: the nominal MaxSubjectCandidates this resolution
+			// ran with -- a plain int, no more sensitive than the counts
+			// already on this line -- so a reader can tell a
+			// pre-calibration (10) decision apart from a post-calibration
+			// (20, or any caller-requested value) one from the trace
+			// alone. See ResolutionTraceEvent.SearchCandidateLimit.
+			"search_candidate_limit", event.SearchCandidateLimit)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put

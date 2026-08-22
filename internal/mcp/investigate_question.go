@@ -17,11 +17,24 @@ import (
 // everything should fetch the canonical result by ID instead of inflating
 // every answer.
 const (
-	defaultMaxDrivers                = 5
-	defaultMaxCohortMembers          = 20
-	defaultMaxAnswerEvidenceRefs     = 25
-	defaultAnswerMaxSerializedBytes  = 65536
-	defaultMaxSubjectCandidates      = 10
+	defaultMaxDrivers               = 5
+	defaultMaxCohortMembers         = 20
+	defaultMaxAnswerEvidenceRefs    = 25
+	defaultAnswerMaxSerializedBytes = 65536
+	// defaultMaxSubjectCandidates (CHAOS-4117): raised 10 -> 20, the
+	// measured SAFE ceiling. At 10, subject search truncated on 90/90
+	// decisive resolution arms in the CHAOS-4117 root-cause run, and
+	// resolution.go's searchTruncated gate sits ABOVE lone_floor/
+	// top_of_two, so truncation alone made both statistical commit gates
+	// structurally dead. 20 is not an arbitrary widening: it is pinned to
+	// falkorgraph.RetrievalPolicy.CalibratedTopK (retrieval_policy.go),
+	// the depth CHAOS-3829's vector_margin_rescue margin M was calibrated
+	// at -- resolve.go's effectiveSearchLimit/CalibratedTopK envelope
+	// check requires the per-call search depth to stay <= CalibratedTopK
+	// for that rescue to remain eligible, so raising past 20 would
+	// silently disable it. Going beyond 20 needs a fresh tau/margin
+	// re-calibration, not a constant edit.
+	defaultMaxSubjectCandidates      = 20
 	defaultMaxRelationshipPaths      = 25
 	investigationRenderedMarkdownMax = renderedMarkdownMaxBytes
 )
