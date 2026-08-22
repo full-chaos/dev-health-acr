@@ -74,6 +74,7 @@ docs/adr/                  # Owned architecture decisions
 - ClickHouse is read-only engineering evidence; ACR Postgres owns operational state.
 - API runtime adapters are injected as one complete bundle; packages do not choose drivers.
 - Query and ranking versions are recorded for replay; evidence URLs remain references only.
+- Every decision branch that changes an outcome -- a commit/veto/gate, a classification, a candidate elimination, an error class -- emits corpus-safe, closed-vocabulary telemetry recording what decided and why, in the SAME change that adds the branch. The bar: a defect there must be diagnosable from the run's own completed artifacts alone (a trace event, a report field, or a structured log field) -- never by re-reading source, re-running with instrumentation added after the fact, or transcript archaeology.
 
 ## CONTRACT-FIRST RULE
 
@@ -110,6 +111,7 @@ Any externally visible field or endpoint change must update, in the same change:
 - Do not narrow an investigation result anywhere but `internal/contextfabric/answerprojection`. A second summariser in a consumer reopens API/MCP answer drift.
 - Outbound fetching of evidence URLs is disabled; evidence URLs are references only.
 - Do not scatter raw ClickHouse SQL through handlers; use versioned, parameterized adapters.
+- Do not ship a new outcome-affecting decision branch (a commit/veto/gate, a classification outcome, a candidate elimination, an error classification) without emitting decision-basis telemetry for it in the same change -- see CANONICAL ARCHITECTURE's diagnosis-in-artifacts rule. A branch that only reaches a fallback/default silently is exactly the failure mode CHAOS-4085 and CHAOS-4077 both cost hours to.
 
 ## COMMANDS
 
