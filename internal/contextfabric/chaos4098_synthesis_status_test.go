@@ -290,6 +290,71 @@ func TestChaos4098_OverrideNeverTouchesTheResolution(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// CHAOS-4103: the uncommitted shape gets a DISTINCT reason
+// ---------------------------------------------------------------------------
+
+// uncommittedClarificationResult is decisiveClarificationResult's twin with
+// NOTHING committed and no candidate at all -- the shape the ticket's own
+// doc comment calls a genuine engine routing bug (the subjectless terminal,
+// unresolved.go, should have composed the clarification terminal itself and
+// did not) rather than a second instance of ordinary under-claiming.
+func uncommittedClarificationResult() InvestigationResult {
+	result := decisiveClarificationResult()
+	// Non-nil, empty: the v1 bounds check (validate_context_fabric_result.go)
+	// rejects a nil Candidates/Committed as an arrays-violate-bounds error
+	// distinct from anything this override cares about -- the fixture's
+	// point is zero COMMITTED subjects, not a malformed resolution.
+	result.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
+	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	return result
+}
+
+// TestChaos4103_UncommittedOverrideGetsADistinctReason is the ruling pin:
+// the override still fires and still serves no_match (never a 500) on the
+// uncommitted shape, but Reason is
+// SynthesisStatusOverrideClarificationUnavailableUncommitted, NOT the
+// ordinary SynthesisStatusOverrideClarificationUnavailable a committed
+// resolution gets -- a downstream reader (the trial harness's blocking
+// defect check) must never have to re-derive the distinction from
+// CommittedCount==0 alone.
+func TestChaos4103_UncommittedOverrideGetsADistinctReason(t *testing.T) {
+	result := uncommittedClarificationResult()
+
+	outcome := applySynthesisStatusOverride(&result)
+	if outcome == nil {
+		t.Fatal("the override must fire on this shape -- it is still clarification_required with no prompt")
+	}
+	want := SynthesisStatusOverrideOutcome{
+		From: InvestigationClarificationRequired, To: InvestigationNoMatch,
+		Reason: SynthesisStatusOverrideClarificationUnavailableUncommitted, CommittedCount: 0,
+	}
+	if *outcome != want {
+		t.Fatalf("override outcome = %+v, want %+v", *outcome, want)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("status = %q, want no_match -- CHAOS-4103 keeps serving, it never reintroduces the 500", result.Status)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the served result must still validate: %v", err)
+	}
+}
+
+// TestChaos4103_CommittedOverrideKeepsTheOrdinaryReason is the companion
+// negative: the pre-existing committed shape must NOT pick up the new
+// reason merely because it now exists.
+func TestChaos4103_CommittedOverrideKeepsTheOrdinaryReason(t *testing.T) {
+	result := decisiveClarificationResult()
+	outcome := applySynthesisStatusOverride(&result)
+	if outcome == nil {
+		t.Fatal("the override must fire on the committed shape")
+	}
+	if outcome.Reason != SynthesisStatusOverrideClarificationUnavailable {
+		t.Fatalf("reason = %q, want the ordinary %q (committed_count=%d)", outcome.Reason, SynthesisStatusOverrideClarificationUnavailable, outcome.CommittedCount)
+	}
+}
+
 // TestChaos4098_OverrideIsIdempotent pins that a second application is a
 // no-op: no duplicate disclosure, no double-counted displacement.
 func TestChaos4098_OverrideIsIdempotent(t *testing.T) {

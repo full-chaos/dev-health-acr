@@ -77,7 +77,17 @@ import (
 // gain it in the same change: a field this struct does not declare is
 // dropped on decode, which would erase how the run was fanned out from
 // every merged artifact while the per-shard artifacts still carried it.
-const expectedSchemaVersion = "12"
+// "13" (CHAOS-4103): twoTurnCaseResult gained the SynthesisStatusOverride
+// Fired/From/To/Reason/CommittedCount block (see the producer's own
+// ReportSchemaVersion doc comment), and twoTurnReport gained
+// SynthesisStatusOverrideUncommittedCount -- summed across shards by
+// mergeReports below, the SAME `+=` arithmetic WrongCommitCount/
+// FalseNoMatchCount already get, and gated by the SAME zero-tolerance fail()
+// check as those two (a blocking defect signal, not observational). The
+// per-row block is purely additive passthrough (Results concatenates
+// verbatim); the mirror still had to gain it in the same change for the
+// SAME reason "11"/"12" did -- an undeclared field is dropped on decode.
+const expectedSchemaVersion = "13"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -188,6 +198,17 @@ type twoTurnCaseResult struct {
 	KindCoverageFloorTruncated bool                   `json:"kind_coverage_floor_truncated,omitempty"`
 	ArmInvalidStage            string                 `json:"arm_invalid_stage,omitempty"`
 	ArmInvalidErrorType        string                 `json:"arm_invalid_error_type,omitempty"`
+	// CHAOS-4103 (schema v13) synthesis-status override provenance, mirroring
+	// twoTurnCaseResult's identically-named block byte-for-byte -- see that
+	// file's own doc comment for what each field means and why
+	// SynthesisStatusOverrideCommittedCount deliberately has no omitempty.
+	// Purely additive passthrough: Results concatenates verbatim across
+	// shards, so no merge arithmetic changes for this block itself.
+	SynthesisStatusOverrideFired          bool   `json:"synthesis_status_override_fired"`
+	SynthesisStatusOverrideFrom           string `json:"synthesis_status_override_from,omitempty"`
+	SynthesisStatusOverrideTo             string `json:"synthesis_status_override_to,omitempty"`
+	SynthesisStatusOverrideReason         string `json:"synthesis_status_override_reason,omitempty"`
+	SynthesisStatusOverrideCommittedCount int    `json:"synthesis_status_override_committed_count"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's
@@ -231,20 +252,25 @@ type twoTurnArmTimingSummary struct {
 }
 
 type twoTurnReport struct {
-	ReportSchemaVersion                     string              `json:"report_schema_version"`
-	Provenance                              trialProvenance     `json:"provenance"`
-	BaseSHA                                 string              `json:"base_sha"`
-	OracleAnnexPath                         string              `json:"oracle_annex_path"`
-	OracleAnnexCorpusSHA                    string              `json:"oracle_annex_corpus_sha256"`
-	OracleAnnexSignedOff                    bool                `json:"oracle_annex_signed_off"`
-	CasesRun                                int                 `json:"cases_run"`
-	PositiveAppliedCount                    int                 `json:"positive_applied_count"`
-	WindowPositiveAppliedCount              int                 `json:"window_positive_applied_count"`
-	GateReachableCount                      int                 `json:"gate_reachable_count"`
-	StructureAndWindowDisclosureAbsentCount int                 `json:"structure_and_window_disclosure_absent_count"`
-	OfferMissCount                          map[string]int      `json:"offer_miss_count"`
-	WrongCommitCount                        int                 `json:"wrong_commit_count"`
-	FalseNoMatchCount                       int                 `json:"false_no_match_count"`
+	ReportSchemaVersion                     string          `json:"report_schema_version"`
+	Provenance                              trialProvenance `json:"provenance"`
+	BaseSHA                                 string          `json:"base_sha"`
+	OracleAnnexPath                         string          `json:"oracle_annex_path"`
+	OracleAnnexCorpusSHA                    string          `json:"oracle_annex_corpus_sha256"`
+	OracleAnnexSignedOff                    bool            `json:"oracle_annex_signed_off"`
+	CasesRun                                int             `json:"cases_run"`
+	PositiveAppliedCount                    int             `json:"positive_applied_count"`
+	WindowPositiveAppliedCount              int             `json:"window_positive_applied_count"`
+	GateReachableCount                      int             `json:"gate_reachable_count"`
+	StructureAndWindowDisclosureAbsentCount int             `json:"structure_and_window_disclosure_absent_count"`
+	OfferMissCount                          map[string]int  `json:"offer_miss_count"`
+	WrongCommitCount                        int             `json:"wrong_commit_count"`
+	FalseNoMatchCount                       int             `json:"false_no_match_count"`
+	// SynthesisStatusOverrideUncommittedCount (CHAOS-4103, schema v13) mirrors
+	// twoTurnReport's identically-named field -- see that file's own doc
+	// comment. A THIRD zero-tolerance bar alongside WrongCommitCount/
+	// FalseNoMatchCount below.
+	SynthesisStatusOverrideUncommittedCount int                 `json:"synthesis_status_override_uncommitted_count"`
 	WindowCommitCount                       int                 `json:"window_commit_count"`
 	WindowInferredTierRanCount              int                 `json:"window_inferred_tier_ran_count"`
 	WindowArmErrorCount                     int                 `json:"window_arm_error_count"`
@@ -520,6 +546,7 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.StructureAndWindowDisclosureAbsentCount += s.StructureAndWindowDisclosureAbsentCount
 		merged.WrongCommitCount += s.WrongCommitCount
 		merged.FalseNoMatchCount += s.FalseNoMatchCount
+		merged.SynthesisStatusOverrideUncommittedCount += s.SynthesisStatusOverrideUncommittedCount
 		merged.WindowCommitCount += s.WindowCommitCount
 		merged.WindowInferredTierRanCount += s.WindowInferredTierRanCount
 		merged.WindowArmErrorCount += s.WindowArmErrorCount
@@ -740,6 +767,13 @@ func evaluateGates(r twoTurnReport) error {
 	}
 	if r.FalseNoMatchCount > 0 {
 		fail("false_no_match_count=%d, want 0", r.FalseNoMatchCount)
+	}
+	// CHAOS-4103: THIRD zero-tolerance bar, deliberately separate from
+	// false_no_match_count above -- see twoTurnReport's own doc comment on
+	// SynthesisStatusOverrideUncommittedCount for why the two are never
+	// folded together.
+	if r.SynthesisStatusOverrideUncommittedCount > 0 {
+		fail("synthesis_status_override_uncommitted_count=%d, want 0 -- an engine routing bug (see chaos4098_synthesis_status.go), not a soft status", r.SynthesisStatusOverrideUncommittedCount)
 	}
 	if r.InferredPairInvalidCount > 0 {
 		fail("inferred_pair_invalid_count=%d, want 0", r.InferredPairInvalidCount)

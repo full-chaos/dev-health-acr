@@ -278,6 +278,23 @@ func defaultRawSignalObserver(override graphrank.RawSignalObserver, logger *slog
 	return graphrank.NewSlogRawSignalObserver(logger)
 }
 
+// contextFabricEngineTelemetry is CHAOS-4103's default for
+// EngineDependencies.Telemetry: options.EngineTelemetry, when non-nil, WINS
+// unchanged -- the CHAOS-3742 generative trial harness sets its own
+// capturing implementation so a synthesis-status override's outcome reaches
+// the trial report row instead of only a slog WARN line (see
+// Options.EngineTelemetry's own doc comment). A nil override (every real
+// deployment) falls through to contextfabric.NewSlogEngineTelemetry, exactly
+// the AC-3782-8 wiring this replaces -- byte-identical production behavior.
+// Factored out to a named, directly-testable function for the same reason
+// defaultRawSignalObserver above is.
+func contextFabricEngineTelemetry(options Options) contextfabric.EngineTelemetry {
+	if options.EngineTelemetry != nil {
+		return options.EngineTelemetry
+	}
+	return contextfabric.NewSlogEngineTelemetry(options.Logger)
+}
+
 // buildGraphLifecycleResolver returns the CHAOS-3898 S2a-2 read-side
 // OrgEpochResolver, or nil when pglifecycle.EnvConfig.Enabled is false (the
 // default) -- see that type's own doc comment for why this master switch
@@ -699,7 +716,14 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// comment). Also covers the pre-existing
 		// RecordPriorSubjectReceiptsSkipped counter, which had a port and
 		// a call site but no production implementation until now.
-		Telemetry: contextfabric.NewSlogEngineTelemetry(request.options.Logger),
+		//
+		// CHAOS-4103: request.options.EngineTelemetry, when set, REPLACES
+		// this default -- same convention graphConfig.ResolutionTracer
+		// below already uses (see Options.EngineTelemetry's own doc
+		// comment) -- letting a caller capture events (e.g. the synthesis-
+		// status override's outcome) in-process instead of only reaching
+		// them by parsing slog output.
+		Telemetry: contextFabricEngineTelemetry(request.options),
 		// CHAOS-3859 (capture-only phase): unconditional -- see
 		// clarificationSink's own construction comment above for why this
 		// does not depend on reuseEnabled.
