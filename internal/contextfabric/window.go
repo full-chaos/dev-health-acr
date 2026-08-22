@@ -1214,12 +1214,16 @@ const windowConfirmationRequiredPlaceholderPrompt = "Confirm the evidence window
 // above: nil watermark/epoch at Save (see that function's own comment --
 // "the fail-CLOSED outcome for reuse specifically"). Deliberately NOT
 // relying on reuseColumnsFor's existing StructureNeeds/ConfirmedStructure
-// check (pginvestigation/store.go): this result carries neither field set
-// in the general case (window has no StructureNeeds block of its own --
-// window.go's own package doc comment, "window is not part of
-// composeConfirmedStructure at all"), so that check alone would not catch
-// it; the explicit nil/nil is the same simple, local, already-proven
-// pattern windowVetoResult already uses for the identical need.
+// check (pginvestigation/store.go): ConfirmedStructure carries nothing in
+// the general case (window is not part of composeConfirmedStructure at
+// all), and even though StructureNeeds now carries the window member's own
+// disclosure (CHAOS-4118: Missing=[window]/WindowOptions, composed just
+// below), that field alone still would not catch every non-reusable case
+// here (the AllowClarification=false branch carries neither field, yet
+// must be exactly as reuse-ineligible as the branch that does) -- the
+// explicit nil/nil watermark/epoch is the same simple, local,
+// already-proven pattern windowVetoResult already uses for the identical
+// need, independent of what either disclosure field carries.
 func (e *Engine) windowConfirmationRequiredResult(
 	ctx context.Context,
 	principal storage.Principal,
@@ -1289,6 +1293,29 @@ func (e *Engine) windowConfirmationRequiredResult(
 		origin = WindowCanonicalizationGatedRefusedNoClarification
 	}
 
+	// CHAOS-4118: this terminal returns BEFORE ResolveSubjects has run (this
+	// function's own doc comment above), so no kind/anchor/handle candidate
+	// pool exists yet -- those three members stay structurally undisclosable
+	// here (CHAOS-4119 tracks the separate handle-path gap; not this
+	// ticket's scope). The window member's own offer is a different case:
+	// composeWindowClarification above already derived it in full from
+	// `effective`, which this function always has. Before this fix, that
+	// offer reached ONLY the legacy WindowClarification field -- a caller
+	// reading StructureNeeds (the CHAOS-3900 W2 unified member surface every
+	// other non-decisive terminal discloses through) saw nothing at all on a
+	// turn-1 window-gated response, even though the identical offer was
+	// sitting right beside it under the old field. nil exactly when
+	// windowClarification is nil (AllowClarification=false declined every
+	// clarification, window included), mirroring composeWindowClarification's
+	// own nil-means-nothing-in-play convention.
+	var structureNeeds *contractsv1.ContextFabricStructureNeeds
+	if windowClarification != nil {
+		structureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+			WindowOptions: windowClarification.Options,
+		}
+	}
+
 	result := InvestigationResult{
 		SchemaVersion:           InvestigationResultSchemaV1,
 		ResultID:                resultID,
@@ -1316,6 +1343,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 		WindowClarification:     windowClarification,
 		ConfirmedStructure:      confirmedStructureEcho,
 		StructureOfferSnapshot:  offerSnapshot,
+		StructureNeeds:          structureNeeds,
 		Versions:                e.terminalVersions(),
 		DeterministicAnswer:     limitation,
 		Warnings:                []string{},
@@ -1334,6 +1362,11 @@ func (e *Engine) windowConfirmationRequiredResult(
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, origin)
 	}
+	// CHAOS-4118: recordStructureNeedsTelemetry's own nil-means-nothing guard
+	// makes this unconditional call a no-op on the AllowClarification=false
+	// branch (structureNeeds is nil there) -- same discipline
+	// terminalResult's own call (unresolved.go) already applies.
+	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

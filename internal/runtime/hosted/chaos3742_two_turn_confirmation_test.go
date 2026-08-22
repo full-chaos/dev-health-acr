@@ -492,9 +492,17 @@ type oracleOfferQuery struct {
 // result.StructureNeeds.WindowOptions (codex round-1 finding #1, confirmed
 // against structure.go's composeStructureNeeds: it populates KindOptions/
 // AnchorOptions/HandleOptions only -- window offers are minted through the
-// SEPARATE CHAOS-3900 W1 WindowClarification path; StructureNeeds.WindowOptions
-// exists on the wire per the design brief's "3900's type, verbatim" but is
-// not yet the field production actually fills).
+// SEPARATE CHAOS-3900 W1 WindowClarification path). CHAOS-4118 (2026-08-22)
+// made StructureNeeds.WindowOptions a real, production-filled field on
+// windowConfirmationRequiredResult's own terminal (window.go) -- mirroring
+// WindowClarification.Options exactly, never a distinct value -- but this
+// oracle keeps reading WindowClarification specifically rather than
+// switching to the new field: it is the ONE surface guaranteed present on
+// every corpus case this member's own regime covers (a confirmed/
+// question_stated window's decisive answer carries WindowClarification==nil
+// AND StructureNeeds==nil, so neither surface would help there; on the
+// window-gated regime the two are identical, so this choice does not
+// change what offer_miss counts).
 func selectOracleOffer(result contractsv1.ContextFabricInvestigationResult, member string, q oracleOfferQuery) (receiptID string, found bool) {
 	switch member {
 	case string(contractsv1.ContextFabricStructureNeedExpectedKind):

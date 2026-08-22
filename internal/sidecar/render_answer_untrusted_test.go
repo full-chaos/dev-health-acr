@@ -79,6 +79,17 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 	notRendered := map[string]string{
 		"structured.question": "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
 		"structured.clarification.candidates[].match_reasons[]": "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
+		// CHAOS-4118 (team-lead ruling 2026-08-22): windowConfirmationRequiredResult
+		// composes StructureNeeds.WindowOptions and WindowClarification.Options
+		// in lockstep from the SAME offer set. Rendering both would show every
+		// window option twice; the legacy "## Window options" (WindowClarification)
+		// rendering stays canonical, so RenderAnswerProjectionMarkdown skips the
+		// window member out of the StructureNeeds block whenever
+		// WindowClarification is also present -- exactly this fixture's own
+		// shape (baseProjection sets both). The identical option content still
+		// reaches the rendering via structured.window_clarification.options[].label,
+		// covered separately below.
+		"structured.structure_needs.window_options[].label": "suppressed to avoid duplicating window_clarification.options[].label's identical, lockstep-composed content -- see RenderAnswerProjectionMarkdown's own comment",
 	}
 	for _, declared := range planted {
 		sentinel := sentinels[declared]
@@ -361,5 +372,62 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 			ProjectionVersion: "p", QueryVersion: "q", InterpretationVersion: "i",
 			SynthesisVersion: "s", CanonicalServiceVersion: "o",
 		},
+	}
+}
+
+// TestRenderAnswerProjectionMarkdown_WindowGatedCaseRendersExactlyOneWindowOptionsSection
+// is CHAOS-4118's own regression test for the sidecar dedup fix (team-lead
+// ruling 2026-08-22): windowConfirmationRequiredResult (contextfabric/window.go)
+// composes StructureNeeds' window member (Missing=[window], WindowOptions)
+// and the legacy WindowClarification field in LOCKSTEP, from the identical
+// option slice -- this fixture mirrors that exact shape, unlike baseProjection
+// above (which deliberately uses two DIFFERENT option sets so the untrusted-field
+// walk can plant a distinct sentinel at each path). Before the dedup fix, both
+// fields would render their own "options" section, showing the SAME window
+// choice twice under two different headings. Pins: the legacy "## Window
+// options" section renders once, the modern "## Structure needed" section
+// does not render at all (nothing else was in Missing/KindOptions/AnchorOptions/
+// HandleOptions to justify it), and the window offer's own receipt id/label
+// text appears exactly once in the whole document.
+func TestRenderAnswerProjectionMarkdown_WindowGatedCaseRendersExactlyOneWindowOptionsSection(t *testing.T) {
+	windowOptions := []contractsv1.ContextFabricWindowOption{{
+		ReceiptID: "winr_dedup00000000000001", OptionID: "opt_dedup_win1", Label: "the last 90 days",
+		RelativeID: contractsv1.ContextFabricRelativeWindowTrailing90D,
+	}}
+	projection := contractsv1.ContextFabricAnswerProjection{
+		SchemaVersion: contractsv1.ContextFabricAnswerProjectionSchema,
+		ResultID:      "result_windowgated1", RequestID: "request_windowgated1",
+		GeneratedAt: time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Status:      contractsv1.ContextFabricInvestigationClarificationRequired,
+		Question:    "What changed recently?",
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+			WindowOptions: windowOptions,
+		},
+		WindowClarification: &contractsv1.ContextFabricWindowClarification{Options: windowOptions},
+		Versions: contractsv1.ContextFabricVersionSet{
+			ServiceVersion: "acr-v1", ContractVersion: contractsv1.ContextFabricAnswerProjectionSchema, Backend: "graph",
+			ProjectionVersion: "p", QueryVersion: "q", InterpretationVersion: "i",
+			SynthesisVersion: "s", CanonicalServiceVersion: "o",
+		},
+	}
+
+	rendered, truncated := RenderAnswerProjectionMarkdown(projection, 400000)
+	if truncated {
+		t.Fatalf("truncated = true, want false for this small fixture")
+	}
+	if got := strings.Count(rendered, "## Window options"); got != 1 {
+		t.Errorf("\"## Window options\" heading count = %d, want exactly 1:\n%s", got, rendered)
+	}
+	if strings.Contains(rendered, "## Structure needed") {
+		t.Errorf("\"## Structure needed\" heading present, want absent: nothing but the window member (now suppressed) was ever in this StructureNeeds:\n%s", rendered)
+	}
+	// safeInline backslash-escapes "_" (a markdown-active character), so the
+	// rendered receipt id reads winr\_dedup... -- match the escaped form.
+	if got := strings.Count(rendered, `winr\_dedup00000000000001`); got != 1 {
+		t.Errorf(`receipt id winr\_dedup00000000000001 appears %d times, want exactly 1 (no duplicate rendering):`+"\n%s", got, rendered)
+	}
+	if got := strings.Count(rendered, "the last 90 days"); got != 1 {
+		t.Errorf("label \"the last 90 days\" appears %d times, want exactly 1 (no duplicate rendering):\n%s", got, rendered)
 	}
 }
