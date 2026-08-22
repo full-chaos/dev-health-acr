@@ -920,16 +920,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
 	}
 	facts, err := e.facts.ReadFacts(ctx, principal, factRequest)
+	// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
+	// this read made is reported here, immediately, whether it expanded,
+	// declined, or failed.
+	//
+	// BEFORE the error check, not after (codex review finding). A fact read
+	// that resolved its scope and THEN failed -- an unbuildable query, a
+	// provider result the merge rejected -- is precisely the run an operator
+	// most needs the expansion decisions for, and emitting after the early
+	// return would drop them exactly then. ReadFacts returns the in-progress
+	// bundle alongside its error so Scope survives; a nil Scope (an error
+	// raised before resolution ran) simply emits nothing.
+	e.recordFactScopeExpansion(ctx, principal, facts.Scope)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("read canonical facts: %w", err))
 	}
-	// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
-	// this read made is reported here, immediately, whether it expanded,
-	// declined, or failed. Emitted BEFORE synthesis so the events are on the
-	// stream even when a later stage errors out -- the diagnosis-in-artifacts
-	// rule is about the run that FAILED at least as much as the one that
-	// succeeded.
-	e.recordFactScopeExpansion(ctx, principal, facts.Scope)
 
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
 		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
