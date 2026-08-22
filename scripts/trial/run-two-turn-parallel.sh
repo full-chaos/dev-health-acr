@@ -442,7 +442,13 @@ echo "cloned $SHARD_COUNT shard database(s) from $PG_TEMPLATE"
 launch_shard() {
   local i="$1"
   local shard_dsn="${SHARD_DSN[$i]}"
-  local shard_cases="${SHARD_CASES[$i]}"
+  # "none", not "" -- an empty string reads to the harness as "the
+  # launcher said nothing", which makes it select by modulo instead of
+  # running nothing (codex xhigh review round 4, P2). The two agree today
+  # by construction, so nothing duplicates; the sentinel removes the
+  # coincidence rather than relying on it.
+  local shard_cases="${SHARD_CASES[$i]:-}"
+  [[ -z "$shard_cases" ]] && shard_cases="none"
 
   # ${TMPDIR:-/tmp}, not $repo_root (codex-round-4 dry-run finding): every
   # process this exchange dir/log path is visible to runs

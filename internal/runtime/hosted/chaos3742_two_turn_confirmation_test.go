@@ -1049,6 +1049,11 @@ func twoTurnCaseIndicesFromResults(results []twoTurnCaseResult) []int {
 	return indices
 }
 
+// twoTurnShardNoCasesSentinel is what a launcher sets for a shard it
+// deliberately assigned NO cases -- distinct from leaving the variable
+// unset, which means "select by modulo instead".
+const twoTurnShardNoCasesSentinel = "none"
+
 // twoTurnShardCaseIndices reads ACR_TEST_TRIAL_SHARD_CASE_INDICES -- a
 // comma-separated list of corpus positions this shard should run.
 //
@@ -1064,6 +1069,27 @@ func twoTurnShardCaseIndices(t *testing.T) ([]int, map[int]struct{}) {
 	raw := strings.TrimSpace(os.Getenv("ACR_TEST_TRIAL_SHARD_CASE_INDICES"))
 	if raw == "" {
 		return nil, nil
+	}
+	// "none" is an EXPLICITLY EMPTY assignment, distinct from the variable
+	// being unset (codex xhigh review round 4, P2).
+	//
+	// An empty STRING cannot carry that distinction: it reads as "the
+	// launcher said nothing", so the shard falls back to selecting by
+	// modulo. Today that is harmless -- the launcher computes its own
+	// layout with the SAME modulo rule over the SAME index set, so a shard
+	// the launcher left empty is a shard modulo also leaves empty, which
+	// is why no duplicate rows occur and the reported consequence does not
+	// reproduce. But it is harmless only because two independent
+	// implementations happen to agree. The moment they diverge -- a new
+	// assignment strategy, a reordered annex -- an "empty" shard would
+	// silently run whatever modulo hands it, duplicating another shard's
+	// cases, and the merge step would reject the run (or, worse, over-count
+	// before anyone noticed why).
+	//
+	// A sentinel makes the two states distinguishable, so the launcher
+	// says which one it means instead of relying on a coincidence.
+	if raw == twoTurnShardNoCasesSentinel {
+		return []int{}, map[int]struct{}{}
 	}
 	indices := make([]int, 0, 8)
 	set := make(map[int]struct{}, 8)

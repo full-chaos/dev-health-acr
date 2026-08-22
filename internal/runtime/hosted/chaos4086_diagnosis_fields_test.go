@@ -389,3 +389,33 @@ func TestChaos4100_CoverageIsDerivedFromRowsNotFromTheAssignedSet(t *testing.T) 
 		t.Fatal("a shard that produced no rows must report no coverage, not an empty-but-present claim")
 	}
 }
+
+// TestChaos4100_AnEmptyShardAssignmentIsDistinctFromNoAssignment is codex
+// xhigh round 4's P2.
+//
+// The reported CONSEQUENCE did not reproduce: the launcher computes its
+// layout with the same modulo rule over the same index set the harness
+// applies, so a shard the launcher leaves empty is one modulo also leaves
+// empty, and no case is duplicated. The DEFECT is real anyway -- that
+// safety holds only because two independent implementations agree, and an
+// empty string cannot say which of the two states the launcher meant.
+//
+// With a sentinel the states are distinguishable, so a future divergence
+// fails loudly instead of silently rerunning another shard's cases.
+func TestChaos4100_AnEmptyShardAssignmentIsDistinctFromNoAssignment(t *testing.T) {
+	t.Setenv("ACR_TEST_TRIAL_SHARD_CASE_INDICES", twoTurnShardNoCasesSentinel)
+	indices, set := twoTurnShardCaseIndices(t)
+	if set == nil {
+		t.Fatal("an explicit no-cases assignment must return a non-nil set -- a nil set is the signal to fall back to modulo, which is the ambiguity being removed")
+	}
+	if len(indices) != 0 || len(set) != 0 {
+		t.Fatalf("explicit no-cases must select nothing, got %v", indices)
+	}
+
+	// The unset case must STILL mean "select by modulo", or every existing
+	// invocation changes behaviour.
+	t.Setenv("ACR_TEST_TRIAL_SHARD_CASE_INDICES", "")
+	if indices, set := twoTurnShardCaseIndices(t); set != nil || indices != nil {
+		t.Fatalf("an unset assignment must fall back to modulo, got indices=%v set=%v", indices, set)
+	}
+}
