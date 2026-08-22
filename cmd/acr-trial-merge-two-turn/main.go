@@ -87,7 +87,24 @@ import (
 // per-row block is purely additive passthrough (Results concatenates
 // verbatim); the mirror still had to gain it in the same change for the
 // SAME reason "11"/"12" did -- an undeclared field is dropped on decode.
-const expectedSchemaVersion = "13"
+// "14" (CHAOS-4120): three changes, all requiring the bump. (a)
+// FalseNoMatch/FalseNoMatchCount widen from inferred_tier-only to ALSO
+// cover the positive arm -- a MEANING change for an existing key (see the
+// producer's own ReportSchemaVersion doc comment); FalseNoMatchCount's own
+// `+=` merge arithmetic below is UNCHANGED, since it already sums the raw
+// per-shard count regardless of which arm produced it. (b)
+// twoTurnCaseResult gained the CHAOS-4120 turn-1 facts block (Turn1CommitGate/
+// Turn1TiedStatisticalTop/Turn1SearchTruncated, the three Turn1KindCoverage*
+// fields, Turn1TermSearchTruncated/Turn1QuestionSearchTruncated,
+// ExpectedInPool, AnchorOptionsCount, HandleOptionsCount, CensusRan,
+// CensusComplete, CensusCount) -- purely additive passthrough, no merge
+// arithmetic. (c)
+// twoTurnCaseResult also gained Regime, stamped from the engine's own
+// RecordWindowCanonicalization telemetry (see the producer's own doc
+// comment on twoTurnTurn1Facts.Regime) -- also purely additive passthrough.
+// For the SAME "an undeclared field is dropped on decode" reason
+// "11"/"12"/"13" each needed the mirror updated in the same change.
+const expectedSchemaVersion = "14"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -209,6 +226,31 @@ type twoTurnCaseResult struct {
 	SynthesisStatusOverrideTo             string `json:"synthesis_status_override_to,omitempty"`
 	SynthesisStatusOverrideReason         string `json:"synthesis_status_override_reason,omitempty"`
 	SynthesisStatusOverrideCommittedCount int    `json:"synthesis_status_override_committed_count"`
+	// CHAOS-4120 (schema v14) turn-1 facts, mirroring twoTurnCaseResult's
+	// identically-named block byte-for-byte -- see that file's own doc
+	// comment for what each field means and why they are separate,
+	// Turn1-prefixed fields rather than reusing CommitGate/TiedStatisticalTop/
+	// SearchTruncated/KindCoverage* above. Purely additive passthrough:
+	// Results concatenates verbatim across shards, so no merge arithmetic
+	// changes for this block itself.
+	Turn1CommitGate                 string `json:"turn1_commit_gate,omitempty"`
+	Turn1TiedStatisticalTop         bool   `json:"turn1_tied_statistical_top,omitempty"`
+	Turn1SearchTruncated            bool   `json:"turn1_search_truncated,omitempty"`
+	Turn1KindCoverageFloorFired     bool   `json:"turn1_kind_coverage_floor_fired,omitempty"`
+	Turn1KindCoverageMissingKinds   int    `json:"turn1_kind_coverage_missing_kinds,omitempty"`
+	Turn1KindCoverageFloorTruncated bool   `json:"turn1_kind_coverage_floor_truncated,omitempty"`
+	Turn1TermSearchTruncated        bool   `json:"turn1_term_search_truncated,omitempty"`
+	Turn1QuestionSearchTruncated    bool   `json:"turn1_question_search_truncated,omitempty"`
+	ExpectedInPool                  bool   `json:"expected_in_pool"`
+	AnchorOptionsCount              int    `json:"anchor_options_count"`
+	HandleOptionsCount              int    `json:"handle_options_count"`
+	CensusRan                       bool   `json:"census_ran"`
+	CensusComplete                  bool   `json:"census_complete"`
+	CensusCount                     int    `json:"census_count"`
+	// Regime (CHAOS-4120) mirrors twoTurnCaseResult's identically-named
+	// field -- see that file's own doc comment (twoTurnTurn1Facts.Regime)
+	// for the engine-native derivation off RecordWindowCanonicalization.
+	Regime string `json:"turn1_regime,omitempty"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's

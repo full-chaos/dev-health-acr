@@ -407,20 +407,36 @@ type ResolutionTraceEvent struct {
 	// already on InvestigationRequest, zero new plumbing (per the ruling:
 	// "request.RequestID exists").
 	RequestID string
-	// Stage is a closed vocabulary: "search", "alias_lookup",
-	// "corroboration", "decision", "identity_gate", "identity_universe",
-	// "evidence_round", "evidence_probe" (CHAOS-3899), "evidence_census_commit"
-	// (CHAOS-3896 Slice C), "evidence_source_native",
-	// "evidence_source_native_probe" (CHAOS-3899 widening measurement,
-	// 2026-08-19).
+	// Stage is a closed vocabulary: "search", "search_question"
+	// (CHAOS-4120), "alias_lookup", "corroboration", "decision",
+	// "identity_gate", "identity_universe", "evidence_round",
+	// "evidence_probe" (CHAOS-3899), "evidence_census_commit" (CHAOS-3896
+	// Slice C), "evidence_source_native", "evidence_source_native_probe"
+	// (CHAOS-3899 widening measurement, 2026-08-19).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
 	// SAME term across a resolution without ever seeing what it was.
 	TermHash string
-	// SearchResultCount (search stage): the raw CandidateNode count
-	// Search() returned for this term, before authorization/dedup.
+	// SearchResultCount (search/search_question stages): the raw
+	// CandidateNode count Search()/SearchQuestion() returned for this
+	// call, before authorization/dedup.
 	SearchResultCount int
+	// Truncated (search/search_question stages, CHAOS-4120): THIS call's
+	// own truncated return value, before it is folded into the
+	// resolution-wide searchTruncated OR-accumulator (resolve.go). Before
+	// this field, a per-term Search() truncation and the question-level
+	// SearchQuestion() truncation were indistinguishable: both fed the
+	// SAME resolution-wide flag, and only that pooled flag ever reached a
+	// trace event (the decision-stage SearchTruncated above). A reader
+	// could tell "some pass truncated" but never which one -- the exact
+	// per-pass breakdown the CHAOS-4120 question-results decomposition
+	// needed and could not get from the artifact. kind_coverage_floor's
+	// own KindCoverageFloorTruncated below already carries this same
+	// distinction for the coverage floor's SearchKind calls; this field
+	// is the missing other two passes, read the identical way (per-event,
+	// never resolution-wide).
+	Truncated bool
 	// AliasLookupComplete/AliasLookupMatchedClaimants (alias_lookup
 	// stage): the completeness flag AliasLookup returned, and the TOTAL
 	// claimant count across every term (claimantsByTerm's total length)
@@ -1098,6 +1114,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 				RequestID: request.RequestID, Stage: "search",
 				TermHash: traceTermHash(term), SearchResultCount: len(results),
+				// Truncated (CHAOS-4120): THIS term's own Search() truncation,
+				// before the fold into the resolution-wide searchTruncated flag
+				// just below -- see Truncated's own doc comment.
+				Truncated: truncated,
 			})
 		}
 		// allowExactMatch=true: term here is genuine caller-derived search
@@ -1180,6 +1200,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			}
 			if degraded {
 				retrievalDegraded = true
+			}
+			// search_question (CHAOS-4120): a SEPARATE stage from "search"
+			// above -- before this, the question-level pass traced NOTHING
+			// of its own; its truncated/degraded outcome only ever reached
+			// the pooled resolution-wide flags folded in just above, making
+			// it indistinguishable from a per-term Search() truncation on
+			// any trace a reader could inspect. This runs AT MOST ONCE per
+			// resolution (deps.SearchQuestion != nil and a non-empty
+			// question, this block's own guard), so one event suffices --
+			// no per-term fan-out to worry about, unlike "search".
+			if deps.ResolutionTracer != nil {
+				deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "search_question",
+					SearchResultCount: len(results), Truncated: truncated,
+				})
 			}
 			// codex round-1 P1 (fix A): mergeSearchResults' term parameter
 			// becomes MatchedTerms/ReceiptID provenance (NodeCandidate) --
