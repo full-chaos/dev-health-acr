@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -44,15 +45,41 @@ const investigationsPath = "/api/v1/context-fabric/investigations"
 // answer for this surface).
 const contextFabricConsumerSurface = "context_fabric_panel_harness"
 
-// consumerName/consumerVersion identify this harness on every request, the
-// same way every other hosted-API caller in this repo stamps its own
-// consumer identity (sidecar's ClientName/ClientVersion, the workbench's
-// "context-fabric-workbench" seen in contracts/examples/v1's own golden
-// fixture).
-const (
-	consumerName    = "acr-panel-harness"
-	consumerVersion = "0.1.0"
-)
+// consumerName identifies this harness on every request, the same way
+// every other hosted-API caller in this repo stamps its own consumer
+// identity (sidecar's ClientName, the workbench's "context-fabric-workbench"
+// seen in contracts/examples/v1's own golden fixture).
+const consumerName = "acr-panel-harness"
+
+// PanelHarnessClientVersionEnvironment lets a deployment override the
+// version this harness reports to the hosted API on every call -- both as
+// Consumer.Version (request body) and X-ACR-Client-Version (header,
+// requireClientVersion's gate, internal/api/runtime.go). It mirrors the
+// SAME env-var-with-a-default sourcing convention
+// internal/sidecar.Client uses for its own identity
+// (sidecar.ClientVersionEnvironment / defaultClientVersion) -- applied to
+// this harness's own, separate identity, not sidecar's -- so raising a
+// deployment's ACR_MINIMUM_SIDECAR_VERSION floor above this default has a
+// lever to raise this harness's reported version alongside it, rather than
+// this harness silently 426ing on every call until someone edits this
+// constant and cuts a new binary.
+const PanelHarnessClientVersionEnvironment = "ACR_PANEL_HARNESS_CLIENT_VERSION"
+
+// defaultConsumerVersion matches ACR_MINIMUM_SIDECAR_VERSION's own default
+// (internal/config/config.go's defaultMinimumSidecar) -- the floor every
+// hosted deployment starts at unless an operator raises it.
+const defaultConsumerVersion = "0.1.0"
+
+// consumerVersion is resolved once, at process start, exactly like
+// sidecar.Config.ClientVersion is resolved once by sidecar.LoadConfig.
+var consumerVersion = panelHarnessClientVersionOrDefault()
+
+func panelHarnessClientVersionOrDefault() string {
+	if value := strings.TrimSpace(os.Getenv(PanelHarnessClientVersionEnvironment)); value != "" {
+		return value
+	}
+	return defaultConsumerVersion
+}
 
 // ErrUnexpectedStatus is returned when the hosted API responds with a
 // non-2xx status this client does not specially classify.

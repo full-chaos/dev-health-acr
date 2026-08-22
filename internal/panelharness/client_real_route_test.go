@@ -118,6 +118,7 @@ func newRealHostedAPITestServer(t *testing.T) (baseURL, bearerToken string) {
 	if err != nil {
 		t.Fatalf("api.NewApp: %v", err)
 	}
+	t.Cleanup(func() { _ = app.Close() })
 	server := httptest.NewServer(app.Handler())
 	t.Cleanup(server.Close)
 	return server.URL, issued.Token

@@ -248,11 +248,18 @@ func TestTokenExchange_succeedsWithoutWebAssertionsWhileDeviceCodeGrantStaysFail
 	}))
 	assertErrorResponse(t, deviceResponse, http.StatusServiceUnavailable, "upstream_unavailable")
 
-	// device_authorization must ALSO stay fail-closed without
-	// WebAssertions -- deviceRuntimeHandler is unchanged for that route.
+	// device_authorization and device_approval must ALSO stay fail-closed
+	// without WebAssertions -- deviceRuntimeHandler is unchanged for both
+	// of those routes.
 	authorizationResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(authorizationResponse, deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_authorization", contractsv1.DeviceAuthorizationRequest{SchemaVersion: contractsv1.DeviceAuthorizationRequestSchema}))
 	assertErrorResponse(t, authorizationResponse, http.StatusServiceUnavailable, "upstream_unavailable")
+
+	approvalResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(approvalResponse, deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_approval", contractsv1.DeviceApprovalRequest{
+		SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{hostedTestRepository},
+	}))
+	assertErrorResponse(t, approvalResponse, http.StatusServiceUnavailable, "upstream_unavailable")
 }
 
 func assertTokenExchangeError(t *testing.T, response *httptest.ResponseRecorder, wantStatus int, wantCode contractsv1.OAuthTokenExchangeErrorCode) {
