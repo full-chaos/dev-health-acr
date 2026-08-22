@@ -957,11 +957,15 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 		res.KindCoverageMissingKinds = event.KindCoverageMissingKinds
 		res.KindCoverageFloorTruncated = event.KindCoverageFloorTruncated
 	}
-	// CHAOS-4103: stamped unconditionally (SynthesisStatusOverrideFired is
-	// never omitted -- see twoTurnCaseResult's own doc comment), same
-	// discipline ExpectedKind/ExpectedID already use, so an absent-from-JSON
-	// override reads as measured-and-did-not-fire rather than not-measured.
-	twoTurnSetSynthesisOverride(res, trace.synthesisOverride)
+	// CHAOS-4103: folded (severity-gated), NOT set unconditionally -- by the
+	// time this is called, an EARLIER call's override may already have been
+	// folded into res (baseline, a setup turn, turn 1 itself), and an
+	// unconditional overwrite here would silently regress an
+	// already-recorded uncommitted (routing-bug) reason back to whatever
+	// this LATEST call's own trace state says, undoing
+	// twoTurnFoldSynthesisStatusOverride's entire severity guarantee. See
+	// that function's own doc comment.
+	twoTurnFoldSynthesisStatusOverride(res, trace.synthesisOverride)
 }
 
 // twoTurnSetSynthesisOverride writes outcome's fields onto res
@@ -2831,6 +2835,12 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 		trace.reset()
 	}
 	turn2, err := investigator.Investigate(callCtx, principal, req)
+	// CHAOS-4103 (codex review round 3, generalized): folded IMMEDIATELY,
+	// before the error return just below, same as every other arm's own
+	// call site in this file.
+	if trace != nil {
+		twoTurnFoldSynthesisStatusOverride(&res, trace.synthesisOverride)
+	}
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
 		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
@@ -3106,21 +3116,24 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// window Start/End, since neither call has to wait on the OTHER leg's
 	// full investigation first.
 	var baselineWindow, hintedWindow contractsv1.ContextFabricBoundSubjectReceipt
-	// windowSetupBaselineOverride/windowSetupHintedOverride: each leg's own
-	// precondition-setup call, captured for the same fold-in below as
-	// baselineSynthesisOverride -- see mintWindowPrecondition's own doc
-	// comment.
-	var windowSetupBaselineOverride, windowSetupHintedOverride *contextfabric.SynthesisStatusOverrideOutcome
 	if !isWindow {
 		var windowReason string
 		var windowCause error
-		baselineWindow, windowReason, windowCause, windowSetupBaselineOverride = mintWindowPrecondition("inferredtierwindowsetupbaseline")
+		var windowOverride *contextfabric.SynthesisStatusOverrideOutcome
+		baselineWindow, windowReason, windowCause, windowOverride = mintWindowPrecondition("inferredtierwindowsetupbaseline")
+		// CHAOS-4103 (codex review round 3, confirmed): folded IMMEDIATELY,
+		// before the windowReason early return just below -- round 2's
+		// shape deferred this to a single fold call at the function's
+		// tail, which silently dropped this leg's own override whenever
+		// the setup call itself failed (the exact branch directly below).
+		twoTurnFoldSynthesisStatusOverride(&res, windowOverride)
 		if windowReason != "" {
 			res.PairInvalid = true
 			twoTurnStampArmFailure(&res, windowReason, windowCause)
 			return res
 		}
-		hintedWindow, windowReason, windowCause, windowSetupHintedOverride = mintWindowPrecondition("inferredtierwindowsetuphinted")
+		hintedWindow, windowReason, windowCause, windowOverride = mintWindowPrecondition("inferredtierwindowsetuphinted")
+		twoTurnFoldSynthesisStatusOverride(&res, windowOverride)
 		if windowReason != "" {
 			res.PairInvalid = true
 			twoTurnStampArmFailure(&res, windowReason, windowCause)
@@ -3130,15 +3143,6 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 
 	var baseline contractsv1.ContextFabricInvestigationResult
 	var baselineDecision graphrank.ResolutionTraceEvent
-	// baselineSynthesisOverride (CHAOS-4103, codex review round 1, confirmed):
-	// the baseline call is a REAL Investigate() and can independently trip
-	// applySynthesisStatusOverride -- captured below at the SAME point as
-	// baselineDecision immediately above, and for the SAME reason: the
-	// hinted call's own reset just below would otherwise silently discard
-	// it before twoTurnStampDecision ever reads it, understating (or
-	// entirely missing) this arm's own count toward the blocking-defect
-	// bar.
-	var baselineSynthesisOverride *contextfabric.SynthesisStatusOverrideOutcome
 	if !isWindow {
 		if trace != nil {
 			trace.reset()
@@ -3149,6 +3153,18 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		var baselineErr error
 		baseline, baselineErr = investigator.Investigate(baselineCtx, principal, baselineReq)
 		baselineCancel()
+		// baselineSynthesisOverride (CHAOS-4103, codex review rounds 1+3,
+		// confirmed): the baseline call is a REAL Investigate() and can
+		// independently trip applySynthesisStatusOverride -- folded
+		// IMMEDIATELY, before the baselineErr early return just below
+		// (round 1's shape deferred this and silently dropped it on that
+		// exact branch, round 3's finding). twoTurnStampDecision's own fold
+		// for the hinted call further below (severity-gated, see its doc
+		// comment) makes this safe regardless of what that later call's own
+		// trace state turns out to be.
+		if trace != nil {
+			twoTurnFoldSynthesisStatusOverride(&res, trace.synthesisOverride)
+		}
 		if baselineErr != nil {
 			// PairInvalid, NOT ArmInvalidReason alone: this pairing could
 			// not be evaluated AT ALL (the baseline itself never resolved),
@@ -3163,7 +3179,6 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			// Captured BEFORE the hinted call's own reset below -- the
 			// baseline's decision event would otherwise be lost.
 			baselineDecision, _ = trace.finalDecisionEvent()
-			baselineSynthesisOverride = trace.synthesisOverride
 		}
 	}
 
@@ -3181,6 +3196,17 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	result, err := investigator.Investigate(callCtx, principal, req)
 	cancel()
+	// CHAOS-4103 (codex review round 3, confirmed): folded IMMEDIATELY,
+	// before the error return just below -- every EARLIER call in this
+	// function (both window-precondition setups, the baseline) already
+	// folds its own override in at its own call site; this is the hinted
+	// call's turn. twoTurnFoldSynthesisStatusOverride's severity gate means
+	// the order these folds happen in, and whether twoTurnStampDecision
+	// below folds this SAME value again on the success path, cannot change
+	// the outcome.
+	if trace != nil {
+		twoTurnFoldSynthesisStatusOverride(&res, trace.synthesisOverride)
+	}
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
 		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
@@ -3205,16 +3231,6 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// reads cannot be the baseline's.
 	twoTurnStampOutcome(&res, tc, result.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
-	// CHAOS-4103 (codex review rounds 1+2): fold every EARLIER call's own
-	// override occurrence back in -- twoTurnStampDecision above only ever
-	// sees the HINTED call's trace state, so the paired baseline's and
-	// EITHER window-precondition setup call's override would otherwise
-	// vanish. Order among the folds does not matter: each is independently
-	// severity-gated against whatever is already stamped -- see
-	// twoTurnFoldSynthesisStatusOverride's own doc comment.
-	twoTurnFoldSynthesisStatusOverride(&res, baselineSynthesisOverride)
-	twoTurnFoldSynthesisStatusOverride(&res, windowSetupBaselineOverride)
-	twoTurnFoldSynthesisStatusOverride(&res, windowSetupHintedOverride)
 	// false_no_match (CHAOS-4039): every inferred-tier case carries a real
 	// expected answer (tc.ExpectID != "" by construction of this harness's
 	// own corpus selection) -- a literal no_match terminal here is as much
@@ -3659,13 +3675,6 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 	twoTurnStampOutcome(&res, tc, nil)
 
 	var offerResultID, receiptID string
-	// setupSynthesisOverride (CHAOS-4103, same class as
-	// runTwoTurnInferredTierArm's baselineSynthesisOverride): the setup
-	// turn below is a REAL Investigate() call and can independently trip
-	// applySynthesisStatusOverride, so it needs the SAME
-	// reset-before/capture-after discipline or the redemption call's own
-	// reset would silently discard it.
-	var setupSynthesisOverride *contextfabric.SynthesisStatusOverrideOutcome
 	if entry.Member == string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
 		receiptID = contractsv1.ContextFabricAnchorOptionReceiptPrefix + "twoturnseed0000000000000"
 		var err error
@@ -3700,8 +3709,14 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		setupCtx, cancel := context.WithTimeout(ctx, timeout)
 		setupResult, err := investigator.Investigate(setupCtx, principal, setupReq)
 		cancel()
+		// CHAOS-4103 (codex review round 3, confirmed): folded IMMEDIATELY,
+		// before either early return below -- deferring this to a single
+		// fold call at the function's tail (round 1's shape) silently
+		// dropped the setup turn's own override whenever the setup call
+		// itself errored or its offer went missing, exactly the two
+		// branches directly below.
 		if trace != nil {
-			setupSynthesisOverride = trace.synthesisOverride
+			twoTurnFoldSynthesisStatusOverride(&res, trace.synthesisOverride)
 		}
 		if err != nil {
 			twoTurnStampArmFailure(&res, "setup turn failed: "+contextFabricRejectionClass(err), err)
@@ -3725,6 +3740,13 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		trace.reset()
 	}
 	turn2, err := investigator.Investigate(callCtx, principal, req)
+	// CHAOS-4103: folded immediately, same reason as the setup call above --
+	// an error return just below must not discard this call's own override
+	// either. twoTurnStampDecision's OWN fold (severity-gated, see its doc
+	// comment) makes this and the setup fold above safe in any order.
+	if trace != nil {
+		twoTurnFoldSynthesisStatusOverride(&res, trace.synthesisOverride)
+	}
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
 		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
@@ -3736,10 +3758,6 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
-	// CHAOS-4103 (codex review round 1, generalized): fold the setup
-	// turn's own override occurrence back in -- see
-	// twoTurnFoldSynthesisStatusOverride's own doc comment.
-	twoTurnFoldSynthesisStatusOverride(&res, setupSynthesisOverride)
 	return res
 }
 
@@ -3792,6 +3810,12 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 			trace.reset()
 		}
 		result, err := investigator.Investigate(callCtx, principal, req)
+		// CHAOS-4103 (codex review round 3, generalized): folded
+		// IMMEDIATELY, before the error return just below -- twoTurnStampDecision
+		// below never runs on that path.
+		if trace != nil {
+			twoTurnFoldSynthesisStatusOverride(&res, trace.synthesisOverride)
+		}
 		if err != nil {
 			// codex round-1 finding #7: an investigator error is NOT
 			// evidence the probe's expected veto/refusal fired -- a
@@ -4357,6 +4381,18 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		turn1Ctx, turn1Cancel := context.WithTimeout(ctx, caseTimeout)
 		turn1, err := investigator.Investigate(turn1Ctx, principal, turn1Req)
 		turn1Cancel()
+		// turn1SynthesisOverride (CHAOS-4103, codex review round 3,
+		// confirmed): turn 1 is itself a real Investigate() call and can
+		// independently trip applySynthesisStatusOverride, but it produces
+		// no twoTurnCaseResult row of its own -- every arm below shares
+		// this ONE turn-1 answer, so its override (if any) is folded into
+		// EVERY row this case produces, not just one arm. Captured
+		// immediately, before any arm resets the shared capture for its
+		// own call.
+		var turn1SynthesisOverride *contextfabric.SynthesisStatusOverrideOutcome
+		if traceCapture != nil {
+			turn1SynthesisOverride = traceCapture.synthesisOverride
+		}
 		turn1Timing := buildTwoTurnArmTiming("turn1", turn1Started, modelCallCapture)
 		// positiveTiming/inferredTiming/confirmedWrongTiming/mutationTiming
 		// (CHAOS-4058) default to zero-duration/zero-call records naming
@@ -4439,6 +4475,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		modelCallCapture.reset()
 		positiveStarted := time.Now()
 		positive := runTwoTurnPositiveArm(ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture)
+		twoTurnFoldSynthesisStatusOverride(&positive, turn1SynthesisOverride)
 		positiveTiming = buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
 		if positive.OfferMiss {
 			report.OfferMissCount[entry.Member]++
@@ -4481,6 +4518,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		modelCallCapture.reset()
 		inferredStarted := time.Now()
 		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
+		twoTurnFoldSynthesisStatusOverride(&inferred, turn1SynthesisOverride)
 		inferredTiming = buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
 		if inferred.PairInvalid {
 			report.InferredPairInvalidCount++
@@ -4536,6 +4574,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		modelCallCapture.reset()
 		confirmedWrongStarted := time.Now()
 		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken, traceCapture)
+		twoTurnFoldSynthesisStatusOverride(&confirmedWrong, turn1SynthesisOverride)
 		confirmedWrongTiming = buildTwoTurnArmTiming(string(twoTurnArmConfirmedWrong), confirmedWrongStarted, modelCallCapture)
 		if confirmedWrong.ArmInvalidReason == "" && confirmedWrong.Applied && entry.NegativeCommittable {
 			report.ConfirmedWrongRedeemedCount[entry.Member]++
@@ -4571,6 +4610,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 				mutationResults := runTwoTurnMutationArm(ctx, investigator, principal, entry.Index, tc, entry, turn1.ResultID, receiptID, caseTimeout, traceCapture)
 				mutationTiming = buildTwoTurnArmTiming(string(twoTurnArmMutation), mutationStarted, modelCallCapture)
 				for _, mutationResult := range mutationResults {
+					twoTurnFoldSynthesisStatusOverride(&mutationResult, turn1SynthesisOverride)
 					report.MutationProbesRun[mutationResult.MutationProbe]++
 					if mutationResult.MutationTripped {
 						report.MutationProbesTripped[mutationResult.MutationProbe]++
