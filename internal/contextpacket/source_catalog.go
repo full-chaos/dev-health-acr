@@ -39,6 +39,23 @@ type CatalogResult struct {
 
 const repositoryWideSourceLabelSuffix = " (repository-wide)"
 
+// reasonNoEvidenceTaskRefFiltered marks a catalog source whose statement
+// applies an exact task_ref match (see taskRefFilteredSources) and returned
+// zero rows for a request that supplied a task_ref. CHAOS-4016: a caller
+// with a stale/wrong task_ref must see this attributed to the filter it
+// applied, not the generic "no_evidence" a source that ignores task_ref
+// entirely gets for the same empty result.
+const reasonNoEvidenceTaskRefFiltered = "no_evidence_task_ref_filtered"
+
+// taskRefFilteredSources are the catalog source IDs whose statement in
+// source_queries.go narrows rows by an exact task_ref match. Keep this in
+// sync with those statements.
+var taskRefFilteredSources = map[string]bool{
+	"work_items.v1":             true,
+	"work_item_dependencies.v1": true,
+	"work_graph.v1":             true,
+}
+
 func catalogSourceQuery(id string) *SourceQuery {
 	for index := range SourceQueryCatalogV1 {
 		if SourceQueryCatalogV1[index].ID == id {
@@ -91,7 +108,7 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		}
 		result.Evidence = append(result.Evidence, rows...)
 	}
-	result.Unavailable = appendMissingCatalogSources(result.Unavailable, result.Evidence)
+	result.Unavailable = appendMissingCatalogSources(result.Unavailable, result.Evidence, plan.TaskRef)
 	result.Watermarks = catalogWatermarks(plan, result.Evidence, result.Unavailable)
 	return result, nil
 }
@@ -119,7 +136,7 @@ func withRepositoryWideScope(metadata map[string]any) map[string]any {
 	return result
 }
 
-func appendMissingCatalogSources(unavailable []contractsv1.UnavailableSource, evidence []contractsv1.EvidenceRef) []contractsv1.UnavailableSource {
+func appendMissingCatalogSources(unavailable []contractsv1.UnavailableSource, evidence []contractsv1.EvidenceRef, taskRef string) []contractsv1.UnavailableSource {
 	available := map[string]bool{}
 	for _, ref := range evidence {
 		available[ref.SourceVersion] = true
@@ -132,7 +149,11 @@ func appendMissingCatalogSources(unavailable []contractsv1.UnavailableSource, ev
 	}
 	for _, query := range SourceQueryCatalogV1 {
 		if !available[query.ID] && !failed[query.ID] {
-			unavailable = append(unavailable, contractsv1.UnavailableSource{Source: query.ID, Reason: "no_evidence"})
+			reason := "no_evidence"
+			if taskRef != "" && taskRefFilteredSources[query.ID] {
+				reason = reasonNoEvidenceTaskRefFiltered
+			}
+			unavailable = append(unavailable, contractsv1.UnavailableSource{Source: query.ID, Reason: reason})
 		}
 	}
 	return unavailable
