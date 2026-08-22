@@ -279,6 +279,24 @@ func TestInvestigateQuestionAppliesAgentDefaults(t *testing.T) {
 	if seen.Options.MaxCohortMembers != defaultMaxCohortMembers {
 		t.Errorf("max_cohort_members = %d, want %d", seen.Options.MaxCohortMembers, defaultMaxCohortMembers)
 	}
+	// CHAOS-4117: pins the calibrated candidate limit (10 -> 20) at the
+	// ONE place a real, budget-omitting MCP caller actually gets it from --
+	// hostedOptions' defaultMaxSubjectCandidates. Neither this test file
+	// nor any other in this package asserted this field before; a revert
+	// of the constant alone would have passed every existing test here.
+	//
+	// Deliberately a LITERAL 20, not defaultMaxSubjectCandidates itself
+	// (codex xhigh review, round 2): comparing the observed value against
+	// the SAME constant hostedOptions reads from proves internal
+	// consistency, never the calibrated value -- a future revert of the
+	// constant back to 10 would change both sides together and this
+	// assertion would stay green. 20 is CalibratedTopK
+	// (falkorgraph.RetrievalPolicy, retrieval_policy.go); a change here
+	// must be a deliberate, reviewed recalibration, not a silent drift.
+	const wantCalibratedMaxSubjectCandidates = 20
+	if seen.Options.MaxSubjectCandidates != wantCalibratedMaxSubjectCandidates {
+		t.Errorf("max_subject_candidates = %d, want the calibrated default %d", seen.Options.MaxSubjectCandidates, wantCalibratedMaxSubjectCandidates)
+	}
 	if !seen.Options.AllowClarification {
 		t.Errorf("clarification must be allowed unless the caller opts out")
 	}
