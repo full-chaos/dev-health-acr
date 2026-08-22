@@ -96,8 +96,12 @@ keeps its single auditable rule and providers keep their declared
    which asserts "proven nothing missing".
 8. Deterministic ordering and dedup; cap detection by limit+1;
    partial → `expanded_partial`, never silent truncation.
-9. Authorization enforced at every graph hop; auth-drops are telemetry-only
-   (no existence side-channel).
+9. Authorization enforced at every graph hop. **Amended 2026-08-22 (see
+   §6b):** an auth-drop's existence may be disclosed to the caller, within
+   org scope, as the count-level `matched_unauthorized` warning — repository
+   existence inside an org is not confidential. Fact **content** from an
+   unauthorized repository is never disclosed under any outcome, and the
+   full operator detail stays in telemetry regardless.
 10. Version bump so pre-fix cached false-no-match results are not reused
     post-activation.
 
@@ -114,8 +118,10 @@ disclosure-only project row.
 **Basis** (`FactScopeBasis`): `direct` | `activity_proxy`.
 
 **Outcome** (`FactScopeExpansionOutcome`): `not_needed`, `policy_unavailable`,
-`attempted_empty`, `target_kind_mismatch`, `expanded`, `expanded_partial`,
-`failed`.
+`attempted_empty`, `matched_unauthorized`, `target_kind_mismatch`,
+`expanded`, `expanded_partial`, `failed`. `matched_unauthorized` is new,
+ruled 2026-08-22 (see §6b) — an expansion whose candidates matched the
+traversal but were dropped by authorization.
 
 Outcome → `SourceState`, none of which is ever `SourcePruned`:
 
@@ -123,9 +129,10 @@ Outcome → `SourceState`, none of which is ever `SourcePruned`:
 | --- | --- | --- |
 | `policy_unavailable` | `unconfigured` | yes |
 | `expanded_partial` | `truncated` | yes |
+| `matched_unauthorized` | `truncated` | yes — new, ruled 2026-08-22 (see §6b) |
 | `failed` | `unavailable` | yes |
 | `target_kind_mismatch` | `unavailable` | yes |
-| `attempted_empty` | `no_data` | yes — ruled 2026-08-22, PENDING chris sign-off on cost (see §6b) |
+| `attempted_empty` | `no_data` | no — reaffirmed 2026-08-22 (see §6b); a real proof of absence |
 | *(unrecognised)* | `unavailable` | yes |
 
 `target_kind_mismatch` degrades. The cause is a wiring error, but
@@ -227,9 +234,13 @@ a current-axis question mean a projection bug; `MissingNextHopCount` is how a
 regression in the zero-UUID sentinel filter announces itself; a target-kind
 mismatch is always a wiring error.
 
-`AuthorizationDroppedCount` is telemetry-**only**. "There were targets you
-cannot see" is an existence side-channel and never reaches the answer or
-public provenance.
+The `AuthorizationDroppedCount` **field** is telemetry-only — full operator
+detail never rides in the caller-visible bundle. **Amended 2026-08-22 (see
+§6b):** the underlying fact "there were targets you cannot see" is no longer
+treated as a side-channel to suppress. Within org scope it is disclosed
+deliberately, at count level, through the distinct `matched_unauthorized`
+outcome and its warning — not through this telemetry field, and never with
+dropped-repository fact content.
 
 ## 6a. The outcome ladder is ordered so nothing degrading is masked
 
@@ -287,80 +298,86 @@ synthesis input saw complete coverage while the answer said evidence was
 missing. A disclosure the fact bundle contradicts is worth less than no
 disclosure at all.
 
-**Superseded for stage 2 (see §6b).** The ruling on invariant 7 × invariant 9
-makes `attempted_empty` degrade, which makes the worst-wins branch above dead
-code once PR-2 lands.
+**Still live post-ruling (see §6b).** The worst-wins disclosure-slot branch
+above stays load-bearing: `attempted_empty` (non-degrading) and the new
+`matched_unauthorized` outcome (degrading) compete for the same slot, so
+`TestChaos4099_ACleanGapNeverEvictsADegradingOne` keeps pinning a reachable
+state.
 
-## 6b. Ruling: `attempted_empty` is not a proof of absence (invariant 7 × invariant 9)
+## 6b. Invariant 7 × invariant 9 on authorization drops — ruling history
 
 An expansion whose admitted set is empty because every candidate was
 authorization-dropped previously reported `attempted_empty` — the same
 clean, non-degrading outcome as a traversal that genuinely found nothing.
-That is a false proof of absence (invariant 7): targets existed, the caller
-simply could not see them. The obvious fix — degrade auth-dropped
-traversals — is forbidden by the opposite invariant: it would make an
-auth-drop caller-observable, an existence side-channel (invariant 9). A
-size-dependent variant was already latent in the merged §6a fix: a full
-first page auth-dropped hits `expanded_partial` (degrading) while a small
-auth-dropped project hits clean `attempted_empty` — the same information
-leaking through result size instead of through the outcome field.
+Read at face value that is a false proof of absence (invariant 7): targets
+existed, the caller simply could not see them. A size-dependent variant was
+already latent in the merged §6a fix: a full first page auth-dropped hits
+`expanded_partial` (degrading) while a small auth-dropped project hits clean
+`attempted_empty` — the same information leaking through result size
+instead of through the outcome field.
 
-**RULED (team-lead, 2026-08-22): indistinguishability at the same truthful
-level.** An expansion whose admitted set is empty for one of three specific
-reasons — genuinely no candidates existed, every candidate was
-authorization-dropped, or the traversal was truncated before anything was
-admitted — now produces ONE non-committal outcome meaning "no evidence
-reached," never a proof of absence. The truncated-before-admitting case
-collapses into the same outcome, closing the size channel. `attempted_empty`
-degrades. Operator truth (`AuthorizationDroppedCount`, `Truncated`) stays
-telemetry-only — the existing invariant-9 carve-out; "no evidence reached"
-is true in all three cases, and invariant 7 forbids a false proof, not the
-strongest true claim. **`target_kind_mismatch` is not one of the three and
-is untouched by this collapse**: an admitted set that is empty because every
-candidate was the wrong kind is a wiring signal, not an
-evidence-reachability question, and it already degrades on its own terms
-(§5).
+### Provisional ruling (team-lead, 2026-08-22) — SUPERSEDED same day
 
-Verified against the `graphrank/resolution.go:885` precedent: not an
-analogue of any of the three fixes rejected there; it matches what graphrank
-ultimately adopted (constant-off, no observable dependence on the hidden
-population), and is strictly stronger — no branch on caller scope shape at
-all.
+Reasoned that degrading auth-dropped traversals was forbidden by invariant 9
+(an auth-drop must not be caller-observable — an existence side-channel),
+and that invariants 7 and 9 could not both be satisfied under the existing
+vocabulary. Ruled that every expansion whose admitted set is empty for one
+of three reasons — genuinely no candidates, every candidate
+authorization-dropped, or truncated before anything was admitted — should
+collapse into ONE non-committal "no evidence reached" outcome, with
+`attempted_empty` degrading; named a PR-2 differential test requiring
+byte-identical caller-visible results between the genuinely-empty and
+fully-auth-dropped scenarios; priced the resulting `Coverage.Partial`
+widening as pending Chris's sign-off; and treated the §6a worst-wins branch
+as consequently dead code. **All of that is superseded by the ruling
+below**, issued the same day. It is kept here only so the reasoning trail is
+honest — do not implement against it.
 
-**PR-2 acceptance criterion (ratified, named).** Collapsing the outcome enum
-is necessary, not sufficient — it removes one observable, but the
-genuinely-empty and fully-auth-dropped cases are indistinguishable only if
-nothing else on the caller-visible surface differs. PR-2 must include a
-differential test that constructs both scenarios so they differ *only* in
-whether candidates were authorization-dropped, serializes the entire
-caller-visible result surface (outcome, the caller-visible counts such as
-`AdmittedCount`/`CandidateCount`/`OriginCount` — never the telemetry-only
-counts carved out above, derived-subject list, coverage reason, limitation
-text) for both, and asserts byte-identity. A label asserting
-"indistinguishable" proves nothing; an artefact identical under both
-hypotheses does.
+### Ruling (chris, 2026-08-22) — authoritative, supersedes the above
 
-**Priced cost — PENDING CHRIS SIGN-OFF.** Because `attempted_empty` now
-degrades, genuinely-empty project traversals will also carry
-`Coverage.Partial`, widening the pre-adjudicated measurement effect (§6, §9)
-a second time. If rejected, the fallback is disabling expansion for the
-affected shape entirely — not reintroducing distinct outcomes, which would
-reinstate the leak this ruling closes.
+The collision is **dissolved at the product level**, not resolved by making
+the two cases indistinguishable. Invariant 9's premise — that an auth-drop
+must be invisible — does not hold here: within an org, repository
+**existence** is not confidential. Org access already implies knowing a
+repository exists; what is actually restricted is access to its *content*.
+Private repositories inside an org are rare for internal use-cases. Once
+existence is not the secret, invariant 9 has nothing left to protect that
+disclosing an auth-drop's existence would violate.
 
-**Consequence: the §6a worst-wins branch becomes dead code.** That logic
-exists only to arbitrate between a degrading gap and a non-degrading one
-sharing a disclosure slot. Checking the rest of the outcome vocabulary:
-`policy_unavailable`, `failed`, `target_kind_mismatch`, `expanded_partial`
-already degrade; `FactScopeNotNeeded` is declared but never assigned
-anywhere in the codebase, so it never records a gap. Once `attempted_empty`
-also degrades, **every** gap-recording outcome degrades — worst-wins and
-first-wins become identical and the branch never fires.
-`TestChaos4099_ACleanGapNeverEvictsADegradingOne` becomes an assertion about
-an unreachable state. PR-2 must make a conscious choice: delete the
-worst-wins branch as dead code (stating why in the commit), or keep it as an
-explicitly-labelled fail-safe for a non-degrading gap outcome that does not
-exist today. Either way, the test must be re-grounded or retired, not left
-as a passing assertion about an impossible state.
+- `attempted_empty` **keeps** its original meaning — a real proof of
+  absence for genuinely-empty traversals. It is **not** reversed, and it
+  does not degrade.
+- An authorization-dropped expansion gets its **own distinct outcome** in
+  v1 — `matched_unauthorized`: candidates matched the traversal but were
+  dropped by authorization. It **is** disclosed to the caller, as a
+  count-level warning that unauthorized repositories exist within the same
+  org scope. Naming the dropped repositories' identity is implementation
+  freedom within that scope; their fact *content* is not. It degrades —
+  coverage genuinely is partial.
+- **Invariant 9 is amended**: existence-level visibility of an
+  authorization drop is allowed by design, within org scope. Telemetry
+  still carries the full operator detail
+  (`AuthorizationDroppedCount`, `Truncated`, etc.) regardless. No fact
+  **content** from an unauthorized repository ever reaches the caller,
+  under any outcome.
+- The provisional ruling's PR-2 differential byte-identity test criterion
+  is **withdrawn** — genuinely-empty and auth-dropped are no longer
+  required to be indistinguishable; they are different outcomes by design.
+- The §6a worst-wins disclosure-slot branch is **not** dead code.
+  Non-degrading `attempted_empty` and degrading `matched_unauthorized`
+  competing for one disclosure slot is a real, reachable case, so
+  `TestChaos4099_ACleanGapNeverEvictsADegradingOne` stays live and needs no
+  re-grounding on this account. `FactScopeNotNeeded` remains
+  declared-but-never-assigned in the codebase and still records no gap on
+  its own, but that no longer implies every gap-recording outcome degrades.
+- **Priced cost — moot.** `Coverage.Partial` does **not** widen to
+  genuinely-empty traversals; that cost from the provisional ruling does
+  not apply.
+
+The `graphrank/resolution.go:885` precedent check performed against the
+provisional ruling (constant-off, no observable dependence) no longer
+governs: this ruling does not make the outcome constant across the two
+cases, it makes the distinction an intentional, disclosed one.
 
 ## 7a. Two disclosures, not one
 
@@ -484,7 +501,10 @@ against empty for every project and pass, which is a check that fails toward
 fine, not evidence. **Producer-generated fixtures — generated by running the
 real producers against seeded ClickHouse rows, never hand-authored — are the
 sanctioned route** for both remaining preconditions until CHAOS-4108 is
-resolved.
+resolved. Chris notes the Go worker migration work may already have found or
+fixed the underlying producer defect; ClickHouse graph data is expected to
+change on the next re-sync as a result, and that is acceptable — it is not
+itself evidence the misalignment is fixed until re-checked.
 
 Activation of the three project policies requires, with evidence in the PR
 body:
@@ -496,11 +516,13 @@ body:
   relationship IDs.
 - Authorization filtering proven at every hop with mixed
   authorized/unauthorized repos.
-- Product sign-off on the `activity_proxy` disclosure semantic.
-- Current axis **only**. The `work_item -> project` edge carries `ObservedAt`
-  but no `ValidFrom`/`ValidTo`, so an as-of expansion would silently answer
-  with today's membership under a historical label. Deferred to its own
-  projection-validity work.
+- Product sign-off on the `activity_proxy` disclosure semantic — **GRANTED**
+  (chris, 2026-08-22).
+- Current axis **only** — **GRANTED for v1** (chris, 2026-08-22), with a
+  **required** fast-follow ticket (being filed) for temporal/as-of edges,
+  not merely a deferral. The `work_item -> project` edge carries
+  `ObservedAt` but no `ValidFrom`/`ValidTo`, so an as-of expansion would
+  silently answer with today's membership under a historical label.
 
 Plus a version bump so pre-fix cached false-no-match results are not reused
 post-activation, and a zero-UUID sentinel regression test whose edge removal
