@@ -255,6 +255,13 @@ func TestChaos4085_DriverCitingPathEvidenceAffirms(t *testing.T) {
 
 // TestChaos4085_FindingCitingSubjectEvidenceAffirms covers the finding
 // lists, which carry the same subject/evidence rule as drivers.
+//
+// The fact bundle is what makes affirmationSubjectRef ATTRIBUTABLE to the
+// subject here: after codex round 1's HIGH finding 2 the same ref coming
+// only from the subject's own candidate entry is circular and no longer
+// affirms. Findings have no PathIDs field (and the contract requires every
+// finding to carry at least one evidence ref), so evidence and claims are
+// the only two grounding forms available to them.
 func TestChaos4085_FindingCitingSubjectEvidenceAffirms(t *testing.T) {
 	for name, apply := range map[string]func(*InvestigationResult, Finding){
 		"remaining_work": func(r *InvestigationResult, f Finding) { r.RemainingWork = []Finding{f} },
@@ -268,10 +275,10 @@ func TestChaos4085_FindingCitingSubjectEvidenceAffirms(t *testing.T) {
 				Subjects: []SubjectRef{affirmationSubject}, EvidenceRefIDs: []string{affirmationSubjectRef},
 			})
 
-			applyCommitAffirmation(&result, statisticalInputs(emptyAffirmationGraph(), emptyAffirmationFacts(), result))
+			applyCommitAffirmation(&result, statisticalInputs(emptyAffirmationGraph(), factsForSubject(affirmationSubject), result))
 
 			if len(result.SubjectResolution.Committed) != 1 {
-				t.Fatalf("a %s finding standing on the subject's own evidence must affirm, got %v", name, result.SubjectResolution.Committed)
+				t.Fatalf("a %s finding standing on evidence attributable to the subject must affirm, got %v", name, result.SubjectResolution.Committed)
 			}
 		})
 	}
@@ -594,4 +601,115 @@ func hasLimitation(limitations []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// codex xhigh review, round 1
+// ---------------------------------------------------------------------------
+
+// TestChaos4085_SubjectsOwnCandidateRefCannotSelfAffirm is codex round 1's
+// HIGH finding 2. A candidate's evidence ref is minted FROM its identity and
+// reaches synthesis only because the subject was proposed, so a driver that
+// names the committed subject and cites that ref has cited nothing the
+// retrieval step did not already assert. Allowing it would let a
+// wrong-but-similar candidate support itself out of its own proposal --
+// the correlated-model-output failure this gate exists to resist.
+func TestChaos4085_SubjectsOwnCandidateRefCannotSelfAffirm(t *testing.T) {
+	result := affirmationResult()
+	result.Drivers = []DriverJudgment{{
+		DriverID: "driver_circular_001", Standing: DriverPrincipal, Category: "relationship",
+		Title: "Circular", Summary: "names the subject and cites the subject's own candidate ref",
+		AffectedSubjects: []SubjectRef{affirmationSubject},
+		EvidenceRefIDs:   []string{affirmationSubjectRef},
+		Derivation:       DerivationGraphAssociated, EpistemicStatus: EpistemicInferred, Confidence: 0.5,
+	}}
+
+	// No path, no driver candidate, no canonical fact for the subject: the
+	// investigation gathered nothing about it beyond proposing it.
+	applyCommitAffirmation(&result, statisticalInputs(emptyAffirmationGraph(), emptyAffirmationFacts(), result))
+
+	if len(result.SubjectResolution.Committed) != 0 {
+		t.Fatalf("a subject's own candidate ref must not affirm it, got %v", result.SubjectResolution.Committed)
+	}
+}
+
+// TestChaos4085_CanonicalFactEvidenceStillAffirms is the narrowness half of
+// the pin above: the SAME ref string affirms once the engine's own fact read
+// actually returned a fact for the subject carrying it. What was excluded is
+// the candidate's self-assertion, not the ref.
+func TestChaos4085_CanonicalFactEvidenceStillAffirms(t *testing.T) {
+	result := affirmationResult()
+	result.Drivers = []DriverJudgment{{
+		DriverID: "driver_factref_0001", Standing: DriverPrincipal, Category: "status",
+		Title: "Grounded", Summary: "cites evidence the fact read returned for the subject",
+		AffectedSubjects: []SubjectRef{affirmationSubject},
+		EvidenceRefIDs:   []string{affirmationSubjectRef},
+		Derivation:       DerivationGraphAssociated, EpistemicStatus: EpistemicObserved, Confidence: 0.8,
+	}}
+
+	applyCommitAffirmation(&result, statisticalInputs(emptyAffirmationGraph(), factsForSubject(affirmationSubject), result))
+
+	if len(result.SubjectResolution.Committed) != 1 {
+		t.Fatalf("evidence the fact read returned for the subject must affirm, got %v", result.SubjectResolution.Committed)
+	}
+}
+
+// TestChaos4085_PathIDOnlyDriverAffirms is codex round 1's MEDIUM finding 3.
+// validate_context_fabric_result.go requires a non-withheld driver to carry
+// PathIDs OR EvidenceRefIDs -- not both -- and the synthesis prompt offers a
+// relationship path as driver grounding, so a path-grounded driver with no
+// evidence refs is a fully valid production answer. Judging only the
+// evidence-ref half would falsely retract a correct commit.
+func TestChaos4085_PathIDOnlyDriverAffirms(t *testing.T) {
+	result := affirmationResult()
+	result.Drivers = []DriverJudgment{{
+		DriverID: "driver_pathonly_001", Standing: DriverPrincipal, Category: "relationship",
+		Title: "Blocks", Summary: "grounded on the relationship path alone",
+		AffectedSubjects: []SubjectRef{affirmationSubject},
+		PathIDs:          []string{"path_affirm_0001"},
+		EvidenceRefIDs:   []string{},
+		Derivation:       DerivationGraphAssociated, EpistemicStatus: EpistemicInferred, Confidence: 0.55,
+	}}
+
+	applyCommitAffirmation(&result, statisticalInputs(affirmationGraphWithPath(), emptyAffirmationFacts(), result))
+
+	if len(result.SubjectResolution.Committed) != 1 {
+		t.Fatalf("a driver grounded on a path the subject is on must affirm, got %v", result.SubjectResolution.Committed)
+	}
+}
+
+// TestChaos4085_PathIDForAPathTheSubjectIsNotOnDoesNotAffirm keeps the
+// path-id half under the SAME attribution rule as the evidence-ref half: a
+// path id is support only when the committed subject is genuinely on that
+// path, never merely because the answer named some path.
+func TestChaos4085_PathIDForAPathTheSubjectIsNotOnDoesNotAffirm(t *testing.T) {
+	graph := affirmationGraphWithPath()
+	// A second path that does NOT touch the committed subject.
+	graph.Paths = append(graph.Paths, RelationshipPath{
+		PathID: "path_foreign_0001",
+		Nodes:  []SubjectRef{affirmationOther, {Kind: SubjectTeam, CanonicalID: "team:THIRD", Label: "Third"}},
+		Edges: []RelationshipEdge{{
+			Type: contractsv1.ContextFabricRelationshipRelatedTo, From: affirmationOther,
+			To:         SubjectRef{Kind: SubjectTeam, CanonicalID: "team:THIRD", Label: "Third"},
+			Derivation: DerivationGraphAssociated, EpistemicStatus: EpistemicObserved,
+			EvidenceRefIDs: []string{affirmationOtherRef},
+		}},
+		WhyRelevant: "unrelated", EvidenceRefIDs: []string{affirmationOtherRef},
+	})
+
+	result := affirmationResult()
+	result.Drivers = []DriverJudgment{{
+		DriverID: "driver_wrongpath_01", Standing: DriverPrincipal, Category: "relationship",
+		Title: "Wrong path", Summary: "names the subject but grounds on a path it is not on",
+		AffectedSubjects: []SubjectRef{affirmationSubject},
+		PathIDs:          []string{"path_foreign_0001"},
+		EvidenceRefIDs:   []string{},
+		Derivation:       DerivationGraphAssociated, EpistemicStatus: EpistemicInferred, Confidence: 0.55,
+	}}
+
+	applyCommitAffirmation(&result, statisticalInputs(graph, emptyAffirmationFacts(), result))
+
+	if len(result.SubjectResolution.Committed) != 0 {
+		t.Fatalf("a path the subject is not on must not affirm it, got %v", result.SubjectResolution.Committed)
+	}
 }

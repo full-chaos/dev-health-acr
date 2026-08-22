@@ -140,9 +140,8 @@ type affirmationInputs struct {
 // else that happened to be in the same answer.
 //
 // Built entirely from what the ENGINE supplied to synthesis, never by
-// parsing a ref string. Four sources, all structural:
+// parsing a ref string. Three sources, all structural:
 //
-//   - the subject's OWN candidate entry (its identity evidence);
 //   - every relationship path whose Nodes include the subject, plus that
 //     path's edges. This is what admits the legitimate shape where an
 //     answer's driver is about a NEIGHBOUR ("X blocks Y") and cites the
@@ -152,10 +151,28 @@ type affirmationInputs struct {
 //   - every driver candidate the graph proposed for the subject;
 //   - every canonical fact read for the subject.
 //
-// A cohort member's own refs are deliberately NOT included: cohort
-// membership says the subject was in a discovered set, not that evidence
-// was gathered about it, and the trial's wrong commit sat in exactly that
-// position -- a subject the answer discussed only as cohort context.
+// WHAT IS DELIBERATELY EXCLUDED, and why each exclusion is load-bearing:
+//
+//   - the subject's OWN candidate evidence ref (codex xhigh review round 1,
+//     HIGH finding 2). A candidate's ref is minted FROM the candidate's
+//     identity and is handed to synthesis purely because the subject was
+//     proposed -- so a model that names the committed subject and cites
+//     that ref has cited nothing the retrieval step did not already
+//     assert. That is circular: it would let a wrong-but-similar candidate
+//     "support" itself using only what its own proposal supplied, which is
+//     exactly the correlated-model-output failure this gate exists to
+//     resist. Requiring evidence the INVESTIGATION gathered about the
+//     subject -- a graph relationship it participates in, a driver the
+//     graph proposed for it, a canonical fact read for it -- is the
+//     difference between the answer echoing the retrieval and the answer
+//     standing on something. Measured against all 51 commit events in the
+//     v9 trial, this exclusion changed no outcome: every one of the 18
+//     affirmed commits stood on path or driver-candidate evidence, never
+//     on its own candidate ref.
+//   - a cohort member's own refs. Cohort membership says the subject was
+//     in a discovered set, not that evidence was gathered about it -- and
+//     the trial's wrong commit sat in exactly that position, a subject the
+//     answer discussed only as cohort context.
 func affirmingEvidenceRefs(subject SubjectRef, inputs affirmationInputs) map[string]struct{} {
 	refs := make(map[string]struct{})
 	add := func(values []string) {
@@ -167,11 +184,6 @@ func affirmingEvidenceRefs(subject SubjectRef, inputs affirmationInputs) map[str
 		}
 	}
 	key := SubjectMapKey(subject)
-	for _, candidate := range inputs.Candidates {
-		if SubjectMapKey(candidate.Subject) == key {
-			add(candidate.EvidenceRefIDs)
-		}
-	}
 	for _, path := range inputs.Graph.Paths {
 		if !pathTouchesSubject(path, key) {
 			continue
@@ -228,9 +240,9 @@ func subjectsContain(subjects []SubjectRef, key string) bool {
 //     names the subject, the field, and the value, and the result contract
 //     independently checks it against what was supplied -- so it needs no
 //     second evidence conjunct;
-//  2. a Driver naming the subject in AffectedSubjects, standing on either
-//     an evidence ref attributable to the subject or a ClaimedFact about
-//     the subject;
+//  2. a Driver naming the subject in AffectedSubjects, standing on an
+//     evidence ref attributable to the subject, a relationship path the
+//     subject is on, or a ClaimedFact about the subject;
 //  3. a Finding (remaining work, readiness gap, or conflict) naming the
 //     subject in Subjects, under the same evidence-or-claim conjunct.
 //
@@ -243,8 +255,11 @@ func subjectsContain(subjects []SubjectRef, key string) bool {
 //     1, and it is the difference between "the answer cited something"
 //     and "the answer said something about THIS subject";
 //   - a driver or finding that names the subject but cites only evidence
-//     belonging to some other subject. It is talking around the subject,
-//     not about it;
+//     belonging to some other subject, or a path the subject is not on. It
+//     is talking around the subject, not about it;
+//   - a driver or finding standing ONLY on the committed subject's own
+//     candidate evidence ref. See affirmingEvidenceRefs for why that is
+//     circular rather than supporting;
 //   - the deterministic answer prose. Free text is never read here.
 func commitSubjectAffirmed(subject SubjectRef, result InvestigationResult, inputs affirmationInputs) bool {
 	key := SubjectMapKey(subject)
@@ -302,11 +317,41 @@ func commitSubjectAffirmed(subject SubjectRef, result InvestigationResult, input
 		}
 		return false
 	}
+	// affirmingPathIDs (codex xhigh review round 1, MEDIUM finding 3) is the
+	// PATH-ID half of the same "evidence attributable to this subject"
+	// question. A driver is contract-valid with PathIDs and NO evidence
+	// refs at all -- validate_context_fabric_result.go requires only that a
+	// non-withheld driver carry ONE of the two -- and the synthesis prompt
+	// explicitly offers a relationship path as driver grounding. Judging
+	// only the evidence-ref half would therefore have falsely retracted a
+	// correct commit whose driver grounded on the path itself, which is the
+	// most natural form for exactly the relationship-shaped driver this
+	// gate most wants to admit.
+	//
+	// Same attribution rule as the ref set, so the two halves cannot
+	// diverge: a path counts only when the subject is genuinely ON it.
+	affirmingPathIDs := make(map[string]struct{})
+	for _, path := range inputs.Graph.Paths {
+		if pathTouchesSubject(path, key) && path.PathID != "" {
+			affirmingPathIDs[path.PathID] = struct{}{}
+		}
+	}
+	supportedByPath := func(pathIDs []string) bool {
+		for _, pathID := range pathIDs {
+			if _, ok := affirmingPathIDs[pathID]; ok {
+				return true
+			}
+		}
+		return false
+	}
 
-	// Shape 2: a driver about the subject, standing on the subject's own
-	// evidence.
+	// Shape 2: a driver about the subject, standing on evidence -- or on a
+	// relationship path -- attributable to that same subject.
 	for _, driver := range result.Drivers {
-		if subjectsContain(driver.AffectedSubjects, key) && supported(driver.EvidenceRefIDs, driver.ClaimedFactIDs) {
+		if !subjectsContain(driver.AffectedSubjects, key) {
+			continue
+		}
+		if supported(driver.EvidenceRefIDs, driver.ClaimedFactIDs) || supportedByPath(driver.PathIDs) {
 			return true
 		}
 	}
