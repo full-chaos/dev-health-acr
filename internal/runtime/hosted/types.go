@@ -53,6 +53,20 @@ type Options struct {
 	// above; a nil tracer here changes nothing (the SlogResolutionTracer
 	// default still wires exactly as before).
 	ResolutionTracer graphrank.ResolutionTracer
+	// EngineTelemetry (CHAOS-4103), when set, REPLACES the default
+	// contextfabric.NewSlogEngineTelemetry(Logger) this package otherwise
+	// wires unconditionally (buildContextFabricEngine) -- same
+	// injectable-override discipline as ResolutionTracer immediately above,
+	// letting a caller capture EngineTelemetry events in-process (e.g. the
+	// synthesis-status override's own outcome, chaos4098_synthesis_status.go)
+	// instead of only reaching them by parsing slog WARN output after the
+	// fact -- which is exactly the archaeology CHAOS-4103's trial-report
+	// fields exist to close. nil (the zero value) for every real caller,
+	// including cmd/acr-api/main.go -- same test-only-hook discipline as
+	// ModelRuntimeOverride/RawSignalObserver/ResolutionTracer above; a nil
+	// value here changes nothing (the SlogEngineTelemetry default still
+	// wires exactly as before).
+	EngineTelemetry contextfabric.EngineTelemetry
 }
 
 type Runtime struct {

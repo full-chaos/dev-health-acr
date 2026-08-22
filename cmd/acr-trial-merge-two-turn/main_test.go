@@ -395,6 +395,90 @@ func TestTwoTurnCaseResultDecodesProducerShapedDiagnosisFields(t *testing.T) {
 	}
 }
 
+// TestTwoTurnCaseResultDecodesProducerShapedSynthesisStatusOverrideFields
+// (CHAOS-4103) is this tool's consumer-level proof: real v13-shaped bytes,
+// the uncommitted shape's own reason value, decoded through the actual
+// mirror struct -- not a struct literal constructed in-process, which would
+// prove nothing about the JSON tags a genuine producer artifact depends on.
+func TestTwoTurnCaseResultDecodesProducerShapedSynthesisStatusOverrideFields(t *testing.T) {
+	const producerJSON = `{
+		"index": 12,
+		"member": "expected_kind",
+		"arm": "inferred_tier",
+		"committed_count": 0,
+		"wrong_commit": false,
+		"synthesis_status_override_fired": true,
+		"synthesis_status_override_from": "clarification_required",
+		"synthesis_status_override_to": "no_match",
+		"synthesis_status_override_reason": "clarification_unavailable_uncommitted",
+		"synthesis_status_override_committed_count": 0
+	}`
+	var got twoTurnCaseResult
+	if err := json.Unmarshal([]byte(producerJSON), &got); err != nil {
+		t.Fatalf("unmarshal producer-shaped JSON: %v", err)
+	}
+	if !got.SynthesisStatusOverrideFired {
+		t.Error("synthesis_status_override_fired = false, want true -- a tag mismatch silently zeroes this")
+	}
+	for name, pair := range map[string][2]string{
+		"synthesis_status_override_from":   {got.SynthesisStatusOverrideFrom, "clarification_required"},
+		"synthesis_status_override_to":     {got.SynthesisStatusOverrideTo, "no_match"},
+		"synthesis_status_override_reason": {got.SynthesisStatusOverrideReason, "clarification_unavailable_uncommitted"},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("%s = %q, want %q -- json tag mismatch would silently zero this", name, pair[0], pair[1])
+		}
+	}
+	// The distinguishing datum itself: 0 must survive decode, not be
+	// confused with "field absent" -- this is the exact value that tells
+	// this shape apart from the ordinary committed override.
+	if got.SynthesisStatusOverrideCommittedCount != 0 {
+		t.Errorf("synthesis_status_override_committed_count = %d, want 0", got.SynthesisStatusOverrideCommittedCount)
+	}
+
+	// A committed shape decodes with the ORDINARY reason, not the
+	// uncommitted one, and a nonzero committed count.
+	const committedJSON = `{
+		"index": 13,
+		"member": "expected_kind",
+		"arm": "positive",
+		"committed_count": 1,
+		"synthesis_status_override_fired": true,
+		"synthesis_status_override_reason": "clarification_unavailable",
+		"synthesis_status_override_committed_count": 1
+	}`
+	var gotCommitted twoTurnCaseResult
+	if err := json.Unmarshal([]byte(committedJSON), &gotCommitted); err != nil {
+		t.Fatalf("unmarshal producer-shaped JSON: %v", err)
+	}
+	if gotCommitted.SynthesisStatusOverrideReason != "clarification_unavailable" {
+		t.Errorf("reason = %q, want the ordinary %q", gotCommitted.SynthesisStatusOverrideReason, "clarification_unavailable")
+	}
+	if gotCommitted.SynthesisStatusOverrideCommittedCount != 1 {
+		t.Errorf("committed_count = %d, want 1", gotCommitted.SynthesisStatusOverrideCommittedCount)
+	}
+
+	// Fired and CommittedCount carry NO omitempty (0/false are exactly the
+	// values that distinguish "did not fire" from "fired uncommitted") --
+	// a zero-value row must still emit both keys explicitly. From/To/Reason
+	// DO carry omitempty: meaningless when Fired is false, and must not
+	// clutter every ordinary row that never triggered the override.
+	zeroRaw, err := json.Marshal(twoTurnCaseResult{Index: 1, Member: "expected_kind", Arm: "positive"})
+	if err != nil {
+		t.Fatalf("marshal zero-value result: %v", err)
+	}
+	for _, want := range []string{`"synthesis_status_override_fired":false`, `"synthesis_status_override_committed_count":0`} {
+		if !strings.Contains(string(zeroRaw), want) {
+			t.Errorf("zero-value twoTurnCaseResult JSON = %s, want it to contain %s (no omitempty)", zeroRaw, want)
+		}
+	}
+	for _, key := range []string{`"synthesis_status_override_from":`, `"synthesis_status_override_to":`, `"synthesis_status_override_reason":`} {
+		if strings.Contains(string(zeroRaw), key) {
+			t.Errorf("zero-value twoTurnCaseResult JSON = %s, want it to omit %s (omitempty)", zeroRaw, key)
+		}
+	}
+}
+
 // TestMirrorKeysMatchTheProducer is the drift pin's mirror half (CHAOS-4086).
 //
 // This tool is a HAND-MAINTAINED copy of the harness's twoTurnCaseResult, and

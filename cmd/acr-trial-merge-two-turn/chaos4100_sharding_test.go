@@ -100,6 +100,13 @@ func TestChaos4100_GateRefusalIsReportedAndNonZero(t *testing.T) {
 			func(r *twoTurnReport) { r.FalseNoMatchCount = 1 },
 			"false_no_match",
 		},
+		"synthesis_status_override_uncommitted": {
+			// CHAOS-4103: a THIRD zero-tolerance bar, deliberately its own
+			// subtest rather than folded into false_no_match above -- the
+			// two are separate counts checked by separate fail() calls.
+			func(r *twoTurnReport) { r.SynthesisStatusOverrideUncommittedCount = 1 },
+			"synthesis_status_override_uncommitted",
+		},
 		"pair_invalid": {
 			func(r *twoTurnReport) { r.InferredPairInvalidCount = 1 },
 			"pair_invalid",

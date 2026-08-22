@@ -76,10 +76,34 @@ const synthesisClarificationUnavailableLimitation = contractsv1.ContextFabricSyn
 // than a bare string so a second cause cannot be added as free text.
 type SynthesisStatusOverrideReason string
 
-// SynthesisStatusOverrideClarificationUnavailable is the only reason this
-// override fires: the synthesis step asked for clarification on a path
-// that has no clarification to offer.
+// SynthesisStatusOverrideClarificationUnavailable is the reason this
+// override fires when the subject resolution HAD committed a subject: the
+// synthesis step asked for clarification on a path that has no
+// clarification to offer, and the model under-claimed against evidence
+// that did resolve to something. The observed CHAOS-4098 case.
 const SynthesisStatusOverrideClarificationUnavailable SynthesisStatusOverrideReason = "clarification_unavailable"
+
+// SynthesisStatusOverrideClarificationUnavailableUncommitted (CHAOS-4103,
+// team-lead ruling 2026-08-22) is the DISTINCT reason this override fires
+// when CommittedCount is zero: no subject was committed AND the engine's
+// own subjectless terminal (unresolved.go) did not fire either. Per this
+// file's own doc comment, that combination is "a genuine engine routing
+// bug rather than model under-claiming" -- unresolved.go exists precisely
+// to compose the clarification terminal for the no-subject case, so
+// reaching this override with nothing committed means that terminal was
+// bypassed, not merely that the model asked the wrong question.
+//
+// The override still serves no_match here -- CHAOS-4103 confirmed the
+// team-lead's preliminary ruling: reintroducing the 500 would throw away a
+// complete, validated answer over a routing detail the caller cannot act
+// on. What changes is OBSERVABILITY: this reason is a DISTINCT closed-vocab
+// value from SynthesisStatusOverrideClarificationUnavailable above (never
+// inferred from CommittedCount==0 alone by a downstream reader), and the
+// trial harness treats its occurrence as a blocking defect signal -- see
+// twoTurnCaseResult.SynthesisStatusOverrideReason and
+// twoTurnReport.SynthesisStatusOverrideUncommittedCount
+// (chaos3742_two_turn_confirmation_test.go).
+const SynthesisStatusOverrideClarificationUnavailableUncommitted SynthesisStatusOverrideReason = "clarification_unavailable_uncommitted"
 
 // SynthesisStatusOverrideOutcome is one override event, reported to
 // telemetry. Closed enums and one count only -- never question text, never
@@ -97,13 +121,17 @@ type SynthesisStatusOverrideOutcome struct {
 	// SynthesisStatusOverrideReason.
 	Reason SynthesisStatusOverrideReason
 	// CommittedCount is how many subjects the resolution had committed at
-	// the moment of the override. It is the one number that separates the
-	// two shapes this can take: a committed resolution (the observed
-	// case -- there was a subject, and the answer about it found nothing)
-	// from an uncommitted one (no subject, and the engine's own subjectless
-	// terminal did not fire). The second would be a genuine engine
-	// routing bug rather than model under-claiming, and without this count
-	// the two are indistinguishable in the telemetry stream.
+	// the moment of the override. It is the number that DRIVES Reason's
+	// choice between the two shapes this can take: a committed resolution
+	// (the observed CHAOS-4098 case -- there was a subject, and the answer
+	// about it found nothing) or an uncommitted one (no subject, and the
+	// engine's own subjectless terminal did not fire -- a genuine engine
+	// routing bug rather than model under-claiming). CHAOS-4103: Reason
+	// itself is now the distinct closed-vocab signal a downstream reader
+	// checks (SynthesisStatusOverrideClarificationUnavailableUncommitted);
+	// CommittedCount is retained unconditionally anyway so a reader is
+	// never asked to trust Reason's derivation without the number that
+	// produced it.
 	CommittedCount int
 }
 
@@ -152,11 +180,21 @@ func applySynthesisStatusOverride(result *InvestigationResult) *SynthesisStatusO
 	if strings.TrimSpace(result.SubjectResolution.ClarificationPrompt) != "" {
 		return nil
 	}
+	committedCount := len(result.SubjectResolution.Committed)
+	// CHAOS-4103: the reason is CHOSEN by committed state, never left for a
+	// downstream reader to re-derive from CommittedCount==0 -- see
+	// SynthesisStatusOverrideClarificationUnavailableUncommitted's own doc
+	// comment for why the uncommitted shape is a routing bug rather than a
+	// second instance of ordinary under-claiming.
+	reason := SynthesisStatusOverrideClarificationUnavailable
+	if committedCount == 0 {
+		reason = SynthesisStatusOverrideClarificationUnavailableUncommitted
+	}
 	outcome := &SynthesisStatusOverrideOutcome{
 		From:           result.Status,
 		To:             InvestigationNoMatch,
-		Reason:         SynthesisStatusOverrideClarificationUnavailable,
-		CommittedCount: len(result.SubjectResolution.Committed),
+		Reason:         reason,
+		CommittedCount: committedCount,
 	}
 	result.Status = InvestigationNoMatch
 	// Read from the RESULT, not from any draft: Synthesize copies the
