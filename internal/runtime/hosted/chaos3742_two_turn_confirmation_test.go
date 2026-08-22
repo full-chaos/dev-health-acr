@@ -19,16 +19,17 @@ package hosted_test
 //   - inferred_tier:   inject the oracle's negative value WITHOUT a receipt
 //     (explicit field, Consumer.Surface="mcp" so it lands at
 //     inferred_default/explicit_unattributed, never question_stated).
-//     CHAOS-4039 v4 measurement contract (sol-max ruling 2026-08-20):
-//     window retains the ORIGINAL "ANY commit fails" bar (WindowCommitCount).
-//     CHAOS-4040 (sol-max ruling 2026-08-21, PR #181) shipped an
-//     unconditional gate over every inferred window instead of a
-//     kind/handle-style noninterference proof -- see WindowGatedCount's own
-//     doc comment (twoTurnReport) for the non-vacuity proof this harness
-//     needed on top of that. kind/handle
-//     commits are no longer an unconditional failure: each DECISIVE commit
-//     is classified baseline_equivalent (a paired no-hint request reaches
-//     an identical interpretation/decision) or kind_insensitivity_attested
+//     CHAOS-4039 v5 measurement contract (team-lead ruling 2026-08-22,
+//     superseding the v4 sol-max ruling 2026-08-20): window retains the
+//     ORIGINAL "ANY commit fails" bar (WindowCommitCount). CHAOS-4040
+//     (sol-max ruling 2026-08-21, PR #181) shipped an unconditional gate
+//     over every inferred window instead of a kind/handle-style
+//     noninterference proof -- see WindowGatedCount's own doc comment
+//     (twoTurnReport) for the non-vacuity proof this harness needed on top
+//     of that. kind/handle commits are no longer an unconditional failure:
+//     each DECISIVE commit is classified baseline_equivalent (a paired
+//     no-hint request reaches the SAME engine-deterministic decision
+//     outcome and committed subject set) or kind_insensitivity_attested
 //     (the all-kinds census itself certified this exact commit) or
 //     unjustified (neither -- an immediate failure); see
 //     twoTurnCaseResult.InferredClassification's own doc comment.
@@ -77,7 +78,6 @@ package hosted_test
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -641,8 +641,10 @@ func (c *twoTurnTraceCapture) evidenceCensusCommitted(committed []contractsv1.Co
 }
 
 // finalDecisionEvent returns the LAST captured "decision"-stage event
-// (zero value, ok=false if none) -- CHAOS-4039's own normalizedDecisionFingerprint
-// input. "Last" because a stalled resolution can emit a decision event
+// (zero value, ok=false if none) -- CHAOS-4039's own
+// twoTurnInferredClassification input (its Outcome is the engine-
+// deterministic half of baseline_equivalent). "Last" because a stalled
+// resolution can emit a decision event
 // TWICE (the initial stalled attempt, then a census-enriched re-decision
 // -- TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate, graphrank);
 // only the final one describes what the caller actually received.
@@ -684,168 +686,103 @@ func twoTurnCommittedWrong(committed []contractsv1.ContextFabricSubjectRef, tc t
 	return len(committed) > 0 && !committedMatchesTrial(committed, tc)
 }
 
-// --- CHAOS-4039 v4 measurement contract: paired baseline hashing (sol-max
-// ruling 2026-08-20, team-lead follow-up ruling 2026-08-20) ---
+// --- CHAOS-4039 v5 measurement contract: engine-deterministic decision-state
+// equivalence (team-lead ruling 2026-08-22, superseding the v4
+// canonicalInterpretationHash/normalizedDecisionFingerprint pairing proof) ---
 //
-// baselineEquivalent (runTwoTurnInferredTierArm) classifies an inferred-tier
-// kind/handle commit as "baseline_equivalent" when a PAIRED no-hint request
-// -- the SAME question, issued immediately before the hinted one, with
-// neither ExpectedKinds nor SubjectHandles set -- reaches an IDENTICAL
-// canonicalInterpretationHash AND (separately -- these are TWO compared
-// values, never blended into one hash) an identical
-// normalizedDecisionFingerprint, AND the pairing itself is valid
-// (pairInvalid in runTwoTurnInferredTierArm is false -- see that function's
-// own doc comment for the full precondition list).
+// v4's pairing proof required BIT-FOR-BIT equality of two SHA-256 hashes,
+// each built partly from RAW LIVE-MODEL OUTPUT: normalizedDecisionFingerprint
+// hashed InvestigationResult.Status (SynthesisDraft.Status, model_runtime.go
+// -- the synthesis model's own free-form completeness judgment), and
+// canonicalInterpretationHash hashed InterpretedQuestion.SubjectTerms/
+// ComparisonTerms/FactRequirements (genkitruntime's interpretationOutput --
+// a SEPARATE live interpretation-model call's own free-text output). Both
+// calls of a pair are INDEPENDENTLY SAMPLED Investigate() calls against the
+// SAME production, live-model Investigator (this file's own header comment)
+// with no temperature pinning anywhere in genkitruntime/modelprovider --
+// so ordinary call-to-call model phrasing/judgment variance, not hint
+// influence, was enough to flip either hash. A live run confirmed this:
+// baseline_equivalent measured 0/4 even on cases whose baseline and hinted
+// legs committed the byte-identical subject (same Kind+CanonicalID) --
+// v4's own definition of "equivalent" was, in practice, close to
+// unreachable, which is what this v5 replacement fixes.
 //
-// Both hashes are SHA-256 over a purpose-built, explicitly-enumerated
-// struct -- never the raw wire JSON -- so a field this contract does not
-// name (a future addition to either wire type) cannot silently join the
-// comparison. Excluded per the ruling: RequestID/ResultID/GeneratedAt
-// (request identity), DeterministicAnswer (answer prose),
-// StructureNeeds/WindowClarification (StructureOfferMaterial -- the
-// hinted call's own receipt-bound offer echo, which the no-hint baseline
-// can never produce, by construction, regardless of whether the DECISION
-// was identical), and request-local Candidate.ReceiptID values (minted
-// fresh per request even for the identical candidate). ConfirmedStructure
-// is EXCLUDED for the identical reason StructureOfferMaterial is
-// (team-lead ruling, confirmed): the hinted call's explicit-tier echo
-// entry (Source=explicit_unattributed/Provenance=inferred_default,
-// resolveExplicitStructure) is a mechanical consequence of the hint's mere
-// PRESENCE on the wire, not evidence of what was decided -- including it
-// would make baseline_equivalent structurally unreachable for every case,
-// defeating the classification's own purpose.
+// v5 compares ONLY engine-deterministic state, produced by graphrank's own
+// resolution/decision logic, never by a model call:
 //
-// normalizedDecisionFingerprint hashes (team-lead ruling, quoting sol's
-// exact spec): (a) final Status, (b) the COMPLETE SubjectResolution
-// EXCLUDING request-local receipt IDs (Candidates, Committed,
-// ClarificationPrompt, RetrievalDegraded -- everything else, unabridged),
-// (c) the paired call's own FINAL decision-stage trace event's Outcome/
-// Subject/CommitGate/WinningMechanism/SearchTruncated (graphrank's own
-// ResolutionTraceEvent -- NOT on the wire InvestigationResult at all,
-// which is why this function takes the caller's own captured event
-// alongside the result). "Final" because a stalled resolution can emit
-// TWO decision events (the initial stalled attempt, then a census-enriched
-// re-decision -- TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate,
-// graphrank) -- only the LAST one describes what the caller actually
-// received (twoTurnTraceCapture.finalDecisionEvent).
+//  1. the paired calls' own FINAL decision-stage trace event Outcome
+//     (graphrank.ResolutionTraceEvent, resolution.go -- the closed
+//     "committed"/"ambiguous"/"no_commit" vocabulary; "final" because a
+//     stalled resolution can emit TWO decision events, the initial stalled
+//     attempt then a census-enriched re-decision --
+//     TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate, graphrank
+//     -- only the LAST one describes what the caller actually received,
+//     twoTurnTraceCapture.finalDecisionEvent) match, AND
+//  2. the paired calls' own committed-subject SETS
+//     (twoTurnCommittedSubjectsEquivalent: Kind+CanonicalID only, Label
+//     dropped as presentation text -- this section's own former
+//     subjectRefFingerprint discipline, twoTurnSubjectKindIDs already
+//     established for the identical reason) are equal.
 //
-// Neither hash's OWN VALUE is ever logged or compared to a corpus-derived
-// oracle -- only hash-to-hash equality between the two paired calls, the
-// SAME one-way-hash discipline traceTermHash/QuestionHash already use
-// elsewhere in this codebase for exactly this reason.
-type interpretationFingerprintFields struct {
-	Shape               string
-	RequestedJudgment   string
-	SubjectTerms        []string
-	ComparisonTerms     []string
-	TimeContext         contractsv1.ContextFabricTimeContext
-	FactRequirements    []contractsv1.ContextFabricFactRequirement
-	ClarificationNeeded bool
-	ClarificationReason string
-	WindowClass         string
-	WindowConfidence    string
-}
-
-// canonicalInterpretationHash is the "canonical interpretation hash" half
-// of CHAOS-4039's pairing proof: does the model understand the question
-// IDENTICALLY with and without the hint present.
-func canonicalInterpretationHash(interp contractsv1.ContextFabricInterpretedQuestion) string {
-	fields := interpretationFingerprintFields{
-		Shape: string(interp.Shape), RequestedJudgment: interp.RequestedJudgment,
-		SubjectTerms: interp.SubjectTerms, ComparisonTerms: interp.ComparisonTerms,
-		TimeContext: interp.TimeContext, FactRequirements: interp.FactRequirements,
-		ClarificationNeeded: interp.ClarificationNeeded, ClarificationReason: interp.ClarificationReason,
-		WindowClass: string(interp.WindowClass), WindowConfidence: string(interp.WindowConfidence),
-	}
-	raw, err := json.Marshal(fields)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
-}
-
-type subjectRefFingerprintFields struct {
+// Neither comparison touches InvestigationResult.Status, Interpretation, or
+// any other model-authored free text -- see twoTurnInferredClassification's
+// own doc comment for the full 3-way partition this feeds.
+type twoTurnSubjectKey struct {
 	Kind        string
 	CanonicalID string
-	Label       string
 }
 
-func subjectRefFingerprint(ref contractsv1.ContextFabricSubjectRef) subjectRefFingerprintFields {
-	return subjectRefFingerprintFields{Kind: string(ref.Kind), CanonicalID: ref.CanonicalID, Label: ref.Label}
+// twoTurnCommittedSubjectKeys reduces refs to its own Kind+CanonicalID SET
+// (a map, so callers get order-independent, duplicate-tolerant comparison
+// for free) -- Label is dropped, matching twoTurnSubjectKindIDs' own "no
+// question/label text" discipline above.
+func twoTurnCommittedSubjectKeys(refs []contractsv1.ContextFabricSubjectRef) map[twoTurnSubjectKey]struct{} {
+	keys := make(map[twoTurnSubjectKey]struct{}, len(refs))
+	for _, r := range refs {
+		keys[twoTurnSubjectKey{Kind: string(r.Kind), CanonicalID: r.CanonicalID}] = struct{}{}
+	}
+	return keys
 }
 
-type subjectCandidateFingerprintFields struct {
-	// ReceiptID deliberately absent -- request-local, minted fresh per
-	// request even for the identical candidate (see this section's own
-	// header comment).
-	Subject         subjectRefFingerprintFields
-	State           string
-	MatchedTerms    []string
-	MatchReasons    []string
-	Confidence      float64
-	EvidenceRefIDs  []string
-	MatchMechanisms []string
-}
-
-type decisionTraceFingerprintFields struct {
-	Outcome          string
-	Subject          subjectRefFingerprintFields
-	CommitGate       string
-	WinningMechanism string
-	SearchTruncated  bool
-}
-
-type decisionFingerprintFields struct {
-	Status              string
-	Candidates          []subjectCandidateFingerprintFields
-	Committed           []subjectRefFingerprintFields
-	ClarificationPrompt string
-	RetrievalDegraded   bool
-	DecisionTrace       decisionTraceFingerprintFields
-}
-
-// normalizedDecisionFingerprint is the "normalized decision fingerprint"
-// half: did resolution reach the SAME decisive outcome via the SAME
-// commit path. decision is the paired call's own final decision-stage
-// trace event (twoTurnTraceCapture.finalDecisionEvent) -- a zero-value
-// ResolutionTraceEvent when the call never reached a decision (e.g. an
-// axis/scope refusal before search ever ran), which hashes identically
-// across a pair whenever it is legitimately absent from both, and
-// differently the moment only one side has it.
-func normalizedDecisionFingerprint(result contractsv1.ContextFabricInvestigationResult, decision graphrank.ResolutionTraceEvent) string {
-	candidates := make([]subjectCandidateFingerprintFields, 0, len(result.SubjectResolution.Candidates))
-	for _, c := range result.SubjectResolution.Candidates {
-		mechanisms := make([]string, 0, len(c.MatchMechanisms))
-		for _, m := range c.MatchMechanisms {
-			mechanisms = append(mechanisms, string(m))
+// twoTurnCommittedSubjectsEquivalent reports whether a and b commit the SAME
+// set of subjects (Kind+CanonicalID only) -- CHAOS-4039 v5's own
+// engine-deterministic half of baseline_equivalent (see this section's own
+// header comment). Order-independent and duplicate-tolerant: what v5 treats
+// as "the same decisive outcome" is the resulting subject SET, never the
+// slice's own incidental order.
+func twoTurnCommittedSubjectsEquivalent(a, b []contractsv1.ContextFabricSubjectRef) bool {
+	ak, bk := twoTurnCommittedSubjectKeys(a), twoTurnCommittedSubjectKeys(b)
+	if len(ak) != len(bk) {
+		return false
+	}
+	for k := range ak {
+		if _, ok := bk[k]; !ok {
+			return false
 		}
-		candidates = append(candidates, subjectCandidateFingerprintFields{
-			Subject: subjectRefFingerprint(c.Subject), State: string(c.State),
-			MatchedTerms: c.MatchedTerms, MatchReasons: c.MatchReasons,
-			Confidence: c.Confidence, EvidenceRefIDs: c.EvidenceRefIDs, MatchMechanisms: mechanisms,
-		})
 	}
-	committed := make([]subjectRefFingerprintFields, 0, len(result.SubjectResolution.Committed))
-	for _, c := range result.SubjectResolution.Committed {
-		committed = append(committed, subjectRefFingerprint(c))
+	return true
+}
+
+// twoTurnInferredClassification computes CHAOS-4039's 3-way partition for a
+// DECISIVE (CommittedCount>0) kind/handle inferred-tier commit: hinted/
+// baselineCommitted are the paired calls' own SubjectResolution.Committed,
+// hinted/baselineOutcome their own final decision-stage trace Outcome
+// (twoTurnTraceCapture.finalDecisionEvent), and kindAttested is whether the
+// all-kinds census itself certified this exact commit (runTwoTurnInferredTierArm's
+// own kindInsensitivityResult/evidenceCensusCommitted check). Extracted from
+// the classification switch (runTwoTurnInferredTierArm) purely so it has a
+// unit test surface independent of that function's full investigator/
+// window-precondition machinery -- mirrors twoTurnUnjustifiedShadowProbe's
+// own extraction, immediately below.
+func twoTurnInferredClassification(hintedCommitted, baselineCommitted []contractsv1.ContextFabricSubjectRef, hintedOutcome, baselineOutcome string, kindAttested bool) string {
+	switch {
+	case hintedOutcome == baselineOutcome && twoTurnCommittedSubjectsEquivalent(hintedCommitted, baselineCommitted):
+		return "baseline_equivalent"
+	case kindAttested:
+		return "kind_insensitivity_attested"
+	default:
+		return "unjustified"
 	}
-	fields := decisionFingerprintFields{
-		Status: string(result.Status), Candidates: candidates, Committed: committed,
-		ClarificationPrompt: result.SubjectResolution.ClarificationPrompt,
-		RetrievalDegraded:   result.SubjectResolution.RetrievalDegraded,
-		DecisionTrace: decisionTraceFingerprintFields{
-			Outcome: decision.Outcome, Subject: subjectRefFingerprint(decision.Subject),
-			CommitGate: decision.CommitGate, WinningMechanism: decision.WinningMechanism,
-			SearchTruncated: decision.SearchTruncated,
-		},
-	}
-	raw, err := json.Marshal(fields)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
 }
 
 // --- report shapes (outcome data only -- no question/label text) ---
@@ -861,12 +798,12 @@ const (
 
 // twoTurnSubjectKindID carries a committed subject's Kind+CanonicalID only
 // -- never Label (presentation/corpus term text, this section's own "no
-// question/label text" discipline; subjectRefFingerprint above drops it for
-// the identical reason). CHAOS-4062: the shadow-insensitivity trace probe's
-// own committed-subject identity, kept separate from
-// subjectRefFingerprintFields (that type is a hash-input shape, not a
-// stable artifact field set this file's schema-version convention would
-// need to track).
+// question/label text" discipline; twoTurnSubjectKey/twoTurnCommittedSubjectKeys
+// above drop it for the identical reason). CHAOS-4062: the
+// shadow-insensitivity trace probe's own committed-subject identity, kept
+// separate from twoTurnSubjectKey (that type is an internal comparison key,
+// not a stable artifact field set this file's schema-version convention
+// would need to track).
 type twoTurnSubjectKindID struct {
 	Kind        string `json:"kind"`
 	CanonicalID string `json:"canonical_id"`
@@ -931,13 +868,27 @@ type twoTurnCaseResult struct {
 	// check).
 	TierRoutedCorrectly bool `json:"tier_routed_correctly,omitempty"`
 	// InferredClassification (inferred_tier arm, kind/handle members only;
-	// CHAOS-4039 v4 measurement contract, sol-max ruling 2026-08-20,
-	// REPLACES the prior SingleSatisfierVerified proxy) is the 3-way
+	// CHAOS-4039 v5 measurement contract, team-lead ruling 2026-08-22,
+	// REPLACES the v4 canonicalInterpretationHash/normalizedDecisionFingerprint
+	// pairing proof -- that proof required BIT-FOR-BIT equality of raw
+	// live-model output, SynthesisDraft.Status and Interpretation's
+	// SubjectTerms/ComparisonTerms/FactRequirements, across two
+	// INDEPENDENTLY SAMPLED Investigate() calls with no temperature pinning
+	// anywhere in the model runtime -- so it was by-construction close to
+	// unreachable on ordinary call-to-call model phrasing variance, never
+	// actually measuring hint influence. v5 compares ONLY
+	// engine-deterministic decision state: the paired no-hint baseline's own
+	// final decision-stage trace Outcome (graphrank's closed
+	// committed/ambiguous/no_commit vocabulary, never model-generated) and
+	// committed-subject SET (twoTurnCommittedSubjectsEquivalent, Kind+
+	// CanonicalID only) both match the hinted call's -- see
+	// twoTurnInferredClassification's own doc comment) is the 3-way
 	// partition every DECISIVE (CommittedCount>0) kind/handle inferred-tier
 	// outcome gets classified into exactly once: "baseline_equivalent" (a
-	// paired no-hint request reached an identical canonicalInterpretationHash
-	// + normalizedDecisionFingerprint, and the hinted result was not itself
-	// served via answer-reuse -- the hint provably had ZERO causal effect),
+	// paired no-hint request reached the SAME engine-deterministic decision
+	// outcome and committed the SAME subject set, and the hinted result was
+	// not itself served via answer-reuse -- the hint provably had ZERO
+	// causal effect),
 	// "kind_insensitivity_attested" (kindInsensitivityProof was actually
 	// consulted and returned commit_sound, AND a decision-stage trace event
 	// shows CommitGate==evidence_census for the committed subject -- the
@@ -1043,9 +994,36 @@ type twoTurnReport struct {
 	// key nonetheless (cmd/acr-trial-merge-two-turn's own hand-maintained
 	// mirror must be updated in lockstep before it can merge an artifact at
 	// this version -- see that tool's own expectedSchemaVersion comment).
-	// Bump this again on any future field rename, removal, or meaning
-	// change so a consumer can detect drift instead of silently reading a
-	// stale key under a new meaning.
+	// "9" marks CHAOS-4039's v5 measurement-contract correction (team-lead
+	// ruling 2026-08-22): InferredClassification's own baseline_equivalent
+	// definition changed MEANING (no wire shape change -- inferred_classification
+	// stays a closed-vocabulary string) from bit-for-bit equality of two
+	// model-derived hashes (canonicalInterpretationHash/normalizedDecisionFingerprint,
+	// which hashed raw live-model output -- InvestigationResult.Status and
+	// InterpretedQuestion.SubjectTerms/ComparisonTerms/FactRequirements --
+	// and was by-construction close to unreachable on ordinary
+	// call-to-call model phrasing variance) to engine-deterministic
+	// decision-state equivalence (the paired calls' own final
+	// decision-stage trace Outcome plus their committed-subject SET,
+	// twoTurnInferredClassification/twoTurnCommittedSubjectsEquivalent). A
+	// prior run's "N/M unjustified" finding was measured under the old,
+	// unsatisfiable definition and does not compare against a run merged at
+	// this version. NOTE: the CHAOS-4062 shadow kind-insensitivity probe's
+	// own zero-overlap wiring gap (narrowPooledKindsByExplicitKinds treating
+	// a wrong-kind hint identically to "no hint", so PreNarrowingExplicitKinds
+	// never populates and the probe never evaluates for that case) is a
+	// SEPARATE, still-open defect -- a graphrank fix was drafted and
+	// rejected on adversarial review (codex xhigh, 2026-08-22): populating
+	// PreNarrowingExplicitKinds there triggers an EXTRA, real (non-shadow)
+	// CensusFunc call whose result chaos3896_slice_c_evidence_census.go's
+	// attestedSatisfier/mergeCensusAttestedSatisfier consumes to decide a
+	// REAL commit -- not observability-only, a genuine commit-behavior risk
+	// under census-read drift. Deferred pending a product-code design
+	// (chris/team-lead decision); ShadowKindInsensitivityEvaluated/Outcome
+	// stay false/absent for that case in a v9 run too. Bump this again on
+	// any future field rename, removal, or meaning change so a consumer can
+	// detect drift instead of silently reading a stale key under a new
+	// meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
 	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
@@ -1765,120 +1743,77 @@ func TestTwoTurnMutationProbe(t *testing.T) {
 	}
 }
 
-// TestCanonicalInterpretationHash pins CHAOS-4039's own pairing invariant:
-// two interpretations with identical structural content hash identically,
-// and the hash changes with any structural field -- the exact property
-// baselineEquivalent depends on (runTwoTurnInferredTierArm).
-func TestCanonicalInterpretationHash(t *testing.T) {
+// TestTwoTurnCommittedSubjectsEquivalent pins CHAOS-4039 v5's own
+// engine-deterministic committed-subject-set comparison: Kind+CanonicalID
+// only (Label-tolerant), order-independent, and count-sensitive.
+func TestTwoTurnCommittedSubjectsEquivalent(t *testing.T) {
 	t.Parallel()
-	base := contractsv1.ContextFabricInterpretedQuestion{
-		Shape: contractsv1.ContextFabricShapeOpen, RequestedJudgment: "status",
-		SubjectTerms: []string{"acme/widgets"}, TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
+	repoA := contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:acme/widgets", Label: "widgets"}
+	repoADifferentLabel := contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:acme/widgets", Label: "a completely different label"}
+	repoB := contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:acme/other"}
+	workItem := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-1"}
+
+	if !twoTurnCommittedSubjectsEquivalent([]contractsv1.ContextFabricSubjectRef{repoA}, []contractsv1.ContextFabricSubjectRef{repoADifferentLabel}) {
+		t.Error("twoTurnCommittedSubjectsEquivalent = false for the SAME Kind+CanonicalID with a differing Label, want true (Label is presentation text, never compared)")
 	}
-	same := base
-	if canonicalInterpretationHash(base) != canonicalInterpretationHash(same) {
-		t.Error("canonicalInterpretationHash(base) != canonicalInterpretationHash(same identical value), want equal")
+	if !twoTurnCommittedSubjectsEquivalent(
+		[]contractsv1.ContextFabricSubjectRef{repoA, workItem},
+		[]contractsv1.ContextFabricSubjectRef{workItem, repoA},
+	) {
+		t.Error("twoTurnCommittedSubjectsEquivalent = false for the same set in a different ORDER, want true (set semantics, not slice-order)")
 	}
-	differentJudgment := base
-	differentJudgment.RequestedJudgment = "drivers"
-	if canonicalInterpretationHash(base) == canonicalInterpretationHash(differentJudgment) {
-		t.Error("canonicalInterpretationHash unchanged by RequestedJudgment, want a different hash")
+	if twoTurnCommittedSubjectsEquivalent([]contractsv1.ContextFabricSubjectRef{repoA}, []contractsv1.ContextFabricSubjectRef{repoB}) {
+		t.Error("twoTurnCommittedSubjectsEquivalent = true for two DIFFERENT canonical ids, want false")
 	}
-	differentClarify := base
-	differentClarify.ClarificationNeeded = true
-	if canonicalInterpretationHash(base) == canonicalInterpretationHash(differentClarify) {
-		t.Error("canonicalInterpretationHash unchanged by ClarificationNeeded, want a different hash")
+	if twoTurnCommittedSubjectsEquivalent([]contractsv1.ContextFabricSubjectRef{repoA}, []contractsv1.ContextFabricSubjectRef{repoA, workItem}) {
+		t.Error("twoTurnCommittedSubjectsEquivalent = true for sets of different SIZE, want false")
+	}
+	if !twoTurnCommittedSubjectsEquivalent(nil, nil) {
+		t.Error("twoTurnCommittedSubjectsEquivalent(nil, nil) = false, want true (both empty)")
 	}
 }
 
-// TestNormalizedDecisionFingerprint pins the exclusion list CHAOS-4039's
-// ruling names (RequestID/ResultID/GeneratedAt/DeterministicAnswer,
-// StructureNeeds/WindowClarification, ConfirmedStructure, and per-candidate
-// ReceiptID) -- changing ONLY those must NOT change the fingerprint, since
-// a paired baseline/hinted call legitimately differs in exactly those ways
-// even when the underlying decision is identical -- while sol's named
-// INCLUSIONS (the complete SubjectResolution otherwise, and the paired
-// call's own final decision-trace fields) MUST each change it.
-func TestNormalizedDecisionFingerprint(t *testing.T) {
+// TestTwoTurnInferredClassification is CHAOS-4039 v5's own regression test
+// (team-lead ruling 2026-08-22): a paired baseline/hinted call that reached
+// the SAME engine-deterministic decision outcome and committed the SAME
+// subject set MUST classify baseline_equivalent -- the exact property v4's
+// canonicalInterpretationHash/normalizedDecisionFingerprint pairing proof
+// failed to deliver on a live run (all 4 committed-identical unjustified
+// rows, CHAOS-4039/CHAOS-4062 diagnosis).
+func TestTwoTurnInferredClassification(t *testing.T) {
 	t.Parallel()
-	decision := graphrank.ResolutionTraceEvent{
-		Stage: "decision", Outcome: "committed",
-		Subject:    contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:acme/widgets"},
-		CommitGate: "evidence_census", WinningMechanism: "identity_fast_path", SearchTruncated: true,
+	repository := []contractsv1.ContextFabricSubjectRef{{Kind: "repository", CanonicalID: "repository:acme/widgets", Label: "widgets"}}
+	repositoryDifferentLabel := []contractsv1.ContextFabricSubjectRef{{Kind: "repository", CanonicalID: "repository:acme/widgets", Label: "a different label entirely"}}
+	otherRepository := []contractsv1.ContextFabricSubjectRef{{Kind: "repository", CanonicalID: "repository:acme/other"}}
+
+	// The regression case: identical committed-subject SET (Label-only
+	// divergence -- exactly what a live model's own per-call Label
+	// rendering could vary, and what v4 never even compared) and identical
+	// engine decision outcome -> baseline_equivalent, unconditionally
+	// (baseline_equivalent takes priority over kindAttested in the switch).
+	if got := twoTurnInferredClassification(repository, repositoryDifferentLabel, "committed", "committed", false); got != "baseline_equivalent" {
+		t.Errorf(`twoTurnInferredClassification = %q, want "baseline_equivalent" for an identical committed-subject set (Label-only divergence) and matching decision outcome`, got)
 	}
-	base := contractsv1.ContextFabricInvestigationResult{
-		RequestID: "request_a", ResultID: "result_a", GeneratedAt: time.Unix(1000, 0),
-		Status: contractsv1.ContextFabricInvestigationComplete, DeterministicAnswer: "the widget repo is healthy",
-		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{},
-		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{
-			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "repository"},
-		},
-		SubjectResolution: contractsv1.ContextFabricSubjectResolution{
-			Committed: []contractsv1.ContextFabricSubjectRef{{Kind: "repository", CanonicalID: "repository:acme/widgets", Label: "acme/widgets"}},
-			Candidates: []contractsv1.ContextFabricSubjectCandidate{
-				{ReceiptID: "receipt_a", Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:acme/widgets"}, Confidence: 0.9},
-			},
-			ClarificationPrompt: "",
-			RetrievalDegraded:   false,
-		},
-	}
-	// Exclusions: RequestID/ResultID/GeneratedAt/DeterministicAnswer
-	// (request identity, answer prose), StructureNeeds (StructureOfferMaterial),
-	// ConfirmedStructure (the hint's own echo), and per-candidate ReceiptID
-	// (request-local, minted fresh even for the identical candidate).
-	excludedFieldsChanged := base
-	excludedFieldsChanged.RequestID, excludedFieldsChanged.ResultID = "request_b", "result_b"
-	excludedFieldsChanged.GeneratedAt = time.Unix(2000, 0)
-	excludedFieldsChanged.DeterministicAnswer = "a completely different sentence"
-	excludedFieldsChanged.StructureNeeds = nil
-	excludedFieldsChanged.ConfirmedStructure = nil
-	excludedFieldsChanged.SubjectResolution.Candidates = []contractsv1.ContextFabricSubjectCandidate{
-		{ReceiptID: "receipt_b_totally_different", Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:acme/widgets"}, Confidence: 0.9},
-	}
-	if normalizedDecisionFingerprint(base, decision) != normalizedDecisionFingerprint(excludedFieldsChanged, decision) {
-		t.Error("normalizedDecisionFingerprint changed by RequestID/ResultID/GeneratedAt/DeterministicAnswer/StructureNeeds/ConfirmedStructure/Candidate.ReceiptID alone, want unchanged (CHAOS-4039's own named exclusions)")
+	if got := twoTurnInferredClassification(repository, repositoryDifferentLabel, "committed", "committed", true); got != "baseline_equivalent" {
+		t.Errorf(`twoTurnInferredClassification = %q, want "baseline_equivalent" even when kindAttested is also true -- baseline_equivalent is checked first`, got)
 	}
 
-	// Inclusions: Status, Candidates (minus ReceiptID), Committed
-	// (including Label -- sol's spec excludes ONLY receipt IDs from
-	// SubjectResolution), ClarificationPrompt, RetrievalDegraded, and the
-	// decision-trace fields.
-	differentStatus := base
-	differentStatus.Status = contractsv1.ContextFabricInvestigationClarificationRequired
-	if normalizedDecisionFingerprint(base, decision) == normalizedDecisionFingerprint(differentStatus, decision) {
-		t.Error("normalizedDecisionFingerprint unchanged by Status, want a different fingerprint")
+	// Different committed subject: kindAttested breaks the tie between
+	// kind_insensitivity_attested and unjustified.
+	if got := twoTurnInferredClassification(repository, otherRepository, "committed", "committed", true); got != "kind_insensitivity_attested" {
+		t.Errorf(`twoTurnInferredClassification = %q, want "kind_insensitivity_attested" for a differing committed subject with kindAttested=true`, got)
 	}
-	differentCommitted := base
-	differentCommitted.SubjectResolution.Committed = []contractsv1.ContextFabricSubjectRef{{Kind: "repository", CanonicalID: "repository:other"}}
-	if normalizedDecisionFingerprint(base, decision) == normalizedDecisionFingerprint(differentCommitted, decision) {
-		t.Error("normalizedDecisionFingerprint unchanged by Committed subject, want a different fingerprint")
+	if got := twoTurnInferredClassification(repository, otherRepository, "committed", "committed", false); got != "unjustified" {
+		t.Errorf(`twoTurnInferredClassification = %q, want "unjustified" for a differing committed subject with kindAttested=false`, got)
 	}
-	labelOnlyChanged := base
-	labelOnlyChanged.SubjectResolution.Committed = []contractsv1.ContextFabricSubjectRef{{Kind: "repository", CanonicalID: "repository:acme/widgets", Label: "a different label"}}
-	if normalizedDecisionFingerprint(base, decision) == normalizedDecisionFingerprint(labelOnlyChanged, decision) {
-		t.Error("normalizedDecisionFingerprint unchanged by Committed Label, want a different fingerprint -- sol's spec excludes ONLY request-local receipt IDs from SubjectResolution")
-	}
-	differentConfidence := base
-	differentConfidence.SubjectResolution.Candidates = []contractsv1.ContextFabricSubjectCandidate{
-		{ReceiptID: "receipt_a", Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:acme/widgets"}, Confidence: 0.1},
-	}
-	if normalizedDecisionFingerprint(base, decision) == normalizedDecisionFingerprint(differentConfidence, decision) {
-		t.Error("normalizedDecisionFingerprint unchanged by Candidate.Confidence, want a different fingerprint")
-	}
-	differentClarificationPrompt := base
-	differentClarificationPrompt.SubjectResolution.ClarificationPrompt = "which one did you mean?"
-	if normalizedDecisionFingerprint(base, decision) == normalizedDecisionFingerprint(differentClarificationPrompt, decision) {
-		t.Error("normalizedDecisionFingerprint unchanged by ClarificationPrompt, want a different fingerprint")
-	}
-	differentRetrievalDegraded := base
-	differentRetrievalDegraded.SubjectResolution.RetrievalDegraded = true
-	if normalizedDecisionFingerprint(base, decision) == normalizedDecisionFingerprint(differentRetrievalDegraded, decision) {
-		t.Error("normalizedDecisionFingerprint unchanged by RetrievalDegraded, want a different fingerprint")
-	}
-	differentDecision := decision
-	differentDecision.CommitGate = "lone_floor"
-	if normalizedDecisionFingerprint(base, decision) == normalizedDecisionFingerprint(base, differentDecision) {
-		t.Error("normalizedDecisionFingerprint unchanged by the paired decision-trace event's CommitGate, want a different fingerprint")
+
+	// Same committed subject but a DIFFERENT engine decision outcome (e.g.
+	// the hinted call committed via a differently-gated resolution path
+	// than the baseline reached) is not equivalent -- Kind+CanonicalID
+	// equality alone is not sufficient, only checking it would silently
+	// re-admit the pre-v5 gap in the opposite direction.
+	if got := twoTurnInferredClassification(repository, repository, "committed", "ambiguous", false); got != "unjustified" {
+		t.Errorf(`twoTurnInferredClassification = %q, want "unjustified" when the paired decision outcomes differ despite an identical committed subject`, got)
 	}
 }
 
@@ -2133,16 +2068,16 @@ func setTwoTurnReceipt(req *contractsv1.ContextFabricInvestigationRequest, membe
 // this file's own header comment) -- returns ArmInvalidReason in that case,
 // never a false pass or fail.
 //
-// CHAOS-4039 v4 measurement contract (sol-max ruling 2026-08-20, team-lead
-// follow-up ruling 2026-08-20): for kind/handle members, the hinted call
-// is PAIRED with an immediately-preceding no-hint baseline (the SAME
-// question, no ExpectedKinds/SubjectHandles set) -- see
-// canonicalInterpretationHash/normalizedDecisionFingerprint's own doc
-// comment for why, and twoTurnCaseResult.InferredClassification for the
-// 3-way classification this pairing feeds. window is EXEMPT from pairing
-// (WindowCommitCount's own doc comment: W4 window-insensitivity is
-// unimplemented, so window keeps the pre-v4 single-call path and its
-// literal zero-commit bar unchanged).
+// CHAOS-4039 v5 measurement contract (team-lead ruling 2026-08-22,
+// superseding the v4 sol-max ruling 2026-08-20): for kind/handle members,
+// the hinted call is PAIRED with an immediately-preceding no-hint baseline
+// (the SAME question, no ExpectedKinds/SubjectHandles set) -- see
+// twoTurnInferredClassification's own doc comment for why, and
+// twoTurnCaseResult.InferredClassification for the 3-way classification
+// this pairing feeds. window is EXEMPT from pairing (WindowCommitCount's
+// own doc comment: W4 window-insensitivity is unimplemented, so window
+// keeps the pre-v4 single-call path and its literal zero-commit bar
+// unchanged).
 //
 // The pairing is VALID (pairInvalid==false) only when EVERY precondition
 // sol's ruling names holds: same frozen corpus/base SHA, principal, model
@@ -2210,9 +2145,10 @@ func windowConfirmedAsBand(r contractsv1.ContextFabricInvestigationResult, band 
 // EXACTLY, not that either failed to confirm a window. See
 // TestWindowBoundsAgree for the all_time/bounded/mismatched-shape cases
 // this function must get right, and team-lead's 2026-08-21 verification
-// request (this tolerance must never reach canonicalInterpretationHash/
-// normalizedDecisionFingerprint's own comparison -- it doesn't: neither
-// function references EffectiveEvidenceWindow/Start/End at all).
+// request (this tolerance must never reach twoTurnInferredClassification's
+// own comparison -- it doesn't: neither the decision-trace Outcome nor
+// twoTurnCommittedSubjectsEquivalent references EffectiveEvidenceWindow/
+// Start/End at all).
 func windowBoundsAgree(a, b contractsv1.ContextFabricInvestigationResult, tolerance time.Duration) bool {
 	if a.EffectiveEvidenceWindow == nil || b.EffectiveEvidenceWindow == nil {
 		return false
@@ -2475,14 +2411,14 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		// unit-tested by TestWindowBoundsAgree) rather than closures, so
 		// the all_time-vs-drift-tolerance split team-lead asked to verify
 		// (2026-08-21: "confirm the drift tolerance does NOT leak into the
-		// interpretation-hash/decision-fingerprint comparison for the
-		// all_time path") has a test surface independent of a live run.
-		// It doesn't: canonicalInterpretationHash/normalizedDecisionFingerprint
-		// (above) serialize Interpretation.TimeContext (the question's own
-		// temporal AXIS framing) and the decision/candidate/commit fields
-		// respectively -- neither references EffectiveEvidenceWindow, Start,
-		// or End at all, so this tolerance cannot reach either hash by
-		// construction, not merely by observation.
+		// decision-equivalence comparison for the all_time path") has a test
+		// surface independent of a live run. It doesn't:
+		// twoTurnInferredClassification (above) compares only the paired
+		// calls' own decision-trace Outcome and committed-subject set
+		// (twoTurnCommittedSubjectsEquivalent) -- neither references
+		// EffectiveEvidenceWindow, Start, or End at all, so this tolerance
+		// cannot reach that comparison by construction, not merely by
+		// observation.
 		pairInvalid := baseline.Reused || result.Reused || baseline.Versions != result.Versions ||
 			!windowConfirmedAsBand(baseline, windowBand) || !windowConfirmedAsBand(result, windowBand) ||
 			!windowBoundsAgree(baseline, result, timeout)
@@ -2498,21 +2434,16 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			// excludes PairInvalid outcomes from the partition entirely.
 			res.PairInvalid = true
 		} else {
-			baselineEquivalent := canonicalInterpretationHash(result.Interpretation) == canonicalInterpretationHash(baseline.Interpretation) &&
-				normalizedDecisionFingerprint(result, hintedDecision) == normalizedDecisionFingerprint(baseline, baselineDecision)
 			kindAttested := false
 			if trace != nil {
 				if evaluated, outcome := trace.kindInsensitivityResult(); evaluated && outcome == "commit_sound" {
 					kindAttested = trace.evidenceCensusCommitted(result.SubjectResolution.Committed)
 				}
 			}
-			switch {
-			case baselineEquivalent:
-				res.InferredClassification = "baseline_equivalent"
-			case kindAttested:
-				res.InferredClassification = "kind_insensitivity_attested"
-			default:
-				res.InferredClassification = "unjustified"
+			res.InferredClassification = twoTurnInferredClassification(
+				result.SubjectResolution.Committed, baseline.SubjectResolution.Committed,
+				hintedDecision.Outcome, baselineDecision.Outcome, kindAttested)
+			if res.InferredClassification == "unjustified" {
 				// CHAOS-4062 shadow-insensitivity trace probe: observability
 				// only, populated for the "unjustified" outcome alone -- see
 				// twoTurnUnjustifiedShadowProbe's own doc comment and
@@ -3206,7 +3137,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "8",
+		ReportSchemaVersion: "9",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,

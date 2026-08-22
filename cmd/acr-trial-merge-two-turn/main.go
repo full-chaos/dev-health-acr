@@ -24,7 +24,19 @@ import (
 // mirrored structs below -- ReportSchemaVersion's own doc comment
 // (chaos3742_two_turn_confirmation_test.go) is the authority on what
 // changed; a _test.go type cannot be imported by a regular package, so this
-// file is a hand-maintained mirror, not a shared definition. "8"
+// file is a hand-maintained mirror, not a shared definition. "9"
+// (CHAOS-4039 v5 measurement-contract correction, team-lead ruling
+// 2026-08-22): InferredClassification's own baseline_equivalent definition
+// changed MEANING (no new/removed wire field -- this mirror's
+// twoTurnCaseResult/twoTurnReport shape is byte-identical to v8) from
+// bit-for-bit equality of two model-derived hashes to engine-deterministic
+// decision-state equivalence -- see chaos3742_two_turn_confirmation_test.go's
+// own ReportSchemaVersion doc comment for the full mechanism (including why
+// the CHAOS-4062 shadow kind-insensitivity probe's own zero-overlap wiring
+// gap is NOT part of this bump -- that fix was drafted and rejected on
+// adversarial review, deferred pending a product-code design). Bumped purely
+// so a v8 artifact (measured under the old, unsatisfiable definition) can
+// never be merged as if it were directly comparable to a v9 one. "8"
 // (CHAOS-4062): twoTurnCaseResult gained ShadowKindInsensitivityEvaluated/
 // ShadowKindInsensitivityOutcome and BaselineCommittedSubjects/
 // HintedCommittedSubjects (see twoTurnSubjectKindID below) -- per-case
@@ -35,7 +47,7 @@ import (
 // "7" (CHAOS-4058): Timings/TimingSummary are new, purely additive fields --
 // see twoTurnArmTiming/twoTurnCaseTiming/twoTurnArmTimingSummary below and
 // mergeReports' own handling of them.
-const expectedSchemaVersion = "8"
+const expectedSchemaVersion = "9"
 
 type trialCommitGateProvenance struct {
 	LoneFloorEnv                   string `json:"lone_floor_env,omitempty"`

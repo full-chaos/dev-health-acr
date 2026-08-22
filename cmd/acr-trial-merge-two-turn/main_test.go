@@ -15,7 +15,7 @@ package main
 // "unjustified" InferredClassification outcome. Purely additive per-case
 // passthrough (no new merge arithmetic), but still a new key a stale
 // mirror would silently drop -- shardReport's "unjustified" result row and
-// TestRunEndToEndMergesValidV8Shards below pin that these fields actually
+// TestRunEndToEndMergesValidV9Shards below pin that these fields actually
 // survive the real JSON round trip through run().
 
 import (
@@ -103,19 +103,19 @@ func TestMergeReportsConcatenatesTimingsAndRecomputesSummary(t *testing.T) {
 	}
 }
 
-// TestRunEndToEndMergesValidV8Shards is the real JSON round-trip codex
+// TestRunEndToEndMergesValidV9Shards is the real JSON round-trip codex
 // round-3 review demanded: TestMergeReportsConcatenatesTimingsAndRecomputesSummary
 // above calls mergeReports directly on in-memory structs, which never
 // proves this tool's actual entrypoint -- json.Unmarshal of a real shard
 // file, run()'s validation gates, json.Marshal of the merged output, and a
-// second independent decode of what landed on disk -- handles a valid v8
+// second independent decode of what landed on disk -- handles a valid v9
 // artifact at all. Two real shard files go in; the written merged file is
 // read back and its Timings/TimingSummary/Provenance, plus (CHAOS-4062)
 // each shard's "unjustified" row's Shadow*/*CommittedSubjects fields, are
 // asserted against what shardReport built, closing the gap between "the
 // merge function is correct" and "the tool as actually invoked is
 // correct".
-func TestRunEndToEndMergesValidV8Shards(t *testing.T) {
+func TestRunEndToEndMergesValidV9Shards(t *testing.T) {
 	dir := t.TempDir()
 	shard0 := shardReport(0, 2, []twoTurnCaseTiming{
 		{Index: 0, Member: "expected_kind", Arms: []twoTurnArmTiming{
@@ -144,7 +144,7 @@ func TestRunEndToEndMergesValidV8Shards(t *testing.T) {
 	mergedPath := filepath.Join(dir, "merged.json")
 	var stdout bytes.Buffer
 	if err := run(mergedPath, shardPaths, &stdout); err != nil {
-		t.Fatalf("run() on two valid v8 shards = %v, want nil (both shards should satisfy every gate)", err)
+		t.Fatalf("run() on two valid v9 shards = %v, want nil (both shards should satisfy every gate)", err)
 	}
 	if !strings.Contains(stdout.String(), "VALID") {
 		t.Errorf("run() stdout = %q, want it to report VALID", stdout.String())
@@ -159,8 +159,8 @@ func TestRunEndToEndMergesValidV8Shards(t *testing.T) {
 		t.Fatalf("unmarshal merged output: %v", err)
 	}
 
-	if merged.ReportSchemaVersion != "8" {
-		t.Errorf("merged.ReportSchemaVersion = %q, want \"8\"", merged.ReportSchemaVersion)
+	if merged.ReportSchemaVersion != "9" {
+		t.Errorf("merged.ReportSchemaVersion = %q, want \"9\"", merged.ReportSchemaVersion)
 	}
 	if !merged.Provenance.AnchorMembershipOffersEnabled {
 		t.Errorf("merged.Provenance.AnchorMembershipOffersEnabled = false, want true (must survive the real JSON round trip, codex round-3 finding)")
@@ -211,11 +211,14 @@ func TestRunEndToEndMergesValidV8Shards(t *testing.T) {
 // does not match this binary's own expectedSchemaVersion is refused with a
 // clear diagnostic, never silently merged (or silently misread) under the
 // wrong shape -- exactly what would have happened here had the schema
-// bump to "8" (CHAOS-4062) landed without a matching update to this mirror.
+// bump to "9" (CHAOS-4039/CHAOS-4062 v5 measurement-contract correction)
+// landed without a matching update to this mirror: a stale "8" artifact was
+// measured under baseline_equivalent's OLD, unsatisfiable definition and
+// must never be silently merged as if directly comparable to a "9" one.
 func TestRunRejectsSchemaVersionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	stale := shardReport(0, 1, nil)
-	stale.ReportSchemaVersion = "7"
+	stale.ReportSchemaVersion = "8"
 	raw, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatalf("marshal stale shard: %v", err)
@@ -227,10 +230,10 @@ func TestRunRejectsSchemaVersionMismatch(t *testing.T) {
 
 	err = run(filepath.Join(dir, "merged.json"), []string{shardPath}, os.Stdout)
 	if err == nil {
-		t.Fatal("run() with a schema_version=7 shard = nil error, want a rejection (this tool expects 8)")
+		t.Fatal("run() with a schema_version=8 shard = nil error, want a rejection (this tool expects 9)")
 	}
-	if !strings.Contains(err.Error(), `report_schema_version="7"`) || !strings.Contains(err.Error(), `want "8"`) {
-		t.Errorf("run() error = %q, want it to name both the got (7) and want (8) schema versions", err.Error())
+	if !strings.Contains(err.Error(), `report_schema_version="8"`) || !strings.Contains(err.Error(), `want "9"`) {
+		t.Errorf("run() error = %q, want it to name both the got (8) and want (9) schema versions", err.Error())
 	}
 }
 
