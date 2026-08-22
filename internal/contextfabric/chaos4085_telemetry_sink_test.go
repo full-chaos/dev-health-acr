@@ -112,12 +112,19 @@ func TestChaos4085_ProductionTelemetryEmitsARetraction(t *testing.T) {
 	}
 }
 
-// TestChaos4085_RetractionTelemetryLeaksNoIdentity holds the content-safety
-// line every method on this sink already holds: an org id, closed enums and
-// counts, never a canonical id or a label. A reader who needs subject
-// identity correlates by request_id with the resolution trace, which is
-// where identity legitimately lives.
-func TestChaos4085_RetractionTelemetryLeaksNoIdentity(t *testing.T) {
+// TestChaos4085_RetractionTelemetryLeaksNoIdentityAndStaysAtWarn holds the
+// content-safety line every method on this sink already holds, and pins the
+// level.
+//
+// The oracle is an ALLOW-LIST, not a denylist (codex pre-merge review, LOW):
+// a denylist of forbidden substrings only catches the leaks someone thought
+// of, so a future field named subject_id or subject carrying a canonical
+// value would sail through one. Requiring every key to be explicitly
+// permitted inverts that -- a new field fails this test by default and has
+// to be argued for. Given this file exists because a telemetry gap shipped
+// unnoticed, the default must be "fail" rather than "pass unless it looks
+// suspicious".
+func TestChaos4085_RetractionTelemetryLeaksNoIdentityAndStaysAtWarn(t *testing.T) {
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
 		NewSlogEngineTelemetry(logger).RecordCommitAffirmationRetraction(
 			context.Background(),
@@ -131,16 +138,37 @@ func TestChaos4085_RetractionTelemetryLeaksNoIdentity(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected one record, got %d", len(records))
 	}
-	// The outcome type carries no identifier field at all, so this is a
-	// pin on that remaining true rather than a filter over what is logged:
-	// a future field carrying an id would fail here.
-	line, err := json.Marshal(records[0])
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	record := records[0]
+
+	// Every key this record is permitted to carry. slog's own envelope
+	// (time/level/msg) plus the org id, the closed enums, and the counts.
+	// request_id is permitted but only appears when ctx carries one.
+	permitted := map[string]struct{}{
+		"time": {}, "level": {}, "msg": {},
+		"org_id": {}, "commit_basis": {}, "subject_kind": {},
+		"winning_mechanism": {}, "provisional_committed": {}, "final_committed": {},
+		"request_id": {},
 	}
-	for _, forbidden := range []string{"canonical_id", "canonical", "label", "question", "result_id", "receipt"} {
-		if strings.Contains(strings.ToLower(string(line)), forbidden) {
-			t.Fatalf("retraction telemetry leaks %q: %s", forbidden, line)
+	for key := range record {
+		if _, ok := permitted[key]; !ok {
+			t.Fatalf("retraction telemetry emits unpermitted key %q -- if this field is genuinely safe, add it to the allow-list deliberately", key)
 		}
+	}
+
+	// The VALUES must be closed-vocabulary too: an allow-listed key holding
+	// a canonical id would defeat the key check.
+	if got := record["subject_kind"]; got != string(SubjectRepository) {
+		t.Fatalf("subject_kind = %v, want the closed kind enum %q", got, SubjectRepository)
+	}
+	if got := record["commit_basis"]; got != string(CommitBasisUnknown) {
+		t.Fatalf("commit_basis = %v, want the closed basis enum (empty for unknown)", got)
+	}
+
+	// WARN, pinned: a retraction is a designed outcome, but a RATE change in
+	// it is the signal that retrieval quality or synthesis grounding moved.
+	// Demoting it to INFO would bury that under the reuse-outcome stream,
+	// and nothing else in the suite would notice.
+	if got := record["level"]; got != "WARN" {
+		t.Fatalf("level = %v, want WARN -- see RecordCommitAffirmationRetraction's own doc comment for why", got)
 	}
 }
