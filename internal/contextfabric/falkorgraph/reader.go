@@ -45,7 +45,7 @@ func (a *Adapter) ResolveInvestigationBinding(ctx context.Context, principal sto
 	return contextfabric.ResolvedGraphBinding{GraphKey: key, Epoch: epoch}, nil
 }
 
-func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, error) {
 	// CHAOS-3898 §2.1: the binding was already resolved ONCE by Engine, via
 	// ResolveInvestigationBinding above, before this call -- never
 	// re-resolved here. See ResolvedGraphBinding's own doc comment for the
@@ -55,7 +55,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// binding -- see that method's own doc comment.
 	key, err := a.effectiveKey(ctx, principal.OrgID, binding)
 	if err != nil {
-		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, err
 	}
 	// One fence verification per resolution, not per term (codex round-2
 	// R2-1). Scoped to this call and never shared across requests.
@@ -442,7 +442,11 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			return claimantsByTerm, complete && graphMissing == 0, nil
 		}
 	}
-	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
+	// CHAOS-4085: the basis-carrying entry point. graphrank records, at
+	// each commit site, which class of proof stood behind that commit; this
+	// adapter is the one production GraphReader, so this is where that
+	// record enters the engine.
+	return graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
 }
 
 func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {

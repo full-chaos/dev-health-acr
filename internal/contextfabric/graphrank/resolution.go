@@ -349,7 +349,36 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // existing vectorArmSimilarity/identity precedent (both are also I/O-derived
 // side channels a caller gathers BEFORE calling in) -- it only ever reads
 // this key back out of a candidate set the caller already enriched.
+//
+// CHAOS-4085: this is the BASIS-DISCARDING wrapper, kept at its original
+// signature so the ~30 existing call sites (all tests, plus
+// ResolveFromMergedCandidates above) are untouched. Production goes
+// through ResolveFromMergedCandidatesWithGateAndBasis, which returns the
+// same resolution PLUS the per-committed-subject CommitBasisSet the engine
+// needs. Discarding the basis here is safe by construction: an absent
+// basis reads as CommitBasisUnknown, which IdentityProven reports false,
+// which is the STRICT treatment -- see contextfabric.CommitBasis.
 func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string) contextfabric.SubjectResolution {
+	resolution, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey)
+	return resolution
+}
+
+// ResolveFromMergedCandidatesWithGateAndBasis is
+// ResolveFromMergedCandidatesWithGate's real implementation, additionally
+// returning the CommitBasisSet: for every subject in the returned
+// Committed list, WHICH CLASS OF PROOF the commit stood on, recorded at the
+// point of commit where that path's own conjuncts are still in scope.
+//
+// The basis cannot be reconstructed by a caller from the returned
+// resolution -- that is the whole reason it is returned rather than
+// derived. A candidate carrying Confidence==1 and MatchAlias may have
+// committed through identity_fast_path (complete enumeration, unique
+// claimant within and across classes: proof) or through lone_floor with
+// aliasIdentityComplete false (an unproven uniqueness claim): identical
+// candidates, different standing. See contextfabric.CommitBasis for the
+// full account.
+func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet) {
+	bases := make(contextfabric.CommitBasisSet)
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -418,7 +447,7 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		if tracer != nil {
 			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated})
 		}
-		return resolution
+		return resolution, bases
 	}
 
 	// Phase 3: commit decision over the FULL, untruncated ranked set.
@@ -448,6 +477,14 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			// which is THIS function's own exact-label-match tier over
 			// candidates that arrived Proposed.
 			commitGate = "pre_committed_exact_hint"
+			// CHAOS-4085: caller-canonical-id proof. The only producer of
+			// this arrival state is resolve.go's SubjectHint branch, which
+			// takes a canonical id the CALLER supplied, re-reads it from
+			// this org's graph by keyed lookup (deps.ExactHint), and
+			// re-authorizes it (AuthorizedAttributes + NodeCandidate)
+			// before stamping Confidence=1/State=Committed. No ranking and
+			// no truncation boundary participate.
+			bases.Record(candidate.Subject, contextfabric.CommitBasisCallerCanonicalID)
 		}
 	}
 	ambiguous := false
@@ -573,6 +610,20 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			candidates[exactIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[exactIndex[0]].Subject}
 			commitGate = "exact_index"
+			// CHAOS-4085 (sol@xhigh change 2): STATISTICAL, deliberately,
+			// even though this tier stamps MatchExact and Confidence==1.
+			// This is LABEL equality, not identity: this branch's own doc
+			// comment above concedes the residual risk it cannot close ("a
+			// duplicate label hidden entirely behind the truncation
+			// boundary"), and the uniqueness it does check (len(exactIndex)
+			// == 1) is uniqueness within the RETAINED set, not within the
+			// corpus. A caller who means a specific subject under that
+			// hazard is told to name it by canonical id -- which is
+			// CommitBasisCallerCanonicalID, a different, genuinely proven
+			// basis. Nothing about the exact-label tier's own commit
+			// behavior changes here; only its standing before CHAOS-4085's
+			// affirmation gate does.
+			bases.Record(candidates[exactIndex[0]].Subject, contextfabric.CommitBasisStatistical)
 		// CHAOS-3884: the identity fast path. Sits AFTER exactIndex
 		// (Finding 1's precedence: a candidate's own canonical label is a
 		// stronger identity claim than a derived alias/provider-key handle,
@@ -595,6 +646,22 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			candidates[identityIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[identityIndex[0]].Subject}
 			commitGate = "identity_fast_path"
+			// CHAOS-4085: the ONE branch that earns
+			// CommitBasisAuthoritativeIdentity, and it earns it from THIS
+			// case's own guard expression rather than from anything visible
+			// on the candidate -- aliasIdentityComplete (the identity
+			// universe was enumerated completely, so uniqueness is proven
+			// rather than an artifact of a truncated read), len(identityIndex)
+			// == 1 and !identityCollision (unique within the class), and
+			// !identityCrossClassRivalClaimant (unique across classes,
+			// CHAOS-3917). Existence and authorization come for free: the
+			// candidate is here because a keyed read of this org's graph
+			// returned it and NodeCandidate's authorization filter kept it.
+			// Drop ANY of those conjuncts and this same candidate would
+			// fall through to lone_floor/top_of_two and be recorded
+			// statistical below -- which is exactly the distinction the
+			// mechanism set alone cannot express.
+			bases.Record(candidates[identityIndex[0]].Subject, contextfabric.CommitBasisAuthoritativeIdentity)
 		case searchTruncated:
 			// Codex round-3 review of D11/AC-3778-0: truncation is a
 			// property of the RESOLUTION, not of any one candidate's
@@ -639,6 +706,13 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
 			commitGate = "lone_floor"
+			// CHAOS-4085: statistical. A confidence floor is a score
+			// comparison against a retrieved population, including for a
+			// Confidence==1 alias candidate that reached here BECAUSE
+			// aliasIdentityComplete was false -- the identity fast path
+			// above declined it for want of a completeness proof, so this
+			// gate must not launder it back into one.
+			bases.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitBasisStatistical)
 		case len(commitIndex) >= 2 && gateValid:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
 			// CHAOS-3884 spot-check item 1: identityCollision applied here
@@ -667,6 +741,8 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 				candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
 				resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
 				commitGate = "top_of_two"
+				// CHAOS-4085: statistical -- a gap between two scores.
+				bases.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitBasisStatistical)
 			} else {
 				ambiguous = true
 			}
@@ -868,9 +944,44 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 		// nothing), so it must be disabled by the SAME invalidity that
 		// disables the confidence-threshold cases above, not just left to
 		// fire because those cases individually declined to commit.
+		// CHAOS-4085 (sol@xhigh change 3, team-lead ratified 2026-08-22):
+		// tiedStatisticalTopUnderTruncation is a NEW, independent conjunct
+		// that removes one demonstrated-unsafe population from this rescue
+		// entirely -- a TRUNCATED search whose top two commit-eligible
+		// candidates carry the SAME confidence.
+		//
+		// The v9 trial (tag 20260822T091538Z) produced BOTH outcomes from
+		// exactly this shape, in the same run, against the same corpus: a
+		// never-commit control committed a wrong subject out of a three-way
+		// tie at 0.76375, and a different case committed the RIGHT subject
+		// out of a three-way tie at 0.755. The two resolutions are
+		// indistinguishable at this layer -- same tie structure, same
+		// mechanisms, same truncation, same rescue. That is the finding:
+		// when a relevance ranking has already declared "these are equally
+		// good" AND the search admits it may not have returned the true
+		// competitor, an embedding-similarity margin is arbitrating a
+		// question the evidence does not answer. Under DP9 (zero wrong
+		// commits) the correct sibling is the recall price, not a licence
+		// to keep the class.
+		//
+		// Deliberately NOT rehabilitated downstream. CHAOS-4085's
+		// post-synthesis affirmation gate reads MODEL OUTPUT, and model
+		// output is CORRELATED with the same lexical/embedding proximity
+		// that produced the tie in the first place -- a synthesis handed a
+		// wrong-but-similar subject can and does write plausible supporting
+		// prose about it. Affirmation may therefore only ever VETO a
+		// commit, never restore one this gate refused; that is why this
+		// conjunct lives here, before the commit, rather than as another
+		// clause in the reducer.
+		//
+		// Narrow by construction: an UNTRUNCATED search reaching a tie is
+		// untouched (the population was complete, so the tie is real
+		// information), and a truncated search with a strictly-separated
+		// top is untouched (the ranking did discriminate). Only the
+		// conjunction is refused.
 		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
 			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK &&
-			unscopedVisibility {
+			unscopedVisibility && !tiedStatisticalTopUnderTruncation(candidates, commitIndex, searchTruncated) {
 			// CHAOS-3884 spot-check MEDIUM-C/item 1: identityCollision is
 			// checked on the RESCUE'S OWN chosen candidate, not via
 			// len(identityIndex) (eligibility-scoped, invisible to a
@@ -910,6 +1021,9 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
 				ambiguous = false
 				commitGate = "vector_margin_rescue"
+				// CHAOS-4085: statistical -- an embedding-similarity margin
+				// is the definitive score comparison.
+				bases.Record(candidates[index].Subject, contextfabric.CommitBasisStatistical)
 			}
 		}
 		// CHAOS-3896 Slice C (design brief v6 §1.4, R5's amendment): the
@@ -983,6 +1097,13 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
 				ambiguous = false
 				commitGate = "evidence_census"
+				// CHAOS-4085: statistical. A census witness lifts a raw
+				// base over LoneFloor through the corroborated-band
+				// arithmetic (evidenceStrength) -- it attests that SOME
+				// source satisfies the question, which is a strength
+				// signal, not a proof that this candidate is the subject
+				// the caller named.
+				bases.Record(candidates[index].Subject, contextfabric.CommitBasisStatistical)
 			}
 		}
 	}
@@ -1084,7 +1205,57 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 			})
 		}
 	}
-	return resolution
+	return resolution, bases
+}
+
+// tiedStatisticalTopUnderTruncation reports the ONE population CHAOS-4085
+// removes from the CHAOS-3829 vector-margin rescue: a resolution whose
+// search TRUNCATED and whose top two commit-eligible candidates hold the
+// SAME confidence, below the exact/identity 1.0 band.
+//
+// Both conjuncts are load-bearing, and neither alone is:
+//
+//   - searchTruncated alone is already tolerated by the rescue on purpose
+//     (see the rescue's own comment: it may fire even when truncation is
+//     why ambiguous is true), because a margin computed over a bounded,
+//     calibrated top-K carries its own completeness envelope.
+//   - a tie alone, on an UNTRUNCATED search, is genuine information: the
+//     population was complete and the ranking honestly could not separate
+//     two real candidates.
+//
+// Together they are not. A tie says the lexical/relevance signal
+// discriminated nothing; truncation says the set it failed to discriminate
+// over may not even contain the right answer. Breaking that with an
+// embedding margin answers "which of these is closest in embedding space",
+// which is a different question from "which subject did the caller mean" --
+// the same category error CHAOS-3810's exact-label duplicate rule and
+// CHAOS-3884's identityCollision rule already refuse to let a proximity
+// signal arbitrate.
+//
+// candidates is confidence-sorted descending and commitIndex preserves that
+// order, so commitIndex[0]/[1] are the top two ELIGIBLE candidates (an
+// observation blocked by an unresolved canonical parent is already absent).
+// Fewer than two eligible candidates cannot be tied.
+//
+// The <1 test excludes the exact/identity 1.0 band: two candidates both at
+// 1.0 are a duplicate-identity collision, which len(exactIndex) < 2 and
+// identityCollision already refuse for reasons of their own, and folding
+// them in here would only obscure which rule did the refusing.
+//
+// Float equality is used deliberately, with no tolerance. These confidences
+// are not independently-derived measurements being compared for
+// approximate agreement: they are the SAME arithmetic (CorroboratedConfidence
+// over a shared band constant) producing bit-identical results for
+// candidates that scored alike, which is precisely the tie this refuses. A
+// tolerance would additionally capture near-ties, a strictly larger
+// population than the one the trial demonstrated unsafe, and CHAOS-4085
+// does not claim evidence about it.
+func tiedStatisticalTopUnderTruncation(candidates []contextfabric.SubjectCandidate, commitIndex []int, searchTruncated bool) bool {
+	if !searchTruncated || len(commitIndex) < 2 {
+		return false
+	}
+	top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
+	return top.Confidence < 1 && top.Confidence == second.Confidence
 }
 
 // vectorMarginCommit implements CHAOS-3829's ratified commit-path carve-out
@@ -1269,6 +1440,33 @@ func FinalizeExactResolution(candidatesBySubject map[string]contextfabric.Subjec
 		committed = append(committed, candidate.Subject)
 	}
 	return contextfabric.SubjectResolution{Candidates: candidates, Committed: committed}
+}
+
+// FinalizeExactResolutionWithBasis is FinalizeExactResolution plus the
+// CommitBasisSet for what it committed: CommitBasisCallerCanonicalID for
+// every subject, without exception.
+//
+// This is the caller-hint SHORT CIRCUIT (resolve.go's
+// AnyCallerSourced branch) -- a second commit exit that never reaches
+// ResolveFromMergedCandidatesWithGateAndBasis at all. It exists because a
+// caller who named subjects by canonical id has already answered the
+// question resolution is for, so no gate runs. CHAOS-4085 must record a
+// basis here too: without it these commits would read back as
+// CommitBasisUnknown and be routed into the affirmation gate -- the
+// fail-closed direction, so the omission would be safe, but it would
+// refuse exactly the commits that carry the STRONGEST proof in the system.
+//
+// Every candidate in this set reached it through resolve.go's hint loop:
+// keyed graph re-read (deps.ExactHint), authorization re-check
+// (AuthorizedAttributes + NodeCandidate), then Confidence=1/
+// State=Committed. Uniform basis is correct because the path is uniform.
+func FinalizeExactResolutionWithBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, callerSourced map[string]bool, max int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet) {
+	resolution := FinalizeExactResolution(candidatesBySubject, callerSourced, max)
+	bases := make(contextfabric.CommitBasisSet, len(resolution.Committed))
+	for _, subject := range resolution.Committed {
+		bases.Record(subject, contextfabric.CommitBasisCallerCanonicalID)
+	}
+	return resolution, bases
 }
 
 // ClarificationPrompt builds the caller-facing ambiguity prompt from the

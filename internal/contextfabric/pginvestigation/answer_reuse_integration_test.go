@@ -88,6 +88,10 @@ var testReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{
 	IdentityNormalizationVersion: "identity_norm_v1",
 	// CHAOS-3900 W1: same mirrored discipline, one more dimension.
 	WindowInferenceVersion: contextfabric.WindowInferenceVersion,
+	// CHAOS-4085: same mirrored discipline, one more dimension -- the
+	// commit-gate fence. FindReusable fails CLOSED on an unset value, so
+	// leaving this blank would make every test in this file miss.
+	CommitGateVersion: contextfabric.CommitGateVersion,
 }
 
 func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKey {
@@ -106,9 +110,12 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 		IdentityNormalizationVersion: testReuseVersionAuthorities.IdentityNormalizationVersion,
 		// CHAOS-3900 W1: same mirror, one more dimension.
 		WindowInferenceVersion: testReuseVersionAuthorities.WindowInferenceVersion,
-		QuestionHash:           contextfabric.QuestionHash(result.Question),
-		ContractVersion:        result.Versions.ContractVersion,
-		ProjectionVersion:      result.Versions.ProjectionVersion,
+		// CHAOS-4085: same mirror, one more dimension (the commit-gate
+		// fence).
+		CommitGateVersion: testReuseVersionAuthorities.CommitGateVersion,
+		QuestionHash:      contextfabric.QuestionHash(result.Question),
+		ContractVersion:   result.Versions.ContractVersion,
+		ProjectionVersion: result.Versions.ProjectionVersion,
 		// A single-member chain: the exact identity this result was
 		// stored under. Most tests in this file want the baseline "the
 		// key that was actually stored still matches" case; CHAOS-3786
@@ -413,6 +420,27 @@ func TestAC_3782_7_VersionMismatchNeverReused(t *testing.T) {
 		_, ok, _, err := store.FindReusable(ctx, principal, key)
 		require.NoError(t, err)
 		require.False(t, ok)
+	})
+	// CHAOS-4085: the commit-gate fence. This is the dimension whose
+	// absence would be a SAFETY hole rather than a staleness one -- the
+	// reuse lookup runs before Interpret and before synthesis, so a row
+	// saved under an older gate would otherwise be served with its stored
+	// Committed list having never passed through the current gate.
+	t.Run("commit_gate_version", func(t *testing.T) {
+		key := baseline
+		key.CommitGateVersion = "cg_v99"
+		_, ok, _, err := store.FindReusable(ctx, principal, key)
+		require.NoError(t, err)
+		require.False(t, ok, "a row produced under a different commit gate must never be replayed under this one")
+	})
+	// CHAOS-4085: the fail-closed half. An unwired dimension must MISS
+	// rather than run a lookup that silently ignores the fence.
+	t.Run("commit_gate_version_unset_misses", func(t *testing.T) {
+		key := baseline
+		key.CommitGateVersion = ""
+		_, ok, _, err := store.FindReusable(ctx, principal, key)
+		require.NoError(t, err)
+		require.False(t, ok, "an unconfigured commit-gate dimension must fail closed")
 	})
 	t.Run("unchanged_key_still_matches", func(t *testing.T) {
 		_, ok, _, err := store.FindReusable(ctx, principal, baseline)

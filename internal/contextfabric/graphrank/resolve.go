@@ -733,7 +733,41 @@ type RawSignalObserver interface {
 // the exact-hint short-circuit below returns one too (a caller-supplied
 // hint that resolved exactly is already decisive on subject identity, so
 // there is nothing on this axis left to disambiguate).
+// CHAOS-4085: the BASIS-DISCARDING wrapper. Kept at the original signature
+// so this package's ~80 existing call sites are untouched; production goes
+// through ResolveSubjectsWithCommitBasis. Discarding is safe by
+// construction -- an absent basis reads back as CommitBasisUnknown, which
+// IdentityProven reports false, which is the STRICT treatment.
 func ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+	resolution, offerMaterial, _, err := ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
+	return resolution, offerMaterial, err
+}
+
+// ResolveSubjectsWithCommitBasis is ResolveSubjects plus the CommitBasisSet
+// describing WHICH CLASS OF PROOF stood behind each committed subject --
+// the signal CHAOS-4085's post-synthesis affirmation gate needs and cannot
+// reconstruct from the returned resolution alone (see
+// contextfabric.CommitBasis for why the mechanism set and Confidence are
+// not that signal).
+//
+// The set is threaded INTO the implementation as a map rather than returned
+// up through it: a map is already a reference, so the body's existing
+// eleven three-value returns stay exactly as they were and this change
+// cannot silently alter any error path. Exactly three points write it, and
+// each RESETS rather than merges -- see their call sites below.
+func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, error) {
+	bases := make(contextfabric.CommitBasisSet)
+	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases)
+	if err != nil {
+		// An error path commits nothing, so a basis some partial pass
+		// happened to record describes a resolution no caller ever
+		// receives. Return an empty set rather than that debris.
+		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), err
+	}
+	return resolution, offerMaterial, bases, nil
+}
+
+func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, errors.New("authenticated organization is required")
 	}
@@ -811,7 +845,13 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// a different subject than the one a prior receipt bound can still be
 	// found and compete on its own terms.
 	if AnyCallerSourced(candidatesBySubject, callerSourced) {
-		return FinalizeExactResolution(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates), contextfabric.StructureOfferMaterial{}, nil
+		// CHAOS-4085 commit-basis write site 1 of 3: the caller-hint short
+		// circuit. Everything this exit commits was named by canonical id,
+		// re-read from the graph by keyed lookup and re-authorized in the
+		// hint loop above -- CommitBasisCallerCanonicalID for all of it.
+		exactResolution, exactBases := FinalizeExactResolutionWithBasis(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates)
+		commitBases.ResetTo(exactBases)
+		return exactResolution, contextfabric.StructureOfferMaterial{}, nil
 	}
 	// observationParentKey maps an observation (document/episode) subject
 	// key to its found canonical parent's subject key -- only set when
@@ -1239,7 +1279,11 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// ConfirmedExpectedKind's own doc comment (ports.go) for why
 	// non-confirmed narrowing cannot reach this same call.
 	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind)
-	resolution := ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
+	// CHAOS-4085 commit-basis write site 2 of 3: the ordinary commit
+	// decision. ResetTo, not merge -- this is the first decision, and it
+	// defines the whole basis set for it.
+	resolution, firstPassBases := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
+	commitBases.ResetTo(firstPassBases)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
 	// OR'd in HERE, informationally, AFTER the gate already decided using
 	// the un-widened retrievalDegraded -- see its own declaration above for
@@ -1277,7 +1321,17 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// to use regardless.
 		if gateValid {
 			if attestedKey, merged := mergeCensusAttestedSatisfier(ctx, principal, request, deps, attestation, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms); merged {
-				resolution = ResolveFromMergedCandidatesWithGate(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey)
+				// CHAOS-4085 commit-basis write site 3 of 3: the
+				// evidence-census RE-DECISION. This call re-runs the entire
+				// commit decision and returns a wholly fresh resolution, so
+				// the basis set must be REPLACED, never merged: a merge
+				// would leave a basis recorded for a subject the first pass
+				// committed and this pass does not, and a stale proven
+				// basis attached to a subject nothing committed is exactly
+				// the failure mode this vocabulary exists to prevent.
+				var censusBases contextfabric.CommitBasisSet
+				resolution, censusBases = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey)
+				commitBases.ResetTo(censusBases)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
 			}
 		}

@@ -59,7 +59,7 @@ import (
 // bearing rows a pre-P5 binary wrote before reuseColumnsFor's own source-
 // ineligibility fix existed. 0030 is CHAOS-4013's RFC 8693 workload token
 // exchange: acr.workload_bindings plus client_credentials.workload_binding_id.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30}
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -455,14 +455,17 @@ func TestRunner_upgradeTo18AddsIdentityNormalizationReuseKeyColumn(t *testing.T)
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "identity_normalization_version")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_identity_norm_version_length")
 	// CHAOS-3898 §2.3's migration 0021 replaces v5 with v6 (one more reuse-
-	// key dimension, graph_epoch), and CHAOS-3900 W1's migration 0022 in turn
-	// replaces v6 with v7 (window_inference_version) -- "latest" here
-	// includes both, so the index this 0018 upgrade itself created is no
-	// longer the CURRENT one; see TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn
-	// and TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn for the
-	// dedicated 0018->0021 and 0021->0022 boundary proofs this same
-	// replace-don't-stack pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
+	// key dimension, graph_epoch), CHAOS-3900 W1's migration 0022 in turn
+	// replaces v6 with v7 (window_inference_version), and CHAOS-4085's
+	// migration 0031 replaces v7 with v8 (commit_gate_version) -- "latest"
+	// here includes all three, so the index this 0018 upgrade itself created
+	// is no longer the CURRENT one; see
+	// TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn,
+	// TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn and
+	// TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the dedicated
+	// boundary proofs this same replace-don't-stack pattern needs.
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v5")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v4")
@@ -522,12 +525,14 @@ func TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn(t *testing.T) {
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "graph_epoch")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_graph_epoch_nonneg")
 	// CHAOS-3900 W1's migration 0022 replaces v6 with v7 (one more reuse-key
-	// dimension, window_inference_version) -- "latest" here includes 0022,
-	// so the index this 0021 upgrade itself created is no longer the CURRENT
-	// one; see TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn for
-	// the dedicated 0021->0022-boundary proof this same replace-don't-stack
-	// pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
+	// dimension, window_inference_version) and CHAOS-4085's migration 0031
+	// replaces v7 with v8 (commit_gate_version) -- "latest" here includes
+	// both, so the index this 0021 upgrade itself created is no longer the
+	// CURRENT one; see TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn
+	// and TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the
+	// dedicated boundary proofs this same replace-don't-stack pattern needs.
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v5")
 }
@@ -585,7 +590,13 @@ func TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn(t *testing.T) {
 
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "window_inference_version")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_window_inference_version_length")
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
+	// CHAOS-4085's migration 0031 replaces v7 with v8 (commit_gate_version)
+	// -- "latest" here includes it, so the index this 0022 upgrade itself
+	// created is no longer the CURRENT one; see
+	// TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the dedicated
+	// 0022->0031-boundary proof.
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
 }
 

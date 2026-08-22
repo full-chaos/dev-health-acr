@@ -66,11 +66,13 @@ func (g authzDroppingGraphReader) ResolveInvestigationBinding(context.Context, s
 	return ResolvedGraphBinding{GraphKey: "authz-dropping-key", Epoch: 0}, nil
 }
 
-func (g authzDroppingGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, _ InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error) {
+func (g authzDroppingGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, _ InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
 	if g.dropped > 0 {
 		RecordSubjectCandidatesAuthzDropped(ctx, g.dropped)
 	}
-	return g.resolution, StructureOfferMaterial{}, nil
+	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
+	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
+	return g.resolution, StructureOfferMaterial{}, nil, nil
 }
 
 func (g authzDroppingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

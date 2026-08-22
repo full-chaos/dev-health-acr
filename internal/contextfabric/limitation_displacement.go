@@ -154,7 +154,13 @@ func isServiceAuthoredLimitation(limitation string) bool {
 // disclosure cannot become displaceable by being forgotten here.
 func serviceAuthoredLimitations() []string {
 	disclosures := append([]string(nil), temporalLimitations...)
-	return append(disclosures, observedTimeLimitation)
+	disclosures = append(disclosures, observedTimeLimitation)
+	// CHAOS-4085: the commit-retraction disclosure. Service-authored, and
+	// never displaceable: it is the only statement in the document that a
+	// candidate subject was deliberately NOT committed, and a reader who
+	// loses it sees an answer that simply never names a subject, with no
+	// account of why.
+	return append(disclosures, commitRetractionLimitation)
 }
 
 func withRetrievalDegradation(limitations []string) (composed []string, displaced int) {

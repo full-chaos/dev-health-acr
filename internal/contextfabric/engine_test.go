@@ -29,14 +29,45 @@ type graphReaderStub struct {
 	// byte-identical to before this field existed), settable per test
 	// that specifically exercises structure-offer composition.
 	material StructureOfferMaterial
+	// bases (CHAOS-4085) is the CommitBasisSet this double reports for what
+	// it commits. Nil means CommitBasisUnknown for every subject, which is
+	// the STRICT reading: the commit-affirmation gate then requires the
+	// synthesized answer to support each committed subject.
+	//
+	// A test whose subject matter is NOT the commit gate sets this to
+	// provenCommitBases(...) so its fixture keeps committing what it always
+	// committed. That is deliberately EXPLICIT at each such site rather
+	// than defaulted here: a silent proven default would switch the gate
+	// off across the whole package, and the next test to need real gate
+	// behavior would get it silently wrong.
+	bases CommitBasisSet
+}
+
+// provenCommitBases marks every listed subject as committed on a proven
+// identity (CommitBasisCallerCanonicalID -- the caller named it by
+// canonical id), exempting it from CHAOS-4085's affirmation gate.
+//
+// For fixtures that model a graph which authoritatively returns THE
+// subject rather than a ranked, scored guess. It is the honest basis for
+// such a double: nothing about these harnesses involves a relevance
+// comparison, which is the only thing the affirmation gate is about.
+func provenCommitBases(subjects ...SubjectRef) CommitBasisSet {
+	bases := make(CommitBasisSet, len(subjects))
+	for _, subject := range subjects {
+		bases.Record(subject, CommitBasisCallerCanonicalID)
+	}
+	return bases
 }
 
 func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error) {
-	return g.resolution, g.material, nil
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
+	// CHAOS-4085: g.bases, nil unless the fixture set it -- see the field's
+	// own doc comment. Nil reads back as CommitBasisUnknown for every
+	// subject, the strict (must-be-affirmed) treatment.
+	return g.resolution, g.material, g.bases, nil
 }
 
 func (g graphReaderStub) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
@@ -152,10 +183,12 @@ func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, stor
 	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: g.bindingEpochs[index]}, nil
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error) {
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
 	g.confirmedAnchors = append(g.confirmedAnchors, confirmedAnchor)
-	return g.resolution, StructureOfferMaterial{}, nil
+	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
+	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
+	return g.resolution, StructureOfferMaterial{}, nil, nil
 }
 
 func (g *capturingGraphReader) DiscoverContext(_ context.Context, _ storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
@@ -1458,12 +1491,14 @@ func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, stora
 	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
 }
 
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error) {
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
 	g.resolveCalls++
+	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
+	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
 	return SubjectResolution{
 		Candidates: []SubjectCandidate{},
 		Committed:  []SubjectRef{{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}},
-	}, StructureOfferMaterial{}, nil
+	}, StructureOfferMaterial{}, nil, nil
 }
 
 func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

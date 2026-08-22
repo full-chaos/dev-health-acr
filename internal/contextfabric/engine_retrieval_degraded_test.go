@@ -45,6 +45,14 @@ func engineForDegradationOnAxis(t *testing.T, degraded bool, limitations []strin
 		}),
 		Graph: graphReaderStub{
 			resolution: resolution,
+			// CHAOS-4085: this harness is about retrieval degradation and
+			// limitation composition, not about the commit gate -- its
+			// fixture returns THE subject outright, with no ranking or
+			// scoring involved, so a proven basis is what it actually
+			// models. Without this the affirmation gate would retract the
+			// commit and add its own disclosure, changing what every
+			// assertion below is counting.
+			bases: provenCommitBases(project),
 			context: GraphContext{
 				Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
