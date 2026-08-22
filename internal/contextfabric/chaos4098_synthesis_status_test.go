@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -439,5 +440,118 @@ func TestChaos4098_OverrideTelemetryLeaksNoIdentityAndStaysAtWarn(t *testing.T) 
 	}
 	if got := record["level"]; got != "WARN" {
 		t.Fatalf("level = %v, want WARN -- see RecordSynthesisStatusOverride's own doc comment for why", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// codex xhigh review round 1, P1 -- reproduced, then closed
+// ---------------------------------------------------------------------------
+
+// fullModelLimitations is a schema-valid MAXIMUM limitation list: exactly
+// the contract's cap, every entry a model caveat, no service disclosure.
+// The synthesis prompt states this cap, so a compliant model can return it
+// and SynthesisDraft.ValidateAgainst does not check top-level collection
+// counts (the documented CHAOS-3790 gap) -- this is ordinary input, not a
+// malformed draft.
+func fullModelLimitations() []string {
+	limitations := make([]string, 0, contractsv1.ContextFabricLimitationsMaxCount)
+	for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
+		limitations = append(limitations, fmt.Sprintf("model caveat %03d", i))
+	}
+	return limitations
+}
+
+// TestChaos4098_OverrideOnAFullLimitationListStaysValid is codex round 1's
+// P1, confirmed by repro before it was fixed.
+//
+// Appending the disclosure to a list already at the cap DISPLACES a model
+// caveat, which sets LimitationsDisplaced. The v1 coherence rule then
+// demanded the RETRIEVAL-DEGRADATION disclosure specifically, which this
+// path never adds -- so the recovery produced a result that failed
+// validation for a second reason, and the caller still got a 500. The rule
+// now derives the question from the whole service-authored vocabulary.
+func TestChaos4098_OverrideOnAFullLimitationListStaysValid(t *testing.T) {
+	result := decisiveClarificationResult()
+	result.Limitations = fullModelLimitations()
+
+	if outcome := applySynthesisStatusOverride(&result); outcome == nil {
+		t.Fatal("the override must fire regardless of how full the limitation list is")
+	}
+	if result.LimitationsDisplaced == 0 {
+		t.Fatal("fixture precondition: a full list must force a displacement, or this test proves nothing")
+	}
+	if !hasLimitation(result.Limitations, synthesisClarificationUnavailableLimitation) {
+		t.Fatal("the disclosure must survive displacement -- it is never the entry dropped")
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("a displaced clarification override must still validate: %v", err)
+	}
+}
+
+// TestChaos4098_RetractionOnAFullLimitationListStaysValid is the SAME
+// defect on CHAOS-4085's disclosure, which reproduced on main before this
+// change. Pinned here rather than left to the ticket that introduced it:
+// the rule is now shared, so a regression would break both paths and both
+// deserve a test that names them.
+func TestChaos4098_RetractionOnAFullLimitationListStaysValid(t *testing.T) {
+	result := decisiveClarificationResult()
+	result.Status = InvestigationPartial
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
+	result.Limitations = fullModelLimitations()
+
+	outcomes := applyCommitAffirmation(&result, statisticalInputs(emptyAffirmationGraph(), emptyAffirmationFacts(), result))
+	if len(outcomes) == 0 {
+		t.Fatal("fixture precondition: the gate must retract this unaffirmed statistical commit")
+	}
+	if result.LimitationsDisplaced == 0 {
+		t.Fatal("fixture precondition: a full list must force a displacement")
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("a displaced retraction must still validate: %v", err)
+	}
+}
+
+// TestChaos4098_DisplacementStillRequiresAServiceDisclosure holds the line
+// the loosened rule must NOT cross: a result claiming a displacement it
+// never took is still refused. The rule was generalized, not deleted.
+func TestChaos4098_DisplacementStillRequiresAServiceDisclosure(t *testing.T) {
+	result := decisiveClarificationResult()
+	result.Status = InvestigationPartial
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
+	result.Limitations = fullModelLimitations()
+	result.LimitationsDisplaced = 1 // claimed, with no disclosure that would require one
+
+	if err := result.Validate(); err == nil {
+		t.Fatal("a displacement claimed without any service disclosure must still be rejected")
+	}
+}
+
+// TestChaos4098_ServiceAuthoredVocabularyIsSharedNotRestated pins the
+// single-source property the fix depends on. Two hand-maintained lists is
+// how the engine came to protect four disclosures from displacement while
+// the validator recognised one.
+func TestChaos4098_ServiceAuthoredVocabularyIsSharedNotRestated(t *testing.T) {
+	for _, disclosure := range contractsv1.ContextFabricServiceAuthoredLimitations() {
+		if !isServiceAuthoredLimitation(disclosure) {
+			t.Fatalf("the engine does not recognise contract disclosure %q as service-authored", disclosure)
+		}
+		if !contractsv1.HasContextFabricServiceAuthoredLimitation([]string{disclosure}) {
+			t.Fatalf("the contract's own oracle does not recognise %q", disclosure)
+		}
+	}
+	// Every disclosure the ENGINE composes must be in the contract's list,
+	// which is what makes the validator's rule complete.
+	for _, disclosure := range []string{
+		retrievalDegradedLimitation, observedTimeLimitation,
+		commitRetractionLimitation, synthesisClarificationUnavailableLimitation,
+	} {
+		if !contractsv1.IsContextFabricServiceAuthoredLimitation(disclosure) {
+			t.Fatalf("engine disclosure %q is absent from the contract vocabulary -- a displaced result carrying only it would be rejected", disclosure)
+		}
+	}
+	for _, disclosure := range temporalLimitations {
+		if !contractsv1.IsContextFabricServiceAuthoredLimitation(disclosure) {
+			t.Fatalf("temporal disclosure %q is absent from the contract vocabulary", disclosure)
+		}
 	}
 }

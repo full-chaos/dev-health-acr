@@ -55,6 +55,7 @@ import (
 	"context"
 	"strings"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -68,7 +69,7 @@ import (
 // reports finding nothing rather than asking them a question. The
 // operator-facing detail -- which status was overridden, and why -- belongs
 // in telemetry, which receives it.
-const synthesisClarificationUnavailableLimitation = "This question could not be answered from the evidence assembled, and no clarification could be offered to narrow it further."
+const synthesisClarificationUnavailableLimitation = contractsv1.ContextFabricSynthesisClarificationUnavailableLimitation
 
 // SynthesisStatusOverrideReason is the closed vocabulary naming WHY the
 // engine overrode a synthesized status. One value today; a type rather
