@@ -598,25 +598,74 @@ func (c *twoTurnTraceCapture) censusRan() bool {
 	return false
 }
 
-// kindInsensitivityResult reports whether kindInsensitivityProof
-// (chaos3900_structure_offers.go) was actually CONSULTED during the
-// captured call and, when it was, its own closed-vocabulary verdict --
-// CHAOS-4039's v4 measurement contract (sol-max ruling 2026-08-20),
-// replacing the prior singleSatisfierVerified proxy (a generic
-// evidence_round/would_commit check the ruling found insufficient: it
-// cannot distinguish "the proof ran and certified this exact commit" from
-// "the round reached would_commit for an unrelated reason, or never ran
-// the proof at all"). Read directly off ResolutionTraceEvent's own
-// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome fields
-// (resolve.go), themselves populated only inside RunShadowEvidenceRound's
-// PreNarrowingExplicitKinds-gated branch (chaos3899_evidence_round.go).
-func (c *twoTurnTraceCapture) kindInsensitivityResult() (evaluated bool, outcome string) {
+// kindInsensitivityResult reports whether the kind-insensitivity proof was
+// actually CONSULTED during the captured call and, when it was, its own
+// closed-vocabulary verdict -- CHAOS-4039's v4 measurement contract
+// (sol-max ruling 2026-08-20), replacing the prior singleSatisfierVerified
+// proxy (a generic evidence_round/would_commit check the ruling found
+// insufficient: it cannot distinguish "the proof ran and certified this
+// exact commit" from "the round reached would_commit for an unrelated
+// reason, or never ran the proof at all"). Read directly off
+// ResolutionTraceEvent's own ShadowKindInsensitivityEvaluated/
+// ShadowKindInsensitivityOutcome fields (resolve.go).
+//
+// CHAOS-4079 additionally returns ShadowKindInsensitivityMode, because
+// those two fields are no longer produced by one mechanism (codex xhigh
+// review round 3 follow-up: this comment used to say kindInsensitivityProof
+// itself always ran, which stopped being true). Under mode=="narrowed" they
+// come from RunShadowEvidenceRound's original PreNarrowingExplicitKinds-gated
+// branch, where kindInsensitivityProof (chaos3900_structure_offers.go)
+// genuinely re-censuses the pre-narrowing kind set. Under an "observed_"
+// mode the census was never narrowed, so the identical verdict is DERIVED
+// from the round's own already-collected census results with no second read.
+// "evaluated" alone therefore no longer implies the verdict attests
+// anything; callers MUST discriminate on mode. See twoTurnKindAttested, the
+// only place this file turns a verdict into a classification.
+func (c *twoTurnTraceCapture) kindInsensitivityResult() (evaluated bool, outcome, mode string) {
 	for _, e := range c.events {
 		if e.Stage == "evidence_round" && e.ShadowKindInsensitivityEvaluated {
-			return true, e.ShadowKindInsensitivityOutcome
+			return true, e.ShadowKindInsensitivityOutcome, e.ShadowKindInsensitivityMode
 		}
 	}
-	return false, ""
+	return false, "", ""
+}
+
+// twoTurnKindAttested is CHAOS-4039's kind_insensitivity_attested
+// precondition, extracted (CHAOS-4079) so the mode gate below has a unit
+// test surface independent of runTwoTurnInferredTierArm's full
+// investigator/window-precondition machinery.
+//
+// THE MODE GATE (team-lead ruling 2026-08-22, CHAOS-4079 phase 1): a
+// commit_sound verdict attests kind-insensitivity ONLY under
+// mode=="narrowed" -- the census hypothesis set actually changed and the
+// outcome held across the change. CHAOS-4079 made the probe evaluable for
+// the "observed_" modes as well (a wrong-kind hint disjoint from the pool,
+// which previously could not be observed at all), but there the census was
+// never narrowed, so a sound verdict is necessary-but-NOT-sufficient
+// evidence that the hint had no influence: request.ExpectedKinds still
+// reaches explicit-structure member stamping (contextfabric/structure.go)
+// and kind-offer ranking (graphrank's kindOfferMaterial), neither of which
+// this proof speaks for. Treating an observed_ verdict as attestation
+// would claim more than was proven AND would silently convert this run's
+// own InferredUnjustifiedCount==0 pass condition into a weaker bar --
+// exactly the confidently-wrong-measurement failure the PairInvalid rule
+// above already exists to prevent.
+//
+// Consequence, stated so a future reader does not have to rediscover it:
+// CHAOS-4079 is pass/fail NEUTRAL for this harness by construction. A run
+// that would fail on InferredUnjustifiedCount before it still fails after;
+// the observed_ rows gain trace-level observability
+// (ShadowKindInsensitivity* on the row) and nothing else.
+// TestTwoTurnKindAttestedRequiresNarrowedMode pins it.
+func twoTurnKindAttested(trace *twoTurnTraceCapture, hintedCommitted []contractsv1.ContextFabricSubjectRef) bool {
+	if trace == nil {
+		return false
+	}
+	evaluated, outcome, mode := trace.kindInsensitivityResult()
+	if !evaluated || outcome != "commit_sound" || mode != "narrowed" {
+		return false
+	}
+	return trace.evidenceCensusCommitted(hintedCommitted)
 }
 
 // evidenceCensusCommitted reports whether a decision-stage event traced
@@ -831,11 +880,11 @@ func twoTurnSubjectKindIDs(refs []contractsv1.ContextFabricSubjectRef) []twoTurn
 // precondition machinery (TestTwoTurnUnjustifiedShadowProbe). Never
 // consulted by, and never influences, the classification itself -- read-only
 // observation of a decision already made by the caller.
-func twoTurnUnjustifiedShadowProbe(trace *twoTurnTraceCapture, baselineCommitted, hintedCommitted []contractsv1.ContextFabricSubjectRef) (evaluated bool, outcome string, baselineSubjects, hintedSubjects []twoTurnSubjectKindID) {
+func twoTurnUnjustifiedShadowProbe(trace *twoTurnTraceCapture, baselineCommitted, hintedCommitted []contractsv1.ContextFabricSubjectRef) (evaluated bool, outcome, mode string, baselineSubjects, hintedSubjects []twoTurnSubjectKindID) {
 	if trace != nil {
-		evaluated, outcome = trace.kindInsensitivityResult()
+		evaluated, outcome, mode = trace.kindInsensitivityResult()
 	}
-	return evaluated, outcome, twoTurnSubjectKindIDs(baselineCommitted), twoTurnSubjectKindIDs(hintedCommitted)
+	return evaluated, outcome, mode, twoTurnSubjectKindIDs(baselineCommitted), twoTurnSubjectKindIDs(hintedCommitted)
 }
 
 // twoTurnCaseResult is one (case, arm) outcome. Every field is a count, a
@@ -940,6 +989,23 @@ type twoTurnCaseResult struct {
 	// are read-only observations of a decision already made above.
 	ShadowKindInsensitivityEvaluated bool   `json:"shadow_kind_insensitivity_evaluated,omitempty"`
 	ShadowKindInsensitivityOutcome   string `json:"shadow_kind_insensitivity_outcome,omitempty"`
+	// ShadowKindInsensitivityMode (CHAOS-4079, same unjustified-only gate)
+	// mirrors ResolutionTraceEvent.ShadowKindInsensitivityMode: which
+	// explicit-kind narrowing situation the two fields above were produced
+	// under ("narrowed" | "observed_no_overlap" | "observed_subsumed").
+	//
+	// This field is what makes the two above finally informative for the
+	// wrong-kind arm. Before CHAOS-4079 the probe was UNREACHABLE for a
+	// hint disjoint from the candidate pool -- precisely what this arm
+	// injects -- so every unjustified row reported evaluated=false and the
+	// distinction the fields were added to draw could not be drawn at all.
+	// Reading it: "observed_no_overlap" + commit_sound means the census was
+	// provably untouched by the wrong hint, and whatever made this row
+	// differ from its baseline came from somewhere OTHER than census
+	// narrowing (member stamping or offer ranking are the candidates) --
+	// which is why it is reported here rather than promoted to
+	// kind_insensitivity_attested; see twoTurnKindAttested's own mode gate.
+	ShadowKindInsensitivityMode string `json:"shadow_kind_insensitivity_mode,omitempty"`
 	// BaselineCommittedSubjects/HintedCommittedSubjects (CHAOS-4062, same
 	// unjustified-only gate as the Shadow* fields above) carry the paired
 	// no-hint baseline's and the hinted call's own SubjectResolution.Committed
@@ -994,6 +1060,17 @@ type twoTurnReport struct {
 	// key nonetheless (cmd/acr-trial-merge-two-turn's own hand-maintained
 	// mirror must be updated in lockstep before it can merge an artifact at
 	// this version -- see that tool's own expectedSchemaVersion comment).
+	// "10" marks CHAOS-4079's write-free shadow-probe observability: the
+	// zero-overlap wiring gap described under "9" below is CLOSED (the
+	// probe now evaluates for a wrong-kind hint), twoTurnCaseResult gained
+	// ShadowKindInsensitivityMode, and ShadowKindInsensitivityEvaluated/
+	// Outcome consequently populate on rows where they were structurally
+	// always false/absent before -- a MEANING change for those two keys, so
+	// a v9 run's unjustified rows do not compare field-for-field against a
+	// v10 run's. The pass condition is UNCHANGED and pass/fail-neutral by
+	// construction: kind_insensitivity_attested still requires
+	// mode=="narrowed" (twoTurnKindAttested), so no row that counted
+	// unjustified at v9 counts otherwise at v10.
 	// "9" marks CHAOS-4039's v5 measurement-contract correction (team-lead
 	// ruling 2026-08-22): InferredClassification's own baseline_equivalent
 	// definition changed MEANING (no wire shape change -- inferred_classification
@@ -1008,19 +1085,22 @@ type twoTurnReport struct {
 	// twoTurnInferredClassification/twoTurnCommittedSubjectsEquivalent). A
 	// prior run's "N/M unjustified" finding was measured under the old,
 	// unsatisfiable definition and does not compare against a run merged at
-	// this version. NOTE: the CHAOS-4062 shadow kind-insensitivity probe's
-	// own zero-overlap wiring gap (narrowPooledKindsByExplicitKinds treating
-	// a wrong-kind hint identically to "no hint", so PreNarrowingExplicitKinds
-	// never populates and the probe never evaluates for that case) is a
-	// SEPARATE, still-open defect -- a graphrank fix was drafted and
-	// rejected on adversarial review (codex xhigh, 2026-08-22): populating
-	// PreNarrowingExplicitKinds there triggers an EXTRA, real (non-shadow)
-	// CensusFunc call whose result chaos3896_slice_c_evidence_census.go's
-	// attestedSatisfier/mergeCensusAttestedSatisfier consumes to decide a
-	// REAL commit -- not observability-only, a genuine commit-behavior risk
-	// under census-read drift. Deferred pending a product-code design
-	// (chris/team-lead decision); ShadowKindInsensitivityEvaluated/Outcome
-	// stay false/absent for that case in a v9 run too. Bump this again on
+	// this version. NOTE (RESOLVED at "10", CHAOS-4079): the CHAOS-4062
+	// shadow kind-insensitivity probe's own zero-overlap wiring gap
+	// (narrowPooledKindsByExplicitKinds treating a wrong-kind hint
+	// identically to "no hint", so PreNarrowingExplicitKinds never
+	// populates and the probe never evaluates for that case) made
+	// ShadowKindInsensitivityEvaluated/Outcome false/absent for that case
+	// in every v9 run. The first drafted fix was rejected on adversarial
+	// review (codex xhigh, 2026-08-22): populating PreNarrowingExplicitKinds
+	// there triggers an EXTRA, real (non-shadow) CensusFunc call whose
+	// result chaos3896_slice_c_evidence_census.go's attestedSatisfier/
+	// mergeCensusAttestedSatisfier consumes to decide a REAL commit -- not
+	// observability-only, a genuine commit-behavior risk under census-read
+	// drift. CHAOS-4079 shipped the write-free construction instead: the
+	// verdict is DERIVED from census results the round already collected,
+	// issuing zero additional CensusFunc calls and writing only
+	// observability fields. Bump this again on
 	// any future field rename, removal, or meaning change so a consumer can
 	// detect drift instead of silently reading a stale key under a new
 	// meaning.
@@ -1896,20 +1976,99 @@ func TestTwoTurnTraceCapture_KindInsensitivityResult(t *testing.T) {
 		c := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
 			{Stage: "evidence_round", ShadowOutcome: "would_commit"},
 		}}
-		evaluated, outcome := c.kindInsensitivityResult()
-		if evaluated || outcome != "" {
-			t.Errorf("kindInsensitivityResult() = (%v, %q), want (false, \"\") when ShadowKindInsensitivityEvaluated was never set", evaluated, outcome)
+		evaluated, outcome, mode := c.kindInsensitivityResult()
+		if evaluated || outcome != "" || mode != "" {
+			t.Errorf("kindInsensitivityResult() = (%v, %q, %q), want (false, \"\", \"\") when ShadowKindInsensitivityEvaluated was never set", evaluated, outcome, mode)
 		}
 	})
-	t.Run("evaluated commit_sound", func(t *testing.T) {
+	t.Run("evaluated commit_sound narrowed", func(t *testing.T) {
 		c := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
-			{Stage: "evidence_round", ShadowOutcome: "would_commit", ShadowKindInsensitivityEvaluated: true, ShadowKindInsensitivityOutcome: "commit_sound"},
+			{Stage: "evidence_round", ShadowOutcome: "would_commit", ShadowKindInsensitivityEvaluated: true, ShadowKindInsensitivityOutcome: "commit_sound", ShadowKindInsensitivityMode: "narrowed"},
 		}}
-		evaluated, outcome := c.kindInsensitivityResult()
-		if !evaluated || outcome != "commit_sound" {
-			t.Errorf("kindInsensitivityResult() = (%v, %q), want (true, \"commit_sound\")", evaluated, outcome)
+		evaluated, outcome, mode := c.kindInsensitivityResult()
+		if !evaluated || outcome != "commit_sound" || mode != "narrowed" {
+			t.Errorf("kindInsensitivityResult() = (%v, %q, %q), want (true, \"commit_sound\", \"narrowed\")", evaluated, outcome, mode)
 		}
 	})
+	// CHAOS-4079: the write-free observation mode reaches this same reader,
+	// and MUST arrive distinguishable -- a caller that cannot tell it from
+	// "narrowed" would treat a census that was never narrowed as proof.
+	t.Run("evaluated commit_sound observed_no_overlap", func(t *testing.T) {
+		c := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "evidence_round", ShadowOutcome: "would_commit", ShadowKindInsensitivityEvaluated: true, ShadowKindInsensitivityOutcome: "commit_sound", ShadowKindInsensitivityMode: "observed_no_overlap"},
+		}}
+		evaluated, outcome, mode := c.kindInsensitivityResult()
+		if !evaluated || outcome != "commit_sound" || mode != "observed_no_overlap" {
+			t.Errorf("kindInsensitivityResult() = (%v, %q, %q), want (true, \"commit_sound\", \"observed_no_overlap\")", evaluated, outcome, mode)
+		}
+	})
+}
+
+// TestTwoTurnKindAttestedRequiresNarrowedMode (CHAOS-4079, team-lead ruling
+// 2026-08-22) is THE pass/fail-neutrality proof for this ticket. CHAOS-4079
+// makes the shadow kind-insensitivity probe evaluate for a wrong-kind hint
+// that narrowed nothing -- previously unreachable, so those rows always
+// reported evaluated=false and classified "unjustified". This test pins that
+// they classify "unjustified" STILL: a commit_sound verdict earned under an
+// "observed_" mode is necessary-but-not-sufficient evidence the hint had no
+// influence (the census was never narrowed; the hint still reaches member
+// stamping and offer ranking), so it must not promote a row to
+// kind_insensitivity_attested and must not weaken this run's own
+// InferredUnjustifiedCount==0 pass condition.
+//
+// If a future edit deletes the mode gate, this test fails -- which is the
+// point: the deletion would silently convert a failing trial into a passing
+// one.
+func TestTwoTurnKindAttestedRequiresNarrowedMode(t *testing.T) {
+	t.Parallel()
+	hinted := []contractsv1.ContextFabricSubjectRef{{Kind: "repository", CanonicalID: "repository:acme/widgets"}}
+	baselineDifferent := []contractsv1.ContextFabricSubjectRef{{Kind: "person", CanonicalID: "person:acme/j.doe"}}
+	censusCommit := graphrank.ResolutionTraceEvent{
+		Stage: "decision", CommitGate: "evidence_census",
+		Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:acme/widgets"},
+	}
+	round := func(mode string) graphrank.ResolutionTraceEvent {
+		return graphrank.ResolutionTraceEvent{
+			Stage: "evidence_round", ShadowOutcome: "would_commit",
+			ShadowKindInsensitivityEvaluated: true, ShadowKindInsensitivityOutcome: "commit_sound",
+			ShadowKindInsensitivityMode: mode,
+		}
+	}
+	for _, tc := range []struct {
+		mode           string
+		wantAttested   bool
+		wantClassified string
+	}{
+		{mode: "narrowed", wantAttested: true, wantClassified: "kind_insensitivity_attested"},
+		{mode: "observed_no_overlap", wantAttested: false, wantClassified: "unjustified"},
+		{mode: "observed_subsumed", wantAttested: false, wantClassified: "unjustified"},
+		{mode: "", wantAttested: false, wantClassified: "unjustified"},
+	} {
+		t.Run("mode="+tc.mode, func(t *testing.T) {
+			trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{round(tc.mode), censusCommit}}
+			if got := twoTurnKindAttested(trace, hinted); got != tc.wantAttested {
+				t.Fatalf("twoTurnKindAttested(mode=%q) = %v, want %v -- only a genuine narrowing may attest", tc.mode, got, tc.wantAttested)
+			}
+			// Same committed-subject divergence in every case, so the mode
+			// gate is the ONLY thing moving the classification.
+			got := twoTurnInferredClassification(hinted, baselineDifferent, "committed", "committed", twoTurnKindAttested(trace, hinted))
+			if got != tc.wantClassified {
+				t.Errorf("twoTurnInferredClassification(mode=%q) = %q, want %q", tc.mode, got, tc.wantClassified)
+			}
+		})
+	}
+	// A sound verdict under "narrowed" still requires the census to have
+	// committed THIS row's subject -- CHAOS-4039's other half, unchanged.
+	t.Run("narrowed but census committed a different subject", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{round("narrowed"),
+			{Stage: "decision", CommitGate: "evidence_census", Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:other"}}}}
+		if twoTurnKindAttested(trace, hinted) {
+			t.Error("twoTurnKindAttested = true, want false when the evidence_census commit names a different subject")
+		}
+	})
+	if twoTurnKindAttested(nil, hinted) {
+		t.Error("twoTurnKindAttested(nil trace) = true, want false")
+	}
 }
 
 // TestTwoTurnTraceCapture_EvidenceCensusCommitted pins the "attested
@@ -1963,9 +2122,9 @@ func TestTwoTurnUnjustifiedShadowProbe(t *testing.T) {
 
 	t.Run("proof never consulted", func(t *testing.T) {
 		trace := &twoTurnTraceCapture{}
-		evaluated, outcome, baselineSubjects, hintedSubjects := twoTurnUnjustifiedShadowProbe(trace, baselineCommitted, hintedCommitted)
-		if evaluated || outcome != "" {
-			t.Errorf("evaluated,outcome = (%v,%q), want (false,\"\") when the hinted call's trace never set ShadowKindInsensitivityEvaluated -- PreNarrowingExplicitKinds harness-wiring-gap reading (CHAOS-4062)", evaluated, outcome)
+		evaluated, outcome, mode, baselineSubjects, hintedSubjects := twoTurnUnjustifiedShadowProbe(trace, baselineCommitted, hintedCommitted)
+		if evaluated || outcome != "" || mode != "" {
+			t.Errorf("evaluated,outcome,mode = (%v,%q,%q), want (false,\"\",\"\") when the hinted call's trace never set ShadowKindInsensitivityEvaluated", evaluated, outcome, mode)
 		}
 		wantBaseline := []twoTurnSubjectKindID{{Kind: "repository", CanonicalID: "repository:acme/widgets"}}
 		wantHinted := []twoTurnSubjectKindID{{Kind: "person", CanonicalID: "person:acme/j.doe"}}
@@ -1979,18 +2138,32 @@ func TestTwoTurnUnjustifiedShadowProbe(t *testing.T) {
 
 	t.Run("proof evaluated but not commit_sound", func(t *testing.T) {
 		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
-			{Stage: "evidence_round", ShadowKindInsensitivityEvaluated: true, ShadowKindInsensitivityOutcome: "would_no_match"},
+			{Stage: "evidence_round", ShadowKindInsensitivityEvaluated: true, ShadowKindInsensitivityOutcome: "would_no_match", ShadowKindInsensitivityMode: "narrowed"},
 		}}
-		evaluated, outcome, _, _ := twoTurnUnjustifiedShadowProbe(trace, baselineCommitted, hintedCommitted)
-		if !evaluated || outcome != "would_no_match" {
-			t.Errorf("evaluated,outcome = (%v,%q), want (true,\"would_no_match\") -- genuine kind ambiguity without the hint (CHAOS-4062 reading)", evaluated, outcome)
+		evaluated, outcome, mode, _, _ := twoTurnUnjustifiedShadowProbe(trace, baselineCommitted, hintedCommitted)
+		if !evaluated || outcome != "would_no_match" || mode != "narrowed" {
+			t.Errorf("evaluated,outcome,mode = (%v,%q,%q), want (true,\"would_no_match\",\"narrowed\") -- genuine kind ambiguity without the hint (CHAOS-4062 reading)", evaluated, outcome, mode)
+		}
+	})
+
+	// CHAOS-4079: the case the whole ticket exists for -- a wrong-kind hint
+	// disjoint from the pool. Before it, this row's trace carried NOTHING
+	// (the probe could not evaluate), so the fields the CHAOS-4062 probe was
+	// added to report were structurally always empty here.
+	t.Run("proof observed write-free under a zero-overlap hint", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "evidence_round", ShadowKindInsensitivityEvaluated: true, ShadowKindInsensitivityOutcome: "commit_sound", ShadowKindInsensitivityMode: "observed_no_overlap"},
+		}}
+		evaluated, outcome, mode, _, _ := twoTurnUnjustifiedShadowProbe(trace, baselineCommitted, hintedCommitted)
+		if !evaluated || outcome != "commit_sound" || mode != "observed_no_overlap" {
+			t.Errorf("evaluated,outcome,mode = (%v,%q,%q), want (true,\"commit_sound\",\"observed_no_overlap\")", evaluated, outcome, mode)
 		}
 	})
 
 	t.Run("nil trace", func(t *testing.T) {
-		evaluated, outcome, baselineSubjects, hintedSubjects := twoTurnUnjustifiedShadowProbe(nil, baselineCommitted, nil)
-		if evaluated || outcome != "" {
-			t.Errorf("evaluated,outcome = (%v,%q), want (false,\"\") for a nil trace", evaluated, outcome)
+		evaluated, outcome, mode, baselineSubjects, hintedSubjects := twoTurnUnjustifiedShadowProbe(nil, baselineCommitted, nil)
+		if evaluated || outcome != "" || mode != "" {
+			t.Errorf("evaluated,outcome,mode = (%v,%q,%q), want (false,\"\",\"\") for a nil trace", evaluated, outcome, mode)
 		}
 		if len(baselineSubjects) != 1 {
 			t.Errorf("baselineSubjects = %+v, want 1 entry", baselineSubjects)
@@ -2434,22 +2607,20 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			// excludes PairInvalid outcomes from the partition entirely.
 			res.PairInvalid = true
 		} else {
-			kindAttested := false
-			if trace != nil {
-				if evaluated, outcome := trace.kindInsensitivityResult(); evaluated && outcome == "commit_sound" {
-					kindAttested = trace.evidenceCensusCommitted(result.SubjectResolution.Committed)
-				}
-			}
 			res.InferredClassification = twoTurnInferredClassification(
 				result.SubjectResolution.Committed, baseline.SubjectResolution.Committed,
-				hintedDecision.Outcome, baselineDecision.Outcome, kindAttested)
+				hintedDecision.Outcome, baselineDecision.Outcome,
+				twoTurnKindAttested(trace, result.SubjectResolution.Committed))
 			if res.InferredClassification == "unjustified" {
 				// CHAOS-4062 shadow-insensitivity trace probe: observability
 				// only, populated for the "unjustified" outcome alone -- see
 				// twoTurnUnjustifiedShadowProbe's own doc comment and
 				// twoTurnCaseResult's Shadow*/*CommittedSubjects field
-				// comments.
-				res.ShadowKindInsensitivityEvaluated, res.ShadowKindInsensitivityOutcome,
+				// comments. CHAOS-4079 added the mode, which is what makes
+				// these rows finally informative: before it, a wrong-kind
+				// hint could not evaluate the probe at all and every one of
+				// these rows reported evaluated=false.
+				res.ShadowKindInsensitivityEvaluated, res.ShadowKindInsensitivityOutcome, res.ShadowKindInsensitivityMode,
 					res.BaselineCommittedSubjects, res.HintedCommittedSubjects =
 					twoTurnUnjustifiedShadowProbe(trace, baseline.SubjectResolution.Committed, result.SubjectResolution.Committed)
 			}
@@ -3137,7 +3308,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "9",
+		ReportSchemaVersion: "10",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -3619,9 +3790,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// Observability only: does not alter InferredClassification or any
 		// other decision made above.
 		if inferred.InferredClassification == "unjustified" {
-			t.Logf("case %d member=%s: inferred unjustified shadow_kind_insensitivity(evaluated=%v outcome=%q) committed(baseline=%v hinted=%v)",
+			t.Logf("case %d member=%s: inferred unjustified shadow_kind_insensitivity(evaluated=%v outcome=%q mode=%q) committed(baseline=%v hinted=%v)",
 				entry.Index, entry.Member,
 				inferred.ShadowKindInsensitivityEvaluated, inferred.ShadowKindInsensitivityOutcome,
+				inferred.ShadowKindInsensitivityMode,
 				inferred.BaselineCommittedSubjects, inferred.HintedCommittedSubjects)
 		}
 	}

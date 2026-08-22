@@ -219,6 +219,29 @@ type Attestation struct {
 	// from Outcome itself.
 	KindInsensitivityEvaluated bool
 	KindInsensitivityOutcome   kindInsensitivityOutcome
+	// KindInsensitivityMode (CHAOS-4079) names WHICH explicit-kind
+	// narrowing situation produced the two fields above -- empty when the
+	// probe was not evaluated at all. Load-bearing for a consumer, not
+	// decoration: only explicitKindNarrowingApplied ("narrowed") means the
+	// verdict ATTESTS insensitivity across an actual change to the census
+	// hypothesis set. An "observed_" mode means the census was never
+	// narrowed, so the verdict is necessary-but-not-sufficient evidence
+	// that the hint had no influence (see explicitKindNarrowingMode's own
+	// doc comment, chaos3900_structure_offers.go).
+	//
+	// WRITE-FREEDOM (CHAOS-4079, the property this ticket exists to
+	// preserve): this field and the two above are the COMPLETE set of
+	// Attestation state the observation path may touch. None of the three
+	// is read by any production consumer of an Attestation --
+	// attestedSatisfier (chaos3896_slice_c_evidence_census.go) reads
+	// Outcome/UnscopedVisibility/Kinds; SurvivorsFirstOrder and
+	// ReorderingWasReachable (chaos3896_slice_b_presentation.go) read
+	// Reason/Kinds -- so populating them cannot reach a commit decision.
+	// TestObservedKindInsensitivityProbeIsWriteFree walks this struct with
+	// reflect and fails on ANY other field differing, so a future field
+	// added to the observation path fails loudly instead of silently
+	// escaping the guarantee.
+	KindInsensitivityMode explicitKindNarrowingMode
 }
 
 // ShadowEvidenceRoundInput is everything RunShadowEvidenceRound needs,
@@ -266,6 +289,44 @@ type ShadowEvidenceRoundInput struct {
 	// ADDITIONALLY pass kindInsensitivityProof re-run over this set before
 	// it may stand -- see the decisive switch in RunShadowEvidenceRound.
 	PreNarrowingExplicitKinds []CensusKind
+	// ObservedExplicitKindHint (CHAOS-4079) is true when an EXPLICIT
+	// (non-receipt) kind hint was present this round but applied NO
+	// narrowing at all -- either disjoint from every pooled kind (the
+	// trial harness's own deliberately-wrong inferred-tier kind arm) or
+	// subsuming the whole pool. MUTUALLY EXCLUSIVE with a non-empty
+	// PreNarrowingExplicitKinds by construction
+	// (runShadowEvidenceRoundForResolution, resolve.go): a narrowing
+	// either happened or it did not.
+	//
+	// It makes the kind-insensitivity probe OBSERVABLE for those cases,
+	// which it previously was not (PreNarrowingExplicitKinds stayed empty,
+	// so the decisive branch's own gate never opened and the trial's
+	// kind_insensitivity partition was unreachable by construction).
+	// Evaluation under this flag is WRITE-FREE and READ-FREE: it derives
+	// the verdict arithmetically from census results this round ALREADY
+	// collected (kindInsensitivityOutcomeFromRound, below) rather than
+	// re-running kindInsensitivityProof, so it issues ZERO additional
+	// CensusFunc calls and writes ONLY the three KindInsensitivity* fields.
+	//
+	// That construction is the whole point. The obvious alternative --
+	// populating PreNarrowingExplicitKinds for these cases so the existing
+	// branch runs -- was drafted and REJECTED on adversarial review (codex
+	// xhigh, 2026-08-22): the existing branch performs a SECOND live census
+	// read with no snapshot isolation against the first, and overwrites
+	// base.Outcome to ShadowWouldClarify when the two disagree. That
+	// Outcome is consumed for a REAL commit decision by CHAOS-3896 Slice C
+	// (attestedSatisfier/mergeCensusAttestedSatisfier, resolve.go), so
+	// census-read drift between the two reads could refuse a commit that
+	// would otherwise land -- an observability change with genuine
+	// commit-behavior risk. Deriving instead of re-reading makes that
+	// hazard structurally impossible rather than merely unlikely.
+	ObservedExplicitKindHint bool
+	// ObservedExplicitKindSubsumed distinguishes the two
+	// ObservedExplicitKindHint situations for the trace alone: true when
+	// the hint admitted EVERY pooled kind (intersecting changed nothing),
+	// false for the disjoint case. Meaningless unless
+	// ObservedExplicitKindHint is set.
+	ObservedExplicitKindSubsumed bool
 	// ConfirmedAnchor (CHAOS-4042, sol-max ruling) is a redeemed ancr_
 	// receipt's own resolved claimant -- nil for the common case (no
 	// anchor receipt confirmed this round), which keeps this an exact
@@ -349,6 +410,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 				ShadowKindsCensused:              len(a.Kinds),
 				ShadowKindInsensitivityEvaluated: a.KindInsensitivityEvaluated,
 				ShadowKindInsensitivityOutcome:   string(a.KindInsensitivityOutcome),
+				ShadowKindInsensitivityMode:      string(a.KindInsensitivityMode),
 			})
 			for _, k := range a.Kinds {
 				// readAtUnix stays 0 (never time.Time{}.Unix()'s large
@@ -604,6 +666,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		// unsound" from "never evaluated at all", not just the sound half.
 		base.KindInsensitivityEvaluated = true
 		base.KindInsensitivityOutcome = proof
+		base.KindInsensitivityMode = explicitKindNarrowingApplied
 		sound := (base.Outcome == ShadowWouldCommit && proof == kindInsensitivityCommitSound) ||
 			(base.Outcome == ShadowWouldNoMatch && proof == kindInsensitivityNoMatchSound)
 		if !sound {
@@ -614,8 +677,102 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			// outcome, so the invariant requires resetting it.
 			base.PreconditionUnproven = false
 		}
+	} else if input.ObservedExplicitKindHint && (base.Outcome == ShadowWouldCommit || base.Outcome == ShadowWouldNoMatch) {
+		// CHAOS-4079: an explicit kind hint was present but applied NO
+		// narrowing (disjoint from, or subsuming, the whole pool) -- see
+		// ShadowEvidenceRoundInput.ObservedExplicitKindHint's own doc
+		// comment. WRITE-FREE OBSERVATION: this branch assigns to the
+		// three KindInsensitivity* fields and NOTHING else. It must never
+		// touch Outcome/Reason/PreconditionUnproven/Kinds or call anything
+		// -- the enclosing else-if keeps it structurally exclusive with the
+		// decision-bearing branch above, and the trailing `else` placement
+		// (rather than a second independent `if`) is what makes that
+		// exclusivity a property of the code rather than of the caller.
+		//
+		// Same decisive gate as the branch above, deliberately: it keeps
+		// KindInsensitivityEvaluated meaning exactly one thing across both
+		// modes -- "the proof was consulted for a would_commit/
+		// would_no_match outcome" -- so a consumer never has to ask which
+		// mode changed the field's meaning.
+		base.KindInsensitivityEvaluated = true
+		base.KindInsensitivityOutcome = kindInsensitivityOutcomeFromRound(base.Kinds)
+		base.KindInsensitivityMode = input.observedNarrowingMode()
 	}
 	return emit(base)
+}
+
+// kindInsensitivityOutcomeFromRound (CHAOS-4079) is kindInsensitivityProof's
+// verdict DERIVED from census results this round already collected, with
+// ZERO additional CensusFunc calls.
+//
+// EQUIVALENCE (why this is the proof's answer, not an approximation).
+// Callable only from the ObservedExplicitKindHint branch above, which holds
+// two preconditions:
+//
+//	(1) NO narrowing was applied, so the "pre-narrowing kind set" the proof
+//	    would re-census IS the set this round already censused -- resolve.go
+//	    passes the UNnarrowed pooledKinds as PooledKinds in that case, and
+//	    the registered-handle-kind append kindInsensitivityProof's caller
+//	    mirrors onto the pre-narrowing set is the SAME append the main
+//	    census loop above already performed on censusKinds.
+//	(2) The outcome is DECISIVE, which the switch above reaches only when
+//	    !NonCensusedSurvivor && !mismatch && complete.
+//
+// Under those, every early-exit inside kindInsensitivityProof is
+// unreachable: no non-censused survivor and no unregistered pooled kind
+// (both set NonCensusedSurvivor, barred by (2)); no kind unreached by a
+// keyed predicate (the main loop sets NonCensusedSurvivor and skips such a
+// kind, likewise barred); no census error (barred by `complete`); no
+// ClosureMismatch (barred by `mismatch`). Each surviving per-kind census
+// call would carry BYTE-IDENTICAL arguments to the call the main loop
+// already made -- same kind, same valueOr(handleApplies, handle), same
+// handleApplies/anchorKind/anchorCanonicalID/anchorApplies -- so its result
+// is the result already recorded in KindAttestation, and re-issuing it
+// would differ only by census-read DRIFT between two unsynchronized live
+// reads. Deriving takes the drift-free answer and, more importantly, makes
+// the second read (and therefore the commit-behavior hazard that sank the
+// naive fix) structurally nonexistent.
+//
+// NOT vacuous: SatisfierSetClosureMismatch is checked HERE (mirroring the
+// proof, codex CHAOS-3972 round 1 finding 2) but NOT by the decisive switch
+// above, so a would_commit round whose census could not prove its satisfier
+// SET closed derives kind_sensitive_outcome rather than commit_sound.
+func kindInsensitivityOutcomeFromRound(kinds []KindAttestation) kindInsensitivityOutcome {
+	if len(kinds) == 0 {
+		return kindInsensitivitySensitive
+	}
+	total := 0
+	for _, ka := range kinds {
+		// Defensive, not reachable under the branch's own decisive gate
+		// (see the EQUIVALENCE note): an incomplete or non-closed census
+		// receipt is exactly as untrustworthy here as it is inside
+		// kindInsensitivityProof, in either direction.
+		if !ka.Complete || ka.ClosureMismatch || ka.SatisfierSetClosureMismatch {
+			return kindInsensitivitySensitive
+		}
+		total += ka.Count
+	}
+	switch total {
+	case 0:
+		return kindInsensitivityNoMatchSound
+	case 1:
+		return kindInsensitivityCommitSound
+	default:
+		return kindInsensitivitySensitive
+	}
+}
+
+// observedNarrowingMode reports which of the two no-narrowing situations
+// ObservedExplicitKindHint stands for. The distinction is not derivable
+// inside this package (PooledKinds arrives already un-narrowed either way),
+// so it is carried on the input rather than re-inferred -- see
+// runShadowEvidenceRoundForResolution (resolve.go), the only place that
+// still holds both the hint and the pre-narrowing pool.
+func (in ShadowEvidenceRoundInput) observedNarrowingMode() explicitKindNarrowingMode {
+	if in.ObservedExplicitKindSubsumed {
+		return explicitKindNarrowingSubsumed
+	}
+	return explicitKindNarrowingNoOverlap
 }
 
 // traceSourceNativeBinds fires the CHAOS-3899 widening measurement's two

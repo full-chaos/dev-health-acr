@@ -15,8 +15,14 @@ package main
 // "unjustified" InferredClassification outcome. Purely additive per-case
 // passthrough (no new merge arithmetic), but still a new key a stale
 // mirror would silently drop -- shardReport's "unjustified" result row and
-// TestRunEndToEndMergesValidV9Shards below pin that these fields actually
+// TestRunEndToEndMergesValidV10Shards below pin that these fields actually
 // survive the real JSON round trip through run().
+//
+// CHAOS-4079: schema bumped again (9->10) for ShadowKindInsensitivityMode,
+// which discriminates a verdict proven across an actual census narrowing
+// ("narrowed") from one merely observed under a hint that narrowed nothing
+// ("observed_no_overlap"/"observed_subsumed") -- the case the probe could
+// not evaluate at all before.
 
 import (
 	"bytes"
@@ -60,6 +66,7 @@ func shardReport(shardIndex, shardCount int, timings []twoTurnCaseTiming) twoTur
 				TierRoutedCorrectly:              true,
 				ShadowKindInsensitivityEvaluated: true,
 				ShadowKindInsensitivityOutcome:   "would_no_match",
+				ShadowKindInsensitivityMode:      "observed_no_overlap",
 				BaselineCommittedSubjects:        []twoTurnSubjectKindID{{Kind: "repository", CanonicalID: "repository:acme/widgets"}},
 				HintedCommittedSubjects:          []twoTurnSubjectKindID{{Kind: "person", CanonicalID: "person:acme/j.doe"}},
 			},
@@ -103,19 +110,20 @@ func TestMergeReportsConcatenatesTimingsAndRecomputesSummary(t *testing.T) {
 	}
 }
 
-// TestRunEndToEndMergesValidV9Shards is the real JSON round-trip codex
+// TestRunEndToEndMergesValidV10Shards is the real JSON round-trip codex
 // round-3 review demanded: TestMergeReportsConcatenatesTimingsAndRecomputesSummary
 // above calls mergeReports directly on in-memory structs, which never
 // proves this tool's actual entrypoint -- json.Unmarshal of a real shard
 // file, run()'s validation gates, json.Marshal of the merged output, and a
-// second independent decode of what landed on disk -- handles a valid v9
+// second independent decode of what landed on disk -- handles a valid v10
 // artifact at all. Two real shard files go in; the written merged file is
 // read back and its Timings/TimingSummary/Provenance, plus (CHAOS-4062)
-// each shard's "unjustified" row's Shadow*/*CommittedSubjects fields, are
+// each shard's "unjustified" row's Shadow*/*CommittedSubjects fields
+// (including CHAOS-4079's ShadowKindInsensitivityMode), are
 // asserted against what shardReport built, closing the gap between "the
 // merge function is correct" and "the tool as actually invoked is
 // correct".
-func TestRunEndToEndMergesValidV9Shards(t *testing.T) {
+func TestRunEndToEndMergesValidV10Shards(t *testing.T) {
 	dir := t.TempDir()
 	shard0 := shardReport(0, 2, []twoTurnCaseTiming{
 		{Index: 0, Member: "expected_kind", Arms: []twoTurnArmTiming{
@@ -144,7 +152,7 @@ func TestRunEndToEndMergesValidV9Shards(t *testing.T) {
 	mergedPath := filepath.Join(dir, "merged.json")
 	var stdout bytes.Buffer
 	if err := run(mergedPath, shardPaths, &stdout); err != nil {
-		t.Fatalf("run() on two valid v9 shards = %v, want nil (both shards should satisfy every gate)", err)
+		t.Fatalf("run() on two valid v10 shards = %v, want nil (both shards should satisfy every gate)", err)
 	}
 	if !strings.Contains(stdout.String(), "VALID") {
 		t.Errorf("run() stdout = %q, want it to report VALID", stdout.String())
@@ -159,8 +167,8 @@ func TestRunEndToEndMergesValidV9Shards(t *testing.T) {
 		t.Fatalf("unmarshal merged output: %v", err)
 	}
 
-	if merged.ReportSchemaVersion != "9" {
-		t.Errorf("merged.ReportSchemaVersion = %q, want \"9\"", merged.ReportSchemaVersion)
+	if merged.ReportSchemaVersion != "10" {
+		t.Errorf("merged.ReportSchemaVersion = %q, want \"10\"", merged.ReportSchemaVersion)
 	}
 	if !merged.Provenance.AnchorMembershipOffersEnabled {
 		t.Errorf("merged.Provenance.AnchorMembershipOffersEnabled = false, want true (must survive the real JSON round trip, codex round-3 finding)")
@@ -192,8 +200,8 @@ func TestRunEndToEndMergesValidV9Shards(t *testing.T) {
 		t.Fatalf("merged (on-disk) unjustified inferred_tier rows = %d, want 2 (one per shard)", len(unjustified))
 	}
 	for _, res := range unjustified {
-		if !res.ShadowKindInsensitivityEvaluated || res.ShadowKindInsensitivityOutcome != "would_no_match" {
-			t.Errorf("case %d: shadow_kind_insensitivity(evaluated=%v outcome=%q), want (true,\"would_no_match\")", res.Index, res.ShadowKindInsensitivityEvaluated, res.ShadowKindInsensitivityOutcome)
+		if !res.ShadowKindInsensitivityEvaluated || res.ShadowKindInsensitivityOutcome != "would_no_match" || res.ShadowKindInsensitivityMode != "observed_no_overlap" {
+			t.Errorf("case %d: shadow_kind_insensitivity(evaluated=%v outcome=%q mode=%q), want (true,\"would_no_match\",\"observed_no_overlap\")", res.Index, res.ShadowKindInsensitivityEvaluated, res.ShadowKindInsensitivityOutcome, res.ShadowKindInsensitivityMode)
 		}
 		wantBaseline := []twoTurnSubjectKindID{{Kind: "repository", CanonicalID: "repository:acme/widgets"}}
 		wantHinted := []twoTurnSubjectKindID{{Kind: "person", CanonicalID: "person:acme/j.doe"}}
@@ -211,14 +219,16 @@ func TestRunEndToEndMergesValidV9Shards(t *testing.T) {
 // does not match this binary's own expectedSchemaVersion is refused with a
 // clear diagnostic, never silently merged (or silently misread) under the
 // wrong shape -- exactly what would have happened here had the schema
-// bump to "9" (CHAOS-4039/CHAOS-4062 v5 measurement-contract correction)
-// landed without a matching update to this mirror: a stale "8" artifact was
-// measured under baseline_equivalent's OLD, unsatisfiable definition and
-// must never be silently merged as if directly comparable to a "9" one.
+// bump to "10" (CHAOS-4079's write-free shadow-probe observability) landed
+// without a matching update to this mirror: a stale "9" artifact reported
+// ShadowKindInsensitivityEvaluated=false for every wrong-kind row because
+// the probe could not evaluate there at all, and must never be silently
+// merged as if directly comparable to a "10" one, where the same key
+// carries a real verdict.
 func TestRunRejectsSchemaVersionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	stale := shardReport(0, 1, nil)
-	stale.ReportSchemaVersion = "8"
+	stale.ReportSchemaVersion = "9"
 	raw, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatalf("marshal stale shard: %v", err)
@@ -230,10 +240,10 @@ func TestRunRejectsSchemaVersionMismatch(t *testing.T) {
 
 	err = run(filepath.Join(dir, "merged.json"), []string{shardPath}, os.Stdout)
 	if err == nil {
-		t.Fatal("run() with a schema_version=8 shard = nil error, want a rejection (this tool expects 9)")
+		t.Fatal("run() with a schema_version=9 shard = nil error, want a rejection (this tool expects 10)")
 	}
-	if !strings.Contains(err.Error(), `report_schema_version="8"`) || !strings.Contains(err.Error(), `want "9"`) {
-		t.Errorf("run() error = %q, want it to name both the got (8) and want (9) schema versions", err.Error())
+	if !strings.Contains(err.Error(), `report_schema_version="9"`) || !strings.Contains(err.Error(), `want "10"`) {
+		t.Errorf("run() error = %q, want it to name both the got (9) and want (10) schema versions", err.Error())
 	}
 }
 
@@ -256,6 +266,7 @@ func TestTwoTurnCaseResultDecodesProducerShapedShadowFields(t *testing.T) {
 		"inferred_classification": "unjustified",
 		"shadow_kind_insensitivity_evaluated": true,
 		"shadow_kind_insensitivity_outcome": "would_no_match",
+		"shadow_kind_insensitivity_mode": "observed_no_overlap",
 		"baseline_committed_subjects": [{"kind": "repository", "canonical_id": "repository:acme/widgets"}],
 		"hinted_committed_subjects": [{"kind": "person", "canonical_id": "person:acme/j.doe"}]
 	}`
@@ -263,8 +274,8 @@ func TestTwoTurnCaseResultDecodesProducerShapedShadowFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(producerJSON), &got); err != nil {
 		t.Fatalf("unmarshal producer-shaped JSON: %v", err)
 	}
-	if !got.ShadowKindInsensitivityEvaluated || got.ShadowKindInsensitivityOutcome != "would_no_match" {
-		t.Errorf("shadow_kind_insensitivity(evaluated=%v outcome=%q), want (true,\"would_no_match\") -- json tag mismatch would silently zero this", got.ShadowKindInsensitivityEvaluated, got.ShadowKindInsensitivityOutcome)
+	if !got.ShadowKindInsensitivityEvaluated || got.ShadowKindInsensitivityOutcome != "would_no_match" || got.ShadowKindInsensitivityMode != "observed_no_overlap" {
+		t.Errorf("shadow_kind_insensitivity(evaluated=%v outcome=%q mode=%q), want (true,\"would_no_match\",\"observed_no_overlap\") -- json tag mismatch would silently zero this", got.ShadowKindInsensitivityEvaluated, got.ShadowKindInsensitivityOutcome, got.ShadowKindInsensitivityMode)
 	}
 	wantBaseline := []twoTurnSubjectKindID{{Kind: "repository", CanonicalID: "repository:acme/widgets"}}
 	wantHinted := []twoTurnSubjectKindID{{Kind: "person", CanonicalID: "person:acme/j.doe"}}
@@ -282,6 +293,7 @@ func TestTwoTurnCaseResultDecodesProducerShapedShadowFields(t *testing.T) {
 	for _, key := range []string{
 		`"shadow_kind_insensitivity_evaluated"`,
 		`"shadow_kind_insensitivity_outcome"`,
+		`"shadow_kind_insensitivity_mode"`,
 		`"baseline_committed_subjects"`,
 		`"hinted_committed_subjects"`,
 	} {

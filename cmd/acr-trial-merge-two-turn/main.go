@@ -24,7 +24,20 @@ import (
 // mirrored structs below -- ReportSchemaVersion's own doc comment
 // (chaos3742_two_turn_confirmation_test.go) is the authority on what
 // changed; a _test.go type cannot be imported by a regular package, so this
-// file is a hand-maintained mirror, not a shared definition. "9"
+// file is a hand-maintained mirror, not a shared definition. "10"
+// (CHAOS-4079 write-free shadow-probe observability): twoTurnCaseResult
+// gained ShadowKindInsensitivityMode, and the v9 note below about the
+// zero-overlap wiring gap is RESOLVED -- the probe now evaluates (write-free,
+// deriving its verdict from census results the round already collected
+// rather than issuing a second live census read) for a wrong-kind hint, so
+// ShadowKindInsensitivityEvaluated/Outcome populate on rows where they were
+// structurally always false/absent at v9. That is a MEANING change for two
+// existing keys, not merely an added one, which is why it bumps rather than
+// riding along as additive passthrough. The measurement's own pass condition
+// is unchanged: kind_insensitivity_attested still requires mode=="narrowed",
+// so no row's InferredClassification moves as a result. Purely additive
+// passthrough for THIS tool regardless -- no merge arithmetic, since Results
+// already concatenates across shards. "9"
 // (CHAOS-4039 v5 measurement-contract correction, team-lead ruling
 // 2026-08-22): InferredClassification's own baseline_equivalent definition
 // changed MEANING (no new/removed wire field -- this mirror's
@@ -33,8 +46,8 @@ import (
 // decision-state equivalence -- see chaos3742_two_turn_confirmation_test.go's
 // own ReportSchemaVersion doc comment for the full mechanism (including why
 // the CHAOS-4062 shadow kind-insensitivity probe's own zero-overlap wiring
-// gap is NOT part of this bump -- that fix was drafted and rejected on
-// adversarial review, deferred pending a product-code design). Bumped purely
+// gap was NOT part of this bump -- that first fix was drafted and rejected
+// on adversarial review; the write-free construction landed at "10"). Bumped purely
 // so a v8 artifact (measured under the old, unsatisfiable definition) can
 // never be merged as if it were directly comparable to a v9 one. "8"
 // (CHAOS-4062): twoTurnCaseResult gained ShadowKindInsensitivityEvaluated/
@@ -47,7 +60,7 @@ import (
 // "7" (CHAOS-4058): Timings/TimingSummary are new, purely additive fields --
 // see twoTurnArmTiming/twoTurnCaseTiming/twoTurnArmTimingSummary below and
 // mergeReports' own handling of them.
-const expectedSchemaVersion = "9"
+const expectedSchemaVersion = "10"
 
 type trialCommitGateProvenance struct {
 	LoneFloorEnv                   string `json:"lone_floor_env,omitempty"`
@@ -111,10 +124,17 @@ type twoTurnCaseResult struct {
 	// file's own doc comments. Populated ONLY for the "unjustified"
 	// InferredClassification outcome; observational passthrough, no merge
 	// arithmetic (this whole row concatenates across shards as-is).
-	ShadowKindInsensitivityEvaluated bool                   `json:"shadow_kind_insensitivity_evaluated,omitempty"`
-	ShadowKindInsensitivityOutcome   string                 `json:"shadow_kind_insensitivity_outcome,omitempty"`
-	BaselineCommittedSubjects        []twoTurnSubjectKindID `json:"baseline_committed_subjects,omitempty"`
-	HintedCommittedSubjects          []twoTurnSubjectKindID `json:"hinted_committed_subjects,omitempty"`
+	ShadowKindInsensitivityEvaluated bool   `json:"shadow_kind_insensitivity_evaluated,omitempty"`
+	ShadowKindInsensitivityOutcome   string `json:"shadow_kind_insensitivity_outcome,omitempty"`
+	// ShadowKindInsensitivityMode (CHAOS-4079, schema v10) mirrors
+	// twoTurnCaseResult's identically-named field: which explicit-kind
+	// narrowing situation produced the two fields above ("narrowed" |
+	// "observed_no_overlap" | "observed_subsumed"). A consumer must read it
+	// alongside them -- only "narrowed" means the verdict attests
+	// insensitivity across an actual change to the census hypothesis set.
+	ShadowKindInsensitivityMode string                 `json:"shadow_kind_insensitivity_mode,omitempty"`
+	BaselineCommittedSubjects   []twoTurnSubjectKindID `json:"baseline_committed_subjects,omitempty"`
+	HintedCommittedSubjects     []twoTurnSubjectKindID `json:"hinted_committed_subjects,omitempty"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's
