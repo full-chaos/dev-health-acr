@@ -30,18 +30,30 @@ check() {
 
 plan() { ACR_TRIAL_SHARD_PLAN_ONLY=1 "$launcher" "$@" 2>/dev/null; }
 
-# A DENSE annex: indices 0..4, one entry per (case, member).
+# FIXTURES USE THE REAL SIGNED-ANNEX SHAPE (codex xhigh review round 3,
+# P1): an object whose `cases` map is keyed by DECIMAL-STRING case index,
+# exactly what loadTwoTurnOracleAnnex/adaptSignedOracleAnnex consume.
+#
+# The first version of this file invented an array-of-entries shape that
+# matched the launcher's (wrong) parse, so both agreed with each other and
+# neither agreed with the annex. A fixture written from the code under test
+# rather than from the real format tests only that the code is
+# self-consistent. These are cut down from the real file's structure.
+
+# A DENSE annex: indices 0..4.
 cat >"$tmp/dense.json" <<'JSON'
-[{"index":0,"member":"expected_kind"},{"index":0,"member":"window"},
- {"index":1,"member":"expected_kind"},{"index":2,"member":"expected_kind"},
- {"index":3,"member":"expected_kind"},{"index":4,"member":"expected_kind"}]
+{"provenance":{"corpus_sha8":"deadbeef","signoff":{"by":"t","status":"APPROVED"}},
+ "cases":{"0":{"band":"b"},"1":{"band":"b"},"2":{"band":"b"},"3":{"band":"b"},"4":{"band":"b"}}}
 JSON
 
 # A SPARSE annex: indices 50, 51, 64 -- the shape that makes modulo
 # splitting produce empty shards, and the reason granularity exists.
+# `_comment` is a non-numeric key: adaptSignedOracleAnnex skips those, so
+# the layout must skip them identically or a shard gets a case the harness
+# will never run.
 cat >"$tmp/sparse.json" <<'JSON'
-[{"index":50,"member":"expected_kind"},{"index":50,"member":"window"},
- {"index":51,"member":"expected_kind"},{"index":64,"member":"window"}]
+{"provenance":{"corpus_sha8":"deadbeef","signoff":{"by":"t","status":"APPROVED"}},
+ "cases":{"50":{"band":"b"},"51":{"band":"b"},"64":{"band":"b"},"_comment":{"band":"ignored"}}}
 JSON
 
 # 1. Granularity 1 over a dense annex: one case per shard, no empties.
@@ -96,7 +108,7 @@ done
 
 # 7. An annex carrying no cases is refused rather than producing a run that
 #    measures nothing and passes.
-echo '[]' >"$tmp/empty.json"
+echo '{"provenance":{},"cases":{}}' >"$tmp/empty.json"
 if ACR_TRIAL_SHARD_PLAN_ONLY=1 "$launcher" "$tmp/empty.json" >/dev/null 2>&1; then
   echo "FAIL: an empty annex was accepted" >&2
   failures=$((failures + 1))
@@ -152,6 +164,48 @@ elif [[ "$out" != *'"shard_count":5'* ]]; then
   failures=$((failures + 1))
 else
   echo "ok: plan-only runs with no dev-health checkout and no ops/.env"
+fi
+
+# 9b. THE FIXTURE-AGREEMENT CHECK (codex xhigh review round 3, P1). Every
+#     check above uses a fixture this repo wrote, so all of them together
+#     still prove nothing about the REAL annex format -- which is exactly
+#     how the array-vs-object defect survived a passing test suite.
+#
+#     When a real signed annex is reachable, the layout must parse it and
+#     find cases. Skipped (loudly) when it is not, because the annex lives
+#     in the sibling dev-health checkout that CI does not have -- a skip
+#     that announces itself is honest; silently passing is what got us here.
+# Walks UP from this script looking for a .remember/ directory, because
+# the repo is checked out at different depths (a plain clone vs. a git
+# worktree under worktrees/acr/<branch>) and a fixed ../../.. only works
+# for one of them -- which is why the first version of this check silently
+# SKIPPED on the machine that actually has the file.
+real_annex="${ACR_TRIAL_REAL_ANNEX:-}"
+if [[ -z "$real_annex" ]]; then
+  probe="$script_dir"
+  for _ in 1 2 3 4 5 6; do
+    probe="$(dirname "$probe")"
+    [[ "$probe" == "/" ]] && break
+    while IFS= read -r candidate; do
+      if [[ -n "$candidate" ]] && jq -e '.cases and .provenance' "$candidate" >/dev/null 2>&1; then
+        real_annex="$candidate"
+        break
+      fi
+    done < <(find "$probe/.remember" -maxdepth 1 -name '*.json' 2>/dev/null || true)
+    [[ -n "$real_annex" ]] && break
+  done
+fi
+if [[ -z "$real_annex" ]]; then
+  echo "SKIP: no real signed annex reachable -- fixture-agreement unverified in this environment"
+else
+  real_count="$(ACR_TRIAL_SHARD_PLAN_ONLY=1 ACR_TRIAL_CASES_PER_SHARD=1 "$launcher" "$real_annex" 2>/dev/null | sed 's/.*"case_count":\([0-9]*\).*/\1/')"
+  jq_count="$(jq -r '[(.cases // {}) | keys[] | select(test("^[0-9]+$"))] | length' "$real_annex")"
+  if [[ "$real_count" != "$jq_count" || "$real_count" == "0" ]]; then
+    echo "FAIL: layout found $real_count case(s) in the REAL annex, the annex carries $jq_count -- the launcher's parse disagrees with the shipped format" >&2
+    failures=$((failures + 1))
+  else
+    echo "ok: layout parses the real signed annex ($real_count cases)"
+  fi
 fi
 
 # 10. The ramp smoke's own counters (codex xhigh review round 2, P2). Its

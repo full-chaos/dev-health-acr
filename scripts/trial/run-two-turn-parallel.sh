@@ -167,11 +167,25 @@ fi
 export ACR_TEST_TRIAL_ARM="twoturn"
 
 # annex_case_indices reads the annex's own DISTINCT case indices, ascending.
-# jq, not a hand-rolled parse: the annex is JSON and this repo already
-# depends on jq (run-frontier-arm.sh). An annex carries one entry per
-# (case, member), so the distinct set is the case set.
+#
+# THE ANNEX IS AN OBJECT, NOT AN ARRAY (codex xhigh review round 3, P1).
+# The signed oracle annex loadTwoTurnOracleAnnex consumes is
+#   {"provenance": {...}, "cases": {"50": {...}, "51": {...}}}
+# -- case indices are the DECIMAL-STRING KEYS of `.cases`. The first
+# version of this function read `.[].index` as though the annex were an
+# array of per-entry objects, which emits nulls against the real file and
+# would have broken every live invocation, including the default modulo
+# path this ticket promised to leave byte-identical. It passed the offline
+# test only because that test's fixture was written to match the same wrong
+# assumption -- the fixture confirmed the belief instead of the format.
+#
+# Non-numeric keys are SKIPPED rather than fatal, mirroring
+# adaptSignedOracleAnnex's own `continue` on a non-numeric case key: the
+# layout must agree with what the harness will actually run, so where the
+# harness is lenient this has to be lenient identically, or a shard would
+# be assigned a case the harness then ignores.
 annex_case_indices() {
-  jq -r '[.[].index] | unique | .[]' "$ANNEX_PATH"
+  jq -r '[(.cases // {}) | keys[] | select(test("^[0-9]+$")) | tonumber] | sort | .[]' "$ANNEX_PATH"
 }
 
 # $$ + timestamp (chaos3884's own collision lesson, applied identically
