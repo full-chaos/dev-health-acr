@@ -1399,6 +1399,51 @@ func (w *twoTurnTimedModelRuntime) SynthesizeAnswer(ctx context.Context, princip
 // (for the file-exchange transport) the session identity -- so a report
 // can be checked against these facts rather than trusted by filename
 // alone, and a mislabeled arm is mechanically detectable.
+
+// trialShardingProvenance (CHAOS-4100) records how a run was fanned out.
+//
+// CORPUS-SAFE: case INDICES, counts, milliseconds and a closed
+// provisioning label. Never a question, never a subject, never a DSN --
+// CaseIndices in particular is the annex's own integer positions, the same
+// values twoTurnCaseResult.Index already carries.
+type trialShardingProvenance struct {
+	// CaseIndices is the exact set of corpus positions THIS shard ran, in
+	// ascending order. It is what makes a merged artifact auditable: the
+	// union across shards must equal the annex's own index set, and any
+	// gap is a silently dropped case rather than a passing run.
+	//
+	// Recorded even when the launcher selected by modulo, because the
+	// question a reader asks is "what did this shard actually run", not
+	// "what rule was used to pick it".
+	CaseIndices []int `json:"case_indices,omitempty"`
+	// Granularity is the requested cases-per-shard (the ticket's C). 0
+	// means the launcher did not say -- an older run, or one that set
+	// shard count directly.
+	Granularity int `json:"granularity,omitempty"`
+	// ConcurrencyCap is how many shards the launcher permitted to run at
+	// once. This is the number a wall-clock comparison actually turns on:
+	// the same corpus at the same granularity takes wildly different wall
+	// time at cap 8 versus cap 65, and without this recorded the two are
+	// indistinguishable after the fact.
+	ConcurrencyCap int `json:"concurrency_cap,omitempty"`
+	// ProvisioningMode is a CLOSED label for what supplied this shard's
+	// postgres: "template_clone" (CHAOS-4100: a CREATE DATABASE ...
+	// TEMPLATE clone on the standing instance) or "container" (the
+	// pre-CHAOS-4100 per-shard scratch container). Empty on any artifact
+	// written before this field existed.
+	//
+	// It is recorded because the substrate is exactly what the
+	// Docker-socket contention flake class turned on, so a run that
+	// exhibits or does not exhibit it must say which substrate it had.
+	ProvisioningMode string `json:"provisioning_mode,omitempty"`
+	// DatabaseProvisionMillis is how long THIS shard's database took to
+	// become usable -- the clone for template_clone, container start plus
+	// migrate for container. The ticket's own premise is that cloning is
+	// seconds where containers were not; this is the field that lets a
+	// reader check that claim against a real run instead of taking it.
+	DatabaseProvisionMillis int64 `json:"database_provision_millis,omitempty"`
+}
+
 type trialProvenance struct {
 	CorpusSHA256      string `json:"corpus_sha256"`
 	Model             string `json:"model,omitempty"`
@@ -1427,6 +1472,18 @@ type trialProvenance struct {
 	ExecutionShape string `json:"execution_shape,omitempty"`
 	ShardIndex     *int   `json:"shard_index,omitempty"`
 	ShardCount     *int   `json:"shard_count,omitempty"`
+	// Sharding (CHAOS-4100) is HOW this run was fanned out, recorded on
+	// the artifact rather than left in the launcher's scrollback.
+	//
+	// ShardIndex/ShardCount above say WHICH slice this is and how many
+	// there were; they cannot say how the slices were chosen, how many ran
+	// at once, or what provisioned their databases. Those three decide
+	// what a wall-clock number means, so an artifact that omits them
+	// cannot be compared with another one -- which is exactly the
+	// comparison this ticket exists to make ("does per-case granularity
+	// measure the same thing as coarse?"). Zero value for every run before
+	// this field existed and every unsharded run.
+	Sharding trialShardingProvenance `json:"sharding"`
 	// ControlsContinue (CHAOS-3858 scorecard mode) records whether this run
 	// was launched with ACR_TEST_TRIAL_CONTROLS_CONTINUE=true -- i.e.
 	// whether a control-violation outcome recorded and continued instead of
