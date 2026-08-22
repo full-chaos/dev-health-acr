@@ -240,14 +240,15 @@ func planFactReads(input factPlanInput, capabilities map[FactKind]FactCapability
 				Reason: prunedReason(capability, unsupportedKinds),
 			})
 		case len(supported) < len(subjects):
-			plan = append(plan, factPlanEntry{
+			plan = append(plan, withScopeGapDisclosure(factPlanEntry{
 				Kind:     requirement.Kind,
 				Subjects: supported,
 				Narrowed: true,
 				Reason:   narrowedReason(capability, unsupportedKinds, len(subjects)-len(supported)),
-			})
+			}, input.Scope, capability))
 		default:
-			plan = append(plan, factPlanEntry{Kind: requirement.Kind, Subjects: supported})
+			plan = append(plan, withScopeGapDisclosure(
+				factPlanEntry{Kind: requirement.Kind, Subjects: supported}, input.Scope, capability))
 		}
 	}
 	return plan
@@ -429,10 +430,40 @@ func narrowedReason(capability FactCapability, unsupported []SubjectKind, droppe
 // unexplained absence the empty-states rule forbids. The two facts are
 // independent and the observation must carry both.
 func withNarrowingNote(planned factPlanEntry, reason string) string {
-	if !planned.Narrowed {
+	// A scope gap rides out on the capability's own observation for the same
+	// reason narrowing does: coverage source names must be unique, so the
+	// subjects the expansion failed to reach cannot get an observation of
+	// their own (CHAOS-4099, codex round 3).
+	if !planned.Narrowed && planned.ScopeGap == nil {
 		return reason
 	}
 	return strings.TrimSpace(planned.Reason + " " + reason)
+}
+
+// withScopeGapDisclosure attaches a DEGRADING scope gap to a plan entry that
+// still has subjects to read.
+//
+// Codex round 3 (Medium): only the len(supported)==0 branch consulted the
+// resolver's gap, so a requirement that lost SOME targets but kept others
+// reported clean coverage. The live shape is target_kind_mismatch, which the
+// round-2 fix deliberately made retain its valid survivors: the resolver
+// recorded the degradation, the planner saw a supported derived subject, and
+// the provider answered SourceAvailable. The engine's answer-level disclosure
+// still fired, but the BUNDLE -- what direct consumers and synthesis input
+// read -- claimed complete coverage over a knowingly incomplete subject set.
+//
+// Only degrading outcomes attach. attempted_empty is a chain that ran and
+// genuinely ended; degrading a successful read on the strength of it would
+// train readers to ignore the disclosure, which is the same reasoning
+// HasDisclosableGap already applies.
+func withScopeGapDisclosure(entry factPlanEntry, scope *FactReadScope, capability FactCapability) factPlanEntry {
+	gap, disclosed := scope.gapFor(entry.Kind)
+	if !disclosed || !factScopeGapDegrades(gap.Outcome) {
+		return entry
+	}
+	entry.ScopeGap = &gap
+	entry.Reason = strings.TrimSpace(entry.Reason + " " + unexpandedReason(capability, gap))
+	return entry
 }
 
 func joinSubjectKinds(kinds []SubjectKind) string {

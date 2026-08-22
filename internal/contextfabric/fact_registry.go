@@ -218,6 +218,32 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	if err := ctx.Err(); err != nil {
 		return CanonicalFactBundle{}, err
 	}
+	// CHAOS-4099, codex round 3 (High). The incoming scope is dropped HERE,
+	// before validation, not merely overwritten later at the resolver.
+	//
+	// "Scope is output, never input" was enforced at the wrong point.
+	// validateCanonicalFactRequest computes its allowed set with
+	// investigationScopeSubjectSet, which trusts every Derivations entry --
+	// so a forged incoming Scope naming an unauthorized subject made that
+	// subject pass the requirement-override scope check (the round-5 R5-1
+	// gate) before the resolver ever ran.
+	//
+	// The round-1 fix stopped the forged subject at buildFactQuery, which
+	// holds only while the forged subject is one a capability DIRECTLY
+	// supports. Forge an out-of-investigation PROJECT instead and the
+	// registry never reaches buildFactQuery for it: the project becomes an
+	// expansion ORIGIN (Resolve takes its roots from requirement.Subjects),
+	// and an enabled policy derives a repository from it. That repository is
+	// then legitimately in the resolved scope and IS read -- an authorized
+	// target hanging off an unauthorized origin, which is precisely the ID
+	// smuggling invariants 3 and 4 forbid. Dark policies hide it today;
+	// stage-2 activation is what makes it live.
+	//
+	// Dropping it before validation is the honest boundary: at validation
+	// time no derivation legitimately exists yet, so an override may name
+	// only an investigation ROOT. Every legitimate derived subject enters
+	// after Resolve, through the resolver, with provenance.
+	request.Scope = nil
 	if err := validateCanonicalFactRequest(request); err != nil {
 		return CanonicalFactBundle{}, err
 	}
@@ -351,7 +377,12 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
 			continue
 		}
-		if planned.ScopeGap != nil {
+		// len(Subjects)==0 distinguishes the two shapes a gap can take. With
+		// no subjects the gap IS the whole story for this requirement and
+		// short-circuits the read. With subjects, some targets survived and
+		// must still be read -- the gap then degrades that read's own
+		// observation further down, rather than replacing it (codex round 3).
+		if planned.ScopeGap != nil && len(planned.Subjects) == 0 {
 			// CHAOS-4099. The gap's own source state is NEVER SourcePruned
 			// (factScopeGapSourceState has no path to it), so this
 			// observation cannot claim the proof of absence the prune below
@@ -410,6 +441,20 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// Prefixed, never replacing: whatever the provider said about its
 		// own read still has to survive.
 		result.Reason = withNarrowingNote(planned, result.Reason)
+		// CHAOS-4099, codex round 3. A read that succeeded over a subject set
+		// the resolver KNOWS is incomplete is a truncated read, and says so.
+		//
+		// It routes through Truncated rather than taking the gap's own
+		// SourceState because that state is SourceUnavailable, and
+		// stateRejectsFacts would then reject the very facts that did come
+		// back. SourceTruncated is the state that already means "some of what
+		// you asked for, honestly labelled": it degrades, it sets
+		// Coverage.Partial, and it permits facts. Same discipline as the
+		// registry fan-out cap and the R4-2 omission path, which reach this
+		// state for the same reason.
+		if planned.ScopeGap != nil {
+			result.Truncated = true
+		}
 		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects); err != nil {
 			// Same reasoning as buildFactQuery's error above: the resolved
 			// scope rides out with the error so its telemetry is not lost.
