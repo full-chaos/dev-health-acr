@@ -961,13 +961,108 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 	// never omitted -- see twoTurnCaseResult's own doc comment), same
 	// discipline ExpectedKind/ExpectedID already use, so an absent-from-JSON
 	// override reads as measured-and-did-not-fire rather than not-measured.
-	if trace.synthesisOverride != nil {
-		res.SynthesisStatusOverrideFired = true
-		res.SynthesisStatusOverrideFrom = string(trace.synthesisOverride.From)
-		res.SynthesisStatusOverrideTo = string(trace.synthesisOverride.To)
-		res.SynthesisStatusOverrideReason = string(trace.synthesisOverride.Reason)
-		res.SynthesisStatusOverrideCommittedCount = trace.synthesisOverride.CommittedCount
+	twoTurnSetSynthesisOverride(res, trace.synthesisOverride)
+}
+
+// twoTurnSetSynthesisOverride writes outcome's fields onto res
+// unconditionally (a nil outcome leaves res's fields at whatever they
+// already were -- callers needing "clear to not-fired" construct a fresh
+// twoTurnCaseResult, which every arm already does per row). Factored out so
+// twoTurnStampDecision's ordinary stamp and twoTurnFoldSynthesisStatusOverride's
+// severity-gated fold below write IDENTICAL fields from the same one place.
+func twoTurnSetSynthesisOverride(res *twoTurnCaseResult, outcome *contextfabric.SynthesisStatusOverrideOutcome) {
+	if res == nil || outcome == nil {
+		return
 	}
+	res.SynthesisStatusOverrideFired = true
+	res.SynthesisStatusOverrideFrom = string(outcome.From)
+	res.SynthesisStatusOverrideTo = string(outcome.To)
+	res.SynthesisStatusOverrideReason = string(outcome.Reason)
+	res.SynthesisStatusOverrideCommittedCount = outcome.CommittedCount
+}
+
+// twoTurnFoldSynthesisStatusOverride folds an EARLIER call's captured
+// override outcome into res, when res's own already-stamped state (from
+// twoTurnStampDecision, which only ever sees the LATEST call's trace) does
+// not already carry the more severe reason.
+//
+// CHAOS-4103, codex review round 1 (confirmed by direct inspection): an
+// arm that makes more than one real Investigate() call before reading the
+// shared trace capture -- runTwoTurnInferredTierArm's paired no-hint
+// baseline, runTwoTurnConfirmedWrongArm's kind/handle/window setup turn --
+// resets that capture before the LATER call it actually stamps from, the
+// SAME "capture immediately after the call, before the next reset"
+// discipline baselineDecision above already needs and already has. Without
+// this fold, an EARLIER call's override -- including the uncommitted
+// routing-bug shape this ticket's own blocking-defect bar exists to catch
+// -- would be silently discarded the instant the arm resets the capture
+// for its next call, understating (or entirely missing) the run-level
+// count.
+//
+// "More severe" is a real tie-break, not an arbitrary pick: uncommitted
+// (SynthesisStatusOverrideClarificationUnavailableUncommitted, a routing
+// bug) always wins over the ordinary reason or over not-fired-at-all --
+// the run-level SynthesisStatusOverrideUncommittedCount bar must never be
+// masked by a LATER call firing the ordinary reason, or by a later call
+// not firing at all. Both calls firing the SAME reason is a no-op either
+// way (nothing changes which reason the row already carries).
+func twoTurnFoldSynthesisStatusOverride(res *twoTurnCaseResult, earlier *contextfabric.SynthesisStatusOverrideOutcome) {
+	if res == nil || earlier == nil {
+		return
+	}
+	uncommitted := string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted)
+	earlierIsUncommitted := string(earlier.Reason) == uncommitted
+	if !res.SynthesisStatusOverrideFired || (earlierIsUncommitted && res.SynthesisStatusOverrideReason != uncommitted) {
+		twoTurnSetSynthesisOverride(res, earlier)
+	}
+}
+
+// TestChaos4103_FoldSynthesisStatusOverridePreservesAnEarlierCall is the
+// direct repro-or-refute pin for codex review round 1's finding: an
+// earlier call's override (the paired baseline in runTwoTurnInferredTierArm,
+// the setup turn in runTwoTurnConfirmedWrongArm) must survive being folded
+// in, and the uncommitted routing-bug reason must never be masked by an
+// ordinary reason from whichever call happens to be read last.
+func TestChaos4103_FoldSynthesisStatusOverridePreservesAnEarlierCall(t *testing.T) {
+	ordinary := contextfabric.SynthesisStatusOverrideOutcome{
+		From: "clarification_required", To: "no_match",
+		Reason: contextfabric.SynthesisStatusOverrideClarificationUnavailable, CommittedCount: 1,
+	}
+	uncommitted := contextfabric.SynthesisStatusOverrideOutcome{
+		From: "clarification_required", To: "no_match",
+		Reason: contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted, CommittedCount: 0,
+	}
+
+	t.Run("hinted never fired, baseline did: baseline's outcome survives the fold", func(t *testing.T) {
+		res := twoTurnCaseResult{}
+		twoTurnFoldSynthesisStatusOverride(&res, &uncommitted)
+		if !res.SynthesisStatusOverrideFired || res.SynthesisStatusOverrideReason != string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted) {
+			t.Fatalf("got %+v, want the baseline's uncommitted outcome folded in", res)
+		}
+	})
+	t.Run("hinted fired ordinary, baseline fired uncommitted: the routing bug wins, never masked", func(t *testing.T) {
+		res := twoTurnCaseResult{}
+		twoTurnSetSynthesisOverride(&res, &ordinary)
+		twoTurnFoldSynthesisStatusOverride(&res, &uncommitted)
+		if res.SynthesisStatusOverrideReason != string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted) {
+			t.Fatalf("reason = %q, want the more severe uncommitted reason to win regardless of call order", res.SynthesisStatusOverrideReason)
+		}
+	})
+	t.Run("hinted fired uncommitted, baseline fired ordinary: the routing bug is never overwritten by an ordinary later reason", func(t *testing.T) {
+		res := twoTurnCaseResult{}
+		twoTurnSetSynthesisOverride(&res, &uncommitted)
+		twoTurnFoldSynthesisStatusOverride(&res, &ordinary)
+		if res.SynthesisStatusOverrideReason != string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted) {
+			t.Fatalf("reason = %q, want the already-stamped uncommitted reason to survive an ordinary fold", res.SynthesisStatusOverrideReason)
+		}
+	})
+	t.Run("neither call fired: no-op, row stays not-fired", func(t *testing.T) {
+		res := twoTurnCaseResult{}
+		twoTurnFoldSynthesisStatusOverride(&res, nil)
+		if res.SynthesisStatusOverrideFired {
+			t.Fatal("a nil earlier outcome must never mark the row as fired")
+		}
+	})
 }
 
 // twoTurnStampArmFailure is the ONE way an error-derived ArmInvalidReason is
@@ -3015,6 +3110,15 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 
 	var baseline contractsv1.ContextFabricInvestigationResult
 	var baselineDecision graphrank.ResolutionTraceEvent
+	// baselineSynthesisOverride (CHAOS-4103, codex review round 1, confirmed):
+	// the baseline call is a REAL Investigate() and can independently trip
+	// applySynthesisStatusOverride -- captured below at the SAME point as
+	// baselineDecision immediately above, and for the SAME reason: the
+	// hinted call's own reset just below would otherwise silently discard
+	// it before twoTurnStampDecision ever reads it, understating (or
+	// entirely missing) this arm's own count toward the blocking-defect
+	// bar.
+	var baselineSynthesisOverride *contextfabric.SynthesisStatusOverrideOutcome
 	if !isWindow {
 		if trace != nil {
 			trace.reset()
@@ -3039,6 +3143,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			// Captured BEFORE the hinted call's own reset below -- the
 			// baseline's decision event would otherwise be lost.
 			baselineDecision, _ = trace.finalDecisionEvent()
+			baselineSynthesisOverride = trace.synthesisOverride
 		}
 	}
 
@@ -3080,6 +3185,12 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// reads cannot be the baseline's.
 	twoTurnStampOutcome(&res, tc, result.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
+	// CHAOS-4103 (codex review round 1): fold the baseline's own override
+	// occurrence back in -- twoTurnStampDecision above only ever sees the
+	// HINTED call's trace state, so a baseline-only override would
+	// otherwise vanish. See twoTurnFoldSynthesisStatusOverride's own doc
+	// comment for the severity tie-break.
+	twoTurnFoldSynthesisStatusOverride(&res, baselineSynthesisOverride)
 	// false_no_match (CHAOS-4039): every inferred-tier case carries a real
 	// expected answer (tc.ExpectID != "" by construction of this harness's
 	// own corpus selection) -- a literal no_match terminal here is as much
@@ -3524,6 +3635,13 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 	twoTurnStampOutcome(&res, tc, nil)
 
 	var offerResultID, receiptID string
+	// setupSynthesisOverride (CHAOS-4103, same class as
+	// runTwoTurnInferredTierArm's baselineSynthesisOverride): the setup
+	// turn below is a REAL Investigate() call and can independently trip
+	// applySynthesisStatusOverride, so it needs the SAME
+	// reset-before/capture-after discipline or the redemption call's own
+	// reset would silently discard it.
+	var setupSynthesisOverride *contextfabric.SynthesisStatusOverrideOutcome
 	if entry.Member == string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
 		receiptID = contractsv1.ContextFabricAnchorOptionReceiptPrefix + "twoturnseed0000000000000"
 		var err error
@@ -3546,9 +3664,21 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		case string(contractsv1.ContextFabricStructureNeedWindow):
 			setupReq.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(entry.NegativeWindowBand)}
 		}
+		// CHAOS-4103: reset immediately before this call, the SAME
+		// discipline every other observed call in this file uses, so the
+		// capture below can only ever hold what THIS call produced --
+		// never a stale outcome left over from whatever ran before this
+		// arm (this file never reads trace state across arm boundaries
+		// otherwise, so nothing else depends on this reset's placement).
+		if trace != nil {
+			trace.reset()
+		}
 		setupCtx, cancel := context.WithTimeout(ctx, timeout)
 		setupResult, err := investigator.Investigate(setupCtx, principal, setupReq)
 		cancel()
+		if trace != nil {
+			setupSynthesisOverride = trace.synthesisOverride
+		}
 		if err != nil {
 			twoTurnStampArmFailure(&res, "setup turn failed: "+contextFabricRejectionClass(err), err)
 			return res
@@ -3582,6 +3712,10 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
+	// CHAOS-4103 (codex review round 1, generalized): fold the setup
+	// turn's own override occurrence back in -- see
+	// twoTurnFoldSynthesisStatusOverride's own doc comment.
+	twoTurnFoldSynthesisStatusOverride(&res, setupSynthesisOverride)
 	return res
 }
 
