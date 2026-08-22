@@ -1013,6 +1013,101 @@ func twoTurnInnermostErrorType(err error) string {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// CHAOS-4100 shard selection and provisioning provenance
+// ---------------------------------------------------------------------------
+
+// twoTurnShardCaseIndices reads ACR_TEST_TRIAL_SHARD_CASE_INDICES -- a
+// comma-separated list of corpus positions this shard should run.
+//
+// Returns (nil, nil) when unset, which is what keeps every pre-CHAOS-4100
+// invocation on the modulo path selecting byte-identical cases.
+//
+// Fails closed on a malformed value rather than falling back to modulo: a
+// launcher that meant to name an explicit chunk and produced garbage would
+// otherwise silently run a DIFFERENT, modulo-selected set of cases, and the
+// artifact would look perfectly well-formed while measuring the wrong slice.
+func twoTurnShardCaseIndices(t *testing.T) ([]int, map[int]struct{}) {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv("ACR_TEST_TRIAL_SHARD_CASE_INDICES"))
+	if raw == "" {
+		return nil, nil
+	}
+	indices := make([]int, 0, 8)
+	set := make(map[int]struct{}, 8)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		index, err := strconv.Atoi(part)
+		if err != nil || index < 0 {
+			t.Fatalf("ACR_TEST_TRIAL_SHARD_CASE_INDICES: %q is not a non-negative integer", part)
+		}
+		if _, exists := set[index]; exists {
+			t.Fatalf("ACR_TEST_TRIAL_SHARD_CASE_INDICES lists index %d twice -- a shard runs each case once", index)
+		}
+		set[index] = struct{}{}
+		indices = append(indices, index)
+	}
+	if len(indices) == 0 {
+		t.Fatal("ACR_TEST_TRIAL_SHARD_CASE_INDICES is set but names no index -- unset it to select by modulo instead")
+	}
+	sort.Ints(indices)
+	return indices, set
+}
+
+// twoTurnDistinctCaseIndices returns the ascending set of corpus positions
+// entries covers. Distinct, because an annex carries one entry per (case,
+// member) and a shard's own case set is what a merged-union audit checks.
+func twoTurnDistinctCaseIndices(entries []twoTurnOracleEntry) []int {
+	seen := make(map[int]struct{}, len(entries))
+	indices := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		if _, exists := seen[entry.Index]; exists {
+			continue
+		}
+		seen[entry.Index] = struct{}{}
+		indices = append(indices, entry.Index)
+	}
+	sort.Ints(indices)
+	return indices
+}
+
+// twoTurnEnvInt reads a non-negative integer the launcher passed for
+// provenance. Absent means 0, which every field's own doc comment reads as
+// "the launcher did not say" -- but a PRESENT and malformed value fails,
+// because a provenance field silently reading 0 when the launcher meant 32
+// is worse than no field at all.
+func twoTurnEnvInt(t *testing.T, name string) int {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		t.Fatalf("%s must be a non-negative integer, got %q", name, raw)
+	}
+	return value
+}
+
+// twoTurnShardProvisioningMode reads the CLOSED provisioning label. An
+// unrecognized value fails rather than being recorded: this field exists so
+// a reader can attribute a contention flake to a substrate, and a free-text
+// value would let a typo quietly create a third, meaningless population.
+func twoTurnShardProvisioningMode(t *testing.T) string {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv("ACR_TEST_TRIAL_SHARD_PROVISIONING_MODE"))
+	switch raw {
+	case "", "template_clone", "container":
+		return raw
+	default:
+		t.Fatalf("ACR_TEST_TRIAL_SHARD_PROVISIONING_MODE must be \"template_clone\" or \"container\", got %q", raw)
+		return ""
+	}
+}
+
 // twoTurnUnjustifiedShadowProbe computes the CHAOS-4062 trace-observability
 // fields for an "unjustified"-classified inferred commit: whether
 // kindInsensitivityProof was evaluated on the hinted call and its verdict
@@ -1337,6 +1432,18 @@ type twoTurnReport struct {
 	// the coverage floor was involved) instead of requiring a re-read of
 	// raw model-exchange files after the run, which is what diagnosing
 	// CHAOS-4085 and CHAOS-4098 actually cost.
+	//
+	// "12" marks CHAOS-4100's sharding provenance: trialProvenance gained
+	// the `sharding` block (case_indices, granularity, concurrency_cap,
+	// provisioning_mode, database_provision_millis). Purely additive, and
+	// on the PROVENANCE rather than any result row, so no measurement
+	// semantics change and no bar reads it.
+	//
+	// It is a schema bump anyway because the merge tool mirrors
+	// trialProvenance too, and a field absent from that mirror is dropped
+	// on decode -- which for THIS block would silently erase the record of
+	// how a run was fanned out from every merged artifact, while the
+	// per-shard artifacts still carried it and every count still agreed.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -3597,7 +3704,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "11",
+		ReportSchemaVersion: "12",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -3702,8 +3809,28 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// overflows int for a huge shardCount (e.g. MaxInt64), producing a
 		// negative make() capacity and a makeslice panic. len(entries) is
 		// always a safe, overflow-free upper bound regardless of shardCount.
-		sharded := make([]twoTurnOracleEntry, 0, len(entries))
+		// CHAOS-4100: an EXPLICIT case list takes precedence over the
+		// modulo rule below.
+		//
+		// Modulo cannot express "the s-th contiguous chunk of an arbitrary
+		// annex index set", which is what per-case granularity needs over a
+		// SPARSE annex. For the full ext65 annex (indices 0..64) modulo
+		// happens to give a clean 1:1 at shardCount=65, but for a narrower
+		// annex -- ext15's indices 50..64, say -- shardCount=65 would spin
+		// fifty EMPTY shards: fifty databases, fifty responders and fifty
+		// go test processes that run no case at all.
+		//
+		// When the variable is absent the modulo path below runs unchanged,
+		// so every pre-CHAOS-4100 invocation selects byte-identical cases.
+		explicitIndices, explicitSet := twoTurnShardCaseIndices(t)
+		filtered := make([]twoTurnOracleEntry, 0, len(entries))
 		for _, entry := range entries {
+			if explicitSet != nil {
+				if _, wanted := explicitSet[entry.Index]; wanted {
+					filtered = append(filtered, entry)
+				}
+				continue
+			}
 			// Go's % follows the dividend's sign, so a malformed
 			// negative Index would otherwise silently match NO shard
 			// (never a non-negative shardIndex) instead of surfacing at
@@ -3713,13 +3840,46 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			// and gets caught there with a clear fatal error, not
 			// dropped silently before ever reaching that check.
 			if ((entry.Index%shardCount)+shardCount)%shardCount == shardIndex {
-				sharded = append(sharded, entry)
+				filtered = append(filtered, entry)
 			}
 		}
-		entries = sharded
+		entries = filtered
 		report.Provenance.ExecutionShape = "parallel"
 		report.Provenance.ShardIndex = &shardIndex
 		report.Provenance.ShardCount = &shardCount
+		// The indices this shard ACTUALLY ran, derived from the filtered
+		// entries rather than echoed from the request. An explicit list
+		// naming a case the annex does not carry must not appear in the
+		// artifact as though it ran -- the union check a merged artifact
+		// supports is only worth anything if each side reports what
+		// happened, not what was asked for.
+		report.Provenance.Sharding.CaseIndices = twoTurnDistinctCaseIndices(entries)
+		report.Provenance.Sharding.Granularity = twoTurnEnvInt(t, "ACR_TEST_TRIAL_SHARD_GRANULARITY")
+		report.Provenance.Sharding.ConcurrencyCap = twoTurnEnvInt(t, "ACR_TEST_TRIAL_SHARD_CONCURRENCY_CAP")
+		report.Provenance.Sharding.ProvisioningMode = twoTurnShardProvisioningMode(t)
+		report.Provenance.Sharding.DatabaseProvisionMillis = int64(twoTurnEnvInt(t, "ACR_TEST_TRIAL_SHARD_DB_PROVISION_MS"))
+		// A requested index the annex does not carry is a LAUNCHER/annex
+		// disagreement, and it fails the run rather than shrinking it
+		// silently. The launcher computes each shard's chunk from the annex
+		// itself, so a mismatch means the two read different files -- under
+		// which the union across shards no longer covers the corpus and
+		// every population bar the merge step evaluates is quietly measured
+		// against the wrong denominator.
+		if explicitSet != nil {
+			ran := make(map[int]struct{}, len(report.Provenance.Sharding.CaseIndices))
+			for _, index := range report.Provenance.Sharding.CaseIndices {
+				ran[index] = struct{}{}
+			}
+			missing := make([]int, 0, len(explicitIndices))
+			for _, index := range explicitIndices {
+				if _, ok := ran[index]; !ok {
+					missing = append(missing, index)
+				}
+			}
+			if len(missing) > 0 {
+				t.Fatalf("ACR_TEST_TRIAL_SHARD_CASE_INDICES names %d case index(es) the oracle annex does not carry: %v -- the launcher and this process disagree about the corpus, so the merged union would not cover it", len(missing), missing)
+			}
+		}
 	}
 
 	// ACR_TEST_TRIAL_LIMIT bounds how many annex entries THIS PROCESS'S

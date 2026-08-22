@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-race test-shuffle-random test-coverage crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-race test-shuffle-random test-coverage crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -140,6 +140,12 @@ contract-test:
 codegraph-contract:
 	bash scripts/codegraph/verify-contract.sh --fixtures testdata/codegraph/v1.2.0
 
+# CHAOS-4100: offline checks for the trial launcher's shard layout. Starts
+# no container, touches no database, calls no model -- see the script's own
+# header for why the layout specifically is worth gating.
+shard-plan:
+	bash scripts/trial/test-shard-plan.sh
+
 canonical-receipts:
 	bash scripts/e2e/test-canonical-receipts.sh
 
@@ -164,7 +170,7 @@ build:
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-projector ./cmd/acr-projector
 
-verify: fmt-check vet test test-race crosscompile contract-test codegraph-contract canonical-receipts fullstack-contract build
+verify: fmt-check vet test test-race crosscompile contract-test codegraph-contract shard-plan canonical-receipts fullstack-contract build
 
 container-contract:
 	bash scripts/container/test-contract.sh

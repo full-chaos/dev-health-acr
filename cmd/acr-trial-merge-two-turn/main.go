@@ -70,7 +70,25 @@ import (
 // mirror below still had to be updated in the same change -- a field this
 // struct does not declare is dropped on decode, which would delete the
 // diagnosis from the merged artifact while every count still agreed.
-const expectedSchemaVersion = "11"
+// "12" (CHAOS-4100): trialProvenance gained the `sharding` block --
+// case_indices, granularity, concurrency_cap, provisioning_mode and
+// database_provision_millis. Purely additive provenance; no merge
+// arithmetic changes and no gate reads it. The mirror below still had to
+// gain it in the same change: a field this struct does not declare is
+// dropped on decode, which would erase how the run was fanned out from
+// every merged artifact while the per-shard artifacts still carried it.
+const expectedSchemaVersion = "12"
+
+// trialShardingProvenance mirrors the producer's identically-named type
+// (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
+// indices, counts, milliseconds and a closed provisioning label.
+type trialShardingProvenance struct {
+	CaseIndices             []int  `json:"case_indices,omitempty"`
+	Granularity             int    `json:"granularity,omitempty"`
+	ConcurrencyCap          int    `json:"concurrency_cap,omitempty"`
+	ProvisioningMode        string `json:"provisioning_mode,omitempty"`
+	DatabaseProvisionMillis int64  `json:"database_provision_millis,omitempty"`
+}
 
 type trialCommitGateProvenance struct {
 	LoneFloorEnv                   string `json:"lone_floor_env,omitempty"`
@@ -80,22 +98,26 @@ type trialCommitGateProvenance struct {
 }
 
 type trialProvenance struct {
-	CorpusSHA256          string `json:"corpus_sha256"`
-	Model                 string `json:"model,omitempty"`
-	ModelFallback         string `json:"model_fallback,omitempty"`
-	Transport             string `json:"transport"`
-	ExchangeModelName     string `json:"exchange_model_name,omitempty"`
-	ExchangeSessionID     string `json:"exchange_session_id,omitempty"`
-	SourceCommit          string `json:"source_commit"`
-	SourceDirty           bool   `json:"source_dirty"`
-	SourceDiffDigest      string `json:"source_diff_digest,omitempty"`
-	RunStartedAt          string `json:"run_started_at"`
-	ExecutionShape        string `json:"execution_shape,omitempty"`
-	ShardIndex            *int   `json:"shard_index,omitempty"`
-	ShardCount            *int   `json:"shard_count,omitempty"`
-	ControlsContinue      bool   `json:"controls_continue"`
-	ResolvedActiveEpoch   int64  `json:"resolved_active_epoch"`
-	GraphLifecycleEnabled bool   `json:"graph_lifecycle_enabled"`
+	CorpusSHA256      string `json:"corpus_sha256"`
+	Model             string `json:"model,omitempty"`
+	ModelFallback     string `json:"model_fallback,omitempty"`
+	Transport         string `json:"transport"`
+	ExchangeModelName string `json:"exchange_model_name,omitempty"`
+	ExchangeSessionID string `json:"exchange_session_id,omitempty"`
+	SourceCommit      string `json:"source_commit"`
+	SourceDirty       bool   `json:"source_dirty"`
+	SourceDiffDigest  string `json:"source_diff_digest,omitempty"`
+	RunStartedAt      string `json:"run_started_at"`
+	ExecutionShape    string `json:"execution_shape,omitempty"`
+	ShardIndex        *int   `json:"shard_index,omitempty"`
+	ShardCount        *int   `json:"shard_count,omitempty"`
+	// Sharding (CHAOS-4100) mirrors trialProvenance's identically-named
+	// block. See the producer's own doc comments for what each field
+	// means; the tags below are the contract.
+	Sharding              trialShardingProvenance `json:"sharding"`
+	ControlsContinue      bool                    `json:"controls_continue"`
+	ResolvedActiveEpoch   int64                   `json:"resolved_active_epoch"`
+	GraphLifecycleEnabled bool                    `json:"graph_lifecycle_enabled"`
 	// AnchorMembershipOffersEnabled (codex round-3 finding, pre-existing
 	// mirror drift unrelated to CHAOS-4058's own timing fields, fixed here
 	// while already touching this struct for the schema bump): the
@@ -373,6 +395,21 @@ func validateShardSet(shards []twoTurnReport, paths []string) error {
 			return mismatchErr(paths[i], paths[0], "provenance.source_dirty", fmt.Sprint(s.Provenance.SourceDirty), fmt.Sprint(first.Provenance.SourceDirty))
 		case s.Provenance.SourceDiffDigest != first.Provenance.SourceDiffDigest:
 			return mismatchErr(paths[i], paths[0], "provenance.source_diff_digest", s.Provenance.SourceDiffDigest, first.Provenance.SourceDiffDigest)
+		// CHAOS-4100: the three sharding fields that describe the LAUNCH
+		// rather than the shard. Granularity, concurrency cap and
+		// provisioning mode are decided once for the whole fan-out, so
+		// shards disagreeing about them means artifacts from two different
+		// launches are being merged into one -- and the merged wall-clock
+		// and contention story would then describe a run that never
+		// happened. CaseIndices and DatabaseProvisionMillis are
+		// deliberately NOT compared here: those legitimately differ per
+		// shard and are combined in mergeReports instead.
+		case s.Provenance.Sharding.Granularity != first.Provenance.Sharding.Granularity:
+			return mismatchErr(paths[i], paths[0], "provenance.sharding.granularity", fmt.Sprint(s.Provenance.Sharding.Granularity), fmt.Sprint(first.Provenance.Sharding.Granularity))
+		case s.Provenance.Sharding.ConcurrencyCap != first.Provenance.Sharding.ConcurrencyCap:
+			return mismatchErr(paths[i], paths[0], "provenance.sharding.concurrency_cap", fmt.Sprint(s.Provenance.Sharding.ConcurrencyCap), fmt.Sprint(first.Provenance.Sharding.ConcurrencyCap))
+		case s.Provenance.Sharding.ProvisioningMode != first.Provenance.Sharding.ProvisioningMode:
+			return mismatchErr(paths[i], paths[0], "provenance.sharding.provisioning_mode", s.Provenance.Sharding.ProvisioningMode, first.Provenance.Sharding.ProvisioningMode)
 		case s.BaseSHA != first.BaseSHA:
 			return mismatchErr(paths[i], paths[0], "base_sha", s.BaseSHA, first.BaseSHA)
 		case s.OracleAnnexPath != first.OracleAnnexPath:
@@ -532,6 +569,75 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		}
 	}
 	merged.AntiVacuityValid = len(merged.ApplicableMembers) > 0 && unsatisfied == 0
+
+	// CHAOS-4100: canonical row order, so the merged artifact does not
+	// depend on HOW the run was cut.
+	//
+	// Results was a plain concatenation in shard order, which means the
+	// same run cut two ways produced the same ROWS in a different
+	// SEQUENCE: cutting cases {0,2} + {1,3} yields 0,2,1,3 where per-case
+	// shards yield 0,1,2,3. Every count and every verdict already matched;
+	// only the ordering did not.
+	//
+	// That is not cosmetic for this ticket. The acceptance test for
+	// per-case sharding is that a merged artifact can be COMPARED against
+	// a coarse-sharded one on the same tip, and two files whose rows are
+	// permuted cannot be diffed by any tool a human would reach for. Row
+	// order carried no information to begin with -- the shard that
+	// happened to be listed first is not a fact about the measurement --
+	// so sorting loses nothing and makes the artifact reproducible.
+	//
+	// Sorted by the SAME key validateResultUniqueness already proves
+	// unique, so the order is total: no two rows can compare equal.
+	sort.Slice(merged.Results, func(i, j int) bool {
+		a, b := merged.Results[i], merged.Results[j]
+		if a.Index != b.Index {
+			return a.Index < b.Index
+		}
+		if a.Member != b.Member {
+			return a.Member < b.Member
+		}
+		if a.Arm != b.Arm {
+			return a.Arm < b.Arm
+		}
+		return a.MutationProbe < b.MutationProbe
+	})
+
+	// CHAOS-4100: the two sharding fields that are per-SHARD are combined
+	// here rather than inherited from shards[0] with the rest of
+	// provenance. Inheriting them would make the merged artifact claim the
+	// whole run covered only shard 0's cases and provisioned in shard 0's
+	// time -- a merged artifact that describes one shard is worse than one
+	// that describes none, because it reads as authoritative.
+	//
+	// CaseIndices UNIONS: it is the merged artifact's own statement of
+	// which corpus positions the run actually covered, and it is what a
+	// reader checks against the annex to prove nothing was dropped.
+	caseIndexSeen := make(map[int]struct{})
+	for _, shard := range shards {
+		for _, index := range shard.Provenance.Sharding.CaseIndices {
+			caseIndexSeen[index] = struct{}{}
+		}
+	}
+	mergedIndices := make([]int, 0, len(caseIndexSeen))
+	for index := range caseIndexSeen {
+		mergedIndices = append(mergedIndices, index)
+	}
+	sort.Ints(mergedIndices)
+	merged.Provenance.Sharding.CaseIndices = mergedIndices
+
+	// DatabaseProvisionMillis takes the MAX, not the sum: the shards
+	// provision CONCURRENTLY, so summing would report a duration the run
+	// never spent. The slowest shard's provisioning is the one that
+	// actually delayed the run, and it is the number to compare against
+	// the container substrate this ticket replaced.
+	var slowestProvision int64
+	for _, shard := range shards {
+		if shard.Provenance.Sharding.DatabaseProvisionMillis > slowestProvision {
+			slowestProvision = shard.Provenance.Sharding.DatabaseProvisionMillis
+		}
+	}
+	merged.Provenance.Sharding.DatabaseProvisionMillis = slowestProvision
 
 	return merged
 }

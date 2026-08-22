@@ -124,7 +124,7 @@ func TestMergeReportsConcatenatesTimingsAndRecomputesSummary(t *testing.T) {
 // asserted against what shardReport built, closing the gap between "the
 // merge function is correct" and "the tool as actually invoked is
 // correct".
-func TestRunEndToEndMergesValidV11Shards(t *testing.T) {
+func TestRunEndToEndMergesValidShards(t *testing.T) {
 	dir := t.TempDir()
 	shard0 := shardReport(0, 2, []twoTurnCaseTiming{
 		{Index: 0, Member: "expected_kind", Arms: []twoTurnArmTiming{
@@ -168,8 +168,12 @@ func TestRunEndToEndMergesValidV11Shards(t *testing.T) {
 		t.Fatalf("unmarshal merged output: %v", err)
 	}
 
-	if merged.ReportSchemaVersion != "11" {
-		t.Errorf("merged.ReportSchemaVersion = %q, want \"11\"", merged.ReportSchemaVersion)
+	// Derived, never restated (CHAOS-4100): this assertion was rewritten by
+	// hand on each of the last three schema bumps -- three chances to
+	// update the tool and forget the test. The tool's own constant is the
+	// authority for what it accepts.
+	if merged.ReportSchemaVersion != expectedSchemaVersion {
+		t.Errorf("merged.ReportSchemaVersion = %q, want %q", merged.ReportSchemaVersion, expectedSchemaVersion)
 	}
 	if !merged.Provenance.AnchorMembershipOffersEnabled {
 		t.Errorf("merged.Provenance.AnchorMembershipOffersEnabled = false, want true (must survive the real JSON round trip, codex round-3 finding)")
@@ -243,8 +247,8 @@ func TestRunRejectsSchemaVersionMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("run() with a schema_version=9 shard = nil error, want a rejection (this tool expects 10)")
 	}
-	if !strings.Contains(err.Error(), `report_schema_version="9"`) || !strings.Contains(err.Error(), `want "11"`) {
-		t.Errorf("run() error = %q, want it to name both the got (9) and want (10) schema versions", err.Error())
+	if !strings.Contains(err.Error(), `report_schema_version="9"`) || !strings.Contains(err.Error(), fmt.Sprintf("want %q", expectedSchemaVersion)) {
+		t.Errorf("run() error = %q, want it to name both the got (9) and the tool's own expected schema version", err.Error())
 	}
 }
 
