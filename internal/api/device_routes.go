@@ -49,9 +49,30 @@ func (a *App) handleDeviceAuthorization(w http.ResponseWriter, r *http.Request) 
 // form-encoded, grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 // -- is handled by handleTokenExchange. Both share the same
 // AllowTokenRequest rate-limit budget for this endpoint.
+//
+// This is where the two grants' runtime-dependency gates deliberately
+// PART WAYS (CHAOS-4071). The route itself carries no
+// deviceRuntimeHandler wrapper -- unlike device_authorization and
+// device_approval, which stay wrapped -- because that wrapper fails
+// closed on a.authenticator.WebAssertions() == nil, a dependency of the
+// human/browser device-login flow with nothing to do with RFC 8693
+// machine token exchange. handleTokenExchange already carries its OWN
+// correct nil check (a.runtime == nil || a.runtime.WorkloadTokenExchange
+// == nil), so the form-encoded branch below needs nothing added here.
+// The JSON device-code branch, however, still needs the exact
+// a.runtime/a.authenticator/WebAssertions() fail-closed check
+// deviceRuntimeHandler used to apply at the route: inlined here, gating
+// only the dispatch into handleDeviceCodeToken, so a deployment without
+// web-assertion JWKS configured keeps rejecting the device-code grant
+// exactly as before while the token-exchange grant is no longer
+// collaterally gated on it.
 func (a *App) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err == nil && mediaType == "application/x-www-form-urlencoded" {
 		a.handleTokenExchange(w, r)
+		return
+	}
+	if a.runtime == nil || a.authenticator == nil || a.authenticator.WebAssertions() == nil {
+		a.handleRuntimeUnavailable(w, r)
 		return
 	}
 	a.handleDeviceCodeToken(w, r)

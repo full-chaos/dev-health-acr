@@ -204,6 +204,65 @@ func TestTokenExchange_unconfiguredExchangerDegradesTo503(t *testing.T) {
 	}
 }
 
+// TestTokenExchange_succeedsWithoutWebAssertionsWhileDeviceCodeGrantStaysFailClosed
+// is CHAOS-4071's own regression proof. deviceRuntimeHandler used to wrap
+// the ENTIRE POST /api/v1/oauth/token route (app.go), so a deployment with
+// a.authenticator.WebAssertions() == nil -- the normal case for one that
+// enables RFC 8693 workload token exchange but never configures the
+// entirely unrelated browser/device-login web-assertion JWKS -- 503'd
+// every token-exchange call before WorkloadTokenExchange.Exchange was ever
+// reached. Every prior token-exchange test in this file used
+// newTokenExchangeTestApp, which ALWAYS configures WebAssertions -- that
+// handler-level gap (testing handleTokenExchange's own nil check in
+// isolation, never the route wrapper actually gating it) is exactly what
+// let this ship unnoticed. This test goes through app.Handler() with
+// newHostedTestApp's no-WebAssertions app, the real route wiring, and also
+// re-confirms the device-code grant and device_authorization endpoint stay
+// fail-closed exactly as before -- WebAssertions really is required for
+// those.
+func TestTokenExchange_succeedsWithoutWebAssertionsWhileDeviceCodeGrantStaysFailClosed(t *testing.T) {
+	exchanger := &fakeWorkloadTokenExchanger{result: auth.WorkloadTokenExchangeResult{
+		AccessToken: "fcacr_workload_test", ExpiresIn: 600, Scope: []string{auth.ScopeContextRead},
+	}}
+	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	t.Cleanup(func() { _ = app.Close() })
+	app.runtime.WorkloadTokenExchange = exchanger
+
+	form := url.Values{}
+	form.Set("grant_type", contractsv1.TokenExchangeGrantType)
+	form.Set("subject_token", "the-subject-jwt")
+	form.Set("subject_token_type", contractsv1.TokenExchangeSubjectTokenTypeJWT)
+	exchangeResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(exchangeResponse, tokenExchangeFormRequest(form))
+	if exchangeResponse.Code != http.StatusOK {
+		t.Fatalf("token-exchange grant status = %d body=%s, want 200 despite WebAssertions being unconfigured", exchangeResponse.Code, exchangeResponse.Body.String())
+	}
+	if exchanger.lastSubjectToken != "the-subject-jwt" {
+		t.Fatalf("Exchange was not actually invoked: lastSubjectToken = %q", exchanger.lastSubjectToken)
+	}
+
+	// The device-code (JSON) grant on the SAME endpoint must stay
+	// fail-closed: WebAssertions really is required for it.
+	deviceResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(deviceResponse, deviceRequest(t, http.MethodPost, "/api/v1/oauth/token", contractsv1.DeviceTokenRequest{
+		SchemaVersion: contractsv1.DeviceTokenRequestSchema, GrantType: contractsv1.DeviceCodeGrantType, DeviceCode: "irrelevant",
+	}))
+	assertErrorResponse(t, deviceResponse, http.StatusServiceUnavailable, "upstream_unavailable")
+
+	// device_authorization and device_approval must ALSO stay fail-closed
+	// without WebAssertions -- deviceRuntimeHandler is unchanged for both
+	// of those routes.
+	authorizationResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(authorizationResponse, deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_authorization", contractsv1.DeviceAuthorizationRequest{SchemaVersion: contractsv1.DeviceAuthorizationRequestSchema}))
+	assertErrorResponse(t, authorizationResponse, http.StatusServiceUnavailable, "upstream_unavailable")
+
+	approvalResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(approvalResponse, deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_approval", contractsv1.DeviceApprovalRequest{
+		SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{hostedTestRepository},
+	}))
+	assertErrorResponse(t, approvalResponse, http.StatusServiceUnavailable, "upstream_unavailable")
+}
+
 func assertTokenExchangeError(t *testing.T, response *httptest.ResponseRecorder, wantStatus int, wantCode contractsv1.OAuthTokenExchangeErrorCode) {
 	t.Helper()
 	if response.Code != wantStatus {
