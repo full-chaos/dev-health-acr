@@ -225,6 +225,7 @@ func TestTokenExchange_succeedsWithoutWebAssertionsWhileDeviceCodeGrantStaysFail
 		AccessToken: "fcacr_workload_test", ExpiresIn: 600, Scope: []string{auth.ScopeContextRead},
 	}}
 	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	t.Cleanup(func() { _ = app.Close() })
 	app.runtime.WorkloadTokenExchange = exchanger
 
 	form := url.Values{}
