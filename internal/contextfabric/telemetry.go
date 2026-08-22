@@ -258,3 +258,55 @@ func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, princip
 	}
 	t.logger.InfoContext(ctx, "context fabric prior consultation degraded", args...)
 }
+
+// RecordFactScopeExpansion implements EngineTelemetry (CHAOS-4099) -- the
+// ONE operator-visible record of whether a fact family could be reached from
+// the subjects an investigation resolved.
+//
+// Content-safe by construction, exactly like every method beside it: an org
+// id, six closed vocabularies (two contract subject/fact kinds, the policy
+// name, the basis, the outcome and the failure class), seven counts and one
+// boolean. Nothing here is high-cardinality, nothing identifies a subject,
+// and no model output reaches it; a reader who needs to know WHICH project
+// correlates by request_id with the resolution trace.
+//
+// EVERY FIELD IS LOGGED, unconditionally, including the zero-valued counts.
+// That is the CHAOS-4085 lesson applied directly: the fields existed on the
+// struct and were populated, and none of it reached an operator because the
+// sink did not write them. Omitting a count because it happens to be zero
+// would also make "the filter dropped nothing" and "nobody ever counted"
+// indistinguishable in a log aggregator, which is exactly the ambiguity
+// MissingNextHopCount exists to resolve for the zero-UUID sentinel.
+//
+// LEVEL SPLIT, on whether the answer was actually degraded. An `expanded` or
+// `attempted_empty` outcome is the system working -- Info. A
+// policy_unavailable, expanded_partial or failed outcome means the caller
+// received an answer with a hole in it, and a RATE change in those is the
+// signal that a policy is still dark, a cap is being hit, or the traversal
+// backend is sick -- Warn, alongside the commit-gate retraction and the
+// synthesis-status override.
+func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, principal storage.Principal, event FactScopeExpansionEvent) {
+	args := append([]any{
+		"org_id", principal.OrgID,
+		"requirement_kind", string(event.RequirementKind),
+		"origin_kind", string(event.OriginKind),
+		"target_kind", string(event.TargetKind),
+		"policy", string(event.Policy),
+		"basis", string(event.Basis),
+		"outcome", string(event.Outcome),
+		"origin_count", event.OriginCount,
+		"candidate_count", event.CandidateCount,
+		"admitted_count", event.AdmittedCount,
+		"authorization_dropped_count", event.AuthorizationDroppedCount,
+		"temporal_dropped_count", event.TemporalDroppedCount,
+		"missing_next_hop_count", event.MissingNextHopCount,
+		"target_kind_mismatch_count", event.TargetKindMismatchCount,
+		"truncated", event.Truncated,
+		"failure_class", string(event.FailureClass),
+	}, requestIDLogAttrs(ctx)...)
+	if factScopeGapDegrades(event.Outcome) {
+		t.logger.WarnContext(ctx, "context fabric fact scope expansion left a gap", args...)
+		return
+	}
+	t.logger.InfoContext(ctx, "context fabric fact scope expansion outcome", args...)
+}

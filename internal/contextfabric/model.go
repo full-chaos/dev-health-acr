@@ -289,6 +289,24 @@ type CanonicalFactRequest struct {
 	Subjects     []SubjectRef        `json:"subjects"`
 	Cohort       *Cohort             `json:"cohort,omitempty"`
 	Requirements []FactRequirement   `json:"requirements"`
+	// Scope is the FactReadScopeResolver's verdict for this request
+	// (CHAOS-4099): which derived subjects each requirement may additionally
+	// be READ for, and which requirements could not be reached at all.
+	//
+	// ENGINE-OWNED AND OPTIONAL. A nil Scope means "no expansion was
+	// resolved", which is exactly what every pre-existing caller means and
+	// what every test that builds a request by hand means -- so the planner
+	// and the registry behave byte-identically to before when it is absent.
+	// It is deliberately NOT part of Subjects: Subjects are the
+	// investigation's ROOT subjects (the committed resolution or the
+	// cohort), and merging derived read targets into them would make a
+	// fact-read permission indistinguishable from a resolution commitment,
+	// which is the one thing ruling invariants 1 and 2 forbid.
+	//
+	// It carries `json:"-"`: this struct's tags exist for debug/trace
+	// rendering, and scope is engine bookkeeping about how a read was
+	// planned, never part of what a fact request MEANS to a provider.
+	Scope *FactReadScope `json:"-"`
 }
 
 type FactValue struct {
@@ -378,6 +396,21 @@ type CanonicalFactBundle struct {
 	// only as precise as its least precise source. Empty when no provider
 	// answered on a temporal axis. See FactProviderResult.Grain.
 	TemporalGrain TemporalGrain `json:"temporal_grain,omitempty"`
+	// Scope is the FactReadScopeResolver's verdict for the read that
+	// produced this bundle (CHAOS-4099), or nil when no resolver ran.
+	//
+	// It rides on the BUNDLE rather than being recomputed by the engine
+	// because the registry is the only layer that holds the capability index
+	// the resolver needs, and a second, independently-derived scope on the
+	// engine side is the drift class investigationScopeSubjectSet's own doc
+	// comment records this package already paid for once. The engine reads
+	// it for exactly two things it alone can do: emit the expansion
+	// telemetry, and compose the answer-facing disclosure.
+	//
+	// `json:"-"`, like CanonicalFactRequest.Scope and for the same reason:
+	// this is engine bookkeeping about how a read was planned, never part of
+	// the evidence a bundle carries.
+	Scope *FactReadScope `json:"-"`
 }
 
 type SynthesisInput struct {

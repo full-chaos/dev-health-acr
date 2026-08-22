@@ -125,6 +125,13 @@ func (e *FactReadFailure) Error() string {
 type FactRegistryOptions struct {
 	DefaultTimeout time.Duration
 	Now            func() time.Time
+	// ScopeExpander (CHAOS-4099) performs the typed graph traversal that
+	// derives read subjects a root subject does not directly own. nil --
+	// the stage-1 default and every existing caller -- means every
+	// expansion policy resolves to policy_unavailable and is DISCLOSED,
+	// which is a strict improvement on the silent false prune it replaces
+	// but reads no new facts. See FactScopeExpander.
+	ScopeExpander FactScopeExpander
 }
 
 type registeredFactProvider struct {
@@ -136,6 +143,7 @@ type FactCapabilityRegistry struct {
 	providers      map[FactKind]registeredFactProvider
 	defaultTimeout time.Duration
 	now            func() time.Time
+	scopeResolver  *FactReadScopeResolver
 }
 
 func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOptions) (*FactCapabilityRegistry, error) {
@@ -149,6 +157,12 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		providers:      make(map[FactKind]registeredFactProvider, len(providers)),
 		defaultTimeout: options.DefaultTimeout,
 		now:            options.Now,
+		// ALWAYS constructed, never left nil. A nil resolver would make
+		// "was scope resolved?" a second thing every call site has to check,
+		// and the check that gets forgotten is the one that reintroduces the
+		// silent prune. A resolver with no expander is a complete, correct
+		// resolver -- it answers policy_unavailable.
+		scopeResolver: NewFactReadScopeResolver(options.ScopeExpander),
 	}
 	for _, provider := range providers {
 		if provider == nil {
@@ -243,6 +257,30 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	// degrades to SourceUnconfigured without ever building a query. This
 	// check governs exactly the requests buildFactQuery would have judged.
 	capabilities := r.capabilityIndex()
+	// CHAOS-4099: resolve the READ SCOPE before anything is planned.
+	//
+	// This is the seam the ratified architecture names -- after resolution
+	// (the request's subjects are final and were decided by DP9, which
+	// cannot see this), before planFactReads (which still applies its single
+	// subject-kind rule, now to a subject list that may include authorized
+	// derived targets). Providers' declared SupportedSubjectKinds are not
+	// touched by any of it.
+	//
+	// An already-populated Scope is honored rather than overwritten: it is
+	// the injection point tests use to exercise a specific expansion outcome
+	// without standing up a graph, and re-resolving over it would make those
+	// tests silently assert nothing.
+	if request.Scope == nil {
+		resolved := r.scopeResolver.Resolve(ctx, newFactScopeResolveInput(request), capabilities)
+		request.Scope = &resolved
+	}
+	bundle.Scope = request.Scope
+	// allowedSubjects is recomputed AFTER scope resolution: derived targets
+	// enter the investigation scope set through request.Scope, and the value
+	// computed above (before the resolver ran) would not contain them --
+	// buildFactQuery and mergeFactProviderResult would then reject every
+	// derived read as out of scope.
+	allowedSubjects = investigationScopeSubjectSet(request)
 	for _, requirement := range request.Requirements {
 		capability, registered := capabilities[requirement.Kind]
 		if !registered {
@@ -295,6 +333,18 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		registered, ok := r.providers[planned.Kind]
 		if !ok {
 			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
+			continue
+		}
+		if planned.ScopeGap != nil {
+			// CHAOS-4099. The gap's own source state is NEVER SourcePruned
+			// (factScopeGapSourceState has no path to it), so this
+			// observation cannot claim the proof of absence the prune below
+			// claims. For every degrading outcome appendFactCoverage also
+			// sets Coverage.Partial and files a DegradedReason, which is
+			// what carries the gap into the answer's own coverage -- the
+			// answer-facing sentence is composed from the same decision by
+			// the engine (applyFactScopeDisclosure).
+			appendFactCoverage(&bundle, planned.Kind, factScopeGapSourceState(planned.ScopeGap.Outcome), nil, "", planned.Reason)
 			continue
 		}
 		if planned.Pruned {
