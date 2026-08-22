@@ -64,6 +64,43 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptsSkipped(ctx context.Conte
 	t.logger.WarnContext(ctx, "context fabric prior-subject receipts skipped", args...)
 }
 
+// RecordCommitAffirmationRetraction implements CommitAffirmationTelemetry
+// (CHAOS-4085) -- the ONE operator-visible record that the commit gate
+// removed a subject from an answer.
+//
+// It exists because it did not, and that was a hole: CommitAffirmationTelemetry
+// is an OPTIONAL interface, recordCommitAffirmation type-asserts for it, and
+// until this method landed NOTHING in production implemented it. Every
+// retraction therefore failed the assertion and vanished silently -- the gate
+// could refuse a commit and no operator could observe that it had. Found by
+// the codex retroactive pass over the trace commit; it is the same class
+// CHAOS-4089 exists to prevent, which is why it is fixed rather than
+// ticketed.
+//
+// Content-safe by construction, exactly like every method beside it: an org
+// id, two closed contract enums (the commit basis and the subject KIND --
+// never a canonical id or a label), one mechanism enum, and two counts.
+// Nothing here is high-cardinality and nothing identifies the subject that
+// was retracted; a reader who needs that correlates by request_id with the
+// resolution trace, which is where subject identity legitimately lives.
+//
+// WARN, not INFO: a retraction means the system found a candidate and then
+// declined to stand behind it. That is a normal, designed outcome rather
+// than an error, but a RATE change in it is exactly the signal that
+// retrieval quality or synthesis grounding has moved -- and the DP9 bar
+// makes that worth surfacing above the reuse-outcome stream.
+func (t SlogEngineTelemetry) RecordCommitAffirmationRetraction(ctx context.Context, principal storage.Principal, outcome CommitAffirmationOutcome) {
+	args := append([]any{
+		"org_id", principal.OrgID,
+		"commit_basis", string(outcome.Basis),
+		"subject_kind", string(outcome.SubjectKind),
+		"winning_mechanism", outcome.WinningMechanism,
+		"provisional_committed", outcome.ProvisionalCommitted,
+		"final_committed", outcome.FinalCommitted,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.WarnContext(ctx, "context fabric commit affirmation retraction", args...)
+}
+
 func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
