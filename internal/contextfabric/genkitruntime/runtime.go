@@ -221,16 +221,41 @@ const (
 	// model steered away from the status produces the answer the caller
 	// actually wanted instead of a relabelled no_match.
 	//
+	// v11 (CHAOS-4102) fixes a regression v10 itself introduced. v10's
+	// fallback clause ("return status no_match ... or degraded/partial if
+	// it supports a weaker one") named a status word this prompt had NEVER
+	// once used before (token count v9=0, v10=1) as the FIRST-offered
+	// option for weak evidence -- a genuine change to the model's output
+	// distribution, not the inert steering the v10 comment above claimed.
+	// A read-only investigation (lane-4102-inv, 2026-08-22) proved this
+	// two ways: the override this clause was meant to be redundant with
+	// (applySynthesisStatusOverride) fired ZERO times across the run that
+	// exposed it, and the model's own status tally shifted no_match 0/42
+	// -> 6/42, complete 5/42 -> 0/42 between v9 and v10 on the same
+	// corpus (Fisher one-sided p<=0.03 both directions) -- one case
+	// (corpus index 60, all four decisive calls, degraded -> no_match in
+	// lockstep) tripped a hard correctness bar (false_no_match) on a
+	// TRUSTED case the corpus authors never intended to exercise this
+	// path. v11 removes the fallback clause entirely, keeping ONLY the
+	// clarification_required steering v10 actually needed to add: the
+	// override handles every status the model can return on the decisive
+	// path (see applySynthesisStatusOverride's own doc comment), so
+	// nothing depends on this prompt naming an alternative, and naming
+	// one is exactly what regressed. The model still sees the full closed
+	// status vocabulary via the attached output schema, not via this
+	// prose -- v11 removes behavioral STEERING toward a status word, not
+	// the status word's validity.
+	//
 	// A version bump cold-caches every reuse-participating row for every
 	// org (the reuse key binds on this exact constant -- see
 	// contextfabric.ReuseKey.SynthesisPromptVersion). That over-
 	// invalidation is the accepted, documented cost of any prompt change,
-	// identical in shape to v6-v9 above; it is not a reason to leave two
+	// identical in shape to v6-v10 above; it is not a reason to leave two
 	// different prompt texts sharing one version string.
 	//
 	// Exported for the same CHAOS-3862 reason as
 	// DefaultInterpretationPromptVersion above.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v10"
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v11"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
