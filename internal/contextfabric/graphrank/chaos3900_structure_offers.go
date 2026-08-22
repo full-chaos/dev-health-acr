@@ -175,6 +175,81 @@ func filterCandidatesByConfirmedKind(candidatesBySubject map[string]contextfabri
 	return filtered
 }
 
+// explicitKindNarrowingMode (CHAOS-4079) names WHICH of
+// classifyExplicitKindNarrowing's four cases a round landed in. It exists
+// because narrowPooledKindsByExplicitKinds' single nil return collapses
+// THREE structurally different situations into one indistinguishable
+// signal -- "no hint at all", "a hint disjoint from the whole pool", and
+// "a hint that subsumes the whole pool" -- and the last two are exactly
+// the cases CHAOS-4062's shadow kind-insensitivity probe could never
+// observe (PreNarrowingExplicitKinds stays empty, so the probe's own gate
+// in RunShadowEvidenceRound never opens).
+//
+// The string values are the closed vocabulary traced as
+// ResolutionTraceEvent.ShadowKindInsensitivityMode (resolve.go) and read
+// by the CHAOS-3742 two-turn harness. They are DELIBERATELY distinct
+// tokens rather than a bare bool: "narrowed" is the only mode under which
+// the probe's verdict may be treated as ATTESTING anything (the census
+// hypothesis set actually changed, so agreement across the change is a
+// real proof), while an "observed_" mode reports a census that was never
+// narrowed at all -- necessary but NOT sufficient evidence that the hint
+// had no influence, since request.ExpectedKinds still reaches explicit-
+// structure member stamping (contextfabric/structure.go) and kind-offer
+// ranking (resolve.go's kindOfferMaterial), neither of which this proof
+// speaks for. A consumer that collapses the two would claim more than was
+// proven.
+type explicitKindNarrowingMode string
+
+const (
+	// explicitKindNarrowingNone: no explicit kind hint on the request at
+	// all (the overwhelming common case). The probe is not evaluated, in
+	// either mode.
+	explicitKindNarrowingNone explicitKindNarrowingMode = ""
+	// explicitKindNarrowingApplied: a genuine narrowing. The probe runs in
+	// its ORIGINAL, decision-bearing form (CHAOS-3972 P3) -- it may
+	// overwrite the round's Outcome/Reason.
+	explicitKindNarrowingApplied explicitKindNarrowingMode = "narrowed"
+	// explicitKindNarrowingNoOverlap: an explicit hint disjoint from every
+	// pooled kind (the trial harness's own deliberately-wrong inferred-tier
+	// kind arm). Probe evaluated WRITE-FREE, observation only.
+	explicitKindNarrowingNoOverlap explicitKindNarrowingMode = "observed_no_overlap"
+	// explicitKindNarrowingSubsumed: an explicit hint that admits every
+	// pooled kind, so intersecting changed nothing. Probe evaluated
+	// WRITE-FREE, observation only.
+	explicitKindNarrowingSubsumed explicitKindNarrowingMode = "observed_subsumed"
+)
+
+// classifyExplicitKindNarrowing (CHAOS-4079) is
+// narrowPooledKindsByExplicitKinds' own intersection, returning the mode
+// alongside the narrowed set instead of collapsing three no-narrowing
+// cases into a bare nil. The narrowed slice is non-nil ONLY for
+// explicitKindNarrowingApplied -- the ratified §2.0/§2.3 semantics are
+// unchanged: a disjoint or subsuming hint still leaves the ordinary
+// pooled set fully in force and is still not a narrowing event.
+func classifyExplicitKindNarrowing(pooled []CensusKind, explicitKinds []contractsv1.ContextFabricSubjectKind) ([]CensusKind, explicitKindNarrowingMode) {
+	if len(explicitKinds) == 0 {
+		return nil, explicitKindNarrowingNone
+	}
+	allow := make(map[CensusKind]bool, len(explicitKinds))
+	for _, kind := range explicitKinds {
+		allow[CensusKind(kind)] = true
+	}
+	var narrowed []CensusKind
+	for _, kind := range pooled {
+		if allow[kind] {
+			narrowed = append(narrowed, kind)
+		}
+	}
+	switch {
+	case len(narrowed) == 0:
+		return nil, explicitKindNarrowingNoOverlap
+	case len(narrowed) == len(pooled):
+		return nil, explicitKindNarrowingSubsumed
+	default:
+		return narrowed, explicitKindNarrowingApplied
+	}
+}
+
 // narrowPooledKindsByExplicitKinds (CHAOS-3972 P3, design brief §2.0/§2.3)
 // intersects pooled with explicitKinds, order-preserving over pooled.
 // Returns nil (meaning "no narrowing applied") when explicitKinds is
@@ -187,23 +262,14 @@ func filterCandidatesByConfirmedKind(candidatesBySubject map[string]contextfabri
 // pass a non-nil result as ShadowEvidenceRoundInput.PooledKinds AND the
 // UNnarrowed pooled slice as PreNarrowingExplicitKinds together -- see
 // runShadowEvidenceRoundForResolution (resolve.go).
+//
+// CHAOS-4079: now a thin wrapper over classifyExplicitKindNarrowing, kept
+// as the named statement of the ratified nil semantics (and as the
+// existing unit-test surface, TestNarrowPooledKindsByExplicitKinds). A
+// caller that needs to tell the three nil cases apart -- the shadow
+// probe's own observation mode does -- must use the classifier directly.
 func narrowPooledKindsByExplicitKinds(pooled []CensusKind, explicitKinds []contractsv1.ContextFabricSubjectKind) []CensusKind {
-	if len(explicitKinds) == 0 {
-		return nil
-	}
-	allow := make(map[CensusKind]bool, len(explicitKinds))
-	for _, kind := range explicitKinds {
-		allow[CensusKind(kind)] = true
-	}
-	var narrowed []CensusKind
-	for _, kind := range pooled {
-		if allow[kind] {
-			narrowed = append(narrowed, kind)
-		}
-	}
-	if len(narrowed) == 0 || len(narrowed) == len(pooled) {
-		return nil
-	}
+	narrowed, _ := classifyExplicitKindNarrowing(pooled, explicitKinds)
 	return narrowed
 }
 

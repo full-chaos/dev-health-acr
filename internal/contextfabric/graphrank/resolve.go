@@ -582,6 +582,26 @@ type ResolutionTraceEvent struct {
 	// (singleSatisfierVerified) sol-max's ruling found insufficient.
 	ShadowKindInsensitivityEvaluated bool
 	ShadowKindInsensitivityOutcome   string
+	// ShadowKindInsensitivityMode (evidence_round stage ONLY, CHAOS-4079)
+	// mirrors Attestation.KindInsensitivityMode: which explicit-kind
+	// narrowing situation the two fields above were produced under, from
+	// explicitKindNarrowingMode's closed vocabulary ("narrowed" |
+	// "observed_no_overlap" | "observed_subsumed"), empty when the probe
+	// was not evaluated.
+	//
+	// A consumer MUST read this alongside the two fields above rather than
+	// treating "evaluated && commit_sound" as a uniform attestation. Only
+	// "narrowed" means the verdict held across an actual change to the
+	// census hypothesis set. An "observed_" mode means the census was
+	// never narrowed, so the verdict shows the CENSUS was untouched by the
+	// hint -- necessary but not sufficient for "the hint had no
+	// influence", because request.ExpectedKinds still reaches explicit-
+	// structure member stamping (contextfabric/structure.go) and kind-offer
+	// ranking (kindOfferMaterial, this file), neither of which this proof
+	// speaks for. The CHAOS-3742 two-turn harness gates its own
+	// kind_insensitivity_attested classification on "narrowed" for exactly
+	// that reason.
+	ShadowKindInsensitivityMode string
 	// CensusKind/CensusComplete/CensusCount/CensusReadAtUnix/CensusProtocol/
 	// CensusClosureMismatch/CensusStatementCount/CensusRowsRead/
 	// CensusHandleApplied/CensusAnchorApplied (evidence_probe stage ONLY,
@@ -1548,10 +1568,23 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 	// narrowing is skipped entirely in that case (it would be redundant at
 	// best; resolveExplicitStructure's own conflict check already proved
 	// agreement when both are present).
+	//
+	// CHAOS-4079: the SAME classification additionally reports WHICH of
+	// the no-narrowing cases a hint-carrying request landed in, so the
+	// shadow kind-insensitivity probe can be OBSERVED (write-free) for a
+	// hint that applied no narrowing -- previously indistinguishable from
+	// "no hint at all", which made the probe unreachable by construction
+	// for exactly the deliberately-wrong hint the trial's inferred-tier
+	// arm injects. The narrowing behavior itself is UNCHANGED: only an
+	// explicitKindNarrowingApplied mode alters censusKinds or populates
+	// preNarrowingExplicitKinds, exactly as before.
 	censusKinds := pooledKinds
 	var preNarrowingExplicitKinds []CensusKind
+	var narrowingMode explicitKindNarrowingMode
 	if confirmedKind == nil {
-		if narrowed := narrowPooledKindsByExplicitKinds(pooledKinds, request.ExpectedKinds); narrowed != nil {
+		var narrowed []CensusKind
+		narrowed, narrowingMode = classifyExplicitKindNarrowing(pooledKinds, request.ExpectedKinds)
+		if narrowed != nil {
 			preNarrowingExplicitKinds = pooledKinds
 			censusKinds = narrowed
 		}
@@ -1571,6 +1604,12 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
 		ConfirmedAnchor:           confirmedAnchorInput,
+		// Mutually exclusive with a non-empty PreNarrowingExplicitKinds:
+		// classifyExplicitKindNarrowing returns a non-nil narrowed set
+		// ONLY for explicitKindNarrowingApplied, and these two modes are
+		// its other, nil-returning hint-present cases.
+		ObservedExplicitKindHint:     narrowingMode == explicitKindNarrowingNoOverlap || narrowingMode == explicitKindNarrowingSubsumed,
+		ObservedExplicitKindSubsumed: narrowingMode == explicitKindNarrowingSubsumed,
 	}, deps.ResolutionTracer)
 	return attestation
 }
