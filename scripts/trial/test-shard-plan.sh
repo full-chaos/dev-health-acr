@@ -154,6 +154,19 @@ else
   echo "ok: plan-only runs with no dev-health checkout and no ops/.env"
 fi
 
+# 10. The ramp smoke's own counters (codex xhigh review round 2, P2). Its
+#     first version died on the HEALTHY path -- grep exits 1 when nothing
+#     matches, pipefail propagated that into the assignment, and `set -e`
+#     killed the script before it could record a successful step -- and
+#     blocked on stdin when no logs existed. Its self-test runs the healthy
+#     path explicitly, which is the case no other check exercised.
+if bash "$script_dir/run-shard-ramp-smoke.sh" --self-test >/dev/null 2>&1; then
+  echo "ok: ramp-smoke counters self-test"
+else
+  echo "FAIL: run-shard-ramp-smoke.sh --self-test failed -- the throughput record this ticket depends on cannot be produced" >&2
+  failures=$((failures + 1))
+fi
+
 if [[ "$failures" -gt 0 ]]; then
   echo "shard-plan checks FAILED ($failures)" >&2
   exit 1
