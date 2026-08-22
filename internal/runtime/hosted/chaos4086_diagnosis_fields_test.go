@@ -262,7 +262,13 @@ func TestChaos4086_EveryArmStampsItsRow(t *testing.T) {
 	}
 	// Every arm calls Investigate, so every arm has both an outcome to
 	// record and an error path to classify.
-	want := []string{"twoTurnStampOutcome", "twoTurnStampDecision", "twoTurnStampArmError"}
+	//
+	// twoTurnStampArmFailure, not twoTurnStampArmError: the arms reach the
+	// stamper THROUGH the paired helper that sets the reason with it (see
+	// TestChaos4086_EveryErrorDerivedReasonIsStamped). Requiring the inner
+	// function here would push arms back toward calling it separately,
+	// which is the split this suite exists to remove.
+	want := []string{"twoTurnStampOutcome", "twoTurnStampDecision", "twoTurnStampArmFailure"}
 	arms := map[string]bool{
 		"runTwoTurnPositiveArm":       false,
 		"runTwoTurnInferredTierArm":   false,
@@ -298,4 +304,58 @@ func TestChaos4086_EveryArmStampsItsRow(t *testing.T) {
 			t.Errorf("arm %s not found in %s -- if it was renamed, update this list rather than deleting the assertion", name, source)
 		}
 	}
+}
+
+// TestChaos4086_EveryErrorDerivedReasonIsStamped is codex xhigh round 1's P2,
+// closed mechanically rather than site by site.
+//
+// The review found the confirmed-wrong SETUP turn setting an ArmInvalidReason
+// with no stage or error type; the anchor-seed failure beside it had the same
+// gap and nobody had noticed. Seven error sites across four arms, and the two
+// nobody was looking at are the two that drifted -- which is what "remember to
+// call the stamper as well" buys you.
+//
+// twoTurnStampArmFailure now sets the reason AND the stamp together, and this
+// test refuses any assignment that goes around it: an ArmInvalidReason
+// derived from a rejection CLASSIFIER is, by definition, derived from an
+// error, and therefore has a stage and a type worth recording. Fixed-string
+// reasons (a structural exemption, an offer miss) are untouched -- there is no
+// error behind them to stamp.
+func TestChaos4086_EveryErrorDerivedReasonIsStamped(t *testing.T) {
+	const source = "chaos3742_two_turn_confirmation_test.go"
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, source, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", source, err)
+	}
+	classifiers := map[string]bool{
+		"contextFabricRejectionClass": true,
+		"anchorSeedRejectionClass":    true,
+	}
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			selector, ok := lhs.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "ArmInvalidReason" || i >= len(assign.Rhs) {
+				continue
+			}
+			ast.Inspect(assign.Rhs[i], func(inner ast.Node) bool {
+				call, ok := inner.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				ident, ok := call.Fun.(*ast.Ident)
+				if !ok || !classifiers[ident.Name] {
+					return true
+				}
+				t.Errorf("%s:%d assigns an error-derived ArmInvalidReason directly. Use twoTurnStampArmFailure(res, reason, err) so the row also names the stage and the error type -- an arm-invalid row without them sends the reader back to the exchange files.",
+					source, fileSet.Position(assign.Pos()).Line)
+				return false
+			})
+		}
+		return true
+	})
 }

@@ -937,6 +937,31 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 	}
 }
 
+// twoTurnStampArmFailure is the ONE way an error-derived ArmInvalidReason is
+// set (codex xhigh review round 1, P2).
+//
+// The review found the confirmed-wrong arm's SETUP-turn failure setting a
+// reason and no stage/type, so a whole class of arm-invalid row stayed
+// non-diagnosable -- and the anchor-seed failure beside it had the same gap,
+// unreported. Both are the predictable outcome of "remember to call the
+// stamper too" being a second, separate step: seven error sites across four
+// arms, and the two nobody was looking at were the ones that drifted.
+//
+// Pairing them in one call makes the omission unrepresentable rather than
+// merely noticed. TestChaos4086_EveryErrorDerivedReasonIsStamped then refuses
+// any assignment that goes around it.
+//
+// reason must already be closed-vocabulary (a classifier's output or a fixed
+// string) -- this helper never derives it, so it cannot launder raw error
+// text into the field.
+func twoTurnStampArmFailure(res *twoTurnCaseResult, reason string, err error) {
+	if res == nil {
+		return
+	}
+	res.ArmInvalidReason = reason
+	twoTurnStampArmError(res, err)
+}
+
 // twoTurnStampArmError records WHERE a failed Investigate call failed,
 // alongside the closed-vocabulary reason the caller already sets.
 //
@@ -2432,8 +2457,7 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 	turn2, err := investigator.Investigate(callCtx, principal, req)
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
-		twoTurnStampArmError(&res, err)
+		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
 		return res
 	}
 	res.Turn2Status = string(turn2.Status)
@@ -2647,20 +2671,29 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// Complete/Partial/Degraded candidates), the two setup calls cannot
 	// collapse into the same underlying result via answer-reuse either --
 	// they are genuinely two separate offers.
-	mintWindowPrecondition := func(requestIDSuffix string) (contractsv1.ContextFabricBoundSubjectReceipt, error) {
+	// Returns (receipt, reason, cause). CHAOS-4086: reason is the
+	// closed-vocabulary string for ArmInvalidReason, and cause is the
+	// ORIGINAL investigator error, kept alive so the caller can stamp its
+	// stage and type. Before this, the cause was classified into a string
+	// and dropped here, which is why a window-precondition failure could
+	// name its class but never its stage. cause is nil for the offer-miss
+	// branch, which is an engine-refusal finding rather than a failure with
+	// a stage at all -- and twoTurnStampArmError leaves both fields empty
+	// for a nil error, which is the honest reading.
+	mintWindowPrecondition := func(requestIDSuffix string) (receipt contractsv1.ContextFabricBoundSubjectReceipt, reason string, cause error) {
 		setupReq := twoTurnRequest(index, tc, requestIDSuffix)
 		setupReq.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(windowBand)}
 		setupCtx, setupCancel := context.WithTimeout(ctx, timeout)
 		setupResult, setupErr := investigator.Investigate(setupCtx, principal, setupReq)
 		setupCancel()
 		if setupErr != nil {
-			return contractsv1.ContextFabricBoundSubjectReceipt{}, fmt.Errorf("window precondition setup failed: %s", contextFabricRejectionClass(setupErr))
+			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup failed: " + contextFabricRejectionClass(setupErr), setupErr
 		}
 		receiptID, found := selectOracleOffer(setupResult, string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: windowBand})
 		if !found {
-			return contractsv1.ContextFabricBoundSubjectReceipt{}, errors.New("window precondition setup turn did not offer the case's own window back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)")
+			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup turn did not offer the case's own window back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)", nil
 		}
-		return contractsv1.ContextFabricBoundSubjectReceipt{ResultID: setupResult.ResultID, ReceiptID: receiptID}, nil
+		return contractsv1.ContextFabricBoundSubjectReceipt{ResultID: setupResult.ResultID, ReceiptID: receiptID}, "", nil
 	}
 
 	if !isWindow && windowBand == "" {
@@ -2683,17 +2716,18 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// full investigation first.
 	var baselineWindow, hintedWindow contractsv1.ContextFabricBoundSubjectReceipt
 	if !isWindow {
-		var windowErr error
-		baselineWindow, windowErr = mintWindowPrecondition("inferredtierwindowsetupbaseline")
-		if windowErr != nil {
+		var windowReason string
+		var windowCause error
+		baselineWindow, windowReason, windowCause = mintWindowPrecondition("inferredtierwindowsetupbaseline")
+		if windowReason != "" {
 			res.PairInvalid = true
-			res.ArmInvalidReason = windowErr.Error()
+			twoTurnStampArmFailure(&res, windowReason, windowCause)
 			return res
 		}
-		hintedWindow, windowErr = mintWindowPrecondition("inferredtierwindowsetuphinted")
-		if windowErr != nil {
+		hintedWindow, windowReason, windowCause = mintWindowPrecondition("inferredtierwindowsetuphinted")
+		if windowReason != "" {
 			res.PairInvalid = true
-			res.ArmInvalidReason = windowErr.Error()
+			twoTurnStampArmFailure(&res, windowReason, windowCause)
 			return res
 		}
 	}
@@ -2717,8 +2751,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			// separately so it is never silently absorbed into either
 			// bucket (InferredPairInvalidCount's own doc comment).
 			res.PairInvalid = true
-			res.ArmInvalidReason = "baseline investigate error: " + contextFabricRejectionClass(baselineErr)
-			twoTurnStampArmError(&res, baselineErr)
+			twoTurnStampArmFailure(&res, "baseline investigate error: "+contextFabricRejectionClass(baselineErr), baselineErr)
 			return res
 		}
 		if trace != nil {
@@ -2744,8 +2777,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	cancel()
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
-		twoTurnStampArmError(&res, err)
+		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
 		// codex xhigh review round 1 (HIGH, confirmed): a hinted-call
 		// error is exactly as much "this pairing could not be evaluated
 		// AT ALL" as a baseline-call error is (this function's own doc
@@ -3216,7 +3248,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		var err error
 		offerResultID, err = seedAnchorNegativeResult(ctx, store, principal, index, entry, receiptID, anchorTerms, runToken)
 		if err != nil {
-			res.ArmInvalidReason = "harness-seeded anchor negative could not be made redeemable: " + anchorSeedRejectionClass(err)
+			twoTurnStampArmFailure(&res, "harness-seeded anchor negative could not be made redeemable: "+anchorSeedRejectionClass(err), err)
 			return res
 		}
 	} else {
@@ -3237,7 +3269,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 		setupResult, err := investigator.Investigate(setupCtx, principal, setupReq)
 		cancel()
 		if err != nil {
-			res.ArmInvalidReason = "setup turn failed: " + contextFabricRejectionClass(err)
+			twoTurnStampArmFailure(&res, "setup turn failed: "+contextFabricRejectionClass(err), err)
 			return res
 		}
 		offerResultID = setupResult.ResultID
@@ -3260,8 +3292,7 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 	turn2, err := investigator.Investigate(callCtx, principal, req)
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-		res.ArmInvalidReason = "investigate error: " + contextFabricRejectionClass(err)
-		twoTurnStampArmError(&res, err)
+		twoTurnStampArmFailure(&res, "investigate error: "+contextFabricRejectionClass(err), err)
 		return res
 	}
 	res.Turn2Status = string(turn2.Status)
@@ -3331,8 +3362,7 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 			// tripped==ran invariant then correctly flags it as a finding
 			// rather than a false pass.
 			res.Turn2Status = "error:" + contextFabricRejectionClass(err)
-			res.ArmInvalidReason = "investigate error (inconclusive, not counted as a trip): " + contextFabricRejectionClass(err)
-			twoTurnStampArmError(&res, err)
+			twoTurnStampArmFailure(&res, "investigate error (inconclusive, not counted as a trip): "+contextFabricRejectionClass(err), err)
 			return res
 		}
 		res.Turn2Status = string(result.Status)
