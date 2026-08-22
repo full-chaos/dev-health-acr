@@ -1443,28 +1443,49 @@ func FinalizeExactResolution(candidatesBySubject map[string]contextfabric.Subjec
 }
 
 // FinalizeExactResolutionWithBasis is FinalizeExactResolution plus the
-// CommitBasisSet for what it committed: CommitBasisCallerCanonicalID for
-// every subject, without exception.
+// CommitBasisSet for what it committed -- recorded PER CLASS, not
+// uniformly.
 //
-// This is the caller-hint SHORT CIRCUIT (resolve.go's
-// AnyCallerSourced branch) -- a second commit exit that never reaches
-// ResolveFromMergedCandidatesWithGateAndBasis at all. It exists because a
-// caller who named subjects by canonical id has already answered the
-// question resolution is for, so no gate runs. CHAOS-4085 must record a
-// basis here too: without it these commits would read back as
-// CommitBasisUnknown and be routed into the affirmation gate -- the
-// fail-closed direction, so the omission would be safe, but it would
-// refuse exactly the commits that carry the STRONGEST proof in the system.
+// This is the caller-hint SHORT CIRCUIT (resolve.go's AnyCallerSourced
+// branch), a second commit exit that never reaches
+// ResolveFromMergedCandidatesWithGateAndBasis at all. It fires when at
+// least ONE caller-explicit hint resolved -- and it then commits every
+// retained candidate, including RECEIPT-DERIVED ones that merely rode
+// along in the same request.
 //
-// Every candidate in this set reached it through resolve.go's hint loop:
-// keyed graph re-read (deps.ExactHint), authorization re-check
-// (AuthorizedAttributes + NodeCandidate), then Confidence=1/
-// State=Committed. Uniform basis is correct because the path is uniform.
+// The two classes do NOT carry the same proof, and this function is built
+// around that distinction already (see its own two-class truncation rule
+// above, and resolve.go's short-circuit comment: a receipt-only resolution
+// deliberately does NOT short-circuit, "so a conversational follow-up
+// naming a different subject than the one a prior receipt bound can still
+// be found and compete on its own terms"):
+//
+//   - callerSourced -- a canonical id the caller stated in THIS request
+//     (RequestedScope.SubjectHints with any source but
+//     prior_subject_receipt). The caller is asserting identity now, and
+//     the hint loop re-read it from the graph by keyed lookup and
+//     re-authorized it. CommitBasisCallerCanonicalID.
+//   - everything else retained here -- a subject derived from a PRIOR
+//     result's receipt. It was re-read and re-authorized identically, but
+//     the identity it names was chosen in an earlier turn and may itself
+//     have been an engine-proposed, statistically-ranked candidate. Under
+//     DP9 that is not a proof, and stamping it proven would launder a
+//     prior statistical guess into an exemption one request later.
+//     CommitBasisStatistical -- it commits exactly as before, it simply
+//     has to be affirmed like any other scored subject.
+//
+// Codex xhigh review round 3, HIGH: the previous version stamped every
+// retained subject CommitBasisCallerCanonicalID, which collapsed exactly
+// the distinction this function's own truncation rule exists to preserve.
 func FinalizeExactResolutionWithBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, callerSourced map[string]bool, max int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet) {
 	resolution := FinalizeExactResolution(candidatesBySubject, callerSourced, max)
 	bases := make(contextfabric.CommitBasisSet, len(resolution.Committed))
 	for _, subject := range resolution.Committed {
-		bases.Record(subject, contextfabric.CommitBasisCallerCanonicalID)
+		if callerSourced[SubjectKey(subject)] {
+			bases.Record(subject, contextfabric.CommitBasisCallerCanonicalID)
+			continue
+		}
+		bases.Record(subject, contextfabric.CommitBasisStatistical)
 	}
 	return resolution, bases
 }

@@ -295,10 +295,12 @@ func commitSubjectAffirmed(subject SubjectRef, result InvestigationResult, input
 
 	// A canonical fact the ENGINE actually read for this subject. This is
 	// the non-model half of shape 1's conjunct: ClaimedFacts is model
-	// output, and the result contract does not itself check a claimed
-	// fact's VALUE against the canonical facts that were supplied (see
-	// ContextFabricClaimedFact's own doc comment), so a claimed fact alone
-	// would let a fabricated claim about the committed subject affirm it.
+	// output, and ContextFabricInvestigationResult.Validate checks only a
+	// claimed fact's STRUCTURE -- value-level agreement with the canonical
+	// facts that were supplied is checked elsewhere (ValidateAgainst), not
+	// by the validation this result has necessarily passed at the point
+	// this gate runs. A claimed fact alone would therefore let a fabricated
+	// claim about the committed subject affirm it.
 	// Pairing it with "the fact read returned at least one fact for this
 	// subject" restores sol@xhigh change 1's requirement that a
 	// subject-bearing claim stand on a canonical fact attributable to that

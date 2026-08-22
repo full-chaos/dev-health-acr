@@ -755,14 +755,36 @@ func TestChaos4085_PathGroundedDriverAffirmsRegardlessOfWhichEndpointIsCommitted
 		t.Fatalf("a path-grounded driver naming the committed subject must affirm, got %v", committedEndpoint.SubjectResolution.Committed)
 	}
 
-	// Endpoint two: the OTHER end of the same path is named instead. The
-	// committed subject is no longer the driver's subject at all, so there
-	// is no subject-bound support for it and it must retract -- which is
-	// what keeps this rule from degenerating into "any path mentions it".
-	otherEndpoint := affirmationResult()
-	otherEndpoint.Drivers = pathDriver(affirmationOther)
-	applyCommitAffirmation(&otherEndpoint, statisticalInputs(affirmationGraphWithPath(), emptyAffirmationFacts(), otherEndpoint))
-	if len(otherEndpoint.SubjectResolution.Committed) != 0 {
-		t.Fatalf("a driver about the OTHER endpoint provides no subject-bound support for the committed subject, got %v", otherEndpoint.SubjectResolution.Committed)
+	// Endpoint two: the OTHER end of the SAME path is what got committed,
+	// and its own driver grounds on that same path. This is the case the
+	// LIMITS section documents -- it affirms, and it affirms for exactly
+	// the same structural reason endpoint one does. Committing the wrong
+	// end of a real relationship is indistinguishable here from committing
+	// the right end (codex xhigh review round 3, MEDIUM: the previous
+	// version of this test never actually committed the other endpoint, so
+	// an endpoint-sensitive implementation would have passed it).
+	otherCommitted := affirmationResult()
+	otherCommitted.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_other_padding", Subject: affirmationOther, State: ResolutionCommitted,
+			MatchReasons: []string{"hybrid graph search"}, Confidence: 0.755,
+			EvidenceRefIDs: []string{affirmationOtherRef},
+		}},
+		Committed: []SubjectRef{affirmationOther},
+	}
+	otherCommitted.Drivers = pathDriver(affirmationOther)
+	applyCommitAffirmation(&otherCommitted, statisticalInputs(affirmationGraphWithPath(), emptyAffirmationFacts(), otherCommitted))
+	if len(otherCommitted.SubjectResolution.Committed) != 1 {
+		t.Fatalf("the documented limit: the other endpoint affirms identically, got %v", otherCommitted.SubjectResolution.Committed)
+	}
+
+	// What must NOT hold, so the rule does not degenerate into "any path
+	// mentions it": a driver about a subject that is NOT the committed one
+	// provides no subject-bound support, whichever path it grounds on.
+	mismatched := affirmationResult()
+	mismatched.Drivers = pathDriver(affirmationOther)
+	applyCommitAffirmation(&mismatched, statisticalInputs(affirmationGraphWithPath(), emptyAffirmationFacts(), mismatched))
+	if len(mismatched.SubjectResolution.Committed) != 0 {
+		t.Fatalf("a driver naming a different subject must not affirm the committed one, got %v", mismatched.SubjectResolution.Committed)
 	}
 }

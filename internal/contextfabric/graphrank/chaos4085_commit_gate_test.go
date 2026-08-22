@@ -208,32 +208,39 @@ func TestChaos4085_PreCommittedCallerHintIsProven(t *testing.T) {
 	}
 }
 
-// TestChaos4085_FinalizeExactResolutionRecordsCallerCanonicalIDForEverySubject
-// covers the SECOND commit exit -- resolve.go's caller-hint short circuit,
-// which never reaches the gate function at all. An unrecorded basis there
-// would be safe (unknown reads strict) but would refuse exactly the
-// commits carrying the strongest proof in the system.
-func TestChaos4085_FinalizeExactResolutionRecordsCallerCanonicalIDForEverySubject(t *testing.T) {
-	first := corroborationCandidate("hint_one", 1, contextfabric.MatchExact)
-	second := corroborationCandidate("hint_two", 1, contextfabric.MatchExact)
+// TestChaos4085_ExactHintShortCircuitRecordsBasisPerClass covers the SECOND
+// commit exit -- resolve.go's caller-hint short circuit, which never
+// reaches the gate function at all -- and specifically the MIXED request
+// codex xhigh review round 3's HIGH names.
+//
+// The short circuit fires when at least ONE caller-explicit hint resolved,
+// and then commits every retained candidate, including receipt-derived ones
+// that merely rode along. Those two classes do not carry the same proof: a
+// receipt names an identity chosen in an EARLIER turn, which may itself
+// have been an engine-proposed, statistically-ranked candidate. Stamping it
+// proven would launder a prior statistical guess into an exemption one
+// request later.
+func TestChaos4085_ExactHintShortCircuitRecordsBasisPerClass(t *testing.T) {
+	explicit := corroborationCandidate("hint_explicit", 1, contextfabric.MatchExact)
+	fromReceipt := corroborationCandidate("hint_receipt", 1, contextfabric.MatchExact)
 	bySubject := map[string]contextfabric.SubjectCandidate{
-		SubjectKey(first.Subject):  first,
-		SubjectKey(second.Subject): second,
+		SubjectKey(explicit.Subject):    explicit,
+		SubjectKey(fromReceipt.Subject): fromReceipt,
 	}
-	callerSourced := map[string]bool{
-		SubjectKey(first.Subject):  true,
-		SubjectKey(second.Subject): true,
-	}
+	// Exactly resolve.go's own bookkeeping: only a hint whose Source is NOT
+	// prior_subject_receipt is marked caller-sourced.
+	callerSourced := map[string]bool{SubjectKey(explicit.Subject): true}
 
 	resolution, bases := FinalizeExactResolutionWithBasis(bySubject, callerSourced, 10)
 
 	if len(resolution.Committed) != 2 {
-		t.Fatalf("both hinted subjects must commit, got %v", resolution.Committed)
+		t.Fatalf("both hinted subjects still commit, got %v", resolution.Committed)
 	}
-	for _, subject := range resolution.Committed {
-		if basis := bases.For(subject); basis != contextfabric.CommitBasisCallerCanonicalID {
-			t.Fatalf("%s: basis = %q, want %q", subject.CanonicalID, basis, contextfabric.CommitBasisCallerCanonicalID)
-		}
+	if basis := bases.For(explicit.Subject); basis != contextfabric.CommitBasisCallerCanonicalID {
+		t.Fatalf("a canonical id the caller stated in THIS request: basis = %q, want %q", basis, contextfabric.CommitBasisCallerCanonicalID)
+	}
+	if basis := bases.For(fromReceipt.Subject); basis != contextfabric.CommitBasisStatistical {
+		t.Fatalf("a receipt-derived rider must not be exempted: basis = %q, want %q", basis, contextfabric.CommitBasisStatistical)
 	}
 }
 
