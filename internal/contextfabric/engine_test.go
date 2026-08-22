@@ -300,7 +300,13 @@ type recordingTelemetry struct {
 	// arguments verbatim, mirroring falkorgraph's own recordingTelemetry
 	// (vector_test.go) -- a slice/struct list, not just a count, so a test
 	// can assert the EXACT reason/id values reported.
-	subjectlessTerminalReasons     []string
+	subjectlessTerminalReasons []string
+	// factScopeExpansions (CHAOS-4099) records every scope-expansion event
+	// verbatim, same list-not-count discipline as the fields around it: a
+	// test asserts the EXACT closed-vocabulary outcome and the exact counts,
+	// because "an event happened" is precisely the assertion that let
+	// CHAOS-4085's fields ship unread.
+	factScopeExpansions            []FactScopeExpansionEvent
 	priorSubjectReceiptSkipReasons []priorSubjectReceiptSkipReasonRecord
 	answerReuseServedRequestIDs    []answerReuseServedRequestIDRecord
 	bindingEpochDeltas             []bindingEpochDeltaRecord
@@ -377,6 +383,10 @@ func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ stor
 
 func (r *recordingTelemetry) RecordSynthesisStatusOverride(_ context.Context, _ storage.Principal, outcome SynthesisStatusOverrideOutcome) {
 	r.synthesisStatusOverrides = append(r.synthesisStatusOverrides, outcome)
+}
+
+func (r *recordingTelemetry) RecordFactScopeExpansion(_ context.Context, _ storage.Principal, event FactScopeExpansionEvent) {
+	r.factScopeExpansions = append(r.factScopeExpansions, event)
 }
 
 func (r *recordingTelemetry) RecordPriorSubjectReceiptSkipReason(_ context.Context, _ storage.Principal, reason string, count int, epochDelta int64) {

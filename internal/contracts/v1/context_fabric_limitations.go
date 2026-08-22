@@ -113,6 +113,27 @@ const ContextFabricCommitRetractionLimitation = "A candidate subject was identif
 // clarification to offer.
 const ContextFabricSynthesisClarificationUnavailableLimitation = "This question could not be answered from the evidence assembled, and no clarification could be offered to narrow it further."
 
+// ContextFabricFactScopeUnexpandedLimitation is CHAOS-4099's disclosure that
+// a requested fact family could not be reached from the subject this answer
+// is about.
+//
+// WHY THIS STRING EXISTS AT ALL. Before it, that situation was reported to
+// the reader as nothing whatsoever: the fact planner pruned the capability,
+// SourcePruned is documented as a PROOF that nothing is missing, and the
+// answer went out saying it had found no match -- with no indication that
+// the evidence had never been looked for. A project-scoped question about
+// pull requests, reviews or metrics is the live case (see
+// internal/contextfabric/fact_scope.go's header), and the reader could not
+// tell it apart from a project that genuinely has none.
+//
+// FIXED AND NON-INTERPOLATED, the same discipline every disclosure above
+// holds. It names no fact family, no subject kind, no policy and no
+// traversal: those are operator-facing detail, and telemetry
+// (RecordFactScopeExpansion) receives all of them. What a READER needs is
+// the one thing that changes how they should read the answer -- that its
+// silence on some evidence is a gap in reach, not a finding of absence.
+const ContextFabricFactScopeUnexpandedLimitation = "Some requested evidence could not be reached from the subject of this question, so this answer's silence on it is a limit of what was retrievable rather than a finding that none exists."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -129,6 +150,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricObservedTimeLimitation,
 		ContextFabricCommitRetractionLimitation,
 		ContextFabricSynthesisClarificationUnavailableLimitation,
+		ContextFabricFactScopeUnexpandedLimitation,
 	}
 }
 

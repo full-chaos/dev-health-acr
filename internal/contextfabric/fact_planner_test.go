@@ -229,6 +229,14 @@ func TestFactPlanInputCarriesNoInterpretation(t *testing.T) {
 	want := map[string]string{
 		"Subjects":     "[]v1.ContextFabricSubjectRef",
 		"Requirements": "[]contextfabric.factPlanRequirement",
+		// CHAOS-4099. Reviewed deliberately, which is what this guard is
+		// for. FactReadScope is composed by FactReadScopeResolver from
+		// factScopeResolveInput -- a type narrowed the same way this one is,
+		// carrying subjects, requirement kinds and the temporal axis, and no
+		// prose. So the addition does not reopen the hole this test closes:
+		// the planner still cannot reach a model-authored string through it,
+		// transitively or otherwise.
+		"Scope": "*contextfabric.FactReadScope",
 	}
 	inputType := reflect.TypeOf(factPlanInput{})
 	if inputType.NumField() != len(want) {
@@ -377,7 +385,7 @@ func TestReadFactsPrunesInsteadOfFailingTheWholeBundle(t *testing.T) {
 		result:     FactProviderResult{State: SourceNoData, Reason: "no forecast rows"},
 	}
 	metrics := &factProviderStub{
-		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		capability: planCapability(FactIdentity, "identity", SubjectRepository),
 		result:     FactProviderResult{State: SourceAvailable},
 	}
 
@@ -387,7 +395,7 @@ func TestReadFactsPrunesInsteadOfFailingTheWholeBundle(t *testing.T) {
 	}
 	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 		Subjects:     []SubjectRef{team},
-		Requirements: []FactRequirement{{Kind: FactWorkload}, {Kind: FactMetrics}},
+		Requirements: []FactRequirement{{Kind: FactWorkload}, {Kind: FactIdentity}},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v, want the inapplicable capability pruned rather than the bundle failed", err)
@@ -403,7 +411,7 @@ func TestReadFactsPrunesInsteadOfFailingTheWholeBundle(t *testing.T) {
 	for _, source := range bundle.Coverage.Sources {
 		byKind[source.Source] = source
 	}
-	pruned, ok := byKind["canonical_fact:metrics"]
+	pruned, ok := byKind["canonical_fact:identity"]
 	if !ok {
 		t.Fatalf("coverage = %+v, want the pruned capability recorded -- absence must be explainable", bundle.Coverage.Sources)
 	}
@@ -430,7 +438,7 @@ func TestReadFactsPruningIsNotADegradation(t *testing.T) {
 		result:     FactProviderResult{State: SourceAvailable},
 	}
 	metrics := &factProviderStub{
-		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		capability: planCapability(FactIdentity, "identity", SubjectRepository),
 		result:     FactProviderResult{State: SourceAvailable},
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{workload, metrics}, FactRegistryOptions{})
@@ -439,7 +447,7 @@ func TestReadFactsPruningIsNotADegradation(t *testing.T) {
 	}
 	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 		Subjects:     []SubjectRef{subject(SubjectTeam, "team_platform")},
-		Requirements: []FactRequirement{{Kind: FactWorkload}, {Kind: FactMetrics}},
+		Requirements: []FactRequirement{{Kind: FactWorkload}, {Kind: FactIdentity}},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
@@ -957,7 +965,7 @@ func TestReadFactsRejectsOutOfScopeExplicitSubjects(t *testing.T) {
 		t.Helper()
 		// Repository-only, so neither a project nor a team subject fits it.
 		metrics := &factProviderStub{
-			capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+			capability: planCapability(FactIdentity, "identity", SubjectRepository),
 			result:     FactProviderResult{State: SourceAvailable},
 		}
 		registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
@@ -974,7 +982,7 @@ func TestReadFactsRejectsOutOfScopeExplicitSubjects(t *testing.T) {
 			Subjects: []SubjectRef{repository},
 			Requirements: []FactRequirement{
 				// project_titan is in NO part of this investigation's scope.
-				{Kind: FactMetrics, Subjects: []SubjectRef{outOfScopeProject}},
+				{Kind: FactIdentity, Subjects: []SubjectRef{outOfScopeProject}},
 			},
 		})
 		if err == nil {
@@ -996,7 +1004,7 @@ func TestReadFactsRejectsOutOfScopeExplicitSubjects(t *testing.T) {
 			// legitimate assertion -- the capability simply cannot serve it.
 			Subjects: []SubjectRef{repository, inScopeTeam},
 			Requirements: []FactRequirement{
-				{Kind: FactMetrics, Subjects: []SubjectRef{inScopeTeam}},
+				{Kind: FactIdentity, Subjects: []SubjectRef{inScopeTeam}},
 			},
 		})
 		if err != nil {
@@ -1016,7 +1024,7 @@ func TestReadFactsRejectsOutOfScopeExplicitSubjects(t *testing.T) {
 		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 			Subjects: []SubjectRef{repository, inScopeTeam},
 			Requirements: []FactRequirement{
-				{Kind: FactMetrics, Subjects: []SubjectRef{repository}},
+				{Kind: FactIdentity, Subjects: []SubjectRef{repository}},
 			},
 		}); err != nil {
 			t.Fatalf("ReadFacts() error = %v, want a valid scoped requirement honored", err)
@@ -1177,7 +1185,7 @@ func TestReadFactsRejectsDuplicateSubjectsEvenWhenEverythingPrunes(t *testing.T)
 	newRegistry := func(t *testing.T) (*FactCapabilityRegistry, *factProviderStub) {
 		t.Helper()
 		metrics := &factProviderStub{
-			capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+			capability: planCapability(FactIdentity, "identity", SubjectRepository),
 			result:     FactProviderResult{State: SourceAvailable},
 		}
 		registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
@@ -1194,7 +1202,7 @@ func TestReadFactsRejectsDuplicateSubjectsEvenWhenEverythingPrunes(t *testing.T)
 			// The same subject twice: rejected by uniqueItems on the wire, so
 			// it must not be quietly accepted here either.
 			Subjects:     []SubjectRef{team, team},
-			Requirements: []FactRequirement{{Kind: FactMetrics}},
+			Requirements: []FactRequirement{{Kind: FactIdentity}},
 		})
 		if err == nil {
 			t.Fatal("ReadFacts() error = nil, want a duplicated subject rejected even when every requirement prunes")
@@ -1214,7 +1222,7 @@ func TestReadFactsRejectsDuplicateSubjectsEvenWhenEverythingPrunes(t *testing.T)
 			Subjects: []SubjectRef{team},
 			Requirements: []FactRequirement{
 				// In scope, but duplicated within the requirement's own list.
-				{Kind: FactMetrics, Subjects: []SubjectRef{team, team}},
+				{Kind: FactIdentity, Subjects: []SubjectRef{team, team}},
 			},
 		})
 		if err == nil {
@@ -1230,7 +1238,7 @@ func TestReadFactsRejectsDuplicateSubjectsEvenWhenEverythingPrunes(t *testing.T)
 		registry, metrics := newRegistry(t)
 		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 			Subjects:     []SubjectRef{team},
-			Requirements: []FactRequirement{{Kind: FactMetrics}},
+			Requirements: []FactRequirement{{Kind: FactIdentity}},
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts() error = %v, want a valid all-unsupported request to prune, not fail", err)
@@ -1249,7 +1257,7 @@ func TestReadFactsRejectsDuplicateSubjectsEvenWhenEverythingPrunes(t *testing.T)
 		registry, metrics := newRegistry(t)
 		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 			Subjects:     []SubjectRef{repository},
-			Requirements: []FactRequirement{{Kind: FactMetrics}},
+			Requirements: []FactRequirement{{Kind: FactIdentity}},
 		}); err != nil {
 			t.Fatalf("ReadFacts() error = %v, want a valid request unaffected by the uniqueness guard", err)
 		}
@@ -1279,7 +1287,7 @@ func TestReadFactsRejectsDisallowedParametersEvenWhenEverythingPrunes(t *testing
 		t.Helper()
 		metrics := &factProviderStub{
 			capability: FactCapability{
-				Kind: FactMetrics, Name: "metrics", Version: "v1",
+				Kind: FactIdentity, Name: "identity", Version: "v1",
 				SupportedSubjectKinds: []SubjectKind{SubjectRepository},
 				AllowedParameters:     []string{"window_days"},
 			},
@@ -1300,7 +1308,7 @@ func TestReadFactsRejectsDisallowedParametersEvenWhenEverythingPrunes(t *testing
 			// requirement prunes, so buildFactQuery never ran.
 			Subjects: []SubjectRef{team},
 			Requirements: []FactRequirement{
-				{Kind: FactMetrics, Parameters: map[string]string{"sql": "select *"}},
+				{Kind: FactIdentity, Parameters: map[string]string{"sql": "select *"}},
 			},
 		})
 		if err == nil {
@@ -1320,7 +1328,7 @@ func TestReadFactsRejectsDisallowedParametersEvenWhenEverythingPrunes(t *testing
 		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 			Subjects: []SubjectRef{team},
 			Requirements: []FactRequirement{
-				{Kind: FactMetrics, Parameters: map[string]string{"window_days": "30"}},
+				{Kind: FactIdentity, Parameters: map[string]string{"window_days": "30"}},
 			},
 		})
 		if err != nil {
@@ -1340,7 +1348,7 @@ func TestReadFactsRejectsDisallowedParametersEvenWhenEverythingPrunes(t *testing
 		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 			Subjects: []SubjectRef{repository},
 			Requirements: []FactRequirement{
-				{Kind: FactMetrics, Parameters: map[string]string{"sql": "select *"}},
+				{Kind: FactIdentity, Parameters: map[string]string{"sql": "select *"}},
 			},
 		}); err == nil {
 			t.Fatal("ReadFacts() error = nil, want the pre-existing rejection preserved on the running path")

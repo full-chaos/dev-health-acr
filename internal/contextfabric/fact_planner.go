@@ -27,6 +27,22 @@ const (
 	// cannot be a second Coverage entry -- it is prefixed onto the
 	// capability's own observation instead.
 	FactNarrowReasonSubjectKindUnsupported = "narrowed:subject_kind_unsupported"
+	// FactScopeReasonUnexpanded is CHAOS-4099's SEPARATE prefix for a
+	// capability that no resolved subject can answer directly AND that
+	// scope expansion did not reach.
+	//
+	// A THIRD PREFIX RATHER THAN A FOURTH SPELLING OF "pruned" (ruling
+	// invariant 7). The two prefixes above both describe a decision the
+	// planner can PROVE: the capability's declared subject kinds and the
+	// resolved subject kinds do not intersect, therefore no admissible fact
+	// existed. This prefix describes the opposite epistemic state -- the
+	// facts may well exist and be reachable, and the system did not reach
+	// them. Reusing "pruned:" for it is precisely how a structural gap came
+	// to be reported as a proof of absence for the whole life of this
+	// defect. The suffix after the colon is the closed
+	// FactScopeExpansionOutcome value, so operators and tests match on a
+	// vocabulary rather than parsing a sentence.
+	FactScopeReasonUnexpanded = "unexpanded"
 )
 
 // factPlanRequirement is one requested fact family, reduced to the only two
@@ -64,6 +80,12 @@ type factPlanInput struct {
 	// the narrowed list the caller will query with.
 	Subjects     []SubjectRef
 	Requirements []factPlanRequirement
+	// Scope is the resolved fact-read scope (CHAOS-4099), or nil when none
+	// was resolved. The planner reads exactly two things from it -- the
+	// derived read subjects for a requirement, and whether a requirement it
+	// is about to prune has a disclosed gap -- and nothing else is
+	// reachable, for the same type-system reason prose is absent above.
+	Scope *FactReadScope
 }
 
 // newFactPlanInput is the boundary that strips a CanonicalFactRequest down
@@ -79,6 +101,7 @@ func newFactPlanInput(request CanonicalFactRequest) factPlanInput {
 	return factPlanInput{
 		Subjects:     investigationScopeSubjects(request),
 		Requirements: requirements,
+		Scope:        request.Scope,
 	}
 }
 
@@ -96,6 +119,16 @@ type factPlanEntry struct {
 	Pruned   bool
 	Narrowed bool
 	Reason   string
+	// ScopeGap is set (CHAOS-4099) instead of Pruned when the capability
+	// could not be answered directly AND scope expansion did not reach it.
+	//
+	// It is a DIFFERENT field rather than a variant of Pruned because the
+	// two produce different source states and different answer-level
+	// consequences: a prune contributes SourcePruned and leaves the answer
+	// whole, while a gap contributes a DEGRADING state and a disclosure.
+	// Both being expressible as `Pruned: true` with a different reason
+	// string is how the distinction would erode.
+	ScopeGap *FactScopeGap
 }
 
 // planFactReads decides, after interpretation and before any fan-out, which
@@ -164,6 +197,16 @@ func planFactReads(input factPlanInput, capabilities map[FactKind]FactCapability
 		if len(subjects) == 0 {
 			subjects = input.Subjects
 		}
+		// CHAOS-4099: derived read subjects are appended to the ROOTS the
+		// requirement already had, never substituted for them. A requirement
+		// with one directly-supported root and three derived targets must
+		// read all four; dropping the root would silently narrow a scope the
+		// caller actually asked for.
+		//
+		// Appended AFTER the roots and deduplicated so the resulting order
+		// is a function of the input alone (ruling invariant 8) -- the
+		// derived list is already deterministically ordered by the resolver.
+		subjects = appendDerivedReadSubjects(subjects, input.Scope.derivedSubjectsFor(requirement.Kind))
 		supported, unsupportedKinds := partitionBySupportedSubjectKind(subjects, capability.SupportedSubjectKinds)
 		switch {
 		case len(subjects) == 0:
@@ -174,6 +217,23 @@ func planFactReads(input factPlanInput, capabilities map[FactKind]FactCapability
 			// collapsing the two would hide it.
 			plan = append(plan, factPlanEntry{Kind: requirement.Kind})
 		case len(supported) == 0:
+			// CHAOS-4099: the ONE branch this ticket changes. A prune here
+			// used to be reported unconditionally as a proof of absence. It
+			// still is -- but only when the resolver holds no gap for this
+			// requirement, which means no known path from these subject
+			// kinds exists and "nothing is missing" is honest. When the
+			// resolver DOES hold a gap, the honest statement is the opposite
+			// one, and it is made here rather than downstream so the
+			// coverage observation and the answer's disclosure derive from a
+			// single decision.
+			if gap, disclosed := input.Scope.gapFor(requirement.Kind); disclosed {
+				plan = append(plan, factPlanEntry{
+					Kind:     requirement.Kind,
+					ScopeGap: &gap,
+					Reason:   unexpandedReason(capability, gap),
+				})
+				continue
+			}
 			plan = append(plan, factPlanEntry{
 				Kind:   requirement.Kind,
 				Pruned: true,
@@ -212,11 +272,29 @@ func planFactReads(input factPlanInput, capabilities map[FactKind]FactCapability
 // requirement naming it was pruned (or, for a project-capable capability,
 // actually QUERIED) instead of being rejected as out of scope. One
 // derivation, used everywhere, is the only fix that stays fixed.
+// CHAOS-4099 amends that derivation in exactly one way: a subject the
+// FactReadScopeResolver ADMITTED as a derived read target is in scope too.
+// It has to be -- buildFactQuery rejects any subject outside this map, and
+// mergeFactProviderResult rejects any FACT whose subject is outside it, so a
+// derived read that were not admitted here would be planned, queried, and
+// then thrown away as out of scope.
+//
+// The widening comes ONLY from request.Scope.Derivations, never from a rule
+// about kinds (ruling invariant 4). That is the difference between "this
+// specific repository entered scope because this specific policy derived it,
+// and the provenance says so" and "project questions may now read
+// repositories" -- the second is the global widen option D was ratified
+// instead of.
 func investigationScopeSubjectSet(request CanonicalFactRequest) map[string]SubjectRef {
 	subjects := investigationScopeSubjects(request)
 	scope := make(map[string]SubjectRef, len(subjects))
 	for _, subject := range subjects {
 		scope[canonicalFactSubjectKey(subject)] = subject
+	}
+	if request.Scope != nil {
+		for _, derivation := range request.Scope.Derivations {
+			scope[canonicalFactSubjectKey(derivation.Target)] = derivation.Target
+		}
 	}
 	return scope
 }
@@ -273,6 +351,64 @@ func prunedReason(capability FactCapability, unsupported []SubjectKind) string {
 		"%s: no resolved subject has a kind this capability supports (resolved: %s; supported: %s)",
 		FactPruneReasonSubjectKindUnsupported, joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
 	)
+}
+
+// unexpandedReason composes the coverage reason for a disclosed scope gap.
+//
+// KINDS AND POLICY NAMES ONLY -- never a canonical id, a label, or a count of
+// subjects the caller may not see. The same rule prunedReason states: a
+// coverage reason is stored, replayed and read by operators, and the kind and
+// policy vocabularies are closed and content-free while identities are
+// investigation content.
+//
+// AuthorizationDroppedCount deliberately has no place here even though the
+// resolver knows it: telling a reader "3 targets existed but you cannot see
+// them" is an existence side-channel (ruling invariant 9). That count goes to
+// telemetry, and only to telemetry.
+func unexpandedReason(capability FactCapability, gap FactScopeGap) string {
+	return fmt.Sprintf(
+		"%s:%s: no resolved subject holds this capability's facts directly and scope expansion did not reach them (origin: %s; supported: %s; policy: %s; basis: %s)",
+		FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,
+		joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
+	)
+}
+
+// appendDerivedReadSubjects appends derived targets to a root subject list,
+// skipping any already present.
+//
+// Dedup is by canonicalFactSubjectKey -- the SAME key buildFactQuery's own
+// uniqueness check uses. That is not a coincidence to be preserved by
+// vigilance: buildFactQuery REJECTS a query whose subjects repeat, so a
+// derived target that duplicates a root would turn a successful expansion
+// into a whole-investigation failure. Deriving both from one key function is
+// what makes that impossible rather than merely unlikely.
+func appendDerivedReadSubjects(roots []SubjectRef, derived []SubjectRef) []SubjectRef {
+	if len(derived) == 0 {
+		return roots
+	}
+	seen := make(map[string]struct{}, len(roots)+len(derived))
+	combined := make([]SubjectRef, 0, len(roots)+len(derived))
+	for _, subject := range roots {
+		key := canonicalFactSubjectKey(subject)
+		if _, exists := seen[key]; exists {
+			// A duplicate already in the roots is buildFactQuery's error to
+			// report, not this function's to silently repair -- passing it
+			// through unchanged keeps that diagnosis where it belongs.
+			combined = append(combined, subject)
+			continue
+		}
+		seen[key] = struct{}{}
+		combined = append(combined, subject)
+	}
+	for _, subject := range derived {
+		key := canonicalFactSubjectKey(subject)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		combined = append(combined, subject)
+	}
+	return combined
 }
 
 func narrowedReason(capability FactCapability, unsupported []SubjectKind, dropped int) string {
