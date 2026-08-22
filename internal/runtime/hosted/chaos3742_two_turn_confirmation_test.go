@@ -598,25 +598,29 @@ func (c *twoTurnTraceCapture) censusRan() bool {
 	return false
 }
 
-// kindInsensitivityResult reports whether kindInsensitivityProof
-// (chaos3900_structure_offers.go) was actually CONSULTED during the
-// captured call and, when it was, its own closed-vocabulary verdict --
-// CHAOS-4039's v4 measurement contract (sol-max ruling 2026-08-20),
-// replacing the prior singleSatisfierVerified proxy (a generic
-// evidence_round/would_commit check the ruling found insufficient: it
-// cannot distinguish "the proof ran and certified this exact commit" from
-// "the round reached would_commit for an unrelated reason, or never ran
-// the proof at all"). Read directly off ResolutionTraceEvent's own
-// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome fields
-// (resolve.go), themselves populated only inside RunShadowEvidenceRound's
-// PreNarrowingExplicitKinds-gated branch (chaos3899_evidence_round.go).
+// kindInsensitivityResult reports whether the kind-insensitivity proof was
+// actually CONSULTED during the captured call and, when it was, its own
+// closed-vocabulary verdict -- CHAOS-4039's v4 measurement contract
+// (sol-max ruling 2026-08-20), replacing the prior singleSatisfierVerified
+// proxy (a generic evidence_round/would_commit check the ruling found
+// insufficient: it cannot distinguish "the proof ran and certified this
+// exact commit" from "the round reached would_commit for an unrelated
+// reason, or never ran the proof at all"). Read directly off
+// ResolutionTraceEvent's own ShadowKindInsensitivityEvaluated/
+// ShadowKindInsensitivityOutcome fields (resolve.go).
 //
-// CHAOS-4079 additionally returns ShadowKindInsensitivityMode, and the
-// probe now also evaluates in a WRITE-FREE observation mode for a hint
-// that applied no narrowing -- so "evaluated" alone no longer implies the
-// verdict attests anything. Callers MUST discriminate on mode; see
-// twoTurnKindAttested, the only place this file turns a verdict into a
-// classification.
+// CHAOS-4079 additionally returns ShadowKindInsensitivityMode, because
+// those two fields are no longer produced by one mechanism (codex xhigh
+// review round 3 follow-up: this comment used to say kindInsensitivityProof
+// itself always ran, which stopped being true). Under mode=="narrowed" they
+// come from RunShadowEvidenceRound's original PreNarrowingExplicitKinds-gated
+// branch, where kindInsensitivityProof (chaos3900_structure_offers.go)
+// genuinely re-censuses the pre-narrowing kind set. Under an "observed_"
+// mode the census was never narrowed, so the identical verdict is DERIVED
+// from the round's own already-collected census results with no second read.
+// "evaluated" alone therefore no longer implies the verdict attests
+// anything; callers MUST discriminate on mode. See twoTurnKindAttested, the
+// only place this file turns a verdict into a classification.
 func (c *twoTurnTraceCapture) kindInsensitivityResult() (evaluated bool, outcome, mode string) {
 	for _, e := range c.events {
 		if e.Stage == "evidence_round" && e.ShadowKindInsensitivityEvaluated {

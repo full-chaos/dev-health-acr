@@ -564,13 +564,26 @@ type ResolutionTraceEvent struct {
 	ShadowKindsCensused          int
 	// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome
 	// (evidence_round stage ONLY, CHAOS-4039/sol-max ruling 2026-08-20,
-	// adopted plan of record): whether kindInsensitivityProof
-	// (chaos3900_structure_offers.go) was actually CONSULTED this round --
-	// true only when the round reached a would_commit/would_no_match
-	// outcome under an EXPLICIT (non-receipt) kind narrowing
-	// (input.PreNarrowingExplicitKinds non-empty) -- and, when it was, the
-	// proof's own closed-vocabulary verdict ("commit_sound" |
-	// "no_match_sound" | "kind_sensitive_outcome"). Distinct from
+	// adopted plan of record): whether the kind-insensitivity proof was
+	// CONSULTED this round -- true only when the round reached a
+	// would_commit/would_no_match outcome carrying an EXPLICIT
+	// (non-receipt) kind hint -- and, when it was, its own
+	// closed-vocabulary verdict ("commit_sound" | "no_match_sound" |
+	// "kind_sensitive_outcome").
+	//
+	// HOW the verdict was obtained depends on the mode below, and the two
+	// are NOT interchangeable (codex xhigh review round 3 follow-up --
+	// this comment previously claimed kindInsensitivityProof itself always
+	// ran, which stopped being true at CHAOS-4079):
+	//   - "narrowed": kindInsensitivityProof (chaos3900_structure_offers.go)
+	//     genuinely re-censused the PRE-narrowing kind set. Decision-bearing
+	//     -- an unsound verdict demotes the round's own Outcome.
+	//   - "observed_*": no narrowing was applied, so the pre-narrowing set
+	//     IS the set already censused and the identical verdict is DERIVED
+	//     arithmetically from this round's own KindAttestations
+	//     (kindInsensitivityOutcomeFromRound) rather than re-read. Write-free
+	//     and read-free: it issues no census call and demotes nothing.
+	// Distinct from
 	// ShadowOutcome==would_commit alone: that field cannot tell a reader
 	// whether an inferred-tier commit was actually PROVEN kind-insensitive
 	// (this proof ran and returned commit_sound) or merely reached that

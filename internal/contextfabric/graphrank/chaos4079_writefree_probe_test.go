@@ -443,6 +443,59 @@ func TestResolveSubjects_ZeroOverlapHintDoesNotChangeCommitUnderCensusDrift(t *t
 	}
 }
 
+// TestResolveSubjects_SubsumingHintWiresObservedSubsumedMode closes the
+// coverage gap codex xhigh review round 3 named: every other test drives
+// observed_no_overlap, so the resolver-to-trace assignment for the OTHER
+// observation mode (ObservedExplicitKindSubsumed) was exercised only
+// synthetically. A hint that names every pooled kind narrows nothing --
+// classifyExplicitKindNarrowing's subsumed case -- and must reach the trace
+// as "observed_subsumed", not as the no_overlap default.
+func TestResolveSubjects_SubsumingHintWiresObservedSubsumedMode(t *testing.T) {
+	t.Parallel()
+	target := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:532", "PR #532", 0.50, "*")
+	backend := &fakeGraphBackend{
+		searchResults:   map[string][]CandidateNode{"PR 532": {target}},
+		searchTruncated: true,
+		exactHints: map[string]CandidateNode{
+			SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:repo-1:532"}): target,
+		},
+	}
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	calls := 0
+	deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		calls++
+		return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierCanonicalID: "pull_request:repo-1:532"}, nil
+	}
+	request := testRequest()
+	request.Question = "why did PR 532 fail?"
+	// The pool is exactly {pull_request}; a hint naming it admits everything,
+	// so intersecting changes nothing and no narrowing is applied.
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}
+
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("PR 532"), deps, nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "pull_request:repo-1:532" {
+		t.Fatalf("resolution.Committed = %#v, want the census-attested satisfier -- a subsuming hint must not change the commit either", resolution.Committed)
+	}
+	if calls != 1 {
+		t.Fatalf("CensusFunc calls = %d, want exactly 1 -- the observation must add no read in this mode either", calls)
+	}
+	rounds := tracer.eventsForStage("evidence_round")
+	if len(rounds) != 1 {
+		t.Fatalf("evidence_round events = %d, want exactly 1", len(rounds))
+	}
+	if !rounds[0].ShadowKindInsensitivityEvaluated ||
+		rounds[0].ShadowKindInsensitivityOutcome != string(kindInsensitivityCommitSound) ||
+		rounds[0].ShadowKindInsensitivityMode != string(explicitKindNarrowingSubsumed) {
+		t.Fatalf("evidence_round probe = evaluated:%v outcome:%q mode:%q, want true/commit_sound/observed_subsumed -- ObservedExplicitKindSubsumed must survive the resolver-to-round wiring, not fall back to the no_overlap default",
+			rounds[0].ShadowKindInsensitivityEvaluated, rounds[0].ShadowKindInsensitivityOutcome, rounds[0].ShadowKindInsensitivityMode)
+	}
+}
+
 // TestResolveSubjects_NoExplicitHintLeavesProbeUnevaluated pins the blast
 // radius: the overwhelming common case (no explicit kind hint at all) is
 // untouched -- no observation, no mode, byte-identical trace to before.
