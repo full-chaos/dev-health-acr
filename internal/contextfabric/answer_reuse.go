@@ -370,7 +370,14 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// CHAOS-3900 W1: a FOURTEENTH conjunctive dimension, same mirrored
 		// discipline -- see ReuseKey.WindowInferenceVersion's own field doc
 		// comment.
-		WindowInferenceVersion:   e.reuseVersionAuthorities.WindowInferenceVersion,
+		WindowInferenceVersion: e.reuseVersionAuthorities.WindowInferenceVersion,
+		// CHAOS-4085: a FIFTEENTH conjunctive dimension, same mirrored
+		// discipline -- and the one that makes the commit gate
+		// cache-proof. This lookup runs before Interpret and before
+		// synthesis, so without it a row saved under the old gate would be
+		// served with its old Committed list intact. See
+		// ReuseKey.CommitGateVersion's own field doc comment.
+		CommitGateVersion:        e.reuseVersionAuthorities.CommitGateVersion,
 		QueryVersion:             e.reuseVersionAuthorities.QueryVersion,
 		CanonicalServiceVersion:  e.reuseVersionAuthorities.CanonicalServiceVersion,
 		ModelOutputSchemaVersion: e.reuseVersionAuthorities.ModelOutputSchemaVersion,
@@ -545,7 +552,16 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// ConfirmedExpectedKind reaching this call site would mean the
 	// bypass itself had broken. CHAOS-4042: ConfirmedAnchorSelection is
 	// nil here for the identical reason.
-	resolution, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil)
+	// CHAOS-4085: the commit basis is discarded here on purpose. This
+	// recheck asks only "is every subject the stored answer speaks for
+	// still resolvable and still authorized for THIS principal" -- it never
+	// produces a commit of its own. The stored answer's own commits were
+	// already gated (by affirmation, or by a proven identity) when it was
+	// synthesized and saved, and the reuse VERSION fence
+	// (chaos4085CommitGateReuseVersion, chaos4085_commit_affirmation.go) is
+	// what keeps a row saved BEFORE that gate existed from being served
+	// through this path at all.
+	resolution, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil)
 	if err != nil {
 		return false, AnswerReuseMissAuthorization
 	}

@@ -287,8 +287,8 @@ func TestChaos3899D2BCardinality(t *testing.T) {
 			}
 			m.Axis = string(interpreted.TimeContext.Axis)
 
-			baselineRes, _, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
-			wiredRes, _, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+			baselineRes, _, _, baselineErr := baselineGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+			wiredRes, _, _, wiredErr := wiredGraph.ResolveSubjects(callCtx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 
 			if baselineErr != nil || wiredErr != nil {
 				m.DiffClass = replayChangedOther

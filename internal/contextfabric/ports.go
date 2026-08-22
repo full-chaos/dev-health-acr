@@ -148,7 +148,18 @@ type GraphReader interface {
 	// confirmedAnchor (CHAOS-4042) is ConfirmedExpectedKind's own sibling
 	// for the subject_anchor member -- see ConfirmedAnchorSelection's own
 	// doc comment.
-	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, error)
+	// CHAOS-4085: the third return is the CommitBasisSet -- for every
+	// subject in the returned Committed list, WHICH CLASS OF PROOF the
+	// commit stood on (see CommitBasis). It is in the SIGNATURE rather
+	// than a side channel for the reason this file already applies to
+	// every other load-bearing value (ResolvedGraphBinding above): the
+	// engine's post-synthesis affirmation gate cannot decide correctly
+	// without it, so an implementation that omits it must fail to compile,
+	// not change behavior silently. An implementation that returns nil is
+	// nevertheless SAFE, not broken: every basis then reads back as
+	// CommitBasisUnknown, IdentityProven reports false, and every commit
+	// takes the strict path.
+	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
 }
 
@@ -730,6 +741,29 @@ type ReuseKey struct {
 	// inferred) would require a dynamic, per-Save value rather than one
 	// deployment-current constant, and is not implemented in W1.
 	WindowInferenceVersion string
+	// CommitGateVersion (CHAOS-4085) is a FIFTEENTH conjunctive dimension,
+	// same NULL-never-matches fail-closed shape as every sibling above. It
+	// binds reuse to contextfabric.CommitGateVersion -- the rules deciding
+	// WHICH SUBJECTS AN ANSWER MAY COMMIT TO: the resolution-time refusal
+	// of the vector-margin rescue for a tied top under a truncated search,
+	// and the post-synthesis affirmation gate that retracts a
+	// statistically-committed subject the answer does not support.
+	//
+	// This is the ONE dimension in this bundle whose absence is a SAFETY
+	// hole rather than a staleness one. tryReuse runs BEFORE Interpret and
+	// BEFORE synthesis (engine.go), so a hit serves the stored result
+	// verbatim -- Committed list included -- without the new gate ever
+	// executing. Without this dimension, the exact wrong commit CHAOS-4085
+	// refuses would continue to be served from cache for every repeat of
+	// the same question inside the staleness window, and no amount of
+	// engine-side gating would stop it. Bump the constant whenever the
+	// commit gate's own decision rules change.
+	//
+	// Over-invalidation is the accepted, safe cost, identical in shape to
+	// WindowInferenceVersion's own note above: a bump cold-caches every
+	// reuse-participating row for the org, including rows whose commits the
+	// new rules would have reached identically.
+	CommitGateVersion string
 	// GraphEpoch (CHAOS-3898 §2.3) is this investigation's own
 	// ResolvedGraphBinding.Epoch -- a THIRTEENTH conjunctive dimension,
 	// structurally distinct from every version-string dimension above: a
@@ -816,6 +850,11 @@ type ReuseVersionAuthorities struct {
 	// current constant threaded identically to every sibling field here --
 	// cannot express).
 	WindowInferenceVersion string
+	// CommitGateVersion (CHAOS-4085) is ONE MORE version constant, same
+	// shape again -- see ReuseKey.CommitGateVersion's own field doc comment
+	// for what it binds and why its absence is a safety hole rather than a
+	// staleness one.
+	CommitGateVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

@@ -795,7 +795,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// case) so ResolveSubjects can narrow its pool to it. See
 	// ConfirmedExpectedKind's own doc comment for why this is a dedicated
 	// type and why that matters.
-	resolution, structureMaterial, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
+	// CHAOS-4085: commitBases records, per committed subject, WHICH CLASS OF
+	// PROOF the commit stood on -- caller-supplied canonical id, an
+	// authoritative keyed identity, or a score comparison. It is consumed
+	// once, after synthesis, by applyCommitAffirmation below; nothing
+	// between here and there reads or alters it. A GraphReader that returns
+	// nil leaves every commit reading CommitBasisUnknown, which is the
+	// STRICT treatment (see CommitBasis).
+	resolution, structureMaterial, commitBases, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
 	if err != nil {
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
@@ -975,6 +982,42 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// requestStructureCanonicalization's own doc comment) -- an empty
 	// Confirmed set means OfferSnapshot is already nil by construction.
 	result.StructureOfferSnapshot = structureCanon.OfferSnapshot
+	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
+	// deliberately -- after every composer that touches Limitations or
+	// Coverage has run (retrieval degradation, temporal disclosures), and
+	// BEFORE Validate and Save, so the retraction, its disclosure and its
+	// Coverage.Partial flag are all part of the SAME object that is
+	// validated, returned, and persisted. A retraction applied after Save
+	// would leave the stored row disagreeing with the served answer, and a
+	// retraction applied before the limitation composers would be re-capped
+	// underneath it.
+	//
+	// This is the ONLY place a commit is revisited after resolution, and it
+	// is strictly subtractive -- see applyCommitAffirmation's own invariant
+	// list. The deterministic answer is NOT recomposed: an unaffirmed
+	// subject is by construction one the answer does not stand behind, so
+	// the prose already reads as the non-answer it is, and re-synthesizing
+	// would mean a second model call to restate a conclusion the engine has
+	// already reached structurally.
+	//
+	// A retraction that empties Committed does NOT convert this into a
+	// clarification terminal: the caller still receives the answer that was
+	// computed, now honestly carrying no committed subject and saying so in
+	// its limitations. Routing to the subjectless terminal here would
+	// discard a paid-for answer and change this path's contract outcome on
+	// a signal the terminal's own logic never sees.
+	if outcomes := applyCommitAffirmation(&result, affirmationInputs{
+		Bases: commitBases,
+		// result.SubjectResolution.Candidates, not the local resolution's:
+		// the same backing array today, but the RESULT's copy is the one
+		// this gate rewrites states on, so reading and writing the same
+		// authoritative list keeps that true if the two ever diverge.
+		Candidates: result.SubjectResolution.Candidates,
+		Graph:      graphContext,
+		Facts:      facts,
+	}); len(outcomes) > 0 {
+		e.recordCommitAffirmation(ctx, principal, outcomes)
+	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

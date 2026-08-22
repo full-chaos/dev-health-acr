@@ -243,8 +243,16 @@ func Clamp(value float64) float64 {
 
 // SubjectKey is the stable dedup/map key for a SubjectRef, shared so every
 // backend's candidate-merging map keys identically.
+//
+// CHAOS-4085: delegates to contextfabric.SubjectMapKey rather than
+// restating the formula. A CommitBasisSet is WRITTEN here (at each commit
+// site in resolution.go) and READ by the engine; if the two packages ever
+// keyed differently, every recorded basis would read back as
+// CommitBasisUnknown and every commit would be silently downgraded to
+// statistical. One shared function makes that impossible instead of merely
+// currently-true.
 func SubjectKey(subject contextfabric.SubjectRef) string {
-	return string(subject.Kind) + "\x00" + subject.CanonicalID
+	return contextfabric.SubjectMapKey(subject)
 }
 
 // UniqueSorted trims, drops empty and "*" sentinel values, dedups, and

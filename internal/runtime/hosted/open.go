@@ -776,6 +776,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// contextfabric's own window class/default-table/binder rules.
 			// Wired unconditionally, same reasoning as its four siblings.
 			WindowInferenceVersion: contextfabric.WindowInferenceVersion,
+			// CHAOS-4085: one more deployment-current version authority --
+			// contextfabric's own commit-gate rules. Wired unconditionally,
+			// same reasoning as its five siblings; see
+			// ReuseKey.CommitGateVersion for why this dimension's absence
+			// would be a safety hole rather than a staleness one.
+			CommitGateVersion: contextfabric.CommitGateVersion,
 		},
 	})
 	if err != nil {
