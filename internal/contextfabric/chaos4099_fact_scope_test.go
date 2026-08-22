@@ -1482,3 +1482,79 @@ func TestChaos4099_AForgedScopeOnTheRequestIsIgnored(t *testing.T) {
 		t.Fatal("the provider was queried for a subject that entered scope through a forged derivation")
 	}
 }
+
+// TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup pins the
+// second-order bound.
+//
+// Both the cap and the target-kind filter are applied per (origin kind),
+// because that is the unit an expander is called for -- but a requirement can
+// have several origin kinds. Without a requirement-level pass, two origin
+// groups each admit up to `limit` targets for ONE requirement (twice the
+// declared cap), and a target reachable from both is admitted twice.
+//
+// The duplicate is the sharp edge: buildFactQuery rejects a query whose
+// subjects repeat with "fact query subjects must be unique", and ReadFacts
+// turns that into a WHOLE-bundle failure. A successful expansion would
+// destroy the investigation it was meant to help.
+func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing.T) {
+	const limit = 2
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	// BOTH origin kinds enabled and aimed at the same target kind, so one
+	// requirement genuinely has two expanding origin groups.
+	rule := factScopePolicyRule{
+		Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+		Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: limit,
+	}
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {SubjectProject: rule, SubjectTeam: rule},
+	}
+	// The same two repositories from both groups: overlapping, and together
+	// over the cap.
+	shared := []SubjectRef{
+		subject(SubjectRepository, "repo:github:a"),
+		subject(SubjectRepository, "repo:github:b"),
+	}
+	expander := &recordingScopeExpander{targets: shared, counts: FactScopeExpansionCounts{CandidateCount: 2}}
+
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(),
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
+			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	derived := scope.DerivedSubjects[FactMetrics]
+	if len(derived) != len(shared) {
+		t.Fatalf("derived = %+v, want the union deduplicated to %d", derived, len(shared))
+	}
+	keys := map[string]struct{}{}
+	for _, target := range derived {
+		key := canonicalFactSubjectKey(target)
+		if _, duplicate := keys[key]; duplicate {
+			t.Fatalf("derived subject %q appears twice -- buildFactQuery rejects that and fails the WHOLE bundle", key)
+		}
+		keys[key] = struct{}{}
+	}
+	if len(derived) > limit {
+		t.Fatalf("derived %d subjects, want the policy's cap of %d honored across origin groups", len(derived), limit)
+	}
+	// The second group reached nothing NEW, and says so rather than claiming
+	// it admitted two subjects it did not add.
+	var totalAdmitted int
+	for _, event := range scope.Events {
+		totalAdmitted += event.AdmittedCount
+	}
+	if totalAdmitted != len(derived) {
+		t.Fatalf("events claim %d admitted subjects but %d are in scope -- telemetry must report what the provider is actually asked", totalAdmitted, len(derived))
+	}
+	// Deterministic: the same inputs produce the same scope, every time.
+	repeat := NewFactReadScopeResolver(&recordingScopeExpander{targets: shared, counts: FactScopeExpansionCounts{CandidateCount: 2}}).Resolve(
+		context.Background(),
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
+			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	if !reflect.DeepEqual(repeat.DerivedSubjects[FactMetrics], derived) {
+		t.Fatalf("scope is not deterministic: %+v vs %+v", repeat.DerivedSubjects[FactMetrics], derived)
+	}
+}

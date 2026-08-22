@@ -901,8 +901,48 @@ func (r *FactReadScopeResolver) expand(
 	default:
 		event.Outcome = FactScopeExpanded
 	}
-	scope.DerivedSubjects[event.RequirementKind] = append(scope.DerivedSubjects[event.RequirementKind], admitted...)
+	// DEDUP AND CAP AT THE REQUIREMENT LEVEL, not merely per event.
+	//
+	// Both bounds above are per-(origin kind) because that is the unit an
+	// expander is called for, and a requirement can have several origin
+	// kinds. Without this second pass, two origin groups could each admit
+	// `limit` targets for ONE requirement -- twice the cap the policy
+	// declares -- and a target reachable from both would be admitted twice,
+	// which buildFactQuery rejects outright ("fact query subjects must be
+	// unique") and thereby fails the WHOLE bundle rather than this one
+	// requirement.
+	//
+	// AdmittedCount is recomputed from what actually survives, so the
+	// telemetry reports the subjects the provider is really asked about
+	// rather than the subjects this origin group happened to produce.
+	existing := scope.DerivedSubjects[event.RequirementKind]
+	seen := make(map[string]struct{}, len(existing)+len(admitted))
+	for _, target := range existing {
+		seen[canonicalFactSubjectKey(target)] = struct{}{}
+	}
+	kept := make([]SubjectRef, 0, len(admitted))
 	for _, target := range admitted {
+		if len(existing)+len(kept) >= rule.limitOrDefault() {
+			event.Truncated = true
+			event.Outcome = FactScopeExpandedPartial
+			break
+		}
+		key := canonicalFactSubjectKey(target)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		kept = append(kept, target)
+	}
+	event.AdmittedCount = len(kept)
+	if len(kept) == 0 {
+		// Everything this group produced was already in scope from another
+		// origin. Nothing new was reached, and nothing is claimed.
+		event.Outcome = FactScopeAttemptedEmpty
+		return
+	}
+	scope.DerivedSubjects[event.RequirementKind] = append(existing, kept...)
+	for _, target := range kept {
 		// Provenance binds every admitted target to the policy that admitted
 		// it. Root is recorded per ORIGIN GROUP rather than per edge -- the
 		// expander's own traversal knows which specific work item linked

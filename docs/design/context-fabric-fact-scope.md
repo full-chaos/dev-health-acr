@@ -217,6 +217,16 @@ truncated one without the overflow row. Trusting the flag there produces
 truncation invariant 8 forbids. The party that owns the invariant checks for
 it.
 
+The cap and the dedup then apply again **per requirement**, not only per
+origin group. An expander is called once per (requirement, origin kind), so a
+requirement with two expanding origin groups would otherwise admit twice the
+declared cap — and a target reachable from both would be admitted twice.
+`buildFactQuery` rejects a query whose subjects repeat and `ReadFacts` turns
+that into a whole-bundle failure, so a successful expansion would destroy the
+investigation it was meant to help. `AdmittedCount` is recomputed from what
+survives, so telemetry reports the subjects the provider is actually asked
+about.
+
 ## 7c. `CanonicalFactRequest.Scope` is output, never input
 
 `ReadFacts` **always** runs the resolver and overwrites any incoming
