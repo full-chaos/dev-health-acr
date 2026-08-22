@@ -3056,20 +3056,35 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// branch, which is an engine-refusal finding rather than a failure with
 	// a stage at all -- and twoTurnStampArmError leaves both fields empty
 	// for a nil error, which is the honest reading.
-	mintWindowPrecondition := func(requestIDSuffix string) (receipt contractsv1.ContextFabricBoundSubjectReceipt, reason string, cause error) {
+	// mintWindowPrecondition's 4th return value (CHAOS-4103, codex review
+	// round 2, confirmed): this closure's own Investigate() call is a REAL
+	// call and can independently trip applySynthesisStatusOverride, SAME
+	// class as baselineSynthesisOverride below -- reset immediately before
+	// it (so the capture can only ever hold what THIS call produced, never
+	// a leftover from the PREVIOUS leg's own setup call, since this
+	// closure runs twice back to back with no reset between callers
+	// otherwise) and return whatever it captured for the caller to fold
+	// in once the row is far enough along to have one.
+	mintWindowPrecondition := func(requestIDSuffix string) (receipt contractsv1.ContextFabricBoundSubjectReceipt, reason string, cause error, override *contextfabric.SynthesisStatusOverrideOutcome) {
+		if trace != nil {
+			trace.reset()
+		}
 		setupReq := twoTurnRequest(index, tc, requestIDSuffix)
 		setupReq.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(windowBand)}
 		setupCtx, setupCancel := context.WithTimeout(ctx, timeout)
 		setupResult, setupErr := investigator.Investigate(setupCtx, principal, setupReq)
 		setupCancel()
+		if trace != nil {
+			override = trace.synthesisOverride
+		}
 		if setupErr != nil {
-			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup failed: " + contextFabricRejectionClass(setupErr), setupErr
+			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup failed: " + contextFabricRejectionClass(setupErr), setupErr, override
 		}
 		receiptID, found := selectOracleOffer(setupResult, string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: windowBand})
 		if !found {
-			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup turn did not offer the case's own window back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)", nil
+			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup turn did not offer the case's own window back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)", nil, override
 		}
-		return contractsv1.ContextFabricBoundSubjectReceipt{ResultID: setupResult.ResultID, ReceiptID: receiptID}, "", nil
+		return contractsv1.ContextFabricBoundSubjectReceipt{ResultID: setupResult.ResultID, ReceiptID: receiptID}, "", nil, override
 	}
 
 	if !isWindow && windowBand == "" {
@@ -3091,16 +3106,21 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// window Start/End, since neither call has to wait on the OTHER leg's
 	// full investigation first.
 	var baselineWindow, hintedWindow contractsv1.ContextFabricBoundSubjectReceipt
+	// windowSetupBaselineOverride/windowSetupHintedOverride: each leg's own
+	// precondition-setup call, captured for the same fold-in below as
+	// baselineSynthesisOverride -- see mintWindowPrecondition's own doc
+	// comment.
+	var windowSetupBaselineOverride, windowSetupHintedOverride *contextfabric.SynthesisStatusOverrideOutcome
 	if !isWindow {
 		var windowReason string
 		var windowCause error
-		baselineWindow, windowReason, windowCause = mintWindowPrecondition("inferredtierwindowsetupbaseline")
+		baselineWindow, windowReason, windowCause, windowSetupBaselineOverride = mintWindowPrecondition("inferredtierwindowsetupbaseline")
 		if windowReason != "" {
 			res.PairInvalid = true
 			twoTurnStampArmFailure(&res, windowReason, windowCause)
 			return res
 		}
-		hintedWindow, windowReason, windowCause = mintWindowPrecondition("inferredtierwindowsetuphinted")
+		hintedWindow, windowReason, windowCause, windowSetupHintedOverride = mintWindowPrecondition("inferredtierwindowsetuphinted")
 		if windowReason != "" {
 			res.PairInvalid = true
 			twoTurnStampArmFailure(&res, windowReason, windowCause)
@@ -3185,12 +3205,16 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// reads cannot be the baseline's.
 	twoTurnStampOutcome(&res, tc, result.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
-	// CHAOS-4103 (codex review round 1): fold the baseline's own override
-	// occurrence back in -- twoTurnStampDecision above only ever sees the
-	// HINTED call's trace state, so a baseline-only override would
-	// otherwise vanish. See twoTurnFoldSynthesisStatusOverride's own doc
-	// comment for the severity tie-break.
+	// CHAOS-4103 (codex review rounds 1+2): fold every EARLIER call's own
+	// override occurrence back in -- twoTurnStampDecision above only ever
+	// sees the HINTED call's trace state, so the paired baseline's and
+	// EITHER window-precondition setup call's override would otherwise
+	// vanish. Order among the folds does not matter: each is independently
+	// severity-gated against whatever is already stamped -- see
+	// twoTurnFoldSynthesisStatusOverride's own doc comment.
 	twoTurnFoldSynthesisStatusOverride(&res, baselineSynthesisOverride)
+	twoTurnFoldSynthesisStatusOverride(&res, windowSetupBaselineOverride)
+	twoTurnFoldSynthesisStatusOverride(&res, windowSetupHintedOverride)
 	// false_no_match (CHAOS-4039): every inferred-tier case carries a real
 	// expected answer (tc.ExpectID != "" by construction of this harness's
 	// own corpus selection) -- a literal no_match terminal here is as much
