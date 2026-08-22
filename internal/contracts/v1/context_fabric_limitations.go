@@ -64,3 +64,94 @@ func HasContextFabricRetrievalDegradedLimitation(limitations []string) bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// The rest of the service-authored disclosure vocabulary (CHAOS-4098)
+// ---------------------------------------------------------------------------
+//
+// These three moved here for the SAME reason the retrieval-degradation
+// string above did, applied to a second reader: LimitationsDisplaced's
+// coherence rule (validate_context_fabric_result.go) has to know which
+// entries in a limitation list are service-authored, and the contract may
+// not import the engine that writes them.
+//
+// WHY THIS MATTERS RATHER THAN BEING TIDINESS. That rule was written when
+// retrieval degradation was the ONLY thing that could displace a model
+// caveat, so it asks for that one disclosure by name. Three more displacers
+// shipped afterwards -- CHAOS-3781's standing historical disclosures,
+// CHAOS-4085's commit retraction, and CHAOS-4098's clarification override --
+// and none of them updated the rule. Every one of them therefore produces a
+// result the validator REJECTS whenever the model returned a full
+// limitation list: the displacement is recorded, the disclosure that caused
+// it is not the one the rule looks for, and the whole investigation fails
+// with ErrInvalidResult. That is the exact defect class CHAOS-3746's
+// displacement mechanism was built to prevent, reintroduced by a rule that
+// enumerates instead of deriving.
+//
+// So the rule now asks whether ANY service-authored disclosure is present,
+// and this list is the single place that answers it. A fifth disclosure is
+// covered by being declared here, not by someone remembering to revisit a
+// validator.
+
+// ContextFabricTemporalProjectionLimitation is CHAOS-3781's standing
+// historical disclosure: the graph holds only the current projection, so a
+// subject deleted at source since the requested time is simply gone.
+const ContextFabricTemporalProjectionLimitation = "Subjects deleted at source since the requested time are not recoverable from the projected graph."
+
+// ContextFabricObservedTimeLimitation is CHAOS-3781's observed-time
+// substitution disclosure: the caller asked what was KNOWN at a past
+// instant and the graph answered from what was TRUE then.
+const ContextFabricObservedTimeLimitation = "Observed-time questions cannot be answered on their own terms: no canonical source retains observation history, so this answer reflects what was TRUE at the requested time, not what was KNOWN then."
+
+// ContextFabricCommitRetractionLimitation is CHAOS-4085's disclosure that
+// the commit gate identified a candidate subject and declined to stand
+// behind it.
+const ContextFabricCommitRetractionLimitation = "A candidate subject was identified but not committed: the evidence assembled for it does not support naming it as the answer to this question."
+
+// ContextFabricSynthesisClarificationUnavailableLimitation is CHAOS-4098's
+// disclosure that the synthesis step declined to conclude on a path with no
+// clarification to offer.
+const ContextFabricSynthesisClarificationUnavailableLimitation = "This question could not be answered from the evidence assembled, and no clarification could be offered to narrow it further."
+
+// ContextFabricServiceAuthoredLimitations returns every disclosure this
+// service composes for itself, in no significant order.
+//
+// A NEW DISCLOSURE BELONGS IN THIS LIST. Everything that reasons about
+// "did the service write this, or did the model?" derives from here --
+// the engine's displacement rule (which never displaces a service
+// disclosure) and the validator's coherence rule (which accepts a positive
+// displaced count only when one is present).
+func ContextFabricServiceAuthoredLimitations() []string {
+	return []string{
+		ContextFabricRetrievalDegradedLimitation,
+		ContextFabricRetrievalDegradedLimitationLegacy,
+		ContextFabricTemporalProjectionLimitation,
+		ContextFabricObservedTimeLimitation,
+		ContextFabricCommitRetractionLimitation,
+		ContextFabricSynthesisClarificationUnavailableLimitation,
+	}
+}
+
+// IsContextFabricServiceAuthoredLimitation reports whether one limitation
+// is a disclosure this service composes rather than a model caveat.
+func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
+	for _, disclosure := range ContextFabricServiceAuthoredLimitations() {
+		if limitation == disclosure {
+			return true
+		}
+	}
+	return false
+}
+
+// HasContextFabricServiceAuthoredLimitation reports whether any entry is
+// one. This is LimitationsDisplaced's coherence oracle: a displacement only
+// ever happens to force a service disclosure into a list that was already
+// full, so a positive count requires one to be present.
+func HasContextFabricServiceAuthoredLimitation(limitations []string) bool {
+	for _, limitation := range limitations {
+		if IsContextFabricServiceAuthoredLimitation(limitation) {
+			return true
+		}
+	}
+	return false
+}

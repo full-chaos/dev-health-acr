@@ -700,9 +700,25 @@ func truncateAtSentenceBoundary(text string, maxRunes int) string {
 // content, not just name -- this is the short judgment sentence alone,
 // without the trailing claimed-fact restatement DeterministicAnswer adds.
 func composeDirectJudgment(draft SynthesisDraft, resolution SubjectResolution) string {
+	return composeDirectJudgmentFrom(draft.Status, draft.Drivers, resolution)
+}
+
+// composeDirectJudgmentFrom is composeDirectJudgment's body, taking the
+// three values it actually reads instead of the draft that carries them.
+//
+// Split out for CHAOS-4098, which must RE-render this field after the
+// engine overrides a synthesized status (see applySynthesisStatusOverride):
+// the engine holds an already-composed InvestigationResult, never the
+// SynthesisDraft, and the result's Drivers are the draft's Drivers copied
+// verbatim (Synthesize above), so the same rendering is reachable from
+// both sides. A wrapper rather than a copy: one definition of what this
+// field says means an override cannot render it differently from the
+// original composition, which is the whole point of recomposing rather
+// than patching the leading sentence.
+func composeDirectJudgmentFrom(status InvestigationStatus, drivers []DriverJudgment, resolution SubjectResolution) string {
 	var b strings.Builder
-	b.WriteString(statusSentence(draft.Status, resolution))
-	if titles := principalDriverTitles(draft.Drivers); len(titles) > 0 {
+	b.WriteString(statusSentence(status, resolution))
+	if titles := principalDriverTitles(drivers); len(titles) > 0 {
 		b.WriteString(" Principal driver: ")
 		b.WriteString(strings.Join(titles, "; "))
 		b.WriteString(".")
@@ -730,16 +746,23 @@ func composeCurrentState(draft SynthesisDraft) string {
 // because every value it renders came from ClaimedFacts, which
 // ValidateAgainst already proved equal to the canonical fact bundle.
 func composeDeterministicAnswer(draft SynthesisDraft, resolution SubjectResolution) string {
+	return composeDeterministicAnswerFrom(draft.Status, draft.Drivers, draft.ClaimedFacts, resolution)
+}
+
+// composeDeterministicAnswerFrom is composeDeterministicAnswer's body,
+// taking the four values it actually reads. Same split, same reason, as
+// composeDirectJudgmentFrom above -- see that function's doc comment.
+func composeDeterministicAnswerFrom(status InvestigationStatus, drivers []DriverJudgment, claims []ClaimedFact, resolution SubjectResolution) string {
 	var b strings.Builder
-	b.WriteString(statusSentence(draft.Status, resolution))
-	if titles := principalDriverTitles(draft.Drivers); len(titles) > 0 {
+	b.WriteString(statusSentence(status, resolution))
+	if titles := principalDriverTitles(drivers); len(titles) > 0 {
 		b.WriteString(" Principal driver(s): ")
 		b.WriteString(strings.Join(titles, "; "))
 		b.WriteString(".")
 	}
-	if claims := claimedFactSentences(draft.ClaimedFacts); len(claims) > 0 {
+	if sentences := claimedFactSentences(claims); len(sentences) > 0 {
 		b.WriteString(" Canonical facts: ")
-		b.WriteString(strings.Join(claims, "; "))
+		b.WriteString(strings.Join(sentences, "; "))
 		b.WriteString(".")
 	}
 	return truncateAtSentenceBoundary(strings.TrimSpace(b.String()), deterministicAnswerMaxLength)

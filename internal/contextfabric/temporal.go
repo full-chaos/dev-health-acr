@@ -346,7 +346,11 @@ var temporalLimitations = []string{
 	// historical read can return is bounded by what still exists now.
 	// Unfixable without an append-only graph history, which is out of
 	// scope -- but never silent.
-	"Subjects deleted at source since the requested time are not recoverable from the projected graph.",
+	//
+	// Declared in the contract (CHAOS-4098) so LimitationsDisplaced's
+	// coherence rule can recognise it as service-authored; referenced
+	// here rather than restated so the two cannot drift.
+	contractsv1.ContextFabricTemporalProjectionLimitation,
 }
 
 // observedTimeLimitation states, in the answer itself, that the
@@ -358,7 +362,7 @@ var temporalLimitations = []string{
 // shape of quiet mislabel the H6 refusal existed to prevent, one axis
 // down, so it is disclosed rather than reasoned about only in code
 // comments.
-const observedTimeLimitation = "Observed-time questions cannot be answered on their own terms: no canonical source retains observation history, so this answer reflects what was TRUE at the requested time, not what was KNOWN then."
+const observedTimeLimitation = contractsv1.ContextFabricObservedTimeLimitation
 
 // temporalLimitationsFor returns the standing disclosures for one
 // historical axis. They describe limits of the SYSTEM, not of one request,

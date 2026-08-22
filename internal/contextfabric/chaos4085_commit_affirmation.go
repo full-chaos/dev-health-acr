@@ -79,6 +79,7 @@ package contextfabric
 import (
 	"context"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -109,7 +110,7 @@ const CommitGateVersion = "cg_v2"
 // has one consequence for that reader: the system declined to name a
 // subject it could not stand behind. Operator-facing detail belongs in
 // telemetry, which receives it.
-const commitRetractionLimitation = "A candidate subject was identified but not committed: the evidence assembled for it does not support naming it as the answer to this question."
+const commitRetractionLimitation = contractsv1.ContextFabricCommitRetractionLimitation
 
 // CommitAffirmationOutcome is one retraction event, reported to telemetry.
 // Counts and closed labels only -- never question text, never answer text,

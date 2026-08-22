@@ -101,6 +101,32 @@ func (t SlogEngineTelemetry) RecordCommitAffirmationRetraction(ctx context.Conte
 	t.logger.WarnContext(ctx, "context fabric commit affirmation retraction", args...)
 }
 
+// RecordSynthesisStatusOverride implements EngineTelemetry (CHAOS-4098) --
+// the ONE operator-visible record that the engine served a different
+// investigation status than the synthesis step returned.
+//
+// Content-safe by construction, exactly like every method beside it: an org
+// id, three closed vocabularies (two contract status enums and the override
+// reason) and one count. Nothing here is high-cardinality, nothing
+// identifies a subject, and no model output reaches it; a reader who needs
+// the answer itself correlates by request_id.
+//
+// WARN, not INFO: an override means the model produced a status ACR cannot
+// serve, and before CHAOS-4098 that combination FAILED the whole
+// investigation with a 500. It is now handled rather than fatal, but a rate
+// change in it is a direct signal about synthesis-prompt compliance, and it
+// sits at the same level as the commit-gate retraction it runs beside.
+func (t SlogEngineTelemetry) RecordSynthesisStatusOverride(ctx context.Context, principal storage.Principal, outcome SynthesisStatusOverrideOutcome) {
+	args := append([]any{
+		"org_id", principal.OrgID,
+		"from_status", string(outcome.From),
+		"to_status", string(outcome.To),
+		"reason", string(outcome.Reason),
+		"committed_count", outcome.CommittedCount,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.WarnContext(ctx, "context fabric synthesis status override", args...)
+}
+
 func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)

@@ -723,10 +723,10 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	// bare "count >= 0" would admit a result claiming losses it never
 	// took, which is the same lie as hiding one -- a reader cannot check
 	// this number against anything else in the document, so the contract
-	// has to. A displacement only ever happens when the disclosure had to
-	// be forced into a list that was already full, so a positive count
-	// requires exactly that shape: the list at its cap, carrying the
-	// disclosure.
+	// has to. A displacement only ever happens when a SERVICE-AUTHORED
+	// disclosure had to be forced into a list that was already full, so a
+	// positive count requires exactly that shape: the list at its cap,
+	// carrying one of them.
 	//
 	// Legacy rows are unaffected: they carry zero, which makes the rule
 	// vacuous for every result written before this field existed.
@@ -748,7 +748,23 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 		// cap and the ceiling is whichever cap this validation is running
 		// under, so on the write path the pair collapses to equality.
 		full := len(r.Limitations) >= ContextFabricLimitationsMaxCount && len(r.Limitations) <= bounds.narrativeCount
-		if !full || !HasContextFabricRetrievalDegradedLimitation(r.Limitations) {
+		// ANY service-authored disclosure, not the retrieval-degradation
+		// one by name (CHAOS-4098). This rule was written when
+		// degradation was the only displacer; CHAOS-3781's historical
+		// disclosures, CHAOS-4085's commit retraction and CHAOS-4098's
+		// clarification override each displace too, and each produced a
+		// result this rule REJECTED whenever the model returned a full
+		// limitation list -- ErrInvalidResult for a displacement that
+		// happened exactly as designed. Deriving the question from
+		// ContextFabricServiceAuthoredLimitations instead of naming one
+		// constant means a fifth disclosure cannot reintroduce it.
+		//
+		// This ADMITS documents the old form rejected and rejects none it
+		// accepted, so it is not a tightening and needs no new major: the
+		// field's own meaning (how many model caveats were dropped) is
+		// unchanged, and every previously valid row carries the
+		// degradation disclosure, which is still in the derived set.
+		if !full || !HasContextFabricServiceAuthoredLimitation(r.Limitations) {
 			return fmt.Errorf("result claims displaced limitations without the full list and disclosure that would require one")
 		}
 	}

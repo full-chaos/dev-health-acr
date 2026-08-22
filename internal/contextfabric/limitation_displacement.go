@@ -138,29 +138,20 @@ func lastModelAuthoredLimitation(limitations []string) int {
 // statements a reader cannot get from anywhere else in the document, so
 // they are never the ones displaced.
 func isServiceAuthoredLimitation(limitation string) bool {
-	if contractsv1.IsContextFabricRetrievalDegradedLimitation(limitation) {
-		return true
-	}
-	for _, disclosure := range serviceAuthoredLimitations() {
-		if limitation == disclosure {
-			return true
-		}
-	}
-	return false
+	return contractsv1.IsContextFabricServiceAuthoredLimitation(limitation)
 }
 
 // serviceAuthoredLimitations enumerates every disclosure this service
-// composes, derived from the same declarations the composers use so a new
-// disclosure cannot become displaceable by being forgotten here.
+// composes.
+//
+// Derived from the CONTRACT's own list (CHAOS-4098), not from a second
+// copy here: the validator's LimitationsDisplaced coherence rule asks the
+// same question of the same strings, and two hand-maintained lists is
+// exactly how three disclosures came to be displaceable-by-omission on one
+// side and unrecognised on the other. A new disclosure is added to
+// ContextFabricServiceAuthoredLimitations and both sides see it.
 func serviceAuthoredLimitations() []string {
-	disclosures := append([]string(nil), temporalLimitations...)
-	disclosures = append(disclosures, observedTimeLimitation)
-	// CHAOS-4085: the commit-retraction disclosure. Service-authored, and
-	// never displaceable: it is the only statement in the document that a
-	// candidate subject was deliberately NOT committed, and a reader who
-	// loses it sees an answer that simply never names a subject, with no
-	// account of why.
-	return append(disclosures, commitRetractionLimitation)
+	return contractsv1.ContextFabricServiceAuthoredLimitations()
 }
 
 func withRetrievalDegradation(limitations []string) (composed []string, displaced int) {
