@@ -344,19 +344,22 @@ func (e *Engine) terminalResult(
 		Warnings:            terminalWarnings,
 	}
 	// CHAOS-4042: terminalVersions() is shared with window.go/structure.go's
-	// own veto paths (which never carry StructureNeeds and so always stay
-	// v1), so it cannot itself decide the contract version -- override it
-	// here, the one call site that can actually mint v2, to the SAME
-	// schemaVersion decided above rather than leaving it permanently
-	// mismatched against a v2 result's own SchemaVersion field.
+	// own veto paths (which never carry kind/anchor/handle StructureNeeds --
+	// windowConfirmationRequiredResult's own window-only StructureNeeds,
+	// CHAOS-4118, never sets AnchorOptions either -- and so always stay v1),
+	// so it cannot itself decide the contract version -- override it here,
+	// the one call site that can actually mint v2, to the SAME schemaVersion
+	// decided above rather than leaving it permanently mismatched against a
+	// v2 result's own SchemaVersion field.
 	result.Versions.ContractVersion = schemaVersion
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
 	}
-	// CHAOS-3900 P1.F: StructureNeeds is only ever composed on this
-	// subjectless-terminal path (result.StructureNeeds above), so this is
-	// the ONLY call site for cf_structure_needs_disclosed/
-	// cf_structure_offer_count.
+	// CHAOS-3900 P1.F: StructureNeeds is composed on this subjectless-terminal
+	// path for the kind/anchor/handle members. windowConfirmationRequiredResult
+	// (window.go, CHAOS-4118) is the other call site, for the window member
+	// only -- recordStructureNeedsTelemetry itself is shared by both rather
+	// than duplicated.
 	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
 	// CHAOS-4042: ValidateResult dispatches on result.SchemaVersion (set
 	// above from the SAME structureMaterial.AnchorOptionsRequireV2 signal)

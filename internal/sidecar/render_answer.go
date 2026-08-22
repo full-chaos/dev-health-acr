@@ -243,39 +243,65 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 	}
 	if needs := projection.StructureNeeds; needs != nil {
-		b.writeLine("")
-		if !b.writeLine("## Structure needed") {
-			return b.finishWithTruncation()
-		}
+		// CHAOS-4118 (team-lead ruling 2026-08-22): windowConfirmationRequiredResult
+		// (contextfabric/window.go) composes StructureNeeds' window member
+		// (Missing=[window], WindowOptions) and the legacy WindowClarification
+		// field in lockstep, from the identical option set -- rendering both
+		// would show every window option twice, under two different
+		// headings. The legacy "## Window options" rendering below stays
+		// canonical and byte-identical to pre-CHAOS-4118 behavior; this block
+		// skips the window member entirely -- both its Missing entry and its
+		// WindowOptions -- whenever WindowClarification is present, rather
+		// than deciding here which surface should ultimately own rendering
+		// (CHAOS-4121 follow-up). Skipping loses nothing: it is the SAME
+		// data, and every non-window member renders exactly as before.
+		skipWindow := projection.WindowClarification != nil
+		var missing []contractsv1.ContextFabricStructureNeedKind
 		for _, member := range needs.Missing {
-			if !b.writeLine("- Missing: " + safeInline(string(member))) {
+			if skipWindow && member == contractsv1.ContextFabricStructureNeedWindow {
+				continue
+			}
+			missing = append(missing, member)
+		}
+		windowOptions := needs.WindowOptions
+		if skipWindow {
+			windowOptions = nil
+		}
+		if len(missing) > 0 || len(needs.KindOptions) > 0 || len(needs.AnchorOptions) > 0 || len(needs.HandleOptions) > 0 || len(windowOptions) > 0 {
+			b.writeLine("")
+			if !b.writeLine("## Structure needed") {
 				return b.finishWithTruncation()
 			}
-		}
-		for _, opt := range needs.KindOptions {
-			line := fmt.Sprintf("- Kind option `%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
+			for _, member := range missing {
+				if !b.writeLine("- Missing: " + safeInline(string(member))) {
+					return b.finishWithTruncation()
+				}
 			}
-		}
-		for _, opt := range needs.AnchorOptions {
-			line := fmt.Sprintf("- Anchor option `%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
+			for _, opt := range needs.KindOptions {
+				line := fmt.Sprintf("- Kind option `%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+				if !b.writeLine(line) {
+					return b.finishWithTruncation()
+				}
 			}
-		}
-		for _, opt := range needs.HandleOptions {
-			line := fmt.Sprintf("- Handle option `%s`/`%s` (receipt `%s`): %s = %s (source %s)",
-				safeInline(string(opt.Kind)), safeInline(opt.PatternID), safeInline(opt.ReceiptID),
-				untrustedInline(opt.Label), untrustedInline(opt.Value), untrustedInline(opt.SourceColumn))
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
+			for _, opt := range needs.AnchorOptions {
+				line := fmt.Sprintf("- Anchor option `%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+				if !b.writeLine(line) {
+					return b.finishWithTruncation()
+				}
 			}
-		}
-		for _, opt := range needs.WindowOptions {
-			line := fmt.Sprintf("- Window option (receipt `%s`): %s", safeInline(opt.ReceiptID), untrustedInline(opt.Label))
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
+			for _, opt := range needs.HandleOptions {
+				line := fmt.Sprintf("- Handle option `%s`/`%s` (receipt `%s`): %s = %s (source %s)",
+					safeInline(string(opt.Kind)), safeInline(opt.PatternID), safeInline(opt.ReceiptID),
+					untrustedInline(opt.Label), untrustedInline(opt.Value), untrustedInline(opt.SourceColumn))
+				if !b.writeLine(line) {
+					return b.finishWithTruncation()
+				}
+			}
+			for _, opt := range windowOptions {
+				line := fmt.Sprintf("- Window option (receipt `%s`): %s", safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+				if !b.writeLine(line) {
+					return b.finishWithTruncation()
+				}
 			}
 		}
 	}

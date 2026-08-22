@@ -1609,11 +1609,13 @@ func recordStructureExplicitTelemetry(ctx context.Context, telemetry EngineTelem
 
 // recordStructureNeedsTelemetry (CHAOS-3900 P1.F) reports
 // cf_structure_needs_disclosed{member} and cf_structure_offer_count{member,
-// source} for one composed StructureNeeds block -- called only where
-// StructureNeeds is ever composed (the subjectless-terminal path,
-// unresolved.go), immediately after it is built. needs==nil (nothing
-// disclosed) records nothing, exactly mirroring composeStructureNeeds' own
-// nil-means-nothing-in-play convention.
+// source} for one composed StructureNeeds block -- called immediately after
+// StructureNeeds is built, at every call site that ever composes one: the
+// subjectless-terminal path (unresolved.go) for the kind/anchor/handle
+// members, and windowConfirmationRequiredResult (window.go, CHAOS-4118) for
+// the window member. needs==nil (nothing disclosed) records nothing,
+// exactly mirroring composeStructureNeeds' own nil-means-nothing-in-play
+// convention.
 func recordStructureNeedsTelemetry(ctx context.Context, telemetry EngineTelemetry, principal storage.Principal, needs *contractsv1.ContextFabricStructureNeeds) {
 	if telemetry == nil || needs == nil {
 		return
@@ -1636,6 +1638,13 @@ func recordStructureNeedsTelemetry(ctx context.Context, telemetry EngineTelemetr
 	}
 	for _, opt := range needs.HandleOptions {
 		addCount(contractsv1.ContextFabricStructureNeedSubjectHandle, opt.OfferSource)
+	}
+	// CHAOS-4118: ContextFabricWindowOption carries no OfferSource field --
+	// a window offer is always derived from the closed relative-window
+	// registry (composeWindowClarification), never prior-sourced -- so
+	// every entry counts as engine-sourced, unconditionally.
+	for range needs.WindowOptions {
+		addCount(contractsv1.ContextFabricStructureNeedWindow, contractsv1.ContextFabricStructureOfferEngine)
 	}
 	// Deterministic iteration: members in Missing's own disclosure-priority
 	// order, sources in a fixed order -- so a caller comparing telemetry

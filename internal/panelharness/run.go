@@ -211,6 +211,24 @@ func runPanelist(ctx context.Context, orgID, question string, base contractsv1.C
 		// just contributes no PanelistSelection.
 		return nil, nil
 	}
+	// CHAOS-4118 (codex xhigh review round 1, confirmed real): windowConfirmationRequiredResult
+	// (contextfabric/window.go) now composes a window-only StructureNeeds
+	// (Missing=["window"], WindowOptions only) on every turn-1 window-gated
+	// response. Window rides its own, separately designed WindowSelectionEvent
+	// path and is deliberately excluded from projectOffers/applyPriorReceipts
+	// (see their own doc comments) -- this package's select-and-continue flow
+	// has never supported it. Guarding only on len(Missing)==0 above would let
+	// a window-only disclosure fall through to SelectReceipts below with ZERO
+	// projected offers for the panelist to choose from -- a real file-exchange
+	// round trip against an external responder, waiting up to its own timeout,
+	// for a member this flow can never resolve. Guard on whether THIS
+	// package's own Selector flow has anything to act on, not merely on
+	// whether Missing is non-empty (also correctly short-circuits the same
+	// way for any other member whose own offer-builder returns Missing with
+	// no options, not only window's case).
+	if len(projectOffers(*turn1Result.StructureNeeds)) == 0 {
+		return nil, nil
+	}
 
 	selections, err := panelist.Selector.SelectReceipts(ctx, question, *turn1Result.StructureNeeds)
 	if err != nil {

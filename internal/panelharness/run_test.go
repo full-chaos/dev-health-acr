@@ -233,6 +233,69 @@ func TestRun_PanelistErrorDoesNotFailWholeRun(t *testing.T) {
 	}
 }
 
+// failIfCalledSelector proves SelectReceipts is never invoked -- a stronger
+// assertion than stubSelector's own fixed-response shape, which cannot tell
+// "never called" from "called and returned an empty map" the way this can.
+type failIfCalledSelector struct {
+	t *testing.T
+}
+
+func (s failIfCalledSelector) SelectReceipts(context.Context, string, contractsv1.ContextFabricStructureNeeds) (map[string]string, error) {
+	s.t.Helper()
+	s.t.Fatal("SelectReceipts called, want it never invoked: this package's select-and-continue flow has no offers to project for a window-only StructureNeeds")
+	return nil, nil
+}
+
+// TestRun_WindowOnlyStructureNeedsContributesNoSelection is a regression test
+// for CHAOS-4118 (codex xhigh review round 1, confirmed real): windowConfirmationRequiredResult
+// (contextfabric/window.go) now composes a window-only StructureNeeds
+// (Missing=["window"], WindowOptions only, zero Kind/Anchor/HandleOptions)
+// on every turn-1 window-gated response. Window rides its own, separately
+// designed WindowSelectionEvent path and is deliberately excluded from
+// projectOffers (selector.go's own doc comment) -- before this ticket's
+// panelharness guard fix, runPanelist's own len(Missing)==0 check would no
+// longer short-circuit here, and it would instead call SelectReceipts with
+// zero projected offers: a real, pointless file-exchange round trip against
+// an external responder for a member this flow can never resolve. Pins that
+// SelectReceipts is never even invoked for this case.
+func TestRun_WindowOnlyStructureNeedsContributesNoSelection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request contractsv1.ContextFabricInvestigationRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		w.Header().Set("Content-Type", "application/json")
+		result := minimalValidResult("result_window_gated", request.RequestID)
+		result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+		result.SubjectResolution.ClarificationPrompt = "Confirm the evidence window for this answer."
+		windowEnd := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+		windowStart := windowEnd.Add(-90 * 24 * time.Hour)
+		result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+			WindowOptions: []contractsv1.ContextFabricWindowOption{
+				{ReceiptID: "winr_receipt00000000000001", OptionID: "opt_win1", Label: "the last 90 days", RelativeID: "trailing_90d", Start: &windowStart, End: &windowEnd},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, testBearerToken('w'), 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	panelist := Panelist{CanonicalModelIdentity: "anthropic/sol-max", Client: client, Selector: failIfCalledSelector{t: t}}
+
+	manifest, err := Run(context.Background(), RunConfig{
+		OrgID: "org-test", Question: "Was Ask Dev ready to ship?",
+		Panelists: []Panelist{panelist}, BaseRequest: validRequest(),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(manifest.Members) != 0 {
+		t.Errorf("Members = %v, want none: a window-only StructureNeeds has nothing this flow can confirm", manifest.Members)
+	}
+}
+
 func TestRun_DecisiveTurn1ContributesNoSelection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request contractsv1.ContextFabricInvestigationRequest

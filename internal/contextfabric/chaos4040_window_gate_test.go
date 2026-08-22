@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -96,6 +97,19 @@ func TestWindowGate_ExplicitUnconfirmed_InterceptsBeforeInterpret(t *testing.T) 
 	if result.WindowClarification == nil || len(result.WindowClarification.Options) == 0 {
 		t.Fatal("WindowClarification is nil or empty, want real receipt-bound options")
 	}
+	// CHAOS-4118: gate 1 shares windowConfirmationRequiredResult with gate 2
+	// (chaos4040_window_gate_test.go's own class-default test asserts this
+	// in detail) -- the window-only StructureNeeds fix applies uniformly to
+	// both call sites.
+	if result.StructureNeeds == nil {
+		t.Fatal("StructureNeeds is nil, want a window-only disclosure mirroring WindowClarification (CHAOS-4118)")
+	}
+	if len(result.StructureNeeds.Missing) != 1 || result.StructureNeeds.Missing[0] != contractsv1.ContextFabricStructureNeedWindow {
+		t.Fatalf("StructureNeeds.Missing = %#v, want exactly [window]", result.StructureNeeds.Missing)
+	}
+	if !reflect.DeepEqual(result.StructureNeeds.WindowOptions, result.WindowClarification.Options) {
+		t.Fatalf("StructureNeeds.WindowOptions = %#v, want the identical option set as WindowClarification.Options = %#v", result.StructureNeeds.WindowOptions, result.WindowClarification.Options)
+	}
 	if result.EffectiveEvidenceWindow == nil || result.EffectiveEvidenceWindow.Provenance != WindowInferredDefault {
 		t.Fatalf("EffectiveEvidenceWindow = %#v, want a disclosed inferred_default window", result.EffectiveEvidenceWindow)
 	}
@@ -128,24 +142,26 @@ func TestWindowGate_ExplicitUnconfirmed_InterceptsBeforeInterpret(t *testing.T) 
 // resolution field is never even consulted here, resolveCalls stays 0,
 // proving the gate does not care what resolution would have found) --
 // team-lead's own pre-PR design check (2026-08-21): since gate 2 fires
-// BEFORE ResolveSubjects, StructureNeeds (composeStructureNeeds's ONLY
-// call site, unresolved.go, takes StructureOfferMaterial -- ResolveSubjects'
-// own second return value) is structurally IMPOSSIBLE to populate here --
-// nil, always, by construction, never merely omitted. Explicitly asserted
-// below alongside WindowClarification's presence: the two-turn harness's
-// own disclosure-presence check (chaos3742_two_turn_confirmation_test.go)
-// is `turn1.StructureNeeds != nil || turn1.WindowClarification != nil` --
-// already OR'd, and already an established, PRE-CHAOS-4040 pattern (that
-// file's own codex round-2 finding #1: "a window-only stalled case can
-// have StructureNeeds==nil while WindowClarification is non-nil") -- so a
-// gate-2 result with WindowClarification-only disclosure satisfies it
-// exactly the same way a naturally window-only-ambiguous case already
-// did before this ticket. Both the harness's arm-skip logic and its
-// corrected controls_witnessed metric (zero commits + disclosure
-// present, CHAOS-3742) read this OR unchanged; CHAOS-4040 does not touch
-// either check, it only changes WHICH corpus cases land in the
-// window-only-disclosure bucket (every windowless one, not only cases
-// where window happened to be independently ambiguous).
+// BEFORE ResolveSubjects, a candidate-based kind/anchor/handle disclosure
+// (composeStructureNeeds's own call site, unresolved.go, takes
+// StructureOfferMaterial -- ResolveSubjects' own second return value) is
+// structurally IMPOSSIBLE to populate here -- CHAOS-4119 tracks that
+// separately, out of this ticket's scope.
+//
+// CHAOS-4118: what IS possible here is the window member's own disclosure
+// -- composeWindowClarification (called above, unconditionally) already
+// derives it in full from `effective`, with no dependency on resolution.
+// Before this ticket, that offer reached ONLY the legacy WindowClarification
+// field; windowConfirmationRequiredResult now ALSO composes a window-only
+// StructureNeeds (Missing=[window], WindowOptions mirroring
+// WindowClarification.Options) so a caller reading the modern CHAOS-3900 W2
+// unified surface sees the SAME offer every other non-decisive terminal
+// discloses through it, instead of nothing. The two-turn harness's own
+// disclosure-presence check (chaos3742_two_turn_confirmation_test.go) is
+// `turn1.StructureNeeds != nil || turn1.WindowClarification != nil` --
+// already OR'd and satisfied either way, so this asserts the STRONGER,
+// now-true claim: both fields are non-nil, and StructureNeeds.WindowOptions
+// carries the identical option set WindowClarification.Options does.
 func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *testing.T) {
 	t.Parallel()
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
@@ -174,8 +190,23 @@ func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *tes
 	if result.WindowClarification == nil || len(result.WindowClarification.Options) == 0 {
 		t.Fatal("WindowClarification is nil or empty, want real receipt-bound options -- alone sufficient to satisfy the harness's OR'd disclosure-presence check")
 	}
-	if result.StructureNeeds != nil {
-		t.Fatalf("StructureNeeds = %#v, want nil: structurally impossible at gate 2 (resolution, which StructureOfferMaterial derives from, never ran) -- not a regression, a precondition of gating before resolution", result.StructureNeeds)
+	// CHAOS-4118: the window member's own StructureNeeds disclosure IS
+	// possible here (unlike kind/anchor/handle, which stay structurally
+	// undisclosable at this gate -- see this test's own doc comment) --
+	// windowConfirmationRequiredResult composes it from the SAME `effective`
+	// window composeWindowClarification already used, so it must carry
+	// exactly one Missing entry (window) and the identical option set.
+	if result.StructureNeeds == nil {
+		t.Fatal("StructureNeeds is nil, want a window-only disclosure: CHAOS-4118 composes it from the effective window, which needs no resolution")
+	}
+	if len(result.StructureNeeds.Missing) != 1 || result.StructureNeeds.Missing[0] != contractsv1.ContextFabricStructureNeedWindow {
+		t.Fatalf("StructureNeeds.Missing = %#v, want exactly [window]", result.StructureNeeds.Missing)
+	}
+	if len(result.StructureNeeds.KindOptions) != 0 || len(result.StructureNeeds.AnchorOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 {
+		t.Fatalf("StructureNeeds kind/anchor/handle options = %#v/%#v/%#v, want all empty: still structurally impossible at gate 2, unaffected by the window fix", result.StructureNeeds.KindOptions, result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions)
+	}
+	if !reflect.DeepEqual(result.StructureNeeds.WindowOptions, result.WindowClarification.Options) {
+		t.Fatalf("StructureNeeds.WindowOptions = %#v, want the identical option set as WindowClarification.Options = %#v", result.StructureNeeds.WindowOptions, result.WindowClarification.Options)
 	}
 }
 
@@ -239,6 +270,13 @@ func TestWindowGate_AllowClarificationFalse_RefusesWithoutOffering(t *testing.T)
 	}
 	if result.WindowClarification != nil {
 		t.Fatalf("WindowClarification = %#v, want nil: the caller declined the only thing a prompt could ask for", result.WindowClarification)
+	}
+	// CHAOS-4118 negative control: a caller that declined clarification gets
+	// NO offer through either surface -- StructureNeeds must stay nil in
+	// lockstep with WindowClarification, never disclose a window option the
+	// caller explicitly said it does not want asked about.
+	if result.StructureNeeds != nil {
+		t.Fatalf("StructureNeeds = %#v, want nil: the caller declined the only thing a prompt could ask for, and this surface carries the SAME offer WindowClarification would have", result.StructureNeeds)
 	}
 	if result.DeterministicAnswer == "" || result.DeterministicAnswer == windowConfirmationRequiredLimitation {
 		t.Fatalf("DeterministicAnswer = %q, want the DISTINCT refused-not-absence prose, never the ordinary confirmation-required text", result.DeterministicAnswer)
@@ -371,5 +409,64 @@ func TestWindowGate_ClassDefault_WithConfirmedStructure_EchoesAndPersists(t *tes
 	}
 	if len(store.saved.ConfirmedStructure) != 1 || store.saved.ConfirmedStructure[0].AppliedValue != string(SubjectPullRequest) {
 		t.Fatalf("store.saved.ConfirmedStructure = %#v, want the same confirmed kind echo the returned result carries", store.saved.ConfirmedStructure)
+	}
+}
+
+// TestWindowGate_ClassDefault_RecordsStructureNeedsTelemetry pins CHAOS-4118's
+// own telemetry requirement (AGENTS.md: no new outcome-affecting disclosure
+// ships without decision-basis telemetry in the same change): the window-only
+// StructureNeeds windowConfirmationRequiredResult now composes must report
+// through the SAME recordStructureNeedsTelemetry helper terminalResult's own
+// kind/anchor/handle disclosure already uses, not a silent new field. This
+// pins the actual observable defect a missing wire-up would produce: the
+// disclosure appears on the result but the operator-facing counters never
+// see it (see structure.go's own recordStructureNeedsTelemetry, which the
+// WindowOptions loop was added to alongside this test).
+func TestWindowGate_ClassDefault_RecordsStructureNeedsTelemetry(t *testing.T) {
+	t.Parallel()
+	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	telemetry := &recordingTelemetry{}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreter,
+		Graph:       graph,
+		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatalf("ReadFacts called with %#v -- a gated request must never reach the canonical fact read", request)
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize called -- a gated request must never reach synthesis")
+			return InvestigationResult{}, nil
+		}),
+		Results:   newMapResultStore(),
+		Telemetry: telemetry,
+	}, EngineOptions{
+		ServiceVersion: "window-gate-telemetry-test",
+		Now:            func() time.Time { return time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC) },
+		NewResultID:    func() string { return "result_windowgatetelemetry01" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	request := validInvestigationRequest() // no EvidenceWindow -- class-default gate applies
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a confirmation-required result, not an error", err)
+	}
+	if result.StructureNeeds == nil || len(result.StructureNeeds.WindowOptions) == 0 {
+		t.Fatalf("result.StructureNeeds = %#v, want a non-nil window-only disclosure with options", result.StructureNeeds)
+	}
+	if len(telemetry.structureNeedsDisclosed) != 1 || telemetry.structureNeedsDisclosed[0] != contractsv1.ContextFabricStructureNeedWindow {
+		t.Fatalf("structureNeedsDisclosed = %#v, want exactly one cf_structure_needs_disclosed{member=window} call", telemetry.structureNeedsDisclosed)
+	}
+	// codex xhigh review round 1 (low, addressed): assert the EXACT record
+	// set, not merely "at least one match" -- a duplicate or spurious extra
+	// record for another member/source would pass the weaker check.
+	wantCount := len(result.StructureNeeds.WindowOptions)
+	want := structureOfferCountRecord{member: contractsv1.ContextFabricStructureNeedWindow, source: contractsv1.ContextFabricStructureOfferEngine, count: wantCount}
+	if len(telemetry.structureOfferCounts) != 1 || telemetry.structureOfferCounts[0] != want {
+		t.Fatalf("structureOfferCounts = %#v, want exactly [%#v]", telemetry.structureOfferCounts, want)
 	}
 }
