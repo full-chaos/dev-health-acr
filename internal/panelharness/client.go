@@ -273,6 +273,17 @@ func (c *Client) Investigate(ctx context.Context, requestID string, request cont
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Authorization", "Bearer "+credential.Token)
+	// CHAOS-4072: every protected hosted-API route (requireClientVersion,
+	// internal/api/runtime.go) requires this header on every request, or
+	// it 426s before authorization is ever evaluated. internal/sidecar.Client
+	// always sets it from its own ClientVersion (api_client_transport.go,
+	// api_client_lifecycle.go); this client mirrors that same
+	// version-sourcing convention -- stamping the SAME consumerVersion this
+	// package already sends as Consumer.Version above, its own single
+	// source of version identity -- without adopting the rest of
+	// sidecar.Client's surface (this stays a separate, honestly-identified
+	// client; see this type's own doc comment).
+	httpRequest.Header.Set("X-ACR-Client-Version", consumerVersion)
 
 	response, err := c.http.Do(httpRequest)
 	if err != nil {

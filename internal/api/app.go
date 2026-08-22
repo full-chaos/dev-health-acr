@@ -81,7 +81,7 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("PUT "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigPutHandler(a.orgModelConfigs(), a.reuseInvalidator()))
 	mux.Handle("DELETE "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigDeleteHandler(a.orgModelConfigs(), a.orgModelRuntimeEvictor(), a.reuseInvalidator()))
 	mux.Handle("POST /api/v1/oauth/device_authorization", a.deviceRuntimeHandler(http.HandlerFunc(a.handleDeviceAuthorization)))
-	mux.Handle("POST /api/v1/oauth/token", a.deviceRuntimeHandler(http.HandlerFunc(a.handleDeviceToken)))
+	mux.Handle("POST /api/v1/oauth/token", http.HandlerFunc(a.handleDeviceToken))
 	mux.Handle("POST /api/v1/oauth/device_approval", a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleDeviceApproval))))
 	mux.Handle("POST /api/v1/auth/credentials/self/rotate", a.selfLifecycleHandler(http.HandlerFunc(a.handleRotateSelfCredential)))
 	mux.Handle("POST /api/v1/auth/credentials/self/revoke", a.selfLifecycleHandler(http.HandlerFunc(a.handleRevokeSelfCredential)))
