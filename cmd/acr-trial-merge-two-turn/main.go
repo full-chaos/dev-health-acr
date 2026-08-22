@@ -24,11 +24,18 @@ import (
 // mirrored structs below -- ReportSchemaVersion's own doc comment
 // (chaos3742_two_turn_confirmation_test.go) is the authority on what
 // changed; a _test.go type cannot be imported by a regular package, so this
-// file is a hand-maintained mirror, not a shared definition. "7"
-// (CHAOS-4058): Timings/TimingSummary are new, purely additive fields --
+// file is a hand-maintained mirror, not a shared definition. "8"
+// (CHAOS-4062): twoTurnCaseResult gained ShadowKindInsensitivityEvaluated/
+// ShadowKindInsensitivityOutcome and BaselineCommittedSubjects/
+// HintedCommittedSubjects (see twoTurnSubjectKindID below) -- per-case
+// observational fields only, populated for the "unjustified"
+// InferredClassification outcome alone. Purely additive passthrough: no
+// merge arithmetic needed, since Results already concatenates across
+// shards (mergeReports) and every field on the row rides along with it.
+// "7" (CHAOS-4058): Timings/TimingSummary are new, purely additive fields --
 // see twoTurnArmTiming/twoTurnCaseTiming/twoTurnArmTimingSummary below and
 // mergeReports' own handling of them.
-const expectedSchemaVersion = "7"
+const expectedSchemaVersion = "8"
 
 type trialCommitGateProvenance struct {
 	LoneFloorEnv                   string `json:"lone_floor_env,omitempty"`
@@ -85,6 +92,26 @@ type twoTurnCaseResult struct {
 	MutationProbe          string `json:"mutation_probe,omitempty"`
 	MutationTripped        bool   `json:"mutation_tripped,omitempty"`
 	ArmInvalidReason       string `json:"arm_invalid_reason,omitempty"`
+	// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome and
+	// BaselineCommittedSubjects/HintedCommittedSubjects (CHAOS-4062,
+	// schema v8) mirror twoTurnCaseResult's identically-named fields in
+	// chaos3742_two_turn_confirmation_test.go byte-for-byte -- see that
+	// file's own doc comments. Populated ONLY for the "unjustified"
+	// InferredClassification outcome; observational passthrough, no merge
+	// arithmetic (this whole row concatenates across shards as-is).
+	ShadowKindInsensitivityEvaluated bool                   `json:"shadow_kind_insensitivity_evaluated,omitempty"`
+	ShadowKindInsensitivityOutcome   string                 `json:"shadow_kind_insensitivity_outcome,omitempty"`
+	BaselineCommittedSubjects        []twoTurnSubjectKindID `json:"baseline_committed_subjects,omitempty"`
+	HintedCommittedSubjects          []twoTurnSubjectKindID `json:"hinted_committed_subjects,omitempty"`
+}
+
+// twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's
+// identically-named type byte-for-byte (CHAOS-4062, schema v8): a committed
+// subject's Kind+CanonicalID only, Label deliberately dropped (that file's
+// own "no question/label text" discipline).
+type twoTurnSubjectKindID struct {
+	Kind        string `json:"kind"`
+	CanonicalID string `json:"canonical_id"`
 }
 
 const twoTurnArmInferredTier = "inferred_tier"
