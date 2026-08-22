@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -123,7 +124,7 @@ func TestMergeReportsConcatenatesTimingsAndRecomputesSummary(t *testing.T) {
 // asserted against what shardReport built, closing the gap between "the
 // merge function is correct" and "the tool as actually invoked is
 // correct".
-func TestRunEndToEndMergesValidV10Shards(t *testing.T) {
+func TestRunEndToEndMergesValidV11Shards(t *testing.T) {
 	dir := t.TempDir()
 	shard0 := shardReport(0, 2, []twoTurnCaseTiming{
 		{Index: 0, Member: "expected_kind", Arms: []twoTurnArmTiming{
@@ -167,8 +168,8 @@ func TestRunEndToEndMergesValidV10Shards(t *testing.T) {
 		t.Fatalf("unmarshal merged output: %v", err)
 	}
 
-	if merged.ReportSchemaVersion != "10" {
-		t.Errorf("merged.ReportSchemaVersion = %q, want \"10\"", merged.ReportSchemaVersion)
+	if merged.ReportSchemaVersion != "11" {
+		t.Errorf("merged.ReportSchemaVersion = %q, want \"11\"", merged.ReportSchemaVersion)
 	}
 	if !merged.Provenance.AnchorMembershipOffersEnabled {
 		t.Errorf("merged.Provenance.AnchorMembershipOffersEnabled = false, want true (must survive the real JSON round trip, codex round-3 finding)")
@@ -242,7 +243,7 @@ func TestRunRejectsSchemaVersionMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("run() with a schema_version=9 shard = nil error, want a rejection (this tool expects 10)")
 	}
-	if !strings.Contains(err.Error(), `report_schema_version="9"`) || !strings.Contains(err.Error(), `want "10"`) {
+	if !strings.Contains(err.Error(), `report_schema_version="9"`) || !strings.Contains(err.Error(), `want "11"`) {
 		t.Errorf("run() error = %q, want it to name both the got (9) and want (10) schema versions", err.Error())
 	}
 }
@@ -300,5 +301,128 @@ func TestTwoTurnCaseResultDecodesProducerShapedShadowFields(t *testing.T) {
 		if strings.Contains(string(zeroRaw), key) {
 			t.Errorf("zero-value twoTurnCaseResult JSON = %s, want it to omit %s (omitempty)", zeroRaw, key)
 		}
+	}
+}
+
+// TestTwoTurnCaseResultDecodesProducerShapedDiagnosisFields is the CHAOS-4086
+// (schema v11) counterpart of the shadow-field test above, and exists for the
+// identical reason: the end-to-end merge test round-trips through THIS
+// mirror's own encoder, so a tag typo here would be invisible to it -- the
+// bytes would be self-consistently wrong.
+//
+// The literal below is keyed exactly as the producer emits it. If a tag
+// drifts, the field decodes to its zero value and the merged artifact loses
+// precisely the diagnosis this schema bump exists to carry, while every
+// count still agrees and every other test still passes.
+func TestTwoTurnCaseResultDecodesProducerShapedDiagnosisFields(t *testing.T) {
+	const producerJSON = `{
+		"index": 60,
+		"member": "expected_kind",
+		"arm": "positive",
+		"committed_count": 1,
+		"wrong_commit": true,
+		"committed_subjects": [{"kind": "project", "canonical_id": "project:acme/widgets"}],
+		"expected_kind": "repository",
+		"expected_id": "repository:acme/widgets",
+		"commit_gate": "evidence_census",
+		"tied_statistical_top": true,
+		"search_truncated": true,
+		"kind_coverage_floor_fired": true,
+		"kind_coverage_missing_kinds": 3,
+		"kind_coverage_floor_truncated": true,
+		"arm_invalid_stage": "validation",
+		"arm_invalid_error_type": "*errors.errorString"
+	}`
+	var got twoTurnCaseResult
+	if err := json.Unmarshal([]byte(producerJSON), &got); err != nil {
+		t.Fatalf("unmarshal producer-shaped JSON: %v", err)
+	}
+	wantCommitted := []twoTurnSubjectKindID{{Kind: "project", CanonicalID: "project:acme/widgets"}}
+	if !reflect.DeepEqual(got.CommittedSubjects, wantCommitted) {
+		t.Errorf("CommittedSubjects = %+v, want %+v -- a tag mismatch silently zeroes this", got.CommittedSubjects, wantCommitted)
+	}
+	// The whole acceptance bar in one assertion: this row says WHAT was
+	// committed, WHAT was expected, WHICH gate fired and whether the
+	// coverage floor was involved -- with no annex and no trace re-read.
+	for name, pair := range map[string][2]string{
+		"expected_kind":          {got.ExpectedKind, "repository"},
+		"expected_id":            {got.ExpectedID, "repository:acme/widgets"},
+		"commit_gate":            {got.CommitGate, "evidence_census"},
+		"arm_invalid_stage":      {got.ArmInvalidStage, "validation"},
+		"arm_invalid_error_type": {got.ArmInvalidErrorType, "*errors.errorString"},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("%s = %q, want %q -- json tag mismatch would silently zero this", name, pair[0], pair[1])
+		}
+	}
+	for name, pair := range map[string][2]bool{
+		"tied_statistical_top":          {got.TiedStatisticalTop, true},
+		"search_truncated":              {got.SearchTruncated, true},
+		"kind_coverage_floor_fired":     {got.KindCoverageFloorFired, true},
+		"kind_coverage_floor_truncated": {got.KindCoverageFloorTruncated, true},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("%s = %v, want %v", name, pair[0], pair[1])
+		}
+	}
+	if got.KindCoverageMissingKinds != 3 {
+		t.Errorf("kind_coverage_missing_kinds = %d, want 3", got.KindCoverageMissingKinds)
+	}
+
+	zeroRaw, err := json.Marshal(twoTurnCaseResult{Index: 1, Member: "expected_kind", Arm: "positive"})
+	if err != nil {
+		t.Fatalf("marshal zero-value result: %v", err)
+	}
+	// Keys are matched WITH their trailing colon, unlike the shadow test
+	// above. "expected_kind" is not only a key here, it is also a legal
+	// VALUE of the member field ("member":"expected_kind"), so the bare
+	// substring form reports a phantom omitempty violation on every
+	// expected_kind row. Caught by this test on first run.
+	for _, key := range []string{
+		`"committed_subjects":`, `"expected_kind":`, `"expected_id":`,
+		`"commit_gate":`, `"tied_statistical_top":`, `"search_truncated":`,
+		`"kind_coverage_floor_fired":`, `"kind_coverage_missing_kinds":`,
+		`"kind_coverage_floor_truncated":`,
+		`"arm_invalid_stage":`, `"arm_invalid_error_type":`,
+	} {
+		if strings.Contains(string(zeroRaw), key) {
+			t.Errorf("zero-value twoTurnCaseResult JSON = %s, want it to omit %s (omitempty)", zeroRaw, key)
+		}
+	}
+}
+
+// TestMirrorKeysMatchTheProducer is the drift pin's mirror half (CHAOS-4086).
+//
+// This tool is a HAND-MAINTAINED copy of the harness's twoTurnCaseResult, and
+// until now nothing compared the two: the version constant catches a
+// DELIBERATE bump, but a field silently missing from this struct decodes to
+// its zero value and deletes that diagnosis from every merged artifact while
+// every count still agrees and every other test still passes. It has happened
+// (trialProvenance.AnchorMembershipOffersEnabled).
+//
+// The harness's struct lives in a _test.go file and cannot be imported here,
+// so the two sides are compared against the SAME checked-in key list instead
+// of against each other. The producer half is
+// TestChaos4086_MirrorKeysMatchTheProducer in internal/runtime/hosted. Drift
+// on either side fails one of them; a schema change must update the list,
+// which is what forces this mirror to be revisited in the same change.
+func TestMirrorKeysMatchTheProducer(t *testing.T) {
+	golden := filepath.Join("..", "..", "testdata", "trial-report", "two_turn_case_result.keys")
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("read key golden: %v", err)
+	}
+	typ := reflect.TypeOf(twoTurnCaseResult{})
+	got := make([]string, 0, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		got = append(got, strings.Split(tag, ",")[0])
+	}
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, strings.Fields(string(want))) {
+		t.Fatalf("merge-mirror twoTurnCaseResult JSON keys differ from the producer's checked-in list.\nmirror:   %v\nproducer: %v\nA key present in the producer and absent here is SILENTLY DROPPED on decode -- update this struct, do not regenerate the list.", got, strings.Fields(string(want)))
 	}
 }

@@ -60,7 +60,17 @@ import (
 // "7" (CHAOS-4058): Timings/TimingSummary are new, purely additive fields --
 // see twoTurnArmTiming/twoTurnCaseTiming/twoTurnArmTimingSummary below and
 // mergeReports' own handling of them.
-const expectedSchemaVersion = "10"
+// "11" (CHAOS-4086): twoTurnCaseResult gained eleven instant-diagnosis
+// fields -- CommittedSubjects/ExpectedKind/ExpectedID on every arm,
+// CommitGate/TiedStatisticalTop/SearchTruncated off the decision trace, the
+// three KindCoverage* fields off the new kind_coverage_floor trace stage, and
+// ArmInvalidStage/ArmInvalidErrorType beside ArmInvalidReason. Purely
+// additive per-row keys: no merge arithmetic changes, because Results
+// concatenates verbatim and every field on the row rides along with it. The
+// mirror below still had to be updated in the same change -- a field this
+// struct does not declare is dropped on decode, which would delete the
+// diagnosis from the merged artifact while every count still agreed.
+const expectedSchemaVersion = "11"
 
 type trialCommitGateProvenance struct {
 	LoneFloorEnv                   string `json:"lone_floor_env,omitempty"`
@@ -135,6 +145,27 @@ type twoTurnCaseResult struct {
 	ShadowKindInsensitivityMode string                 `json:"shadow_kind_insensitivity_mode,omitempty"`
 	BaselineCommittedSubjects   []twoTurnSubjectKindID `json:"baseline_committed_subjects,omitempty"`
 	HintedCommittedSubjects     []twoTurnSubjectKindID `json:"hinted_committed_subjects,omitempty"`
+	// CHAOS-4086 (schema v11) instant-diagnosis fields, mirroring
+	// twoTurnCaseResult's identically-named block. Rows ride through
+	// mergeReports verbatim, so these need no merge arithmetic -- but they
+	// MUST be declared here anyway: an absent field is silently dropped by
+	// json.Unmarshal and the merged artifact would lose exactly the
+	// diagnosis this schema bump exists to carry. That has happened before
+	// on this mirror (trialProvenance.AnchorMembershipOffersEnabled).
+	//
+	// See twoTurnCaseResult's own block for what each one means and why it
+	// is corpus-safe; the tags below are the contract.
+	CommittedSubjects          []twoTurnSubjectKindID `json:"committed_subjects,omitempty"`
+	ExpectedKind               string                 `json:"expected_kind,omitempty"`
+	ExpectedID                 string                 `json:"expected_id,omitempty"`
+	CommitGate                 string                 `json:"commit_gate,omitempty"`
+	TiedStatisticalTop         bool                   `json:"tied_statistical_top,omitempty"`
+	SearchTruncated            bool                   `json:"search_truncated,omitempty"`
+	KindCoverageFloorFired     bool                   `json:"kind_coverage_floor_fired,omitempty"`
+	KindCoverageMissingKinds   int                    `json:"kind_coverage_missing_kinds,omitempty"`
+	KindCoverageFloorTruncated bool                   `json:"kind_coverage_floor_truncated,omitempty"`
+	ArmInvalidStage            string                 `json:"arm_invalid_stage,omitempty"`
+	ArmInvalidErrorType        string                 `json:"arm_invalid_error_type,omitempty"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's

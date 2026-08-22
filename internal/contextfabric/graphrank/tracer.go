@@ -80,6 +80,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// value, never an identifier -- so they carry no more than the
 			// fields beside them already do.
 			"commit_basis", event.CommitBasis, "tied_statistical_top", event.TiedStatisticalTop)
+	case "kind_coverage_floor":
+		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
+		// harness reads the same event off an in-process tracer to put
+		// these on a trial-report row; this branch is what makes the same
+		// facts readable in production, where no harness exists. Counts and
+		// booleans only -- no kind name, no term, no candidate identity.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: kind coverage floor",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"fired", event.KindCoverageFloorFired,
+			"missing_kinds", event.KindCoverageMissingKinds,
+			"truncated", event.KindCoverageFloorTruncated)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,

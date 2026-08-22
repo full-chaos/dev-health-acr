@@ -227,11 +227,20 @@ func candidatesOfKind(pool map[string]contextfabric.SubjectCandidate, kind conte
 // exactly like Search/SearchQuestion/AliasLookup's own error handling
 // (resolve.go) -- a real backend fault is never silently downgraded to
 // "found nothing" here either.
-func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, aliasLookupTrustworthy bool) (added []contextfabric.SubjectCandidate, traversalDegraded int, authzDropped int, truncated bool, degraded bool, err error) {
+func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, aliasLookupTrustworthy bool) (added []contextfabric.SubjectCandidate, traversalDegraded int, authzDropped int, truncated bool, degraded bool, missingKinds int, err error) {
 	if deps.SearchKind == nil {
-		return nil, 0, 0, false, false, nil
+		return nil, 0, 0, false, false, 0, nil
 	}
 	missing := missingCoverageKinds(pool, effectiveCoverageFloorKinds(aliasLookupTrustworthy))
+	// missingKinds (CHAOS-4086) is the SNAPSHOT taken here, before any
+	// SearchKind call runs -- how many floor kinds had zero representation
+	// in the pool at the moment this pass began. Deliberately not
+	// recomputed at the end: the question a reader asks of a report row is
+	// "what was missing that this floor had to go looking for", and a
+	// post-pass count would answer the different question "what is still
+	// missing", conflating a floor that found everything with one that
+	// never had anything to find.
+	missingKinds = len(missing)
 	boundedTerms := terms
 	if len(boundedTerms) > kindCoverageMaxTermsPerKind {
 		boundedTerms = boundedTerms[:kindCoverageMaxTermsPerKind]
@@ -240,7 +249,7 @@ func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, re
 		for _, term := range boundedTerms {
 			results, kindTruncated, kindDegraded, searchErr := deps.SearchKind(ctx, term, kind, kindCoverageQueryLimit)
 			if searchErr != nil {
-				return added, traversalDegraded, authzDropped, truncated, degraded, searchErr
+				return added, traversalDegraded, authzDropped, truncated, degraded, missingKinds, searchErr
 			}
 			if kindTruncated {
 				truncated = true
@@ -259,5 +268,5 @@ func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, re
 	for _, kind := range missing {
 		added = append(added, candidatesOfKind(pool, kind)...)
 	}
-	return added, traversalDegraded, authzDropped, truncated, degraded, nil
+	return added, traversalDegraded, authzDropped, truncated, degraded, missingKinds, nil
 }

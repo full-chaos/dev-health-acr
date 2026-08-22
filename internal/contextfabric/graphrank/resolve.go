@@ -553,6 +553,28 @@ type ResolutionTraceEvent struct {
 	// this event carries). Reporting it as an exact count would overstate
 	// the rule's reach.
 	TiedStatisticalTop bool
+	// KindCoverageFloorFired/KindCoverageMissingKinds/
+	// KindCoverageFloorTruncated (stage=="kind_coverage_floor" ONLY,
+	// CHAOS-4086) describe CHAOS-4038's kind-coverage floor: how many floor
+	// kinds had ZERO representation in the candidate pool when the pass
+	// began, whether the pass actually put a candidate of such a kind into
+	// the pool, and whether any of its own SearchKind queries hit their row
+	// limit.
+	//
+	// They are carried on their OWN stage and are ALWAYS ZERO on a decision
+	// event. That is deliberate and load-bearing: this floor's truncation
+	// and degradation are explicitly excluded from the commit gate's inputs
+	// (see the call site in resolve.go), so presenting them beside
+	// CommitGate/SearchTruncated -- which ARE gate inputs -- would invite
+	// exactly the causal reading the resolver is built to avoid.
+	//
+	// "Fired" means ADDED SOMETHING (len(added) > 0), not "ran": a floor
+	// can run over three missing kinds and find nothing, which is a
+	// different finding from one that never ran, and MissingKinds>0 with
+	// Fired==false is precisely how a reader tells them apart.
+	KindCoverageFloorFired     bool
+	KindCoverageMissingKinds   int
+	KindCoverageFloorTruncated bool
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -1236,7 +1258,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// the coverage floor must widen to cover them too -- see
 		// effectiveCoverageFloorKinds' own doc comment.
 		aliasLookupTrustworthy := deps.AliasLookup != nil && aliasIdentityComplete
-		added, coverageTraversalDegraded, coverageAuthzDropped, _, coverageDegraded, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, aliasLookupTrustworthy)
+		added, coverageTraversalDegraded, coverageAuthzDropped, coverageTruncated, coverageDegraded, coverageMissingKinds, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, aliasLookupTrustworthy)
 		if coverageErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, coverageErr
 		}
@@ -1244,6 +1266,34 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		coverageFloorDegraded = coverageDegraded
 		traversalDegraded += coverageTraversalDegraded
 		subjectCandidatesAuthzDropped += coverageAuthzDropped
+		// CHAOS-4086: the floor's own OBSERVATION event, emitted on its own
+		// stage rather than folded onto the decision event below.
+		//
+		// A SEPARATE STAGE IS THE POINT, not a convenience. The paragraph
+		// above establishes that this pass's truncation and degradation say
+		// something about a MISSING KIND's visibility and never about
+		// whether an already-decisive candidate of a different kind is safe
+		// to commit -- which is why coverageFloorDegraded is kept out of the
+		// gate's inputs and coverageFloorTruncated was left unread
+		// entirely. Attaching these three values to the decision event
+		// would put them exactly where a reader infers gate inputs from,
+		// re-creating by presentation the coupling the code is careful not
+		// to have. On their own stage they are what they are: what the
+		// floor went looking for, and what it found.
+		//
+		// This makes CHAOS-4038's floor effect readable from a run's own
+		// artifacts for the first time -- before this, the pass could widen
+		// or fail to widen a candidate pool and nothing downstream could
+		// tell which had happened. Counts and booleans only: no kind name,
+		// no term, no candidate identity.
+		if deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "kind_coverage_floor",
+				KindCoverageFloorFired:     len(added) > 0,
+				KindCoverageMissingKinds:   coverageMissingKinds,
+				KindCoverageFloorTruncated: coverageTruncated,
+			})
+		}
 	}
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)
