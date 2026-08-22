@@ -125,7 +125,7 @@ Outcome → `SourceState`, none of which is ever `SourcePruned`:
 | `expanded_partial` | `truncated` | yes |
 | `failed` | `unavailable` | yes |
 | `target_kind_mismatch` | `unavailable` | yes |
-| `attempted_empty` | `no_data` | no |
+| `attempted_empty` | `no_data` | yes — ruled 2026-08-22, PENDING chris sign-off on cost (see §6b) |
 | *(unrecognised)* | `unavailable` | yes |
 
 `target_kind_mismatch` degrades. The cause is a wiring error, but
@@ -287,6 +287,81 @@ synthesis input saw complete coverage while the answer said evidence was
 missing. A disclosure the fact bundle contradicts is worth less than no
 disclosure at all.
 
+**Superseded for stage 2 (see §6b).** The ruling on invariant 7 × invariant 9
+makes `attempted_empty` degrade, which makes the worst-wins branch above dead
+code once PR-2 lands.
+
+## 6b. Ruling: `attempted_empty` is not a proof of absence (invariant 7 × invariant 9)
+
+An expansion whose admitted set is empty because every candidate was
+authorization-dropped previously reported `attempted_empty` — the same
+clean, non-degrading outcome as a traversal that genuinely found nothing.
+That is a false proof of absence (invariant 7): targets existed, the caller
+simply could not see them. The obvious fix — degrade auth-dropped
+traversals — is forbidden by the opposite invariant: it would make an
+auth-drop caller-observable, an existence side-channel (invariant 9). A
+size-dependent variant was already latent in the merged §6a fix: a full
+first page auth-dropped hits `expanded_partial` (degrading) while a small
+auth-dropped project hits clean `attempted_empty` — the same information
+leaking through result size instead of through the outcome field.
+
+**RULED (team-lead, 2026-08-22): indistinguishability at the same truthful
+level.** An expansion whose admitted set is empty for one of three specific
+reasons — genuinely no candidates existed, every candidate was
+authorization-dropped, or the traversal was truncated before anything was
+admitted — now produces ONE non-committal outcome meaning "no evidence
+reached," never a proof of absence. The truncated-before-admitting case
+collapses into the same outcome, closing the size channel. `attempted_empty`
+degrades. Operator truth (`AuthorizationDroppedCount`, `Truncated`) stays
+telemetry-only — the existing invariant-9 carve-out; "no evidence reached"
+is true in all three cases, and invariant 7 forbids a false proof, not the
+strongest true claim. **`target_kind_mismatch` is not one of the three and
+is untouched by this collapse**: an admitted set that is empty because every
+candidate was the wrong kind is a wiring signal, not an
+evidence-reachability question, and it already degrades on its own terms
+(§5).
+
+Verified against the `graphrank/resolution.go:885` precedent: not an
+analogue of any of the three fixes rejected there; it matches what graphrank
+ultimately adopted (constant-off, no observable dependence on the hidden
+population), and is strictly stronger — no branch on caller scope shape at
+all.
+
+**PR-2 acceptance criterion (ratified, named).** Collapsing the outcome enum
+is necessary, not sufficient — it removes one observable, but the
+genuinely-empty and fully-auth-dropped cases are indistinguishable only if
+nothing else on the caller-visible surface differs. PR-2 must include a
+differential test that constructs both scenarios so they differ *only* in
+whether candidates were authorization-dropped, serializes the entire
+caller-visible result surface (outcome, the caller-visible counts such as
+`AdmittedCount`/`CandidateCount`/`OriginCount` — never the telemetry-only
+counts carved out above, derived-subject list, coverage reason, limitation
+text) for both, and asserts byte-identity. A label asserting
+"indistinguishable" proves nothing; an artefact identical under both
+hypotheses does.
+
+**Priced cost — PENDING CHRIS SIGN-OFF.** Because `attempted_empty` now
+degrades, genuinely-empty project traversals will also carry
+`Coverage.Partial`, widening the pre-adjudicated measurement effect (§6, §9)
+a second time. If rejected, the fallback is disabling expansion for the
+affected shape entirely — not reintroducing distinct outcomes, which would
+reinstate the leak this ruling closes.
+
+**Consequence: the §6a worst-wins branch becomes dead code.** That logic
+exists only to arbitrate between a degrading gap and a non-degrading one
+sharing a disclosure slot. Checking the rest of the outcome vocabulary:
+`policy_unavailable`, `failed`, `target_kind_mismatch`, `expanded_partial`
+already degrade; `FactScopeNotNeeded` is declared but never assigned
+anywhere in the codebase, so it never records a gap. Once `attempted_empty`
+also degrades, **every** gap-recording outcome degrades — worst-wins and
+first-wins become identical and the branch never fires.
+`TestChaos4099_ACleanGapNeverEvictsADegradingOne` becomes an assertion about
+an unreachable state. PR-2 must make a conscious choice: delete the
+worst-wins branch as dead code (stating why in the commit), or keep it as an
+explicitly-labelled fail-safe for a non-degrading gap outcome that does not
+exist today. Either way, the test must be re-grounded or retired, not left
+as a passing assertion about an impossible state.
+
 ## 7a. Two disclosures, not one
 
 They say opposite things and neither implies the other:
@@ -396,6 +471,20 @@ disclosed gap — onto a genuinely ineligible pair. The invariants they pin are
 unchanged.
 
 ## 9. Stage 2 preconditions
+
+**Status (2026-08-22): stage 2 is BLOCKED on CHAOS-4108.** In live data,
+`work_items.project_id` and `projects.id` use different identity schemes for
+the same entity — a repo slug vs. an org:provider:id composite — so the join
+`queryWorkItemProjects` relies on never matches. Every project either has
+repo-linked work items whose `project_id` matches nothing in `projects`, or
+is Linear-sourced and 100% zero-UUID `repo_id`. The two populations needed
+for the oracle-comparison and per-hop-authorization preconditions below are
+disjoint on live data — a graph-vs-ClickHouse comparison would compare empty
+against empty for every project and pass, which is a check that fails toward
+fine, not evidence. **Producer-generated fixtures — generated by running the
+real producers against seeded ClickHouse rows, never hand-authored — are the
+sanctioned route** for both remaining preconditions until CHAOS-4108 is
+resolved.
 
 Activation of the three project policies requires, with evidence in the PR
 body:
