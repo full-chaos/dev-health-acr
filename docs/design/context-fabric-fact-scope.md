@@ -252,6 +252,41 @@ Expander and resolver mismatch counts are **disjoint by contract**: an
 expander reports only targets it dropped itself and never returns them, so
 summing cannot double-count.
 
+A **third** instance was found one level up, outside `expand()`, and a
+**fourth** downstream of the resolver entirely. The class is now understood as
+structural rather than as three individual ordering slips: wherever a
+degrading fact and a clean fact compete for one slot, the clean one wins by
+default unless something makes it lose.
+
+- **The disclosure slot.** A requirement has several origin kinds and one
+  gap slot, and the slot went to the first origin in *sorted* order —
+  `project` before `team`. A project chain that ran and genuinely found
+  nothing (`attempted_empty`, non-degrading, `SourceNoData`) therefore
+  discarded a team gap still owed a disclosure. `HasDisclosableGap` reads the
+  same map, so the answer's sentence went quiet too. **The worst outcome now
+  wins the slot, not the first**; among gaps that agree on whether they
+  degrade, sorted order still decides, so the choice stays deterministic
+  (invariant 8).
+- **The planner's branches.** Only the "nothing supported at all" branch
+  consulted the resolver's gap. A requirement that lost *some* targets but
+  kept others took the ordinary read path and the provider answered
+  `SourceAvailable` over a subject set the resolver already knew was
+  incomplete. `target_kind_mismatch` is the live shape, precisely because the
+  fix above made it retain its survivors. A degrading gap now attaches to a
+  plan entry **that still has subjects**, and the read is marked truncated:
+  the facts that did come back are kept, and the bundle says the scope was
+  cut. It routes through `SourceTruncated` rather than the gap's own
+  `SourceUnavailable` because `stateRejectsFacts` would otherwise reject the
+  very facts being disclosed about — `SourceTruncated` is the state that
+  already means "some of what you asked for, honestly labelled".
+
+The second one matters beyond its own coverage line: the engine's
+answer-level disclosure fired either way, so the defect was a **bundle that
+contradicted the answer built from it**. Direct bundle consumers and
+synthesis input saw complete coverage while the answer said evidence was
+missing. A disclosure the fact bundle contradicts is worth less than no
+disclosure at all.
+
 ## 7a. Two disclosures, not one
 
 They say opposite things and neither implies the other:
@@ -306,6 +341,35 @@ override, and have `buildFactQuery`'s own scope check wave it through — ID
 smuggling past authorization (invariant 3), and a route to new fact reads
 while every policy is disabled. Tests reach the same outcomes through a
 `FactScopeExpander`, which is the real port.
+
+**Overwriting the scope was the wrong remedy; it is now dropped before
+validation.** Overwriting fixed the symptom at the resolver, but
+`validateCanonicalFactRequest` runs *earlier* and computes its allowed set
+with the same trusting `investigationScopeSubjectSet` — so a forged scope
+still carried an unauthorized subject past the requirement-override scope
+gate. Stopping the forgery at `buildFactQuery` holds only while the forged
+subject is one a capability **directly supports**, because that is the gate it
+walks into.
+
+Forge an out-of-investigation **project** instead and the registry never
+reaches that gate for it. The project becomes an expansion **origin** —
+`Resolve` takes a requirement's roots from `requirement.Subjects` — and an
+enabled policy derives a repository from it. The repository is then
+legitimately in the resolved scope and *is* read. The subject reaching the
+provider is authorized; the origin it hangs off never was, and no amount of
+downstream scope checking catches that, because by the time the derived
+subject exists the unauthorized origin has already done its work.
+
+`request.Scope` is therefore set to `nil` **before** validation. At validation
+time no derivation legitimately exists yet, so an override may name only an
+investigation **root**; every legitimate derived subject enters after
+`Resolve`, through the resolver, with provenance. The regression test asserts
+the expander was **never called** — a rejection arriving after the traversal
+already ran has already leaked the existence of the origin's repositories.
+
+The general rule this settles: an authorization input must be neutralised at
+the point the first decision is made from it, not at the point it is
+conveniently overwritten later.
 
 `ReadFacts` returns the in-progress bundle alongside a post-resolution error
 so the scope telemetry survives a failed read; the engine emits from

@@ -957,18 +957,38 @@ func (r *FactReadScopeResolver) resolveRequirement(
 		if event.Outcome == FactScopeExpanded && event.AdmittedCount > 0 {
 			continue
 		}
-		// A gap is recorded per requirement. When several origin kinds all
-		// fail, the FIRST in sorted order wins the disclosure slot: the
-		// coverage contract allows one observation per source, and the
-		// per-origin detail lives in the events, which are emitted for every
-		// one of them.
-		if _, exists := scope.Gaps[kind]; !exists {
-			scope.Gaps[kind] = FactScopeGap{
-				Outcome:    event.Outcome,
-				Policy:     event.Policy,
-				Basis:      event.Basis,
-				OriginKind: originKind,
-			}
+		// A gap is recorded per requirement. The coverage contract allows one
+		// observation per source, so several origin kinds compete for one
+		// disclosure slot; the per-origin detail lives in the events, which
+		// are emitted for every one of them.
+		//
+		// THE WORST OUTCOME WINS, not the first.
+		//
+		// Codex round 3 (Medium): first-in-sorted-order was a THIRD instance
+		// of the round-2 masking class, one level up from the two fixed
+		// inside expand(). attempted_empty is non-degrading and maps to
+		// SourceNoData; policy_unavailable, failed, target_kind_mismatch and
+		// expanded_partial all degrade. Origin kinds are walked sorted, so
+		// `project` is decided before `team`: a project chain that ran and
+		// genuinely found nothing took the slot and DISCARDED a team gap that
+		// was still owed a disclosure. The bundle then reported a clean
+		// SourceNoData with no Coverage.Partial, and HasDisclosableGap --
+		// which reads the same map -- returned false, so the answer's
+		// sentence vanished too. A clean outcome must never evict a degrading
+		// one.
+		//
+		// Among gaps that agree on whether they degrade, the first in sorted
+		// order still wins, so the choice stays a deterministic function of
+		// the input (ruling invariant 8).
+		candidate := FactScopeGap{
+			Outcome:    event.Outcome,
+			Policy:     event.Policy,
+			Basis:      event.Basis,
+			OriginKind: originKind,
+		}
+		existing, exists := scope.Gaps[kind]
+		if !exists || (!factScopeGapDegrades(existing.Outcome) && factScopeGapDegrades(candidate.Outcome)) {
+			scope.Gaps[kind] = candidate
 		}
 	}
 }

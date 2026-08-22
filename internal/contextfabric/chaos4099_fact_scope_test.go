@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -915,7 +916,11 @@ func TestChaos4099_ANilScopeChangesNothing(t *testing.T) {
 // fail-closed logic runs against it exactly as it will against the graph
 // implementation stage 2 wires.
 type recordingScopeExpander struct {
-	targets  []SubjectRef
+	targets []SubjectRef
+	// perCall overrides targets on a per-invocation basis, so a test can
+	// give two origin groups DIFFERENT target sets. Identical sets cannot
+	// distinguish the requirement-level cap from dedup (codex round 3).
+	perCall  [][]SubjectRef
 	counts   FactScopeExpansionCounts
 	err      error
 	calls    int
@@ -928,7 +933,15 @@ func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request Fact
 	if e.err != nil {
 		return FactScopeExpansionResult{Counts: e.counts}, e.err
 	}
-	return FactScopeExpansionResult{Targets: e.targets, Counts: e.counts}, nil
+	targets := e.targets
+	if len(e.perCall) > 0 {
+		if e.calls-1 < len(e.perCall) {
+			targets = e.perCall[e.calls-1]
+		} else {
+			targets = nil
+		}
+	}
+	return FactScopeExpansionResult{Targets: targets, Counts: e.counts}, nil
 }
 
 // TestChaos4099_ADisabledPolicyNeverReachesTheExpander is the stage gate
@@ -1489,6 +1502,243 @@ func TestChaos4099_AForgedScopeOnTheRequestIsIgnored(t *testing.T) {
 	}
 }
 
+// TestChaos4099_AForgedScopeCannotSmuggleAnExpansionOrigin closes the
+// escalation of the forged-scope hole (codex round 3, High).
+//
+// The round-1 fix stopped a forged derivation at buildFactQuery. That holds
+// only while the forged subject is one a capability DIRECTLY supports --
+// buildFactQuery is the gate it walks into. Forge an out-of-investigation
+// PROJECT instead and the registry never reaches that gate for it: the
+// project becomes an expansion ORIGIN (Resolve takes a requirement's roots
+// from requirement.Subjects), and an enabled policy derives a repository from
+// it. The repository is then legitimately in the resolved scope and IS read.
+//
+// The subject that reaches the provider is authorized; the ORIGIN it hangs
+// off never was. That is the ID smuggling invariants 3 and 4 forbid, and no
+// amount of downstream scope checking catches it, because by the time the
+// derived subject exists the unauthorized origin has already done its work.
+//
+// The fix drops the incoming scope BEFORE validation, so the override is
+// rejected as out of scope and the expander is never consulted at all.
+func TestChaos4099_AForgedScopeCannotSmuggleAnExpansionOrigin(t *testing.T) {
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	// The project policy ACTIVATED, which is what stage 2 does. The hole is
+	// dark today only because nothing traverses yet.
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {SubjectProject: {
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 10,
+		}},
+	}
+
+	// scopeProject is the investigation's only authorized root. The forged
+	// project is a DIFFERENT one the caller may not read.
+	forgedOrigin := subject(SubjectProject, "project:linear:NOT-YOURS")
+	derivedTarget := subject(SubjectRepository, "repo:github:secret")
+	request := scopeRequest([]SubjectRef{scopeProject},
+		[]FactRequirement{{Kind: FactMetrics, Subjects: []SubjectRef{forgedOrigin}}}, TemporalCurrent)
+	request.Scope = &FactReadScope{
+		DerivedSubjects: map[FactKind][]SubjectRef{},
+		Derivations: []FactScopeDerivation{{
+			Root: scopeProject, Target: forgedOrigin,
+			Policy: FactScopePolicyProjectWorkItemRepository, Basis: FactScopeBasisActivityProxy,
+		}},
+		Gaps: map[FactKind]FactScopeGap{},
+	}
+
+	expander := &recordingScopeExpander{targets: []SubjectRef{derivedTarget}}
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result:     FactProviderResult{State: SourceAvailable, Version: "metrics-v1"},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics},
+		FactRegistryOptions{ScopeExpander: expander})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+
+	_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err == nil {
+		t.Fatal("a forged expansion origin was accepted -- an override may name only an investigation root")
+	}
+	if !strings.Contains(err.Error(), "outside the discovered investigation set") {
+		t.Fatalf("error = %v, want the smuggled origin rejected as out of scope", err)
+	}
+	// The sharpest assertion: the unauthorized project must never have been
+	// TRAVERSED. A rejection that arrives after the expander already walked
+	// the graph for it has already leaked the existence of its repositories.
+	if expander.calls != 0 {
+		t.Fatalf("the expander traversed %d time(s) from a forged origin -- authorization must precede traversal", expander.calls)
+	}
+	if len(metrics.queries) != 0 {
+		t.Fatal("the provider was queried for a subject derived from a forged origin")
+	}
+}
+
+// TestChaos4099_ACleanGapNeverEvictsADegradingOne is the THIRD instance of
+// the round-2 masking class (codex round 3, Medium), one level up from the
+// two fixed inside expand().
+//
+// A requirement can have several origin kinds and only one disclosure slot.
+// The slot used to go to the first origin in sorted order, and `project`
+// sorts before `team`. So a project chain that ran and genuinely found
+// nothing (attempted_empty -- non-degrading, SourceNoData) took the slot and
+// DISCARDED a team gap that was still owed a disclosure.
+//
+// The bundle then reported a clean no_data with no Coverage.Partial, and
+// HasDisclosableGap reads the same map, so the answer's sentence vanished
+// too. Exactly this ticket's own defect, arrived at from a third direction.
+func TestChaos4099_ACleanGapNeverEvictsADegradingOne(t *testing.T) {
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	// The project origin is ENABLED and will find nothing; the team origin
+	// stays disabled and therefore degrades. Sorted order decides project
+	// first, so the non-degrading outcome reaches the slot first.
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {
+			SubjectProject: {
+				Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 10,
+			},
+			SubjectTeam: {
+				Policy: FactScopePolicyNone, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: false, Limit: 10,
+			},
+		},
+	}
+
+	// No targets and no counts: the chain ran and genuinely ended.
+	expander := &recordingScopeExpander{}
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(),
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
+			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+
+	// Both origins were decided, and the events keep the per-origin detail.
+	if len(scope.Events) != 2 {
+		t.Fatalf("events = %+v, want one per origin kind", scope.Events)
+	}
+	var sawCleanProject, sawDegradingTeam bool
+	for _, event := range scope.Events {
+		if event.OriginKind == SubjectProject && event.Outcome == FactScopeAttemptedEmpty {
+			sawCleanProject = true
+		}
+		if event.OriginKind == SubjectTeam && factScopeGapDegrades(event.Outcome) {
+			sawDegradingTeam = true
+		}
+	}
+	if !sawCleanProject || !sawDegradingTeam {
+		t.Fatalf("events = %+v, want a clean project outcome and a degrading team outcome", scope.Events)
+	}
+
+	gap, disclosed := scope.gapFor(FactMetrics)
+	if !disclosed {
+		t.Fatal("no gap was recorded at all -- the degrading team outcome is owed a disclosure")
+	}
+	if !factScopeGapDegrades(gap.Outcome) {
+		t.Fatalf("gap = %+v, want the DEGRADING outcome to win the slot, not the first in sorted order", gap)
+	}
+	if gap.OriginKind != SubjectTeam {
+		t.Fatalf("gap origin = %q, want the team origin that actually degraded", gap.OriginKind)
+	}
+	// The consequence the reader sees: without this, both the coverage state
+	// and the answer's sentence go quiet.
+	if factScopeGapSourceState(gap.Outcome) == SourceNoData {
+		t.Fatal("the gap reports a clean no_data -- a discarded degrading outcome is a false proof of absence")
+	}
+	if !scope.HasDisclosableGap() {
+		t.Fatal("HasDisclosableGap is false -- the answer would carry no unexpanded limitation")
+	}
+}
+
+// TestChaos4099_APartiallyLostExpansionDegradesTheBundle closes the last
+// masking path (codex round 3, Medium).
+//
+// Only the "nothing supported at all" branch of the planner consulted the
+// resolver's gap. A requirement that lost SOME targets but kept others took
+// the ordinary read path, and the provider answered SourceAvailable over a
+// subject set the resolver already KNEW was incomplete.
+//
+// target_kind_mismatch is the live shape, because the round-2 fix
+// deliberately made it retain its valid survivors. The engine's answer-level
+// disclosure still fired, but the BUNDLE -- what direct consumers and
+// synthesis input read -- claimed complete coverage. A disclosure the fact
+// bundle contradicts is worth less than no disclosure at all.
+func TestChaos4099_APartiallyLostExpansionDegradesTheBundle(t *testing.T) {
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {SubjectProject: {
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 10,
+		}},
+	}
+
+	// One good repository and one wrong-kind target: the survivor is
+	// admitted and read, the mismatch is recorded.
+	goodRepo := subject(SubjectRepository, "repo:github:api")
+	wrongKind := subject(SubjectWorkItem, "work_item:linear:TITAN-1")
+	expander := &recordingScopeExpander{targets: []SubjectRef{goodRepo, wrongKind}}
+
+	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result: FactProviderResult{
+			State: SourceAvailable, Version: "metrics-v1", ObservedAt: &observed,
+			Facts: []CanonicalFact{{
+				Kind: FactMetrics, Subject: goodRepo,
+				Fields:      map[string]FactValue{"lead_time_days": NumberFactValue(3.5)},
+				ObservedAt:  &observed,
+				SourceState: SourceAvailable,
+			}},
+		},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics},
+		FactRegistryOptions{ScopeExpander: expander})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+
+	// The survivor WAS read -- degrading must not mean discarding.
+	if len(bundle.Facts) != 1 {
+		t.Fatalf("facts = %+v, want the valid survivor still read", bundle.Facts)
+	}
+	if len(metrics.queries) != 1 {
+		t.Fatalf("provider queried %d time(s), want the surviving repository read", len(metrics.queries))
+	}
+	// And the bundle says the scope was incomplete.
+	if !bundle.Coverage.Partial {
+		t.Fatal("bundle reports complete coverage over a scope the resolver knows lost targets")
+	}
+	var observation SourceObservation
+	for _, source := range bundle.Coverage.Sources {
+		if source.Source == "canonical_fact:"+string(FactMetrics) {
+			observation = source
+		}
+	}
+	if observation.State == SourceAvailable {
+		t.Fatalf("coverage state = %q, want a degrading state for a knowingly incomplete read", observation.State)
+	}
+	if !factStateDegrades(observation.State) {
+		t.Fatalf("coverage state = %q does not degrade -- the gap is invisible to every bundle consumer", observation.State)
+	}
+	if !strings.Contains(observation.Reason, string(FactScopeReasonUnexpanded)) {
+		t.Fatalf("reason = %q, want the unexpanded note riding on the capability's own observation", observation.Reason)
+	}
+	if len(bundle.Coverage.DegradedReasons) == 0 {
+		t.Fatal("no degraded reason was filed for a knowingly incomplete read")
+	}
+}
+
 // TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup pins the
 // second-order bound.
 //
@@ -1515,13 +1765,22 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: rule, SubjectTeam: rule},
 	}
-	// The same two repositories from both groups: overlapping, and together
-	// over the cap.
-	shared := []SubjectRef{
-		subject(SubjectRepository, "repo:github:a"),
-		subject(SubjectRepository, "repo:github:b"),
+	// OVERLAPPING BUT DISTINCT groups: [a,b] and [b,c].
+	//
+	// Codex round 3 (Low): both groups previously returned the identical
+	// pair, so dedup alone held the union at 2 and deleting the
+	// requirement-level cap guard still passed -- the mutation check was
+	// vacuous. With [a,b] and [b,c] the deduplicated union is 3, which is
+	// over the cap of 2, so ONLY the cap can bring it back down. Removing
+	// the guard now admits 3 and fails.
+	repoA := subject(SubjectRepository, "repo:github:a")
+	repoB := subject(SubjectRepository, "repo:github:b")
+	repoC := subject(SubjectRepository, "repo:github:c")
+	shared := []SubjectRef{repoA, repoB}
+	expander := &recordingScopeExpander{
+		perCall: [][]SubjectRef{{repoA, repoB}, {repoB, repoC}},
+		counts:  FactScopeExpansionCounts{CandidateCount: 2},
 	}
-	expander := &recordingScopeExpander{targets: shared, counts: FactScopeExpansionCounts{CandidateCount: 2}}
 
 	scope := NewFactReadScopeResolver(expander).Resolve(
 		context.Background(),
@@ -1531,7 +1790,15 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 	)
 	derived := scope.DerivedSubjects[FactMetrics]
 	if len(derived) != len(shared) {
-		t.Fatalf("derived = %+v, want the union deduplicated to %d", derived, len(shared))
+		t.Fatalf("derived = %+v, want the union capped and deduplicated to %d", derived, len(shared))
+	}
+	// The cap, not dedup, is what holds this at 2: the deduplicated union of
+	// [a,b] and [b,c] is 3. Naming the excluded subject makes the assertion
+	// about the cap rather than about the count alone.
+	for _, target := range derived {
+		if canonicalFactSubjectKey(target) == canonicalFactSubjectKey(repoC) {
+			t.Fatalf("derived %+v admitted a subject past the policy's cap of %d", derived, limit)
+		}
 	}
 	keys := map[string]struct{}{}
 	for _, target := range derived {
@@ -1554,7 +1821,10 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 		t.Fatalf("events claim %d admitted subjects but %d are in scope -- telemetry must report what the provider is actually asked", totalAdmitted, len(derived))
 	}
 	// Deterministic: the same inputs produce the same scope, every time.
-	repeat := NewFactReadScopeResolver(&recordingScopeExpander{targets: shared, counts: FactScopeExpansionCounts{CandidateCount: 2}}).Resolve(
+	repeat := NewFactReadScopeResolver(&recordingScopeExpander{
+		perCall: [][]SubjectRef{{repoA, repoB}, {repoB, repoC}},
+		counts:  FactScopeExpansionCounts{CandidateCount: 2},
+	}).Resolve(
 		context.Background(),
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
 			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
@@ -1798,6 +2068,24 @@ func TestChaos4099_EveryEligibilityRowCitesItsChain(t *testing.T) {
 		if !strings.Contains(row.Rule.Chain, "->") || !strings.Contains(row.Rule.Chain, "devhealthsource/") {
 			t.Fatalf("%s cites %q, want typed edges and the prod producer that writes them", row.Requirement, row.Rule.Chain)
 		}
+		// Codex round 3 (Low): the checks above are SYNTACTIC, so a citation
+		// naming a producer that does not exist would pass them -- and a
+		// fabricated chain is exactly the failure this test exists to
+		// prevent, since a row's whole claim is that the pruner's proof of
+		// absence is false. Resolve every cited `file: function` pair against
+		// the tree and require the function to actually be declared there.
+		for _, citation := range parseChainCitations(t, row.Rule.Chain) {
+			source, err := os.ReadFile(citation.file)
+			if err != nil {
+				t.Fatalf("%s cites %q, which does not exist: %v", row.Requirement, citation.file, err)
+			}
+			for _, producer := range citation.producers {
+				if !strings.Contains(string(source), "func "+producer+"(") {
+					t.Fatalf("%s cites %s: %s, but %s declares no such function -- the chain is fabricated",
+						row.Requirement, citation.file, producer, citation.file)
+				}
+			}
+		}
 		if len(row.Origins) == 0 {
 			t.Fatalf("%s has no origin kinds", row.Requirement)
 		}
@@ -1808,6 +2096,49 @@ func TestChaos4099_EveryEligibilityRowCitesItsChain(t *testing.T) {
 			t.Fatalf("%s names no epistemic basis", row.Requirement)
 		}
 	}
+}
+
+// chainCitation is one `devhealthsource/<file>.go: fnA, fnB` clause lifted
+// out of a chain string.
+type chainCitation struct {
+	file      string
+	producers []string
+}
+
+// parseChainCitations pulls every parenthesised `file: producers` clause out
+// of a chain citation and resolves the file against this package's directory.
+// Chains are built by concatenating clauses with "; ", and each clause ends
+// in "(<path>: <fn>[, <fn>...])".
+func parseChainCitations(t *testing.T, chain string) []chainCitation {
+	t.Helper()
+
+	citations := []chainCitation{}
+	for _, clause := range strings.Split(chain, "(")[1:] {
+		body, _, found := strings.Cut(clause, ")")
+		if !found {
+			t.Fatalf("chain %q has an unterminated citation clause", chain)
+		}
+		path, functions, found := strings.Cut(body, ":")
+		if !found {
+			t.Fatalf("citation %q names no producer -- want `<file>: <function>`", body)
+		}
+		producers := []string{}
+		for _, function := range strings.Split(functions, ",") {
+			if trimmed := strings.TrimSpace(function); trimmed != "" {
+				producers = append(producers, trimmed)
+			}
+		}
+		if len(producers) == 0 {
+			t.Fatalf("citation %q names no producer", body)
+		}
+		// Chains cite paths relative to the contextfabric package, which is
+		// this test's own working directory.
+		citations = append(citations, chainCitation{file: strings.TrimSpace(path), producers: producers})
+	}
+	if len(citations) == 0 {
+		t.Fatalf("chain %q carries no checkable `(file: function)` citation", chain)
+	}
+	return citations
 }
 
 // TestChaos4099_OnlyTheThreeRuledPoliciesAreEverActivatable is the stage
