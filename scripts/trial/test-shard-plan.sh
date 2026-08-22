@@ -89,6 +89,19 @@ check "ACR_TRIAL_PG_HOST/PORT override reaches trial_pg_dsn" \
   '{"shard_count":5,"granularity":1,"concurrency_cap":8,"case_count":5,"pg_host":"pgrelay.internal","pg_port":"15432","pg_dsn_example":"postgres://plan-only:plan-only@pgrelay.internal:15432/EXAMPLE_DB?sslmode=disable","shards":[{"index":0,"cases":"0"},{"index":1,"cases":"1"},{"index":2,"cases":"2"},{"index":3,"cases":"3"},{"index":4,"cases":"4"}]}' \
   "$(ACR_TRIAL_CASES_PER_SHARD=1 ACR_TRIAL_PG_HOST=pgrelay.internal ACR_TRIAL_PG_PORT=15432 plan "$tmp/dense.json")"
 
+# 4c. codex review round 1 (P2, confirmed): a `"` in an operator-controlled
+# ACR_TRIAL_PG_HOST value used to emit invalid JSON (printf %s with no
+# escaping). jq -Rn --arg now escapes it -- the plan output must still be
+# WELL-FORMED JSON (parseable, and pg_host round-trips to the literal
+# string INCLUDING the quote) rather than merely "does not crash".
+evil_host_plan="$(env ACR_TRIAL_CASES_PER_SHARD=1 ACR_TRIAL_PG_HOST='evil"host' ACR_TRIAL_SHARD_PLAN_ONLY=1 "$launcher" "$tmp/dense.json" 2>/dev/null)"
+check "a quote in ACR_TRIAL_PG_HOST is escaped, not injected" \
+  'valid
+evil"host' \
+  "$(printf '%s\n%s' \
+    "$(jq -e . >/dev/null 2>&1 <<<"$evil_host_plan" && echo valid || echo INVALID)" \
+    "$(jq -r .pg_host <<<"$evil_host_plan")")"
+
 # 5. The concurrency cap is reported in the plan, so an operator can see
 #    what a run WILL do before it does it.
 check "concurrency cap is configurable and reported" \

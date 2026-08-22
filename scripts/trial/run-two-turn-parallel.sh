@@ -286,8 +286,16 @@ if [[ "$PLAN_ONLY" == "1" ]]; then
   # it. "EXAMPLE_DB" stands in for the RUN_TAG-derived database name neither
   # of those has yet at plan time; the DSN shape and the host/port it
   # carries are identical regardless of which database name fills that slot.
-  printf '{"shard_count":%d,"granularity":%s,"concurrency_cap":%d,"case_count":%d,"pg_host":"%s","pg_port":"%s","pg_dsn_example":"%s","shards":[' \
-    "$SHARD_COUNT" "${CASES_PER_SHARD:-0}" "$MAX_CONCURRENT" "${#ALL_INDICES[@]}" "$PG_HOST" "$PG_PORT" "$(trial_pg_dsn EXAMPLE_DB)"
+  #
+  # codex review round 1 (P2, confirmed): PG_HOST/PG_PORT are OPERATOR
+  # input (ACR_TRIAL_PG_HOST/PORT), not a closed set of digits like every
+  # other value in this JSON -- a value carrying a `"` or a newline would
+  # otherwise emit invalid JSON no consumer could parse. `jq -Rn --arg`
+  # produces a properly quoted-and-escaped JSON string; this script
+  # already depends on jq for annex parsing, so this adds no new tool.
+  json_string() { jq -Rn --arg v "$1" '$v'; }
+  printf '{"shard_count":%d,"granularity":%s,"concurrency_cap":%d,"case_count":%d,"pg_host":%s,"pg_port":%s,"pg_dsn_example":%s,"shards":[' \
+    "$SHARD_COUNT" "${CASES_PER_SHARD:-0}" "$MAX_CONCURRENT" "${#ALL_INDICES[@]}" "$(json_string "$PG_HOST")" "$(json_string "$PG_PORT")" "$(json_string "$(trial_pg_dsn EXAMPLE_DB)")"
   for ((i = 0; i < SHARD_COUNT; i++)); do
     [[ "$i" -gt 0 ]] && printf ','
     printf '{"index":%d,"cases":"%s"}' "$i" "${SHARD_CASES[$i]}"
