@@ -331,6 +331,15 @@ jobs:
         run: make contract-test
       - name: Verify CodeGraph contract
         run: make codegraph-contract
+      # CHAOS-4100. Runs HERE, not only in `make verify`: this job is what
+      # actually executes script gates in CI, and a target that exists only
+      # in the local aggregate protects nothing on a pull request. It is
+      # also the only place the plan-only path is exercised in an
+      # environment with no sibling dev-health checkout and no ops/.env --
+      # which is the exact shape that broke it, and the shape no developer
+      # machine reproduces.
+      - name: Verify trial shard layout
+        run: make shard-plan
       - name: Verify full-stack offline contract
         run: make fullstack-contract
 
