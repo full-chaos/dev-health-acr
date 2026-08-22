@@ -287,3 +287,96 @@ func TestChaos4085_BasisDiscardingWrappersStayBehaviourallyIdentical(t *testing.
 		}
 	}
 }
+
+// TestChaos4085_DecisionTraceCarriesBasisAndTieFlags is the observability
+// pin for the team-lead addition (2026-08-22): the CHAOS-4085
+// investigation could not attribute the wrong commit from trace at all --
+// establishing what happened needed captured model-exchange transcripts,
+// because nothing said which class of proof the commit stood on.
+//
+// A decision-stage event must now answer that on its own: gate, basis,
+// mechanism, tie, truncation.
+func TestChaos4085_DecisionTraceCarriesBasisAndTieFlags(t *testing.T) {
+	t.Run("committed carries its basis", func(t *testing.T) {
+		tracer := &recordingTracer{}
+		lone := corroborationCandidate("traced_lone", 0.80, contextfabric.MatchLexical)
+		bySubject := map[string]contextfabric.SubjectCandidate{SubjectKey(lone.Subject): lone}
+		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis", "")
+
+		event, ok := tracer.decision()
+		if !ok {
+			t.Fatal("no decision-stage event emitted")
+		}
+		if event.Outcome != "committed" || event.CommitGate != "lone_floor" {
+			t.Fatalf("event = %+v, want a lone_floor commit", event)
+		}
+		if event.CommitBasis != string(contextfabric.CommitBasisStatistical) {
+			t.Fatalf("CommitBasis = %q, want %q", event.CommitBasis, contextfabric.CommitBasisStatistical)
+		}
+		if event.TiedStatisticalTop {
+			t.Fatal("a single candidate cannot be tied")
+		}
+	})
+
+	t.Run("the tied-rescue refusal is countable from trace", func(t *testing.T) {
+		tracer := &recordingTracer{}
+		candidates := tiedTopCandidates()
+		bySubject := make(map[string]contextfabric.SubjectCandidate, len(candidates))
+		for _, candidate := range candidates {
+			bySubject[SubjectKey(candidate.Subject)] = candidate
+		}
+		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, true, /* searchTruncated */
+			tiedTopSimilarities(), 0.25, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-tied", "")
+
+		event, ok := tracer.decision()
+		if !ok {
+			t.Fatal("no decision-stage event emitted")
+		}
+		// This exact conjunction IS the refusal, with no downstream
+		// reconstruction required.
+		if !(event.Outcome == "ambiguous" && event.TiedStatisticalTop && event.SearchTruncated && event.CommitGate == "") {
+			t.Fatalf("the tied-rescue refusal must be directly countable, got %+v", event)
+		}
+		if event.CommitBasis != "" {
+			t.Fatalf("nothing committed, so no basis may be traced, got %q", event.CommitBasis)
+		}
+	})
+
+	t.Run("a tie WITHOUT truncation stays distinguishable", func(t *testing.T) {
+		tracer := &recordingTracer{}
+		candidates := tiedTopCandidates()
+		bySubject := make(map[string]contextfabric.SubjectCandidate, len(candidates))
+		for _, candidate := range candidates {
+			bySubject[SubjectKey(candidate.Subject)] = candidate
+		}
+		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, /* searchTruncated */
+			tiedTopSimilarities(), 0.25, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-untied", "")
+
+		event, ok := tracer.decision()
+		if !ok {
+			t.Fatal("no decision-stage event emitted")
+		}
+		// Tied, not truncated, and it still commits -- the population the
+		// refusal deliberately does NOT claim. A single "refused" boolean
+		// would have made this indistinguishable from the case above by
+		// absence alone.
+		if !event.TiedStatisticalTop || event.SearchTruncated || event.Outcome != "committed" {
+			t.Fatalf("a tie without truncation must stay separable and still commit, got %+v", event)
+		}
+	})
+}
+
+// recordingTracer captures decision-stage events for the trace pins above.
+type recordingTracer struct{ events []ResolutionTraceEvent }
+
+func (r *recordingTracer) Trace(event ResolutionTraceEvent) { r.events = append(r.events, event) }
+
+func (r *recordingTracer) decision() (ResolutionTraceEvent, bool) {
+	for _, event := range r.events {
+		if event.Stage == "decision" {
+			return event, true
+		}
+	}
+	return ResolutionTraceEvent{}, false
+}

@@ -126,6 +126,18 @@ type CommitAffirmationOutcome struct {
 	// SubjectKind is the retracted subject's kind. A closed enum from the
 	// contract, never an identifier.
 	SubjectKind SubjectKind
+	// WinningMechanism is the retracted candidate's own strongest recorded
+	// match mechanism ("lexical", "vector", "exact", "alias",
+	// "provider_key", ...) -- a closed contract enum, never an identifier.
+	//
+	// Present so a retraction is attributable WITHOUT joining to the
+	// resolution trace (team-lead addition, 2026-08-22): pairing it with
+	// Basis answers "what kind of match produced a commit the answer could
+	// not stand behind" from this one event. Empty when the candidate
+	// recorded no mechanism, which must be read as "not recorded" rather
+	// than "no mechanism matched" -- MatchMechanisms is additive-optional in
+	// v1 and absent on every pre-CHAOS-3778 result.
+	WinningMechanism string
 	// ProvisionalCommitted/FinalCommitted are the Committed cardinalities
 	// before and after THIS investigation's whole reduction, so a reader
 	// can tell a partial retraction from a total one without joining
@@ -450,6 +462,7 @@ func applyCommitAffirmation(result *InvestigationResult, inputs affirmationInput
 		outcomes = append(outcomes, CommitAffirmationOutcome{
 			Basis:                basis,
 			SubjectKind:          subject.Kind,
+			WinningMechanism:     winningMechanismFor(subject, inputs.Candidates),
 			ProvisionalCommitted: len(provisional),
 		})
 	}
@@ -498,6 +511,28 @@ func applyCommitAffirmation(result *InvestigationResult, inputs affirmationInput
 		outcomes[index].FinalCommitted = final
 	}
 	return outcomes
+}
+
+// winningMechanismFor returns subject's own candidate entry's FIRST
+// recorded match mechanism, or "" when the subject has no candidate entry
+// or that entry recorded none.
+//
+// First, not "strongest": MatchMechanisms is already stored in the
+// mechanism-precedence order MergeMechanisms maintains, so the first entry
+// IS the strongest one -- and re-deriving a ranking here would be a second,
+// driftable definition of precedence for a telemetry field.
+func winningMechanismFor(subject SubjectRef, candidates []SubjectCandidate) string {
+	key := SubjectMapKey(subject)
+	for _, candidate := range candidates {
+		if SubjectMapKey(candidate.Subject) != key {
+			continue
+		}
+		if len(candidate.MatchMechanisms) == 0 {
+			return ""
+		}
+		return string(candidate.MatchMechanisms[0])
+	}
+	return ""
 }
 
 // recordCommitAffirmation emits one telemetry event per retraction, when

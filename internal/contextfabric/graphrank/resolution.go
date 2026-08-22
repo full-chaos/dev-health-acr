@@ -502,6 +502,15 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// OBSERVABILITY -- it never feeds back into any commit decision
 	// itself.
 	identityTrustGateBlocked := false
+	// tiedStatisticalTop (CHAOS-4085 observability, team-lead addition
+	// 2026-08-22): the TIE half of tiedStatisticalTopUnderTruncation's
+	// conjunct, captured for the decision-stage trace independently of
+	// whether the refusal fired -- see ResolutionTraceEvent.TiedStatisticalTop
+	// for why the tie and the truncation are emitted as two fields rather
+	// than one "refused" boolean. Assigned inside the commit block below,
+	// where commitIndex exists; stays false for a resolution that committed
+	// on arrival (the pre-committed hint fast path never computes one).
+	tiedStatisticalTop := false
 	// CHAOS-3857 sol review F1: computed ONCE, gates BOTH the
 	// confidence-threshold decision below (the two commitIndex cases in
 	// the switch) and the CHAOS-3829 margin-rescue block further down --
@@ -594,6 +603,11 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		if len(commitIndex) > 0 {
 			identityTrustGateBlocked = identityTrustUnproven(candidates[commitIndex[0]], aliasIdentityComplete)
 		}
+		// Reuses tiedStatisticalTopUnderTruncation's own tie test with
+		// searchTruncated forced TRUE, so the trace flag and the refusal
+		// rule can never disagree about what "tied" means -- one definition,
+		// two readers.
+		tiedStatisticalTop = tiedStatisticalTopUnderTruncation(candidates, commitIndex, true)
 		switch {
 		// CHAOS-3917: exact alias != canonical identity -- an exact-label
 		// match alone must never suffice to commit when the identical
@@ -1190,18 +1204,28 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: commitGate,
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 				SearchTruncated: searchTruncated,
+				// CHAOS-4085: read back from the SAME set the engine
+				// consumes, never re-derived here -- a trace that disagreed
+				// with the basis the gate actually used would be worse than
+				// no trace at all.
+				CommitBasis:        string(bases.For(resolution.Committed[0])),
+				TiedStatisticalTop: tiedStatisticalTop,
 			})
 		case len(resolution.Committed) == 0 && ambiguous:
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Outcome: "ambiguous",
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 				SearchTruncated: searchTruncated,
+				// CHAOS-4085: an ambiguous outcome carrying
+				// TiedStatisticalTop && SearchTruncated && CommitGate=="" IS
+				// the tied-rescue refusal, countable directly from trace.
+				TiedStatisticalTop: tiedStatisticalTop,
 			})
 		case len(resolution.Committed) == 0:
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Outcome: "no_commit",
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
-				SearchTruncated: searchTruncated,
+				SearchTruncated: searchTruncated, TiedStatisticalTop: tiedStatisticalTop,
 			})
 		}
 	}

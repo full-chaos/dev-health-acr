@@ -497,6 +497,41 @@ type ResolutionTraceEvent struct {
 	// the truncation-preempted case; SearchTruncated==false there means
 	// the gates themselves declined to commit.
 	SearchTruncated bool
+	// CommitBasis (decision stage, CHAOS-4085): the recorded
+	// contextfabric.CommitBasis for the committed subject -- "caller_canonical_id"
+	// | "authoritative_identity" | "statistical" -- empty for any
+	// non-committed outcome.
+	//
+	// This is the field that makes a wrong commit ATTRIBUTABLE FROM TRACE
+	// ALONE, which the CHAOS-4085 investigation could not do: establishing
+	// what had actually happened required reconstructing the commit from
+	// captured model-exchange transcripts, because nothing in the trace said
+	// which class of proof the commit stood on. CommitGate names which BRANCH
+	// fired; CommitBasis names what that branch's decision was WORTH, and the
+	// two are not derivable from each other -- exact_index and
+	// identity_fast_path both commit at Confidence 1 with an identity-shaped
+	// mechanism, and only one of them is a proof (see
+	// contextfabric.CommitBasis).
+	//
+	// Together with TiedStatisticalTop below, a decision-stage event now
+	// carries the complete answer to "why did this commit, and how much
+	// should we have trusted it": gate, basis, mechanism, tie, truncation.
+	CommitBasis string
+	// TiedStatisticalTop (decision stage, CHAOS-4085): true when the top two
+	// commit-eligible candidates held the SAME sub-1.0 confidence -- the tie
+	// half of tiedStatisticalTopUnderTruncation's conjunct, emitted
+	// independently of whether the refusal actually fired.
+	//
+	// Emitted on EVERY decision-stage event, committed or not, and
+	// deliberately NOT conflated with the refusal itself: paired with the
+	// SearchTruncated field immediately above, a reader can separate the
+	// three populations that matter -- a tie WITH truncation (the refused
+	// class: TiedStatisticalTop && SearchTruncated && CommitGate==""), a tie
+	// WITHOUT truncation (still rescuable, and still committing today), and
+	// truncation without a tie (untouched by CHAOS-4085). A single "refused"
+	// boolean would collapse the second and third into the first's absence
+	// and make the rule's real reach uncountable.
+	TiedStatisticalTop bool
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
