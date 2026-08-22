@@ -1217,8 +1217,11 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 				SearchTruncated: searchTruncated,
 				// CHAOS-4085: an ambiguous outcome carrying
-				// TiedStatisticalTop && SearchTruncated && CommitGate=="" IS
-				// the tied-rescue refusal, countable directly from trace.
+				// TiedStatisticalTop && SearchTruncated && CommitGate=="" is
+				// a NECESSARY condition for the tied-rescue refusal -- an
+				// upper bound, not an exact count, because the rescue's own
+				// eligibility conjuncts are not on this event. See
+				// ResolutionTraceEvent.TiedStatisticalTop's doc comment.
 				TiedStatisticalTop: tiedStatisticalTop,
 			})
 		case len(resolution.Committed) == 0:

@@ -73,7 +73,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"outcome", event.Outcome, "winning_mechanism", event.WinningMechanism, "commit_gate", event.CommitGate,
 			"alias_identity_complete", event.AliasLookupComplete, "identity_trust_gate_blocked", event.IdentityTrustGateBlocked,
-			"search_truncated", event.SearchTruncated)
+			"search_truncated", event.SearchTruncated,
+			// CHAOS-4085/CHAOS-4089: the two fields that make a commit
+			// attributable without transcript archaeology. Both are closed
+			// vocabularies or booleans -- commit_basis is a CommitBasis enum
+			// value, never an identifier -- so they carry no more than the
+			// fields beside them already do.
+			"commit_basis", event.CommitBasis, "tied_statistical_top", event.TiedStatisticalTop)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,

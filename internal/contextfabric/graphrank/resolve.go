@@ -525,12 +525,33 @@ type ResolutionTraceEvent struct {
 	// Emitted on EVERY decision-stage event, committed or not, and
 	// deliberately NOT conflated with the refusal itself: paired with the
 	// SearchTruncated field immediately above, a reader can separate the
-	// three populations that matter -- a tie WITH truncation (the refused
-	// class: TiedStatisticalTop && SearchTruncated && CommitGate==""), a tie
-	// WITHOUT truncation (still rescuable, and still committing today), and
+	// three populations that matter -- a tie WITH truncation, a tie WITHOUT
+	// truncation (still rescuable, and still committing today), and
 	// truncation without a tie (untouched by CHAOS-4085). A single "refused"
 	// boolean would collapse the second and third into the first's absence
 	// and make the rule's real reach uncountable.
+	//
+	// NECESSARY, NOT SUFFICIENT (codex xhigh retroactive review, MEDIUM 2 --
+	// an earlier version of this comment claimed the conjunction below
+	// simply WAS the refusal, which over-counts). An ambiguous event with
+	// TiedStatisticalTop && SearchTruncated && CommitGate=="" is a
+	// NECESSARY condition for the tied-rescue refusal, not a sufficient
+	// one: this flag reports the TIE alone, independently of whether the
+	// rescue was ever ELIGIBLE. The rescue additionally requires
+	// unscopedVisibility, a valid CommitGatePolicy, a positive
+	// vectorMarginCommitThreshold, non-degraded retrieval, and an
+	// effectiveSearchLimit inside [2, calibratedTopK] (see the rescue's own
+	// guard, resolution.go). A scoped principal alone -- or an invalid
+	// gate, degraded retrieval, an uncalibrated threshold, or a
+	// out-of-envelope search limit -- produces the identical conjunction
+	// with the rescue never available at all.
+	//
+	// So a reader counting the refusal from trace gets an UPPER BOUND from
+	// this conjunction, and must exclude the ineligible population by other
+	// means (the scoped/degraded/uncalibrated dimensions are knowable from
+	// deployment configuration and the request's own scope, none of which
+	// this event carries). Reporting it as an exact count would overstate
+	// the rule's reach.
 	TiedStatisticalTop bool
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
