@@ -265,7 +265,11 @@ type FactScopeExpansionEvent struct {
 	TemporalDroppedCount      int
 	MissingNextHopCount       int
 	TargetKindMismatchCount   int
-	// Truncated is true exactly when a cap was hit, detected by limit+1.
+	// Truncated is the EXPANDER's own report that it hit a cap of its own
+	// (a per-hop bound, a backend page limit). The resolver ORs its own
+	// overflow detection into this rather than replacing it: both are real
+	// ways a traversal can be incomplete, and either one alone is enough to
+	// make the answer partial.
 	Truncated bool
 	// FailureClass is set only for FactScopeFailed.
 	FailureClass FactScopeFailureClass
@@ -285,6 +289,19 @@ type factScopePolicyRule struct {
 	// rule that is enabled but has no expander wired still fails CLOSED to
 	// FactScopePolicyUnavailable -- see FactReadScopeResolver.Resolve.
 	Enabled bool
+	// Limit overrides maxFactScopeTargets for this policy. Zero means the
+	// default. A per-policy bound exists because the three chains have very
+	// different fan-out: one project reaches few repositories but those
+	// repositories reach many pull requests, and many more reviews.
+	Limit int
+}
+
+// limitOrDefault is the cap this rule's traversal is bounded by.
+func (r factScopePolicyRule) limitOrDefault() int {
+	if r.Limit > 0 {
+		return r.Limit
+	}
+	return maxFactScopeTargets
 }
 
 // factScopePolicies is the CLOSED (requirement kind, origin kind) -> rule
@@ -487,10 +504,29 @@ func (s *FactReadScope) HasDisclosableGap() bool {
 // is looking. Everything else means the system did not, or could not, look.
 func factScopeGapDegrades(outcome FactScopeExpansionOutcome) bool {
 	switch outcome {
-	case FactScopePolicyUnavailable, FactScopeExpandedPartial, FactScopeFailed:
+	// The system did not look, could not finish, or produced targets it
+	// could not use. In every one of these the answer is missing evidence it
+	// could have had.
+	//
+	// target_kind_mismatch is HERE, not below, on the second pass over this
+	// decision (codex review). It was originally excluded as "a wiring error
+	// with no user-visible loss the user could act on" -- but that reasons
+	// about the CAUSE, and Coverage.Partial describes the ANSWER. A
+	// mismatched traversal yields no facts, so the answer is exactly as
+	// incomplete as if the policy had been disabled; the reader is owed the
+	// same disclosure either way. That the operator ALSO gets a loud
+	// telemetry event is not a substitute for telling the reader.
+	case FactScopePolicyUnavailable, FactScopeExpandedPartial, FactScopeFailed, FactScopeTargetKindMismatch:
 		return true
-	default:
+	// A complete expansion, and a chain that ran and genuinely ended, are
+	// the only two outcomes where nothing is missing.
+	case FactScopeNotNeeded, FactScopeExpanded, FactScopeAttemptedEmpty:
 		return false
+	default:
+		// FAIL CLOSED on an outcome this function has never heard of. A new
+		// value defaulting to "nothing is missing" would reintroduce this
+		// ticket's entire defect silently, one enum addition at a time.
+		return true
 	}
 }
 
@@ -515,10 +551,18 @@ func factScopeGapSourceState(outcome FactScopeExpansionOutcome) SourceState {
 	case FactScopeFailed:
 		return SourceUnavailable
 	case FactScopeTargetKindMismatch:
-		return SourceNotApplicable
-	default:
-		// attempted_empty: the chain ran and there was nothing there.
+		// NOT SourceNotApplicable: that state does not degrade, and this
+		// outcome does (see factScopeGapDegrades). The targets existed and
+		// could not be used, which is what "unavailable" says.
+		return SourceUnavailable
+	case FactScopeAttemptedEmpty:
+		// The chain ran and there was genuinely nothing there.
 		return SourceNoData
+	default:
+		// FAIL CLOSED, same reasoning as factScopeGapDegrades' own default:
+		// an unrecognised outcome must not be able to present itself as a
+		// clean no_data.
+		return SourceUnavailable
 	}
 }
 
@@ -548,8 +592,17 @@ type FactScopeExpansionRequest struct {
 	Origins         []SubjectRef
 	Policy          FactScopePolicy
 	TargetKind      SubjectKind
-	// Limit bounds admitted targets. The implementation reads Limit+1 rows
-	// so truncation is DETECTED rather than inferred (ruling invariant 8).
+	// Limit bounds admitted targets. The implementation must read up to
+	// Limit+1 rows and return all of them: the resolver detects truncation
+	// from the OVERFLOW row and enforces the cap itself (ruling invariant 8).
+	//
+	// The resolver does not trust Counts.Truncated alone. An expander that
+	// issued `LIMIT 200` instead of `LIMIT 201` would return exactly 200
+	// rows with Truncated=false, and a full page is indistinguishable from a
+	// truncated one -- which is precisely the silent truncation invariant 8
+	// forbids. The overflow row is the only evidence that distinguishes
+	// them, so the party that owns the invariant is the party that checks
+	// for it.
 	Limit int
 }
 
@@ -784,7 +837,7 @@ func (r *FactReadScopeResolver) expand(
 		Origins:         origins,
 		Policy:          rule.Policy,
 		TargetKind:      rule.TargetKind,
-		Limit:           maxFactScopeTargets,
+		Limit:           rule.limitOrDefault(),
 	})
 	event.CandidateCount = result.Counts.CandidateCount
 	event.AuthorizationDroppedCount = result.Counts.AuthorizationDroppedCount
@@ -805,7 +858,9 @@ func (r *FactReadScopeResolver) expand(
 	// The target-kind check is re-run HERE rather than trusted from the
 	// expander: this is the last point before a subject becomes readable,
 	// and a provider must never be handed a subject kind its capability says
-	// it cannot answer.
+	// it cannot answer. buildFactQuery rejects an unsupported kind by
+	// failing the WHOLE bundle, so a miswired policy that slipped through
+	// would cost the entire investigation, not just this requirement.
 	admitted := make([]SubjectRef, 0, len(result.Targets))
 	mismatched := 0
 	for _, target := range result.Targets {
@@ -816,15 +871,32 @@ func (r *FactReadScopeResolver) expand(
 		admitted = append(admitted, target)
 	}
 	event.TargetKindMismatchCount += mismatched
+	// CAP ENFORCED HERE, from the OVERFLOW row (ruling invariant 8; codex
+	// review finding). The expander is asked for up to Limit+1 targets
+	// precisely so that "we got a full page" and "there was more" are
+	// distinguishable, and the distinction is worthless if the party that
+	// owns the invariant delegates it. An expander that under-reports
+	// Truncated, or ignores the limit entirely and returns thousands, is
+	// contained by this rather than believed.
+	overflowed := false
+	if len(admitted) > rule.limitOrDefault() {
+		admitted = admitted[:rule.limitOrDefault()]
+		overflowed = true
+	}
+	event.Truncated = result.Counts.Truncated || overflowed
 	event.AdmittedCount = len(admitted)
 	switch {
-	case len(admitted) == 0 && event.CandidateCount > 0 && event.TargetKindMismatchCount > 0:
+	case len(admitted) == 0 && event.TargetKindMismatchCount > 0:
+		// Distinct from attempted_empty on purpose: "the chain produced
+		// things of the wrong kind" is a wiring error, and "the chain
+		// produced nothing" is a fact about the data. Collapsing them would
+		// hide a bug inside a normal outcome.
 		event.Outcome = FactScopeTargetKindMismatch
 		return
 	case len(admitted) == 0:
 		event.Outcome = FactScopeAttemptedEmpty
 		return
-	case result.Counts.Truncated:
+	case event.Truncated:
 		event.Outcome = FactScopeExpandedPartial
 	default:
 		event.Outcome = FactScopeExpanded
@@ -898,6 +970,11 @@ func sortFactScopeDerivations(derivations []FactScopeDerivation) {
 // fact family, policy or subject kind.
 const factScopeUnexpandedLimitation = contractsv1.ContextFabricFactScopeUnexpandedLimitation
 
+// factScopeActivityProxyLimitation is the answer-facing disclosure that some
+// evidence was gathered by activity association rather than ownership
+// (ruling invariant 6). See the contract constant's own doc comment.
+const factScopeActivityProxyLimitation = contractsv1.ContextFabricFactScopeActivityProxyLimitation
+
 // recordFactScopeExpansion emits every decision the resolver made.
 //
 // Needs no type assertion: RecordFactScopeExpansion is a method on
@@ -933,14 +1010,41 @@ func (e *Engine) recordFactScopeExpansion(ctx context.Context, principal storage
 //     not the origin kind, not the policy, not a count -- reaches the
 //     answer. All of it is on the telemetry stream instead.
 func applyFactScopeDisclosure(result *InvestigationResult, scope *FactReadScope) {
-	if result == nil || !scope.HasDisclosableGap() {
+	if result == nil {
+		return
+	}
+	// TWO INDEPENDENT DISCLOSURES, EITHER OR BOTH.
+	//
+	// They say opposite things and neither implies the other. The gap
+	// disclosure says "we could not reach some evidence"; the proxy
+	// disclosure says "we DID reach evidence, by a route weaker than it
+	// looks". One investigation can easily be both -- metrics expanded
+	// through the activity proxy while reviews hit a disabled policy -- and
+	// a reader told only the first would take everything PRESENT in the
+	// answer at face value.
+	//
+	// The proxy half was originally deferred to stage 2 on the reasoning
+	// that nothing is admitted while every policy is disabled. Codex review
+	// caught that for what it was: HasActivityProxyDerivation existed,
+	// documented as invariant 6's trigger, and nothing called it. Wiring it
+	// now means stage 2 flips a policy flag rather than also having to
+	// introduce an invariant -- and the mechanism is tested before it is
+	// load-bearing rather than after.
+	disclosures := make([]string, 0, 2)
+	if scope.HasDisclosableGap() {
+		disclosures = append(disclosures, factScopeUnexpandedLimitation)
+	}
+	if scope.HasActivityProxyDerivation() {
+		disclosures = append(disclosures, factScopeActivityProxyLimitation)
+	}
+	if len(disclosures) == 0 {
 		return
 	}
 	// appendBoundedLimitations is the ONE path by which anything is added to
-	// a composed result's limitations. The disclosure is registered
-	// service-authored in the contract's own list, so it can displace a
+	// a composed result's limitations. Both disclosures are registered
+	// service-authored in the contract's own list, so each can displace a
 	// model caveat but can never itself be the caveat displaced.
-	composed, displaced := appendBoundedLimitations(result.Limitations, []string{factScopeUnexpandedLimitation})
+	composed, displaced := appendBoundedLimitations(result.Limitations, disclosures)
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced
 	// The answer does not cover what it set out to cover. This is the same

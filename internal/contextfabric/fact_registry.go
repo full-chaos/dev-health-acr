@@ -266,15 +266,24 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	// derived targets). Providers' declared SupportedSubjectKinds are not
 	// touched by any of it.
 	//
-	// An already-populated Scope is honored rather than overwritten: it is
-	// the injection point tests use to exercise a specific expansion outcome
-	// without standing up a graph, and re-resolving over it would make those
-	// tests silently assert nothing.
-	if request.Scope == nil {
-		resolved := r.scopeResolver.Resolve(ctx, newFactScopeResolveInput(request), capabilities)
-		request.Scope = &resolved
-	}
-	bundle.Scope = request.Scope
+	// THE RESOLVER ALWAYS RUNS, AND ALWAYS WINS. An incoming request.Scope
+	// is overwritten, never honored.
+	//
+	// It used to be honored, as a test injection point. Codex review named
+	// that for what it was: investigationScopeSubjectSet trusts every
+	// Derivations entry, so an in-process caller could hand over a forged
+	// derivation for an unauthorized repository, name that repository in a
+	// requirement override, and have buildFactQuery's own scope check wave
+	// it through -- ID smuggling past authorization, which is exactly what
+	// ruling invariant 3 forbids, and a path to new fact reads while every
+	// policy is still disabled. A convenience that widens an authorization
+	// boundary is not a convenience.
+	//
+	// Tests reach the same outcomes through a FactScopeExpander, which is
+	// the real port and therefore the honest way to exercise them.
+	resolved := r.scopeResolver.Resolve(ctx, newFactScopeResolveInput(request), capabilities)
+	request.Scope = &resolved
+	bundle.Scope = &resolved
 	// allowedSubjects is recomputed AFTER scope resolution: derived targets
 	// enter the investigation scope set through request.Scope, and the value
 	// computed above (before the resolver ran) would not contain them --
@@ -360,7 +369,15 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		}
 		query, err := buildFactQuery(request, requirement, registered.capability, allowedSubjects, planned.Subjects)
 		if err != nil {
-			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
+			// The BUNDLE is returned alongside the error, not a zero value
+			// (codex review finding). Scope is already resolved and carries
+			// every expansion decision this read made; returning nothing
+			// would drop that telemetry on exactly the runs an operator most
+			// needs it for. The engine emits from facts.Scope BEFORE it
+			// checks err, and discards the rest of the bundle -- see
+			// Investigate. Nothing consumes a bundle returned with an error
+			// for its facts.
+			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 		result, err := r.readProvider(ctx, principal, registered, query)
 		if err != nil {
@@ -384,7 +401,9 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// own read still has to survive.
 		result.Reason = withNarrowingNote(planned, result.Reason)
 		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects); err != nil {
-			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
+			// Same reasoning as buildFactQuery's error above: the resolved
+			// scope rides out with the error so its telemetry is not lost.
+			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 	}
 	sortCanonicalFacts(bundle.Facts)

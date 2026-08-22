@@ -43,9 +43,12 @@ var (
 // pullrequests.go): metrics answers for repositories, pull_requests for pull
 // requests, reviews for pull request reviews. None answers for a project.
 //
-// Restated here rather than imported so this package's tests do not depend
-// on devhealthfacts; the values are pinned against the real ones by
-// TestChaos4099_ProviderSubjectKindsAreUnchanged.
+// Restated here rather than imported because devhealthfacts imports THIS
+// package -- an import from these tests would be a cycle. That makes any
+// assertion in this file about "the real capabilities" a tautology, so the
+// real guard lives where the real declarations do:
+// devhealthfacts/chaos4099_capability_kinds_test.go pins these exact values
+// against the production providers, and fails if one is widened.
 func scopeCapabilities() map[FactKind]FactCapability {
 	return map[FactKind]FactCapability{
 		FactMetrics:      planCapability(FactMetrics, "metrics", SubjectRepository),
@@ -85,6 +88,39 @@ func scopeRegistry(t *testing.T) (*FactCapabilityRegistry, map[FactKind]*factPro
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
 	}
 	return registry, stubs
+}
+
+// scopeServableResult is affirmationResult() stamped with the identity and
+// version fields Investigate would have filled in, so a unit-level
+// disclosure test can call the REAL contract validator.
+//
+// The validation matters here specifically: LimitationsDisplaced carries a
+// coherence rule (a positive displaced count requires a service-authored
+// disclosure present), and a disclosure that made a result unservable would
+// be a worse defect than the one being fixed -- that is exactly how
+// CHAOS-4098 produced a 500.
+func scopeServableResult() InvestigationResult {
+	result := affirmationResult()
+	result.SchemaVersion = InvestigationResultSchemaV1
+	result.ResultID = "result_12345678"
+	result.RequestID = "request_12345678"
+	result.GeneratedAt = time.Unix(100, 0).UTC()
+	result.Question = "how is this project doing?"
+	result.Interpretation = InterpretedQuestion{
+		Shape: ShapeSingleSubject, RequestedJudgment: "release_readiness_and_drivers",
+		TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{},
+		SubjectTerms: []string{}, ComparisonTerms: []string{},
+	}
+	result.Versions = VersionSet{
+		ServiceVersion: "acr-test", ContractVersion: InvestigationResultSchemaV1,
+		Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+		InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+		CanonicalServiceVersion: "ops-v1", ModelIdentity: "unwired",
+	}
+	result.Status = InvestigationNoMatch
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
+	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	return result
 }
 
 func coverageBySource(bundle CanonicalFactBundle) map[string]SourceObservation {
@@ -221,7 +257,12 @@ func TestChaos4099_TeamOriginIsDisabledButDisclosed(t *testing.T) {
 			t.Fatalf("%s claims a proof of absence over the confirmed team gap", observation.Source)
 		}
 	}
+	if len(bundle.Scope.Events) != 3 {
+		t.Fatalf("events = %+v, want one per requirement", bundle.Scope.Events)
+	}
+	seen := map[FactKind]bool{}
 	for _, event := range bundle.Scope.Events {
+		seen[event.RequirementKind] = true
 		if event.OriginKind != SubjectTeam {
 			t.Fatalf("origin = %q, want team", event.OriginKind)
 		}
@@ -230,6 +271,11 @@ func TestChaos4099_TeamOriginIsDisabledButDisclosed(t *testing.T) {
 		}
 		if event.Outcome != FactScopePolicyUnavailable {
 			t.Fatalf("outcome = %q, want policy_unavailable", event.Outcome)
+		}
+	}
+	for _, kind := range []FactKind{FactPullRequests, FactReviews, FactMetrics} {
+		if !seen[kind] {
+			t.Fatalf("no team-origin decision recorded for %s", kind)
 		}
 	}
 }
@@ -396,6 +442,20 @@ func TestChaos4099_MixedDirectAndUnreachableSubjectsNarrowRatherThanGap(t *testi
 func TestChaos4099_NoExpansionOutcomeEverMapsToPruned(t *testing.T) {
 	t.Parallel()
 
+	// The EXACT mapping, not merely "not pruned" (codex review: a loose
+	// assertion here would pass for any wrong-but-unpruned state).
+	wantState := map[FactScopeExpansionOutcome]SourceState{
+		FactScopePolicyUnavailable:  SourceUnconfigured,
+		FactScopeExpandedPartial:    SourceTruncated,
+		FactScopeFailed:             SourceUnavailable,
+		FactScopeTargetKindMismatch: SourceUnavailable,
+		FactScopeAttemptedEmpty:     SourceNoData,
+	}
+	for outcome, want := range wantState {
+		if got := factScopeGapSourceState(outcome); got != want {
+			t.Fatalf("factScopeGapSourceState(%q) = %q, want %q", outcome, got, want)
+		}
+	}
 	for _, outcome := range []FactScopeExpansionOutcome{
 		FactScopeNotNeeded, FactScopePolicyUnavailable, FactScopeAttemptedEmpty,
 		FactScopeTargetKindMismatch, FactScopeExpanded, FactScopeExpandedPartial, FactScopeFailed,
@@ -404,9 +464,18 @@ func TestChaos4099_NoExpansionOutcomeEverMapsToPruned(t *testing.T) {
 		if state == SourcePruned {
 			t.Fatalf("outcome %q maps to SourcePruned -- that vocabulary asserts a proof this one does not hold", outcome)
 		}
-		if !validFactSourceState(state) && state != SourcePruned {
+		if !validFactSourceState(state) {
 			t.Fatalf("outcome %q maps to %q, which no provider may return either", outcome, state)
 		}
+	}
+	// An outcome this code has never heard of must FAIL CLOSED, or the
+	// defect returns one enum addition at a time.
+	unknown := FactScopeExpansionOutcome("something_new_v2")
+	if !factScopeGapDegrades(unknown) {
+		t.Fatal("an unrecognised outcome must degrade -- defaulting to 'nothing is missing' is this ticket's defect")
+	}
+	if got := factScopeGapSourceState(unknown); got != SourceUnavailable {
+		t.Fatalf("unknown outcome maps to %q, want unavailable", got)
 	}
 	// And the degrading split is exactly the outcomes that mean "the system
 	// did not, or could not, look".
@@ -414,8 +483,8 @@ func TestChaos4099_NoExpansionOutcomeEverMapsToPruned(t *testing.T) {
 		FactScopePolicyUnavailable:  true,
 		FactScopeExpandedPartial:    true,
 		FactScopeFailed:             true,
+		FactScopeTargetKindMismatch: true,
 		FactScopeAttemptedEmpty:     false,
-		FactScopeTargetKindMismatch: false,
 		FactScopeNotNeeded:          false,
 		FactScopeExpanded:           false,
 	} {
@@ -458,20 +527,24 @@ func TestChaos4099_TheCoverageReasonLeaksNoIdentity(t *testing.T) {
 // Invariants 1/2/3/4 -- what expansion must NOT touch
 // ---------------------------------------------------------------------------
 
-// TestChaos4099_ProviderSubjectKindsAreUnchanged is acceptance point 3, and
-// it is the reason option A was rejected: widening each capability's
-// SupportedSubjectKinds would have put the same join in N places with no
-// central policy. The declared kinds are the planner's ONE signal, and this
-// ticket does not touch them.
-func TestChaos4099_ProviderSubjectKindsAreUnchanged(t *testing.T) {
+// TestChaos4099_ScopeFixtureKindsMatchWhatTheResolverAssumes checks this
+// FILE's fixture, not production -- see scopeCapabilities' doc comment for
+// why an import of devhealthfacts would be a cycle, and where the real
+// acceptance-point-3 guard lives
+// (devhealthfacts/chaos4099_capability_kinds_test.go).
+//
+// It still earns its place: if someone "fixes" a failing test here by
+// widening the fixture instead of the code, every other assertion in this
+// file silently stops testing the project gap at all.
+func TestChaos4099_ScopeFixtureKindsMatchWhatTheResolverAssumes(t *testing.T) {
 	t.Parallel()
 
 	for kind, capability := range scopeCapabilities() {
 		if supportsSubjectKind(capability.SupportedSubjectKinds, SubjectProject) {
-			t.Fatalf("%s now declares project support -- scope expansion must not reach into provider capabilities", kind)
+			t.Fatalf("%s fixture declares project support -- every project-gap assertion in this file would then be vacuous", kind)
 		}
 		if supportsSubjectKind(capability.SupportedSubjectKinds, SubjectTeam) {
-			t.Fatalf("%s now declares team support -- same reason", kind)
+			t.Fatalf("%s fixture declares team support -- same reason", kind)
 		}
 	}
 }
@@ -767,8 +840,8 @@ func TestChaos4099_ANonDegradingOutcomeDoesNotDisclose(t *testing.T) {
 		FactScopePolicyUnavailable:  true,
 		FactScopeExpandedPartial:    true,
 		FactScopeFailed:             true,
+		FactScopeTargetKindMismatch: true,
 		FactScopeAttemptedEmpty:     false,
-		FactScopeTargetKindMismatch: false,
 	} {
 		scope := &FactReadScope{Gaps: map[FactKind]FactScopeGap{FactMetrics: {Outcome: outcome}}}
 		if got := scope.HasDisclosableGap(); got != wantDisclosure {
@@ -960,6 +1033,13 @@ func TestChaos4099_AWrongKindTargetIsNeverHandedToAProvider(t *testing.T) {
 	}
 	if scope.Events[0].TargetKindMismatchCount != 1 {
 		t.Fatalf("TargetKindMismatchCount = %d, want 1", scope.Events[0].TargetKindMismatchCount)
+	}
+	// It DEGRADES. The cause is a wiring error, but Coverage.Partial
+	// describes the ANSWER, and this answer is exactly as short of evidence
+	// as one whose policy was switched off. A loud telemetry event for the
+	// operator is not a substitute for telling the reader.
+	if !scope.HasDisclosableGap() {
+		t.Fatal("a wrong-kind traversal yielded no facts; the reader is owed the same disclosure as any other gap")
 	}
 }
 
@@ -1158,5 +1238,247 @@ func TestChaos4099_EveryEventFieldReachesTheSink(t *testing.T) {
 		if _, present := records[0][key]; !present {
 			t.Fatalf("the sink never wrote %q for field %s", key, name)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// End to end with a policy actually enabled (stage 2's shape, proven now)
+// ---------------------------------------------------------------------------
+
+// enableMetricsProjectPolicy switches on the metrics policy for the duration
+// of one test. Stage 1 ships every policy dark, so without this no test could
+// exercise the admission path at all -- and an admission path that first runs
+// in the change that activates it is an admission path nobody reviewed.
+func enableMetricsProjectPolicy(t *testing.T, limit int) {
+	t.Helper()
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {SubjectProject: {
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: limit,
+		}},
+	}
+}
+
+// TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy is the
+// full-stack proof, and the one codex review named as the most important
+// missing invariant.
+//
+// It runs the REAL registry, the REAL planner, the REAL scope-set gate and a
+// REAL provider, with a policy switched on -- so it exercises every step
+// stage 2 will depend on:
+//
+//   - the derived repository reaches the provider as a query subject at all;
+//   - investigationScopeSubjectSet admits it, so buildFactQuery does not
+//     reject it as "outside the discovered investigation set";
+//   - mergeFactProviderResult keeps a fact whose Subject is the derived
+//     repository, so the fact is not silently dropped after being read;
+//   - CanonicalFact.Subject stays the exact repository (ruling invariant 5);
+//   - the answer discloses the activity proxy (ruling invariant 6).
+//
+// Every one of those is a place a derived read can be planned and then
+// thrown away, which would present as "expansion did nothing" with no error
+// anywhere.
+func TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy(t *testing.T) {
+	enableMetricsProjectPolicy(t, 0)
+
+	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result: FactProviderResult{
+			State: SourceAvailable, Version: "metrics-v1", ObservedAt: &observed,
+			Facts: []CanonicalFact{{
+				Kind: FactMetrics, Subject: scopeRepo,
+				Fields:      map[string]FactValue{"lead_time_days": NumberFactValue(3.5)},
+				ObservedAt:  &observed,
+				SourceState: SourceAvailable,
+			}},
+		},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+		ScopeExpander: &recordingScopeExpander{targets: []SubjectRef{scopeRepo}},
+	})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(metrics.queries) != 1 {
+		t.Fatalf("provider queried %d time(s), want 1 -- the derived subject never reached it", len(metrics.queries))
+	}
+	if got := metrics.queries[0].Subjects; len(got) != 1 || got[0] != scopeRepo {
+		t.Fatalf("query subjects = %+v, want exactly the derived repository", got)
+	}
+	if len(bundle.Facts) != 1 {
+		t.Fatalf("facts = %+v, want the derived fact retained -- a fact read and then dropped by the scope gate is invisible", bundle.Facts)
+	}
+	// Ruling invariant 5: the fact's subject is the exact repository, NOT
+	// the project it was derived from. That is what keeps the fact
+	// re-verifiable against its own source.
+	if bundle.Facts[0].Subject != scopeRepo {
+		t.Fatalf("fact subject = %+v, want the exact repository", bundle.Facts[0].Subject)
+	}
+	// ...and the derivation is recorded in the parallel structure instead.
+	if len(bundle.Scope.Derivations) != 1 {
+		t.Fatalf("derivations = %+v, want one", bundle.Scope.Derivations)
+	}
+	derivation := bundle.Scope.Derivations[0]
+	if derivation.Root != scopeProject || derivation.Target != scopeRepo {
+		t.Fatalf("derivation = %+v, want project -> repository", derivation)
+	}
+	if derivation.Policy != FactScopePolicyProjectWorkItemRepository || derivation.Basis != FactScopeBasisActivityProxy {
+		t.Fatalf("derivation = %+v, want the named policy on an activity-proxy basis", derivation)
+	}
+	// Ruling invariant 6: the proxy is disclosed on the ANSWER.
+	result := scopeServableResult()
+	applyFactScopeDisclosure(&result, bundle.Scope)
+	if len(result.Limitations) != 1 || result.Limitations[0] != contractsv1.ContextFabricFactScopeActivityProxyLimitation {
+		t.Fatalf("limitations = %v, want the activity-proxy disclosure -- a reader takes a proxy for a roster without it", result.Limitations)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false on a proxy-derived answer")
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the disclosed result must be servable: %v", err)
+	}
+}
+
+// TestChaos4099_BothDisclosuresCanFireOnOneAnswer pins that the two
+// disclosures are independent. One investigation can easily expand metrics
+// through the proxy while reviews hit a disabled policy, and a reader told
+// only about the gap would take the metrics at face value.
+func TestChaos4099_BothDisclosuresCanFireOnOneAnswer(t *testing.T) {
+	t.Parallel()
+
+	scope := &FactReadScope{
+		Gaps: map[FactKind]FactScopeGap{FactReviews: {Outcome: FactScopePolicyUnavailable}},
+		Derivations: []FactScopeDerivation{{
+			Root: scopeProject, Target: scopeRepo,
+			Policy: FactScopePolicyProjectWorkItemRepository, Basis: FactScopeBasisActivityProxy,
+		}},
+	}
+	result := scopeServableResult()
+	applyFactScopeDisclosure(&result, scope)
+	if len(result.Limitations) != 2 {
+		t.Fatalf("limitations = %v, want both disclosures -- they say opposite things and neither implies the other", result.Limitations)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("two disclosures must still validate: %v", err)
+	}
+}
+
+// TestChaos4099_ADirectBasisDerivationDoesNotClaimAProxy is the
+// false-positive pin for the proxy disclosure. A future ownership edge must
+// not inherit a caveat that does not apply to it, or the sentence stops
+// carrying information.
+func TestChaos4099_ADirectBasisDerivationDoesNotClaimAProxy(t *testing.T) {
+	t.Parallel()
+
+	scope := &FactReadScope{
+		Gaps: map[FactKind]FactScopeGap{},
+		Derivations: []FactScopeDerivation{{
+			Root: scopeProject, Target: scopeRepo, Basis: FactScopeBasisDirect,
+		}},
+	}
+	if scope.HasActivityProxyDerivation() {
+		t.Fatal("a direct-basis derivation is not an activity proxy")
+	}
+	result := affirmationResult()
+	applyFactScopeDisclosure(&result, scope)
+	if len(result.Limitations) != 0 {
+		t.Fatalf("limitations = %v, want none", result.Limitations)
+	}
+}
+
+// TestChaos4099_TheResolverEnforcesTheCapItselfFromTheOverflowRow is ruling
+// invariant 8's truncation half, pinned against the party that OWNS it.
+//
+// The failure it forbids is subtle and silent: an expander that issued
+// `LIMIT 200` rather than `LIMIT 201` returns exactly a full page with
+// Truncated=false, and a full page is indistinguishable from a truncated one
+// without the overflow row. Trusting the expander's flag there produces
+// `expanded` with no disclosure over a scope that was actually cut -- which
+// is the silent truncation the invariant exists to forbid. So the resolver
+// detects overflow itself and enforces the cap, rather than believing a
+// count it did not compute.
+func TestChaos4099_TheResolverEnforcesTheCapItselfFromTheOverflowRow(t *testing.T) {
+	const limit = 3
+	enableMetricsProjectPolicy(t, limit)
+
+	// limit+1 targets, and an expander that (incorrectly) reports no
+	// truncation -- the exact miswiring described above.
+	targets := make([]SubjectRef, 0, limit+1)
+	for _, id := range []string{"repo:github:a", "repo:github:b", "repo:github:c", "repo:github:d"} {
+		targets = append(targets, subject(SubjectRepository, id))
+	}
+	expander := &recordingScopeExpander{
+		targets: targets,
+		counts:  FactScopeExpansionCounts{CandidateCount: len(targets), Truncated: false},
+	}
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(),
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	event := scope.Events[0]
+	if !event.Truncated {
+		t.Fatal("the resolver believed an expander that under-reported truncation -- a full page is not proof of completeness")
+	}
+	if event.Outcome != FactScopeExpandedPartial {
+		t.Fatalf("outcome = %q, want expanded_partial", event.Outcome)
+	}
+	if event.AdmittedCount != limit {
+		t.Fatalf("AdmittedCount = %d, want the cap enforced at %d", event.AdmittedCount, limit)
+	}
+	if got := len(scope.DerivedSubjects[FactMetrics]); got != limit {
+		t.Fatalf("derived = %d subjects, want the cap enforced at %d", got, limit)
+	}
+	if !scope.HasDisclosableGap() {
+		t.Fatal("a capped scope must disclose")
+	}
+	if expander.requests[0].Limit != limit {
+		t.Fatalf("request limit = %d, want the policy's own %d", expander.requests[0].Limit, limit)
+	}
+}
+
+// TestChaos4099_AForgedScopeOnTheRequestIsIgnored is the authorization pin
+// for the trust boundary codex review found.
+//
+// ReadFacts used to HONOR a pre-populated request.Scope as a test injection
+// point. investigationScopeSubjectSet trusts every Derivations entry, so an
+// in-process caller could hand over a forged derivation for a repository it
+// may not read, name that repository in a requirement override, and have
+// buildFactQuery's own scope check wave it through -- ID smuggling past
+// authorization (ruling invariant 3), and a path to new fact reads while
+// every policy is still disabled. The resolver now always runs and always
+// wins.
+func TestChaos4099_AForgedScopeOnTheRequestIsIgnored(t *testing.T) {
+	t.Parallel()
+
+	forged := subject(SubjectRepository, "repo:github:not-yours")
+	request := scopeRequest([]SubjectRef{scopeProject},
+		[]FactRequirement{{Kind: FactMetrics, Subjects: []SubjectRef{forged}}}, TemporalCurrent)
+	request.Scope = &FactReadScope{
+		DerivedSubjects: map[FactKind][]SubjectRef{FactMetrics: {forged}},
+		Derivations: []FactScopeDerivation{{
+			Root: scopeProject, Target: forged,
+			Policy: FactScopePolicyProjectWorkItemRepository, Basis: FactScopeBasisActivityProxy,
+		}},
+		Gaps: map[FactKind]FactScopeGap{},
+	}
+	registry, stubs := scopeRegistry(t)
+	_, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err == nil {
+		t.Fatal("a forged derivation was accepted -- the resolver must overwrite an incoming scope, never honor it")
+	}
+	if !strings.Contains(err.Error(), "outside the discovered investigation set") {
+		t.Fatalf("error = %v, want the smuggled subject rejected as out of scope", err)
+	}
+	if len(stubs[FactMetrics].queries) != 0 {
+		t.Fatal("the provider was queried for a subject that entered scope through a forged derivation")
 	}
 }

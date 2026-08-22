@@ -134,6 +134,30 @@ const ContextFabricSynthesisClarificationUnavailableLimitation = "This question 
 // silence on some evidence is a gap in reach, not a finding of absence.
 const ContextFabricFactScopeUnexpandedLimitation = "Some requested evidence could not be reached from the subject of this question, so this answer's silence on it is a limit of what was retrievable rather than a finding that none exists."
 
+// ContextFabricFactScopeActivityProxyLimitation is CHAOS-4099's disclosure
+// that some evidence in this answer was gathered by ACTIVITY association
+// rather than by ownership.
+//
+// WHY A SECOND STRING RATHER THAN REUSING THE ONE ABOVE. They say opposite
+// things. The unexpanded disclosure says "we could not reach some evidence";
+// this one says "we DID reach evidence, by a route that is weaker than it
+// looks". A reader who is told only the first would take everything present
+// in the answer at face value, which is exactly the misreading this exists
+// to prevent.
+//
+// THE MISREADING IT PREVENTS, CONCRETELY. A "project" here is a
+// work-tracking project (Linear-shaped). There is no project-to-repository
+// ownership edge in the projected graph. What the traversal establishes is
+// that a repository has at least one work item linked to the project -- good
+// enough to scope "how is this project's code doing", and NOT a statement
+// that the project owns the repository or that its repositories are only
+// these. Without this sentence a reader takes a proxy for a roster.
+//
+// FIXED and non-interpolated like every disclosure here: it names no policy,
+// no subject kind and no traversal. Operators get all of that on the
+// RecordFactScopeExpansion telemetry stream.
+const ContextFabricFactScopeActivityProxyLimitation = "Some evidence in this answer was gathered by association rather than by ownership, so it reflects where related activity was found and may not be the complete or authoritative set."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -151,6 +175,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricCommitRetractionLimitation,
 		ContextFabricSynthesisClarificationUnavailableLimitation,
 		ContextFabricFactScopeUnexpandedLimitation,
+		ContextFabricFactScopeActivityProxyLimitation,
 	}
 }
 

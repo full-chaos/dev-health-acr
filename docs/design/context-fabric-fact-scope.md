@@ -123,8 +123,19 @@ Outcome → `SourceState`, none of which is ever `SourcePruned`:
 | `policy_unavailable` | `unconfigured` | yes |
 | `expanded_partial` | `truncated` | yes |
 | `failed` | `unavailable` | yes |
+| `target_kind_mismatch` | `unavailable` | yes |
 | `attempted_empty` | `no_data` | no |
-| `target_kind_mismatch` | `not_applicable` | no |
+| *(unrecognised)* | `unavailable` | yes |
+
+`target_kind_mismatch` degrades. The cause is a wiring error, but
+`Coverage.Partial` describes the **answer**, and a mismatched traversal
+yields no facts — the reader is exactly as short of evidence as if the policy
+had been switched off. A loud telemetry event for the operator is not a
+substitute for telling the reader.
+
+Both mapping functions **fail closed** on an outcome they do not recognise. A
+new enum value defaulting to "nothing is missing" would reintroduce this
+ticket's defect silently, one addition at a time.
 
 The contract's `SourceState` enum is **not** widened — that would require a
 new major contract. The expansion vocabulary rides in the structured reason
@@ -174,6 +185,55 @@ mismatch is always a wiring error.
 cannot see" is an existence side-channel and never reaches the answer or
 public provenance.
 
+## 7a. Two disclosures, not one
+
+They say opposite things and neither implies the other:
+
+- `ContextFabricFactScopeUnexpandedLimitation` — "we could not reach some
+  evidence."
+- `ContextFabricFactScopeActivityProxyLimitation` — "we DID reach evidence,
+  by a route weaker than it looks."
+
+One investigation can be both (metrics expanded through the proxy while
+reviews hit a disabled policy). A reader told only the first would take
+everything *present* in the answer at face value, which is the misreading
+invariant 6 exists to prevent.
+
+The proxy disclosure ships in **stage 1** even though nothing is admitted
+while every policy is disabled, so stage 2 flips a policy flag rather than
+also introducing an invariant — and the mechanism is tested before it is
+load-bearing rather than after.
+
+## 7b. Who owns the cap
+
+The resolver, not the expander. `FactScopeExpansionRequest.Limit` asks for up
+to `Limit+1` targets and the resolver detects overflow from the extra row,
+enforces the cap, and ORs its own finding into the expander's `Truncated`.
+
+An expander that issued `LIMIT 200` rather than `LIMIT 201` returns exactly a
+full page with `Truncated=false`, and a full page is indistinguishable from a
+truncated one without the overflow row. Trusting the flag there produces
+`expanded` with no disclosure over a scope that was actually cut — the silent
+truncation invariant 8 forbids. The party that owns the invariant checks for
+it.
+
+## 7c. `CanonicalFactRequest.Scope` is output, never input
+
+`ReadFacts` **always** runs the resolver and overwrites any incoming
+`request.Scope`.
+
+It briefly honored one, as a test injection point. `investigationScopeSubjectSet`
+trusts every `Derivations` entry, so an in-process caller could hand over a
+forged derivation for an unauthorized repository, name it in a requirement
+override, and have `buildFactQuery`'s own scope check wave it through — ID
+smuggling past authorization (invariant 3), and a route to new fact reads
+while every policy is disabled. Tests reach the same outcomes through a
+`FactScopeExpander`, which is the real port.
+
+`ReadFacts` returns the in-progress bundle alongside a post-resolution error
+so the scope telemetry survives a failed read; the engine emits from
+`facts.Scope` **before** it checks `err`.
+
 ## 8. Stage 1 (this change)
 
 Ships the resolver, the vocabulary, the disclosure and the telemetry, with
@@ -184,7 +244,8 @@ what the answer *says* about the facts it did not get.
   `policy_unavailable`, recorded with a degrading source state and the
   `unexpanded:` reason prefix.
 - The answer carries `ContextFabricFactScopeUnexpandedLimitation` and
-  `Coverage.Partial`.
+  `Coverage.Partial`. The activity-proxy disclosure is wired and tested,
+  though no stage-1 path admits a derived subject to trigger it.
 - Non-current axes refuse **before** traversing.
 - Ineligible pairs keep CHAOS-3783's non-degrading prune.
 
