@@ -859,6 +859,48 @@ const (
 	twoTurnArmMutation       twoTurnArm = "mutation"
 )
 
+// twoTurnSubjectKindID carries a committed subject's Kind+CanonicalID only
+// -- never Label (presentation/corpus term text, this section's own "no
+// question/label text" discipline; subjectRefFingerprint above drops it for
+// the identical reason). CHAOS-4062: the shadow-insensitivity trace probe's
+// own committed-subject identity, kept separate from
+// subjectRefFingerprintFields (that type is a hash-input shape, not a
+// stable artifact field set this file's schema-version convention would
+// need to track).
+type twoTurnSubjectKindID struct {
+	Kind        string `json:"kind"`
+	CanonicalID string `json:"canonical_id"`
+}
+
+func twoTurnSubjectKindIDs(refs []contractsv1.ContextFabricSubjectRef) []twoTurnSubjectKindID {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]twoTurnSubjectKindID, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, twoTurnSubjectKindID{Kind: string(r.Kind), CanonicalID: r.CanonicalID})
+	}
+	return out
+}
+
+// twoTurnUnjustifiedShadowProbe computes the CHAOS-4062 trace-observability
+// fields for an "unjustified"-classified inferred commit: whether
+// kindInsensitivityProof was evaluated on the hinted call and its verdict
+// (off trace, already scoped to the hinted call only by
+// runTwoTurnInferredTierArm's own reset-before-hinted-call discipline), plus
+// both legs' own committed-subject Kind+CanonicalID. Extracted from the
+// classification switch (runTwoTurnInferredTierArm) purely so it has a unit
+// test surface independent of that function's full investigator/window-
+// precondition machinery (TestTwoTurnUnjustifiedShadowProbe). Never
+// consulted by, and never influences, the classification itself -- read-only
+// observation of a decision already made by the caller.
+func twoTurnUnjustifiedShadowProbe(trace *twoTurnTraceCapture, baselineCommitted, hintedCommitted []contractsv1.ContextFabricSubjectRef) (evaluated bool, outcome string, baselineSubjects, hintedSubjects []twoTurnSubjectKindID) {
+	if trace != nil {
+		evaluated, outcome = trace.kindInsensitivityResult()
+	}
+	return evaluated, outcome, twoTurnSubjectKindIDs(baselineCommitted), twoTurnSubjectKindIDs(hintedCommitted)
+}
+
 // twoTurnCaseResult is one (case, arm) outcome. Every field is a count, a
 // bool, an id, or a closed-vocabulary status string -- the same privacy
 // discipline replayCaseOutcome pins (TestReplayCaseOutcomeCarriesNoQuestionOrTermText).
@@ -931,6 +973,30 @@ type twoTurnCaseResult struct {
 	// error can carry upstream detail this outcome-only artifact must not
 	// persist).
 	ArmInvalidReason string `json:"arm_invalid_reason,omitempty"`
+	// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome
+	// (CHAOS-4062 shadow-insensitivity trace probe, off the CHAOS-4039
+	// analysis) mirror ResolutionTraceEvent's own same-named fields
+	// (resolve.go) as read by kindInsensitivityResult off THIS case's
+	// HINTED-call trace only (trace is reset immediately before the hinted
+	// Investigate() call below, so any baseline-call events are already
+	// gone by the time these are captured). Populated ONLY when
+	// InferredClassification=="unjustified" -- trace-level observability
+	// added to distinguish, per CHAOS-4039's open questions, "genuine kind
+	// ambiguity without the hint" (evaluated=true,
+	// outcome=would_no_match/would_clarify) from "the proof was never even
+	// consulted" (evaluated=false) for the cases the 3-way partition
+	// already rejected. No classification/semantics change: these fields
+	// are read-only observations of a decision already made above.
+	ShadowKindInsensitivityEvaluated bool   `json:"shadow_kind_insensitivity_evaluated,omitempty"`
+	ShadowKindInsensitivityOutcome   string `json:"shadow_kind_insensitivity_outcome,omitempty"`
+	// BaselineCommittedSubjects/HintedCommittedSubjects (CHAOS-4062, same
+	// unjustified-only gate as the Shadow* fields above) carry the paired
+	// no-hint baseline's and the hinted call's own SubjectResolution.Committed
+	// Kind+CanonicalID -- CHAOS-4039's "commit_sound on a DIFFERENT subject"
+	// reading needs both sides' identity to tell that apart from an
+	// identical commit reached by two independent, kind-insensitive paths.
+	BaselineCommittedSubjects []twoTurnSubjectKindID `json:"baseline_committed_subjects,omitempty"`
+	HintedCommittedSubjects   []twoTurnSubjectKindID `json:"hinted_committed_subjects,omitempty"`
 }
 
 type twoTurnReport struct {
@@ -968,10 +1034,18 @@ type twoTurnReport struct {
 	// Timings/TimingSummary are new (per-case/per-arm wall-clock and
 	// file-exchange responder round-trip cost, plus a run-level
 	// aggregate) -- purely additive, carries no measurement semantics, and
-	// backs none of this file's pass/fail checks. Bump this again on any
-	// future field rename, removal, or meaning change so a consumer can
-	// detect drift instead of silently reading a stale key under a new
-	// meaning.
+	// backs none of this file's pass/fail checks. "8" marks CHAOS-4062's
+	// shadow-insensitivity trace probe: twoTurnCaseResult gained
+	// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome and
+	// BaselineCommittedSubjects/HintedCommittedSubjects, populated ONLY for
+	// the "unjustified" InferredClassification outcome -- trace-level
+	// observability only, no classification/semantics change, but a new
+	// key nonetheless (cmd/acr-trial-merge-two-turn's own hand-maintained
+	// mirror must be updated in lockstep before it can merge an artifact at
+	// this version -- see that tool's own expectedSchemaVersion comment).
+	// Bump this again on any future field rename, removal, or meaning
+	// change so a consumer can detect drift instead of silently reading a
+	// stale key under a new meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
 	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
@@ -1937,6 +2011,61 @@ func TestTwoTurnTraceCapture_EvidenceCensusCommitted(t *testing.T) {
 	})
 }
 
+// TestTwoTurnUnjustifiedShadowProbe (CHAOS-4062) pins twoTurnUnjustifiedShadowProbe
+// against fabricated inputs shaped like the cases the "unjustified"
+// classification actually covers -- proving the artifact's new
+// Shadow*/*CommittedSubjects fields populate correctly without standing up
+// the full runTwoTurnInferredTierArm investigator/window-precondition
+// machinery.
+func TestTwoTurnUnjustifiedShadowProbe(t *testing.T) {
+	t.Parallel()
+	baselineCommitted := []contractsv1.ContextFabricSubjectRef{
+		{Kind: "repository", CanonicalID: "repository:acme/widgets", Label: "widgets (never persisted)"},
+	}
+	hintedCommitted := []contractsv1.ContextFabricSubjectRef{
+		{Kind: "person", CanonicalID: "person:acme/j.doe", Label: "J. Doe (never persisted)"},
+	}
+
+	t.Run("proof never consulted", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{}
+		evaluated, outcome, baselineSubjects, hintedSubjects := twoTurnUnjustifiedShadowProbe(trace, baselineCommitted, hintedCommitted)
+		if evaluated || outcome != "" {
+			t.Errorf("evaluated,outcome = (%v,%q), want (false,\"\") when the hinted call's trace never set ShadowKindInsensitivityEvaluated -- PreNarrowingExplicitKinds harness-wiring-gap reading (CHAOS-4062)", evaluated, outcome)
+		}
+		wantBaseline := []twoTurnSubjectKindID{{Kind: "repository", CanonicalID: "repository:acme/widgets"}}
+		wantHinted := []twoTurnSubjectKindID{{Kind: "person", CanonicalID: "person:acme/j.doe"}}
+		if !reflect.DeepEqual(baselineSubjects, wantBaseline) {
+			t.Errorf("baselineSubjects = %+v, want %+v (Kind+CanonicalID only, Label dropped)", baselineSubjects, wantBaseline)
+		}
+		if !reflect.DeepEqual(hintedSubjects, wantHinted) {
+			t.Errorf("hintedSubjects = %+v, want %+v (Kind+CanonicalID only, Label dropped)", hintedSubjects, wantHinted)
+		}
+	})
+
+	t.Run("proof evaluated but not commit_sound", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "evidence_round", ShadowKindInsensitivityEvaluated: true, ShadowKindInsensitivityOutcome: "would_no_match"},
+		}}
+		evaluated, outcome, _, _ := twoTurnUnjustifiedShadowProbe(trace, baselineCommitted, hintedCommitted)
+		if !evaluated || outcome != "would_no_match" {
+			t.Errorf("evaluated,outcome = (%v,%q), want (true,\"would_no_match\") -- genuine kind ambiguity without the hint (CHAOS-4062 reading)", evaluated, outcome)
+		}
+	})
+
+	t.Run("nil trace", func(t *testing.T) {
+		evaluated, outcome, baselineSubjects, hintedSubjects := twoTurnUnjustifiedShadowProbe(nil, baselineCommitted, nil)
+		if evaluated || outcome != "" {
+			t.Errorf("evaluated,outcome = (%v,%q), want (false,\"\") for a nil trace", evaluated, outcome)
+		}
+		if len(baselineSubjects) != 1 {
+			t.Errorf("baselineSubjects = %+v, want 1 entry", baselineSubjects)
+		}
+		if hintedSubjects != nil {
+			t.Errorf("hintedSubjects = %+v, want nil for an empty committed slice", hintedSubjects)
+		}
+	})
+}
+
 // --- arm runners: real production code (Investigate/Save), driven from the harness ---
 
 // twoTurnRequest builds the base investigation request for a corpus case,
@@ -2384,6 +2513,14 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 				res.InferredClassification = "kind_insensitivity_attested"
 			default:
 				res.InferredClassification = "unjustified"
+				// CHAOS-4062 shadow-insensitivity trace probe: observability
+				// only, populated for the "unjustified" outcome alone -- see
+				// twoTurnUnjustifiedShadowProbe's own doc comment and
+				// twoTurnCaseResult's Shadow*/*CommittedSubjects field
+				// comments.
+				res.ShadowKindInsensitivityEvaluated, res.ShadowKindInsensitivityOutcome,
+					res.BaselineCommittedSubjects, res.HintedCommittedSubjects =
+					twoTurnUnjustifiedShadowProbe(trace, baseline.SubjectResolution.Committed, result.SubjectResolution.Committed)
 			}
 		}
 	}
@@ -3069,7 +3206,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "7",
+		ReportSchemaVersion: "8",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -3539,6 +3676,23 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			inferredTiming.WallDurationMS, inferredTiming.ResponderCallCount, inferredTiming.ResponderCallMaxMS,
 			confirmedWrongTiming.WallDurationMS, confirmedWrongTiming.ResponderCallCount, confirmedWrongTiming.ResponderCallMaxMS,
 			mutationTiming.WallDurationMS, mutationTiming.ResponderCallCount, mutationTiming.ResponderCallMaxMS)
+
+		// CHAOS-4062 shadow-insensitivity trace probe: a SEPARATE log line
+		// (the case log line above stays byte-for-byte as it was -- append
+		// only), emitted ONLY for the "unjustified" classification, printing
+		// exactly the discriminating fields off CHAOS-4039's analysis --
+		// whether kindInsensitivityProof was even evaluated on the hinted
+		// call, its verdict when it was, and both legs' own committed
+		// Kind+CanonicalID -- so a run can be read for CHAOS-4039's open
+		// questions without re-deriving them from a raw trace dump.
+		// Observability only: does not alter InferredClassification or any
+		// other decision made above.
+		if inferred.InferredClassification == "unjustified" {
+			t.Logf("case %d member=%s: inferred unjustified shadow_kind_insensitivity(evaluated=%v outcome=%q) committed(baseline=%v hinted=%v)",
+				entry.Index, entry.Member,
+				inferred.ShadowKindInsensitivityEvaluated, inferred.ShadowKindInsensitivityOutcome,
+				inferred.BaselineCommittedSubjects, inferred.HintedCommittedSubjects)
+		}
 	}
 	// Per-member anti-vacuity (codex round-1 finding #4): valid only once
 	// EVERY member with a designated committable negative has redeemed at
