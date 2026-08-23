@@ -4431,10 +4431,14 @@ func TestSelectOracleOffer(t *testing.T) {
 			HandleOptions: []contractsv1.ContextFabricHandleOption{
 				{ReceiptID: "handr_cccccccccccccccccccccc", Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "532"},
 			},
-			// CHAOS-4121: the SAME slice value as WindowClarification.Options
-			// below, mirroring window.go:1315's real production assignment
-			// (never a copy) -- selectOracleOffer's window case now reads
-			// THIS field, not WindowClarification.
+			// CHAOS-4121: content-identical to WindowClarification.Options
+			// below (a separate literal here, not the same slice value --
+			// this fixture only needs matching CONTENT to prove
+			// selectOracleOffer's window case now reads THIS field, not
+			// WindowClarification; TestTwoTurnWindowSurfacesAgree and
+			// chaos4138WindowSetupResult are what actually exercise the
+			// "same slice, never a copy" production shape window.go:1315
+			// guarantees).
 			WindowOptions: []contractsv1.ContextFabricWindowOption{
 				{ReceiptID: "winr_dddddddddddddddddddddd", RelativeID: "trailing_90d"},
 			},
