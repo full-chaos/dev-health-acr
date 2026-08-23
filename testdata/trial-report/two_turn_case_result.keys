@@ -30,6 +30,10 @@ mutation_probe
 mutation_tripped
 offer_miss
 pair_invalid
+pair_retried
+pair_retry_first_arm_invalid_error_type
+pair_retry_first_arm_invalid_reason
+pair_retry_first_arm_invalid_stage
 reused
 search_truncated
 shadow_kind_insensitivity_evaluated
