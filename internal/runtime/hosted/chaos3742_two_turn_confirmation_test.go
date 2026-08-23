@@ -3611,6 +3611,22 @@ type twoTurnReport struct {
 	// same change, same "an undeclared field is dropped on decode" reason
 	// every prior bump needed it for.
 	//
+	// "21" (CHAOS-4157, 2026-08-23): a MEANING change on an existing key,
+	// not an added one -- BaseSHA used to be a wrapper-script-exported
+	// `git rev-parse origin/main`, read AT LAUNCH TIME, a genuine
+	// provenance defect caught live: origin/main can (and during a real
+	// clean CHAOS-4100 re-measure DID -- three unrelated PRs landed mid-run)
+	// move while a run is in flight, so the field could name a commit that
+	// never actually produced the artifact. BaseSHA now reads
+	// source.commit (requireGitSourceIdentity's own `git rev-parse HEAD`,
+	// the SAME value SourceCommit already uses) on all four trial report
+	// types (two-turn, replay, W0, D2B cardinality), so a v20 artifact's
+	// base_sha is not comparable to a v21 one field-for-field even though
+	// the wire shape is unchanged -- exactly the v8->v9/v16 class of bump.
+	// No field added or removed, so cmd/acr-trial-merge-two-turn's own
+	// mirror needs only its expectedSchemaVersion constant updated, not a
+	// new field.
+	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
 	// stale key under a new meaning.
@@ -6490,7 +6506,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "20",
+		ReportSchemaVersion: "21",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,

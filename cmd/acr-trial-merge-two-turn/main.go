@@ -174,7 +174,12 @@ import (
 // arithmetic changes (Results concatenates verbatim); mirrored here in the
 // same change for the same undeclared-field-dropped-on-decode reason as
 // everything else on this list.
-const expectedSchemaVersion = "20"
+// "21" (CHAOS-4157, 2026-08-23): a MEANING change on an existing key, not
+// an added one -- see the producer's own ReportSchemaVersion doc comment.
+// BaseSHA now reads the worktree's actual checked-out HEAD instead of a
+// launch-time-drifting `git rev-parse origin/main`. No field added or
+// removed, so no mirror struct change here -- only this version bump.
+const expectedSchemaVersion = "21"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
