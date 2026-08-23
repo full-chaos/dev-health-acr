@@ -254,9 +254,9 @@ func candidatesOfKind(pool map[string]contextfabric.SubjectCandidate, kind conte
 // exactly like Search/SearchQuestion/AliasLookup's own error handling
 // (resolve.go) -- a real backend fault is never silently downgraded to
 // "found nothing" here either.
-func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, aliasLookupTrustworthy bool) (added []contextfabric.SubjectCandidate, traversalDegraded int, authzDropped int, truncated bool, degraded bool, missingKinds int, err error) {
+func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, aliasLookupTrustworthy bool) (added []contextfabric.SubjectCandidate, traversalDegraded int, authzDropped int, truncated bool, degraded bool, missingKinds int, missingKindsList []string, err error) {
 	if deps.SearchKind == nil {
-		return nil, 0, 0, false, false, 0, nil
+		return nil, 0, 0, false, false, 0, nil, nil
 	}
 	missing := missingCoverageKinds(pool, effectiveCoverageFloorKinds(aliasLookupTrustworthy))
 	// missingKinds (CHAOS-4086) is the SNAPSHOT taken here, before any
@@ -268,6 +268,21 @@ func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, re
 	// missing", conflating a floor that found everything with one that
 	// never had anything to find.
 	missingKinds = len(missing)
+	// missingKindsList (CHAOS-4183, phase 2, team-lead ruling 2026-08-23) is
+	// the SAME snapshot's own kind IDENTITY, closed-vocabulary
+	// (contextfabric.SubjectKind values only, corpus-safe -- same
+	// discipline as KindOfferBoundaryKinds/distinctCandidateKinds,
+	// chaos3900_structure_offers.go). missingKinds alone (a bare count) was
+	// not enough to disambiguate a CHAOS-4012 re-smoke finding: two
+	// genuinely different situations -- "the floor searched for kind X and
+	// still couldn't retain the corpus-target item" (a lexical-reach
+	// question) vs. "the floor never touched kind Y at all because a
+	// sibling of Y already occupied the pool, and Y's own later absence
+	// from the offer builders' shared input is pure ranking/truncation" --
+	// were indistinguishable from missingKinds' count alone once more than
+	// one floor kind was in play. This field is what a future reader checks
+	// FIRST, before re-deriving the same ambiguity CHAOS-4183 hit.
+	missingKindsList = subjectKindStrings(missing)
 	boundedTerms := terms
 	if len(boundedTerms) > kindCoverageMaxTermsPerKind {
 		boundedTerms = boundedTerms[:kindCoverageMaxTermsPerKind]
@@ -276,7 +291,7 @@ func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, re
 		for _, term := range boundedTerms {
 			results, kindTruncated, kindDegraded, searchErr := deps.SearchKind(ctx, term, kind, kindCoverageQueryLimit)
 			if searchErr != nil {
-				return added, traversalDegraded, authzDropped, truncated, degraded, missingKinds, searchErr
+				return added, traversalDegraded, authzDropped, truncated, degraded, missingKinds, missingKindsList, searchErr
 			}
 			if kindTruncated {
 				truncated = true
@@ -295,5 +310,22 @@ func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, re
 	for _, kind := range missing {
 		added = append(added, candidatesOfKind(pool, kind)...)
 	}
-	return added, traversalDegraded, authzDropped, truncated, degraded, missingKinds, nil
+	return added, traversalDegraded, authzDropped, truncated, degraded, missingKinds, missingKindsList, nil
+}
+
+// subjectKindStrings converts a []contextfabric.SubjectKind to []string,
+// preserving order -- the same closed-vocabulary, corpus-safe conversion
+// distinctCandidateKinds (chaos3900_structure_offers.go) already uses for a
+// sibling telemetry field, kept as its own small function here rather than
+// exported and shared, since the two operate on different input shapes
+// (a candidate slice there, a kind slice here).
+func subjectKindStrings(kinds []contextfabric.SubjectKind) []string {
+	if len(kinds) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		out = append(out, string(kind))
+	}
+	return out
 }

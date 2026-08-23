@@ -59,6 +59,19 @@ func TestChaos4086_CoverageFloorEmitsItsOwnTraceEvent(t *testing.T) {
 	if event.KindCoverageMissingKinds == 0 {
 		t.Error("KindCoverageMissingKinds = 0, but the pool started with only work_item")
 	}
+	// CHAOS-4183 phase 2: MissingKindsList is MissingKinds' own kind-
+	// identity twin -- pull_request must be one of the kinds it names,
+	// since the pool started with only work_item and pull_request is what
+	// the floor went looking for and found.
+	sawPullRequest := false
+	for _, kind := range event.KindCoverageMissingKindsList {
+		if kind == string(contextfabric.SubjectPullRequest) {
+			sawPullRequest = true
+		}
+	}
+	if !sawPullRequest {
+		t.Errorf("KindCoverageMissingKindsList = %v, want it to include %q", event.KindCoverageMissingKindsList, contextfabric.SubjectPullRequest)
+	}
 }
 
 // TestChaos4086_CoverageFloorReportsNotFiredWhenItAddsNothing pins the
@@ -90,6 +103,14 @@ func TestChaos4086_CoverageFloorReportsNotFiredWhenItAddsNothing(t *testing.T) {
 	if event.KindCoverageMissingKinds == 0 {
 		t.Error("KindCoverageMissingKinds = 0, but kinds were missing and queried")
 	}
+	// CHAOS-4183 phase 2: the identity list must be non-empty in lockstep
+	// with the count -- Fired==false with a genuinely missing kind is
+	// exactly the case a reader needs the kind's OWN name for, not just a
+	// count, to tell "the floor searched for X and still couldn't rescue
+	// the corpus target" apart from "the floor never touched X at all".
+	if len(event.KindCoverageMissingKindsList) != event.KindCoverageMissingKinds {
+		t.Errorf("len(KindCoverageMissingKindsList) = %d, want %d (must match KindCoverageMissingKinds exactly)", len(event.KindCoverageMissingKindsList), event.KindCoverageMissingKinds)
+	}
 }
 
 // TestChaos4086_FloorStateNeverRidesOnTheDecisionEvent pins the separation
@@ -118,8 +139,8 @@ func TestChaos4086_FloorStateNeverRidesOnTheDecisionEvent(t *testing.T) {
 		if e.Stage == "kind_coverage_floor" {
 			continue
 		}
-		if e.KindCoverageFloorFired || e.KindCoverageMissingKinds != 0 || e.KindCoverageFloorTruncated {
-			t.Fatalf("stage %q carries coverage-floor state (fired=%v missing=%d truncated=%v) -- it belongs to its own stage only", e.Stage, e.KindCoverageFloorFired, e.KindCoverageMissingKinds, e.KindCoverageFloorTruncated)
+		if e.KindCoverageFloorFired || e.KindCoverageMissingKinds != 0 || e.KindCoverageFloorTruncated || len(e.KindCoverageMissingKindsList) != 0 {
+			t.Fatalf("stage %q carries coverage-floor state (fired=%v missing=%d truncated=%v missing_list=%v) -- it belongs to its own stage only", e.Stage, e.KindCoverageFloorFired, e.KindCoverageMissingKinds, e.KindCoverageFloorTruncated, e.KindCoverageMissingKindsList)
 		}
 	}
 }

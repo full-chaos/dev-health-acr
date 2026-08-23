@@ -200,7 +200,26 @@ import (
 // verbatim); mirrored here in the same change for the same
 // undeclared-field-dropped-on-decode reason as everything else on this
 // list.
-const expectedSchemaVersion = "23"
+// "24" (CHAOS-4183 phase 2, 2026-08-23): two changes, both requiring the
+// bump. (a) twoTurnCaseResult gains KindCoverageMissingKindsList and its
+// Turn1-prefixed twin -- KindCoverageMissingKinds' own kind-IDENTITY twin,
+// closed-vocabulary (contextfabric.SubjectKind values only, corpus-safe),
+// purely additive. (b) `omitempty` DROPPED from
+// KindCoverageFloorFired/KindCoverageMissingKinds/KindCoverageFloorTruncated
+// and their Turn1-prefixed twins -- a MEANING change on existing keys, not
+// merely additive: these six keys now ALWAYS appear on the row (as
+// false/0 when the floor genuinely found nothing missing), where a v23
+// artifact silently dropped the key in that exact case. This is the
+// motivating incident, not a hypothetical: a live CHAOS-4183 investigation
+// queried a v23 artifact with jq and misread an omitted key as "the
+// kind_coverage_floor event never fired," when it had fired with real
+// zero values. No merge arithmetic changes for either (a) or (b) (Results
+// concatenates verbatim); the fields were mirrored here in the same
+// change, same undeclared-field-dropped-on-decode reason as every prior
+// bump needed it for -- and (b) means a v23-vs-v24 row now needs THIS
+// version check before a reader treats "key absent" as meaningful for any
+// of these six keys, not only before comparing counts.
+const expectedSchemaVersion = "24"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -342,15 +361,21 @@ type twoTurnCaseResult struct {
 	//
 	// See twoTurnCaseResult's own block for what each one means and why it
 	// is corpus-safe; the tags below are the contract.
-	CommittedSubjects          []twoTurnSubjectKindID `json:"committed_subjects,omitempty"`
-	ExpectedKind               string                 `json:"expected_kind,omitempty"`
-	ExpectedID                 string                 `json:"expected_id,omitempty"`
-	CommitGate                 string                 `json:"commit_gate,omitempty"`
-	TiedStatisticalTop         bool                   `json:"tied_statistical_top,omitempty"`
-	SearchTruncated            bool                   `json:"search_truncated,omitempty"`
-	KindCoverageFloorFired     bool                   `json:"kind_coverage_floor_fired,omitempty"`
-	KindCoverageMissingKinds   int                    `json:"kind_coverage_missing_kinds,omitempty"`
-	KindCoverageFloorTruncated bool                   `json:"kind_coverage_floor_truncated,omitempty"`
+	CommittedSubjects  []twoTurnSubjectKindID `json:"committed_subjects,omitempty"`
+	ExpectedKind       string                 `json:"expected_kind,omitempty"`
+	ExpectedID         string                 `json:"expected_id,omitempty"`
+	CommitGate         string                 `json:"commit_gate,omitempty"`
+	TiedStatisticalTop bool                   `json:"tied_statistical_top,omitempty"`
+	SearchTruncated    bool                   `json:"search_truncated,omitempty"`
+	// CHAOS-4183 phase 2: omitempty DROPPED on all three -- mirroring
+	// twoTurnCaseResult's own fields byte-for-byte, see that struct's own
+	// doc comment for the motivating jq-misread incident.
+	KindCoverageFloorFired     bool `json:"kind_coverage_floor_fired"`
+	KindCoverageMissingKinds   int  `json:"kind_coverage_missing_kinds"`
+	KindCoverageFloorTruncated bool `json:"kind_coverage_floor_truncated"`
+	// KindCoverageMissingKindsList (CHAOS-4183 phase 2) mirrors
+	// twoTurnCaseResult's identically-named field byte-for-byte.
+	KindCoverageMissingKindsList []string `json:"kind_coverage_missing_kinds_list"`
 	// CHAOS-4038 v18: confirmed_kind_rescue's own twin block, mirroring
 	// twoTurnCaseResult's identically-named fields byte-for-byte.
 	ConfirmedKindRescueFired       bool `json:"confirmed_kind_rescue_fired,omitempty"`
@@ -387,12 +412,17 @@ type twoTurnCaseResult struct {
 	// SearchTruncated/KindCoverage* above. Purely additive passthrough:
 	// Results concatenates verbatim across shards, so no merge arithmetic
 	// changes for this block itself.
-	Turn1CommitGate                 string `json:"turn1_commit_gate,omitempty"`
-	Turn1TiedStatisticalTop         bool   `json:"turn1_tied_statistical_top,omitempty"`
-	Turn1SearchTruncated            bool   `json:"turn1_search_truncated,omitempty"`
-	Turn1KindCoverageFloorFired     bool   `json:"turn1_kind_coverage_floor_fired,omitempty"`
-	Turn1KindCoverageMissingKinds   int    `json:"turn1_kind_coverage_missing_kinds,omitempty"`
-	Turn1KindCoverageFloorTruncated bool   `json:"turn1_kind_coverage_floor_truncated,omitempty"`
+	Turn1CommitGate         string `json:"turn1_commit_gate,omitempty"`
+	Turn1TiedStatisticalTop bool   `json:"turn1_tied_statistical_top,omitempty"`
+	Turn1SearchTruncated    bool   `json:"turn1_search_truncated,omitempty"`
+	// CHAOS-4183 phase 2: omitempty dropped, same reason as the arm-level
+	// trio above.
+	Turn1KindCoverageFloorFired     bool `json:"turn1_kind_coverage_floor_fired"`
+	Turn1KindCoverageMissingKinds   int  `json:"turn1_kind_coverage_missing_kinds"`
+	Turn1KindCoverageFloorTruncated bool `json:"turn1_kind_coverage_floor_truncated"`
+	// Turn1KindCoverageMissingKindsList (CHAOS-4183 phase 2) mirrors
+	// twoTurnCaseResult's identically-named field byte-for-byte.
+	Turn1KindCoverageMissingKindsList []string `json:"turn1_kind_coverage_missing_kinds_list"`
 	// CHAOS-4038 v18: turn 1's own confirmed_kind_rescue twin, mirroring
 	// twoTurnCaseResult's identically-named fields byte-for-byte.
 	Turn1ConfirmedKindRescueFired       bool `json:"turn1_confirmed_kind_rescue_fired,omitempty"`

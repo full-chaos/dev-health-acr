@@ -676,6 +676,18 @@ type ResolutionTraceEvent struct {
 	KindCoverageFloorFired     bool
 	KindCoverageMissingKinds   int
 	KindCoverageFloorTruncated bool
+	// KindCoverageMissingKindsList (stage=="kind_coverage_floor" ONLY,
+	// CHAOS-4183 phase 2, team-lead ruling 2026-08-23) is
+	// KindCoverageMissingKinds' own kind-IDENTITY twin -- the closed-
+	// vocabulary contextfabric.SubjectKind values (as strings) the floor
+	// found missing at its own pre-search snapshot, same corpus-safe
+	// "kind values only, never a canonical id" discipline
+	// KindOfferBoundaryKinds (below) already uses. Added because
+	// MissingKinds' bare COUNT could not disambiguate a real CHAOS-4012
+	// re-smoke finding: whether the floor searched for the SAME kind a
+	// later analysis cares about, or a different one entirely, once more
+	// than one floor kind could be in play for a single call.
+	KindCoverageMissingKindsList []string
 	// ConfirmedKindRescueFired/ConfirmedKindRescueResultCount/
 	// ConfirmedKindRescueTruncated (stage=="confirmed_kind_rescue" ONLY,
 	// CHAOS-4132) describe applyConfirmedKindRescue's own outcome: a
@@ -1526,7 +1538,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// the coverage floor must widen to cover them too -- see
 		// effectiveCoverageFloorKinds' own doc comment.
 		aliasLookupTrustworthy := deps.AliasLookup != nil && aliasIdentityComplete
-		added, coverageTraversalDegraded, coverageAuthzDropped, coverageTruncated, coverageDegraded, coverageMissingKinds, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, aliasLookupTrustworthy)
+		added, coverageTraversalDegraded, coverageAuthzDropped, coverageTruncated, coverageDegraded, coverageMissingKinds, coverageMissingKindsList, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, aliasLookupTrustworthy)
 		if coverageErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, coverageErr
 		}
@@ -1557,9 +1569,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if deps.ResolutionTracer != nil {
 			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 				RequestID: request.RequestID, Stage: "kind_coverage_floor",
-				KindCoverageFloorFired:     len(added) > 0,
-				KindCoverageMissingKinds:   coverageMissingKinds,
-				KindCoverageFloorTruncated: coverageTruncated,
+				KindCoverageFloorFired:       len(added) > 0,
+				KindCoverageMissingKinds:     coverageMissingKinds,
+				KindCoverageFloorTruncated:   coverageTruncated,
+				KindCoverageMissingKindsList: coverageMissingKindsList,
 			})
 		}
 	}

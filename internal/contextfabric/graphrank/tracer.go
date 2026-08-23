@@ -109,11 +109,21 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// these on a trial-report row; this branch is what makes the same
 		// facts readable in production, where no harness exists. Counts and
 		// booleans only -- no kind name, no term, no candidate identity.
+		//
+		// missing_kinds_list (CHAOS-4183 phase 2, team-lead ruling
+		// 2026-08-23) is the deliberate exception to "no kind name" above --
+		// closed-vocabulary kind VALUES only (never a canonical id, never
+		// candidate identity), same discipline "boundary_kinds" already
+		// established for the kind_offer stage. See
+		// KindCoverageMissingKindsList's own doc comment
+		// (ResolutionTraceEvent) for the CHAOS-4012 re-smoke ambiguity this
+		// resolves.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: kind coverage floor",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"fired", event.KindCoverageFloorFired,
 			"missing_kinds", event.KindCoverageMissingKinds,
-			"truncated", event.KindCoverageFloorTruncated)
+			"truncated", event.KindCoverageFloorTruncated,
+			"missing_kinds_list", event.KindCoverageMissingKindsList)
 	case "confirmed_kind_rescue":
 		// CHAOS-4132: the operator-visible half of the confirmed-kind
 		// rescue -- this event's own presence in a production log already

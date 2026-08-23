@@ -437,6 +437,7 @@ func TestTwoTurnCaseResultDecodesProducerShapedDiagnosisFields(t *testing.T) {
 		"kind_coverage_floor_fired": true,
 		"kind_coverage_missing_kinds": 3,
 		"kind_coverage_floor_truncated": true,
+		"kind_coverage_missing_kinds_list": ["work_item", "repository", "project"],
 		"arm_invalid_stage": "validation",
 		"arm_invalid_error_type": "*errors.errorString"
 	}`
@@ -475,6 +476,13 @@ func TestTwoTurnCaseResultDecodesProducerShapedDiagnosisFields(t *testing.T) {
 	if got.KindCoverageMissingKinds != 3 {
 		t.Errorf("kind_coverage_missing_kinds = %d, want 3", got.KindCoverageMissingKinds)
 	}
+	// codex xhigh R3 (2026-08-23, LOW finding): three entries, matching
+	// kind_coverage_missing_kinds' count above -- production always keeps
+	// them in lockstep.
+	wantMissingKindsList := []string{"work_item", "repository", "project"}
+	if !reflect.DeepEqual(got.KindCoverageMissingKindsList, wantMissingKindsList) {
+		t.Errorf("KindCoverageMissingKindsList = %+v, want %+v -- a tag mismatch silently zeroes this", got.KindCoverageMissingKindsList, wantMissingKindsList)
+	}
 
 	zeroRaw, err := json.Marshal(twoTurnCaseResult{Index: 1, Member: "expected_kind", Arm: "positive"})
 	if err != nil {
@@ -485,15 +493,36 @@ func TestTwoTurnCaseResultDecodesProducerShapedDiagnosisFields(t *testing.T) {
 	// VALUE of the member field ("member":"expected_kind"), so the bare
 	// substring form reports a phantom omitempty violation on every
 	// expected_kind row. Caught by this test on first run.
+	//
+	// CHAOS-4183 phase 2: kind_coverage_floor_fired/kind_coverage_missing_
+	// kinds/kind_coverage_floor_truncated REMOVED from this list -- omitempty
+	// was dropped from all three (twoTurnCaseResult's own doc comment) so a
+	// zero-value row now DELIBERATELY carries them at false/0 rather than
+	// omitting them; asserting their absence here would fail the very fix
+	// this phase exists to ship.
 	for _, key := range []string{
 		`"committed_subjects":`, `"expected_kind":`, `"expected_id":`,
 		`"commit_gate":`, `"tied_statistical_top":`, `"search_truncated":`,
-		`"kind_coverage_floor_fired":`, `"kind_coverage_missing_kinds":`,
-		`"kind_coverage_floor_truncated":`,
 		`"arm_invalid_stage":`, `"arm_invalid_error_type":`,
 	} {
 		if strings.Contains(string(zeroRaw), key) {
 			t.Errorf("zero-value twoTurnCaseResult JSON = %s, want it to omit %s (omitempty)", zeroRaw, key)
+		}
+	}
+	// CHAOS-4183 phase 2: the positive twin of the removal above -- these
+	// six keys (arm-level trio + Turn1-prefixed twin) must be PRESENT on a
+	// zero-value row, at false/0, never omitted. This is the actual
+	// regression pin for the fix: a jq query on a real artifact treats an
+	// absent key differently from a present-but-zero one, and this test
+	// proves the mirror struct (not just the producer) upholds that.
+	for _, key := range []string{
+		`"kind_coverage_floor_fired":`, `"kind_coverage_missing_kinds":`,
+		`"kind_coverage_floor_truncated":`,
+		`"turn1_kind_coverage_floor_fired":`, `"turn1_kind_coverage_missing_kinds":`,
+		`"turn1_kind_coverage_floor_truncated":`,
+	} {
+		if !strings.Contains(string(zeroRaw), key) {
+			t.Errorf("zero-value twoTurnCaseResult JSON = %s, want it to carry %s at its zero value (omitempty dropped, CHAOS-4183 phase 2)", zeroRaw, key)
 		}
 	}
 }
