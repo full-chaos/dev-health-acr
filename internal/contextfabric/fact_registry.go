@@ -19,7 +19,21 @@ import (
 // codex round-1 P1) so hosted composition can stamp the SAME value on a
 // terminal result, which reads no bundle and therefore has none to copy --
 // see RuntimeAnswerSynthesizerOptions.CanonicalServiceVersion.
-const CanonicalFactRegistryVersion = "context-fabric-facts.v1"
+//
+// BUMPED to v2 for CHAOS-4099 stage 2 (design doc §9's own activation
+// precondition): activating the 3 ratified project-origin policies changes
+// what this registry can answer for a project subject that previously
+// pruned every capability. This value feeds VersionSet.CanonicalServiceVersion,
+// which reuse_key_completeness_test.go's versionSetAuthorities table already
+// classifies as a genuine ReuseKey.CanonicalServiceVersion member (not an
+// excluded field) -- TestReuseKeyClassifiesEveryVersionSetField verifies
+// that binding exists. Since ReuseKey participates in FindReusable's
+// equality-scoped lookup, changing this value changes the key a
+// pre-activation cached false_no_match result was stored under, so it can
+// never be served for a post-activation request. No new test needed: the
+// bump itself is what that already-generic reuse-key property exists to
+// enforce.
+const CanonicalFactRegistryVersion = "context-fabric-facts.v2"
 
 // maxCanonicalFactsPerBundle bounds how many CanonicalFacts one
 // CanonicalFactBundle may carry, across ALL providers that contributed to
@@ -307,7 +321,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	//
 	// Tests reach the same outcomes through a FactScopeExpander, which is
 	// the real port and therefore the honest way to exercise them.
-	resolved := r.scopeResolver.Resolve(ctx, newFactScopeResolveInput(request), capabilities)
+	resolved := r.scopeResolver.Resolve(ctx, principal, newFactScopeResolveInput(request), capabilities)
 	request.Scope = &resolved
 	bundle.Scope = &resolved
 	// allowedSubjects is recomputed AFTER scope resolution: derived targets

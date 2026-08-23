@@ -206,7 +206,7 @@ func TestChaos4099_EachProjectPolicyIsNamedOnItsOwnRequirement(t *testing.T) {
 		FactReviews:      {FactScopePolicyProjectWorkItemPullRequestReview, contractsv1.ContextFabricSubjectPullRequestReview},
 	}
 	scope := NewFactReadScopeResolver(nil).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, caseSixtyRequirements(), TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -313,7 +313,7 @@ func TestChaos4099_NonCurrentAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *testin
 		contractsv1.ContextFabricTemporalRange,
 	} {
 		scope := NewFactReadScopeResolver(expander).Resolve(
-			context.Background(),
+			context.Background(), storage.Principal{OrgID: "org_1"},
 			newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, axis)),
 			scopeCapabilities(),
 		)
@@ -331,7 +331,7 @@ func TestChaos4099_NonCurrentAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *testin
 	// Control: the SAME table on the current axis does expand, proving the
 	// refusals above are attributable to the axis and nothing else.
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -944,21 +944,54 @@ func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request Fact
 	return FactScopeExpansionResult{Targets: targets, Counts: e.counts}, nil
 }
 
+// disableAllProjectPolicies installs a narrow table with the SAME three
+// project policies caseSixtyRequirements() exercises, each pinned
+// Enabled:false, and restores the real global table on cleanup.
+//
+// Deliberately NOT the ambient factScopePolicies: a test asserting "a
+// disabled policy never reaches the expander" must hold regardless of
+// which policies happen to be live in production right now -- pinning its
+// own disabled table keeps that invariant meaningful even after CHAOS-4099
+// stage 2 activates these same three for real.
+func disableAllProjectPolicies(t *testing.T) {
+	t.Helper()
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {SubjectProject: {
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: false,
+		}},
+		FactPullRequests: {SubjectProject: {
+			Policy: FactScopePolicyProjectWorkItemPullRequest, TargetKind: SubjectPullRequest,
+			Basis: FactScopeBasisActivityProxy, Enabled: false,
+		}},
+		FactReviews: {SubjectProject: {
+			Policy:     FactScopePolicyProjectWorkItemPullRequestReview,
+			TargetKind: contractsv1.ContextFabricSubjectPullRequestReview,
+			Basis:      FactScopeBasisActivityProxy, Enabled: false,
+		}},
+	}
+}
+
 // TestChaos4099_ADisabledPolicyNeverReachesTheExpander is the stage gate
-// itself. Stage 1 must not traverse, whatever is wired: an expander that
-// runs behind a disabled policy would mean the staged delivery never
-// actually staged anything.
+// itself: an expander that runs behind a disabled policy would mean a
+// staged delivery never actually staged anything. Pins the disabled path
+// specifically -- CHAOS-4099 stage 2 activates these same three policies
+// for real (see TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy
+// for that path), so this test installs its own disabled table rather than
+// reading the ambient one.
 func TestChaos4099_ADisabledPolicyNeverReachesTheExpander(t *testing.T) {
-	t.Parallel()
+	disableAllProjectPolicies(t)
 
 	expander := &recordingScopeExpander{targets: []SubjectRef{scopeRepo}}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, caseSixtyRequirements(), TemporalCurrent)),
 		scopeCapabilities(),
 	)
 	if expander.calls != 0 {
-		t.Fatalf("expander ran %d time(s) -- every stage-1 policy is disabled", expander.calls)
+		t.Fatalf("expander ran %d time(s) -- every policy in this table is disabled", expander.calls)
 	}
 	if len(scope.DerivedSubjects) != 0 || len(scope.Derivations) != 0 {
 		t.Fatalf("scope admitted subjects with every policy disabled: %+v", scope)
@@ -989,7 +1022,7 @@ func TestChaos4099_AFailedTraversalAdmitsNothing(t *testing.T) {
 		err:     context.DeadlineExceeded,
 	}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -1040,7 +1073,7 @@ func TestChaos4099_AWrongKindTargetIsNeverHandedToAProvider(t *testing.T) {
 		counts:  FactScopeExpansionCounts{CandidateCount: 1},
 	}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -1079,7 +1112,7 @@ func TestChaos4099_TruncationIsReportedNotSwallowed(t *testing.T) {
 		counts:  FactScopeExpansionCounts{CandidateCount: 1, Truncated: true},
 	}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -1439,7 +1472,7 @@ func TestChaos4099_TheResolverEnforcesTheCapItselfFromTheOverflowRow(t *testing.
 		counts:  FactScopeExpansionCounts{CandidateCount: len(targets), Truncated: false},
 	}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -1611,7 +1644,7 @@ func TestChaos4099_ACleanGapNeverEvictsADegradingOne(t *testing.T) {
 	// No targets and no counts: the chain ran and genuinely ended.
 	expander := &recordingScopeExpander{}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
 			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -1783,7 +1816,7 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 	}
 
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
 			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -1825,7 +1858,7 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 		perCall: [][]SubjectRef{{repoA, repoB}, {repoB, repoC}},
 		counts:  FactScopeExpansionCounts{CandidateCount: 2},
 	}).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
 			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -1859,7 +1892,7 @@ func TestChaos4099_ATruncatedTraversalThatAdmittedNothingIsNotAProofOfAbsence(t 
 		},
 	}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -1886,6 +1919,125 @@ func TestChaos4099_ATruncatedTraversalThatAdmittedNothingIsNotAProofOfAbsence(t 
 	}
 }
 
+// TestChaos4099_AllAuthorizationDroppedIsMatchedUnauthorizedNotAttemptedEmpty
+// pins the ruling (2026-08-22, design doc §6b, superseding an earlier
+// same-day ruling that collapsed this case into attempted_empty): a
+// traversal that ran to COMPLETION (not truncated), found real candidates,
+// and had every one of them dropped by authorization is NOT a proof of
+// absence. Distinguished from
+// TestChaos4099_ATruncatedTraversalThatAdmittedNothingIsNotAProofOfAbsence
+// by Truncated=false -- this is the "we saw everything, none of it was
+// authorized" case, not "we stopped partway through."
+func TestChaos4099_AllAuthorizationDroppedIsMatchedUnauthorizedNotAttemptedEmpty(t *testing.T) {
+	enableMetricsProjectPolicy(t, 0)
+
+	expander := &recordingScopeExpander{
+		targets: nil,
+		counts: FactScopeExpansionCounts{
+			CandidateCount: 3, AuthorizationDroppedCount: 3, Truncated: false,
+		},
+	}
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(), storage.Principal{OrgID: "org_1"},
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	event := scope.Events[0]
+	if event.Outcome != FactScopeMatchedUnauthorized {
+		t.Fatalf("outcome = %q, want matched_unauthorized", event.Outcome)
+	}
+	if event.AuthorizationDroppedCount != 3 {
+		t.Fatalf("AuthorizationDroppedCount = %d, want 3", event.AuthorizationDroppedCount)
+	}
+	if !factScopeGapDegrades(event.Outcome) {
+		t.Fatal("matched_unauthorized must degrade -- coverage genuinely is partial")
+	}
+	if factScopeGapSourceState(event.Outcome) != SourceTruncated {
+		t.Fatalf("source state = %q, want truncated", factScopeGapSourceState(event.Outcome))
+	}
+	if !scope.HasMatchedUnauthorizedGap() {
+		t.Fatal("HasMatchedUnauthorizedGap() = false, want true")
+	}
+	if got := scope.MatchedUnauthorizedCount(); got != 3 {
+		t.Fatalf("MatchedUnauthorizedCount() = %d, want 3", got)
+	}
+
+	// The existence disclosure reaches the answer as a WARNING (not a
+	// Limitation -- ruled 2026-08-22), naming the COUNT only.
+	result := scopeServableResult()
+	applyFactScopeDisclosure(&result, &scope)
+	if len(result.Warnings) != 1 {
+		t.Fatalf("warnings = %v, want exactly one existence-drop warning", result.Warnings)
+	}
+	if !strings.Contains(result.Warnings[0], "3 repository matches") {
+		t.Fatalf("warning = %q, want the count (3) named as matches, not a claimed-distinct repository count (codex round 1: the count sums per-requirement drops, which can double-count one physical repository)", result.Warnings[0])
+	}
+	if strings.Contains(result.Warnings[0], "metrics") || strings.Contains(strings.ToLower(result.Warnings[0]), "project_work_item") {
+		t.Fatalf("warning = %q, names the requirement kind or policy -- count only", result.Warnings[0])
+	}
+	// The generic unexpanded-gap Limitation ALSO fires: matched_unauthorized
+	// is still "could not reach some evidence" from the reader's own
+	// perspective, exactly like every other degrading gap.
+	found := false
+	for _, limitation := range result.Limitations {
+		if limitation == contractsv1.ContextFabricFactScopeUnexpandedLimitation {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("limitations = %v, want the unexpanded-gap disclosure alongside the warning", result.Limitations)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false over a matched_unauthorized gap")
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the disclosed result must be servable: %v", err)
+	}
+}
+
+// TestChaos4099_MixedAuthorizedAndUnauthorizedStaysExpandedNoWarning pins the
+// v1 scope boundary team-lead ruled explicitly (2026-08-22): matched_unauthorized
+// and its warning fire ONLY on the all-dropped/empty-admitted path. A MIXED
+// traversal -- some candidates admitted, some auth-dropped -- makes no false
+// proof of absence (real facts DO reach the answer), so it stays
+// expanded/expanded_partial exactly as before, undisclosed re: the drop
+// specifically. Extending the warning to this case is a deliberate v1
+// limitation (design doc §6b), not an oversight.
+func TestChaos4099_MixedAuthorizedAndUnauthorizedStaysExpandedNoWarning(t *testing.T) {
+	enableMetricsProjectPolicy(t, 0)
+
+	expander := &recordingScopeExpander{
+		targets: []SubjectRef{scopeRepo},
+		counts: FactScopeExpansionCounts{
+			CandidateCount: 3, AuthorizationDroppedCount: 2, Truncated: false,
+		},
+	}
+	scope := NewFactReadScopeResolver(expander).Resolve(
+		context.Background(), storage.Principal{OrgID: "org_1"},
+		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
+		scopeCapabilities(),
+	)
+	event := scope.Events[0]
+	if event.Outcome != FactScopeExpanded {
+		t.Fatalf("outcome = %q, want expanded: real facts reached the answer, no false proof of absence to correct", event.Outcome)
+	}
+	if event.AuthorizationDroppedCount != 2 {
+		t.Fatalf("AuthorizationDroppedCount = %d, want 2 (telemetry still sees it)", event.AuthorizationDroppedCount)
+	}
+	if scope.HasMatchedUnauthorizedGap() {
+		t.Fatal("HasMatchedUnauthorizedGap() = true, want false: no requirement hit matched_unauthorized in the mixed case")
+	}
+	if got := scope.MatchedUnauthorizedCount(); got != 0 {
+		t.Fatalf("MatchedUnauthorizedCount() = %d, want 0", got)
+	}
+
+	result := scopeServableResult()
+	applyFactScopeDisclosure(&result, &scope)
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %v, want none: the mixed case does not warn in v1", result.Warnings)
+	}
+}
+
 // TestChaos4099_AMixedKindTraversalIsNotReportedAsComplete pins the ladder's
 // other ordering bug. A chain returning one good repository and one wrong-kind
 // work item used to be reported as a clean `expanded`: the bad candidate
@@ -1900,7 +2052,7 @@ func TestChaos4099_AMixedKindTraversalIsNotReportedAsComplete(t *testing.T) {
 		counts:  FactScopeExpansionCounts{CandidateCount: 2},
 	}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -1935,7 +2087,7 @@ func TestChaos4099_TheExpandersOwnMismatchCountIsNotDoubleCounted(t *testing.T) 
 		counts:  FactScopeExpansionCounts{CandidateCount: 4, TargetKindMismatchCount: 2},
 	}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -1959,7 +2111,7 @@ func TestChaos4099_ExactlyTheCapIsNotTruncation(t *testing.T) {
 		counts: FactScopeExpansionCounts{CandidateCount: limit},
 	}
 	scope := NewFactReadScopeResolver(expander).Resolve(
-		context.Background(),
+		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
 	)
@@ -2149,6 +2301,16 @@ func parseChainCitations(t *testing.T, chain string) []chainCitation {
 // product commitment about what a fact family MEANS for a subject that does
 // not own it, and every one needs its own preconditions. A row that acquired
 // a policy name without going through that is the failure this pins.
+//
+// CHAOS-4099 stage 2 activates EXACTLY these three, project origin only --
+// updated from stage 1's "even the ratified three ship dark" assertion, the
+// same control-flow-unchanged activation the design doc's own §8/§9 describe
+// ("stage 2 activates a policy by flipping Enabled and wiring an
+// implementation"). Everything else in the table -- every FactScopePolicyNone
+// row, and any future row this test does not already know about -- must stay
+// disabled; a second policy silently going live alongside these three would
+// widen ACTIVATION scope with no product ruling behind it, exactly the
+// failure this test exists to catch.
 func TestChaos4099_OnlyTheThreeRuledPoliciesAreEverActivatable(t *testing.T) {
 	t.Parallel()
 
@@ -2157,6 +2319,7 @@ func TestChaos4099_OnlyTheThreeRuledPoliciesAreEverActivatable(t *testing.T) {
 		FactScopePolicyProjectWorkItemPullRequest:       {},
 		FactScopePolicyProjectWorkItemPullRequestReview: {},
 	}
+	seen := make(map[FactScopePolicy]bool, len(named))
 	for _, row := range factScopeEligibility {
 		if row.Rule.Policy == FactScopePolicyNone {
 			if row.Rule.Enabled {
@@ -2167,15 +2330,21 @@ func TestChaos4099_OnlyTheThreeRuledPoliciesAreEverActivatable(t *testing.T) {
 		if _, ok := named[row.Rule.Policy]; !ok {
 			t.Fatalf("%s carries unratified policy %q -- activation scope is the 3 ruled policies only", row.Requirement, row.Rule.Policy)
 		}
-		// Stage 1: even the ratified three ship dark.
-		if row.Rule.Enabled {
-			t.Fatalf("%s ships enabled -- stage 1 activates nothing", row.Requirement)
+		// Stage 2: exactly the ratified three ship enabled.
+		if !row.Rule.Enabled {
+			t.Fatalf("%s ships disabled -- stage 2 activates the 3 ruled policies", row.Requirement)
 		}
+		seen[row.Rule.Policy] = true
 		// ...and only from a project origin.
 		for _, origin := range row.Origins {
 			if origin != SubjectProject {
 				t.Fatalf("policy %q is declared for origin %q; the ruled activation scope is project only", row.Rule.Policy, origin)
 			}
+		}
+	}
+	for policy := range named {
+		if !seen[policy] {
+			t.Fatalf("ratified policy %q never appears as an enabled row -- activation is incomplete", policy)
 		}
 	}
 }
