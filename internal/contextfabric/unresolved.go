@@ -135,6 +135,17 @@ const (
 	// qualified slug, then repository basename). See
 	// noMatchLimitationForEmptyPool, the seam that branch will extend.
 	noMatchLimitationUnproven = "Retrieval found no candidate for this question in this organization's graph, so no canonical facts were read. This search is not exhaustive, so it does not confirm that no matching subject exists."
+	// noMatchLimitationGraphNotProjected (CHAOS-4077, codex xhigh review
+	// round 2, confirmed real LOW finding): noMatchLimitationUnproven's own
+	// text claims retrieval ran "in this organization's graph" -- false for
+	// this specific cause, where no graph exists yet to have searched.
+	// Unlike the authz-filtered-to-empty/empty-pool distinction (which
+	// stays telemetry-only by design, see subjectlessTerminalReason's own
+	// doc comment on the existence-oracle leak that would create), whether
+	// an org's graph has been projected carries no privacy-sensitive
+	// content -- it is operational status, not a fact about any specific
+	// subject -- so surfacing it here is not the same class of leak.
+	noMatchLimitationGraphNotProjected = "This organization's graph has not been projected yet, so no canonical facts were read. This is not a search result: retrieval did not run, and once the organization's data has been synced, the same question may answer differently."
 	// The ambiguous-and-clarification-unavailable pair (CHAOS-3810 codex
 	// round-1 P2): a no_match result reached WITH candidates attached must
 	// not claim nothing matched while the candidates it names sit in the
@@ -430,6 +441,13 @@ func (e *Engine) terminalResult(
 // would be exactly the kind of existence-oracle leak CHAOS-3829's
 // unscopedVisibility guard exists to prevent on the resolution side).
 //
+//   - "graph_not_projected" (CHAOS-4077): the candidate pool was empty
+//     because the organization's graph has never been projected at all
+//     (SubjectResolution.GraphNotProjected) -- checked FIRST, ahead of
+//     authz_filtered_to_empty/empty_pool, because those two both presume a
+//     real search ran against a real graph and is reporting on WHAT it
+//     found; here no search could run at all, which is a different
+//     operator response (run the projector for this org) than either.
 //   - "empty_pool": the candidate pool was empty and nothing this
 //     resolution found was excluded by authorization -- a true absence (or
 //     at least, retrieval genuinely found nothing to exclude either way).
@@ -445,6 +463,9 @@ func (e *Engine) terminalResult(
 func subjectlessTerminalReason(resolution SubjectResolution, subjectCandidatesAuthzDropped int) string {
 	if len(resolution.Candidates) > 0 {
 		return "ambiguous"
+	}
+	if resolution.GraphNotProjected {
+		return "graph_not_projected"
 	}
 	if subjectCandidatesAuthzDropped > 0 {
 		return "authz_filtered_to_empty"
@@ -491,8 +512,16 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 // No path today attaches such a proof to a resolution -- typed exact
 // readers, canonical basename projection, and per-key completeness tracking
 // are all later phases of the same architecture (§21 Phase 1-6) -- so every
-// empty pool takes the unproven branch below.
+// ORDINARY empty pool takes the unproven branch below.
+//
+// CHAOS-4077 is this seam's first real branch, ahead of Phase 6: a
+// never-projected org is not "retrieval ran and found nothing" at all, so
+// it gets its own accurate wording rather than borrowing the unproven
+// one's (false, for this cause) claim that a search happened.
 func noMatchLimitationForEmptyPool(resolution *SubjectResolution) string {
+	if resolution != nil && resolution.GraphNotProjected {
+		return noMatchLimitationGraphNotProjected
+	}
 	return noMatchLimitationUnproven
 }
 

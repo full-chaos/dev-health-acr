@@ -36,7 +36,7 @@ func TestSlogEngineTelemetry_RecordAnswerReuseLogsOrgAndOutcome(t *testing.T) {
 
 func TestSlogEngineTelemetry_RecordAnswerReuseLogsMissReasons(t *testing.T) {
 	t.Parallel()
-	for _, outcome := range []AnswerReuseOutcome{AnswerReuseMissNoCandidate, AnswerReuseMissAuthorization, AnswerReuseMissEvidenceContainment} {
+	for _, outcome := range []AnswerReuseOutcome{AnswerReuseMissNoCandidate, AnswerReuseMissAuthorization, AnswerReuseMissEvidenceContainment, AnswerReuseMissGraphNotProjected} {
 		var buf bytes.Buffer
 		telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
 

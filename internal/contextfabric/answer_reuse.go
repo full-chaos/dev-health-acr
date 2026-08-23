@@ -249,6 +249,20 @@ const (
 	// own ResolvedGraphBinding -- a build/flip, not staleness, invalidated
 	// it. See ReuseMissReason's doc comment.
 	AnswerReuseMissStaleGraphEpoch AnswerReuseOutcome = "stale_graph_epoch"
+	// AnswerReuseMissGraphNotProjected (CHAOS-4077): the stored candidate
+	// is a never-projected-org no_match (SubjectResolution.GraphNotProjected).
+	// Always a miss, checked BEFORE reuseAuthorizationStillHolds' own
+	// zero-subjects/zero-evidence "nothing to recheck, trivially still
+	// valid" shortcut can ever fire for it: that shortcut is correct for
+	// an ORDINARY confirmed-empty result (nothing about reality changed),
+	// but wrong here -- the org's graph may have been projected for the
+	// first time since this candidate was stored, and the identical empty
+	// resolution it carries is no longer evidence the graph still doesn't
+	// exist. Forcing a miss makes every reuse attempt re-resolve fresh,
+	// which is what discovers real candidates the moment a projector
+	// finally runs, rather than serving the same cached "no match"
+	// indefinitely.
+	AnswerReuseMissGraphNotProjected AnswerReuseOutcome = "graph_not_projected"
 )
 
 // tryReuse implements CHAOS-3782 (TRD §19.7). It is called from
@@ -523,6 +537,13 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 // agree, or a recheck could pass against an epoch the candidate itself was
 // never generated under.
 func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult, binding ResolvedGraphBinding) (bool, AnswerReuseOutcome) {
+	// CHAOS-4077: checked FIRST, before subjects/evidenceRefs are even
+	// collected -- see AnswerReuseMissGraphNotProjected's own doc comment
+	// for why the zero-subjects/zero-evidence shortcut below is unsafe
+	// specifically for this candidate shape.
+	if candidate.SubjectResolution.GraphNotProjected {
+		return false, AnswerReuseMissGraphNotProjected
+	}
 	subjects := reuseSubjectsToRecheck(candidate)
 	if len(subjects) > maxReuseSubjectRecheckCount {
 		return false, AnswerReuseMissAuthorization

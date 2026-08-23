@@ -79,6 +79,38 @@ var (
 	// PurgeOrganization-based rebuild) triggered by a network blip rather
 	// than a real divergence.
 	ErrProjectionWatermarkNotFound = errors.New("context fabric: projection watermark not found")
+	// ErrGraphNotProjected is the backend-neutral classification for
+	// "GraphReader.ResolveSubjects/DiscoverContext queried a graph key
+	// that has never been created" (CHAOS-4077) -- an org whose projector
+	// has never run for it, not a transient dependency problem. Every
+	// GraphReader implementation wraps its own vendor-specific
+	// missing-graph sentinel (e.g. falkorgraph.ErrNotFound, returned by
+	// FalkorDB's GRAPH.RO_QUERY against a key that was never
+	// GRAPH.QUERY-created) into this one, so Engine can recognize a
+	// never-projected org without importing a specific backend package.
+	//
+	// Deliberately DISTINCT from ErrProjectionWatermarkNotFound: that
+	// sentinel answers "does projectionrun.Coordinator's own checkpoint
+	// bookkeeping have a durable watermark for this (org, source)", a
+	// question about the PROJECTOR's own state; this one answers "does
+	// the graph this investigation is about to READ exist at all", a
+	// question about the read path itself. The two can and do diverge --
+	// a watermark can exist while a specific epoch's graph key does not
+	// (mid-rebuild), and this sentinel says nothing about watermark
+	// state either way.
+	//
+	// Engine's own handling (engine.go, ResolveSubjects call site) treats
+	// this exactly like a resolution that legitimately found zero
+	// candidates: it skips DiscoverContext entirely (which would query
+	// the identical nonexistent key and fail the same way) and degrades
+	// straight to the same clean terminalResult path a naturally-empty
+	// resolution already uses -- never propagated as a 5xx.
+	//
+	// Any OTHER error a GraphReader returns (a rate limit, a timeout, a
+	// real dependency outage) must NOT satisfy
+	// errors.Is(err, ErrGraphNotProjected) -- degrading one of those to a
+	// silent "no match" would misreport a real outage as a clean answer.
+	ErrGraphNotProjected = errors.New("context fabric: graph not yet projected for this organization")
 	// ErrUnsupportedTimeAxis is RETIRED by CHAOS-3781 and deliberately
 	// not replaced by an equivalent.
 	//

@@ -425,6 +425,23 @@ func TestNoMatchLimitationForEmptyPoolSeamTakesUnprovenBranchToday(t *testing.T)
 	}
 }
 
+// TestNoMatchLimitationForEmptyPoolTakesGraphNotProjectedBranch (CHAOS-4077,
+// codex xhigh review round 2, confirmed real LOW finding): a
+// GraphNotProjected resolution must NOT get the unproven wording's false
+// claim that a search ran "in this organization's graph" -- this is the
+// seam's first real branch, ahead of Phase 6.
+func TestNoMatchLimitationForEmptyPoolTakesGraphNotProjectedBranch(t *testing.T) {
+	t.Parallel()
+	resolution := &SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, GraphNotProjected: true}
+	got := noMatchLimitationForEmptyPool(resolution)
+	if got != noMatchLimitationGraphNotProjected {
+		t.Fatalf("noMatchLimitationForEmptyPool() = %q, want the graph-not-projected wording", got)
+	}
+	if got == noMatchLimitationUnproven {
+		t.Fatal("a graph-not-projected result must not fall back to the unproven wording, which falsely claims a search ran")
+	}
+}
+
 // The synthesized (model) path shares statusSentence, so it inherits every
 // rule below. no_match is FOUR states, not one (codex rounds 1-2), and the
 // sentence must name the one that actually happened without guessing a cause.

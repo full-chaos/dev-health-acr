@@ -1,6 +1,7 @@
 package falkorgraph
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -224,6 +225,55 @@ func TestSafeDependencyErrorFlattensGenuinelyUnknownErrors(t *testing.T) {
 		t.Fatal("safeDependencyError() leaked the raw dependency error text")
 	}
 }
+
+// TestGraphNotProjectedErrorTranslatesErrNotFound (CHAOS-4077) pins
+// graphNotProjectedError's own contract: an already-classified ErrNotFound
+// (the ONLY shape classifyFalkorError produces for "GRAPH.RO_QUERY against
+// a graph key that never existed") gains contextfabric.ErrGraphNotProjected
+// WITHOUT losing errors.Is(err, ErrNotFound) -- callers elsewhere in this
+// package that only check the local sentinel must keep working unchanged.
+func TestGraphNotProjectedErrorTranslatesErrNotFound(t *testing.T) {
+	classified := classifyFalkorError("query context graph", errNotFoundLike{})
+	translated := graphNotProjectedError(classified)
+	if !errors.Is(translated, contextfabric.ErrGraphNotProjected) {
+		t.Fatalf("graphNotProjectedError() = %v, want errors.Is(_, contextfabric.ErrGraphNotProjected)", translated)
+	}
+	if !isErrNotFound(translated) {
+		t.Fatalf("graphNotProjectedError() = %v, lost errors.Is(_, ErrNotFound) -- existing package-local callers would break", translated)
+	}
+}
+
+// TestGraphNotProjectedErrorPassesThroughEverythingElse proves the guard is
+// narrow: a genuine rate limit, auth failure, or generic dependency error
+// must NEVER satisfy errors.Is(_, contextfabric.ErrGraphNotProjected) --
+// misclassifying one of those would degrade a real outage into a silent
+// "no match" instead of surfacing it.
+func TestGraphNotProjectedErrorPassesThroughEverythingElse(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"nil", nil},
+		{"a DIFFERENT classified sentinel (unauthorized, not not-found)", classifyFalkorError("op", errUnauthorizedLike{})},
+		{"generic dependency error", safeDependencyError("op", genericErr{})},
+		{"context canceled", context.Canceled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := graphNotProjectedError(tc.err)
+			if errors.Is(got, contextfabric.ErrGraphNotProjected) {
+				t.Fatalf("graphNotProjectedError(%v) = %v, must NOT satisfy errors.Is(_, ErrGraphNotProjected)", tc.err, got)
+			}
+			if got != tc.err {
+				t.Fatalf("graphNotProjectedError(%v) = %v, want the error returned UNCHANGED (identity-equal) for anything but ErrNotFound", tc.err, got)
+			}
+		})
+	}
+}
+
+type errUnauthorizedLike struct{}
+
+func (errUnauthorizedLike) Error() string { return "WRONGPASS invalid credentials" }
 
 type errNotFoundLike struct{}
 
