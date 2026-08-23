@@ -77,7 +77,30 @@ var structureOfferKinds = map[contractsv1.ContextFabricSubjectKind]bool{
 // actually present; a caller-named kind is always worth offering back
 // (it may be wrong, and the receipt-bound offer is exactly how a caller
 // finds out).
-func kindOfferMaterial(candidates []contextfabric.SubjectCandidate, explicitKinds []contractsv1.ContextFabricSubjectKind) contextfabric.StructureOfferMaterial {
+// kindOfferDiagnostics (CHAOS-4012 v20, telemetry-only) reports the exact
+// counts kindOfferMaterial's own suppression check consumes, so a caller
+// can trace WHY KindOptions came back empty -- distinct from the
+// CensusRan/EvidenceRoundEntered ambiguity CHAOS-3899/CHAOS-4161 already
+// resolve one layer over (the shadow evidence round, not offer
+// construction). See resolve.go's own "kind_offer" stage doc comment
+// (ResolutionTraceEvent) for the full rationale.
+type kindOfferDiagnostics struct {
+	// ExplicitHintCount is explicitCount: the number of valid, deduped,
+	// caller-supplied ExpectedKinds hints that survived the
+	// structureOfferKinds/dedup filter.
+	ExplicitHintCount int
+	// DistinctKindCount is len(ranked) at the moment the suppression check
+	// runs -- explicit hints plus pool-derived kinds, deduped, restricted
+	// to the closed structureOfferKinds set. 0 means genuinely no offerable
+	// kind was present at all; 1 means exactly the "in the pool, still not
+	// offered" gap CHAOS-4012 investigates.
+	DistinctKindCount int
+	// SuppressedByCardinality is true exactly when
+	// "explicitCount==0 && len(ranked)<2" fired.
+	SuppressedByCardinality bool
+}
+
+func kindOfferMaterial(candidates []contextfabric.SubjectCandidate, explicitKinds []contractsv1.ContextFabricSubjectKind) (contextfabric.StructureOfferMaterial, kindOfferDiagnostics) {
 	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(candidates)+len(explicitKinds))
 	var ranked []contractsv1.ContextFabricSubjectKind
 	for _, kind := range explicitKinds {
@@ -98,12 +121,14 @@ func kindOfferMaterial(candidates []contextfabric.SubjectCandidate, explicitKind
 		poolDistinct = append(poolDistinct, kind)
 	}
 	ranked = append(ranked, poolDistinct...)
+	diagnostics := kindOfferDiagnostics{ExplicitHintCount: explicitCount, DistinctKindCount: len(ranked)}
 	// The pool alone still needs >=2 DISTINCT kinds (its own kinds plus
 	// whatever explicit kinds already claimed) to be worth disambiguating
 	// on its own; an explicit kind is ALWAYS worth offering regardless of
 	// pool cardinality.
 	if explicitCount == 0 && len(ranked) < 2 {
-		return contextfabric.StructureOfferMaterial{}
+		diagnostics.SuppressedByCardinality = true
+		return contextfabric.StructureOfferMaterial{}, diagnostics
 	}
 	options := make([]contractsv1.ContextFabricKindOption, 0, len(ranked))
 	for _, kind := range ranked {
@@ -116,7 +141,7 @@ func kindOfferMaterial(candidates []contextfabric.SubjectCandidate, explicitKind
 	return contextfabric.StructureOfferMaterial{
 		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
 		KindOptions: options,
-	}
+	}, diagnostics
 }
 
 // kindOfferLabel renders a server-owned, closed-vocabulary label for one

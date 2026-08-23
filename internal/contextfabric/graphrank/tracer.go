@@ -130,6 +130,20 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"fired", event.ConfirmedKindRescueFired,
 			"result_count", event.ConfirmedKindRescueResultCount,
 			"truncated", event.ConfirmedKindRescueTruncated)
+	case "kind_offer":
+		// CHAOS-4012 v20: the operator-visible half of kindOfferMaterial's
+		// own suppression check -- this event fires on EVERY resolution
+		// (unlike kind_coverage_floor/confirmed_kind_rescue above, which are
+		// gated behind their own preconditions), so "distinct_kind_count"
+		// tells an operator apart "genuinely nothing offerable" (0) from
+		// "exactly one, still suppressed" (1) -- CHAOS-4012's own open
+		// question -- without needing a harness. Counts and a bool only --
+		// no kind name, no candidate identity.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: kind offer",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"explicit_hint_count", event.KindOfferExplicitHintCount,
+			"distinct_kind_count", event.KindOfferDistinctKindCount,
+			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality)
 	case "confirmed_kind_scope":
 		// CHAOS-4154: the operator-visible half of the confirmed-kind
 		// truncation-scoping mechanism -- this event's own presence in a

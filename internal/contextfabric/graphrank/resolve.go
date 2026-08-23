@@ -482,7 +482,7 @@ type ResolutionTraceEvent struct {
 	// (CHAOS-3899), "evidence_census_commit" (CHAOS-3896 Slice C),
 	// "evidence_source_native", "evidence_source_native_probe" (CHAOS-3899
 	// widening measurement, 2026-08-19), "slice_b_survivor_verdict"
-	// (CHAOS-4088).
+	// (CHAOS-4088), "kind_offer" (CHAOS-4012 v20).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -702,6 +702,35 @@ type ResolutionTraceEvent struct {
 	ConfirmedKindRescueFired       bool
 	ConfirmedKindRescueResultCount int
 	ConfirmedKindRescueTruncated   bool
+	// KindOfferExplicitHintCount/KindOfferDistinctKindCount/
+	// KindOfferSuppressedByCardinality (stage=="kind_offer" ONLY,
+	// CHAOS-4012 v20) describe kindOfferMaterial's own suppression check
+	// (chaos3900_structure_offers.go): the number of valid, deduped,
+	// caller-supplied ExpectedKinds hints; the number of distinct
+	// structureOfferKinds-registered kinds actually collected (explicit
+	// hints plus pool-derived, deduped) BEFORE the check runs; and whether
+	// "explicitCount==0 && len(ranked)<2" fired, leaving KindOptions empty
+	// for cardinality reasons rather than because no offerable kind was
+	// present at all.
+	//
+	// Filed to resolve exactly the ambiguity CensusRan/EvidenceRoundEntered
+	// (CHAOS-3899/CHAOS-4161) already resolve one layer over: an
+	// expected_kind candidate can be genuinely IN the resolved pool
+	// (including a CHAOS-4038 coverage-floor rescue, unioned in for offer
+	// purposes at this call site) and still never reach KindOptions, because
+	// a single-distinct-kind pool has, by kindOfferMaterial's own design,
+	// "nothing to disambiguate." KindOfferDistinctKindCount is what tells a
+	// reader "genuinely 0 offerable kinds" apart from "exactly 1 -- present,
+	// still suppressed" (CHAOS-4012's own open question).
+	//
+	// UNLIKE KindCoverageFloorFired/ConfirmedKindRescueFired, this event is
+	// UNCONDITIONAL: kindOfferMaterial runs on EVERY resolution (not gated
+	// on a precondition the way the coverage floor and confirmed-kind
+	// rescue are), so this stage fires every time deps.ResolutionTracer is
+	// non-nil, corpus-wide, not only for the previously-flagged subset.
+	KindOfferExplicitHintCount       int
+	KindOfferDistinctKindCount       int
+	KindOfferSuppressedByCardinality bool
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -1921,8 +1950,22 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	kindOfferCandidates := make([]contextfabric.SubjectCandidate, 0, len(resolution.Candidates)+len(coverageCandidates))
 	kindOfferCandidates = append(kindOfferCandidates, resolution.Candidates...)
 	kindOfferCandidates = append(kindOfferCandidates, coverageCandidates...)
+	kindOffer, kindOfferDiag := kindOfferMaterial(kindOfferCandidates, request.ExpectedKinds)
+	// CHAOS-4012 v20: UNCONDITIONAL, unlike kind_coverage_floor/
+	// confirmed_kind_rescue above -- kindOfferMaterial runs on EVERY
+	// resolution, not gated behind a "still missing" precondition, so this
+	// stage fires every time a tracer is wired, corpus-wide. See
+	// ResolutionTraceEvent's own "kind_offer" field doc comment.
+	if deps.ResolutionTracer != nil {
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "kind_offer",
+			KindOfferExplicitHintCount:       kindOfferDiag.ExplicitHintCount,
+			KindOfferDistinctKindCount:       kindOfferDiag.DistinctKindCount,
+			KindOfferSuppressedByCardinality: kindOfferDiag.SuppressedByCardinality,
+		})
+	}
 	offerMaterial := combineStructureOfferMaterial(
-		kindOfferMaterial(kindOfferCandidates, request.ExpectedKinds),
+		kindOffer,
 		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled),
 		handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker),
 	)
