@@ -155,7 +155,16 @@ import (
 // against. No merge arithmetic changes (Results concatenates verbatim);
 // mirrored here in the same change for the same undeclared-field-dropped-
 // on-decode reason as everything else on this list.
-const expectedSchemaVersion = "18"
+// "19" (CHAOS-4161, 2026-08-23): purely additive -- see the producer's own
+// ReportSchemaVersion doc comment for the full mechanism. twoTurnCaseResult
+// gained EvidenceRoundEntered/EvidenceRoundReason, distinguishing "the
+// evidence round (CHAOS-3899) was never entered" from "entered but refused
+// before any per-kind census probe" -- previously indistinguishable from
+// census_ran==false alone. No merge arithmetic changes (Results
+// concatenates verbatim); mirrored here in the same change for the same
+// undeclared-field-dropped-on-decode reason as everything else on this
+// list.
+const expectedSchemaVersion = "19"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -350,6 +359,10 @@ type twoTurnCaseResult struct {
 	CensusRan                           bool `json:"census_ran"`
 	CensusComplete                      bool `json:"census_complete"`
 	CensusCount                         int  `json:"census_count"`
+	// CHAOS-4161 v19: mirrors twoTurnCaseResult's identically-named fields
+	// byte-for-byte -- see that file's own doc comment.
+	EvidenceRoundEntered bool   `json:"evidence_round_entered"`
+	EvidenceRoundReason  string `json:"evidence_round_reason"`
 	// Regime (CHAOS-4120) mirrors twoTurnCaseResult's identically-named
 	// field -- see that file's own doc comment (twoTurnTurn1Facts.Regime)
 	// for the engine-native derivation off RecordWindowCanonicalization.
