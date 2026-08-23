@@ -24,6 +24,7 @@ package hosted_test
 // first found in.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -62,6 +63,28 @@ func identityRoundTripsCleanly(kind, id string) bool {
 	return rederived == id
 }
 
+// isWorkItemAnchorCandidate reports whether an annex anchor value should be
+// validated as a work_item id.
+//
+// Checks the RAW id string's own "work_item.v2:" prefix, not (only)
+// entry.PositiveKind/NegativeKind (codex sol/high review round 2, MEDIUM):
+// a MALFORMED v2-looking id with the wrong segment count -- e.g.
+// "work_item.v2:repo-1", missing its second segment -- makes
+// identity.Segments fail for every registered kind, so splitAnchorKey
+// falls back to its legacy single-colon split and returns the WRONG kind
+// ("work_item.v2", not "work_item") for that one malformed entry. Gating
+// only on kind=="work_item" would let exactly the malformed ids this
+// preflight exists to catch evade it by breaking the very parser that
+// would have classified them as work_item in the first place. The raw
+// prefix check is independent of that parse, so a malformed id can never
+// dodge this preflight by corrupting its own kind classification.
+func isWorkItemAnchorCandidate(kind, canonicalID string) bool {
+	if canonicalID == "" {
+		return false
+	}
+	return kind == identity.KindWorkItem || strings.HasPrefix(canonicalID, identity.KindWorkItem+".v2:")
+}
+
 // twoTurnFindWorkItemV2SchemeViolations is the pure check both the real
 // preflight and its own unit test share: every work_item identifier
 // either fixture carries must round-trip cleanly through the live v2
@@ -73,12 +96,12 @@ func identityRoundTripsCleanly(kind, id string) bool {
 func twoTurnFindWorkItemV2SchemeViolations(annex twoTurnOracleAnnex, corpus []trialCase) []twoTurnV2SchemeViolation {
 	var violations []twoTurnV2SchemeViolation
 	for _, entry := range annex.Entries {
-		if entry.PositiveKind == identity.KindWorkItem && entry.PositiveAnchorCanonicalID != "" {
+		if isWorkItemAnchorCandidate(entry.PositiveKind, entry.PositiveAnchorCanonicalID) {
 			if !identityRoundTripsCleanly(identity.KindWorkItem, entry.PositiveAnchorCanonicalID) {
 				violations = append(violations, twoTurnV2SchemeViolation{Source: "annex_positive", Index: entry.Index})
 			}
 		}
-		if entry.NegativeKind == identity.KindWorkItem && entry.NegativeAnchorCanonicalID != "" {
+		if isWorkItemAnchorCandidate(entry.NegativeKind, entry.NegativeAnchorCanonicalID) {
 			if !identityRoundTripsCleanly(identity.KindWorkItem, entry.NegativeAnchorCanonicalID) {
 				violations = append(violations, twoTurnV2SchemeViolation{Source: "annex_negative", Index: entry.Index})
 			}
@@ -177,6 +200,15 @@ func TestTwoTurnFindWorkItemV2SchemeViolations(t *testing.T) {
 	// re-encode "%ZZ" to "%25ZZ"). No real committed subject's id can ever
 	// equal it, so the round-trip check must still flag it.
 	const malformedV2 = "work_item.v2:repo-1:%ZZ"
+	// wrongSegmentCountV2 has the RIGHT prefix but the WRONG segment count
+	// (missing its second segment) -- identity.Segments fails for every
+	// registered kind, so splitAnchorKey's own fallback would classify
+	// this entry's PositiveKind as "work_item.v2" (codex sol/high review
+	// round 2, MEDIUM), not "work_item". PositiveKind is set to match
+	// exactly that real fallback output here, proving the check still
+	// catches it via the raw id's own prefix rather than the (here,
+	// corrupted) parsed kind.
+	const wrongSegmentCountV2 = "work_item.v2:repo-1"
 
 	annex := twoTurnOracleAnnex{Entries: []twoTurnOracleEntry{
 		{Index: 0, PositiveKind: identity.KindWorkItem, PositiveAnchorCanonicalID: validV2},
@@ -190,6 +222,7 @@ func TestTwoTurnFindWorkItemV2SchemeViolations(t *testing.T) {
 		// case) -- never a violation.
 		{Index: 4, PositiveKind: identity.KindWorkItem, PositiveAnchorCanonicalID: ""},
 		{Index: 5, PositiveKind: identity.KindWorkItem, PositiveAnchorCanonicalID: malformedV2},
+		{Index: 6, PositiveKind: "work_item.v2", PositiveAnchorCanonicalID: wrongSegmentCountV2},
 	}}
 	corpus := []trialCase{
 		{ExpectKind: identity.KindWorkItem, ExpectID: validV2},     // index 0: clean
@@ -203,6 +236,7 @@ func TestTwoTurnFindWorkItemV2SchemeViolations(t *testing.T) {
 		{Source: "annex_positive", Index: 1}:   true,
 		{Source: "annex_negative", Index: 2}:   true,
 		{Source: "annex_positive", Index: 5}:   true,
+		{Source: "annex_positive", Index: 6}:   true,
 		{Source: "corpus_expect_id", Index: 1}: true,
 		{Source: "corpus_expect_id", Index: 3}: true,
 	}
@@ -278,6 +312,14 @@ func TestSplitAnchorKeyV2Scheme(t *testing.T) {
 		{"legacy plain kind", "repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7", "repository", "7b9583ee-4d24-2be7-4d09-34f815bebdd7", true},
 		{"empty", "", "", "", false},
 		{"no colon", "malformed", "", "", false},
+		// Documents the known residual (isWorkItemAnchorCandidate's own
+		// doc comment): a v2-prefixed id with the WRONG segment count
+		// still falls through to the legacy split and returns the WRONG
+		// kind ("work_item.v2", not "work_item") -- the preflight catches
+		// this class via the raw prefix instead of trusting this return
+		// value, precisely because this fallback cannot be trusted for a
+		// malformed v2-looking key.
+		{"malformed v2 wrong segment count", "work_item.v2:repo-1", "work_item.v2", "repo-1", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
