@@ -34,7 +34,26 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // already-projected organization's team nodes carry text without it, so
 // the bump forces the same deliberate rebuild ClickHouseSourceVersion v5
 // forces for its own producers -- one operator action covers both.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v2"
+//
+// v3 (CHAOS-3916, local/trial slice; codex xhigh review finding on that
+// ticket's own PR, confirmed): CHAOS-3898 rewired queryProjects onto
+// identity.Derive (project.v2:<provider>:<id> canonical ids, teams_projects.go)
+// and CHAOS-4108 widened queryWorkItemProjects' join
+// (teams_projects_edges.go) -- BOTH producers this source, not
+// ClickHouseProjectionSource, owns -- WITHOUT ever bumping this constant.
+// projectionrun checkpoints are keyed (org_id, source) and compared
+// independently per source (ProjectionCheckpointStore.LoadProjectionCheckpoint),
+// so CHAOS-3916's own ClickHouseSourceVersion v5->v6 bump does NOTHING for
+// an already-projected organization's teams/projects checkpoint: it would
+// keep advancing incrementally under a stale "v2" marker forever, never
+// re-deriving already-committed project/work-item-to-project rows with
+// either identity change, exactly the mixed-format risk CHAOS-3916 exists
+// to close. This bump is the SAME deliberate-rebuild discipline as every
+// entry above, on the source that actually needed it for these two
+// changes. Live-verified (CHAOS-4108's own re-projection decision matrix,
+// standing stack, ground-truth org 70d529e0): zero project.v2:-shaped
+// nodes exist anywhere in that org's graph today.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v3"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.

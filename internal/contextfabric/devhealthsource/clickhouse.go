@@ -18,7 +18,30 @@ import (
 // onto every batch it produces. Checkpoints and telemetry are keyed by it.
 const SourceName = "dev_health_clickhouse"
 
-// ClickHouseSourceVersion is bumped to v5 by CHAOS-3833 (embed-text spec v2
+// ClickHouseSourceVersion is bumped to v6 by CHAOS-3916 (CHAOS-3898's own
+// deploy-gating requirement, local/trial slice): CHAOS-3898 changed
+// projected identity formats (work_item.v2, relationship.v2 digest ids,
+// project.v2:<provider>:<id> via identity.Derive) WITHOUT a version bump --
+// CHAOS-3916's own finding was that the moment a binary carrying those
+// formats projects incrementally against a still-v5, flag-off graph, NEW-
+// and OLD-format ids coexist in the SAME graph: mixed-format edges,
+// duplicate nodes. Every already-projected organization (this repo's own
+// standing stack included -- live-verified zero project.v2:-shaped nodes
+// anywhere in the ground-truth org, CHAOS-4108's own re-projection decision
+// matrix) is still v5/pre-.v2 today. Forcing
+// ErrProjectionSourceVersionChanged makes the operator-prescribed rebuild
+// (acr-projector rebuild --org, or the ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED
+// build-aside-and-swap path this bump is sequenced with -- see that flag's
+// own doc comment, pglifecycle/env.go) happen deliberately, the SAME
+// discipline v2-v5 below already established for their own identity/schema
+// changes, rather than leaving mixed-format state to accumulate silently.
+// This bump alone changes nothing until an operator actually runs a
+// rebuild -- CHAOS-3916's local/trial slice merges this bump and enables
+// the lifecycle flag in the trial harness WITHOUT triggering any rebuild;
+// prod cutover timing (which organizations, when) is chris-owned per
+// CHAOS-3916's own text.
+//
+// ClickHouseSourceVersion was bumped to v5 by CHAOS-3833 (embed-text spec v2
 // §2/§4 Layer A): the producers emit the per-kind embed-text fields --
 // work_items gains the first-colon ticket-key ALIAS plus type/labels/
 // project_name/native_team_key properties, git_pull_requests gains
@@ -70,7 +93,7 @@ const SourceName = "dev_health_clickhouse"
 // (v2, CHAOS-3779 codex round-2 H2 residual: queryWorkItemDependencies'
 // RelationshipID began embedding relationship_type (previously (source,
 // target) only), and queryWorkItemHierarchy was a new producer.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v5"
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v6"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and

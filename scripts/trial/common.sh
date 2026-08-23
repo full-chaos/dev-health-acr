@@ -157,6 +157,42 @@ trial_wire_common_env() {
   export ACR_TEST_TRIAL_EMBED_API_KEY="$(trial_secret OPENAI_API_KEY)"
 }
 
+# trial_wire_graph_lifecycle_env (CHAOS-3916, local/trial slice) is
+# DELIBERATELY NOT folded into trial_wire_common_env above: that function is
+# shared by every live trial script (replay, arm, smoke, reclass, W0, D2B,
+# ...), but generative_trial_live_test.go's own trialCaseReport doc comment
+# records that ONLY chaos3884_replay_harness_test.go populates
+# ResolvedActiveEpoch/GraphLifecycleEnabled in its provenance today -- "every
+# other trial script's provenance leaves them at their zero values" even
+# though wireProductionEnv (shared by all of them) would silently start
+# wiring a REAL, active EpochResolver into their graph readers too if this
+# env var were exported common-wide. That is exactly the "measurement fails
+# toward fine" class chris's CHAOS-3896 Slice B rider exists to prevent:
+# an unrecorded active epoch is worse than none. Call this ADDITIONALLY,
+# only from run-replay.sh, so every OTHER trial script stays byte-identical
+# (codex xhigh review finding, confirmed).
+#
+# The TRIAL-PREFIXED name, NOT the bare production
+# ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED one: generative_trial_live_test.go's
+# wireProductionEnv calls clearAmbientACREnv first, which wipes any ambient
+# bare export -- exactly the trap that function's own doc comment names
+# ("precisely why 'export the real var and hope' silently measured epoch 0
+# twice before this fix"). wireProductionEnv then re-derives the real var
+# from THIS one (ACR_TEST_TRIAL_ prefix survives the clear by design).
+# Confirmed live: exporting the bare name still measured wired=false; this
+# is what actually reaches the harness. This ONLY wires the epoch resolver
+# so the harness reads a REAL answer from Postgres instead of defaulting a
+# hardcoded 0 in (confirmed live: the ground-truth org's own lifecycle row
+# already resolves to epoch 1, from an earlier, unrelated flip -- reading
+# it is a NO-OP on Postgres, never a write) -- it does not itself trigger
+# any rebuild; ACR_TEST_TRIAL_POSTGRES_DSN (trial_wire_common_env) is the
+# same DSN buildReplayEpochResolver reads, and migration
+# 0019_context_fabric_graph_lifecycle.sql (+ related) is already applied to
+# the standing stack's acr database.
+trial_wire_graph_lifecycle_env() {
+  export ACR_TEST_TRIAL_GRAPH_LIFECYCLE_ENABLED=1
+}
+
 trial_run_go_test() {
   ( cd "$repo_root" && go test -run TestGenerativeTrialCorpus -count=1 -v -timeout "${1:?timeout required}" ./internal/runtime/hosted )
 }

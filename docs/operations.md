@@ -365,6 +365,25 @@ tau=0.2821294944901428, a 0.0179 delta from the shipped 0.30 — inside the
 `RetrievalPolicyVersion` bump. See `calibratedIdentityText3Large`'s doc
 comment for the full result, provenance caveat, and negative-gate note.
 
+**A rebuild is likewise REQUIRED after deploying CHAOS-3916**
+(`ClickHouseSourceVersion` v5 → v6, `TeamsProjectsSourceVersion` v2 → v3).
+Unlike CHAOS-3833/3835 above this is not a text/embedding change — it
+closes CHAOS-3898's own gap: `queryProjects` (`teams_projects.go`) and
+`queryWorkItemProjects` (`teams_projects_edges.go`, widened further by
+CHAOS-4108) mint `project.v2:<provider>:<id>`/`work_item.v2:...` canonical
+ids via `identity.Derive` without either producer's own `SourceVersion`
+ever having been bumped for it, so an already-projected organization keeps
+mixed pre-`.v2` and post-`.v2` identities across ordinary incremental
+ticks — exactly the "mixed-format edges, duplicate nodes" class
+`ErrProjectionSourceVersionChanged` exists to fence. Both bumps are
+sequenced WITH or AFTER `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED`, so a
+flag-on rebuild resolves via the build-aside-and-swap path above, not the
+legacy in-place purge. This is a code+config change only for now: it
+merges without touching prod deploy config or triggering any rebuild — the
+prod cutover (which organizations, when) is a separate, chris-owned
+decision. Run `acr-projector rebuild --org <organization-id>` for every
+affected organization once that cutover is ruled.
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`

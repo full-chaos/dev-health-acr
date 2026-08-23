@@ -225,18 +225,34 @@ func TestHierarchyEdgeStaysOpenWhenBothEndpointsAreOpen(t *testing.T) {
 func TestSourceVersionIsBumpedForValidityWindows(t *testing.T) {
 	t.Parallel()
 
-	if devhealthsource.ClickHouseSourceVersion == "devhealthsource.clickhouse.v3" {
-		t.Fatal("emitting validity windows changes what this producer projects; the source version must advance past v3 so ErrProjectionSourceVersionChanged forces a rebuild")
+	// Every version PRIOR to v5 (validity windows shipped in v5) is listed
+	// EXHAUSTIVELY and rejected, not just v3/v4 by name (codex xhigh review
+	// finding, confirmed: a bare v3/v4 check alone would silently let a
+	// hypothetical future v1/v2/malformed value through). v3/v4 keep their
+	// own named reasons below; v1/v2 predate this test's own history but
+	// must be just as unreachable -- "advanced past v4" is not itself proof
+	// of "advanced past v1/v2" for a version scheme that is a plain string,
+	// not a monotonic type the compiler enforces ordering on.
+	preV5 := map[string]string{
+		"devhealthsource.clickhouse.v1": "pre-CHAOS-3779 baseline",
+		"devhealthsource.clickhouse.v2": "CHAOS-3779 codex round-2 H2 residual",
+		"devhealthsource.clickhouse.v3": "CHAOS-3785 relaxed repos joins -- emitting validity windows changes what this producer projects; the source version must advance past v3 so ErrProjectionSourceVersionChanged forces a rebuild",
+		// CHAOS-3833 advanced past CHAOS-3781's v4 for the same reason on a
+		// different axis: the embed-text producer fields change what this
+		// producer projects, so v4 must be as unreachable as v3 is.
+		"devhealthsource.clickhouse.v4": "CHAOS-3781 validity windows -- emitting the embed-text fields changes what this producer projects; the source version must advance past v4 so ErrProjectionSourceVersionChanged forces a rebuild",
 	}
-	// CHAOS-3833 advanced past CHAOS-3781's v4 for the same reason on a
-	// different axis: the embed-text producer fields change what this
-	// producer projects, so v4 must be as unreachable as v3 is.
-	if devhealthsource.ClickHouseSourceVersion == "devhealthsource.clickhouse.v4" {
-		t.Fatal("emitting the embed-text fields changes what this producer projects; the source version must advance past v4 so ErrProjectionSourceVersionChanged forces a rebuild")
+	if reason, stale := preV5[devhealthsource.ClickHouseSourceVersion]; stale {
+		t.Fatalf("ClickHouseSourceVersion regressed to a pre-v5 value (%s): %s", devhealthsource.ClickHouseSourceVersion, reason)
 	}
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v5" {
-		t.Fatalf("ClickHouseSourceVersion = %q, want devhealthsource.clickhouse.v5", devhealthsource.ClickHouseSourceVersion)
-	}
+	// CHAOS-3916 (local/trial slice) advanced the version again, past v5,
+	// for a reason independent of this test's own concern (validity
+	// windows): CHAOS-3898's identity-format changes (project.v2:<provider>:<id>
+	// etc.) were never version-bumped, so the version now advances on that
+	// axis too. This test's own job stops at "validity windows never
+	// regress to pre-v5" -- it does NOT pin the version to v5 exactly, so a
+	// later legitimate bump for an unrelated reason (this one, or the next)
+	// does not have to keep re-litigating this test.
 }
 
 // --- CHAOS-3781 codex round-1 regressions ---
