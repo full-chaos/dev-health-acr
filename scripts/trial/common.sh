@@ -30,6 +30,40 @@ if repo_root="$(cd "$script_dir" && git rev-parse --show-toplevel 2>/dev/null)" 
 else
   repo_root="$(cd "$script_dir/../.." && pwd -P)"
 fi
+
+# CWD-VS-SCRIPT REPO FAIL-FAST (2026-08-23, live incident): repo_root above
+# is resolved from THIS SCRIPT FILE'S OWN on-disk location (via
+# BASH_SOURCE/script_dir), which is correct in isolation -- but a caller
+# invoking these scripts by a RELATIVE path (`./scripts/trial/run-two-turn.sh`)
+# from the WRONG worktree's own directory has bash resolve and exec that
+# OTHER worktree's copy of this very file before it ever runs a single
+# line here, so repo_root ends up self-consistently "correct" for a
+# worktree that was never the caller's intent. A live run hit exactly
+# this: an operator's shell cwd had drifted to a stale worktree several
+# commits behind; the launched scripts (this one included) compiled and
+# ran entirely from that stale tree while a SEPARATE provenance signal
+# (ACR_TEST_TRIAL_BASE_SHA / origin/main, a ref shared across every
+# worktree of this repo) happened to still read the intended, current
+# commit -- so the artifact's own provenance fields looked plausible while
+# the code that actually produced it was stale. Nothing in the chain
+# above is individually wrong; the caller's cwd is simply never checked
+# against what actually got resolved.
+#
+# The fix: compare repo_root (this script's OWN worktree) against
+# whatever `git rev-parse --show-toplevel` reports for the CALLER's raw
+# cwd (no cd, so it reflects whatever worktree the operator was actually
+# standing in when the command was typed) -- a caller running from
+# outside any git worktree at all (empty result) is not itself an error
+# (e.g. invoked via an absolute path from $HOME), only a DISAGREEING
+# worktree is.
+if caller_toplevel="$(git rev-parse --show-toplevel 2>/dev/null)" && [[ -n "$caller_toplevel" && "$caller_toplevel" != "$repo_root" ]]; then
+  echo "common.sh: refusing to run -- the invoking shell's cwd resolves to a DIFFERENT worktree than this script's own file location." >&2
+  echo "  caller's cwd worktree : $caller_toplevel" >&2
+  echo "  this script's worktree: $repo_root" >&2
+  echo "  This is exactly the shape of the 2026-08-23 stale-checkout incident (see this check's own comment) -- cd into $repo_root (or invoke this script by an absolute path from there) before retrying." >&2
+  exit 1
+fi
+
 # dev_health_root resolves via the git COMMON dir, not repo_root/.. --
 # repo_root (--show-toplevel) is the CURRENT worktree's own root, which for
 # a lane checked out under dev-health/worktrees/acr/<branch> sits two
