@@ -74,6 +74,126 @@ package hosted_test
 // exactly -- question/term text stays in process memory only; the report
 // artifact carries outcome data (index, member, arm, status, counts) never
 // question or offer-label text. See TestTwoTurnCaseResultCarriesNoQuestionText.
+//
+// ATTESTATION BOUNDARY (CHAOS-4083, chris-approved 2026-08-22): what this
+// instrument can and cannot attest.
+//
+// After three measurement-layer defect cycles (CHAOS-4039, CHAOS-4085's
+// discovery chain, CHAOS-4135's shard-54 finding), CHAOS-4083 asked for the
+// underlying CLASS to be characterized instead of patching a fourth
+// instance: a harness layer that asserts a property the instrument
+// structurally cannot measure fails in the dangerous direction -- it looks
+// clean, not broken, right up until someone checks the artifact against an
+// independent source. The audit below is that characterization, current as
+// of the CHAOS-4135 merge (PR #224, `7ae4cab7`); see the CHAOS-4061 retro
+// (Linear document, linked from the CHAOS-4061 ticket) for the full
+// incident-by-incident history each line below references.
+//
+// The class has two shapes:
+//
+//  1. Bit-for-bit equality demanded across independently sampled live-LLM
+//     calls. Free-text model output is not deterministic call-to-call with
+//     no temperature pinning anywhere in the model runtime, so a classifier
+//     built on it is close to unreachable by construction -- CHAOS-4039's
+//     own v4 baseline_equivalent (canonicalInterpretationHash /
+//     normalizedDecisionFingerprint, hashing InvestigationResult.Status and
+//     Interpretation's own free text) measured 0/4 even on cases whose two
+//     legs committed the byte-identical subject. FIXED (v5, PR #203,
+//     schema v9): baseline_equivalent now compares only engine-deterministic
+//     state -- the paired calls' own final decision-stage trace Outcome and
+//     Kind+CanonicalID committed-subject SETS (twoTurnCommittedSubjectsEquivalent,
+//     twoTurnInferredClassification) -- never a model-authored string. No
+//     surviving gate or classification in this file, or in
+//     cmd/acr-trial-merge-two-turn's evaluateGates, compares hashed or raw
+//     free-text model output; confirmed by direct sweep of both, 2026-08-23.
+//
+//  2. Engine trace fields that are structurally unpopulated or unreachable
+//     in the scenarios this harness actually constructs, asserted anyway.
+//     Two named instances, in different states:
+//
+//       - kind_insensitivity_attested (the all-kinds census attests a
+//         kind/handle inferred-tier commit): CHAOS-4079 found the probe
+//         never evaluates when the harness's own inferred_tier arm injects
+//         a wrong-kind hint with ~zero overlap against the pool -- exactly
+//         the case the mechanism exists to attest, invisible by
+//         construction. FIXED, but NOT by widening what the harness
+//         trusts: twoTurnKindAttested (this file) discriminates
+//         mode=="narrowed" (the census hypothesis set actually changed and
+//         the outcome held -- attestation) from an "observed_" mode (the
+//         census was never narrowed, so a sound verdict is
+//         necessary-but-not-sufficient -- request.ExpectedKinds still
+//         reaches offer ranking and structure stamping this proof never
+//         speaks for). Treating an observed_ verdict as attestation would
+//         claim more than was proven; the mode gate refuses to.
+//         CHAOS-4079 is deliberately pass/fail NEUTRAL for this harness --
+//         it only ever ADDS trace-level observability, never loosens a bar.
+//       - A handle-member equivalent of kind_insensitivity_attested does
+//         NOT exist. CHAOS-4081 found request.SubjectHandles never reaches
+//         the shadow evidence round at all -- it feeds handleOfferMaterial
+//         (offer ranking, resolve.go) and explicit-structure
+//         stamping/echo (resolveExplicitStructure, structure.go), neither
+//         of which is the census-attestation mechanism kind_insensitivity_
+//         attested is built on. OPEN, Backlog, and correctly so: this is a
+//         genuine, currently permanent bound on what the handle member can
+//         attest, not a bug to strip. Confirmed by direct sweep: no
+//         handle-path attestation
+//         function exists anywhere in this file or the merge tool: a
+//         handle-member decisive inferred-tier commit can only ever land
+//         baseline_equivalent or unjustified, never
+//         kind_insensitivity_attested -- the harness already refuses to
+//         claim more than CHAOS-4081 leaves it able to prove.
+//
+// A third shape, added by this audit rather than pre-named in CHAOS-4083:
+// a paired-leg divergence with no available EXPLANATION is not evidence of
+// anything by itself. Shard 54 of the 2026-08-23 re-measure hit exactly
+// this: a correct commit (wrong_commit=false) classified unjustified
+// because its paired, hint-free baseline leg diverged, every channel by
+// which the hint could structurally have caused that was ruled out from
+// the resolution-side trace, and -- until CHAOS-4135 -- there was no
+// further trace to consult. Ruled D-plus: the gate stays zero-tolerance
+// and unchanged (a real defect would still fail it), and CHAOS-4135 (PR
+// #224) closed the actual gap -- paired ResolutionTraceEvent persistence
+// for any bar-tripping or non-justified classification, on EITHER leg,
+// error paths included -- so a recurrence of this shape now adjudicates
+// itself from a persisted artifact instead of requiring a fresh live
+// investigation. This is a boundary that MOVED, not one that was always
+// open: before CHAOS-4135, "why did the paired legs diverge" was
+// unattestable; after it, it usually is.
+//
+// A persistence-layer variant of the same general class, caught in
+// CHAOS-4135's own review (HIGH severity, codex xhigh, pre-merge): the new
+// paired-trace snapshot would have written Subject.Label -- a
+// human-readable string that can carry a real work-item or PR title,
+// which can itself echo the corpus question's own wording -- straight into
+// a persisted file, unscrubbed. Not a measurement-validity bug, but the
+// identical root shape: a new field on a new struct silently assumed a
+// safety property (corpus-safe by construction) that nothing actually
+// enforced there. FIXED before merge: labels are scrubbed at snapshot
+// time, not left to whatever downstream reader happened to be careful.
+// Recorded here because "can this instrument attest X" and "can this
+// instrument accidentally leak Y" are the same discipline applied to
+// different properties, and this file is exactly where a new persisted
+// field would be added next.
+//
+// WHAT THIS INSTRUMENT CAN ATTEST, stated positively: engine-deterministic
+// decision state only -- committed subject sets (Kind+CanonicalID),
+// closed-vocabulary trace Outcomes, gate_reachable, wrong_commit, window
+// coverage, and, as of CHAOS-4135, paired-leg divergence on any row a bar
+// or classification flags, reconstructable from a persisted trace without
+// a fresh live call. It cannot, and does not try to, attest anything about
+// model-authored free text, a trace field a given scenario cannot reach
+// (handle-path insensitivity today), or a divergence whose cause a
+// persisted trace does not cover.
+//
+// AUDIT VERDICT (CHAOS-4083, 2026-08-23): no strip. Every gate in
+// evaluateGates (cmd/acr-trial-merge-two-turn/main.go) and every
+// classification vocabulary item in this file was swept directly against
+// the class above; both named unmeasurable-property examples were already
+// fixed by prior work (CHAOS-4039 v5, CHAOS-4079's mode gate) before this
+// audit began, CHAOS-4081's gap was already correctly excluded from every
+// gate rather than silently trusted, and CHAOS-4135 closed the one new gap
+// this audit's own review surfaced. No PR accompanies this audit; this
+// comment section is the deliverable CHAOS-4083 asked for.
 
 import (
 	"context"
