@@ -132,6 +132,88 @@ func TestMergeReportsSumsPairRetriedCountAcrossShards(t *testing.T) {
 	}
 }
 
+// TestMutationProbeCoverage (CHAOS-4165) pins mutationProbeCoverage's own
+// three behaviors: the floor caps required_min at mutationProbeCoverageFloor
+// when eligible exceeds it; a small eligible population caps required_min at
+// eligible itself instead (never demanding more runs than the population
+// could structurally supply); and a probe kind entirely ABSENT from `ran`
+// still gets a returned entry with Runs=0, never silently dropped (the
+// exact gap a naive `range ran` would reintroduce -- see
+// mutationProbeKinds's own doc comment).
+func TestMutationProbeCoverage(t *testing.T) {
+	t.Run("eligible exceeds floor: required_min is the floor", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{"remove_confirmation": 7, "corrupt_receipt": 7, "stale_superseded_offer": 7}, 65)
+		for _, kind := range mutationProbeKinds {
+			if got := cov[kind]; got.RequiredMin != mutationProbeCoverageFloor || !got.Adequate {
+				t.Errorf("%s = %+v, want required_min=%d adequate=true", kind, got, mutationProbeCoverageFloor)
+			}
+		}
+	})
+	t.Run("low run count under the floor: adequate is false", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{"remove_confirmation": 1, "corrupt_receipt": 1, "stale_superseded_offer": 1}, 65)
+		for _, kind := range mutationProbeKinds {
+			if got := cov[kind]; got.Runs != 1 || got.RequiredMin != mutationProbeCoverageFloor || got.Adequate {
+				t.Errorf("%s = %+v, want runs=1 required_min=%d adequate=false", kind, got, mutationProbeCoverageFloor)
+			}
+		}
+	})
+	t.Run("eligible population smaller than the floor: required_min caps at eligible, not the floor", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{"remove_confirmation": 2}, 2)
+		got := cov["remove_confirmation"]
+		if got.RequiredMin != 2 || !got.Adequate {
+			t.Errorf("remove_confirmation = %+v, want required_min=2 adequate=true -- a 2-case eligible population must never be held to a 5-run floor it cannot structurally reach", got)
+		}
+	})
+	t.Run("a probe kind absent from ran still gets an explicit zero-runs entry", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{"remove_confirmation": 7}, 65)
+		if len(cov) != len(mutationProbeKinds) {
+			t.Fatalf("mutationProbeCoverage returned %d kinds, want all %d of mutationProbeKinds regardless of what `ran` carries", len(cov), len(mutationProbeKinds))
+		}
+		if got := cov["stale_superseded_offer"]; got.Runs != 0 || got.Adequate {
+			t.Errorf("stale_superseded_offer (absent from ran) = %+v, want runs=0 adequate=false, not silently missing", got)
+		}
+	})
+	t.Run("zero eligible population: never adequate, even at runs=0 required_min=0", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{}, 0)
+		for _, kind := range mutationProbeKinds {
+			if got := cov[kind]; got.Adequate {
+				t.Errorf("%s = %+v, want adequate=false -- a zero-eligible population's 0>=0 must never read as adequate (codex review finding)", kind, got)
+			}
+		}
+	})
+}
+
+// TestMergeReportsSumsMutationProbeEligibleCountAndRecomputesCoverage
+// (CHAOS-4165) mirrors TestMergeReportsSumsPairRetriedCountAcrossShards
+// immediately above: MutationProbeEligibleCount sums per-shard like every
+// other structural count, and MutationProbeCoverage is RECOMPUTED from the
+// MERGED sums (never trusted from -- or concatenated out of -- any one
+// shard, the same discipline AntiVacuityValid already follows).
+func TestMergeReportsSumsMutationProbeEligibleCountAndRecomputesCoverage(t *testing.T) {
+	shard0 := shardReport(0, 2, nil)
+	shard0.MutationProbeEligibleCount = 1
+	shard0.MutationProbesRun = map[string]int{"remove_confirmation": 1, "corrupt_receipt": 1, "stale_superseded_offer": 1}
+	shard0.MutationProbesTripped = map[string]int{"remove_confirmation": 1, "corrupt_receipt": 1, "stale_superseded_offer": 1}
+	shard1 := shardReport(1, 2, nil)
+	shard1.MutationProbeEligibleCount = 1
+	shard1.MutationProbesRun = map[string]int{"remove_confirmation": 1, "corrupt_receipt": 1, "stale_superseded_offer": 1}
+	shard1.MutationProbesTripped = map[string]int{"remove_confirmation": 1, "corrupt_receipt": 1, "stale_superseded_offer": 1}
+
+	merged := mergeReports([]twoTurnReport{shard0, shard1})
+
+	if got, want := merged.MutationProbeEligibleCount, 2; got != want {
+		t.Errorf("merged.MutationProbeEligibleCount = %d, want %d (1 + 1, summed across both shards)", got, want)
+	}
+	// eligible=2 is below the floor, so required_min caps at the eligible
+	// population itself (2) -- runs=2 (1+1 summed) exactly meets it.
+	for _, kind := range mutationProbeKinds {
+		got := merged.MutationProbeCoverage[kind]
+		if got.Runs != 2 || got.RequiredMin != 2 || !got.Adequate {
+			t.Errorf("merged.MutationProbeCoverage[%q] = %+v, want {runs:2 required_min:2 adequate:true} -- recomputed from the MERGED sums, not copied from either shard", kind, got)
+		}
+	}
+}
+
 // TestRunEndToEndMergesValidShards is the real JSON round-trip codex
 // round-3 review demanded: TestMergeReportsConcatenatesTimingsAndRecomputesSummary
 // above calls mergeReports directly on in-memory structs, which never

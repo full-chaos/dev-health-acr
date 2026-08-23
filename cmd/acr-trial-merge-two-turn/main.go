@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 )
 
 // expectedSchemaVersion pins this tool to the exact twoTurnReport shape it
@@ -179,7 +180,15 @@ import (
 // BaseSHA now reads the worktree's actual checked-out HEAD instead of a
 // launch-time-drifting `git rev-parse origin/main`. No field added or
 // removed, so no mirror struct change here -- only this version bump.
-const expectedSchemaVersion = "21"
+// "22" (CHAOS-4165, 2026-08-23): purely additive -- see the producer's own
+// ReportSchemaVersion doc comment for the full mechanism. twoTurnReport
+// gained MutationProbeEligibleCount and MutationProbeCoverage (a soft,
+// informational statistical-power indicator per mutation-probe kind); this
+// mirror also gained its own copy of mutationProbeKinds/
+// mutationProbeCoverageFloor/mutationProbeCoverage (derivation logic, not
+// only wire shape) so the merge-time recomputation agrees with the
+// producer's. No hard-gate changes.
+const expectedSchemaVersion = "22"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -469,18 +478,29 @@ type twoTurnReport struct {
 	// identically-named field -- see that file's own doc comment.
 	// Observational only; summed across shards like every other count
 	// field below, never itself gated.
-	PairRetriedCount                     int                 `json:"pair_retried_count"`
-	ConfirmedWrongRedeemedCount          map[string]int      `json:"confirmed_wrong_redeemed_committable_count"`
-	ApplicableMembers                    []string            `json:"applicable_members"`
-	AntiVacuityValid                     bool                `json:"anti_vacuity_valid"`
-	AnchorAntiVacuityDenominator         int                 `json:"anchor_anti_vacuity_denominator"`
-	AnchorNonEnumerableKindExcludedCount int                 `json:"anchor_non_enumerable_kind_excluded_count"`
-	MutationProbesTripped                map[string]int      `json:"mutation_probes_tripped"`
-	MutationProbesRun                    map[string]int      `json:"mutation_probes_run"`
-	ControlsTotal                        int                 `json:"controls_total"`
-	ControlsWitnessed                    int                 `json:"controls_witnessed"`
-	ControlsWitnessedNoMatchCensusBacked int                 `json:"controls_witnessed_no_match_census_backed"`
-	Results                              []twoTurnCaseResult `json:"results"`
+	PairRetriedCount                     int            `json:"pair_retried_count"`
+	ConfirmedWrongRedeemedCount          map[string]int `json:"confirmed_wrong_redeemed_committable_count"`
+	ApplicableMembers                    []string       `json:"applicable_members"`
+	AntiVacuityValid                     bool           `json:"anti_vacuity_valid"`
+	AnchorAntiVacuityDenominator         int            `json:"anchor_anti_vacuity_denominator"`
+	AnchorNonEnumerableKindExcludedCount int            `json:"anchor_non_enumerable_kind_excluded_count"`
+	MutationProbesTripped                map[string]int `json:"mutation_probes_tripped"`
+	MutationProbesRun                    map[string]int `json:"mutation_probes_run"`
+	// MutationProbeEligibleCount/MutationProbeCoverage (CHAOS-4165) mirror
+	// twoTurnReport's identically-named fields byte-for-byte -- see the
+	// producer's own doc comments for what each means. Eligible sums
+	// across shards like every other per-shard structural count;
+	// Coverage is RECOMPUTED here from the merged sums (mergeReports),
+	// never trusted from any one shard -- the SAME "never trust a
+	// per-shard aggregate" discipline AntiVacuityValid already follows,
+	// since at granularity=1 a single shard's own eligible population is
+	// at most 1.
+	MutationProbeEligibleCount           int                                     `json:"mutation_probe_eligible_count"`
+	MutationProbeCoverage                map[string]twoTurnMutationProbeCoverage `json:"mutation_probe_coverage"`
+	ControlsTotal                        int                                     `json:"controls_total"`
+	ControlsWitnessed                    int                                     `json:"controls_witnessed"`
+	ControlsWitnessedNoMatchCensusBacked int                                     `json:"controls_witnessed_no_match_census_backed"`
+	Results                              []twoTurnCaseResult                     `json:"results"`
 	// Timings/TimingSummary (CHAOS-4058, purely additive, observational
 	// only): Timings concatenates across shards exactly like Results
 	// does (each shard's cases are disjoint); TimingSummary is never
@@ -557,8 +577,25 @@ func run(outPath string, shardPaths []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "merged report written to %s -- INVALID:\n%v\n", outPath, gateErr)
 		return gateErr
 	}
+	// CHAOS-4165: SOFT, informational only -- printed alongside the VALID
+	// summary line (never instead of it, never changing gateErr's verdict
+	// above) so a low run count under a given responder is impossible to
+	// miss in a live run's own console output, not only in the artifact's
+	// own mutation_probe_coverage field. See twoTurnMutationProbeCoverage's
+	// own doc comment for why this is a product finding, never a run
+	// failure.
+	var lowPower []string
+	for _, kind := range mutationProbeKinds {
+		if cov := merged.MutationProbeCoverage[kind]; !cov.Adequate {
+			lowPower = append(lowPower, fmt.Sprintf("%s(runs=%d,required_min=%d)", kind, cov.Runs, cov.RequiredMin))
+		}
+	}
 	fmt.Fprintf(stdout, "merged report written to %s: cases_run=%d shards=%d wrong_commits=%d anti_vacuity_valid=%v VALID\n",
 		outPath, merged.CasesRun, len(shards), merged.WrongCommitCount, merged.AntiVacuityValid)
+	if len(lowPower) > 0 {
+		fmt.Fprintf(stdout, "mutation_probe_coverage: low_power (eligible=%d): %s -- informational, not a failure\n",
+			merged.MutationProbeEligibleCount, strings.Join(lowPower, ", "))
+	}
 	return nil
 }
 
@@ -763,6 +800,7 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.ControlsTotal += s.ControlsTotal
 		merged.ControlsWitnessed += s.ControlsWitnessed
 		merged.ControlsWitnessedNoMatchCensusBacked += s.ControlsWitnessedNoMatchCensusBacked
+		merged.MutationProbeEligibleCount += s.MutationProbeEligibleCount
 
 		for k, v := range s.OfferMissCount {
 			merged.OfferMissCount[k] += v
@@ -797,6 +835,10 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		}
 	}
 	merged.AntiVacuityValid = len(merged.ApplicableMembers) > 0 && unsatisfied == 0
+
+	// CHAOS-4165: recomputed from the MERGED sums, never trusted from any
+	// one shard -- see MutationProbeCoverage's own doc comment.
+	merged.MutationProbeCoverage = mutationProbeCoverage(merged.MutationProbesRun, merged.MutationProbeEligibleCount)
 
 	// CHAOS-4100: canonical row order, so the merged artifact does not
 	// depend on HOW the run was cut.
@@ -914,6 +956,39 @@ func summarizeTwoTurnTiming(timings []twoTurnCaseTiming) []twoTurnArmTimingSumma
 		})
 	}
 	return summaries
+}
+
+// mutationProbeKinds/mutationProbeCoverageFloor/twoTurnMutationProbeCoverage/
+// mutationProbeCoverage (CHAOS-4165) mirror chaos3742_two_turn_confirmation_
+// test.go's identically-named symbols byte-for-byte -- this tool is a
+// hand-maintained mirror (see expectedSchemaVersion's own doc comment), so
+// the derivation logic itself, not only the wire shape, has to be
+// duplicated here for the merge-time recomputation to agree with the
+// producer's own per-shard/sequential-run value.
+var mutationProbeKinds = []string{"remove_confirmation", "corrupt_receipt", "stale_superseded_offer"}
+
+const mutationProbeCoverageFloor = 5
+
+type twoTurnMutationProbeCoverage struct {
+	Runs        int  `json:"runs"`
+	RequiredMin int  `json:"required_min"`
+	Adequate    bool `json:"adequate"`
+}
+
+func mutationProbeCoverage(ran map[string]int, eligible int) map[string]twoTurnMutationProbeCoverage {
+	requiredMin := eligible
+	if requiredMin > mutationProbeCoverageFloor {
+		requiredMin = mutationProbeCoverageFloor
+	}
+	coverage := make(map[string]twoTurnMutationProbeCoverage, len(mutationProbeKinds))
+	for _, kind := range mutationProbeKinds {
+		runs := ran[kind]
+		// codex review finding (P2, confirmed) mirrored from the producer's
+		// own identical fix: eligible==0 must never read adequate (a
+		// zero-population ratio is undefined, not clean).
+		coverage[kind] = twoTurnMutationProbeCoverage{Runs: runs, RequiredMin: requiredMin, Adequate: eligible > 0 && runs >= requiredMin}
+	}
+	return coverage
 }
 
 // evaluateGates reproduces every assertion
