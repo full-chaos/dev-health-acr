@@ -219,7 +219,16 @@ import (
 // bump needed it for -- and (b) means a v23-vs-v24 row now needs THIS
 // version check before a reader treats "key absent" as meaningful for any
 // of these six keys, not only before comparing counts.
-const expectedSchemaVersion = "24"
+// "25" (CHAOS-4183 phase "2c", 2026-08-23): purely additive.
+// twoTurnCaseResult gains Turn1TraceEvents -- turn 1's own raw trace
+// stream, a DEBUG AFFORDANCE gated on ACR_TEST_TRIAL_FORCE_TRACE_INDICES
+// (an opt-in knob, not anomaly status), nil on every ordinary run. Mirrored
+// here as json.RawMessage, same passthrough discipline as
+// TraceEvents/BaselineTraceEvents above. No merge arithmetic changes
+// (Results concatenates verbatim); mirrored here in the same change, same
+// undeclared-field-dropped-on-decode reason as every prior bump needed it
+// for.
+const expectedSchemaVersion = "25"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -340,6 +349,16 @@ type twoTurnCaseResult struct {
 	// every other purely-observational block on this row already gets.
 	TraceEvents         json.RawMessage `json:"trace_events,omitempty"`
 	BaselineTraceEvents json.RawMessage `json:"baseline_trace_events,omitempty"`
+	// Turn1TraceEvents (CHAOS-4183 phase "2c", schema v25) mirrors
+	// twoTurnCaseResult's identically-named field -- same json.RawMessage
+	// passthrough discipline as TraceEvents/BaselineTraceEvents above, same
+	// reason (this tool never reads trace-event content). Unlike those two,
+	// gated on ACR_TEST_TRIAL_FORCE_TRACE_INDICES rather than anomaly
+	// status -- nil on every ordinary run. A force-traced artifact is a
+	// debug-only, local-artifact capture, never part of a ratified
+	// measurement -- see the producer's own doc comment for the full
+	// corpus-safety discipline.
+	Turn1TraceEvents json.RawMessage `json:"turn1_trace_events,omitempty"`
 	// HintedCommitAffirmation/BaselineCommitAffirmation (CHAOS-4139, schema
 	// v16) mirror twoTurnCaseResult's identically-named fields byte-for-
 	// byte -- plain closed-vocabulary strings ("", "exempt", "affirmed",
