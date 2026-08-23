@@ -7,7 +7,7 @@
   "required": ["schema_version", "panel_run_id", "org_id", "question_hash", "algorithm_version", "started_at", "completed_at", "members"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": { "const": "panel_run_manifest.v1" },
+    "schema_version": { "const": "panel_run_manifest.v2" },
     "panel_run_id": { "type": "string", "minLength": 1 },
     "org_id": { "type": "string", "minLength": 1 },
     "question_hash": {
@@ -26,6 +26,26 @@
       "type": "array",
       "description": "CHAOS-4146(a): one entry per panelist that attempted at least one Investigate call, its own turn-by-turn clarification-loop history. Optional and additive -- absent on a manifest written before this field existed.",
       "items": { "$ref": "#/$defs/panelist_clarification_log" }
+    },
+    "case_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "CHAOS-4146(c), schema v2: 0-based corpus case index (cmd/acr-panel-harness -corpus batch mode). Index only, never the case's question text. Absent for a single ad-hoc (-question) run."
+    },
+    "run_tag": {
+      "type": "string",
+      "minLength": 1,
+      "description": "CHAOS-4146(c), schema v2: groups every manifest one batch invocation writes (mirrors scripts/trial's own RUN_TAG discipline). Absent for a single ad-hoc run."
+    },
+    "corpus_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "CHAOS-4146(c), schema v2: path to the corpus file that drove a batch run -- path only, never the corpus's own content. Absent for a single ad-hoc run."
+    },
+    "corpus_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "CHAOS-4146(c), schema v2: SHA-256 hex digest of the corpus file's raw bytes, proving it was not silently swapped mid-batch. Absent for a single ad-hoc run."
     }
   },
   "$defs": {
@@ -51,7 +71,12 @@
           "type": "boolean",
           "description": "true only when every panelist's canonical_model_identity is unique -- the required invariant, part 2."
         },
-        "consensus": { "$ref": "#/$defs/consensus_summary" }
+        "consensus": { "$ref": "#/$defs/consensus_summary" },
+        "case_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "CHAOS-4146(c), schema v2: mirrors the enclosing manifest's own case_index, denormalized onto every member row. Absent for a single ad-hoc run."
+        }
       }
     },
     "panelist_selection": {

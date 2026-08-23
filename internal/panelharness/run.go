@@ -66,6 +66,17 @@ type RunConfig struct {
 	// MaxClarificationTurns overrides DefaultMaxClarificationTurns when
 	// positive; zero (the common case) uses the default.
 	MaxClarificationTurns int
+	// CaseIndex/RunTag/CorpusPath/CorpusSHA256 (CHAOS-4146(c), schema v2)
+	// are the batch corpus driver's own provenance -- stamped verbatim
+	// onto the manifest and every PanelMemberRun when set. All four are
+	// the zero value for a single ad-hoc (-question) run; nil is
+	// CaseIndex's own "not a corpus-driven run" state, never a real
+	// index of zero silently collapsed into "absent" (this is why it is
+	// a pointer, not a bare int).
+	CaseIndex    *int
+	RunTag       string
+	CorpusPath   string
+	CorpusSHA256 string
 }
 
 // panelistMemberResult is one panelist's outcome for one member, carried
@@ -174,7 +185,13 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 	}
 	members := make([]PanelMemberRun, 0, len(memberOrder))
 	for _, member := range memberOrder {
-		members = append(members, BuildMemberRun(member, len(cfg.Panelists), byMember[member]))
+		built := BuildMemberRun(member, len(cfg.Panelists), byMember[member])
+		// CaseIndex is denormalized onto every member row (see its own doc
+		// comment, manifest.go) -- stamped here, once, rather than
+		// threaded through BuildMemberRun's own signature, which several
+		// existing tests call directly with the pre-CHAOS-4146(c) shape.
+		built.CaseIndex = cfg.CaseIndex
+		members = append(members, built)
 	}
 	// CHAOS-4146(a): keep only the logs of panelists that actually attempted
 	// at least one turn -- a nil Client guard failure (rejected before any
@@ -197,6 +214,10 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 		CompletedAt:       now(),
 		Members:           members,
 		ClarificationLogs: clarificationLogs,
+		CaseIndex:         cfg.CaseIndex,
+		RunTag:            cfg.RunTag,
+		CorpusPath:        cfg.CorpusPath,
+		CorpusSHA256:      cfg.CorpusSHA256,
 	}, nil
 }
 

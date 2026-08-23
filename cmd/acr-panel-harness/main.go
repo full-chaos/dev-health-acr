@@ -1,15 +1,19 @@
 // Command acr-panel-harness is the CHAOS-3860 P6 activation driver's CLI
-// entry point: it runs a configured multi-model panel through the two-turn
-// select-and-continue confirmation flow against one organization's real
-// data, speaking the hosted ACR contract directly over HTTP with real,
-// per-panelist bearer credentials, and writes the resulting
-// internal/panelharness.PanelRunManifest to disk.
+// entry point: it runs a configured multi-model panel through a bounded
+// N-turn select-and-continue confirmation flow (CHAOS-4146(a)) against one
+// organization's real data -- either a single ad-hoc -question, or a
+// -corpus batch (CHAOS-4146(b)) -- speaking the hosted ACR contract
+// directly over HTTP with real, per-panelist bearer credentials, and
+// writes the resulting internal/panelharness.PanelRunManifest to disk (one
+// per case, in corpus mode).
 //
 // See docs/design/context-fabric-panel-run-manifest.md for the full design
 // and scope discipline this binary follows -- in particular: it NEVER
 // writes to acr.context_fabric_structure_selections.consensus_evidence (it
 // has no database access at all), and it must never be pointed at the
-// frozen evaluation corpus.
+// frozen evaluation corpus (the -corpus batch driver is validated against
+// .remember/acr-3778-corpus-ext65.json, a separate, already-in-use trial
+// corpus -- see docs §4).
 //
 // Credential provisioning is deliberately OUT of this binary's scope: mint
 // each panelist's bearer credential with the existing, already-shipped
@@ -91,9 +95,17 @@ func run(arguments []string, stdout, stderr *os.File) error {
 	flags.SetOutput(stderr)
 	apiBaseURL := flags.String("api-base-url", "", "hosted ACR API base URL, e.g. https://acr.example.com (required)")
 	orgID := flags.String("org-id", "", "organization id every panelist's credential is scoped to (required)")
-	question := flags.String("question", "", "the natural-language question to run the panel on (required)")
+	question := flags.String("question", "", "the natural-language question to run the panel on (mutually exclusive with -corpus; one of the two is required)")
 	panelistsPath := flags.String("panelists", "", "path to a JSON array of panelist configs (required, see panelistConfig)")
-	outputPath := flags.String("output", "", "path to write the panel run manifest JSON to (required)")
+	outputPath := flags.String("output", "", "path to write the panel run manifest JSON to (required with -question)")
+	// CHAOS-4146(b): batch corpus driver flags. -corpus and -question are
+	// mutually exclusive modes -- see the corpus-vs-question validation
+	// below, and docs/design/context-fabric-panel-run-manifest.md §5.
+	corpusPath := flags.String("corpus", "", "path to a JSON array corpus file (mutually exclusive with -question; see docs §5)")
+	caseStart := flags.Int("case-start", 0, "0-based index of the first corpus case this invocation processes (corpus mode only)")
+	caseCount := flags.Int("case-count", 0, "number of corpus cases to process starting at -case-start; 0 means every remaining case (corpus mode only)")
+	outputDir := flags.String("output-dir", "", "directory to write one manifest per corpus case into (required with -corpus)")
+	runTag := flags.String("run-tag", "", "groups every manifest a corpus batch invocation writes; default: computed as panelbatch-<UTC timestamp>-<pid> (corpus mode only)")
 	callTimeout := flags.Duration("call-timeout", 60*time.Second, "per hosted-API call timeout")
 	fileExchangeTimeout := flags.Duration("file-exchange-timeout", 5*time.Minute, "how long a file-exchange selector waits for a responder")
 	var projectIDs, repositorySlugs, teamIDs stringSliceFlag
@@ -103,8 +115,25 @@ func run(arguments []string, stdout, stderr *os.File) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*apiBaseURL) == "" || strings.TrimSpace(*orgID) == "" || strings.TrimSpace(*question) == "" || strings.TrimSpace(*panelistsPath) == "" || strings.TrimSpace(*outputPath) == "" {
-		return errors.New("api-base-url, org-id, question, panelists, and output are all required")
+	if strings.TrimSpace(*apiBaseURL) == "" || strings.TrimSpace(*orgID) == "" || strings.TrimSpace(*panelistsPath) == "" {
+		return errors.New("api-base-url, org-id, and panelists are all required")
+	}
+	corpusMode := strings.TrimSpace(*corpusPath) != ""
+	adHocMode := strings.TrimSpace(*question) != ""
+	if corpusMode == adHocMode {
+		return errors.New("exactly one of -question or -corpus is required")
+	}
+	if adHocMode && strings.TrimSpace(*outputPath) == "" {
+		return errors.New("-output is required with -question")
+	}
+	if corpusMode && strings.TrimSpace(*outputDir) == "" {
+		return errors.New("-output-dir is required with -corpus")
+	}
+	if *caseStart < 0 {
+		return errors.New("-case-start must not be negative")
+	}
+	if *caseCount < 0 {
+		return errors.New("-case-count must not be negative")
 	}
 
 	configs, err := loadPanelistConfigs(*panelistsPath)
@@ -161,32 +190,49 @@ func run(arguments []string, stdout, stderr *os.File) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	manifest, err := panelharness.Run(ctx, panelharness.RunConfig{
-		OrgID: *orgID, Question: *question, Panelists: panelists,
-		BaseRequest: contractsv1.ContextFabricInvestigationRequest{
-			RequestedScope: contractsv1.ContextFabricRequestedScope{
-				ProjectIDs: projectIDs, RepositorySlugs: repositorySlugs, TeamIDs: teamIDs,
-			},
-			TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
-			Options: contractsv1.ContextFabricInvestigationOptions{
-				// MaxSubjectCandidates: 20, not the pre-CHAOS-4117 10 --
-				// see internal/mcp.defaultMaxSubjectCandidates' doc comment
-				// for why 20 is the measured safe ceiling (pinned to
-				// falkorgraph.RetrievalPolicy.CalibratedTopK).
-				MaxSubjectCandidates: 20, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
-				MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144,
-				AllowClarification: true,
-			},
+	baseRequest := buildBaseRequest(projectIDs, repositorySlugs, teamIDs)
+
+	if adHocMode {
+		manifest, err := panelharness.Run(ctx, panelharness.RunConfig{
+			OrgID: *orgID, Question: *question, Panelists: panelists, BaseRequest: baseRequest,
+		})
+		if err != nil {
+			return fmt.Errorf("panel run: %w", err)
+		}
+		if err := manifest.WriteFile(*outputPath); err != nil {
+			return fmt.Errorf("write manifest: %w", err)
+		}
+		fmt.Fprintf(stdout, "wrote panel run manifest %s (panel_run_id=%s, %d member(s))\n", *outputPath, manifest.PanelRunID, len(manifest.Members))
+		return nil
+	}
+
+	return runCorpusBatch(ctx, corpusBatchConfig{
+		orgID: *orgID, panelists: panelists, baseRequest: baseRequest,
+		corpusPath: *corpusPath, caseStart: *caseStart, caseCount: *caseCount,
+		outputDir: *outputDir, runTag: *runTag,
+	}, stdout)
+}
+
+// buildBaseRequest assembles the RequestedScope/TimeContext/Options every
+// Run call in this binary shares, regardless of ad-hoc or corpus mode --
+// extracted so corpus mode's per-case loop builds it exactly once, not
+// once per case.
+func buildBaseRequest(projectIDs, repositorySlugs, teamIDs []string) contractsv1.ContextFabricInvestigationRequest {
+	return contractsv1.ContextFabricInvestigationRequest{
+		RequestedScope: contractsv1.ContextFabricRequestedScope{
+			ProjectIDs: projectIDs, RepositorySlugs: repositorySlugs, TeamIDs: teamIDs,
 		},
-	})
-	if err != nil {
-		return fmt.Errorf("panel run: %w", err)
+		TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
+		Options: contractsv1.ContextFabricInvestigationOptions{
+			// MaxSubjectCandidates: 20, not the pre-CHAOS-4117 10 -- see
+			// internal/mcp.defaultMaxSubjectCandidates' doc comment for why
+			// 20 is the measured safe ceiling (pinned to
+			// falkorgraph.RetrievalPolicy.CalibratedTopK).
+			MaxSubjectCandidates: 20, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144,
+			AllowClarification: true,
+		},
 	}
-	if err := manifest.WriteFile(*outputPath); err != nil {
-		return fmt.Errorf("write manifest: %w", err)
-	}
-	fmt.Fprintf(stdout, "wrote panel run manifest %s (panel_run_id=%s, %d member(s))\n", *outputPath, manifest.PanelRunID, len(manifest.Members))
-	return nil
 }
 
 func loadPanelistConfigs(path string) ([]panelistConfig, error) {

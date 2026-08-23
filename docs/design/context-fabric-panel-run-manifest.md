@@ -111,6 +111,28 @@ session state across calls), so every turn after the first resends the FULL
 set of previously-applied receipts, not just the newest turn's — a request
 that dropped an earlier turn's receipt would silently un-confirm it.
 
+### 2.4 Batch corpus provenance (CHAOS-4146(b)/(c), schema v2)
+
+`cmd/acr-panel-harness -corpus` (§5) drives the panel over a JSON array
+corpus file, one case per array element, instead of a single `-question`.
+Each case's manifest carries:
+
+- **`case_index`** — the case's 0-based position in the corpus array
+  (matching the two-turn trial harness's own oracle-annex indexing
+  convention), denormalized onto both `PanelRunManifest` and every
+  `PanelMemberRun` row. Index only — the corpus's own `question` field text
+  is read locally to drive the `Investigate` call and is NEVER carried onto
+  the manifest, a report, a Linear ticket, or any other artifact (§3
+  extends identically to batch runs).
+- **`run_tag`** — groups every manifest one batch invocation writes,
+  mirroring `scripts/trial`'s own RUN_TAG discipline (UTC timestamp + PID).
+- **`corpus_path`** / **`corpus_sha256`** — which corpus file drove the run,
+  and a content hash proving it was not silently swapped mid-batch. Path and
+  hash only; never the corpus's own content.
+
+All four fields are absent (zero value / `nil`) on a manifest from a single
+ad-hoc `-question` run.
+
 ## 3. Privacy discipline
 
 `question_hash` is `contextfabric.QuestionHash(question)` — the SAME
@@ -119,11 +141,43 @@ question TEXT is never carried by a manifest, matching the standing rule
 (design brief §6): question text stays out of telemetry, capture sinks, and
 prior stores; only the product's own org-scoped result storage
 (`engine.go`'s own `result.Question` persistence) is the legitimate
-exception, and manifests are not that.
+exception, and manifests are not that. This applies identically whether the
+question came from `-question` or from one array element of a `-corpus`
+file (§2.4): the corpus driver reads the case's `question` field locally,
+solely to place it on the wire request, and never writes it to any output
+this binary produces.
 
 ## 4. Frozen corpus stays eval-only
 
 This harness runs against a real org's own real data. It is never pointed at
 the frozen evaluation corpus (`.remember/acr-3778-corpus-frozen-annotated.json`)
 — that corpus stays eval-only forever, per the holdout discipline CHAOS-3860's
-own GUARDS section states as a design requirement, not an option.
+own GUARDS section states as a design requirement, not an option. The batch
+corpus driver (§2.4, §5) is validated against `.remember/acr-3778-corpus-ext65.json`
+(CHAOS-4146(d)'s own ext65 measurement corpus) — a SEPARATE, already-in-use
+trial corpus, never the frozen holdout.
+
+## 5. Batch corpus driver (CHAOS-4146(b))
+
+`cmd/acr-panel-harness -corpus <path>` replaces `-question <text>` (mutually
+exclusive) and drives the panel across a contiguous slice of the corpus
+array:
+
+- `-case-start <int>` (default `0`) / `-case-count <int>` (default: every
+  remaining case) select the slice this invocation processes — the
+  driver's own shard-selection surface, mirroring `scripts/trial`'s
+  contiguous shard-range pattern. Unlike that harness, panelharness has no
+  local Postgres dependency to isolate per shard (every call is a real,
+  stateless HTTP round trip to the hosted API), so no per-shard
+  database/container machinery is needed: an operator wanting parallel
+  shards simply launches several invocations with disjoint
+  `-case-start`/`-case-count` ranges and a shared `-run-tag`.
+- `-run-tag <string>` (default: computed as `panelbatch-<UTC timestamp>-<pid>`,
+  matching `scripts/trial`'s own RUN_TAG discipline) groups every manifest
+  the invocation writes.
+- `-output-dir <dir>` (replaces `-output` in corpus mode) receives one
+  manifest file per case, named `<run-tag>-case<index>.json`.
+
+Each case's corpus `question` field is read locally and used only to build
+that case's `Investigate` request; it is never written to stdout, a log
+line, or any manifest field (§2.4, §3).
