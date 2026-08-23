@@ -4,6 +4,7 @@ arm
 arm_invalid_error_type
 arm_invalid_reason
 arm_invalid_stage
+baseline_commit_affirmation
 baseline_committed_subjects
 baseline_trace_events
 census_complete
@@ -17,6 +18,7 @@ expected_in_pool
 expected_kind
 false_no_match
 handle_options_count
+hinted_commit_affirmation
 hinted_committed_subjects
 index
 inferred_classification

@@ -123,7 +123,22 @@ import (
 // responder model by construction) -- mirrored here for the same
 // undeclared-field-dropped-on-decode reason as everything else on this
 // list.
-const expectedSchemaVersion = "15"
+// "16" (CHAOS-4139, 2026-08-23, team-lead ruling "A'"): a MEANING change,
+// not purely additive -- see the producer's own ReportSchemaVersion doc
+// comment for the full mechanism (InferredClassification's comparison
+// basis moved from SubjectResolution.Committed, which CHAOS-4085's
+// post-synthesis affirmation gate can retract independently per leg, to
+// each leg's own decision-stage trace event). No wire-shape change for
+// InferredClassification itself (still one of the same three string
+// values), but the SAME inputs can now classify differently than under
+// v15 -- the identical "field shape unchanged, meaning changed" reason
+// v8->v9 already bumped on. twoTurnCaseResult also gained
+// HintedCommitAffirmation/BaselineCommitAffirmation (purely additive,
+// closed three-value-plus-empty strings; own doc comment on the field
+// below) -- mirrored here in the SAME change for the SAME
+// undeclared-field-dropped-on-decode reason as everything else on this
+// list.
+const expectedSchemaVersion = "16"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -235,6 +250,17 @@ type twoTurnCaseResult struct {
 	// every other purely-observational block on this row already gets.
 	TraceEvents         json.RawMessage `json:"trace_events,omitempty"`
 	BaselineTraceEvents json.RawMessage `json:"baseline_trace_events,omitempty"`
+	// HintedCommitAffirmation/BaselineCommitAffirmation (CHAOS-4139, schema
+	// v16) mirror twoTurnCaseResult's identically-named fields byte-for-
+	// byte -- plain closed-vocabulary strings ("", "exempt", "affirmed",
+	// "retracted"), unlike TraceEvents/BaselineTraceEvents above: no
+	// maintenance-coupling concern to avoid here, so a full string mirror
+	// rather than RawMessage. Purely additive passthrough (Results
+	// concatenates verbatim), but still had to be declared here for the
+	// SAME undeclared-field-dropped-on-decode reason as everything else on
+	// this list.
+	HintedCommitAffirmation   string `json:"hinted_commit_affirmation,omitempty"`
+	BaselineCommitAffirmation string `json:"baseline_commit_affirmation,omitempty"`
 	// CHAOS-4086 (schema v11) instant-diagnosis fields, mirroring
 	// twoTurnCaseResult's identically-named block. Rows ride through
 	// mergeReports verbatim, so these need no merge arithmetic -- but they
