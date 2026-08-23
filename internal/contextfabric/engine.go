@@ -861,7 +861,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// between here and there reads or alters it. A GraphReader that returns
 	// nil leaves every commit reading CommitBasisUnknown, which is the
 	// STRICT treatment (see CommitBasis).
-	resolution, structureMaterial, commitBases, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
+	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME
@@ -1159,6 +1159,30 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Facts:      facts,
 	}); len(outcomes) > 0 {
 		e.recordCommitAffirmation(ctx, principal, outcomes)
+	}
+	// CHAOS-4087: stamped AFTER applyCommitAffirmation, not before -- that
+	// gate can RETRACT a subject from result.SubjectResolution.Committed
+	// (affirmationInputs.Bases is the SAME commitBases this reads), so
+	// building the digest list from the resolution-time commitDigests
+	// BEFORE affirmation ran would leave a stale entry describing a
+	// subject that is no longer committed. Reading the FINAL Committed
+	// here means a retracted subject's digest is never persisted at all --
+	// exactly the outcome CommitBasisSet's own "a stale proven basis
+	// attached to a subject nothing committed" concern (ResetTo's doc
+	// comment) describes, applied to this wire-safe companion set. One
+	// entry per committed subject, always, even when commitDigests has
+	// none for it (the fail-closed CommitGate=="" reading) -- see
+	// ContextFabricCommitDecisionDigest's own doc comment.
+	if len(result.SubjectResolution.Committed) > 0 {
+		digests := make([]contractsv1.ContextFabricCommitDecisionDigest, 0, len(result.SubjectResolution.Committed))
+		for _, subject := range result.SubjectResolution.Committed {
+			d := commitDigests.For(subject)
+			digests = append(digests, contractsv1.ContextFabricCommitDecisionDigest{
+				Subject: subject, CommitGate: d.CommitGate, IdentityProven: d.IdentityProven,
+				SearchTruncated: d.SearchTruncated, AliasLookupComplete: d.AliasLookupComplete,
+			})
+		}
+		result.SubjectResolution.CommitDecisionDigests = digests
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))

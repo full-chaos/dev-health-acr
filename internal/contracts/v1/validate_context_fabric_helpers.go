@@ -430,6 +430,58 @@ func validResolutionState(value ContextFabricResolutionState) bool {
 	}
 }
 
+// validCommitGate (CHAOS-4087) is a plain-string closed-vocabulary check,
+// not a dedicated Go enum type, matching graphrank.ResolutionTraceEvent.CommitGate's
+// own bare-string precedent for the identical concept (live-only there).
+// "" IS a valid member here -- the fail-closed "nothing recorded" reading
+// ContextFabricCommitDecisionDigest.CommitGate's own doc comment
+// establishes, not an omission to reject.
+func validCommitGate(value string) bool {
+	switch value {
+	case "", "caller_hint_short_circuit", "pre_committed_exact_hint", "exact_index",
+		"identity_fast_path", "lone_floor", "top_of_two", "vector_margin_rescue", "evidence_census":
+		return true
+	default:
+		return false
+	}
+}
+
+// validCommitDecisionDigestIdentityProven (CHAOS-4087, codex R1) rejects an
+// IdentityProven value that contradicts what its CommitGate can ever
+// produce, mirroring every graphrank.go/resolution.go call site's own fixed
+// pairing (see chaos4085_commit_basis.go's CommitBasis.IdentityProven()):
+//
+//   - "" (unrecorded): every field must sit at its honest zero value -- a
+//     digest claiming IdentityProven=true with no gate recorded is exactly
+//     the "recorded and clean" false reading the fail-closed contract
+//     exists to rule out.
+//   - "pre_committed_exact_hint" / "identity_fast_path": always
+//     CommitBasisCallerCanonicalID / CommitBasisAuthoritativeIdentity ->
+//     IdentityProven must be true.
+//   - "exact_index" / "lone_floor" / "top_of_two" / "vector_margin_rescue" /
+//     "evidence_census": always CommitBasisStatistical -> IdentityProven
+//     must be false.
+//   - "caller_hint_short_circuit" is the ONE gate that legitimately varies
+//     per subject at the SAME call site (resolution.go's
+//     FinalizeExactResolutionWithBasis: a caller-explicit hint is proven,
+//     a receipt-derived rider that merely rode along is not) -- both
+//     values are valid here, see
+//     TestChaos4085_ExactHintShortCircuitRecordsBasisPerClass.
+func validCommitDecisionDigestIdentityProven(gate string, identityProven bool) bool {
+	switch gate {
+	case "":
+		return !identityProven
+	case "pre_committed_exact_hint", "identity_fast_path":
+		return identityProven
+	case "exact_index", "lone_floor", "top_of_two", "vector_margin_rescue", "evidence_census":
+		return !identityProven
+	case "caller_hint_short_circuit":
+		return true
+	default:
+		return false
+	}
+}
+
 // ValidContextFabricSubjectMatchMechanism reports whether value is one of the
 // six closed enum members (CHAOS-3778 / AC-3778-6). Exported because
 // graphrank's corroboration band counts DISTINCT mechanisms and must reject an

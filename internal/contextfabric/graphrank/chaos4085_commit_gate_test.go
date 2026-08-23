@@ -10,7 +10,7 @@ import (
 // BOTH the resolution and the CommitBasisSet recorded at the commit site,
 // which is the whole point of these tests -- the basis is not derivable
 // from the resolution, so nothing but the second return value can prove it.
-func resolveWithBasis(searchTruncated bool, vectorArmSimilarity map[string]float64, threshold float64, aliasIdentityComplete bool, identity identityClaimants, terms identityMatchTerms, candidates ...contextfabric.SubjectCandidate) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet) {
+func resolveWithBasis(searchTruncated bool, vectorArmSimilarity map[string]float64, threshold float64, aliasIdentityComplete bool, identity identityClaimants, terms identityMatchTerms, candidates ...contextfabric.SubjectCandidate) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bySubject := make(map[string]contextfabric.SubjectCandidate, len(candidates))
 	for _, candidate := range candidates {
 		bySubject[SubjectKey(candidate.Subject)] = candidate
@@ -52,7 +52,7 @@ func tiedTopSimilarities() map[string]float64 {
 // statistical top plus a truncated search must commit NOTHING, however
 // decisive the vector-arm margin looks.
 func TestChaos4085_TiedTopUnderTruncationRefusesTheVectorMarginRescue(t *testing.T) {
-	resolution, bases := resolveWithBasis(true /* searchTruncated */, tiedTopSimilarities(), 0.25, false, nil, nil, tiedTopCandidates()...)
+	resolution, bases, _ := resolveWithBasis(true /* searchTruncated */, tiedTopSimilarities(), 0.25, false, nil, nil, tiedTopCandidates()...)
 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("a tied statistical top under a truncated search must commit nothing, got %v", resolution.Committed)
@@ -73,7 +73,7 @@ func TestChaos4085_TiedTopUnderTruncationRefusesTheVectorMarginRescue(t *testing
 // untruncated search that reaches a tie saw a COMPLETE population, so the
 // tie is real information and the ratified carve-out still applies.
 func TestChaos4085_TiedTopWithoutTruncationStillRescues(t *testing.T) {
-	resolution, bases := resolveWithBasis(false /* searchTruncated */, tiedTopSimilarities(), 0.25, false, nil, nil, tiedTopCandidates()...)
+	resolution, bases, _ := resolveWithBasis(false /* searchTruncated */, tiedTopSimilarities(), 0.25, false, nil, nil, tiedTopCandidates()...)
 
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "tied_a" {
 		t.Fatalf("an untruncated tie must still rescue the decisive-margin candidate, got %v", resolution.Committed)
@@ -96,7 +96,7 @@ func TestChaos4085_SeparatedTopUnderTruncationStillRescues(t *testing.T) {
 		SubjectKey(second.Subject): 0.40,
 	}
 
-	resolution, bases := resolveWithBasis(true /* searchTruncated */, similarities, 0.25, false, nil, nil, top, second)
+	resolution, bases, _ := resolveWithBasis(true /* searchTruncated */, similarities, 0.25, false, nil, nil, top, second)
 
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "sep_top" {
 		t.Fatalf("a truncated search with a strictly separated top must still rescue, got %v", resolution.Committed)
@@ -138,7 +138,7 @@ func TestChaos4085_IdentityFastPathIsTheOnlyAuthoritativeBasis(t *testing.T) {
 		MatchMechanisms: []contextfabric.MatchMechanism{contextfabric.MatchAlias},
 	}
 
-	complete, completeBases := resolveWithBasis(false, nil, 0, true /* aliasIdentityComplete */, nil, nil, repo)
+	complete, completeBases, _ := resolveWithBasis(false, nil, 0, true /* aliasIdentityComplete */, nil, nil, repo)
 	if len(complete.Committed) != 1 {
 		t.Fatalf("a complete, unrivalled keyed identity must commit, got %v", complete.Committed)
 	}
@@ -151,7 +151,7 @@ func TestChaos4085_IdentityFastPathIsTheOnlyAuthoritativeBasis(t *testing.T) {
 	// blocks it at lone_floor. That pre-existing behavior is what this
 	// assertion pins -- the important property for CHAOS-4085 is that
 	// nothing anywhere records CommitBasisAuthoritativeIdentity for it.
-	incomplete, incompleteBases := resolveWithBasis(false, nil, 0, false /* aliasIdentityComplete */, nil, nil, repo)
+	incomplete, incompleteBases, _ := resolveWithBasis(false, nil, 0, false /* aliasIdentityComplete */, nil, nil, repo)
 	if len(incomplete.Committed) != 0 {
 		t.Fatalf("an identity claim over an incompletely-read universe must not commit, got %v", incomplete.Committed)
 	}
@@ -163,7 +163,7 @@ func TestChaos4085_IdentityFastPathIsTheOnlyAuthoritativeBasis(t *testing.T) {
 	// contrasting STATISTICAL commit: same single-candidate pool, same
 	// gate, but selected by a score rather than by a proven identity.
 	lexical := corroborationCandidate("lexical_lone", 0.80, contextfabric.MatchLexical)
-	scored, scoredBases := resolveWithBasis(false, nil, 0, false, nil, nil, lexical)
+	scored, scoredBases, _ := resolveWithBasis(false, nil, 0, false, nil, nil, lexical)
 	if len(scored.Committed) != 1 {
 		t.Fatalf("a lone candidate above LoneFloor must commit, got %v", scored.Committed)
 	}
@@ -179,7 +179,7 @@ func TestChaos4085_IdentityFastPathIsTheOnlyAuthoritativeBasis(t *testing.T) {
 func TestChaos4085_ExactLabelTierIsStatistical(t *testing.T) {
 	labelled := corroborationCandidate("exact_label", 1, contextfabric.MatchExact, contextfabric.MatchLexical)
 
-	resolution, bases := resolveWithBasis(false, nil, 0, false, nil, nil, labelled)
+	resolution, bases, _ := resolveWithBasis(false, nil, 0, false, nil, nil, labelled)
 
 	if len(resolution.Committed) != 1 {
 		t.Fatalf("the exact-label tier must still commit exactly as before, got %v", resolution.Committed)
@@ -198,7 +198,7 @@ func TestChaos4085_PreCommittedCallerHintIsProven(t *testing.T) {
 	hinted := corroborationCandidate("hinted", 1, contextfabric.MatchExact)
 	hinted.State = contextfabric.ResolutionCommitted
 
-	resolution, bases := resolveWithBasis(true /* even under truncation */, nil, 0, false, nil, nil, hinted)
+	resolution, bases, _ := resolveWithBasis(true /* even under truncation */, nil, 0, false, nil, nil, hinted)
 
 	if len(resolution.Committed) != 1 {
 		t.Fatalf("a caller-hinted subject commits regardless of truncation, got %v", resolution.Committed)
@@ -231,7 +231,7 @@ func TestChaos4085_ExactHintShortCircuitRecordsBasisPerClass(t *testing.T) {
 	// prior_subject_receipt is marked caller-sourced.
 	callerSourced := map[string]bool{SubjectKey(explicit.Subject): true}
 
-	resolution, bases := FinalizeExactResolutionWithBasis(bySubject, callerSourced, 10)
+	resolution, bases, digests := FinalizeExactResolutionWithBasis(bySubject, callerSourced, 10)
 
 	if len(resolution.Committed) != 2 {
 		t.Fatalf("both hinted subjects still commit, got %v", resolution.Committed)
@@ -242,13 +242,23 @@ func TestChaos4085_ExactHintShortCircuitRecordsBasisPerClass(t *testing.T) {
 	if basis := bases.For(fromReceipt.Subject); basis != contextfabric.CommitBasisStatistical {
 		t.Fatalf("a receipt-derived rider must not be exempted: basis = %q, want %q", basis, contextfabric.CommitBasisStatistical)
 	}
+	// CHAOS-4087: the wire-safe digest must agree with the internal basis
+	// at the SAME call site -- IdentityProven derived from each subject's
+	// own basis, both stamped with the caller-hint short-circuit's own
+	// commit gate name.
+	if d := digests.For(explicit.Subject); d.CommitGate != "caller_hint_short_circuit" || !d.IdentityProven {
+		t.Fatalf("explicit hint digest = %+v, want CommitGate=caller_hint_short_circuit, IdentityProven=true", d)
+	}
+	if d := digests.For(fromReceipt.Subject); d.CommitGate != "caller_hint_short_circuit" || d.IdentityProven {
+		t.Fatalf("receipt-derived digest = %+v, want CommitGate=caller_hint_short_circuit, IdentityProven=false", d)
+	}
 }
 
 // TestChaos4085_BasisIsEmptyWhenNothingCommits pins the absence case: an
 // ambiguous resolution records no basis at all, so a stale entry can never
 // be read back for a subject nothing committed.
 func TestChaos4085_BasisIsEmptyWhenNothingCommits(t *testing.T) {
-	_, bases := resolveWithBasis(true, nil, 0, false, nil, nil,
+	_, bases, _ := resolveWithBasis(true, nil, 0, false, nil, nil,
 		corroborationCandidate("amb_a", 0.50, contextfabric.MatchLexical),
 		corroborationCandidate("amb_b", 0.50, contextfabric.MatchLexical),
 	)
@@ -273,7 +283,7 @@ func TestChaos4085_BasisDiscardingWrappersStayBehaviourallyIdentical(t *testing.
 		bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
 		tiedTopSimilarities(), 0.25, false, 10, 20, true,
 		DefaultCommitGatePolicy(), nil, nil, false, nil, "", "")
-	viaBasis, _ := ResolveFromMergedCandidatesWithGateAndBasis(
+	viaBasis, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
 		bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
 		tiedTopSimilarities(), 0.25, false, 10, 20, true,
 		DefaultCommitGatePolicy(), nil, nil, false, nil, "", "")

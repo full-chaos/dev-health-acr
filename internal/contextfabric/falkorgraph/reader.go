@@ -68,7 +68,7 @@ func (a *Adapter) ResolveInvestigationBinding(ctx context.Context, principal sto
 	return contextfabric.ResolvedGraphBinding{GraphKey: key, Epoch: epoch}, nil
 }
 
-func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, error) {
+func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	// CHAOS-3898 §2.1: the binding was already resolved ONCE by Engine, via
 	// ResolveInvestigationBinding above, before this call -- never
 	// re-resolved here. See ResolvedGraphBinding's own doc comment for the
@@ -78,7 +78,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// binding -- see that method's own doc comment.
 	key, err := a.effectiveKey(ctx, principal.OrgID, binding)
 	if err != nil {
-		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, err
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, nil, err
 	}
 	// One fence verification per resolution, not per term (codex round-2
 	// R2-1). Scoped to this call and never shared across requests.
@@ -468,14 +468,15 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// CHAOS-4085: the basis-carrying entry point. graphrank records, at
 	// each commit site, which class of proof stood behind that commit; this
 	// adapter is the one production GraphReader, so this is where that
-	// record enters the engine.
-	resolution, offers, bases, err := graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
+	// record enters the engine. CHAOS-4087: digests is the SAME record's
+	// wire-safe companion set, carried out identically.
+	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
 	// CHAOS-4077: the single point every deps.* callback's own ErrNotFound
 	// (a never-projected org's graph key) funnels through on its way back
 	// to Engine -- translated here, once, rather than at each of the
 	// several callbacks above, since graphrank.ResolveSubjectsWithCommitBasis
 	// is this function's one delegated return.
-	return resolution, offers, bases, graphNotProjectedError(err)
+	return resolution, offers, bases, digests, graphNotProjectedError(err)
 }
 
 func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {

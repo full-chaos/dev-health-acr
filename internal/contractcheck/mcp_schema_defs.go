@@ -40,16 +40,17 @@ type mcpResponseDefsSync struct {
 // pointers would otherwise resolve against the WRAPPER's root, where
 // nothing of that name exists.
 var contextFabricCommonDefsRewrites = map[string]string{
-	"#/$defs/AuthorizationScope": "#/$defs/context_fabric_common.v1/$defs/AuthorizationScope",
-	"#/$defs/CohortExclusion":    "#/$defs/context_fabric_common.v1/$defs/CohortExclusion",
-	"#/$defs/CohortMember":       "#/$defs/context_fabric_common.v1/$defs/CohortMember",
-	"#/$defs/FactRequirement":    "#/$defs/context_fabric_common.v1/$defs/FactRequirement",
-	"#/$defs/RelationshipEdge":   "#/$defs/context_fabric_common.v1/$defs/RelationshipEdge",
-	"#/$defs/ScalarValue":        "#/$defs/context_fabric_common.v1/$defs/ScalarValue",
-	"#/$defs/SubjectCandidate":   "#/$defs/context_fabric_common.v1/$defs/SubjectCandidate",
-	"#/$defs/SubjectHint":        "#/$defs/context_fabric_common.v1/$defs/SubjectHint",
-	"#/$defs/SubjectRef":         "#/$defs/context_fabric_common.v1/$defs/SubjectRef",
-	"#/$defs/TimeContext":        "#/$defs/context_fabric_common.v1/$defs/TimeContext",
+	"#/$defs/AuthorizationScope":   "#/$defs/context_fabric_common.v1/$defs/AuthorizationScope",
+	"#/$defs/CohortExclusion":      "#/$defs/context_fabric_common.v1/$defs/CohortExclusion",
+	"#/$defs/CohortMember":         "#/$defs/context_fabric_common.v1/$defs/CohortMember",
+	"#/$defs/CommitDecisionDigest": "#/$defs/context_fabric_common.v1/$defs/CommitDecisionDigest",
+	"#/$defs/FactRequirement":      "#/$defs/context_fabric_common.v1/$defs/FactRequirement",
+	"#/$defs/RelationshipEdge":     "#/$defs/context_fabric_common.v1/$defs/RelationshipEdge",
+	"#/$defs/ScalarValue":          "#/$defs/context_fabric_common.v1/$defs/ScalarValue",
+	"#/$defs/SubjectCandidate":     "#/$defs/context_fabric_common.v1/$defs/SubjectCandidate",
+	"#/$defs/SubjectHint":          "#/$defs/context_fabric_common.v1/$defs/SubjectHint",
+	"#/$defs/SubjectRef":           "#/$defs/context_fabric_common.v1/$defs/SubjectRef",
+	"#/$defs/TimeContext":          "#/$defs/context_fabric_common.v1/$defs/TimeContext",
 	// CHAOS-3900 W1: five more locally-$ref'd defs (TimeContext.evidence_window
 	// -> RequestedEvidenceWindow; RequestedEvidenceWindow/EffectiveEvidenceWindow/
 	// WindowOption -> RelativeWindowID; WindowClarification -> WindowOption).

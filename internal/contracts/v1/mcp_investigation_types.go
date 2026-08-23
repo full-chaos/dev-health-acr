@@ -262,6 +262,11 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.subject_resolution.candidates[].matched_terms[]",
 	"structured.subject_resolution.candidates[].subject.label",
 	"structured.subject_resolution.committed[].label",
+	// CHAOS-4087: CommitDecisionDigest.Subject is a SubjectRef, the SAME
+	// entity-display-label concern as every other .subject.label above --
+	// classified identically, not by the leaf-name-generic
+	// trustedBecauseClosed pattern.
+	"structured.subject_resolution.commit_decision_digests[].subject.label",
 	// CHAOS-3900 P1: StructureNeeds offer labels get the SAME conservative
 	// treatment as window_clarification.options[].label above -- server-
 	// rendered today, but classified untrusted rather than widening the

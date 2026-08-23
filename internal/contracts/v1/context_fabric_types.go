@@ -835,6 +835,74 @@ type ContextFabricSubjectResolution struct {
 	// Additive-optional in v1, same convention as RetrievalDegraded:
 	// absent means "not reported", never "the graph is projected".
 	GraphNotProjected bool `json:"graph_not_projected,omitempty"`
+	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
+	// summary of WHICH MECHANISM committed each subject in Committed --
+	// persisted so a wrong commit discovered later from a STORED result
+	// has a durable link to the decision that produced it, closing the gap
+	// a live-sink-only trace stream and a tryReuse hit (which serves an
+	// old result without re-emitting any correlating trace) both leave
+	// open. See ContextFabricCommitDecisionDigest's own doc comment for
+	// the exact fields and their fail-closed zero value.
+	//
+	// One entry PER SUBJECT in Committed whenever this resolution runs
+	// through a commit path that records at all -- len(CommitDecisionDigests)
+	// == len(Committed), or the field is entirely absent (a resolution
+	// engine that predates CHAOS-4087, or a test double that returns a
+	// bare SubjectResolution). Each entry self-identifies via its own
+	// Subject field, so a consumer never has to trust positional
+	// correspondence with Committed. A committed subject with no digest
+	// actually recorded for it STILL gets an entry here, with
+	// CommitGate=="" -- the fail-closed "nothing recorded" reading, never
+	// silently omitted.
+	//
+	// Additive-optional in v1, same convention as GraphNotProjected/
+	// RetrievalDegraded above: absent means "not reported", never "no
+	// digest exists".
+	CommitDecisionDigests []ContextFabricCommitDecisionDigest `json:"commit_decision_digests,omitempty"`
+}
+
+// ContextFabricCommitDecisionDigest (CHAOS-4087) is the wire-safe,
+// persisted counterpart to contextfabric.CommitBasis -- see that
+// (internal-only, never-wire) type's own doc comment for the exact
+// boundary this type sits on the allowed side of: IdentityProven is a
+// DERIVED boolean projection of CommitBasis.IdentityProven(), never the
+// raw internal enum itself.
+type ContextFabricCommitDecisionDigest struct {
+	// Subject is which committed subject (kind + canonical id) this digest
+	// describes -- ContextFabricSubjectResolution.CommitDecisionDigests'
+	// own doc comment for why this makes each entry self-identifying
+	// rather than positionally correlated with Committed.
+	Subject ContextFabricSubjectRef `json:"subject"`
+	// CommitGate is the closed-vocabulary name of the commit path that
+	// fired for this subject -- the SAME vocabulary
+	// graphrank.ResolutionTraceEvent.CommitGate already uses for the
+	// identical concept, live-only ("caller_hint_short_circuit" |
+	// "pre_committed_exact_hint" | "exact_index" | "identity_fast_path" |
+	// "lone_floor" | "top_of_two" | "vector_margin_rescue" |
+	// "evidence_census").
+	//
+	// Empty is the FAIL-CLOSED zero value: it means NOTHING recorded a
+	// digest for this subject, never "recorded and clean." A consumer
+	// must check CommitGate != "" before trusting the three fields below
+	// at all -- an unrecorded digest and a recorded-but-clean one are
+	// deliberately indistinguishable in every OTHER field, which is
+	// exactly the point: there is nothing safe to infer from an
+	// unrecorded digest.
+	CommitGate string `json:"commit_gate,omitempty"`
+	// IdentityProven reports whether this subject's commit stood on a
+	// PROVEN identity (a caller-supplied canonical id, or an
+	// authoritative keyed identity under a completely-enumerated identity
+	// universe) rather than a score comparison among candidates. Only
+	// meaningful when CommitGate != "".
+	IdentityProven bool `json:"identity_proven,omitempty"`
+	// SearchTruncated/AliasLookupComplete mirror the SAME resolution-wide
+	// signals ResolutionTraceEvent's decision-stage event already carries,
+	// live-only, persisted here so a stored result answers "was the
+	// search truncated / was alias lookup complete" without a live trace
+	// consumer having been attached at request time. Only meaningful when
+	// CommitGate != "".
+	SearchTruncated     bool `json:"search_truncated,omitempty"`
+	AliasLookupComplete bool `json:"alias_lookup_complete,omitempty"`
 }
 
 type ContextFabricCohort struct {

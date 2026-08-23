@@ -582,7 +582,13 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// (chaos4085CommitGateReuseVersion, chaos4085_commit_affirmation.go) is
 	// what keeps a row saved BEFORE that gate existed from being served
 	// through this path at all.
-	resolution, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil)
+	// CHAOS-4087: the digest set is discarded here for the identical
+	// reason CommitBasisSet is discarded immediately above -- this recheck
+	// never produces a commit of its own, and the STORED result's own
+	// digest (from the original synthesis) is exactly what a reuse hit is
+	// for: it survives on the served row without this recheck needing to
+	// reproduce it.
+	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil)
 	if err != nil {
 		return false, AnswerReuseMissAuthorization
 	}

@@ -53,7 +53,7 @@ func (g bindingFailingGraphReader) ResolveInvestigationBinding(context.Context, 
 	return ResolvedGraphBinding{}, g.err
 }
 
-func (g bindingFailingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
+func (g bindingFailingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	panic("bindingFailingGraphReader.ResolveSubjects must never be called: ResolveInvestigationBinding already failed")
 }
 

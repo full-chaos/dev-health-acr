@@ -20,7 +20,7 @@ func resolveWithTracer(tracer ResolutionTracer, max int, searchTruncated bool, c
 	for _, candidate := range candidates {
 		bySubject[SubjectKey(candidate.Subject)] = candidate
 	}
-	resolution, _ := ResolveFromMergedCandidatesWithGateAndBasis(
+	resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
 		bySubject, map[string]string{}, map[string]bool{}, max, true, searchTruncated,
 		nil, 0, false, max, 20, true,
 		DefaultCommitGatePolicy(), nil, nil, false, tracer, "request_1", "")

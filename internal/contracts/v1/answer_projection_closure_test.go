@@ -221,7 +221,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// confirmed_structure (design brief §2.3/§4), each contributing
 		// their own new string leaves.
 		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 131},
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 213},
+		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
+		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
+		// subject.label).
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 217},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -305,7 +308,12 @@ func trustedBecauseClosed(path string) bool {
 		// stored -- never model prose. "missing" is an ARRAY of the same
 		// StructureNeedKind enum (StructureNeeds.Validate rejects any
 		// non-member entry).
-		"member", "offer_source", "disposition", "missing":
+		"member", "offer_source", "disposition", "missing",
+		// CHAOS-4087: "commit_gate" (ContextFabricCommitDecisionDigest) is a
+		// closed-vocabulary string validated against its own registry
+		// (validCommitGate) before a result is stored -- never model prose,
+		// the same standing as member/offer_source/disposition above.
+		"commit_gate":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",
