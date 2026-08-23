@@ -110,6 +110,22 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"fired", event.KindCoverageFloorFired,
 			"missing_kinds", event.KindCoverageMissingKinds,
 			"truncated", event.KindCoverageFloorTruncated)
+	case "confirmed_kind_rescue":
+		// CHAOS-4132: the operator-visible half of the confirmed-kind
+		// rescue -- this event's own presence in a production log already
+		// means the rescue was attempted (see ConfirmedKindRescueFired's
+		// own doc comment); "fired"/"result_count" say whether it found
+		// anything, and "truncated" says whether that finding is complete
+		// enough to trust for a commit (folded into the gate's own
+		// searchTruncated input, unlike the coverage floor's own
+		// truncation signal -- see ConfirmedKindRescueTruncated's own doc
+		// comment for why). Counts and bools only -- no kind name, no
+		// term, no candidate identity.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: confirmed kind rescue",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"fired", event.ConfirmedKindRescueFired,
+			"result_count", event.ConfirmedKindRescueResultCount,
+			"truncated", event.ConfirmedKindRescueTruncated)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,
