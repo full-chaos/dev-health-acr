@@ -98,7 +98,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// pre-calibration (10) decision apart from a post-calibration
 			// (20, or any caller-requested value) one from the trace
 			// alone. See ResolutionTraceEvent.SearchCandidateLimit.
-			"search_candidate_limit", event.SearchCandidateLimit)
+			"search_candidate_limit", event.SearchCandidateLimit,
+			// CHAOS-4154: which candidate population a statistical commit
+			// was decided over -- a closed vocabulary, see
+			// ResolutionTraceEvent.PopulationBasis's own doc comment.
+			"population_basis", event.PopulationBasis)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put
@@ -126,6 +130,21 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"fired", event.ConfirmedKindRescueFired,
 			"result_count", event.ConfirmedKindRescueResultCount,
 			"truncated", event.ConfirmedKindRescueTruncated)
+	case "confirmed_kind_scope":
+		// CHAOS-4154: the operator-visible half of the confirmed-kind
+		// truncation-scoping mechanism -- this event's own presence in a
+		// production log already means the resolution reached this
+		// mechanism's own trigger (confirmed kind, resolution-wide
+		// searchTruncated, nothing committed yet). "state" is the closed
+		// vocabulary ConfirmedKindScopeState carries; "candidate_count" is
+		// the isolated snapshot's own size (0 whenever state != "complete",
+		// since an incomplete snapshot is never handed to the gate). Counts
+		// and closed-vocabulary strings only -- no kind name, no term, no
+		// candidate identity.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: confirmed kind scope",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"state", event.ConfirmedKindScopeState,
+			"candidate_count", event.ConfirmedKindScopeCandidateCount)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,

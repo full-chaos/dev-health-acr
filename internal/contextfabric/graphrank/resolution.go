@@ -359,7 +359,15 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // basis reads as CommitBasisUnknown, which IdentityProven reports false,
 // which is the STRICT treatment -- see contextfabric.CommitBasis.
 func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string) contextfabric.SubjectResolution {
-	resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey)
+	// confirmedKindScopedBasis=false: every caller of this original-signature
+	// wrapper (this package's ~80 existing call sites, per CHAOS-4085's own
+	// doc comment above) decides over the ordinary, unscoped candidate
+	// population -- CHAOS-4154's isolated confirmed-kind census is reached
+	// ONLY through ResolveFromMergedCandidatesWithGateAndBasis's own extra
+	// parameter, from its one dedicated call site (resolve.go). Keeping this
+	// wrapper's signature byte-identical is deliberate: it is what lets those
+	// ~80 call sites stay untouched by this ticket.
+	resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, false)
 	return resolution
 }
 
@@ -377,7 +385,20 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 // aliasIdentityComplete false (an unproven uniqueness claim): identical
 // candidates, different standing. See contextfabric.CommitBasis for the
 // full account.
-func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+// confirmedKindScopedBasis (CHAOS-4154) is true for exactly ONE call site
+// (resolve.go's confirmed-kind-scoped re-decision, chaos4154_confirmed_kind_scope.go):
+// candidatesBySubject is then NOT the ordinary resolution-wide pool but an
+// ISOLATED, exhaustively-proven-complete confirmed-kind census that REPLACES
+// it for this call -- see that file's own doc comment for the completeness
+// proof and the do-not-build list sol-max's ruling required. This parameter
+// changes NOTHING about how LoneFloor/TopFloor/TopGap/identity/vector-only
+// vetoes decide -- every existing gate runs unmodified over whatever
+// candidatesBySubject the caller passed, exactly as before this ticket. Its
+// ONLY effect is on the decision-stage trace event's PopulationBasis field
+// (see below): a caller passing true is making an affirmative claim that
+// this population is complete, and that claim is what gets recorded, not a
+// new commit path.
+func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -450,7 +471,14 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	if len(candidates) == 0 {
 		resolution.Candidates = candidates
 		if tracer != nil {
-			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated, SearchCandidateLimit: max})
+			// CHAOS-4154 (codex review finding, Low, confirmed): PopulationBasis
+			// is explicit "none" here too -- an earlier version left this
+			// event's PopulationBasis at its Go zero value (empty string)
+			// instead of the documented closed-vocabulary "none", the ONE
+			// decision-stage emission site this ticket's own populationBasis
+			// local (computed further down, unreached on this early return)
+			// never covered.
+			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated, SearchCandidateLimit: max, PopulationBasis: "none"})
 		}
 		return resolution, bases, digests
 	}
@@ -1159,6 +1187,33 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			candidates[index].State = contextfabric.ResolutionAmbiguous
 		}
 	}
+	// populationBasis (CHAOS-4154, decision-stage telemetry): closed
+	// vocabulary naming which candidate population a STATISTICAL commit
+	// (exact_index/lone_floor/top_of_two/vector_margin_rescue/evidence_census
+	// -- every commitGate whose bases.Record call above stamped
+	// CommitBasisStatistical) was actually decided over.
+	//
+	// "none" covers three genuinely different situations on purpose, not by
+	// omission: no commit at all, a NON-statistical commit
+	// (pre_committed_exact_hint/identity_fast_path), and the narrow
+	// CHAOS-3810 exact-label-survives-truncation carve-out (commitGate ==
+	// "exact_index" reached with searchTruncated true and
+	// confirmedKindScopedBasis false) -- that carve-out trusts STRING
+	// EQUALITY, not any claim about population completeness, so it must not
+	// be mislabeled as either basis below.
+	populationBasis := "none"
+	switch commitGate {
+	case "exact_index", "lone_floor", "top_of_two", "vector_margin_rescue", "evidence_census":
+		switch {
+		case confirmedKindScopedBasis:
+			// CHAOS-4154: this call's candidatesBySubject was the isolated,
+			// exhaustively-proven-complete confirmed-kind census -- see
+			// confirmedKindScopedBasis's own doc comment above.
+			populationBasis = "confirmed_kind_scoped_complete"
+		case !searchTruncated:
+			populationBasis = "resolution_wide_untruncated"
+		}
+	}
 
 	// Phase 4: truncation last. parentKeys is the set of subject keys that
 	// are themselves the resolved canonical parent of at least one
@@ -1245,6 +1300,8 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				TiedStatisticalTop: tiedStatisticalTop,
 				// CHAOS-4117: SearchCandidateLimit's own doc comment.
 				SearchCandidateLimit: max,
+				// CHAOS-4154: populationBasis's own doc comment above.
+				PopulationBasis: populationBasis,
 			})
 		case len(resolution.Committed) == 0 && ambiguous:
 			tracer.Trace(ResolutionTraceEvent{
@@ -1260,6 +1317,10 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				TiedStatisticalTop: tiedStatisticalTop,
 				// CHAOS-4117: SearchCandidateLimit's own doc comment.
 				SearchCandidateLimit: max,
+				// CHAOS-4154: always "none" here (no commit) -- present for
+				// uniformity so a reader never has to special-case a missing
+				// field on a non-committed decision event.
+				PopulationBasis: populationBasis,
 			})
 		case len(resolution.Committed) == 0:
 			tracer.Trace(ResolutionTraceEvent{
@@ -1268,6 +1329,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				SearchTruncated: searchTruncated, TiedStatisticalTop: tiedStatisticalTop,
 				// CHAOS-4117: SearchCandidateLimit's own doc comment.
 				SearchCandidateLimit: max,
+				PopulationBasis:      populationBasis,
 			})
 		}
 	}
