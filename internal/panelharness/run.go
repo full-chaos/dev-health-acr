@@ -22,6 +22,14 @@ type Panelist struct {
 	Selector               Selector
 }
 
+// DefaultMaxClarificationTurns bounds how many Investigate calls runPanelist
+// will drive one panelist through (CHAOS-4146(a)) before giving up and
+// recording a turn_exhausted outcome -- turn 1 (the initial ask) counts
+// toward this bound like every later clarification round. A caller may
+// override via RunConfig.MaxClarificationTurns; this is only the default
+// applied when that field is zero.
+const DefaultMaxClarificationTurns = 4
+
 // RunConfig configures one full panel run: one org, one question, driven
 // through every configured panelist independently and in parallel.
 type RunConfig struct {
@@ -49,12 +57,15 @@ type RunConfig struct {
 	// BaseRequest supplies every field of the investigation request OTHER
 	// than Question/SchemaVersion/RequestID/Consumer, which Run/Client.Investigate
 	// always overwrite per-panelist-per-turn: RequestedScope, TimeContext,
-	// Options, and (turn 2 only) the Prior*Receipts fields this package
-	// itself populates from each panelist's own selections.
+	// Options, and (every turn after the first) the Prior*Receipts fields
+	// this package itself populates from each panelist's own selections.
 	BaseRequest contractsv1.ContextFabricInvestigationRequest
 	// Now returns the current time for StartedAt/CompletedAt -- injectable
 	// for deterministic tests, defaulting to time.Now in Run.
 	Now func() time.Time
+	// MaxClarificationTurns overrides DefaultMaxClarificationTurns when
+	// positive; zero (the common case) uses the default.
+	MaxClarificationTurns int
 }
 
 // panelistMemberResult is one panelist's outcome for one member, carried
@@ -64,7 +75,7 @@ type panelistMemberResult struct {
 	selection PanelistSelection
 }
 
-// Run drives every configured panelist through the two-turn
+// Run drives every configured panelist through the bounded N-turn
 // select-and-continue flow in parallel, then assembles the immutable
 // PanelRunManifest. It NEVER touches Postgres and NEVER constructs a
 // contextfabric.ConsensusEvidence value -- see this package's own doc
@@ -97,14 +108,20 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 	if now == nil {
 		now = time.Now
 	}
+	maxTurns := cfg.MaxClarificationTurns
+	if maxTurns <= 0 {
+		maxTurns = DefaultMaxClarificationTurns
+	}
 	startedAt := now()
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	results := make([][]panelistMemberResult, len(cfg.Panelists))
+	logs := make([]PanelistClarificationLog, len(cfg.Panelists))
 	panelistErrors := make([]error, len(cfg.Panelists))
 	for i, panelist := range cfg.Panelists {
 		group.Go(func() error {
-			memberResults, err := runPanelist(groupCtx, cfg.OrgID, cfg.Question, cfg.BaseRequest, panelist)
+			memberResults, log, err := runPanelist(groupCtx, cfg.OrgID, cfg.Question, cfg.BaseRequest, panelist, maxTurns)
+			logs[i] = log
 			if err != nil {
 				// A single panelist's failure (timeout, credential
 				// rejected, no fitting offer) never fails the whole run --
@@ -159,134 +176,205 @@ func Run(ctx context.Context, cfg RunConfig) (PanelRunManifest, error) {
 	for _, member := range memberOrder {
 		members = append(members, BuildMemberRun(member, len(cfg.Panelists), byMember[member]))
 	}
+	// CHAOS-4146(a): keep only the logs of panelists that actually attempted
+	// at least one turn -- a nil Client guard failure (rejected before any
+	// goroutine ran) never reaches runPanelist, so its zero-value log would
+	// otherwise contribute a spurious, empty CanonicalModelIdentity entry.
+	clarificationLogs := make([]PanelistClarificationLog, 0, len(logs))
+	for _, log := range logs {
+		if log.CanonicalModelIdentity == "" {
+			continue
+		}
+		clarificationLogs = append(clarificationLogs, log)
+	}
 	return PanelRunManifest{
-		SchemaVersion:    ManifestSchemaVersion,
-		PanelRunID:       panelRunID,
-		OrgID:            cfg.OrgID,
-		QuestionHash:     contextfabric.QuestionHash(cfg.Question),
-		AlgorithmVersion: AlgorithmVersion,
-		StartedAt:        startedAt,
-		CompletedAt:      now(),
-		Members:          members,
+		SchemaVersion:     ManifestSchemaVersion,
+		PanelRunID:        panelRunID,
+		OrgID:             cfg.OrgID,
+		QuestionHash:      contextfabric.QuestionHash(cfg.Question),
+		AlgorithmVersion:  AlgorithmVersion,
+		StartedAt:         startedAt,
+		CompletedAt:       now(),
+		Members:           members,
+		ClarificationLogs: clarificationLogs,
 	}, nil
 }
 
-// runPanelist drives one panelist through turn 1 (ask the question), the
-// select step (this panelist's own Selector chooses among offered
-// receipts), and turn 2 (re-ask carrying the chosen receipts) -- CHAOS-3860's
-// own stated delta over the CHAOS-3742 trial harness: "driving the
-// CLARIFICATION flow rather than stopping at first resolution."
-func runPanelist(ctx context.Context, orgID, question string, base contractsv1.ContextFabricInvestigationRequest, panelist Panelist) ([]panelistMemberResult, error) {
-	// codex adversarial review (round 1, MEDIUM): base is COPIED into
-	// every concurrently-running panelist's own turn1Request/turn2Request
-	// (Run starts one goroutine per panelist, all sharing the same
-	// RunConfig.BaseRequest value) -- a struct copy copies each
-	// Prior*Receipts field's SLICE HEADER, not its backing array. If
-	// BaseRequest ever arrived with a non-nil Prior*Receipts slice (this
-	// harness's own CLI never sets one, but the exported Run/RunConfig API
-	// does not prevent a caller from doing so), every panelist's later
-	// append in applyPriorReceipts could write into the SAME shared
-	// backing array from multiple goroutines at once -- a data race, and
-	// worse, a chance for one panelist's receipts to bleed into another's
-	// request. Turn 1 and turn 2's Prior*Receipts are entirely this
-	// function's own responsibility to construct (turn 1 asks fresh; turn
-	// 2's are built by applyPriorReceipts below), so both are explicitly
-	// reset to nil before use, guaranteeing every append starts a FRESH
-	// backing array no other goroutine can ever see.
+// receiptRef names one structure-offer receipt this panelist chose,
+// carrying its own originating result id -- ContextFabricConfirmedStructureEntry's
+// own doc comment states receipts are "globally scoped by (PriorResultID,
+// ReceiptID): a bare receipt id is only unique within its issuing result,"
+// so a multi-turn accumulator cannot share one priorResultID across every
+// entry the way the old fixed two-turn flow could. accepted is captured at
+// SELECTION time (against the StructureNeeds the offer actually came from),
+// never recomputed later once that turn's own response is out of scope.
+type receiptRef struct {
+	member        string
+	priorResultID string
+	receiptID     string
+	accepted      bool
+}
+
+// runPanelist drives one panelist through a bounded (maxTurns) clarification
+// loop -- CHAOS-4146(a)'s own generalization of the prior fixed two-turn
+// flow: ask, and for as long as the response keeps surfacing an actionable
+// StructureNeeds AND the panelist's own Selector keeps choosing among the
+// offers, re-ask carrying every receipt confirmed so far. Confirmed contract
+// state is NOT retained server-side across calls (canonicalizeStructure
+// derives structure fresh from what each request itself carries -- see
+// GraphReader.ResolveSubjects' own doc comment), so every subsequent
+// request must resend the FULL accumulated set of previously-applied
+// receipts, not just the newest turn's -- dropping an earlier turn's
+// receipt from a later request would silently un-confirm it. Returns the
+// landed PanelistSelection per member this panelist actually confirmed,
+// plus this panelist's own turn-by-turn clarification log (returned even on
+// error, reflecting whatever turns were actually attempted before failing).
+func runPanelist(ctx context.Context, orgID, question string, base contractsv1.ContextFabricInvestigationRequest, panelist Panelist, maxTurns int) ([]panelistMemberResult, PanelistClarificationLog, error) {
+	if maxTurns <= 0 {
+		maxTurns = DefaultMaxClarificationTurns
+	}
+	log := PanelistClarificationLog{CanonicalModelIdentity: panelist.CanonicalModelIdentity}
+
+	// codex adversarial review (round 1, MEDIUM), preserved verbatim under
+	// the N-turn generalization: base is COPIED into every concurrently
+	// running panelist's own request (Run starts one goroutine per
+	// panelist, all sharing the same RunConfig.BaseRequest value) -- a
+	// struct copy copies each Prior*Receipts field's SLICE HEADER, not its
+	// backing array. Every turn's request is built by copying base fresh
+	// and re-applying the full accumulated receipt set, so no goroutine
+	// ever appends into a backing array another goroutine might also hold.
 	clearPriorReceipts(&base)
-	turn1Request := base
-	turn1Request.Question = question
-	requestID1, err := generateRequestID()
-	if err != nil {
-		return nil, err
-	}
-	turn1Result, err := panelist.Client.Investigate(ctx, requestID1, turn1Request)
-	if err != nil {
-		return nil, fmt.Errorf("panelharness: panelist %s turn 1: %w", panelist.CanonicalModelIdentity, err)
-	}
-	if turn1Result.StructureNeeds == nil || len(turn1Result.StructureNeeds.Missing) == 0 {
-		// Decisive on turn 1, or no structure need surfaced at all --
-		// nothing for this panelist to confirm through this flow. Not an
-		// error: a genuinely decisive answer is a legitimate outcome, it
-		// just contributes no PanelistSelection.
-		return nil, nil
-	}
-	// CHAOS-4118 (codex xhigh review round 1, confirmed real): windowConfirmationRequiredResult
-	// (contextfabric/window.go) now composes a window-only StructureNeeds
-	// (Missing=["window"], WindowOptions only) on every turn-1 window-gated
-	// response. Window rides its own, separately designed WindowSelectionEvent
-	// path and is deliberately excluded from projectOffers/applyPriorReceipts
-	// (see their own doc comments) -- this package's select-and-continue flow
-	// has never supported it. Guarding only on len(Missing)==0 above would let
-	// a window-only disclosure fall through to SelectReceipts below with ZERO
-	// projected offers for the panelist to choose from -- a real file-exchange
-	// round trip against an external responder, waiting up to its own timeout,
-	// for a member this flow can never resolve. Guard on whether THIS
-	// package's own Selector flow has anything to act on, not merely on
-	// whether Missing is non-empty (also correctly short-circuits the same
-	// way for any other member whose own offer-builder returns Missing with
-	// no options, not only window's case).
-	if len(projectOffers(*turn1Result.StructureNeeds)) == 0 {
-		return nil, nil
-	}
 
-	selections, err := panelist.Selector.SelectReceipts(ctx, question, *turn1Result.StructureNeeds)
-	if err != nil {
-		return nil, fmt.Errorf("panelharness: panelist %s selection: %w", panelist.CanonicalModelIdentity, err)
-	}
-	if len(selections) == 0 {
-		// The panelist was not confident in any offer -- a legitimate,
-		// reportable outcome (this member simply gets no vote from this
-		// panelist), never a fabricated choice.
-		return nil, nil
-	}
+	confirmedByMember := make(map[string]receiptRef, 4) // member -> latest applied ref, resent every later turn
+	appliedValue := make(map[string]string, 4)          // member -> the applied value that ref actually confirmed
+	confirmedAtResult := make(map[string]string, 4)     // member -> result id where that confirmation was observed
+	var pending []receiptRef                            // refs this turn's OWN request carried, to be checked against this turn's response
 
-	turn2Request := base
-	turn2Request.Question = question
-	applyPriorReceipts(&turn2Request, turn1Result.ResultID, selections)
-	requestID2, err := generateRequestID()
-	if err != nil {
-		return nil, err
-	}
-	turn2Result, err := panelist.Client.Investigate(ctx, requestID2, turn2Request)
-	if err != nil {
-		return nil, fmt.Errorf("panelharness: panelist %s turn 2: %w", panelist.CanonicalModelIdentity, err)
-	}
+	request := base
+	request.Question = question
 
-	memberResults := make([]panelistMemberResult, 0, len(selections))
-	for member, receiptID := range selections {
-		entry, ok := findConfirmedEntry(turn2Result.ConfirmedStructure, member, turn1Result.ResultID, receiptID)
-		if !ok || entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
-			// Vetoed, superseded, or otherwise not applied -- this
-			// panelist's attempted confirmation did not actually land, so
-			// it contributes no selection for this member. Reported
-			// nowhere but the ordinary hosted-API telemetry this call
-			// already produces; not a manifest concern.
-			continue
+	for turn := 1; turn <= maxTurns; turn++ {
+		requestID, err := generateRequestID()
+		if err != nil {
+			return nil, log, err
 		}
+		result, err := panelist.Client.Investigate(ctx, requestID, request)
+		if err != nil {
+			return nil, log, fmt.Errorf("panelharness: panelist %s turn %d: %w", panelist.CanonicalModelIdentity, turn, err)
+		}
+
+		for _, ref := range pending {
+			entry, ok := findConfirmedEntry(result.ConfirmedStructure, ref.member, ref.priorResultID, ref.receiptID)
+			if !ok || entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
+				// Vetoed, superseded, or otherwise not applied -- dropped,
+				// never resent. If this member is still needed, the
+				// engine's own next StructureNeeds re-offers it fresh.
+				continue
+			}
+			confirmedByMember[ref.member] = ref
+			appliedValue[ref.member] = entry.AppliedValue
+			confirmedAtResult[ref.member] = result.ResultID
+		}
+		pending = nil
+
+		if result.StructureNeeds == nil || len(result.StructureNeeds.Missing) == 0 {
+			// Decisive, or no structure need surfaced at all -- a
+			// legitimate terminal outcome, not an error.
+			log.Turns = append(log.Turns, ClarificationTurnEvent{Turn: turn, Outcome: ClarificationTurnDecisive})
+			break
+		}
+
+		offers := projectOffers(*result.StructureNeeds)
+		if len(offers) == 0 {
+			// CHAOS-4118: a window-only (or otherwise unrepresentable)
+			// StructureNeeds has nothing this flow's Selector can act on --
+			// see projectOffers/applyPriorReceipts' own doc comments for
+			// why window is deliberately excluded.
+			log.Turns = append(log.Turns, ClarificationTurnEvent{Turn: turn, Outcome: ClarificationTurnRefusedNoOffers})
+			break
+		}
+		offerKinds := offerKindsSeen(offers)
+
+		selections, err := panelist.Selector.SelectReceipts(ctx, question, *result.StructureNeeds)
+		if err != nil {
+			return nil, log, fmt.Errorf("panelharness: panelist %s selection (turn %d): %w", panelist.CanonicalModelIdentity, turn, err)
+		}
+		if len(selections) == 0 {
+			// Not confident in any offer -- a legitimate, reportable
+			// refusal, never a fabricated choice.
+			log.Turns = append(log.Turns, ClarificationTurnEvent{Turn: turn, Outcome: ClarificationTurnRefusedNotConfident, OfferKinds: offerKinds})
+			break
+		}
+		if turn == maxTurns {
+			// The panelist would continue, but the turn budget is spent --
+			// never spend a selection round the loop cannot act on.
+			log.Turns = append(log.Turns, ClarificationTurnEvent{Turn: turn, Outcome: ClarificationTurnExhausted, OfferKinds: offerKinds})
+			break
+		}
+		log.Turns = append(log.Turns, ClarificationTurnEvent{Turn: turn, Outcome: ClarificationTurnContinued, OfferKinds: offerKinds})
+
+		newRefs := make([]receiptRef, 0, len(selections))
+		for member, receiptID := range selections {
+			newRefs = append(newRefs, receiptRef{
+				member: member, priorResultID: result.ResultID, receiptID: receiptID,
+				// Accepted reports whether this receipt was the
+				// TOP-RANKED (rank 0) offer THIS turn presented for
+				// member -- captured now, against this turn's own
+				// StructureNeeds, matching PanelistSelection's own doc
+				// comment. NOT entry.Provenance: every successfully
+				// redeemed structure receipt on this flow carries
+				// ContextFabricStructureClarificationConfirmed provenance
+				// regardless of rank, so that comparison would never
+				// actually measure acceptance of the engine's own
+				// leading proposal.
+				accepted: offerIsTopRanked(*result.StructureNeeds, member, receiptID),
+			})
+		}
+
+		nextRequest := base
+		nextRequest.Question = question
+		refsToResend := make([]receiptRef, 0, len(confirmedByMember)+len(newRefs))
+		for _, ref := range confirmedByMember {
+			refsToResend = append(refsToResend, ref)
+		}
+		refsToResend = append(refsToResend, newRefs...)
+		applyReceiptRefs(&nextRequest, refsToResend)
+
+		pending = newRefs
+		request = nextRequest
+	}
+
+	memberResults := make([]panelistMemberResult, 0, len(confirmedByMember))
+	for member, ref := range confirmedByMember {
 		memberResults = append(memberResults, panelistMemberResult{
 			member: member,
 			selection: PanelistSelection{
 				CanonicalModelIdentity: panelist.CanonicalModelIdentity,
-				PriorResultID:          turn1Result.ResultID,
-				ReceiptID:              receiptID,
-				AppliedValue:           entry.AppliedValue,
-				// Accepted reports whether this receipt was the
-				// TOP-RANKED (rank 0) offer turn 1 presented for member --
-				// PanelistSelection's own doc comment, matching
-				// StructureSelectionEvent.Accepted's identical semantics.
-				// NOT entry.Provenance: every successfully redeemed
-				// structure receipt on this flow carries
-				// ContextFabricStructureClarificationConfirmed provenance
-				// regardless of rank, so that comparison is always true
-				// and would never actually measure acceptance of the
-				// engine's own leading proposal.
-				Accepted:          offerIsTopRanked(*turn1Result.StructureNeeds, member, receiptID),
-				ConfirmedResultID: turn2Result.ResultID,
+				PriorResultID:          ref.priorResultID,
+				ReceiptID:              ref.receiptID,
+				AppliedValue:           appliedValue[member],
+				Accepted:               ref.accepted,
+				ConfirmedResultID:      confirmedAtResult[member],
 			},
 		})
 	}
-	return memberResults, nil
+	return memberResults, log, nil
+}
+
+// offerKindsSeen returns the distinct closed-vocabulary member kinds
+// projectOffers actually offered this turn, in first-seen order -- the
+// per-turn "offer kinds seen" telemetry CHAOS-4146(a) requires.
+func offerKindsSeen(offers []offerProjection) []string {
+	seen := make(map[string]struct{}, len(offers))
+	kinds := make([]string, 0, len(offers))
+	for _, offer := range offers {
+		if _, ok := seen[offer.Member]; ok {
+			continue
+		}
+		seen[offer.Member] = struct{}{}
+		kinds = append(kinds, offer.Member)
+	}
+	return kinds
 }
 
 // allPanelistsFailed reports whether every entry in errs is non-nil --
@@ -322,15 +410,19 @@ func clearPriorReceipts(request *contractsv1.ContextFabricInvestigationRequest) 
 	request.PriorHandleReceipts = nil
 }
 
-// applyPriorReceipts buckets selections (member -> receipt id) into
-// turn2Request's own three Prior*Receipts fields, matching each closed
-// member value to its namespace exactly (design brief §2.1's own receipt
-// prefixes) -- window is deliberately absent from this switch (out of this
-// package's scope, see manifest.go).
-func applyPriorReceipts(request *contractsv1.ContextFabricInvestigationRequest, priorResultID string, selections map[string]string) {
-	for member, receiptID := range selections {
-		receipt := contractsv1.ContextFabricBoundSubjectReceipt{ReceiptID: receiptID, ResultID: priorResultID}
-		switch contractsv1.ContextFabricStructureNeedKind(member) {
+// applyReceiptRefs buckets refs into request's own three Prior*Receipts
+// fields, matching each closed member value to its namespace exactly
+// (design brief §2.1's own receipt prefixes) -- window is deliberately
+// absent from this switch (out of this package's scope, see manifest.go).
+// Unlike the prior fixed two-turn flow's applyPriorReceipts, each ref
+// carries its OWN priorResultID: a multi-turn accumulator resends receipts
+// that originated from DIFFERENT turns' results in a single later request,
+// and receipts are only unique within their own issuing result (see
+// receiptRef's own doc comment).
+func applyReceiptRefs(request *contractsv1.ContextFabricInvestigationRequest, refs []receiptRef) {
+	for _, ref := range refs {
+		receipt := contractsv1.ContextFabricBoundSubjectReceipt{ReceiptID: ref.receiptID, ResultID: ref.priorResultID}
+		switch contractsv1.ContextFabricStructureNeedKind(ref.member) {
 		case contractsv1.ContextFabricStructureNeedExpectedKind:
 			request.PriorKindReceipts = append(request.PriorKindReceipts, receipt)
 		case contractsv1.ContextFabricStructureNeedSubjectAnchor:
