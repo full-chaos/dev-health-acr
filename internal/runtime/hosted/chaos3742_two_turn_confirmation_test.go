@@ -677,21 +677,25 @@ type oracleOfferQuery struct {
 // §5 head's oracle-independence rule). A case where no offer matches is
 // scored offer_miss (found=false), never silently skipped.
 //
-// Window offers are read from result.WindowClarification.Options, NOT
-// result.StructureNeeds.WindowOptions (codex round-1 finding #1, confirmed
-// against structure.go's composeStructureNeeds: it populates KindOptions/
-// AnchorOptions/HandleOptions only -- window offers are minted through the
-// SEPARATE CHAOS-3900 W1 WindowClarification path). CHAOS-4118 (2026-08-22)
-// made StructureNeeds.WindowOptions a real, production-filled field on
-// windowConfirmationRequiredResult's own terminal (window.go) -- mirroring
-// WindowClarification.Options exactly, never a distinct value -- but this
-// oracle keeps reading WindowClarification specifically rather than
-// switching to the new field: it is the ONE surface guaranteed present on
-// every corpus case this member's own regime covers (a confirmed/
-// question_stated window's decisive answer carries WindowClarification==nil
-// AND StructureNeeds==nil, so neither surface would help there; on the
-// window-gated regime the two are identical, so this choice does not
-// change what offer_miss counts).
+// CHAOS-4121: window offers now read result.StructureNeeds.WindowOptions --
+// the SAME unified surface kind/anchor/handle already read through above --
+// instead of the legacy result.WindowClarification.Options this oracle read
+// exclusively through the post-4117/4118/4120 re-measure (deliberately, per
+// this file's own prior form -- see git blame -- to keep that re-measure's
+// before/after comparable while StructureNeeds.WindowOptions was still new).
+// window.go:1315 assigns StructureNeeds.WindowOptions the
+// WindowClarification.Options SLICE VALUE ITSELF (never a copy), built once
+// by the SAME composeWindowClarification call both fields share, so this
+// switch is provably a no-op against every result this oracle has ever
+// scored. twoTurnAssertWindowSurfacesAgree below -- called by every live
+// caller of this window case -- Fatalf's, naming the case index, the
+// instant a live result's two surfaces ever stop agreeing, so a future
+// divergence becomes a loud measurement-integrity failure instead of a
+// silently-chosen surface. Applied only once the post-4117/4118/4120
+// re-measure baseline landed (cf-rulings.md's "Oracle freeze" ruling). No
+// ReportSchemaVersion bump: the artifact's wire shape and every measured
+// value are unchanged (team-lead ruling, CHAOS-4121 close-out) -- a bump
+// marks a meaning/shape change, and this one provably has neither.
 func selectOracleOffer(result contractsv1.ContextFabricInvestigationResult, member string, q oracleOfferQuery) (receiptID string, found bool) {
 	switch member {
 	case string(contractsv1.ContextFabricStructureNeedExpectedKind):
@@ -722,16 +726,57 @@ func selectOracleOffer(result contractsv1.ContextFabricInvestigationResult, memb
 			}
 		}
 	case string(contractsv1.ContextFabricStructureNeedWindow):
-		if result.WindowClarification == nil {
+		if result.StructureNeeds == nil {
 			return "", false
 		}
-		for _, opt := range result.WindowClarification.Options {
+		for _, opt := range result.StructureNeeds.WindowOptions {
 			if string(opt.RelativeID) == q.windowBand {
 				return opt.ReceiptID, true
 			}
 		}
 	}
 	return "", false
+}
+
+// twoTurnAssertWindowSurfacesAgree is CHAOS-4121's own measurement-
+// discipline guard, live for as long as result.WindowClarification (CHAOS-
+// 3900 W1) exists alongside its CHAOS-4118 mirror
+// result.StructureNeeds.WindowOptions: selectOracleOffer's window case
+// above now reads ONLY the unified StructureNeeds surface, on the strength
+// of window.go:1315's own "same slice value, never a copy" guarantee. This
+// Fatalf's, naming ONLY the case index (never any oracle/question content),
+// the instant that guarantee stops holding for a LIVE result -- proving the
+// no-op claim on every case actually measured, rather than trusting the
+// static code-read once and letting a future window.go change silently
+// pick one surface over the other with nothing to notice.
+//
+// Deliberately reflect.DeepEqual over the raw slices, not a semantic
+// "same set of bands" comparison: the two fields are supposed to be the
+// IDENTICAL value (same slice, same order, same ReceiptIDs) by
+// construction, so anything looser would mask exactly the drift this guard
+// exists to catch.
+func twoTurnAssertWindowSurfacesAgree(t *testing.T, index int, result contractsv1.ContextFabricInvestigationResult) {
+	t.Helper()
+	if !twoTurnWindowSurfacesAgree(result) {
+		t.Fatalf("case index %d: WindowClarification.Options and StructureNeeds.WindowOptions diverged -- CHAOS-4121's own parity guarantee no longer holds for this live result; selectOracleOffer's window case reads StructureNeeds.WindowOptions only, so this divergence would otherwise silently change what window offer_miss counts", index)
+	}
+}
+
+// twoTurnWindowSurfacesAgree is the pure predicate
+// twoTurnAssertWindowSurfacesAgree Fatal's on -- split out so it has a unit-
+// test surface that never has to trigger a real t.Fatalf (a genuinely
+// FAILING subtest would cascade its parent test, and ultimately this whole
+// package's `go test` exit code, to fail even though catching the
+// divergence IS the correct, intended behavior being tested).
+func twoTurnWindowSurfacesAgree(result contractsv1.ContextFabricInvestigationResult) bool {
+	var legacy, unified []contractsv1.ContextFabricWindowOption
+	if result.WindowClarification != nil {
+		legacy = result.WindowClarification.Options
+	}
+	if result.StructureNeeds != nil {
+		unified = result.StructureNeeds.WindowOptions
+	}
+	return reflect.DeepEqual(legacy, unified)
 }
 
 // positiveQuery/negativeQuery build the typed oracleOfferQuery for this
@@ -3675,6 +3720,16 @@ type twoTurnReport struct {
 	// mutationProbeCoverage (hand-maintained derivation logic, not only
 	// wire shape) in the same change.
 	//
+	// v22 unchanged by CHAOS-4121: window oracle source field swapped
+	// (selectOracleOffer's window case now reads
+	// StructureNeeds.WindowOptions instead of the legacy
+	// WindowClarification.Options), byte-identical surfaces by
+	// construction (window.go:1315's own "same slice value, never a copy"
+	// guarantee), parity-guarded live by twoTurnAssertWindowSurfacesAgree
+	// (Fatalf's, naming the case index, the instant that guarantee stops
+	// holding for a real result) -- no wire-shape or measured-value change,
+	// so no version bump (team-lead ruling, CHAOS-4121 close-out).
+	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
 	// stale key under a new meaning.
@@ -4376,6 +4431,13 @@ func TestSelectOracleOffer(t *testing.T) {
 			HandleOptions: []contractsv1.ContextFabricHandleOption{
 				{ReceiptID: "handr_cccccccccccccccccccccc", Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "532"},
 			},
+			// CHAOS-4121: the SAME slice value as WindowClarification.Options
+			// below, mirroring window.go:1315's real production assignment
+			// (never a copy) -- selectOracleOffer's window case now reads
+			// THIS field, not WindowClarification.
+			WindowOptions: []contractsv1.ContextFabricWindowOption{
+				{ReceiptID: "winr_dddddddddddddddddddddd", RelativeID: "trailing_90d"},
+			},
 		},
 		WindowClarification: &contractsv1.ContextFabricWindowClarification{
 			Options: []contractsv1.ContextFabricWindowOption{
@@ -4400,7 +4462,7 @@ func TestSelectOracleOffer(t *testing.T) {
 		{"anchor miss on id", string(contractsv1.ContextFabricStructureNeedSubjectAnchor), oracleOfferQuery{kind: "repository", anchorID: "repository_other"}, "", false, false},
 		{"handle match", string(contractsv1.ContextFabricStructureNeedSubjectHandle), oracleOfferQuery{kind: "pull_request", handlePatternID: "pull_request_number", handleValue: "532"}, "handr_cccccccccccccccccccccc", true, false},
 		{"handle miss on pattern", string(contractsv1.ContextFabricStructureNeedSubjectHandle), oracleOfferQuery{kind: "pull_request", handlePatternID: "wrong_pattern", handleValue: "532"}, "", false, false},
-		{"window match (from WindowClarification, not StructureNeeds)", string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: "trailing_90d"}, "winr_dddddddddddddddddddddd", true, false},
+		{"window match (from StructureNeeds.WindowOptions, CHAOS-4121)", string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: "trailing_90d"}, "winr_dddddddddddddddddddddd", true, false},
 		{"nil result", string(contractsv1.ContextFabricStructureNeedExpectedKind), oracleOfferQuery{kind: "pull_request"}, "", false, true},
 	}
 	for _, tc := range cases {
@@ -4412,6 +4474,87 @@ func TestSelectOracleOffer(t *testing.T) {
 			gotID, gotFound := selectOracleOffer(input, tc.member, tc.q)
 			if gotFound != tc.wantFound || gotID != tc.wantReceiptID {
 				t.Errorf("selectOracleOffer(%s) = (%q, %v), want (%q, %v)", tc.name, gotID, gotFound, tc.wantReceiptID, tc.wantFound)
+			}
+		})
+	}
+}
+
+// TestSelectOracleOfferWindowIgnoresLegacyFieldAlone pins CHAOS-4121's own
+// behavior change directly: a result carrying a POPULATED
+// WindowClarification.Options but a nil StructureNeeds (the shape a
+// pre-CHAOS-4118 result, or any future divergence, would have) must miss --
+// proving the legacy field alone can no longer redeem a window offer.
+func TestSelectOracleOfferWindowIgnoresLegacyFieldAlone(t *testing.T) {
+	t.Parallel()
+	input := contractsv1.ContextFabricInvestigationResult{
+		WindowClarification: &contractsv1.ContextFabricWindowClarification{
+			Options: []contractsv1.ContextFabricWindowOption{
+				{ReceiptID: "winr_eeeeeeeeeeeeeeeeeeeeee", RelativeID: "trailing_90d"},
+			},
+		},
+	}
+	gotID, gotFound := selectOracleOffer(input, string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: "trailing_90d"})
+	if gotFound || gotID != "" {
+		t.Errorf("selectOracleOffer with WindowClarification populated but StructureNeeds nil = (%q, %v), want (\"\", false)", gotID, gotFound)
+	}
+}
+
+// TestTwoTurnWindowSurfacesAgree exercises the parity guard's own pure
+// predicate directly -- see twoTurnWindowSurfacesAgree's own doc comment
+// for why the predicate is tested rather than driving
+// twoTurnAssertWindowSurfacesAgree's real t.Fatalf (a genuinely failing
+// subtest would cascade this whole package's test run to FAIL even though
+// catching the divergence is the correct, intended behavior). Passes
+// (true) when the two surfaces agree, including both nil (the "no window
+// regime" case); false whenever they diverge.
+func TestTwoTurnWindowSurfacesAgree(t *testing.T) {
+	t.Parallel()
+	agreeing := []contractsv1.ContextFabricWindowOption{{ReceiptID: "winr_ffffffffffffffffffffff", RelativeID: "trailing_90d"}}
+
+	cases := []struct {
+		name   string
+		result contractsv1.ContextFabricInvestigationResult
+		want   bool
+	}{
+		{"both nil (no window regime)", contractsv1.ContextFabricInvestigationResult{}, true},
+		{
+			"both populated, identical",
+			contractsv1.ContextFabricInvestigationResult{
+				WindowClarification: &contractsv1.ContextFabricWindowClarification{Options: agreeing},
+				StructureNeeds:      &contractsv1.ContextFabricStructureNeeds{WindowOptions: agreeing},
+			},
+			true,
+		},
+		{
+			"legacy populated, unified nil -- DIVERGE",
+			contractsv1.ContextFabricInvestigationResult{
+				WindowClarification: &contractsv1.ContextFabricWindowClarification{Options: agreeing},
+			},
+			false,
+		},
+		{
+			"unified populated, legacy nil -- DIVERGE",
+			contractsv1.ContextFabricInvestigationResult{
+				StructureNeeds: &contractsv1.ContextFabricStructureNeeds{WindowOptions: agreeing},
+			},
+			false,
+		},
+		{
+			"both populated, different content -- DIVERGE",
+			contractsv1.ContextFabricInvestigationResult{
+				WindowClarification: &contractsv1.ContextFabricWindowClarification{Options: agreeing},
+				StructureNeeds: &contractsv1.ContextFabricStructureNeeds{WindowOptions: []contractsv1.ContextFabricWindowOption{
+					{ReceiptID: "winr_gggggggggggggggggggggg", RelativeID: "all_time"},
+				}},
+			},
+			false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := twoTurnWindowSurfacesAgree(tc.result)
+			if got != tc.want {
+				t.Errorf("twoTurnWindowSurfacesAgree(%s) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
 	}
@@ -5181,9 +5324,12 @@ func twoTurnRequest(index int, tc trialCase, requestIDSuffix string) contractsv1
 
 // runTwoTurnPositiveArm confirms the oracle-matching offer via receipt and
 // reports whether it converted.
-func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1 contractsv1.ContextFabricInvestigationResult, timeout time.Duration, trace *twoTurnTraceCapture) twoTurnCaseResult {
+func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1 contractsv1.ContextFabricInvestigationResult, timeout time.Duration, trace *twoTurnTraceCapture) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmPositive), Turn1Status: string(turn1.Status)}
 	twoTurnStampOutcome(&res, tc, nil)
+	if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+		twoTurnAssertWindowSurfacesAgree(t, index, turn1)
+	}
 	receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 	if !found {
 		res.OfferMiss = true
@@ -5367,7 +5513,7 @@ func windowBoundsAgree(a, b contractsv1.ContextFabricInvestigationResult, tolera
 // own retry attempt passes a distinct prefix instead, so a retried pairing's
 // four calls never collide (same RequestID) with the first attempt's own,
 // already-exchanged four calls in the SAME run's file-exchange directory.
-func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string, requestIDPrefix string) twoTurnCaseResult {
+func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string, requestIDPrefix string) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmInferredTier)}
 	// CHAOS-4086: stamped up front for the same reason the other arms do
 	// it -- this arm has many early returns (structurally exempt anchor, a
@@ -5481,6 +5627,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		if setupErr != nil {
 			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup failed: " + contextFabricRejectionClass(setupErr), setupErr, override
 		}
+		twoTurnAssertWindowSurfacesAgree(t, index, setupResult)
 		receiptID, found := selectOracleOffer(setupResult, string(contractsv1.ContextFabricStructureNeedWindow), oracleOfferQuery{windowBand: windowBand})
 		if !found {
 			return contractsv1.ContextFabricBoundSubjectReceipt{}, "window precondition setup turn did not offer the case's own window back as a receipt-bound offer (an engine-refusal finding, not this harness's own defect)", nil, override
@@ -5868,12 +6015,12 @@ func twoTurnPairInvalidIsInstrumentFailure(res twoTurnCaseResult) bool {
 // would be (report.InferredPairInvalidCount's own zero-tolerance gate still
 // fires on it) -- this function only ever removes a STOCHASTIC instrument
 // failure from the report, never a genuine, reproducing one.
-func runTwoTurnInferredTierArmWithPairRetry(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string) twoTurnCaseResult {
-	first := runTwoTurnInferredTierArm(ctx, investigator, principal, index, tc, entry, timeout, trace, windowBand, twoTurnInferredTierRequestIDPrefix)
+func runTwoTurnInferredTierArmWithPairRetry(t *testing.T, ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string) twoTurnCaseResult {
+	first := runTwoTurnInferredTierArm(t, ctx, investigator, principal, index, tc, entry, timeout, trace, windowBand, twoTurnInferredTierRequestIDPrefix)
 	if !twoTurnPairInvalidIsInstrumentFailure(first) {
 		return first
 	}
-	retry := runTwoTurnInferredTierArm(ctx, investigator, principal, index, tc, entry, timeout, trace, windowBand, twoTurnInferredTierRetryRequestIDPrefix)
+	retry := runTwoTurnInferredTierArm(t, ctx, investigator, principal, index, tc, entry, timeout, trace, windowBand, twoTurnInferredTierRetryRequestIDPrefix)
 	retry.PairRetried = true
 	retry.PairRetryFirstArmInvalidReason = first.ArmInvalidReason
 	retry.PairRetryFirstArmInvalidStage = first.ArmInvalidStage
@@ -6197,7 +6344,7 @@ func preflightAnchorCausalChain(ctx context.Context, investigator contextfabric.
 	return fmt.Errorf("preflight: the probe anchor redemption (case %d) did not apply (no receipt-sourced ConfirmedStructure entry for subject_anchor) -- the anchor causal chain is not live this run", probe.Index)
 }
 
-func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, anchorTerms anchorTermIndex, runToken string, trace *twoTurnTraceCapture) twoTurnCaseResult {
+func runTwoTurnConfirmedWrongArm(t *testing.T, ctx context.Context, investigator contextfabric.Investigator, store twoTurnResultStoreSaver, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, anchorTerms anchorTermIndex, runToken string, trace *twoTurnTraceCapture) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmConfirmedWrong)}
 	// Stamped BEFORE the early returns below (a seeded-negative failure, a
 	// missing offer): a row that never reached Investigate still says what
@@ -6254,6 +6401,9 @@ func runTwoTurnConfirmedWrongArm(ctx context.Context, investigator contextfabric
 			return res
 		}
 		offerResultID = setupResult.ResultID
+		if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+			twoTurnAssertWindowSurfacesAgree(t, index, setupResult)
+		}
 		var found bool
 		receiptID, found = selectOracleOffer(setupResult, entry.Member, entry.negativeQuery())
 		if !found {
@@ -7181,7 +7331,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 		modelCallCapture.reset()
 		positiveStarted := time.Now()
-		positive := runTwoTurnPositiveArm(ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture)
+		positive := runTwoTurnPositiveArm(t, ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture)
 		twoTurnFoldSynthesisStatusOverride(&positive, turn1SynthesisOverride)
 		twoTurnStampTurn1Facts(&positive, turn1Facts)
 		positiveTiming = buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
@@ -7231,7 +7381,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 		modelCallCapture.reset()
 		inferredStarted := time.Now()
-		inferred := runTwoTurnInferredTierArmWithPairRetry(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
+		inferred := runTwoTurnInferredTierArmWithPairRetry(t, ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
 		twoTurnFoldSynthesisStatusOverride(&inferred, turn1SynthesisOverride)
 		twoTurnStampTurn1Facts(&inferred, turn1Facts)
 		inferredTiming = buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
@@ -7291,7 +7441,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 		modelCallCapture.reset()
 		confirmedWrongStarted := time.Now()
-		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken, traceCapture)
+		confirmedWrong := runTwoTurnConfirmedWrongArm(t, ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken, traceCapture)
 		twoTurnFoldSynthesisStatusOverride(&confirmedWrong, turn1SynthesisOverride)
 		twoTurnStampTurn1Facts(&confirmedWrong, turn1Facts)
 		confirmedWrongTiming = buildTwoTurnArmTiming(string(twoTurnArmConfirmedWrong), confirmedWrongStarted, modelCallCapture)

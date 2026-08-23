@@ -123,14 +123,26 @@ func (f *chaos4138FakeInvestigator) Investigate(_ context.Context, _ storage.Pri
 // synthetic placeholder text, never real corpus content (this repo's own
 // PII-withholding discipline for hand-built test fixtures, the same
 // convention minimalValidStalledResult already documents).
+//
+// CHAOS-4121: StructureNeeds.WindowOptions is set to the SAME slice value
+// as WindowClarification.Options -- mirroring window.go:1315's real
+// production assignment exactly (never a copy) -- because selectOracleOffer
+// now reads StructureNeeds.WindowOptions for the window member, and
+// twoTurnAssertWindowSurfacesAgree Fatal's this fixture's own caller if the
+// two fields ever disagree.
 func chaos4138WindowSetupResult(resultID, windowBand string) contractsv1.ContextFabricInvestigationResult {
+	options := []contractsv1.ContextFabricWindowOption{
+		{ReceiptID: "winr_" + resultID, OptionID: "opt1", Label: "synthetic test label, not corpus content", RelativeID: contractsv1.ContextFabricRelativeWindowID(windowBand)},
+	}
 	return contractsv1.ContextFabricInvestigationResult{
 		ResultID: resultID,
 		Status:   contractsv1.ContextFabricInvestigationClarificationRequired,
 		WindowClarification: &contractsv1.ContextFabricWindowClarification{
-			Options: []contractsv1.ContextFabricWindowOption{
-				{ReceiptID: "winr_" + resultID, OptionID: "opt1", Label: "synthetic test label, not corpus content", RelativeID: contractsv1.ContextFabricRelativeWindowID(windowBand)},
-			},
+			Options: options,
+		},
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+			WindowOptions: options,
 		},
 	}
 }
@@ -183,7 +195,7 @@ func TestRunTwoTurnInferredTierArmWithPairRetry_RecoversFromBaselineInstrumentFa
 			return chaos4138ClarificationResult(requestID), nil
 		},
 	}
-	res := runTwoTurnInferredTierArmWithPairRetry(context.Background(), fake, storage.Principal{}, 21, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
+	res := runTwoTurnInferredTierArmWithPairRetry(t, context.Background(), fake, storage.Principal{}, 21, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
 
 	if !res.PairRetried {
 		t.Error("PairRetried = false, want true -- the first attempt's baseline leg errored with ErrSynthesisRejected, an instrument failure")
@@ -252,7 +264,7 @@ func TestRunTwoTurnInferredTierArmWithPairRetry_BoundedToExactlyOneRetry(t *test
 			return contractsv1.ContextFabricInvestigationResult{}, nil
 		},
 	}
-	res := runTwoTurnInferredTierArmWithPairRetry(context.Background(), fake, storage.Principal{}, 99, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
+	res := runTwoTurnInferredTierArmWithPairRetry(t, context.Background(), fake, storage.Principal{}, 99, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
 
 	if !res.PairRetried {
 		t.Error("PairRetried = false, want true -- the retry DID run, it just also failed")
@@ -300,7 +312,7 @@ func TestRunTwoTurnInferredTierArmWithPairRetry_NeverRetriesWhenFirstAttemptSucc
 			return chaos4138ClarificationResult(requestID), nil
 		},
 	}
-	res := runTwoTurnInferredTierArmWithPairRetry(context.Background(), fake, storage.Principal{}, 1, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
+	res := runTwoTurnInferredTierArmWithPairRetry(t, context.Background(), fake, storage.Principal{}, 1, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
 
 	if res.PairRetried {
 		t.Error("PairRetried = true, want false -- the first attempt never failed at all")
@@ -341,7 +353,7 @@ func TestRunTwoTurnInferredTierArmWithPairRetry_NeverRetriesWindowPreconditionSe
 			return contractsv1.ContextFabricInvestigationResult{}, nil
 		},
 	}
-	res := runTwoTurnInferredTierArmWithPairRetry(context.Background(), fake, storage.Principal{}, 5, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
+	res := runTwoTurnInferredTierArmWithPairRetry(t, context.Background(), fake, storage.Principal{}, 5, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
 
 	if !res.PairInvalid {
 		t.Error("PairInvalid = false, want true -- the window-precondition setup call errored")
@@ -378,7 +390,7 @@ func TestRunTwoTurnInferredTierArmWithPairRetry_RetriesOnHintedLegInstrumentFail
 			return contractsv1.ContextFabricInvestigationResult{}, &contextfabric.StageError{Stage: contextfabric.StageSynthesis, Err: contextfabric.ErrSynthesisRejected}
 		},
 	}
-	res := runTwoTurnInferredTierArmWithPairRetry(context.Background(), fake, storage.Principal{}, 42, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
+	res := runTwoTurnInferredTierArmWithPairRetry(t, context.Background(), fake, storage.Principal{}, 42, chaos4138Case(), chaos4138Entry(), 30*time.Second, &twoTurnTraceCapture{}, "trailing_90d")
 
 	if !res.PairRetried {
 		t.Error("PairRetried = false, want true -- the first attempt's hinted leg errored with ErrSynthesisRejected, an instrument failure")
