@@ -113,3 +113,29 @@ func TestChaos4085_ProductionTraceEmitsTheTieFlagOnANonCommittedOutcome(t *testi
 		t.Fatalf("search_candidate_limit = %v, want 10", record["search_candidate_limit"])
 	}
 }
+
+// TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics is the sink-level
+// pin for CHAOS-4012's kind_offer stage -- same file-doc-comment obligation
+// ("If you add a field to ResolutionTraceEvent, assert it here too") as
+// every field above. A SEPARATE stage from "decision" (its own event, not
+// folded onto CommitGate/SearchTruncated above), so this asserts a
+// dedicated captureTraceJSON call rather than adding keys to the two tests
+// above.
+func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
+	record := captureTraceJSON(t, ResolutionTraceEvent{
+		RequestID: "request_sink_0003", Stage: "kind_offer",
+		KindOfferExplicitHintCount:       1,
+		KindOfferDistinctKindCount:       1,
+		KindOfferSuppressedByCardinality: true,
+	})
+
+	if got, ok := record["explicit_hint_count"].(float64); !ok || got != 1 {
+		t.Fatalf("explicit_hint_count = %v, want 1", record["explicit_hint_count"])
+	}
+	if got, ok := record["distinct_kind_count"].(float64); !ok || got != 1 {
+		t.Fatalf("distinct_kind_count = %v, want 1", record["distinct_kind_count"])
+	}
+	if got, ok := record["suppressed_by_cardinality"].(bool); !ok || !got {
+		t.Fatalf("suppressed_by_cardinality = %v, want true", record["suppressed_by_cardinality"])
+	}
+}
