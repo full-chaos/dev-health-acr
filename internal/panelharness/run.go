@@ -248,7 +248,17 @@ func runPanelist(ctx context.Context, orgID, question string, base contractsv1.C
 	confirmedByMember := make(map[string]receiptRef, 4) // member -> latest applied ref, resent every later turn
 	appliedValue := make(map[string]string, 4)          // member -> the applied value that ref actually confirmed
 	confirmedAtResult := make(map[string]string, 4)     // member -> result id where that confirmation was observed
-	var pending []receiptRef                            // refs this turn's OWN request carried, to be checked against this turn's response
+	// pending is the FULL set of refs the just-sent request carried --
+	// every accumulated (already-applied, resent) ref PLUS whatever was
+	// newly selected that turn, never just the newest selections alone
+	// (codex xhigh review, HIGH: ContextFabricConfirmedStructureEntry's own
+	// doc comment says the response carries "one entry PER carried member,
+	// INCLUDING vetoed ones" -- an ALREADY-applied member can flip to
+	// vetoed_stale/vetoed_conflict on a LATER turn, e.g. a graph epoch
+	// flip or a conflicting confirmation elsewhere in the same request;
+	// reconciling only the newest selections would silently keep a
+	// since-invalidated confirmation in the manifest forever).
+	var pending []receiptRef
 
 	request := base
 	request.Question = question
@@ -266,9 +276,14 @@ func runPanelist(ctx context.Context, orgID, question string, base contractsv1.C
 		for _, ref := range pending {
 			entry, ok := findConfirmedEntry(result.ConfirmedStructure, ref.member, ref.priorResultID, ref.receiptID)
 			if !ok || entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
-				// Vetoed, superseded, or otherwise not applied -- dropped,
-				// never resent. If this member is still needed, the
-				// engine's own next StructureNeeds re-offers it fresh.
+				// Vetoed, superseded, or otherwise not applied -- dropped
+				// from every accumulator, including one this member landed
+				// on an EARLIER turn (see pending's own doc comment above).
+				// If this member is still needed, the engine's own next
+				// StructureNeeds re-offers it fresh.
+				delete(confirmedByMember, ref.member)
+				delete(appliedValue, ref.member)
+				delete(confirmedAtResult, ref.member)
 				continue
 			}
 			confirmedByMember[ref.member] = ref
@@ -298,6 +313,17 @@ func runPanelist(ctx context.Context, orgID, question string, base contractsv1.C
 		selections, err := panelist.Selector.SelectReceipts(ctx, question, *result.StructureNeeds)
 		if err != nil {
 			return nil, log, fmt.Errorf("panelharness: panelist %s selection (turn %d): %w", panelist.CanonicalModelIdentity, turn, err)
+		}
+		// Selector's own doc comment: "a member absent from the map, or
+		// mapped to an empty string, means the panelist found no offer
+		// worth confirming for that member" -- filter blank values out
+		// before treating the map as a genuine selection (codex xhigh
+		// review, MEDIUM: a map containing only empty/blank values used to
+		// be treated as a non-empty, confident selection).
+		for member, receiptID := range selections {
+			if receiptID == "" {
+				delete(selections, member)
+			}
 		}
 		if len(selections) == 0 {
 			// Not confident in any offer -- a legitimate, reportable
@@ -340,7 +366,10 @@ func runPanelist(ctx context.Context, orgID, question string, base contractsv1.C
 		refsToResend = append(refsToResend, newRefs...)
 		applyReceiptRefs(&nextRequest, refsToResend)
 
-		pending = newRefs
+		// pending is the FULL carried set (see its own doc comment above),
+		// not just newRefs -- every one of these must be reconciled against
+		// the NEXT turn's own response.
+		pending = refsToResend
 		request = nextRequest
 	}
 
