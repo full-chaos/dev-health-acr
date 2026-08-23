@@ -267,6 +267,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
@@ -5892,6 +5893,16 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if raw := os.Getenv("ACR_TEST_TRIAL_ANCHOR_MEMBERSHIP_ENABLED"); raw != "" {
 		t.Setenv("ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED", raw)
 	}
+	// pglifecycle.EnvEnabled: UNLIKE the anchor-membership block above,
+	// wireProductionEnv's own set() call ALREADY re-exports this one from
+	// ACR_TEST_TRIAL_GRAPH_LIFECYCLE_ENABLED for every trial test sharing
+	// that function (generative_trial_live_test.go, "DELIBERATELY absent
+	// from acrEnvIsolationAllowlist" -- see that var's own doc comment) --
+	// no second re-export needed here. This harness's OWN gap was never
+	// the env-wiring (already shared/correct); it was that nothing in this
+	// file ever built an epochResolver or recorded what it resolved, so
+	// every run silently measured epoch 0 regardless of the flag. See the
+	// read-proof block right after hosted.Open below.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -5951,6 +5962,35 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open hosted runtime: %v", err)
 	}
+	// CHAOS-4100 graph-lifecycle proof (mirrors chaos3884_replay_harness_test.go's
+	// own "THE PROOF" comment exactly): hosted.Open above already wires its OWN
+	// epochResolver into the engine internally via buildGraphLifecycleResolver
+	// (open.go) -- driven by the SAME pglifecycle.EnvEnabled var wireProductionEnv
+	// re-exports for every trial test sharing it -- but that internal resolver
+	// is not exposed for this harness's own provenance. This second, independent
+	// resolver instance
+	// (built via chaos3884's own buildReplayEpochResolver, same package, same
+	// DSN/org, same pglifecycle.ConfigFromEnv gate) queries the SAME graph
+	// lifecycle table the engine just read, so its answer is a real read-proof
+	// of what the engine itself saw -- never a guess, never merely logged. Runs
+	// even when the flag is off (nil-safe, matches chaos3884's own convention):
+	// reports resolved_active_epoch=0, GraphLifecycleEnabled=false, byte-
+	// identical to every run before this fix existed.
+	epochResolver, err := buildReplayEpochResolver(t, ctx, os.Getenv("ACR_TEST_TRIAL_POSTGRES_DSN"))
+	if err != nil {
+		t.Fatalf("build epoch resolver: %v", err)
+	}
+	var resolvedActiveEpoch int64
+	if epochResolver != nil {
+		resolvedActiveEpoch, err = epochResolver.ResolveActiveEpoch(ctx, orgID)
+		if err != nil {
+			t.Fatalf("resolve active epoch for %s: %v", orgID, err)
+		}
+		if resolvedActiveEpoch <= 0 {
+			t.Fatalf("%s is set but ResolveActiveEpoch(%s) = %d -- want a positive epoch (a lifecycle row exists but reports no flip, or the flag is on against the wrong organization); refusing to silently measure epoch 0 under a flag that claims otherwise", pglifecycle.EnvEnabled, orgID, resolvedActiveEpoch)
+		}
+	}
+	t.Logf("CHAOS-4100 graph-lifecycle proof: org=%s resolved_active_epoch=%d (epochResolver wired=%v)", orgID, resolvedActiveEpoch, epochResolver != nil)
 	defer func() {
 		if cerr := rt.Close(); cerr != nil {
 			t.Logf("runtime close: %v", cerr)
@@ -6024,6 +6064,14 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 			AnchorMembershipOffersEnabled: cfg.AnchorMembershipOffersEnabled,
 			ResponderModel:                responderModel,
+			// ResolvedActiveEpoch/GraphLifecycleEnabled (CHAOS-4100, the
+			// 2026-08-23 graph-rebuild incident): the SECOND trial script to
+			// populate these -- see their own doc comment (generative_trial_live_test.go)
+			// for why they were always zero/false here before this fix, and
+			// the read-proof comment above for how these two exact values
+			// were obtained (never a guess at what the flag claims).
+			ResolvedActiveEpoch:   resolvedActiveEpoch,
+			GraphLifecycleEnabled: epochResolver != nil,
 			// ExecutionShape (CHAOS-4033 follow-up, team-lead ruling
 			// 2026-08-21): defaults to "sequential" here -- an unsharded run
 			// WRITES this explicitly rather than relying on absence-means-

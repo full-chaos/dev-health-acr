@@ -31,6 +31,16 @@ if [[ ! -f "$ANNEX_PATH" ]]; then
 fi
 
 trial_wire_common_env
+# CHAOS-4100 (post-4108-fix graph rebuild incident): this script's own
+# consumer, TestChaos3742TwoTurnConfirmationReplay, is the SECOND trial
+# test (after chaos3884_replay_harness_test.go) to record
+# ResolvedActiveEpoch/GraphLifecycleEnabled in its provenance -- see
+# trial_wire_graph_lifecycle_env's own doc comment (common.sh) for why this
+# is called here specifically rather than folded into trial_wire_common_env.
+# Without this, the harness silently reads the bare legacy epoch-0 graph
+# key even when the org has a live, rebuilt epoch (the exact incident that
+# blocked CHAOS-4100's rerun #2 for two attempts).
+trial_wire_graph_lifecycle_env
 # ACR_TEST_TRIAL_ARM: the file-exchange runtime uses this value as the
 # Model field in every persisted ModelExecutionReceipt (model_runtime.go);
 # an unset value fails ModelExecutionReceipt.Validate() universally at
