@@ -153,6 +153,36 @@ func mustReuseTestEngine(t *testing.T, deps EngineDependencies) *Engine {
 	return engine
 }
 
+// TestCHAOS4077_GraphNotProjectedCandidateAlwaysMissesReuseWithoutReadingTheGraph
+// pins the fix for the reuse-staleness gap codex xhigh review round 1
+// found (confirmed real): a stored never-projected-org no_match makes NO
+// positive claims (zero subjects, zero evidence), so
+// reuseAuthorizationStillHolds' own "nothing to recheck, trivially still
+// valid" shortcut would otherwise treat it as an automatic hit forever --
+// even after the org's graph gets projected for the first time and a
+// fresh resolution could find real candidates. The fix must reject this
+// shape BEFORE ever calling e.graph.ResolveSubjects, not merely return the
+// right answer after reading it -- bindingOnlyGraphReader here fails the
+// test outright if ResolveSubjects is reached at all, exactly the same
+// discipline this file's own reuse-hit tests use to prove a hit never
+// touches the graph.
+func TestCHAOS4077_GraphNotProjectedCandidateAlwaysMissesReuseWithoutReadingTheGraph(t *testing.T) {
+	t.Parallel()
+	engine := mustReuseTestEngine(t, EngineDependencies{Graph: bindingOnlyGraphReader{t: t}})
+
+	candidate := validInvestigationResult()
+	candidate.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, GraphNotProjected: true}
+	candidate.EvidenceRefIDs = []string{}
+
+	holds, outcome := engine.reuseAuthorizationStillHolds(context.Background(), reusePrincipal(), validInvestigationRequest(), candidate, ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
+	if holds {
+		t.Fatal("reuseAuthorizationStillHolds() = true, want false: a graph-not-projected candidate must never be trivially reused")
+	}
+	if outcome != AnswerReuseMissGraphNotProjected {
+		t.Fatalf("outcome = %q, want %q", outcome, AnswerReuseMissGraphNotProjected)
+	}
+}
+
 // TestAC_3782_1_ReuseHitMakesZeroModelCalls binds AC-3782-1 literally: the
 // same question, same organization, watermark unchanged, inside the
 // staleness window, produces zero model calls -- asserted by a counting

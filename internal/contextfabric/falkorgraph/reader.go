@@ -22,6 +22,29 @@ import (
 // first place; there is nothing here to filter.
 func isInternalSubject(contextfabric.SubjectRef) bool { return false }
 
+// graphNotProjectedError translates ErrNotFound -- classifyFalkorError's own
+// unambiguous "GRAPH.RO_QUERY against a graph key that never existed"
+// classification (client.go's own doc comment) -- into the backend-neutral
+// contextfabric.ErrGraphNotProjected sentinel (CHAOS-4077), so Engine can
+// recognize a never-projected org without importing this package. Used
+// ONLY at the two investigation-time read boundaries where a missing key
+// genuinely means "this org has no projection yet" (ResolveSubjects,
+// DiscoverContext below) -- never a blanket replacement for
+// safeDependencyError, whose other call sites (constraint creation, list
+// graphs, delete) have their own, different meaning for the same
+// underlying FalkorDB error. Any error OTHER than ErrNotFound passes
+// through unchanged, so a genuine rate limit, auth failure, or timeout is
+// never misread as "no such graph".
+func graphNotProjectedError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: %w", err, contextfabric.ErrGraphNotProjected)
+	}
+	return err
+}
+
 // ResolveInvestigationBinding implements contextfabric.GraphReader (CHAOS-3898
 // §2.1). It resolves the org's CURRENT ResolvedGraphBinding exactly the way
 // resolveReadKey always has (KeyResolver, design brief §3.1; a nil
@@ -446,7 +469,13 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// each commit site, which class of proof stood behind that commit; this
 	// adapter is the one production GraphReader, so this is where that
 	// record enters the engine.
-	return graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
+	resolution, offers, bases, err := graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
+	// CHAOS-4077: the single point every deps.* callback's own ErrNotFound
+	// (a never-projected org's graph key) funnels through on its way back
+	// to Engine -- translated here, once, rather than at each of the
+	// several callbacks above, since graphrank.ResolveSubjectsWithCommitBasis
+	// is this function's one delegated return.
+	return resolution, offers, bases, graphNotProjectedError(err)
 }
 
 func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
@@ -506,7 +535,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	for _, subject := range request.Resolution.Committed {
 		nodes, edges, failed, filters, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		if err != nil {
-			return contextfabric.GraphContext{}, err
+			// CHAOS-4077: see graphNotProjectedError's own doc comment --
+			// this is one of the two DiscoverContext sites that would
+			// otherwise independently re-hit the identical never-projected
+			// graph key ResolveSubjects already degraded gracefully from,
+			// one call later, if this Adapter method is ever reached with
+			// a resolution that came from a source other than Engine's own
+			// short-circuit (e.g. a direct/test caller).
+			return contextfabric.GraphContext{}, graphNotProjectedError(err)
 		}
 		failedLookups += failed
 		edgeFilters.Authz += filters.Authz
@@ -535,7 +571,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// bounded and already best-effort, not a committed-subject gate.
 	textNodes, _, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal)
 	if err != nil {
-		return contextfabric.GraphContext{}, err
+		// CHAOS-4077: see graphNotProjectedError's own doc comment and the
+		// hopWalk error site's identical comment above -- this is the
+		// UNCONDITIONAL query (runs even with zero committed subjects),
+		// so it is the one that actually fires for a subjectless-cohort
+		// never-projected org.
+		return contextfabric.GraphContext{}, graphNotProjectedError(err)
 	}
 	// Codex P2a (round 2): the full-text-adjacent edge set is gathered from
 	// EVERY matched node before any truncation decision, then ranked and
@@ -558,7 +599,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		textEdges, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID, temporal)
 		if err != nil {
-			return contextfabric.GraphContext{}, err
+			// CHAOS-4077: see graphNotProjectedError's own doc comment
+			// above -- unreachable for a genuinely never-projected org in
+			// practice (textNodes would already be empty), kept for the
+			// same reason the hopWalk site is: consistent behavior if this
+			// method is ever reached with a non-empty node set from a
+			// source other than this adapter's own prior query.
+			return contextfabric.GraphContext{}, graphNotProjectedError(err)
 		}
 		for _, ce := range textEdges {
 			if seenEdge[ce.UUID] {

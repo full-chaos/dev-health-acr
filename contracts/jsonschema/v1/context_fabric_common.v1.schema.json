@@ -1582,6 +1582,9 @@
         },
         "retrieval_degraded": {
           "type": "boolean"
+        },
+        "graph_not_projected": {
+          "type": "boolean"
         }
       },
       "required": [

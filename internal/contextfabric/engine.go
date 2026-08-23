@@ -860,6 +860,44 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// STRICT treatment (see CommitBasis).
 	resolution, structureMaterial, commitBases, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
 	if err != nil {
+		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
+		// graph key that has never been created) degrades to the SAME
+		// clean terminal a legitimately-empty resolution already
+		// produces, below -- never a 5xx. DiscoverContext is skipped
+		// entirely here, not called and then also handled: it would
+		// query the identical nonexistent graph key and fail the same
+		// way, one call later, undoing this branch. See
+		// ErrGraphNotProjected's own doc comment (ports.go) for why this
+		// is safe to degrade (a confirmed, unambiguous "no such graph
+		// key" classification, never a generic dependency failure).
+		if errors.Is(err, ErrGraphNotProjected) {
+			// Candidates/Committed must be non-nil empty slices, never a
+			// bare nil: ContextFabricSubjectResolution.Validate rejects a
+			// nil array as violating v1 bounds (it cannot tell "resolved
+			// to genuinely zero candidates" from "this field was never
+			// populated at all").
+			emptyResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, GraphNotProjected: true}
+			// codex xhigh review round 2 (confirmed real, MEDIUM): the
+			// ordinary zero-subjects terminal a few lines below reaches
+			// BOTH of these before terminalResult -- this branch must
+			// too, not silently drop them because it returns earlier.
+			// consultPriorStructureOffers is a safe no-op here in
+			// practice (structureMaterial.Missing is empty on this error
+			// path, nothing on ResolveSubjects computed one), kept for
+			// the same reason engine.go's own invariant assertions stay
+			// in place after their guard makes them unreachable: assert,
+			// don't assume. recordPriorSubjectReceiptSkips is NOT a
+			// no-op: with emptyResolution's own zero candidates/committed,
+			// every prior receipt the caller submitted correctly reports
+			// as skipped (none could possibly have survived a
+			// non-existent graph) -- exactly the honest diagnostic signal
+			// an operator needs, previously silently dropped.
+			structureMaterial = e.consultPriorStructureOffers(ctx, principal, priorEntries, structureMaterial)
+			if len(request.PriorSubjectReceipts) > 0 {
+				e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, emptyResolution, priorHintsUnloadable, priorHintsNoMatch, priorHintsStaleGraphEpoch, priorHintsStaleGraphEpochDelta)
+			}
+			return e.terminalResult(ctx, principal, request, interpretation, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow)
+		}
 		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	// priorEntries: fetched ABOVE, before this call (CHAOS-4040 reordering

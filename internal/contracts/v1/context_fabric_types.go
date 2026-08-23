@@ -822,6 +822,19 @@ type ContextFabricSubjectResolution struct {
 	// Every result persisted before CHAOS-3778 lacks it and must still
 	// validate on replay.
 	RetrievalDegraded bool `json:"retrieval_degraded,omitempty"`
+	// GraphNotProjected reports that this resolution is empty because the
+	// organization's graph has never been projected at all (CHAOS-4077,
+	// contextfabric.ErrGraphNotProjected), never because a search ran and
+	// genuinely found nothing. Distinct from an ordinary empty pool for
+	// the same reason RetrievalDegraded is distinct from an ordinary
+	// narrow one: the two situations look identical in Candidates/
+	// Committed (both empty) but call for a different operator response
+	// -- run the projector for this org, not "investigate why the search
+	// missed a real subject".
+	//
+	// Additive-optional in v1, same convention as RetrievalDegraded:
+	// absent means "not reported", never "the graph is projected".
+	GraphNotProjected bool `json:"graph_not_projected,omitempty"`
 }
 
 type ContextFabricCohort struct {
