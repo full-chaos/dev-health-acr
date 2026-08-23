@@ -1499,10 +1499,11 @@ type trialProvenance struct {
 	// actually read epoch 0 (falkorgraph.Config.EpochResolver was never
 	// wired). 0 with GraphLifecycleEnabled=false is every run before this
 	// field existed and every run that does not enable the flag --
-	// byte-identical, not a breaking change to this shared struct. Only
-	// chaos3884_replay_harness_test.go populates these two fields today;
-	// every other trial script's provenance leaves them at their zero
-	// values.
+	// byte-identical, not a breaking change to this shared struct.
+	// chaos3884_replay_harness_test.go and (CHAOS-4100, the 2026-08-23
+	// graph-rebuild incident) chaos3742_two_turn_confirmation_test.go
+	// populate these two fields today; every other trial script's
+	// provenance still leaves them at their zero values.
 	ResolvedActiveEpoch   int64 `json:"resolved_active_epoch"`
 	GraphLifecycleEnabled bool  `json:"graph_lifecycle_enabled"`
 	// AnchorMembershipOffersEnabled (CHAOS-3742 RUN 3 finding, lane-run3,

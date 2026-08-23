@@ -192,6 +192,17 @@ require_outside_repo_tree() {
 plan_only_requested || require_outside_repo_tree "TMPDIR" "${TMPDIR:-/tmp}"
 
 trial_wire_common_env
+# CHAOS-4100 (post-4108-fix graph rebuild incident): trial_wire_graph_lifecycle_env
+# is only DEFINED by the real common.sh sourced above -- plan-only mode never
+# sources it (its trial_wire_common_env stub reaches no database and needs
+# none of this), so this call is guarded exactly like require_outside_repo_tree
+# on the next line. Exported here, at the parallel launcher's own top level,
+# it is inherited by every shard subshell below -- the SAME mechanism
+# ACR_TEST_TRIAL_RESPONDER_MODEL already relies on. See run-two-turn.sh's own
+# comment on trial_wire_graph_lifecycle_env for why this harness needs it at
+# all: without it, every shard silently reads the bare legacy epoch-0 graph
+# key even when the org has a live, rebuilt epoch.
+plan_only_requested || trial_wire_graph_lifecycle_env
 plan_only_requested || require_outside_repo_tree "ACR_TRIAL_RESULTS_DIR" "$ACR_TRIAL_RESULTS_DIR"
 export ACR_TEST_TWOTURN_ORACLE_ANNEX="$ANNEX_PATH"
 if [[ -n "$LIMIT" ]]; then
@@ -530,6 +541,28 @@ template_dsn="$(trial_pg_dsn "$PG_TEMPLATE")"
     go run ./cmd/acr-migrate up )
 template_ms=$(($(date +%s%3N 2>/dev/null || echo 0) - template_started))
 echo "template database migrated in ${template_ms}ms"
+
+# CHAOS-4100 (2026-08-23 finding, discovered live via a 2-shard smoke while
+# wiring trial_wire_graph_lifecycle_env below): `go run ./cmd/acr-migrate up`
+# above only CREATES acr.context_fabric_graph_lifecycle -- it never seeds a
+# row into it, so absent this copy every shard clone reads an EMPTY
+# lifecycle table for every org regardless of the flag, and
+# ResolveActiveEpoch(org) fatally refuses (buildReplayEpochResolver's own
+# "refusing to silently measure epoch 0 under a flag that claims otherwise"
+# guard) instead of the run-two-turn.sh single-process path's correct
+# resolved_active_epoch=2 (that path reads the STANDING acr database
+# directly, never a shard clone). pg_dump/psql --data-only, not a hand-built
+# INSERT, so jsonb/timestamptz/NULL columns are never re-escaped by hand.
+# Copies the WHOLE table (this trial harness has exactly one org of
+# interest; unrelated orgs' rows are harmless, inert extras -- filtering by
+# org_id would need a second, narrower pg_dump invocation for no real
+# benefit). Unconditional, not gated behind the flag: cheap, and a row's
+# mere presence is dormant/inert without EpochResolver separately wired --
+# see this file's own trial_wire_graph_lifecycle_env comment for that
+# byte-identical-when-unused convention.
+echo "copying acr.context_fabric_graph_lifecycle from the standing database into the template..."
+pg_dump --data-only --table=acr.context_fabric_graph_lifecycle --no-owner "$(trial_pg_dsn acr)" |
+  psql --no-psqlrc -v ON_ERROR_STOP=1 -q "$template_dsn"
 
 # --- clone one database per shard, SERIALLY ---------------------------
 # Serial deliberately: CREATE DATABASE ... TEMPLATE requires that NOTHING
