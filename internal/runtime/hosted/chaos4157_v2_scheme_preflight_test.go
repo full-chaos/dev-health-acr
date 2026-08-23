@@ -16,7 +16,12 @@ package hosted_test
 // (cases 28/54). Both fixture files were regenerated at the producer
 // (identity.Derive, never hand-typed) and are corpus-safe untracked
 // artifacts outside this repo -- this preflight is the code-side guard
-// that keeps the class from recurring silently.
+// that keeps the class from recurring silently. The corpus half
+// (validateCorpusWorkItemV2Scheme) is wired into loadTrialCorpus itself
+// (generative_trial_live_test.go), so it guards every live corpus
+// consumer in this package -- replay, D2B, W0, generative, frontier, and
+// two-turn -- not only the two-turn confirmation replay this incident was
+// first found in.
 
 import (
 	"testing"
@@ -33,50 +38,111 @@ type twoTurnV2SchemeViolation struct {
 	Index  int
 }
 
+// identityRoundTripsCleanly reports whether id is EXACTLY what
+// identity.Derive would mint for kind from id's own decoded segments --
+// not merely that it carries the right prefix and segment count.
+//
+// identity.Segments alone (codex sol/high review, P2) only checks the
+// "<kind>.v2:" prefix and segment count; DecodeSegment never rejects
+// malformed percent-escaping (e.g. a literal "%ZZ"), so a fixture that
+// merely LOOKS like a v2 id can still be one Derive itself could never
+// have produced -- a real committed subject's id would still fail exact
+// comparison against it. Re-deriving from the decoded segments and
+// requiring byte-for-byte equality closes that gap: only a value the
+// producer function ITSELF could emit ever passes.
+func identityRoundTripsCleanly(kind, id string) bool {
+	values, ok := identity.Segments(kind, id)
+	if !ok {
+		return false
+	}
+	rederived, omitted, err := identity.Derive(kind, values, nil)
+	if err != nil || omitted {
+		return false
+	}
+	return rederived == id
+}
+
 // twoTurnFindWorkItemV2SchemeViolations is the pure check both the real
 // preflight and its own unit test share: every work_item identifier
-// either fixture carries must parse under the live v2 canonical scheme
-// (identity.Segments, the exact inverse of the minting path in
-// devhealthsource/tables.go's queryWorkItems). Returns every violation
-// found (never stops at the first) so a single bad regeneration surfaces
-// its full blast radius in one run, not one Fatalf at a time.
+// either fixture carries must round-trip cleanly through the live v2
+// canonical scheme (identityRoundTripsCleanly, the exact inverse of the
+// minting path in devhealthsource/tables.go's queryWorkItems). Returns
+// every violation found (never stops at the first) so a single bad
+// regeneration surfaces its full blast radius in one run, not one Fatalf
+// at a time.
 func twoTurnFindWorkItemV2SchemeViolations(annex twoTurnOracleAnnex, corpus []trialCase) []twoTurnV2SchemeViolation {
 	var violations []twoTurnV2SchemeViolation
 	for _, entry := range annex.Entries {
 		if entry.PositiveKind == identity.KindWorkItem && entry.PositiveAnchorCanonicalID != "" {
-			if _, ok := identity.Segments(identity.KindWorkItem, entry.PositiveAnchorCanonicalID); !ok {
+			if !identityRoundTripsCleanly(identity.KindWorkItem, entry.PositiveAnchorCanonicalID) {
 				violations = append(violations, twoTurnV2SchemeViolation{Source: "annex_positive", Index: entry.Index})
 			}
 		}
 		if entry.NegativeKind == identity.KindWorkItem && entry.NegativeAnchorCanonicalID != "" {
-			if _, ok := identity.Segments(identity.KindWorkItem, entry.NegativeAnchorCanonicalID); !ok {
+			if !identityRoundTripsCleanly(identity.KindWorkItem, entry.NegativeAnchorCanonicalID) {
 				violations = append(violations, twoTurnV2SchemeViolation{Source: "annex_negative", Index: entry.Index})
 			}
 		}
 	}
+	violations = append(violations, corpusFindWorkItemV2SchemeViolations(corpus, "corpus_expect_id")...)
+	return violations
+}
+
+// corpusFindWorkItemV2SchemeViolations is the harness-agnostic half of the
+// check (codex sol/high review, P2): every LIVE corpus consumer in this
+// package -- not just the two-turn test -- loads the same withheld corpus
+// via loadTrialCorpus and classifies results through exact
+// trialCase.ExpectID equality (chaos3884_replay_harness_test.go,
+// chaos3899_d2b_cardinality_test.go, chaos3900_w0_window_shadow_test.go,
+// generative_trial_live_test.go, frontier_trial_live_test.go), so a stale
+// pre-v2 work_item expect_id can produce spurious "correct" evidence in
+// any of them, not only the two-turn confirmation replay. `source` names
+// the caller in the returned violations for a corpus-safe diagnostic
+// (case index only, never the identifier or corpus text).
+func corpusFindWorkItemV2SchemeViolations(corpus []trialCase, source string) []twoTurnV2SchemeViolation {
+	var violations []twoTurnV2SchemeViolation
 	for i, tc := range corpus {
 		if tc.ExpectKind == identity.KindWorkItem && tc.ExpectID != "" {
-			if _, ok := identity.Segments(identity.KindWorkItem, tc.ExpectID); !ok {
-				violations = append(violations, twoTurnV2SchemeViolation{Source: "corpus_expect_id", Index: i})
+			if !identityRoundTripsCleanly(identity.KindWorkItem, tc.ExpectID) {
+				violations = append(violations, twoTurnV2SchemeViolation{Source: source, Index: i})
 			}
 		}
 	}
 	return violations
 }
 
-// twoTurnValidateWorkItemV2Scheme is the real preflight call site: fails
-// closed, naming every offending case index, before any live measurement
-// work begins.
+// validateCorpusWorkItemV2Scheme is the call site every OTHER live corpus
+// consumer in this package uses (the two-turn confirmation replay uses
+// twoTurnValidateWorkItemV2Scheme below instead, which also covers its
+// own annex): fails closed, naming every offending case index, before any
+// live measurement work begins.
+func validateCorpusWorkItemV2Scheme(t interface{ Fatalf(string, ...any) }, corpus []trialCase) {
+	violations := corpusFindWorkItemV2SchemeViolations(corpus, "corpus_expect_id")
+	if len(violations) == 0 {
+		return
+	}
+	indices := make([]int, len(violations))
+	for i, v := range violations {
+		indices[i] = v.Index
+	}
+	t.Fatalf("trial corpus work_item identifiers do not round-trip through the live v2 canonical scheme (stale pre-v2 format? see CHAOS-4157) -- indices=%v", indices)
+}
+
+// twoTurnValidateWorkItemV2Scheme is the two-turn test's own preflight
+// call site: fails closed, naming every offending case index, before any
+// live measurement work begins.
 //
-// Scoped to a dedicated call site (TestChaos3742TwoTurnConfirmationReplay,
-// right after its own annex/corpus loads) rather than folded into
-// loadTwoTurnOracleAnnex/loadTrialCorpus themselves: those two functions
-// are shared by unit tests elsewhere in this package that construct
-// synthetic work_item fixtures in the pre-v2 plain form on purpose (they
-// are testing the ADAPTATION shape, not canonical-id validity) -- baking
-// this check into the shared loaders would break those unrelated tests.
-// A real trial run is the only caller that needs the guard, so it is the
-// only caller that pays for it.
+// The corpus half this also checks is REDUNDANT with loadTrialCorpus's own
+// internal call to validateCorpusWorkItemV2Scheme (below) -- harmless
+// (a few dozen cases, checked twice), kept here so this call site alone
+// still documents "both fixtures this test loads are validated" without a
+// reader having to know loadTrialCorpus's own internals. The annex half is
+// NOT folded into loadTwoTurnOracleAnnex/adaptSignedOracleAnnex the same
+// way loadTrialCorpus was: those two functions are shared by unit tests
+// elsewhere in this package that construct synthetic work_item fixtures in
+// the pre-v2 plain form on purpose (testing the ADAPTATION shape, not
+// canonical-id validity) -- baking this check into them would break those
+// unrelated tests.
 func twoTurnValidateWorkItemV2Scheme(t interface{ Fatalf(string, ...any) }, annex twoTurnOracleAnnex, corpus []trialCase) {
 	violations := twoTurnFindWorkItemV2SchemeViolations(annex, corpus)
 	if len(violations) == 0 {
@@ -104,6 +170,13 @@ func TestTwoTurnFindWorkItemV2SchemeViolations(t *testing.T) {
 		t.Fatalf("identity.Derive(work_item, repo-1, WIDGET-101) = (%q, %v, %v), want a valid id", validV2, omitted, err)
 	}
 	const stalePlain = "work_item:synthetic:WIDGET-101"
+	// malformedV2 has the right prefix and segment COUNT (identity.Segments
+	// alone would accept it) but DecodeSegment's own never-errors contract
+	// means a bad percent-escape decodes silently -- re-deriving from
+	// those decoded segments never re-produces this exact string (it would
+	// re-encode "%ZZ" to "%25ZZ"). No real committed subject's id can ever
+	// equal it, so the round-trip check must still flag it.
+	const malformedV2 = "work_item.v2:repo-1:%ZZ"
 
 	annex := twoTurnOracleAnnex{Entries: []twoTurnOracleEntry{
 		{Index: 0, PositiveKind: identity.KindWorkItem, PositiveAnchorCanonicalID: validV2},
@@ -116,18 +189,22 @@ func TestTwoTurnFindWorkItemV2SchemeViolations(t *testing.T) {
 		// annex convention, e.g. an existence_probe or ambiguity-band
 		// case) -- never a violation.
 		{Index: 4, PositiveKind: identity.KindWorkItem, PositiveAnchorCanonicalID: ""},
+		{Index: 5, PositiveKind: identity.KindWorkItem, PositiveAnchorCanonicalID: malformedV2},
 	}}
 	corpus := []trialCase{
-		{ExpectKind: identity.KindWorkItem, ExpectID: validV2},    // index 0: clean
-		{ExpectKind: identity.KindWorkItem, ExpectID: stalePlain}, // index 1: stale
-		{ExpectKind: "repository", ExpectID: stalePlain},          // index 2: wrong kind, ignored
+		{ExpectKind: identity.KindWorkItem, ExpectID: validV2},     // index 0: clean
+		{ExpectKind: identity.KindWorkItem, ExpectID: stalePlain},  // index 1: stale
+		{ExpectKind: "repository", ExpectID: stalePlain},           // index 2: wrong kind, ignored
+		{ExpectKind: identity.KindWorkItem, ExpectID: malformedV2}, // index 3: malformed escape
 	}
 
 	got := twoTurnFindWorkItemV2SchemeViolations(annex, corpus)
 	want := map[twoTurnV2SchemeViolation]bool{
 		{Source: "annex_positive", Index: 1}:   true,
 		{Source: "annex_negative", Index: 2}:   true,
+		{Source: "annex_positive", Index: 5}:   true,
 		{Source: "corpus_expect_id", Index: 1}: true,
+		{Source: "corpus_expect_id", Index: 3}: true,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("violations = %#v, want exactly %d entries matching %#v", got, len(want), want)
@@ -136,6 +213,79 @@ func TestTwoTurnFindWorkItemV2SchemeViolations(t *testing.T) {
 		if !want[v] {
 			t.Errorf("unexpected violation %#v", v)
 		}
+	}
+}
+
+// TestCorpusFindWorkItemV2SchemeViolations exercises the harness-agnostic
+// corpus-only half directly (the shape every OTHER live corpus consumer
+// in this package calls, not just the two-turn test).
+func TestCorpusFindWorkItemV2SchemeViolations(t *testing.T) {
+	t.Parallel()
+	validV2, _, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", "WIDGET-101"}, nil)
+	if err != nil {
+		t.Fatalf("identity.Derive: %v", err)
+	}
+	corpus := []trialCase{
+		{ExpectKind: identity.KindWorkItem, ExpectID: validV2},
+		{ExpectKind: identity.KindWorkItem, ExpectID: "work_item:synthetic:WIDGET-101"},
+		{ExpectKind: "repository", ExpectID: "work_item:synthetic:WIDGET-101"},
+	}
+	got := corpusFindWorkItemV2SchemeViolations(corpus, "replay_expect_id")
+	if len(got) != 1 || got[0] != (twoTurnV2SchemeViolation{Source: "replay_expect_id", Index: 1}) {
+		t.Fatalf("violations = %#v, want exactly one {replay_expect_id, 1}", got)
+	}
+}
+
+func TestValidateCorpusWorkItemV2SchemeFailsClosed(t *testing.T) {
+	t.Parallel()
+	validV2, _, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", "WIDGET-101"}, nil)
+	if err != nil {
+		t.Fatalf("identity.Derive: %v", err)
+	}
+
+	fake := &fatalfSpy{}
+	validateCorpusWorkItemV2Scheme(fake, []trialCase{{ExpectKind: identity.KindWorkItem, ExpectID: validV2}})
+	if fake.called {
+		t.Errorf("Fatalf called on a clean corpus: %q", fake.message)
+	}
+
+	fake = &fatalfSpy{}
+	validateCorpusWorkItemV2Scheme(fake, []trialCase{{ExpectKind: identity.KindWorkItem, ExpectID: "work_item:synthetic:WIDGET-101"}})
+	if !fake.called {
+		t.Fatal("Fatalf never called on a stale corpus")
+	}
+}
+
+// TestSplitAnchorKeyV2Scheme pins the codex sol/high review's P1 fix: a
+// v2-scheme canonical id must resolve to its TRUE kind ("work_item"), not
+// the whole "work_item.v2" prefix a naive first-colon split used to
+// return -- see splitAnchorKey's own doc comment for the incident.
+func TestSplitAnchorKeyV2Scheme(t *testing.T) {
+	t.Parallel()
+	validV2, _, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", "WIDGET-101"}, nil)
+	if err != nil {
+		t.Fatalf("identity.Derive: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		key      string
+		wantKind string
+		wantID   string
+		wantOK   bool
+	}{
+		{"v2 work_item", validV2, identity.KindWorkItem, validV2, true},
+		{"legacy plain kind", "repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7", "repository", "7b9583ee-4d24-2be7-4d09-34f815bebdd7", true},
+		{"empty", "", "", "", false},
+		{"no colon", "malformed", "", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			kind, canonicalID, ok := splitAnchorKey(c.key)
+			if kind != c.wantKind || canonicalID != c.wantID || ok != c.wantOK {
+				t.Errorf("splitAnchorKey(%q) = (%q, %q, %v), want (%q, %q, %v)", c.key, kind, canonicalID, ok, c.wantKind, c.wantID, c.wantOK)
+			}
+		})
 	}
 }
 

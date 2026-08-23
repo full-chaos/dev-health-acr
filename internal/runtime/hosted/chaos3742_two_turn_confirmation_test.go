@@ -267,6 +267,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
@@ -442,6 +443,21 @@ func handlePatternIDForKind(kind string) (string, bool) {
 // taking only the FIRST colon (a canonical id may itself contain colons,
 // e.g. "work_item:linear:CHAOS-2476" -> ("work_item", "linear:CHAOS-2476")).
 func splitAnchorKey(key string) (kind, canonicalID string, ok bool) {
+	// CHAOS-4157 fix (codex sol/high review, P1): a v2-scheme canonical id
+	// ("<kind>.v2:<repo_id>:<enc(external_id)>", identity.Derive's own
+	// format) carries its OWN internal colon before the traditional
+	// kind/id boundary this function used to assume was always the FIRST
+	// one -- a plain SplitN(key, ":", 2) on "work_item.v2:00000000-...
+	// :linear%3ACHAOS-3792" returned kind="work_item.v2", not "work_item".
+	// Try every registered kind's v2 form FIRST (identity.Segments is the
+	// authoritative parser, the exact inverse of Derive) before falling
+	// back to the legacy single-colon split every non-v2-scheme kind
+	// (repository, project's pre-migration form, ...) still uses.
+	for _, reg := range identity.Registry {
+		if _, segOK := identity.Segments(reg.Kind, key); segOK {
+			return reg.Kind, key, true
+		}
+	}
 	parts := strings.SplitN(key, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false
