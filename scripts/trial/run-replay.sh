@@ -42,6 +42,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 LIMIT="${1:-}"
 
 trial_wire_common_env
+# CHAOS-3916 (local/trial slice): this script's own consumer,
+# TestChaos3884ReplayHarness, is the ONLY trial test that records
+# ResolvedActiveEpoch/GraphLifecycleEnabled in its provenance -- see
+# trial_wire_graph_lifecycle_env's own doc comment (common.sh) for why this
+# is called here specifically rather than folded into trial_wire_common_env.
+trial_wire_graph_lifecycle_env
 : "${ACR_TEST_REPLAY_OUT:=$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3884_full50_replay-$(date -u +%Y%m%dT%H%M%SZ)-$$.json}"
 export ACR_TEST_REPLAY_OUT
 export ACR_TEST_TRIAL_ARM="replay"
