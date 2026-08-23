@@ -107,6 +107,35 @@ package hosted_test
 //     cmd/acr-trial-merge-two-turn's evaluateGates, compares hashed or raw
 //     free-text model output; confirmed by direct sweep of both, 2026-08-23.
 //
+//     RECURRENCE (CHAOS-4139, 2026-08-23, ruling "A'"): shape 1 is not
+//     only about free-text hashing -- it is any property whose value a
+//     live model call can move, hashed or not. v5's committed-subject SET
+//     read off SubjectResolution.Committed on the final InvestigationResult,
+//     which is downstream of CHAOS-4085's post-synthesis commit-affirmation
+//     gate (chaos4085_commit_affirmation.go): a CommitBasisStatistical
+//     commit can be RETRACTED from that exact field based on what an
+//     independently-sampled synthesis call did or did not write, strictly
+//     after the decision v5 meant to compare. CHAOS-4135's shard-54 rerun
+//     (persisted paired ResolutionTraceEvent streams, PR #224) proved it
+//     directly: two legs with byte-identical decision-stage trace events
+//     (same CommitGate, same CommitBasis=statistical, same committed
+//     Subject) still classified "unjustified", because one leg's synthesis
+//     call affirmed the commit and the other's did not.
+//     request.ExpectedKinds cannot explain the divergence (zero
+//     occurrences in internal/contextfabric/genkitruntime, confirmed by
+//     direct grep) -- it is exactly the kind of ordinary sampling noise a
+//     genuinely engine-deterministic comparison must be immune to, which
+//     is what v5 already intended and did not quite reach. FIXED:
+//     twoTurnDecisionCommittedSubjects now reads the committed-subject SET
+//     straight off each leg's own decision-stage trace event (captured
+//     BEFORE synthesis ever runs), never off SubjectResolution.Committed.
+//     wrong_commit/false_no_match and every other gate are UNCHANGED and
+//     correctly still read the result layer -- they assert product
+//     properties of what was actually returned to a caller, which is a
+//     different question from "did the two legs reach the same engine
+//     decision", the one thing this specific classification exists to
+//     answer.
+//
 //  2. Engine trace fields that are structurally unpopulated or unreachable
 //     in the scenarios this harness actually constructs, asserted anyway.
 //     Two named instances, in different states:
@@ -160,6 +189,16 @@ package hosted_test
 // open: before CHAOS-4135, "why did the paired legs diverge" was
 // unattestable; after it, it usually is.
 //
+// It did, exactly as designed, the very next time this shape recurred:
+// shard 54's SECOND occurrence (2026-08-23 rerun) adjudicated itself from
+// the CHAOS-4135 persisted traces, field-by-field, no live call needed --
+// and what it found was not a fresh unexplained divergence but the shape-1
+// recurrence documented above (CHAOS-4139): the two legs' decision-stage
+// traces were byte-identical: same CommitGate, same CommitBasis, same
+// committed Subject. The paired-leg comparison itself was reading the
+// wrong layer. CHAOS-4139 fixed the classifier, not the engine -- see the
+// shape-1 RECURRENCE paragraph above for the mechanism and fix.
+//
 // A persistence-layer variant of the same general class, caught in
 // CHAOS-4135's own review (HIGH severity, codex xhigh, pre-merge): the new
 // paired-trace snapshot would have written Subject.Label -- a
@@ -176,24 +215,37 @@ package hosted_test
 // field would be added next.
 //
 // WHAT THIS INSTRUMENT CAN ATTEST, stated positively: engine-deterministic
-// decision state only -- committed subject sets (Kind+CanonicalID),
-// closed-vocabulary trace Outcomes, gate_reachable, wrong_commit, window
-// coverage, and, as of CHAOS-4135, paired-leg divergence on any row a bar
-// or classification flags, reconstructable from a persisted trace without
-// a fresh live call. It cannot, and does not try to, attest anything about
+// decision state only -- committed subject sets (Kind+CanonicalID), taken
+// as of CHAOS-4139 from each leg's own decision-stage trace event, never
+// from a post-affirmation result field -- closed-vocabulary trace
+// Outcomes, gate_reachable, wrong_commit, window coverage, per-leg commit
+// affirmation state (hinted/baseline_commit_affirmation, CHAOS-4139), and,
+// as of CHAOS-4135, paired-leg divergence on any row a bar or
+// classification flags, reconstructable from a persisted trace without a
+// fresh live call. It cannot, and does not try to, attest anything about
 // model-authored free text, a trace field a given scenario cannot reach
 // (handle-path insensitivity today), or a divergence whose cause a
-// persisted trace does not cover.
+// persisted trace does not cover. wrong_commit/false_no_match and every
+// other product-facing gate deliberately stay on the result layer -- they
+// exist to assert what a caller actually received, a different question
+// from paired-decision equivalence.
 //
-// AUDIT VERDICT (CHAOS-4083, 2026-08-23): no strip. Every gate in
-// evaluateGates (cmd/acr-trial-merge-two-turn/main.go) and every
-// classification vocabulary item in this file was swept directly against
-// the class above; both named unmeasurable-property examples were already
-// fixed by prior work (CHAOS-4039 v5, CHAOS-4079's mode gate) before this
-// audit began, CHAOS-4081's gap was already correctly excluded from every
-// gate rather than silently trusted, and CHAOS-4135 closed the one new gap
-// this audit's own review surfaced. No PR accompanies this audit; this
-// comment section is the deliverable CHAOS-4083 asked for.
+// AUDIT VERDICT (CHAOS-4083, 2026-08-23, reaffirmed CHAOS-4139
+// 2026-08-23): no strip. Every gate in evaluateGates
+// (cmd/acr-trial-merge-two-turn/main.go) and every classification
+// vocabulary item in this file was swept directly against the class
+// above; both named unmeasurable-property examples were already fixed by
+// prior work (CHAOS-4039 v5, CHAOS-4079's mode gate) before this audit
+// began, CHAOS-4081's gap was already correctly excluded from every gate
+// rather than silently trusted, and CHAOS-4135 closed the one new gap
+// this audit's own review surfaced. The class predicted its own next
+// instance correctly: CHAOS-4139 found that CHAOS-4039 v5's
+// "engine-deterministic" comparison was itself reading a
+// post-synthesis-affirmation result field, not the decision-stage trace
+// it claimed to -- shape 1, one layer deeper than the free-text check v5
+// actually closed -- and moved it off that layer. No PR accompanied the
+// original CHAOS-4083 audit; CHAOS-4139 is the PR that keeps this
+// section's claims true.
 
 import (
 	"context"
@@ -1157,17 +1209,136 @@ func twoTurnCommittedSubjectsEquivalent(a, b []contractsv1.ContextFabricSubjectR
 	return true
 }
 
+// twoTurnDecisionCommittedSubjects (CHAOS-4139) extracts the committed-
+// subject SET straight from a decision-stage graphrank.ResolutionTraceEvent
+// -- the true engine-deterministic layer, one hop earlier than
+// SubjectResolution.Committed on the final InvestigationResult.
+//
+// THE BUG THIS CLOSES: CHAOS-4039 v5's own doc comment (twoTurnCaseResult.
+// InferredClassification, below) already CLAIMED "engine-deterministic
+// decision state... never a model-authored string", but the code it
+// described read hintedCommitted/baselineCommitted off
+// result.SubjectResolution.Committed -- which is NOT engine-deterministic.
+// CHAOS-4085's post-synthesis commit-affirmation gate
+// (chaos4085_commit_affirmation.go, applyCommitAffirmation) can retract a
+// CommitBasisStatistical subject from that exact field based on live,
+// independently-sampled model synthesis output, strictly AFTER the
+// decision v5 meant to compare. v5 moved away from hashing free-text model
+// output (CHAOS-4039's own v4 defect, this file's ATTESTATION BOUNDARY
+// section, CHAOS-4083) but landed one layer short of where model influence
+// actually stops: the decision-stage trace event, captured BEFORE
+// synthesis ever runs. CHAOS-4135's shard-54 rerun proved the gap directly
+// -- two legs with byte-identical decision-stage trace events (same
+// CommitGate=vector_margin_rescue, same CommitBasis=statistical, same
+// committed Subject) still classified "unjustified" because one leg's own
+// independent synthesis call did not affirm the commit while the other
+// did. request.ExpectedKinds structurally cannot explain that divergence
+// (confirmed: zero occurrences in internal/contextfabric/genkitruntime,
+// production code) -- it is exactly the sampling noise a decision-layer
+// comparison is supposed to be immune to, per v5's OWN stated intent.
+//
+// A single-element slice when Outcome=="committed" (graphrank's own commit
+// switch, resolution.go, never produces more than one committed subject
+// today), nil otherwise -- twoTurnCommittedSubjectsEquivalent treats
+// nil/empty identically to any other empty set. decision.Subject.Label is
+// UNSCRUBBED here (this is a local, in-process comparison value, never
+// serialized -- unlike twoTurnTraceCapture.snapshot(), which strips it
+// before anything reaches the persisted artifact) but
+// twoTurnCommittedSubjectKeys drops Label regardless, so it never reaches
+// the comparison either way.
+func twoTurnDecisionCommittedSubjects(decision graphrank.ResolutionTraceEvent) []contractsv1.ContextFabricSubjectRef {
+	if decision.Outcome != "committed" {
+		return nil
+	}
+	return []contractsv1.ContextFabricSubjectRef{decision.Subject}
+}
+
+// twoTurnCommitAffirmationState (CHAOS-4139) reports what CHAOS-4085's
+// post-synthesis commit-affirmation gate (chaos4085_commit_affirmation.go)
+// did to decision's own committed subject.
+//
+//   - "" -- decision itself did not commit (nothing for the gate to act on).
+//   - "exempt" -- decision.CommitBasis is IdentityProven
+//     (CommitBasisCallerCanonicalID/CommitBasisAuthoritativeIdentity);
+//     applyCommitAffirmation's own gate (line 458: `basis.IdentityProven()
+//     || commitSubjectAffirmed(...)`) never evaluates these at all, so
+//     there is nothing here to attribute to synthesis.
+//   - "retracted" -- basis is not IdentityProven and decision.Subject's
+//     Kind+CanonicalID is absent from result.SubjectResolution.Committed.
+//   - "affirmed" -- basis is not IdentityProven and decision.Subject is
+//     still present there.
+//
+// codex xhigh review round 2 (MEDIUM, confirmed): the first version of this
+// function detected "retracted" by scanning result.Limitations for the
+// FIXED ContextFabricCommitRetractionLimitation string, reasoning that the
+// string "has exactly ONE append site in the whole engine". That reasoning
+// only covers the production APPEND site -- it does not cover the TYPE.
+// SynthesisDraft.Limitations ([]string, model_runtime.go) is model-authored
+// free text, cloned verbatim into result.Limitations
+// (`Limitations: cloneSlice(draft.Limitations)`, model_runtime.go). Nothing
+// stops a synthesis call from independently emitting a string that happens
+// to equal the constant's value, at which point this function would read
+// "retracted" whether or not CHAOS-4085's gate actually fired for THIS
+// leg -- precisely the model-influenceable-comparison hazard (ATTESTATION
+// BOUNDARY shape 1) this same PR fixes one layer up. Fixed by comparing
+// result.SubjectResolution.Committed instead: that field is engine-only
+// (set once from graphrank's own resolution at engine.go:957, mutated only
+// by applyCommitAffirmation's `result.SubjectResolution.Committed =
+// retained` at chaos4085_commit_affirmation.go:477 -- computed purely from
+// the pre-affirmation provisional list filtered by
+// IdentityProven()/commitSubjectAffirmed(), never assigned from draft
+// anywhere in model_runtime.go). Absence there is direct evidence the gate
+// retracted this exact subject, immune to whatever free text a model wrote.
+//
+// Deliberately does NOT read result.Coverage.Partial, though
+// applyCommitAffirmation sets that too (line 508) -- Partial is NOT
+// exclusive to this gate: engine.go's retrieval-degradation path
+// (withRetrievalDegradation) sets the SAME field for an UNRELATED reason
+// (search truncation), and this exact case has search_truncated=true on
+// both legs regardless of any retraction. Reading Partial alone here would
+// have reported every row in a truncated search as "retracted" whether or
+// not CHAOS-4085 ever fired -- exactly the kind of over-broad marker this
+// function exists to avoid.
+func twoTurnCommitAffirmationState(decision graphrank.ResolutionTraceEvent, result contractsv1.ContextFabricInvestigationResult) string {
+	if decision.Outcome != "committed" {
+		return ""
+	}
+	// codex xhigh review round 1 (MEDIUM, confirmed): CommitBasisUnknown
+	// (the zero value, "") is NOT string(CommitBasisStatistical), so a
+	// literal `!= statistical` comparison misreads it as exempt. Its own
+	// doc comment (chaos4085_commit_basis.go) says the opposite: Unknown
+	// is FAIL-CLOSED, "treated exactly like CommitBasisStatistical by
+	// every consumer", and is not in IdentityProven's allow-list. Calling
+	// IdentityProven() directly is both correct for Unknown and immune to
+	// a future CommitBasis value landing on the wrong side by default.
+	if contextfabric.CommitBasis(decision.CommitBasis).IdentityProven() {
+		return "exempt"
+	}
+	still := twoTurnCommittedSubjectKeys(result.SubjectResolution.Committed)
+	key := twoTurnSubjectKey{Kind: string(decision.Subject.Kind), CanonicalID: decision.Subject.CanonicalID}
+	if _, ok := still[key]; ok {
+		return "affirmed"
+	}
+	return "retracted"
+}
+
 // twoTurnInferredClassification computes CHAOS-4039's 3-way partition for a
 // DECISIVE (CommittedCount>0) kind/handle inferred-tier commit: hinted/
-// baselineCommitted are the paired calls' own SubjectResolution.Committed,
-// hinted/baselineOutcome their own final decision-stage trace Outcome
-// (twoTurnTraceCapture.finalDecisionEvent), and kindAttested is whether the
-// all-kinds census itself certified this exact commit (runTwoTurnInferredTierArm's
-// own kindInsensitivityResult/evidenceCensusCommitted check). Extracted from
-// the classification switch (runTwoTurnInferredTierArm) purely so it has a
-// unit test surface independent of that function's full investigator/
-// window-precondition machinery -- mirrors twoTurnUnjustifiedShadowProbe's
-// own extraction, immediately below.
+// baselineCommitted are the paired calls' own DECISION-LAYER committed-
+// subject sets (CHAOS-4139: twoTurnDecisionCommittedSubjects off each leg's
+// own final decision-stage trace event -- deliberately NOT
+// SubjectResolution.Committed on the final InvestigationResult, which
+// CHAOS-4085's post-synthesis affirmation gate can retract from
+// independently per leg; see twoTurnDecisionCommittedSubjects' own doc
+// comment for the full mechanism), hinted/baselineOutcome their own final
+// decision-stage trace Outcome (twoTurnTraceCapture.finalDecisionEvent),
+// and kindAttested is whether the all-kinds census itself certified this
+// exact commit (runTwoTurnInferredTierArm's own kindInsensitivityResult/
+// evidenceCensusCommitted check). Extracted from the classification switch
+// (runTwoTurnInferredTierArm) purely so it has a unit test surface
+// independent of that function's full investigator/window-precondition
+// machinery -- mirrors twoTurnUnjustifiedShadowProbe's own extraction,
+// immediately below.
 func twoTurnInferredClassification(hintedCommitted, baselineCommitted []contractsv1.ContextFabricSubjectRef, hintedOutcome, baselineOutcome string, kindAttested bool) string {
 	switch {
 	case hintedOutcome == baselineOutcome && twoTurnCommittedSubjectsEquivalent(hintedCommitted, baselineCommitted):
@@ -2313,6 +2484,19 @@ type twoTurnCaseResult struct {
 	// committed-subject SET (twoTurnCommittedSubjectsEquivalent, Kind+
 	// CanonicalID only) both match the hinted call's -- see
 	// twoTurnInferredClassification's own doc comment) is the 3-way
+	//
+	// CHAOS-4139 (2026-08-23) CLOSED A GAP between this paragraph's own
+	// claim and what the code actually compared: v5 shipped reading the
+	// committed-subject SET off SubjectResolution.Committed on the final
+	// InvestigationResult, which is NOT engine-deterministic --
+	// CHAOS-4085's post-synthesis commit-affirmation gate can retract a
+	// statistical commit from that exact field based on live model
+	// synthesis output, one layer downstream of the decision this
+	// paragraph always meant to compare. Now genuinely reads
+	// twoTurnDecisionCommittedSubjects off each leg's own decision-stage
+	// trace event -- see that function's own doc comment for the shard-54
+	// discovery and the ATTESTATION BOUNDARY section (CHAOS-4083) this is
+	// now also recorded under.
 	// partition every DECISIVE (CommittedCount>0) kind/handle inferred-tier
 	// outcome gets classified into exactly once: "baseline_equivalent" (a
 	// paired no-hint request reached the SAME engine-deterministic decision
@@ -2448,6 +2632,30 @@ type twoTurnCaseResult struct {
 	// as ever.
 	TraceEvents         []graphrank.ResolutionTraceEvent `json:"trace_events,omitempty"`
 	BaselineTraceEvents []graphrank.ResolutionTraceEvent `json:"baseline_trace_events,omitempty"`
+	// HintedCommitAffirmation/BaselineCommitAffirmation (CHAOS-4139,
+	// inferred_tier non-window members only) are each leg's OWN
+	// twoTurnCommitAffirmationState: "" (nothing committed at the decision
+	// layer), "exempt" (IdentityProven commit basis -- CHAOS-4085's gate
+	// never evaluates it), "affirmed" (statistical basis, gate evaluated
+	// it, let it stand), or "retracted" (statistical basis, gate found no
+	// synthesis support and discarded it from SubjectResolution.Committed).
+	// Read directly off each leg's own result.SubjectResolution.Committed
+	// (engine-only state; never off result.Limitations, which is
+	// model-authored and could coincidentally match the fixed
+	// ContextFabricCommitRetractionLimitation text) -- see that
+	// function's own doc comment.
+	//
+	// THE BAR THIS EXISTS FOR: shard 54 of the 2026-08-23 re-measure showed
+	// two legs with BYTE-IDENTICAL decision-stage trace events still
+	// classify "unjustified" (pre-CHAOS-4139) because one leg's
+	// independent synthesis call affirmed the statistical commit and the
+	// other's did not -- CHAOS-4139 moved the classification itself off
+	// this model-influenced layer (see InferredClassification's own doc
+	// comment), but a reader watching THIS specific mechanism recur still
+	// needs it visible on the row, not re-derived by re-investigating a
+	// live run every time.
+	HintedCommitAffirmation   string `json:"hinted_commit_affirmation,omitempty"`
+	BaselineCommitAffirmation string `json:"baseline_commit_affirmation,omitempty"`
 	// ---------------------------------------------------------------
 	// CHAOS-4086 instant-diagnosis fields
 	// ---------------------------------------------------------------
@@ -2947,6 +3155,26 @@ type twoTurnReport struct {
 	// provenance gap it closes (no artifact recorded which model actually
 	// answered a file-exchange run's calls). Purely additive; the mirror
 	// gained it too, for the same reason.
+	//
+	// "16" (CHAOS-4139, 2026-08-23, team-lead ruling "A'"): a MEANING
+	// change, not purely additive -- the SAME class of bump v9 needed for
+	// the identical reason. InferredClassification's own comparison basis
+	// changed: twoTurnInferredClassification now reads
+	// twoTurnDecisionCommittedSubjects (each leg's own decision-stage trace
+	// event) instead of SubjectResolution.Committed on the final
+	// InvestigationResult -- see that function's own doc comment for why
+	// v15 and earlier's "engine-deterministic" claim was not actually true
+	// (CHAOS-4085's post-synthesis affirmation gate can retract a
+	// statistical commit from the OLD comparison field independently per
+	// leg). A row this bug affected under v15 could classify
+	// "unjustified"; the identical inputs under v16 classify
+	// "baseline_equivalent" -- the SAME artifact shape, a DIFFERENT verdict
+	// for some rows, which is exactly why v8->v9 bumped on a meaning
+	// change with no field-shape change either. twoTurnCaseResult also
+	// gained HintedCommitAffirmation/BaselineCommitAffirmation (purely
+	// additive, own doc comment above) -- both changes land in the SAME
+	// bump since they are one ticket's own before/after pair, not two
+	// unrelated additions.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -3757,6 +3985,122 @@ func TestTwoTurnInferredClassification(t *testing.T) {
 	// re-admit the pre-v5 gap in the opposite direction.
 	if got := twoTurnInferredClassification(repository, repository, "committed", "ambiguous", false); got != "unjustified" {
 		t.Errorf(`twoTurnInferredClassification = %q, want "unjustified" when the paired decision outcomes differ despite an identical committed subject`, got)
+	}
+}
+
+// TestTwoTurnDecisionCommittedSubjects (CHAOS-4139) pins the extraction:
+// nil for any non-"committed" outcome (regardless of what garbage a
+// zero-value Subject might otherwise carry), a single-element slice
+// carrying exactly the decision's own Subject when committed.
+func TestTwoTurnDecisionCommittedSubjects(t *testing.T) {
+	t.Parallel()
+	subject := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-992"}
+	for _, outcome := range []string{"ambiguous", "no_commit", ""} {
+		t.Run("not committed: "+outcome, func(t *testing.T) {
+			decision := graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: outcome, Subject: subject}
+			if got := twoTurnDecisionCommittedSubjects(decision); got != nil {
+				t.Errorf("twoTurnDecisionCommittedSubjects(Outcome=%q) = %+v, want nil", outcome, got)
+			}
+		})
+	}
+	t.Run("committed", func(t *testing.T) {
+		decision := graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "committed", Subject: subject}
+		got := twoTurnDecisionCommittedSubjects(decision)
+		if len(got) != 1 || got[0] != subject {
+			t.Errorf("twoTurnDecisionCommittedSubjects(committed) = %+v, want [%+v]", got, subject)
+		}
+	})
+}
+
+// TestTwoTurnCommitAffirmationState (CHAOS-4139) pins all four states
+// against the ACTUAL constant CHAOS-4085's gate uses for basis
+// (contextfabric.CommitBasisStatistical/CommitBasisCallerCanonicalID/
+// CommitBasisAuthoritativeIdentity/CommitBasisUnknown) and, per codex xhigh
+// review round 2 (MEDIUM, confirmed), against a result.SubjectResolution
+// shaped exactly as applyCommitAffirmation itself leaves it -- present in
+// Committed for "affirmed", absent for "retracted" -- never against
+// result.Limitations, which is model-authored free text
+// (SynthesisDraft.Limitations, model_runtime.go) a synthesis call could in
+// principle reproduce independent of whether this gate ever fired.
+func TestTwoTurnCommitAffirmationState(t *testing.T) {
+	t.Parallel()
+	subject := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-992"}
+	otherSubject := contractsv1.ContextFabricSubjectRef{Kind: "repository", CanonicalID: "repository:github:full-chaos/other"}
+	committedStatistical := graphrank.ResolutionTraceEvent{
+		Stage: "decision", Outcome: "committed", Subject: subject,
+		CommitBasis: string(contextfabric.CommitBasisStatistical),
+	}
+	committedIdentityProven := graphrank.ResolutionTraceEvent{
+		Stage: "decision", Outcome: "committed", Subject: subject,
+		CommitBasis: string(contextfabric.CommitBasisCallerCanonicalID),
+	}
+	committedAuthoritativeIdentity := graphrank.ResolutionTraceEvent{
+		Stage: "decision", Outcome: "committed", Subject: subject,
+		CommitBasis: string(contextfabric.CommitBasisAuthoritativeIdentity),
+	}
+	// committedUnknownBasis (codex xhigh review round 1, MEDIUM, confirmed):
+	// CommitBasisUnknown is the zero value ("") -- a GraphReader or test
+	// double that never populates CommitBasis lands here for every
+	// committed subject by construction. Its own doc comment
+	// (chaos4085_commit_basis.go) is explicit: FAIL-CLOSED, "treated
+	// exactly like CommitBasisStatistical by every consumer", NOT
+	// IdentityProven. A CommitBasis field left zero-valued on a
+	// ResolutionTraceEvent (e.g. an older or partially-wired GraphReader)
+	// must still be subject to this gate, never silently read as exempt.
+	committedUnknownBasis := graphrank.ResolutionTraceEvent{
+		Stage: "decision", Outcome: "committed", Subject: subject,
+		CommitBasis: string(contextfabric.CommitBasisUnknown),
+	}
+	notCommitted := graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "ambiguous", Subject: subject}
+
+	if got := twoTurnCommitAffirmationState(notCommitted, contractsv1.ContextFabricInvestigationResult{}); got != "" {
+		t.Errorf(`twoTurnCommitAffirmationState(not committed) = %q, want ""`, got)
+	}
+	if got := twoTurnCommitAffirmationState(committedIdentityProven, contractsv1.ContextFabricInvestigationResult{}); got != "exempt" {
+		t.Errorf(`twoTurnCommitAffirmationState(IdentityProven basis: caller_canonical_id) = %q, want "exempt"`, got)
+	}
+	if got := twoTurnCommitAffirmationState(committedAuthoritativeIdentity, contractsv1.ContextFabricInvestigationResult{}); got != "exempt" {
+		t.Errorf(`twoTurnCommitAffirmationState(IdentityProven basis: authoritative_identity) = %q, want "exempt"`, got)
+	}
+	// "affirmed": decision.Subject is still present in
+	// result.SubjectResolution.Committed, exactly as applyCommitAffirmation
+	// leaves an un-retracted subject.
+	stillCommitted := contractsv1.ContextFabricInvestigationResult{
+		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []contractsv1.ContextFabricSubjectRef{subject}},
+	}
+	if got := twoTurnCommitAffirmationState(committedUnknownBasis, stillCommitted); got != "affirmed" {
+		t.Errorf(`twoTurnCommitAffirmationState(CommitBasisUnknown, still committed) = %q, want "affirmed" (Unknown is NOT exempt)`, got)
+	}
+	if got := twoTurnCommitAffirmationState(committedStatistical, stillCommitted); got != "affirmed" {
+		t.Errorf(`twoTurnCommitAffirmationState(statistical, still committed) = %q, want "affirmed"`, got)
+	}
+	// "retracted": decision.Subject is ABSENT from
+	// result.SubjectResolution.Committed -- either because Committed is
+	// empty (the subject was the only candidate and got fully retracted)
+	// or because Committed holds only some OTHER subject.
+	if got := twoTurnCommitAffirmationState(committedUnknownBasis, contractsv1.ContextFabricInvestigationResult{}); got != "retracted" {
+		t.Errorf(`twoTurnCommitAffirmationState(CommitBasisUnknown, absent from Committed) = %q, want "retracted"`, got)
+	}
+	otherCommitted := contractsv1.ContextFabricInvestigationResult{
+		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []contractsv1.ContextFabricSubjectRef{otherSubject}},
+	}
+	if got := twoTurnCommitAffirmationState(committedStatistical, otherCommitted); got != "retracted" {
+		t.Errorf(`twoTurnCommitAffirmationState(statistical, a DIFFERENT subject committed) = %q, want "retracted"`, got)
+	}
+	// Coverage.Partial=true and a model-authored Limitations entry that
+	// happens to equal the retraction disclosure string must NOT, on
+	// their own, flip an otherwise-still-committed subject to "retracted"
+	// -- both are exactly the false-positive shapes this function's own
+	// doc comment explains avoiding (Partial is shared with an unrelated
+	// retrieval-degradation path; Limitations is model-authored and could
+	// coincidentally match).
+	falsePositiveMarkers := contractsv1.ContextFabricInvestigationResult{
+		Coverage:          contractsv1.ContextFabricCoverage{Partial: true},
+		Limitations:       []string{contractsv1.ContextFabricCommitRetractionLimitation},
+		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []contractsv1.ContextFabricSubjectRef{subject}},
+	}
+	if got := twoTurnCommitAffirmationState(committedStatistical, falsePositiveMarkers); got != "affirmed" {
+		t.Errorf(`twoTurnCommitAffirmationState(statistical, still committed despite Partial+matching Limitations text) = %q, want "affirmed" (neither marker is this gate's own evidence)`, got)
 	}
 }
 
@@ -4651,8 +4995,35 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		res.FalseNoMatch = true
 	}
 
-	if !isWindow && res.CommittedCount > 0 {
-		hintedDecision, _ := trace.finalDecisionEvent()
+	var hintedDecision graphrank.ResolutionTraceEvent
+	if !isWindow {
+		hintedDecision, _ = trace.finalDecisionEvent()
+		// CHAOS-4139: per-leg affirmation visibility -- what CHAOS-4085's
+		// post-synthesis gate did to EACH leg's own commit, independent of
+		// whether the pairing below is valid for classification at all.
+		// This is what makes a future "unjustified despite identical
+		// decisions" row self-explanatory from the artifact alone, instead
+		// of requiring the shard-54-style investigation that found this
+		// mechanism in the first place. Stamped unconditionally (not
+		// gated on res.CommittedCount, a RESULT-layer/hinted-only field --
+		// see the classification gate below for why that would be exactly
+		// the bug this ticket exists to fix, one line up).
+		res.HintedCommitAffirmation = twoTurnCommitAffirmationState(hintedDecision, result)
+		res.BaselineCommitAffirmation = twoTurnCommitAffirmationState(baselineDecision, baseline)
+	}
+	// codex xhigh review round 1 (MEDIUM, confirmed): this used to read
+	// `res.CommittedCount > 0` -- len(result.SubjectResolution.Committed),
+	// the HINTED leg's own RESULT-layer (post-CHAOS-4085-affirmation)
+	// count. When CHAOS-4085 retracts the hinted leg's ONLY commit, that
+	// count goes to zero and this whole block -- classification included
+	// -- was silently skipped, even though the hinted leg's OWN
+	// decision-stage trace shows a real "committed" outcome. That is the
+	// exact shape this ticket fixes one layer up, just on the gate that
+	// decides whether to classify at all rather than on the comparison
+	// itself: team-lead's ruling ("classify regardless of post-synthesis
+	// affirmation divergence") applies to both. Decision-layer outcome on
+	// EITHER leg is now what makes a pairing worth classifying.
+	if !isWindow && (hintedDecision.Outcome == "committed" || baselineDecision.Outcome == "committed") {
 		// windowConfirmedAsBand (codex adversarial review, 2026-08-21,
 		// round 2, HIGH -- confirmed against window.go's own
 		// composeWindowClarification/relativeWindowBounds): safety net for
@@ -4717,7 +5088,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			res.PairInvalid = true
 		} else {
 			res.InferredClassification = twoTurnInferredClassification(
-				result.SubjectResolution.Committed, baseline.SubjectResolution.Committed,
+				twoTurnDecisionCommittedSubjects(hintedDecision), twoTurnDecisionCommittedSubjects(baselineDecision),
 				hintedDecision.Outcome, baselineDecision.Outcome,
 				twoTurnKindAttested(trace, result.SubjectResolution.Committed))
 			if res.InferredClassification == "unjustified" {
@@ -5500,7 +5871,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "15",
+		ReportSchemaVersion: "16",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
