@@ -99,6 +99,16 @@ SHARD_COUNT="${3:-4}"
 # failures are free, not in a measurement run.
 CASES_PER_SHARD="${ACR_TRIAL_CASES_PER_SHARD:-}"
 MAX_CONCURRENT="${ACR_TRIAL_MAX_CONCURRENT_SHARDS:-8}"
+# ACR_TEST_TRIAL_RESPONDER_MODEL (CHAOS-4113): explicit pass-through to
+# run-responder-codex.sh, not ambient inheritance -- unset by default,
+# which leaves every shard's responder with no `-m` flag (today's
+# behavior, unchanged; see that script's own header for what setting this
+# actually does and does not affect). Exported ONCE here, before the shard
+# loop below launches its per-shard responder background jobs, since every
+# shard in one run answers with the SAME model -- each backgrounded
+# `run-responder-codex.sh` call inherits it like any other exported
+# variable, no per-shard threading needed.
+export ACR_TEST_TRIAL_RESPONDER_MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}"
 # SHARD_PLAN_ONLY prints the computed layout as JSON and exits without
 # provisioning anything. The layout is the one piece of this script with
 # real logic in it, so it is made inspectable and testable rather than

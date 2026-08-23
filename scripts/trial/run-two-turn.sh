@@ -61,6 +61,11 @@ exdir="$repo_root/.trial-exchange-twoturn-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 mkdir -p "$exdir/requests" "$exdir/responses"
 export ACR_TEST_TRIAL_EXCHANGE_DIR="$exdir"
 export ACR_TEST_TRIAL_EXCHANGE_TIMEOUT="${ACR_TRIAL_EXCHANGE_TIMEOUT:-10m}"
+# CHAOS-4113: explicit pass-through, not ambient inheritance -- unset by
+# default, which leaves run-responder-codex.sh's own `codex exec` call with
+# no `-m` flag (today's behavior, unchanged). See that script's own header
+# for what setting this actually does and does not affect.
+export ACR_TEST_TRIAL_RESPONDER_MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}"
 echo "EXCHANGE_DIR=$exdir"
 echo "ORACLE_ANNEX=$ANNEX_PATH"
 

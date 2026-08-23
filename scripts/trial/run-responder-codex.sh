@@ -10,6 +10,20 @@
 # exports that variable). Exits once <exchange-dir>/DONE exists and every
 # published request has a matching response file.
 #
+# ACR_TEST_TRIAL_RESPONDER_MODEL (CHAOS-4113, optional): when set, passed to
+# every `codex exec` invocation as `-m "$MODEL"`, so the answering model is
+# an explicit, deliberate choice rather than whatever this batch's
+# config-less CODEX_HOME (below) happens to resolve as its own built-in
+# default. Left unset, the `codex exec` argv itself is unchanged -- still no
+# `-m` flag at all, so the answering model is exactly what it was before
+# this variable existed. (The watch line below and the three wrapper
+# scripts do gain a new, empty pass-through variable and an explicit
+# "model=<codex default...>" mention in the log -- narrower than a literal
+# byte-identical run, codex xhigh review round 1.) This is the ONLY model
+# knob this script has: it never reads ACR_CONTEXT_FABRIC_MODEL or any
+# other production-model env var, and setting this has no effect on ACR's
+# own genkit/OpenAI-API code path, which this harness never calls.
+#
 # Hygiene (non-negotiable, per the epic's standing operational rules):
 #   - ONE fresh, PRIVATE CODEX_HOME for this whole batch -- not the operator's
 #     real ~/.codex (a large, shared, live-session directory: history,
@@ -36,6 +50,7 @@ set -euo pipefail
 
 EXDIR="${1:?exchange dir required}"
 POLL="${2:-2}"
+MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}"
 
 REQ_DIR="$EXDIR/requests"
 RESP_DIR="$EXDIR/responses"
@@ -56,7 +71,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "responder: watching $EXDIR (private CODEX_HOME=$codex_home_batch, poll=${POLL}s) -- subscription auth only, never a metered API key"
+if [[ -n "$MODEL" ]]; then
+  echo "responder: watching $EXDIR (private CODEX_HOME=$codex_home_batch, poll=${POLL}s, model=$MODEL) -- subscription auth only, never a metered API key"
+else
+  echo "responder: watching $EXDIR (private CODEX_HOME=$codex_home_batch, poll=${POLL}s, model=<codex default -- ACR_TEST_TRIAL_RESPONDER_MODEL unset>) -- subscription auth only, never a metered API key"
+fi
 
 answer_one() {
   local req="$1" base resp prompt
@@ -64,13 +83,22 @@ answer_one() {
   resp="$RESP_DIR/$base"
   [[ -f "$resp" ]] && return 0
   prompt="Read the JSON file at $req. It has fields: operation, seq, session_nonce, system, prompt, output_schema, instructions. Follow the request's own \"instructions\" field exactly: treat \"system\" as the system role and \"prompt\" as the user payload, produce exactly one JSON object satisfying \"output_schema\" (every required field present, enum values exactly as listed, no extra top-level fields beyond what the schema allows). Base the answer ONLY on \"system\" and \"prompt\" -- never invent facts not present in them. Then write a JSON file to $resp whose top level is exactly {\"session_nonce\": <the request's session_nonce, copied verbatim>, \"output\": <your JSON object>}. Write the file yourself with your own file-write tool at that exact path. Do not print the JSON to the terminal. Do not modify any other file. This is a single self-contained task; stop once the response file is written."
+  # -m/--model is appended ONLY when ACR_TEST_TRIAL_RESPONDER_MODEL is set
+  # (see this script's own header) -- an empty MODEL leaves this array
+  # byte-identical to every invocation before that variable existed.
+  local -a codex_args=(
+    --ephemeral
+    --skip-git-repo-check
+    -s workspace-write
+    -C "$EXDIR"
+    --add-dir "$EXDIR"
+    -c 'sandbox_workspace_write.network_access=false'
+  )
+  if [[ -n "$MODEL" ]]; then
+    codex_args+=(-m "$MODEL")
+  fi
   CODEX_HOME="$codex_home_batch" codex exec \
-    --ephemeral \
-    --skip-git-repo-check \
-    -s workspace-write \
-    -C "$EXDIR" \
-    --add-dir "$EXDIR" \
-    -c 'sandbox_workspace_write.network_access=false' \
+    "${codex_args[@]}" \
     "$prompt" \
     </dev/null >>"$LOG_DIR/$base.log" 2>&1 || true
 }
