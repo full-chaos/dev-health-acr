@@ -26,18 +26,40 @@
 //     testdata/fullstack/v1's own "harness-owned schema... never enters
 //     contracts/, not subject to the contract-first rule" precedent,
 //     docs/fullstack-acceptance.md): it is the future P5 annotator's input,
-//     documented in-repo (testdata/panelharness/v1/schema/panel_run_manifest.v1.schema.json,
+//     documented in-repo (testdata/panelharness/v1/schema/panel_run_manifest.v{1,2}.schema.json,
+//     one file per ManifestSchemaVersion so an old artifact keeps
+//     validating against its OWN version's file even after a bump --
 //     docs/design/context-fabric-panel-run-manifest.md) as its own
 //     versioned artifact, never folded into internal/contracts/v1.
 package panelharness
 
 import "time"
 
-// ManifestSchemaVersion is this package's own schema identity -- bump on any
-// breaking change to PanelRunManifest's shape, mirroring every other
-// versioned wire/artifact type in this repo (contractsv1's own
-// "<Name>Schema" constants).
-const ManifestSchemaVersion = "panel_run_manifest.v1"
+// ManifestSchemaVersion is this package's own schema identity, ladder
+// mirroring contractsv1's own "<Name>Schema" version-bump discipline
+// (see e.g. that package's ReportSchemaVersion v13/v17/v22 citations at
+// each field's own introduction) -- ONE evolving const in this package,
+// each new field's doc comment citing the ticket and version that added
+// it (CHAOS-4146(c): "started properly," this is that start). UNLIKE
+// contractsv1 (which has no per-version JSON Schema file to keep in
+// lockstep), this package's own testdata/panelharness/v1/schema/ directory
+// keeps ONE JSON Schema file PER version (panel_run_manifest.v1.schema.json,
+// panel_run_manifest.v2.schema.json, ...): a manifest a prior binary wrote
+// must keep validating against ITS OWN version's schema after a later
+// bump, never be silently invalidated by one shared, overwritten file
+// (codex xhigh review, MEDIUM, caught on the v1->v2 bump this ticket
+// makes).
+//
+//   - v1 (CHAOS-3860 P6): SchemaVersion, PanelRunID, OrgID, QuestionHash,
+//     AlgorithmVersion, StartedAt, CompletedAt, Members. Retroactively also
+//     covers ClarificationLogs (CHAOS-4146(a)) -- purely additive
+//     (omitempty), so it shipped without its own bump; noted here so the
+//     ladder is complete starting from v1, as CHAOS-4146(c) requires.
+//   - v2 (CHAOS-4146(c)): CaseIndex (PanelRunManifest and PanelMemberRun),
+//     RunTag, CorpusPath, CorpusSHA256 -- the batch corpus driver's own
+//     provenance, all optional/omitempty for a single ad-hoc (-question)
+//     run.
+const ManifestSchemaVersion = "panel_run_manifest.v2"
 
 // AlgorithmVersion identifies THIS package's own selection-and-consensus
 // algorithm (how a panelist's redemption is recorded, how majority/agreement
@@ -80,6 +102,26 @@ type PanelRunManifest struct {
 	// exactly like AgreementBits below: no consensus/disagreement labeling
 	// is derived from it here.
 	ClarificationLogs []PanelistClarificationLog `json:"clarification_logs,omitempty"`
+	// CaseIndex identifies which corpus case (0-based array position,
+	// matching the two-turn trial harness's own oracle-annex indexing
+	// convention) this manifest answers, when produced by the batch corpus
+	// driver (cmd/acr-panel-harness -corpus) -- CHAOS-4146(c), schema v2.
+	// Index only, NEVER the case's question text (corpus-safety discipline,
+	// docs/design/context-fabric-panel-run-manifest.md §4). nil for a
+	// single ad-hoc (-question) run.
+	CaseIndex *int `json:"case_index,omitempty"`
+	// RunTag groups every manifest one batch invocation writes -- mirrors
+	// scripts/trial's own RUN_TAG discipline (UTC timestamp + PID,
+	// collision-safe across concurrent invocations). Empty for a single
+	// ad-hoc run. CHAOS-4146(c), schema v2.
+	RunTag string `json:"run_tag,omitempty"`
+	// CorpusPath/CorpusSHA256 are the batch run's own provenance: WHICH
+	// corpus file drove it, and a hash proving it was not silently swapped
+	// mid-batch -- path and hash only, the corpus's own question text is
+	// never carried here. Empty for a single ad-hoc run. CHAOS-4146(c),
+	// schema v2.
+	CorpusPath   string `json:"corpus_path,omitempty"`
+	CorpusSHA256 string `json:"corpus_sha256,omitempty"`
 }
 
 // ClarificationTurnOutcome is the closed-vocabulary classification for one
@@ -150,6 +192,11 @@ type PanelMemberRun struct {
 	// "panelists" would really be the same model counted twice.
 	DistinctIdentities bool             `json:"distinct_identities"`
 	Consensus          ConsensusSummary `json:"consensus"`
+	// CaseIndex mirrors PanelRunManifest.CaseIndex (denormalized onto every
+	// member row so a flattened/joined reader over Members does not need
+	// to carry the parent manifest's context) -- CHAOS-4146(c), schema v2.
+	// nil for a single ad-hoc run, identical to the top-level field.
+	CaseIndex *int `json:"case_index,omitempty"`
 }
 
 // PanelistSelection is one panelist's own, independently-derived redemption

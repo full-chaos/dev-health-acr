@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/full-chaos/dev-health-acr/testdata/panelharness/v1/schema/panel_run_manifest.v2.schema.json",
+  "title": "CHAOS-3860 P6 panel run manifest (v2)",
+  "description": "HARNESS-OWNED schema (see docs/design/context-fabric-panel-run-manifest.md): the immutable, machine-readable artifact internal/panelharness.Run produces per (org, question) activation. NOT a product wire contract -- it never enters contracts/ and is not subject to the contract-first rule, mirroring testdata/fullstack/v1's own context_fabric_agent_result.v1.schema.json precedent exactly (ACR does not consume this; a future, separately-ratified P5 annotator does). v2 adds CHAOS-4146(c)'s batch corpus provenance (case_index/run_tag/corpus_path/corpus_sha256); v1 (panel_run_manifest.v1.schema.json, kept unchanged and still valid for historical v1 artifacts) is the pre-CHAOS-4146(c) shape.",
+  "type": "object",
+  "required": ["schema_version", "panel_run_id", "org_id", "question_hash", "algorithm_version", "started_at", "completed_at", "members"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "panel_run_manifest.v2" },
+    "panel_run_id": { "type": "string", "minLength": 1 },
+    "org_id": { "type": "string", "minLength": 1 },
+    "question_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hex digest of the canonicalized question (contextfabric.QuestionHash) -- the raw question text is NEVER carried by this artifact."
+    },
+    "algorithm_version": { "type": "string", "minLength": 1 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "members": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/panel_member_run" }
+    },
+    "clarification_logs": {
+      "type": "array",
+      "description": "CHAOS-4146(a): one entry per panelist that attempted at least one Investigate call, its own turn-by-turn clarification-loop history. Optional and additive -- absent on a manifest written before this field existed.",
+      "items": { "$ref": "#/$defs/panelist_clarification_log" }
+    },
+    "case_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "CHAOS-4146(c), schema v2: 0-based corpus case index (cmd/acr-panel-harness -corpus batch mode). Index only, never the case's question text. Absent for a single ad-hoc (-question) run."
+    },
+    "run_tag": {
+      "type": "string",
+      "minLength": 1,
+      "description": "CHAOS-4146(c), schema v2: groups every manifest one batch invocation writes (mirrors scripts/trial's own RUN_TAG discipline). Absent for a single ad-hoc run."
+    },
+    "corpus_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "CHAOS-4146(c), schema v2: path to the corpus file that drove a batch run -- path only, never the corpus's own content. Absent for a single ad-hoc run."
+    },
+    "corpus_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "CHAOS-4146(c), schema v2: SHA-256 hex digest of the corpus file's raw bytes, proving it was not silently swapped mid-batch. Absent for a single ad-hoc run."
+    }
+  },
+  "$defs": {
+    "panel_member_run": {
+      "type": "object",
+      "required": ["member", "panelists", "complete", "distinct_identities", "consensus"],
+      "additionalProperties": false,
+      "properties": {
+        "member": {
+          "type": "string",
+          "enum": ["expected_kind", "subject_anchor", "subject_handle"],
+          "description": "window is out of this harness's scope -- it rides its own, separately designed WindowSelectionEvent path."
+        },
+        "panelists": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/panelist_selection" }
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "true only when EVERY configured panelist produced a landed (applied, not vetoed) selection for this member -- the sol-max ruling's required invariant, part 1."
+        },
+        "distinct_identities": {
+          "type": "boolean",
+          "description": "true only when every panelist's canonical_model_identity is unique -- the required invariant, part 2."
+        },
+        "consensus": { "$ref": "#/$defs/consensus_summary" },
+        "case_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "CHAOS-4146(c), schema v2: mirrors the enclosing manifest's own case_index, denormalized onto every member row. Absent for a single ad-hoc run."
+        }
+      }
+    },
+    "panelist_selection": {
+      "type": "object",
+      "required": ["canonical_model_identity", "prior_result_id", "receipt_id", "applied_value", "accepted", "confirmed_result_id"],
+      "additionalProperties": false,
+      "properties": {
+        "canonical_model_identity": { "type": "string", "minLength": 1 },
+        "prior_result_id": { "type": "string", "minLength": 1 },
+        "receipt_id": { "type": "string", "minLength": 1 },
+        "applied_value": { "type": "string", "minLength": 1 },
+        "accepted": { "type": "boolean" },
+        "confirmed_result_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "panelist_clarification_log": {
+      "type": "object",
+      "required": ["canonical_model_identity", "turns"],
+      "additionalProperties": false,
+      "properties": {
+        "canonical_model_identity": { "type": "string", "minLength": 1 },
+        "turns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/clarification_turn_event" }
+        }
+      }
+    },
+    "clarification_turn_event": {
+      "type": "object",
+      "required": ["turn", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "turn": { "type": "integer", "minimum": 1 },
+        "outcome": {
+          "type": "string",
+          "enum": ["decisive", "refused_no_offers", "refused_not_confident", "continued", "turn_exhausted"]
+        },
+        "offer_kinds": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["expected_kind", "subject_anchor", "subject_handle"] }
+        }
+      }
+    },
+    "consensus_summary": {
+      "type": "object",
+      "required": ["value_counts", "agreement_bits"],
+      "additionalProperties": false,
+      "properties": {
+        "value_counts": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "majority_value": { "type": "string" },
+        "agreement_bits": {
+          "type": "array",
+          "items": { "type": "boolean" },
+          "description": "parallel to the enclosing panel_member_run's own panelists array -- agreement_bits[i] reports whether panelists[i].applied_value equals majority_value. Reported data only; this artifact never itself claims a promotion decision (that rule is P5/curation's own, separately-ratified authority threshold)."
+        }
+      }
+    }
+  }
+}
