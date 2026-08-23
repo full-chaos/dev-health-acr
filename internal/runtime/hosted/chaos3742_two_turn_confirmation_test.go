@@ -1012,6 +1012,32 @@ func (c *twoTurnTraceCapture) confirmedKindRescueEvent() (event graphrank.Resolu
 	return event, ok
 }
 
+// evidenceRoundEvent (CHAOS-4161 v19) is kindCoverageFloorEvent's own twin
+// for the evidence_round stage (CHAOS-3899) -- same last-event-wins rule.
+// Deliberately a SEPARATE reader from censusRan(): RunShadowEvidenceRound
+// (chaos3899_evidence_round.go) emits exactly ONE "evidence_round" event on
+// EVERY call that reaches it, including every one of its own early-return
+// refusals (non-current axis, scoped visibility, multi-handle, no
+// discriminators, unregistered census kind, zero census kinds surviving the
+// per-kind loop) -- so this event's mere PRESENCE proves only that the
+// round was ENTERED (resolve.go:1835's own outer gate,
+// deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated,
+// passed), never that CensusFunc was actually invoked for any kind. That is
+// exactly what census_ran()'s own doc comment already establishes by keying
+// off "evidence_probe" instead. This reader exists to make the ENTRY fact
+// itself observable, corpus-wide, independent of whether a census ever ran
+// -- see evidenceRoundEntered/evidenceRoundReason, below, and CHAOS-4161's
+// own investigation (census_ran=false read as "CensusFunc is nil" until
+// this distinction was traced through).
+func (c *twoTurnTraceCapture) evidenceRoundEvent() (event graphrank.ResolutionTraceEvent, ok bool) {
+	for _, e := range c.events {
+		if e.Stage == "evidence_round" {
+			event, ok = e, true
+		}
+	}
+	return event, ok
+}
+
 // passTruncation (CHAOS-4120) reports per-pass truncation across the
 // captured call's retrieval: whether the per-term "search" pass truncated
 // on ANY term, and whether the question-level "search_question" pass
@@ -1648,6 +1674,31 @@ type twoTurnTurn1Facts struct {
 	CensusRan      bool
 	CensusComplete bool
 	CensusCount    int
+	// EvidenceRoundEntered/EvidenceRoundReason (CHAOS-4161 v19) mirror
+	// twoTurnTraceCapture.evidenceRoundEvent() -- whether the round was
+	// entered at all (resolve.go:1835's outer gate passed) and, when it
+	// was, the closed-vocabulary DegradationReason it refused with --
+	// ShadowReason's own vocabulary, chaos3899_handle_grammar.go. MUST be
+	// read together, exactly like CensusRan/CensusComplete/CensusCount
+	// above: EvidenceRoundEntered==false -> never entered,
+	// EvidenceRoundReason carries no meaning; EvidenceRoundEntered==true &&
+	// EvidenceRoundReason!="" -> entered and refused for that named reason.
+	// EvidenceRoundEntered==true && EvidenceRoundReason=="" is genuinely
+	// TWO-WAY AMBIGUOUS (codex xhigh review, CHAOS-4161 R1) -- Reason stays
+	// unset both for a terminal would_commit/would_no_match outcome AND for
+	// the default would_clarify branch's own "genuinely ambiguous, no
+	// single closed-vocabulary reason token names this case" outcome
+	// (chaos3899_evidence_round.go's decisive switch, its own default arm)
+	// -- so an empty Reason here means "no NAMED degradation reason," never
+	// "terminal." Disambiguating those two needs ShadowOutcome, which this
+	// ticket does not carry (out of scope; a future field, not this one).
+	// An empty EvidenceRoundReason is NOT by itself the fail-closed "never
+	// entered" reading either way -- EvidenceRoundEntered is the field that
+	// draws that line; census_ran()==false with EvidenceRoundEntered==true
+	// is exactly the "entered but the per-kind CensusFunc loop was never
+	// reached" case CHAOS-4161 was filed to make observable.
+	EvidenceRoundEntered bool
+	EvidenceRoundReason  string
 	// Regime (CHAOS-4120, coined by the 2026-08-22 question-results
 	// decomposition off CHAOS-4118's own Mechanism section) is stamped from
 	// the engine's OWN gate-path telemetry (EngineTelemetry.
@@ -1752,6 +1803,10 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 	facts.CensusRan = trace.censusRan()
 	facts.CensusComplete = trace.censusComplete()
 	facts.CensusCount = trace.censusCount()
+	if event, ok := trace.evidenceRoundEvent(); ok {
+		facts.EvidenceRoundEntered = true
+		facts.EvidenceRoundReason = event.ShadowReason
+	}
 	facts.Regime = twoTurnRegimeFromWindowCanonicalization(trace.windowCanonicalization)
 	return facts
 }
@@ -1784,6 +1839,8 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.CensusRan = facts.CensusRan
 	res.CensusComplete = facts.CensusComplete
 	res.CensusCount = facts.CensusCount
+	res.EvidenceRoundEntered = facts.EvidenceRoundEntered
+	res.EvidenceRoundReason = facts.EvidenceRoundReason
 	res.Regime = facts.Regime
 }
 
@@ -2053,6 +2110,7 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 				{Stage: "search_question", Truncated: true},
 				{Stage: "kind_coverage_floor", KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true},
 				{Stage: "confirmed_kind_rescue", ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true},
+				{Stage: "evidence_round", ShadowReason: ""},
 				{Stage: "evidence_probe", CensusComplete: true, CensusCount: 4},
 				{Stage: "decision", CommitGate: "lone_floor", TiedStatisticalTop: true, SearchTruncated: true},
 			},
@@ -2065,10 +2123,59 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 			ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
 			TermSearchTruncated: true, QuestionSearchTruncated: true,
 			ExpectedInPool: true, CensusRan: true, CensusComplete: true, CensusCount: 4,
+			EvidenceRoundEntered: true, EvidenceRoundReason: "",
 			Regime: twoTurnRegimeAWindowGated,
 		}
 		if facts != want {
 			t.Errorf("twoTurnCaptureTurn1Facts() = %+v, want %+v", facts, want)
+		}
+	})
+
+	// CHAOS-4161: the exact case this ticket exists for -- the round is
+	// ENTERED (an evidence_round event traces) but refuses BEFORE the
+	// per-kind loop, so evidence_probe never fires and CensusRan stays
+	// false. EvidenceRoundEntered must still read true, with the refusal's
+	// own reason carried, proving this case is distinguishable from "the
+	// round was never entered at all" (the next subtest).
+	t.Run("evidence_round entered but refused before any census probe", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{
+			events: []graphrank.ResolutionTraceEvent{
+				{Stage: "search", Truncated: true},
+				{Stage: "evidence_round", ShadowReason: string(graphrank.ReasonNoDiscriminators)},
+				{Stage: "decision", CommitGate: "", SearchTruncated: true},
+			},
+		}
+		facts := twoTurnCaptureTurn1Facts(trace, contractsv1.ContextFabricInvestigationResult{}, tc)
+		if !facts.EvidenceRoundEntered {
+			t.Error("EvidenceRoundEntered = false, want true -- an evidence_round event was traced")
+		}
+		if facts.EvidenceRoundReason != string(graphrank.ReasonNoDiscriminators) {
+			t.Errorf("EvidenceRoundReason = %q, want %q", facts.EvidenceRoundReason, graphrank.ReasonNoDiscriminators)
+		}
+		if facts.CensusRan {
+			t.Error("CensusRan = true, want false -- no evidence_probe event was traced")
+		}
+	})
+
+	// The outer gate (resolve.go:1835) never entered the round at all --
+	// e.g. deps.CensusFunc==nil, or resolution.Committed was non-empty, or
+	// searchTruncated was false. No evidence_round event traces, so
+	// EvidenceRoundEntered must read false and EvidenceRoundReason must
+	// carry no meaning (stay at its zero value) -- distinct from the
+	// "entered but refused" subtest above.
+	t.Run("evidence_round never entered", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{
+			events: []graphrank.ResolutionTraceEvent{
+				{Stage: "search", Truncated: false},
+				{Stage: "decision", CommitGate: "lone_floor"},
+			},
+		}
+		facts := twoTurnCaptureTurn1Facts(trace, contractsv1.ContextFabricInvestigationResult{}, tc)
+		if facts.EvidenceRoundEntered {
+			t.Error("EvidenceRoundEntered = true, want false -- no evidence_round event was traced")
+		}
+		if facts.EvidenceRoundReason != "" {
+			t.Errorf("EvidenceRoundReason = %q, want \"\" (carries no meaning when EvidenceRoundEntered is false)", facts.EvidenceRoundReason)
 		}
 	})
 }
@@ -2153,7 +2260,9 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
 			TermSearchTruncated: true, QuestionSearchTruncated: true,
 			ExpectedInPool: true, AnchorOptionsCount: 1, HandleOptionsCount: 2,
-			CensusRan: true, CensusComplete: true, CensusCount: 7, Regime: twoTurnRegimeAWindowGated,
+			CensusRan: true, CensusComplete: true, CensusCount: 7,
+			EvidenceRoundEntered: true, EvidenceRoundReason: string(graphrank.ReasonNoDiscriminators),
+			Regime: twoTurnRegimeAWindowGated,
 		}
 		res := twoTurnCaseResult{}
 		twoTurnStampTurn1Facts(&res, facts)
@@ -2195,6 +2304,10 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			t.Error("CensusComplete = false, want true")
 		case res.CensusCount != 7:
 			t.Errorf("CensusCount = %d, want 7", res.CensusCount)
+		case !res.EvidenceRoundEntered:
+			t.Error("EvidenceRoundEntered = false, want true")
+		case res.EvidenceRoundReason != string(graphrank.ReasonNoDiscriminators):
+			t.Errorf("EvidenceRoundReason = %q, want %q", res.EvidenceRoundReason, graphrank.ReasonNoDiscriminators)
 		case res.Regime != twoTurnRegimeAWindowGated:
 			t.Errorf("Regime = %q, want %q", res.Regime, twoTurnRegimeAWindowGated)
 		}
@@ -2942,6 +3055,27 @@ type twoTurnCaseResult struct {
 	CensusRan      bool `json:"census_ran"`
 	CensusComplete bool `json:"census_complete"`
 	CensusCount    int  `json:"census_count"`
+	// EvidenceRoundEntered/EvidenceRoundReason (CHAOS-4161 v19) mirror
+	// twoTurnTurn1Facts.EvidenceRoundEntered/EvidenceRoundReason -- see that
+	// field's own doc comment for the exact reading (never-entered /
+	// entered-and-named-refusal / entered-with-no-named-reason -- the last
+	// of those is genuinely two-way ambiguous between a terminal
+	// would_commit/would_no_match and the decisive switch's own
+	// unnamed-ambiguity default arm; ShadowOutcome would be needed to tell
+	// them apart and is out of this ticket's scope) and why an empty
+	// EvidenceRoundReason is NOT itself the fail-closed "never entered"
+	// signal either way -- EvidenceRoundEntered is. No omitempty on either,
+	// the same reason CensusRan/CensusComplete/CensusCount above have none:
+	// false and "" are exactly the values that distinguish "never entered"
+	// from "entered, no named reason," and hiding them would reintroduce
+	// the ambiguity this pair exists to resolve. Filed because
+	// census_ran==false was being read as "CensusFunc is nil" corpus-wide
+	// when it actually meant "the round entered (or not) but never reached
+	// the per-kind CensusFunc loop" -- these two fields make that
+	// distinction directly observable without needing the (redacted-on-
+	// non-anomalous-rows) full trace.
+	EvidenceRoundEntered bool   `json:"evidence_round_entered"`
+	EvidenceRoundReason  string `json:"evidence_round_reason"`
 	// Regime (CHAOS-4120) mirrors twoTurnTurn1Facts.Regime -- see that
 	// field's own doc comment for the engine-native (never output-shape-
 	// inferred) derivation and why this is a closed vocabulary string
@@ -3307,6 +3441,30 @@ type twoTurnReport struct {
 	// cmd/acr-trial-merge-two-turn/main.go gained all six fields in the same
 	// change, same "an undeclared field is dropped on decode" reason every
 	// prior bump needed it for.
+	//
+	// "19" (CHAOS-4161, 2026-08-23): purely additive, closing a gap found
+	// while diagnosing why census_ran read false on every work_item-anchored
+	// stalled row in an ext65 rerun: RunShadowEvidenceRound
+	// (chaos3899_evidence_round.go) traces an "evidence_round" event on
+	// EVERY call that reaches it, including every one of its own 7 early-
+	// return refusals -- so that stage's mere presence proves only the round
+	// was ENTERED (resolve.go:1835's outer gate passed), never that
+	// CensusFunc was invoked. census_ran() already knew this (it keys off
+	// "evidence_probe" instead, per its own doc comment), but the harness
+	// never captured the entry fact itself, so "never entered" (the outer
+	// gate's own precondition failed) and "entered but refused before the
+	// per-kind loop" were indistinguishable from the artifact alone.
+	// twoTurnCaseResult gains EvidenceRoundEntered/EvidenceRoundReason, read
+	// via the new twoTurnTraceCapture.evidenceRoundEvent() (kindCoverage
+	// FloorEvent's own last-event-wins pattern) and populated turn-1-only,
+	// the same single-field (no Turn1-prefixed twin) shape CensusRan/
+	// CensusComplete/CensusCount already use. Survives CHAOS-4135's
+	// non-anomalous-row trace redaction unchanged: that pass clears only
+	// TraceEvents/BaselineTraceEvents, never these scalar summary fields.
+	// No merge arithmetic changes (Results concatenates verbatim); the
+	// mirror in cmd/acr-trial-merge-two-turn/main.go gained both fields in
+	// the same change, same "an undeclared field is dropped on decode"
+	// reason every prior bump needed it for.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -4344,8 +4502,10 @@ func TestTwoTurnRedactNonAnomalousTraceEvents(t *testing.T) {
 	t.Parallel()
 	events := []graphrank.ResolutionTraceEvent{{Stage: "decision", Outcome: "committed"}}
 	results := []twoTurnCaseResult{
-		{Index: 1, WrongCommit: true, TraceEvents: events, BaselineTraceEvents: events},
-		{Index: 2, TraceEvents: events, BaselineTraceEvents: events},
+		{Index: 1, WrongCommit: true, TraceEvents: events, BaselineTraceEvents: events,
+			CensusRan: true, EvidenceRoundEntered: true, EvidenceRoundReason: string(graphrank.ReasonNoDiscriminators)},
+		{Index: 2, TraceEvents: events, BaselineTraceEvents: events,
+			CensusRan: true, EvidenceRoundEntered: true, EvidenceRoundReason: string(graphrank.ReasonNoDiscriminators)},
 	}
 	twoTurnRedactNonAnomalousTraceEvents(results)
 
@@ -4354,6 +4514,25 @@ func TestTwoTurnRedactNonAnomalousTraceEvents(t *testing.T) {
 	}
 	if results[1].TraceEvents != nil || results[1].BaselineTraceEvents != nil {
 		t.Errorf("ordinary row (index 2) kept its trace events: %+v", results[1])
+	}
+	// CHAOS-4161: redaction only clears TraceEvents/BaselineTraceEvents --
+	// CensusRan/EvidenceRoundEntered/EvidenceRoundReason are separate scalar
+	// summary fields, computed once (pre-redaction) from the in-process
+	// trace capture, and must survive on BOTH rows regardless of anomaly
+	// status. A regression here would silently reintroduce, for the
+	// (overwhelmingly common) non-anomalous rows, exactly the
+	// never-entered-vs-entered-but-refused ambiguity these fields exist to
+	// resolve.
+	for _, res := range results {
+		if !res.CensusRan {
+			t.Errorf("row %d: CensusRan redacted to false, want true (redaction must not touch summary scalars)", res.Index)
+		}
+		if !res.EvidenceRoundEntered {
+			t.Errorf("row %d: EvidenceRoundEntered redacted to false, want true", res.Index)
+		}
+		if res.EvidenceRoundReason != string(graphrank.ReasonNoDiscriminators) {
+			t.Errorf("row %d: EvidenceRoundReason redacted to %q, want %q", res.Index, res.EvidenceRoundReason, graphrank.ReasonNoDiscriminators)
+		}
 	}
 }
 
@@ -6142,7 +6321,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "18",
+		ReportSchemaVersion: "19",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
