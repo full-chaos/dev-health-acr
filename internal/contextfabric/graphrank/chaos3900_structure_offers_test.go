@@ -35,7 +35,7 @@ func TestKindOfferMaterial_SingleKindPoolOffersNothing(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_2"),
 	}
-	material, diag := kindOfferMaterial(candidates, nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(single-kind pool) = %+v, want empty: nothing to disambiguate when every candidate is the same kind", material)
 	}
@@ -57,7 +57,7 @@ func TestKindOfferMaterial_MultiKindPoolOffersDisambiguation(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material, diag := kindOfferMaterial(candidates, nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
 		t.Fatalf("material.Missing = %v, want exactly [expected_kind]", material.Missing)
 	}
@@ -99,7 +99,7 @@ func TestKindOfferMaterial_DuplicateKindsCollapseToOneOption(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_3"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material, diag := kindOfferMaterial(candidates, nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil)
 	if len(material.KindOptions) != 2 {
 		t.Fatalf("len(material.KindOptions) = %d, want 2 (one per DISTINCT kind, not one per candidate)", len(material.KindOptions))
 	}
@@ -119,7 +119,7 @@ func TestKindOfferMaterial_NonOfferableKindsAreIgnoredForDisambiguation(t *testi
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectDocument, "doc_1"),
 	}
-	material, diag := kindOfferMaterial(candidates, nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(pull_request + document) = %+v, want empty: document is not in the offerable expected_kind vocabulary", material)
 	}
@@ -1653,6 +1653,123 @@ func TestNarrowPooledKindsByExplicitKinds(t *testing.T) {
 	}
 }
 
+// TestDistinctOfferableKinds_DedupesFirstOccurrenceOrderRestrictedToOfferable
+// pins distinctOfferableKinds' own contract, extracted verbatim from
+// kindOfferMaterial's old inline poolDistinct loop (CHAOS-4183 phase 3): a
+// pool's distinct offerable kinds, first-occurrence order, with any
+// non-offerable kind (document -- not in structureOfferKinds) silently
+// dropped.
+func TestDistinctOfferableKinds_DedupesFirstOccurrenceOrderRestrictedToOfferable(t *testing.T) {
+	t.Parallel()
+	candidates := []contextfabric.SubjectCandidate{
+		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
+		candidateOf(contractsv1.ContextFabricSubjectDocument, "doc_1"),
+		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_2"),
+	}
+	got := distinctOfferableKinds(candidates)
+	want := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectPullRequest}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("distinctOfferableKinds = %v, want %v -- first-occurrence order, document dropped, wi_2 not a second entry", got, want)
+	}
+}
+
+func TestDistinctOfferableKinds_EmptyPool(t *testing.T) {
+	t.Parallel()
+	if got := distinctOfferableKinds(nil); got != nil {
+		t.Errorf("distinctOfferableKinds(nil) = %v, want nil", got)
+	}
+}
+
+// TestProjectKindOfferKinds_CausalUnitFixture is the CHAOS-4183 phase 3
+// validation step 1 causal fixture (sol design consult, team-lead ratified
+// 2026-08-23): visible carries only the top-ranked kind (pull_request); the
+// full merged pool additionally carries two lower-ranked kinds that never
+// reached `visible` -- ci_pipeline_run and work_item -- PLUS a non-offerable
+// kind (document) that must never be admitted regardless of pool presence.
+// Asserts: before is untouched (visible's own distinct kinds only); after
+// admits exactly the two missing OFFERABLE kinds, appended in the FIXED
+// sortedKinds(structureOfferKinds) lexicographic order
+// (ci_pipeline_run < work_item), never fullPool's own (map, thus
+// non-deterministic) iteration order, and never document.
+func TestProjectKindOfferKinds_CausalUnitFixture(t *testing.T) {
+	t.Parallel()
+	visible := []contextfabric.SubjectCandidate{
+		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+	}
+	fullPool := map[string]contextfabric.SubjectCandidate{
+		"pr_1":  candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+		"ci_1":  candidateOf(contractsv1.ContextFabricSubjectCIRun, "ci_1"),
+		"wi_1":  candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
+		"doc_1": candidateOf(contractsv1.ContextFabricSubjectDocument, "doc_1"),
+	}
+
+	before, after := projectKindOfferKinds(visible, fullPool, 0)
+
+	wantBefore := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}
+	if len(before) != 1 || before[0] != wantBefore[0] {
+		t.Fatalf("before = %v, want %v -- unchanged from visible's own distinct kinds", before, wantBefore)
+	}
+	wantAfter := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectPullRequest,
+		contractsv1.ContextFabricSubjectCIRun,
+		contractsv1.ContextFabricSubjectWorkItem,
+	}
+	if len(after) != len(wantAfter) {
+		t.Fatalf("after = %v, want %v", after, wantAfter)
+	}
+	for i, kind := range wantAfter {
+		if after[i] != kind {
+			t.Fatalf("after = %v, want %v -- FIXED closed-vocab (sortedKinds) order, not pool iteration order", after, wantAfter)
+		}
+	}
+}
+
+// TestProjectKindOfferKinds_CommittedResolutionSkipsRepair pins the design's
+// own "stalled resolutions ONLY" scope: once anything has committed, the
+// pre-repair boundary is returned for BOTH before and after unchanged --
+// the kind-only completion never fires on a committed resolution, even when
+// the full pool has an absent offerable kind.
+func TestProjectKindOfferKinds_CommittedResolutionSkipsRepair(t *testing.T) {
+	t.Parallel()
+	visible := []contextfabric.SubjectCandidate{
+		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+	}
+	fullPool := map[string]contextfabric.SubjectCandidate{
+		"pr_1": candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+		"wi_1": candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
+	}
+
+	before, after := projectKindOfferKinds(visible, fullPool, 1)
+
+	if len(after) != 1 || after[0] != contractsv1.ContextFabricSubjectPullRequest {
+		t.Fatalf("after = %v, want [pull_request] -- committed resolutions must not repair", after)
+	}
+	if len(before) != 1 || before[0] != after[0] {
+		t.Fatalf("before = %v, after = %v, want identical when committed", before, after)
+	}
+}
+
+// TestProjectKindOfferKinds_NoAbsentKindsIsANoOp pins the case where fullPool
+// has nothing visible does not already carry: after must equal before, not
+// merely equal in content -- no spurious repair entries appended.
+func TestProjectKindOfferKinds_NoAbsentKindsIsANoOp(t *testing.T) {
+	t.Parallel()
+	visible := []contextfabric.SubjectCandidate{
+		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
+	}
+	fullPool := map[string]contextfabric.SubjectCandidate{
+		"pr_1": candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+		"wi_1": candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
+	}
+
+	before, after := projectKindOfferKinds(visible, fullPool, 0)
+	if len(before) != 2 || len(after) != 2 || before[0] != after[0] || before[1] != after[1] {
+		t.Fatalf("before = %v, after = %v, want identical two-kind lists -- nothing absent to repair", before, after)
+	}
+}
+
 // TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool
 // (CHAOS-3972 P3, design brief §2.3) pins the asymmetry explicit kinds
 // introduce: the pool-derived >=2-distinct-kinds gate stays in force for
@@ -1681,7 +1798,7 @@ func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testin
 		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem}},
 		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest}},
 	}
-	material, diag = kindOfferMaterial(candidates, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem})
+	material, diag = kindOfferMaterial(distinctOfferableKinds(candidates), []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem})
 	if len(material.KindOptions) != 2 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectWorkItem {
 		t.Fatalf("material.KindOptions = %+v, want the explicit kind ranked first", material.KindOptions)
 	}

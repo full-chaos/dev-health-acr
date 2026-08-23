@@ -160,6 +160,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// -- see KindOfferBoundaryKinds' own doc comment (ResolutionTraceEvent)
 		// for why boundary-scoped presence, distinct from the trace-wide
 		// ExpectedInPool, is what this re-smoke follow-up needed.
+		//
+		// CHAOS-4183 phase 3 (sol design consult, team-lead ratified
+		// 2026-08-23): boundary_kinds is now POST-repair (the kind-only
+		// projection's own `after` list); the three *_before_repair keys
+		// carry the pre-phase-3 readings verbatim, same closed-vocabulary
+		// discipline as boundary_kinds itself. See
+		// KindOfferBoundaryKindsBeforeRepair's own doc comment
+		// (ResolutionTraceEvent) for the full mechanism.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: kind offer",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"explicit_hint_count", event.KindOfferExplicitHintCount,
@@ -167,7 +175,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
 			"candidate_offer_count", event.KindOfferCandidateOfferCount,
 			"offer_kind", event.KindOfferOfferKind,
-			"boundary_kinds", event.KindOfferBoundaryKinds)
+			"boundary_kinds", event.KindOfferBoundaryKinds,
+			"boundary_kinds_before_repair", event.KindOfferBoundaryKindsBeforeRepair,
+			"distinct_kind_count_before_repair", event.KindOfferDistinctKindCountBeforeRepair,
+			"suppressed_by_cardinality_before_repair", event.KindOfferSuppressedByCardinalityBeforeRepair)
 	case "confirmed_kind_scope":
 		// CHAOS-4154: the operator-visible half of the confirmed-kind
 		// truncation-scoping mechanism -- this event's own presence in a

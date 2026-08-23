@@ -228,7 +228,27 @@ import (
 // (Results concatenates verbatim); mirrored here in the same change, same
 // undeclared-field-dropped-on-decode reason as every prior bump needed it
 // for.
-const expectedSchemaVersion = "25"
+// "26" (CHAOS-4183 phase 3, sol design consult, team-lead ratified
+// 2026-08-23): POST-DECISION KIND-ONLY BOUNDARY COMPLETION for Shape A --
+// stalled resolutions only, no candidate added, no score changed, no extra
+// SearchKind call, no displacement. Two changes, both requiring the bump.
+// (a) MEANING change: KindOfferBoundaryKinds is now the POST-repair
+// boundary, not the raw pre-repair snapshot -- so ExpectedKindAtOfferBoundary
+// reads POST-repair too, automatically. A v25 row's
+// expected_kind_at_offer_boundary=false and a v26 row's own false are NOT
+// the same claim for a Shape-A case. (b) Purely additive: the PRE-repair
+// twins -- KindOfferBoundaryKindsBeforeRepair/
+// KindOfferDistinctKindCountBeforeRepair/
+// KindOfferSuppressedByCardinalityBeforeRepair on the trace event;
+// ExpectedKindAtOfferBoundaryBeforeRepair (single, turn-1-only) and the
+// Turn1-prefixed KindOfferDistinctKindCountBeforeRepair/
+// KindOfferSuppressedByCardinalityBeforeRepair twins on twoTurnCaseResult.
+// candidateOfferMaterial/CandidateOptions and resolution.Candidates/Committed
+// are byte-unchanged by this phase. No merge arithmetic changes (Results
+// concatenates verbatim); mirrored here in the same change, same
+// undeclared-field-dropped-on-decode reason as every prior bump needed it
+// for.
+const expectedSchemaVersion = "26"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -452,6 +472,10 @@ type twoTurnCaseResult struct {
 	Turn1KindOfferExplicitHintCount       int  `json:"turn1_kind_offer_explicit_hint_count"`
 	Turn1KindOfferDistinctKindCount       int  `json:"turn1_kind_offer_distinct_kind_count"`
 	Turn1KindOfferSuppressedByCardinality bool `json:"turn1_kind_offer_suppressed_by_cardinality"`
+	// CHAOS-4183 phase 3 (schema v26): the PRE-repair twins, mirroring
+	// twoTurnCaseResult's identically-named fields byte-for-byte.
+	Turn1KindOfferDistinctKindCountBeforeRepair       int  `json:"turn1_kind_offer_distinct_kind_count_before_repair"`
+	Turn1KindOfferSuppressedByCardinalityBeforeRepair bool `json:"turn1_kind_offer_suppressed_by_cardinality_before_repair"`
 	// CHAOS-4012 v22: turn 1's own candidate-list twin, mirroring
 	// twoTurnCaseResult's identically-named fields byte-for-byte.
 	Turn1CandidateOfferCount     int    `json:"turn1_candidate_offer_count"`
@@ -463,11 +487,15 @@ type twoTurnCaseResult struct {
 	// scoped refinement, mirroring twoTurnCaseResult's identically-named
 	// field byte-for-byte.
 	ExpectedKindAtOfferBoundary bool `json:"expected_kind_at_offer_boundary"`
-	AnchorOptionsCount          int  `json:"anchor_options_count"`
-	HandleOptionsCount          int  `json:"handle_options_count"`
-	CensusRan                   bool `json:"census_ran"`
-	CensusComplete              bool `json:"census_complete"`
-	CensusCount                 int  `json:"census_count"`
+	// CHAOS-4183 phase 3 (schema v26): ExpectedKindAtOfferBoundary's
+	// PRE-repair twin, mirroring twoTurnCaseResult's identically-named
+	// field byte-for-byte.
+	ExpectedKindAtOfferBoundaryBeforeRepair bool `json:"expected_kind_at_offer_boundary_before_repair"`
+	AnchorOptionsCount                      int  `json:"anchor_options_count"`
+	HandleOptionsCount                      int  `json:"handle_options_count"`
+	CensusRan                               bool `json:"census_ran"`
+	CensusComplete                          bool `json:"census_complete"`
+	CensusCount                             int  `json:"census_count"`
 	// CHAOS-4161 v19: mirrors twoTurnCaseResult's identically-named fields
 	// byte-for-byte -- see that file's own doc comment.
 	EvidenceRoundEntered bool   `json:"evidence_round_entered"`
