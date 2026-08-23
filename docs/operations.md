@@ -1088,6 +1088,117 @@ Promotion, publication, and release revocation are described in
 [release policy](release-policy.md). Test the promoted digest, preserve its
 provenance, and rehearse an application rollback before a production upgrade.
 
+### CHAOS-3916 production graph cutover runbook
+
+This is the chris-owned cutover CHAOS-3916 itself deferred ("a separate,
+chris-owned decision" -- see the CHAOS-3916 paragraph above): enabling
+`ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED` in production for the first
+time, on an image that already carries `ClickHouseSourceVersion` v6,
+`TeamsProjectsSourceVersion` v3, and the CHAOS-4108 join-arm fix. Every
+pre-flight below was learned the hard way during CHAOS-3916's local/trial
+rehearsal (see CHAOS-4147) -- skipping one reproduces that incident at
+production scale.
+
+**Mandatory pre-flights, in order, before triggering anything:**
+
+1. **`ACR_CONTEXT_FABRIC_EMBED_API_KEY` is present AND non-blank in
+   `acr-projector`'s actual resolved environment -- the RUNNING container's
+   own view, not a reference or a point-in-time Secret read.** Neither
+   `kubectl get pod -o jsonpath` (shows the env var's `secretKeyRef`
+   NAME/KEY, never the resolved value) nor reading the Secret object
+   directly (its CURRENT content, which the running container may not
+   actually have -- a rotation after the Pod last started leaves the
+   container's real environment stale until it restarts) proves what the
+   process actually has. The image is distroless (no `printenv`/`env`
+   binary to `kubectl exec`), so use `kubectl debug -it <pod>
+   --image=busybox --target=acr-projector -- sh -c "cat
+   /proc/1/environ | tr '\0' '\n' | grep -E
+   '^ACR_CONTEXT_FABRIC_EMBED_API_KEY=.+$'"` -- anchored and requiring at
+   least one character after `=`; an unanchored `grep
+   ACR_CONTEXT_FABRIC_EMBED_API_KEY` matches the line even when the value
+   is blank (`ACR_CONTEXT_FABRIC_EMBED_API_KEY=` with nothing after it),
+   which is exactly the failure mode this pre-flight exists to catch
+   (an ephemeral debug container sharing the target's process namespace) to
+   read the value the running process actually resolved at its own start
+   time. This is the CHAOS-4147 trap: `embedprovider.Configured()` checks
+   only `ACR_CONTEXT_FABRIC_EMBED_BASE_URL` -- a set base URL with a
+   blank/absent key constructs a fully "configured", silently-broken
+   embedder that destroys every vector it touches on its first failed
+   batch. Do not infer from "the Secret exists" or "the Pod spec
+   references a Secret"; confirm the key material actually resolved into
+   the RUNNING container, right now.
+2. **The lifecycle flag is ON in BOTH `acr-api` and `acr-projector`,
+   set the same way.** `contextFabric.falkor.*` and the lifecycle env var
+   must agree across both Deployments (`values.yaml`'s own comment: they
+   resolve an organization's graph key through the same epoch pointer once
+   either has it on). Check both rendered manifests, not just one.
+3. **The lifecycle flag must be ON for EVERY reader of an organization --
+   not just `acr-api`/`acr-projector` -- BEFORE that organization's first
+   flip, and this is IRREVERSIBLE once the flip's grace window sweeps
+   (CHAOS-4147, second finding).** A flag-off reader (any harness, script,
+   or tool constructing its own falkorgraph client with a nil
+   `EpochResolver`) resolves the bare, unsuffixed epoch-0 key
+   (`graphKeyForEpoch`'s epoch<=0 branch is byte-identical to the
+   pre-CHAOS-3898 legacy key). The FIRST flip an organization ever does
+   starts that epoch-0 key's grace clock; once grace expires, the retire
+   executor's periodic sweep (`tryBeginRetire`/`DrainingRetirements`)
+   issues a real `GRAPH.DELETE` against it. **The sweep only runs while an
+   `acr-projector serve` tick loop is alive** -- if nothing has been
+   running, an already-expired retirement sits dormant, durably recorded
+   (`acr.context_fabric_graph_epoch_retirements`, `state=draining`) but
+   not yet executed, and fires on the NEXT process to tick, arbitrarily
+   later and for reasons unrelated to whatever that process is actually
+   doing. A flag-off reader querying the now-deleted key does not get a
+   clean "not found": FalkorDB/RedisGraph auto-vivifies an empty,
+   index-less graph on any query against a nonexistent key, so the reader
+   observes "key exists, index_absent" -- indistinguishable from a
+   fresh/never-bootstrapped organization, not from "this reader's target
+   was permanently retired." Confirm every reader that will touch this
+   organization -- including CI harnesses -- resolves epochs through the
+   lifecycle-aware path before the first flip, not after.
+4. **The deployed image digest actually contains v6/v3 + CHAOS-4108.**
+   Confirm the digest being promoted was built from a commit at or after
+   `TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v3"` and
+   `ClickHouseSourceVersion = "devhealthsource.clickhouse.v6"`
+   (`internal/contextfabric/devhealthsource/{teams_projects,clickhouse}.go`)
+   and after PR #216 (CHAOS-4108's join-arm fix). An older digest re-creates
+   exactly the mixed-format-edge hazard this ticket exists to close.
+5. **No CLI lever exists to supersede a completed-but-bad epoch during its
+   grace window (CHAOS-4147).** `acr-projector rebuild --org` refuses
+   (silently, as a benign no-op) once a prior rebuild has already flipped
+   for that organization -- `rollback --org` is the only lever inside the
+   grace window, and it reverts to the PRIOR epoch's data (pre-CHAOS-4108
+   here). Get pre-flights 1-4 right BEFORE triggering `rebuild --org`; there
+   is no clean in-window do-over if the embedder credential turns out to be
+   wrong.
+6. **Post-rebuild verification is BY EXERCISE, never by inference**, for
+   every organization rebuilt:
+   - `Subject.embedding IS NOT NULL` count is nonzero on the active epoch
+     key, and any gap from total node count is accounted for by the
+     documented `embedKindSkipped`/`isPureIdentifierSubject` skip
+     populations (CHAOS-3833/CHAOS-3835) -- not left unexplained.
+   - Run one real `CALL db.idx.vector.queryNodes('Subject', 'embedding',
+     k, <a live node's own embedding>)` KNN query and confirm a
+     near-zero self-match distance plus semantically coherent neighbors.
+     An operational index with zero embeddings still answers a KNN query
+     with garbage; only an exercised query catches that.
+   - Spot-check the census/project-anchor predicate (or an equivalent
+     project-scoped read) against a known project pair to confirm the
+     CHAOS-4108 join-arm fix produced the expected edge counts.
+   - Spot-check at least one ordinary, non-project-scoped read (e.g. a
+     work item lookup) for coherent, well-formed output, and check for
+     duplicate `canonical_id`s org-wide -- the CHAOS-3916 ticket's own
+     failure mode ("mixed-format edges, duplicate nodes").
+
+**Rollback posture:** the build-aside-and-swap design retains the prior
+epoch through its grace window (default 24h, `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_GRACE_WINDOW`)
+specifically so `acr-projector rollback --org <id>` can restore it if a
+flip should not have happened. Outside the grace window, or for an
+organization never before rebuilt (a first-time cutover, epoch 0 -> 1, no
+prior epoch to roll back to), the only rollback is disabling the lifecycle
+flag application-wide, which reverts read/write to the legacy in-place
+path and leaves the just-built epoch orphaned until a future decision.
+
 ## Backup and restore
 
 ACR PostgreSQL is operational state; ClickHouse evidence is read-only and is

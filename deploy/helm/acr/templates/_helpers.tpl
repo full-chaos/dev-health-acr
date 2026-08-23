@@ -292,6 +292,41 @@ operator's own responsibility (codex round 2 finding 2).
 {{- end -}}
 
 {{/*
+CHAOS-3916/CHAOS-4147 codex round-1 findings: two Context Fabric
+misconfigurations a doc comment alone cannot prevent an operator from
+making.
+
+F1: contextFabric.embed.baseURL constructs a non-nil embedder
+(embedprovider.Configured() checks ONLY baseURL) regardless of whether a
+real API key is behind existingSecret -- a set baseURL with an absent
+existingSecret is EXACTLY the CHAOS-4147 incident shape (a silently
+"configured" embedder that destroys vectors on its first failed batch).
+Only guarded when contextFabric.projector.enabled, matching this chart's
+existing "unused values are not yet a hazard" posture (e.g.
+validateConnectionKind never fires for a Deployment that isn't rendered).
+
+F2: contextFabric.lifecycleEnabled activates acr-projector's build-aside-
+and-swap epoch mechanics from the shared flag ALONE (projector-deployment.yaml
+has no readsEnabled gate), independent of acr-api's Investigator gate
+(contextFabric.readsEnabled -- see values.yaml's own comment: lifecycleEnabled
+is inert on acr-api without it). A projector actively flipping an
+organization's active epoch while no acr-api reader can ever observe the
+result is a real, silent misconfiguration, not a valid degraded state --
+guard it the same way the projector-specific F1 guard above does, only
+when the projector is genuinely active (enabled AND projectionEnabled).
+*/}}
+{{- define "acr.validateContextFabricGraph" -}}
+{{- $cf := .Values.contextFabric -}}
+{{- $projectorActive := and $cf.projector.enabled $cf.projector.projectionEnabled -}}
+{{- if and $cf.projector.enabled ($cf.embed.baseURL | default "") -}}
+{{- $_ := include "acr.requireSecretName" (dict "name" ($cf.embed.existingSecret | default "") "label" "unconfigured-embedder" "field" "contextFabric.embed.existingSecret") -}}
+{{- end -}}
+{{- if and $projectorActive $cf.lifecycleEnabled (not $cf.readsEnabled) -}}
+{{- fail "orphaned-lifecycle-writer: contextFabric.lifecycleEnabled=true with an active projector (contextFabric.projector.enabled and projectionEnabled) requires contextFabric.readsEnabled=true -- otherwise acr-projector actively flips this organization's active epoch while no acr-api reader can ever observe the result" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Remote entitlement is selected automatically when an origin is supplied. Local
 allow-all entitlement is restricted to development/test and must not retain
 remote token or CA inputs.
