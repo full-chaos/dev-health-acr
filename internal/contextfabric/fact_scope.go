@@ -47,6 +47,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -174,6 +175,33 @@ const (
 	// set assembled from a half-completed authorization pass is not a
 	// subject set anyone may read facts for.
 	FactScopeFailed FactScopeExpansionOutcome = "failed"
+
+	// FactScopeMatchedUnauthorized: the chain ran to completion, candidates
+	// existed, and every one of them was dropped by authorization -- a
+	// caller unauthorized for a project's repositories traversing that same
+	// project.
+	//
+	// RULED 2026-08-22 (design doc §6b), SUPERSEDING an earlier same-day
+	// ruling that collapsed this case into attempted_empty. Reporting an
+	// all-auth-dropped traversal as attempted_empty is a FALSE proof of
+	// absence (invariant 7): targets existed, the caller simply could not
+	// see them. The fix is not to make the two cases indistinguishable --
+	// it is to give this one its own honest name. Invariant 9 is amended to
+	// permit it: within an org, repository EXISTENCE is not confidential
+	// (org access already implies knowing a repository exists; what is
+	// actually restricted is its CONTENT), so disclosing that unauthorized
+	// repositories exist protects nothing invariant 9 was written to guard.
+	// Fact content from an unauthorized repository never reaches the
+	// caller under ANY outcome, including this one.
+	//
+	// SCOPED TO THE ALL-DROPPED CASE ONLY (team-lead ruling 2026-08-22): a
+	// MIXED traversal -- some candidates admitted, some auth-dropped --
+	// stays FactScopeExpanded/FactScopeExpandedPartial and does not raise
+	// this outcome or its warning. No false proof of absence is made in the
+	// mixed case (real facts DO reach the answer), so invariant 7 is not in
+	// play there; extending the warning to that case is a deliberate v1
+	// limitation, left to a possible fast-follow (see design doc §6b).
+	FactScopeMatchedUnauthorized FactScopeExpansionOutcome = "matched_unauthorized"
 )
 
 // FactScopeFailureClass is the closed sub-vocabulary for FactScopeFailed.
@@ -400,18 +428,26 @@ type factScopeEligibilityRow struct {
 //     directly, so it never prunes and never reaches this table.
 var factScopeEligibility = []factScopeEligibilityRow{
 	// --- The three ACTIVATABLE policies (stage 2, project origin only) ---
+	//
+	// ENABLED (CHAOS-4099 stage 2, 2026-08-22): every stage-2 activation
+	// precondition is satisfied -- see design doc §9 and this change's own
+	// PR body for the evidence (oracle comparison, canonical-ID alignment
+	// via CHAOS-4108, per-hop authorization proof, activity_proxy and
+	// current-axis-only sign-offs). No control-flow change from stage 1:
+	// exactly the Enabled flip and a wired FactScopeExpander implementation
+	// the design doc's own §8 promised.
 	{
 		Requirement: FactMetrics, Origins: []SubjectKind{SubjectProject},
 		Rule: factScopePolicyRule{
 			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainRepository,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainRepository, Enabled: true,
 		},
 	},
 	{
 		Requirement: FactPullRequests, Origins: []SubjectKind{SubjectProject},
 		Rule: factScopePolicyRule{
 			Policy: FactScopePolicyProjectWorkItemPullRequest, TargetKind: SubjectPullRequest,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainPullRequest,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainPullRequest, Enabled: true,
 		},
 	},
 	{
@@ -419,6 +455,7 @@ var factScopeEligibility = []factScopeEligibilityRow{
 		Rule: factScopePolicyRule{
 			Policy:     FactScopePolicyProjectWorkItemPullRequestReview,
 			TargetKind: contractsv1.ContextFabricSubjectPullRequestReview,
+			Enabled:    true,
 			Basis:      FactScopeBasisActivityProxy, Chain: factScopeChainReview,
 		},
 	},
@@ -646,6 +683,38 @@ func (s *FactReadScope) HasDisclosableGap() bool {
 	return false
 }
 
+// MatchedUnauthorizedCount sums AuthorizationDroppedCount across every event
+// this resolution recorded a matched_unauthorized outcome for -- the trigger
+// AND the count for the existence-disclosure warning (ruled 2026-08-22,
+// design doc §6b). Zero whenever no requirement hit that outcome, which
+// HasMatchedUnauthorizedGap treats identically to "nothing to disclose."
+//
+// Summed from Events, not Gaps: Gaps holds one entry PER REQUIREMENT (the
+// worst-wins slot), so reading it back would under-count a requirement
+// whose matched_unauthorized origin lost the slot to a worse-still gap from
+// a different origin kind -- unreachable for the three ruled policies today
+// (each has exactly one eligible origin kind, project), but Events is the
+// complete, ungated record and costs nothing extra to sum over.
+func (s *FactReadScope) MatchedUnauthorizedCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, event := range s.Events {
+		if event.Outcome == FactScopeMatchedUnauthorized {
+			count += event.AuthorizationDroppedCount
+		}
+	}
+	return count
+}
+
+// HasMatchedUnauthorizedGap reports whether any requirement's expansion hit
+// the matched_unauthorized outcome -- the trigger for the existence-drop
+// warning below.
+func (s *FactReadScope) HasMatchedUnauthorizedGap() bool {
+	return s.MatchedUnauthorizedCount() > 0
+}
+
 // factScopeGapDegrades says whether an outcome means something the answer
 // wanted is genuinely missing.
 //
@@ -668,7 +737,11 @@ func factScopeGapDegrades(outcome FactScopeExpansionOutcome) bool {
 	// incomplete as if the policy had been disabled; the reader is owed the
 	// same disclosure either way. That the operator ALSO gets a loud
 	// telemetry event is not a substitute for telling the reader.
-	case FactScopePolicyUnavailable, FactScopeExpandedPartial, FactScopeFailed, FactScopeTargetKindMismatch:
+	// FactScopeMatchedUnauthorized degrades (ruled 2026-08-22, design doc
+	// §6b): candidates existed and coverage is genuinely partial, even
+	// though the cause is authorization rather than a wiring error or an
+	// incomplete traversal.
+	case FactScopePolicyUnavailable, FactScopeExpandedPartial, FactScopeFailed, FactScopeTargetKindMismatch, FactScopeMatchedUnauthorized:
 		return true
 	// A complete expansion, and a chain that ran and genuinely ended, are
 	// the only two outcomes where nothing is missing.
@@ -710,6 +783,12 @@ func factScopeGapSourceState(outcome FactScopeExpansionOutcome) SourceState {
 	case FactScopeAttemptedEmpty:
 		// The chain ran and there was genuinely nothing there.
 		return SourceNoData
+	case FactScopeMatchedUnauthorized:
+		// Candidates existed and some of what was asked for is withheld --
+		// the same "some of what you asked for, honestly labelled" shape
+		// expanded_partial already carries, not SourceUnavailable (nothing
+		// ran) or SourceNoData (nothing was there).
+		return SourceTruncated
 	default:
 		// FAIL CLOSED, same reasoning as factScopeGapDegrades' own default:
 		// an unrecognised outcome must not be able to present itself as a
@@ -740,6 +819,14 @@ type FactScopeExpander interface {
 
 // FactScopeExpansionRequest is one traversal ask.
 type FactScopeExpansionRequest struct {
+	// Principal is the AUTHENTICATED caller, threaded through unmodified
+	// from ReadFacts (stage 2; unused while every policy stays disabled).
+	// An implementation authorizes every hop against THIS value -- never a
+	// value it re-derives from request.Origins or from anything read
+	// mid-traversal, and never a Principal it constructs itself (see
+	// storage.Principal's own doc comment: derived from validated
+	// authentication only).
+	Principal       storage.Principal
 	RequirementKind FactKind
 	Origins         []SubjectRef
 	Policy          FactScopePolicy
@@ -847,6 +934,7 @@ func newFactScopeResolveInput(request CanonicalFactRequest) factScopeResolveInpu
 // derived subject sets are deterministic (ruling invariant 8).
 func (r *FactReadScopeResolver) Resolve(
 	ctx context.Context,
+	principal storage.Principal,
 	input factScopeResolveInput,
 	capabilities map[FactKind]FactCapability,
 ) FactReadScope {
@@ -875,7 +963,7 @@ func (r *FactReadScopeResolver) Resolve(
 			// are stage 2's explicit case, gated on the same policy switch.
 			continue
 		}
-		r.resolveRequirement(ctx, &scope, requirement.Kind, roots, input.Axis)
+		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.Axis)
 	}
 	sortFactScopeDerivations(scope.Derivations)
 	return scope
@@ -885,6 +973,7 @@ func (r *FactReadScopeResolver) Resolve(
 // directly, walking its origin kinds in deterministic order.
 func (r *FactReadScopeResolver) resolveRequirement(
 	ctx context.Context,
+	principal storage.Principal,
 	scope *FactReadScope,
 	kind FactKind,
 	roots []SubjectRef,
@@ -945,7 +1034,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			// the same reason as every rung above.
 			event.Outcome = FactScopePolicyUnavailable
 		default:
-			r.expand(ctx, scope, &event, origins, rule)
+			r.expand(ctx, principal, scope, &event, origins, rule)
 		}
 
 		scope.Events = append(scope.Events, event)
@@ -999,12 +1088,14 @@ func (r *FactReadScopeResolver) resolveRequirement(
 // implementation, with no control-flow change to review a second time.
 func (r *FactReadScopeResolver) expand(
 	ctx context.Context,
+	principal storage.Principal,
 	scope *FactReadScope,
 	event *FactScopeExpansionEvent,
 	origins []SubjectRef,
 	rule factScopePolicyRule,
 ) {
 	result, err := r.expander.ExpandFactScope(ctx, FactScopeExpansionRequest{
+		Principal:       principal,
 		RequirementKind: event.RequirementKind,
 		Origins:         origins,
 		Policy:          rule.Policy,
@@ -1091,9 +1182,23 @@ func (r *FactReadScopeResolver) expand(
 		if len(admitted) == 0 {
 			return
 		}
+	case len(admitted) == 0 && event.AuthorizationDroppedCount > 0:
+		// The chain ran to completion, candidates existed, and every one
+		// was dropped by authorization -- NOT a proof of absence (ruled
+		// 2026-08-22, design doc §6b, superseding an earlier same-day
+		// ruling that collapsed this into attempted_empty). Distinct from
+		// the Truncated branch above: this traversal saw every candidate
+		// there was (no more pages behind it) and none of them survived
+		// authorization, which is a different, and more complete, picture
+		// than "we stopped partway through and everything so far was
+		// dropped."
+		event.Outcome = FactScopeMatchedUnauthorized
+		return
 	case len(admitted) == 0:
-		// The chain genuinely ran to completion and there was nothing there.
-		// The ONE outcome here that is a real proof of absence.
+		// The chain genuinely ran to completion and there was nothing
+		// there -- no candidates at all, or candidates that were dropped
+		// for a reason OTHER than authorization (temporal, missing next
+		// hop). The ONE outcome here that is a real proof of absence.
 		event.Outcome = FactScopeAttemptedEmpty
 		return
 	default:
@@ -1260,7 +1365,7 @@ func applyFactScopeDisclosure(result *InvestigationResult, scope *FactReadScope)
 	if result == nil {
 		return
 	}
-	// TWO INDEPENDENT DISCLOSURES, EITHER OR BOTH.
+	// TWO INDEPENDENT LIMITATION DISCLOSURES, EITHER OR BOTH.
 	//
 	// They say opposite things and neither implies the other. The gap
 	// disclosure says "we could not reach some evidence"; the proxy
@@ -1284,25 +1389,74 @@ func applyFactScopeDisclosure(result *InvestigationResult, scope *FactReadScope)
 	if scope.HasActivityProxyDerivation() {
 		disclosures = append(disclosures, factScopeActivityProxyLimitation)
 	}
-	if len(disclosures) == 0 {
-		return
+	if len(disclosures) > 0 {
+		// appendBoundedLimitations is the ONE path by which anything is
+		// added to a composed result's limitations. Both disclosures are
+		// registered service-authored in the contract's own list, so each
+		// can displace a model caveat but can never itself be the caveat
+		// displaced.
+		composed, displaced := appendBoundedLimitations(result.Limitations, disclosures)
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+		// The answer does not cover what it set out to cover. This is the
+		// same field, set for the same reason, as the retrieval-degradation
+		// path (engine.go), the commit-affirmation gate and CHAOS-4098's
+		// override.
+		//
+		// It is set here as well as by appendFactCoverage on the fact
+		// BUNDLE (fact_registry.go) rather than instead of it: the
+		// bundle's coverage is merged by the synthesizer, and a
+		// Synthesizer implementation that composes its own Coverage would
+		// otherwise drop the flag on the floor between the two. The
+		// result is what is validated, returned and persisted, so the
+		// result is where the guarantee has to hold.
+		result.Coverage.Partial = true
 	}
-	// appendBoundedLimitations is the ONE path by which anything is added to
-	// a composed result's limitations. Both disclosures are registered
-	// service-authored in the contract's own list, so each can displace a
-	// model caveat but can never itself be the caveat displaced.
-	composed, displaced := appendBoundedLimitations(result.Limitations, disclosures)
-	result.Limitations = composed
-	result.LimitationsDisplaced += displaced
-	// The answer does not cover what it set out to cover. This is the same
-	// field, set for the same reason, as the retrieval-degradation path
-	// (engine.go), the commit-affirmation gate and CHAOS-4098's override.
+	// A THIRD, SEPARATE disclosure -- a WARNING, not a limitation (ruled
+	// 2026-08-22, design doc §6b, superseding the earlier same-day ruling
+	// that kept every authorization drop telemetry-only). Existence-level
+	// visibility of an authorization drop is allowed by design within org
+	// scope: org access already implies knowing a repository exists, and
+	// what disclosing it protects is nothing invariant 9 was written to
+	// guard once existence itself is not the secret. Fact CONTENT from an
+	// unauthorized repository still never reaches the caller, under any
+	// outcome, through any channel -- this warning names a COUNT only.
 	//
-	// It is set here as well as by appendFactCoverage on the fact BUNDLE
-	// (fact_registry.go) rather than instead of it: the bundle's coverage is
-	// merged by the synthesizer, and a Synthesizer implementation that
-	// composes its own Coverage would otherwise drop the flag on the floor
-	// between the two. The result is what is validated, returned and
-	// persisted, so the result is where the guarantee has to hold.
-	result.Coverage.Partial = true
+	// Deliberately a Warning rather than a Limitation: every existing
+	// Limitations entry is FIXED and non-interpolated
+	// (ContextFabricServiceAuthoredLimitations' own exact-match contract),
+	// and this disclosure is "count-level" by ruling -- it cannot be both a
+	// fixed string and carry a count. Warnings have no such contract
+	// (appendUniqueWarning's own bound-and-dedupe discipline is sufficient).
+	if count := scope.MatchedUnauthorizedCount(); count > 0 {
+		result.Warnings = appendUniqueWarning(result.Warnings, factScopeMatchedUnauthorizedWarning(count))
+	}
+}
+
+// factScopeMatchedUnauthorizedWarning renders the count-level existence
+// disclosure for an authorization-dropped expansion. COUNT ONLY: no
+// repository identity, no policy, no requirement kind, no subject kind --
+// "identity naming is implementation freedom within same-org scope" per the
+// ruling, and this implementation takes the more conservative option rather
+// than assuming the freedom must be used. Full operator detail reaches
+// telemetry regardless (RecordFactScopeExpansion's own AuthorizationDroppedCount).
+//
+// "match(es)", not "repositories" (codex xhigh review round 1, confirmed
+// real, LOW): MatchedUnauthorizedCount sums AuthorizationDroppedCount
+// across every requirement's own event, and the SAME physical repository
+// dropped for metrics, pull_requests, AND reviews in one investigation
+// counts three times -- once per requirement, since each runs its own
+// traversal and authorization check independently. Deduplicating to a
+// true distinct-repository count would mean carrying repository identity
+// up into FactReadScope for this purpose alone, which the rest of this
+// disclosure path deliberately never does (identity stays out of every
+// caller-visible count by design). "Match" is the honest unit for what is
+// actually counted: one authorization drop the traversal encountered,
+// not one repository guaranteed unique.
+func factScopeMatchedUnauthorizedWarning(count int) string {
+	noun := "match"
+	if count != 1 {
+		noun = "matches"
+	}
+	return fmt.Sprintf("%d repository %s within this organization could not be read due to authorization while gathering evidence for this question, so that content is not included in this answer.", count, noun)
 }

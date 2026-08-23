@@ -573,7 +573,14 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	}
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
 		devhealthfacts.NewProviders(clickhouse.queryClient),
-		contextfabric.FactRegistryOptions{Now: request.options.Now},
+		// CHAOS-4099 stage 2: the real ScopeExpander over the SAME
+		// ClickHouse client every FactProvider above shares -- activating
+		// the 3 ratified project-origin policies (fact_scope.go's own
+		// Enabled flip). No control-flow change: an unwired ScopeExpander
+		// would have made every enabled policy fail closed to
+		// policy_unavailable exactly as stage 1 did (NewFactReadScopeResolver's
+		// own doc comment), so this line is the ENTIRE activation.
+		contextfabric.FactRegistryOptions{Now: request.options.Now, ScopeExpander: devhealthfacts.NewScopeExpander(clickhouse.queryClient)},
 	)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
