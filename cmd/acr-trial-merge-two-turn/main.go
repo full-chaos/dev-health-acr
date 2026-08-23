@@ -145,7 +145,17 @@ import (
 // PairRetriedCount; mirrored here in the same change for the same
 // undeclared-field-dropped-on-decode reason as everything else on this
 // list.
-const expectedSchemaVersion = "17"
+// "18" (CHAOS-4038 dial, 2026-08-23): purely additive -- see the producer's
+// own ReportSchemaVersion doc comment for the full mechanism. twoTurnCaseResult
+// gained ConfirmedKindRescueFired/ResultCount/Truncated and
+// Turn1ConfirmedKindRescueFired/ResultCount/Truncated (confirmed_kind_rescue's
+// own twin of the existing KindCoverageFloor*/Turn1KindCoverageFloor*
+// fields), closing a gap where kindCoverageQueryLimit's shared coupling with
+// CHAOS-4132's rescue mechanism had no artifact-visible subset to validate
+// against. No merge arithmetic changes (Results concatenates verbatim);
+// mirrored here in the same change for the same undeclared-field-dropped-
+// on-decode reason as everything else on this list.
+const expectedSchemaVersion = "18"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -296,8 +306,13 @@ type twoTurnCaseResult struct {
 	KindCoverageFloorFired     bool                   `json:"kind_coverage_floor_fired,omitempty"`
 	KindCoverageMissingKinds   int                    `json:"kind_coverage_missing_kinds,omitempty"`
 	KindCoverageFloorTruncated bool                   `json:"kind_coverage_floor_truncated,omitempty"`
-	ArmInvalidStage            string                 `json:"arm_invalid_stage,omitempty"`
-	ArmInvalidErrorType        string                 `json:"arm_invalid_error_type,omitempty"`
+	// CHAOS-4038 v18: confirmed_kind_rescue's own twin block, mirroring
+	// twoTurnCaseResult's identically-named fields byte-for-byte.
+	ConfirmedKindRescueFired       bool   `json:"confirmed_kind_rescue_fired,omitempty"`
+	ConfirmedKindRescueResultCount int    `json:"confirmed_kind_rescue_result_count,omitempty"`
+	ConfirmedKindRescueTruncated   bool   `json:"confirmed_kind_rescue_truncated,omitempty"`
+	ArmInvalidStage                string `json:"arm_invalid_stage,omitempty"`
+	ArmInvalidErrorType            string `json:"arm_invalid_error_type,omitempty"`
 	// CHAOS-4103 (schema v13) synthesis-status override provenance, mirroring
 	// twoTurnCaseResult's identically-named block byte-for-byte -- see that
 	// file's own doc comment for what each field means and why
@@ -322,14 +337,19 @@ type twoTurnCaseResult struct {
 	Turn1KindCoverageFloorFired     bool   `json:"turn1_kind_coverage_floor_fired,omitempty"`
 	Turn1KindCoverageMissingKinds   int    `json:"turn1_kind_coverage_missing_kinds,omitempty"`
 	Turn1KindCoverageFloorTruncated bool   `json:"turn1_kind_coverage_floor_truncated,omitempty"`
-	Turn1TermSearchTruncated        bool   `json:"turn1_term_search_truncated,omitempty"`
-	Turn1QuestionSearchTruncated    bool   `json:"turn1_question_search_truncated,omitempty"`
-	ExpectedInPool                  bool   `json:"expected_in_pool"`
-	AnchorOptionsCount              int    `json:"anchor_options_count"`
-	HandleOptionsCount              int    `json:"handle_options_count"`
-	CensusRan                       bool   `json:"census_ran"`
-	CensusComplete                  bool   `json:"census_complete"`
-	CensusCount                     int    `json:"census_count"`
+	// CHAOS-4038 v18: turn 1's own confirmed_kind_rescue twin, mirroring
+	// twoTurnCaseResult's identically-named fields byte-for-byte.
+	Turn1ConfirmedKindRescueFired       bool `json:"turn1_confirmed_kind_rescue_fired,omitempty"`
+	Turn1ConfirmedKindRescueResultCount int  `json:"turn1_confirmed_kind_rescue_result_count,omitempty"`
+	Turn1ConfirmedKindRescueTruncated   bool `json:"turn1_confirmed_kind_rescue_truncated,omitempty"`
+	Turn1TermSearchTruncated            bool `json:"turn1_term_search_truncated,omitempty"`
+	Turn1QuestionSearchTruncated        bool `json:"turn1_question_search_truncated,omitempty"`
+	ExpectedInPool                      bool `json:"expected_in_pool"`
+	AnchorOptionsCount                  int  `json:"anchor_options_count"`
+	HandleOptionsCount                  int  `json:"handle_options_count"`
+	CensusRan                           bool `json:"census_ran"`
+	CensusComplete                      bool `json:"census_complete"`
+	CensusCount                         int  `json:"census_count"`
 	// Regime (CHAOS-4120) mirrors twoTurnCaseResult's identically-named
 	// field -- see that file's own doc comment (twoTurnTurn1Facts.Regime)
 	// for the engine-native derivation off RecordWindowCanonicalization.

@@ -999,6 +999,19 @@ func (c *twoTurnTraceCapture) kindCoverageFloorEvent() (event graphrank.Resoluti
 	return event, ok
 }
 
+// confirmedKindRescueEvent (CHAOS-4038 v18) is kindCoverageFloorEvent's own
+// twin for the confirmed_kind_rescue stage (CHAOS-4132) -- same last-event-
+// wins rule, same rationale (a separate stage from the decision event, read
+// by a dedicated function rather than folded into finalDecisionEvent).
+func (c *twoTurnTraceCapture) confirmedKindRescueEvent() (event graphrank.ResolutionTraceEvent, ok bool) {
+	for _, e := range c.events {
+		if e.Stage == "confirmed_kind_rescue" {
+			event, ok = e, true
+		}
+	}
+	return event, ok
+}
+
 // passTruncation (CHAOS-4120) reports per-pass truncation across the
 // captured call's retrieval: whether the per-term "search" pass truncated
 // on ANY term, and whether the question-level "search_question" pass
@@ -1443,6 +1456,13 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 		res.KindCoverageMissingKinds = event.KindCoverageMissingKinds
 		res.KindCoverageFloorTruncated = event.KindCoverageFloorTruncated
 	}
+	// CHAOS-4038 v18: confirmed_kind_rescue's own twin capture, same
+	// last-event-wins reader as kind_coverage_floor above.
+	if event, ok := trace.confirmedKindRescueEvent(); ok {
+		res.ConfirmedKindRescueFired = event.ConfirmedKindRescueFired
+		res.ConfirmedKindRescueResultCount = event.ConfirmedKindRescueResultCount
+		res.ConfirmedKindRescueTruncated = event.ConfirmedKindRescueTruncated
+	}
 	// CHAOS-4103: folded (severity-gated), NOT set unconditionally -- by the
 	// time this is called, an EARLIER call's override may already have been
 	// folded into res (baseline, a setup turn, turn 1 itself), and an
@@ -1596,8 +1616,14 @@ type twoTurnTurn1Facts struct {
 	KindCoverageFloorFired     bool
 	KindCoverageMissingKinds   int
 	KindCoverageFloorTruncated bool
-	TermSearchTruncated        bool
-	QuestionSearchTruncated    bool
+	// ConfirmedKindRescueFired/ResultCount/Truncated (CHAOS-4038 v18) mirror
+	// KindCoverageFloorFired/MissingKinds/Truncated above, read off turn 1's
+	// own confirmed_kind_rescue stage (CHAOS-4132) instead.
+	ConfirmedKindRescueFired       bool
+	ConfirmedKindRescueResultCount int
+	ConfirmedKindRescueTruncated   bool
+	TermSearchTruncated            bool
+	QuestionSearchTruncated        bool
 	// ExpectedInPool (CHAOS-4038's exact question) is poolContainsKind
 	// evaluated against THIS case's own oracle expected kind -- "in the
 	// pool but never offered" (true) versus "never retrieved at all"
@@ -1716,6 +1742,11 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 		facts.KindCoverageMissingKinds = event.KindCoverageMissingKinds
 		facts.KindCoverageFloorTruncated = event.KindCoverageFloorTruncated
 	}
+	if event, ok := trace.confirmedKindRescueEvent(); ok {
+		facts.ConfirmedKindRescueFired = event.ConfirmedKindRescueFired
+		facts.ConfirmedKindRescueResultCount = event.ConfirmedKindRescueResultCount
+		facts.ConfirmedKindRescueTruncated = event.ConfirmedKindRescueTruncated
+	}
 	facts.TermSearchTruncated, facts.QuestionSearchTruncated = trace.passTruncation()
 	facts.ExpectedInPool = trace.poolContainsKind(tc.ExpectKind)
 	facts.CensusRan = trace.censusRan()
@@ -1742,6 +1773,9 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.Turn1KindCoverageFloorFired = facts.KindCoverageFloorFired
 	res.Turn1KindCoverageMissingKinds = facts.KindCoverageMissingKinds
 	res.Turn1KindCoverageFloorTruncated = facts.KindCoverageFloorTruncated
+	res.Turn1ConfirmedKindRescueFired = facts.ConfirmedKindRescueFired
+	res.Turn1ConfirmedKindRescueResultCount = facts.ConfirmedKindRescueResultCount
+	res.Turn1ConfirmedKindRescueTruncated = facts.ConfirmedKindRescueTruncated
 	res.Turn1TermSearchTruncated = facts.TermSearchTruncated
 	res.Turn1QuestionSearchTruncated = facts.QuestionSearchTruncated
 	res.ExpectedInPool = facts.ExpectedInPool
@@ -2018,6 +2052,7 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 				{Stage: "search", Truncated: true},
 				{Stage: "search_question", Truncated: true},
 				{Stage: "kind_coverage_floor", KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true},
+				{Stage: "confirmed_kind_rescue", ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true},
 				{Stage: "evidence_probe", CensusComplete: true, CensusCount: 4},
 				{Stage: "decision", CommitGate: "lone_floor", TiedStatisticalTop: true, SearchTruncated: true},
 			},
@@ -2027,6 +2062,7 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 		want := twoTurnTurn1Facts{
 			CommitGate: "lone_floor", TiedStatisticalTop: true, SearchTruncated: true,
 			KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true,
+			ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
 			TermSearchTruncated: true, QuestionSearchTruncated: true,
 			ExpectedInPool: true, CensusRan: true, CensusComplete: true, CensusCount: 4,
 			Regime: twoTurnRegimeAWindowGated,
@@ -2114,6 +2150,7 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 		facts := twoTurnTurn1Facts{
 			CommitGate: "top_of_two", TiedStatisticalTop: true, SearchTruncated: true,
 			KindCoverageFloorFired: true, KindCoverageMissingKinds: 3, KindCoverageFloorTruncated: true,
+			ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
 			TermSearchTruncated: true, QuestionSearchTruncated: true,
 			ExpectedInPool: true, AnchorOptionsCount: 1, HandleOptionsCount: 2,
 			CensusRan: true, CensusComplete: true, CensusCount: 7, Regime: twoTurnRegimeAWindowGated,
@@ -2136,6 +2173,12 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			t.Errorf("Turn1KindCoverageMissingKinds = %d, want 3", res.Turn1KindCoverageMissingKinds)
 		case !res.Turn1KindCoverageFloorTruncated:
 			t.Error("Turn1KindCoverageFloorTruncated = false, want true")
+		case !res.Turn1ConfirmedKindRescueFired:
+			t.Error("Turn1ConfirmedKindRescueFired = false, want true")
+		case res.Turn1ConfirmedKindRescueResultCount != 1:
+			t.Errorf("Turn1ConfirmedKindRescueResultCount = %d, want 1", res.Turn1ConfirmedKindRescueResultCount)
+		case !res.Turn1ConfirmedKindRescueTruncated:
+			t.Error("Turn1ConfirmedKindRescueTruncated = false, want true")
 		case !res.Turn1TermSearchTruncated:
 			t.Error("Turn1TermSearchTruncated = false, want true")
 		case !res.Turn1QuestionSearchTruncated:
@@ -2749,6 +2792,16 @@ type twoTurnCaseResult struct {
 	KindCoverageFloorFired     bool `json:"kind_coverage_floor_fired,omitempty"`
 	KindCoverageMissingKinds   int  `json:"kind_coverage_missing_kinds,omitempty"`
 	KindCoverageFloorTruncated bool `json:"kind_coverage_floor_truncated,omitempty"`
+	// ConfirmedKindRescueFired/ConfirmedKindRescueResultCount/
+	// ConfirmedKindRescueTruncated (CHAOS-4038 v18) mirror the three
+	// KindCoverageFloor* fields above, read off the confirmed_kind_rescue
+	// trace stage (CHAOS-4132) instead -- kindCoverageQueryLimit's shared-
+	// const coupling with that mechanism (see the constant's own doc
+	// comment, chaos4038_kind_coverage.go) is the reason this arm's own
+	// rescue outcome must be adjudicable from this report alone.
+	ConfirmedKindRescueFired       bool `json:"confirmed_kind_rescue_fired,omitempty"`
+	ConfirmedKindRescueResultCount int  `json:"confirmed_kind_rescue_result_count,omitempty"`
+	ConfirmedKindRescueTruncated   bool `json:"confirmed_kind_rescue_truncated,omitempty"`
 	// ArmInvalidStage/ArmInvalidErrorType pair with ArmInvalidReason, whose
 	// closed vocabulary names the error CLASS but not where it came from.
 	//
@@ -2834,6 +2887,14 @@ type twoTurnCaseResult struct {
 	Turn1KindCoverageFloorFired     bool `json:"turn1_kind_coverage_floor_fired,omitempty"`
 	Turn1KindCoverageMissingKinds   int  `json:"turn1_kind_coverage_missing_kinds,omitempty"`
 	Turn1KindCoverageFloorTruncated bool `json:"turn1_kind_coverage_floor_truncated,omitempty"`
+	// Turn1ConfirmedKindRescueFired/Turn1ConfirmedKindRescueResultCount/
+	// Turn1ConfirmedKindRescueTruncated (CHAOS-4038 v18) mirror
+	// ConfirmedKindRescueFired/ResultCount/Truncated above, read off turn
+	// 1's own confirmed_kind_rescue trace stage instead of this arm's own
+	// turn-2 call.
+	Turn1ConfirmedKindRescueFired       bool `json:"turn1_confirmed_kind_rescue_fired,omitempty"`
+	Turn1ConfirmedKindRescueResultCount int  `json:"turn1_confirmed_kind_rescue_result_count,omitempty"`
+	Turn1ConfirmedKindRescueTruncated   bool `json:"turn1_confirmed_kind_rescue_truncated,omitempty"`
 	// Turn1TermSearchTruncated/Turn1QuestionSearchTruncated (the
 	// per-pass truncation breakdown) are turn 1's own per-term "search"
 	// pass and question-level "search_question" pass truncation signals,
@@ -3223,6 +3284,29 @@ type twoTurnReport struct {
 	// mirror in cmd/acr-trial-merge-two-turn/main.go gained all five
 	// fields in the same change, same "an undeclared field is dropped on
 	// decode" reason every prior bump needed it for.
+	//
+	// "18" (CHAOS-4038 dial, 2026-08-23): purely additive, closing a gap
+	// found while verifying the kindCoverageQueryLimit 5->20 bump's
+	// observability. confirmed_kind_rescue (CHAOS-4132) has carried its own
+	// trace stage (ConfirmedKindRescueFired/ResultCount/Truncated,
+	// resolve.go/tracer.go) since that ticket landed, but unlike
+	// kind_coverage_floor's identically-shaped fields, this harness never
+	// captured it into twoTurnCaseResult -- so a merged trial artifact could
+	// not show the rescue-fired subset kindCoverageQueryLimit's shared-const
+	// coupling with CHAOS-4132 makes load-bearing (see that constant's own
+	// doc comment, chaos4038_kind_coverage.go). twoTurnCaseResult gains
+	// ConfirmedKindRescueFired/ConfirmedKindRescueResultCount/
+	// ConfirmedKindRescueTruncated (this arm's own turn-2 decisive call,
+	// mirroring CommitGate/KindCoverageFloor* above) and
+	// Turn1ConfirmedKindRescueFired/Turn1ConfirmedKindRescueResultCount/
+	// Turn1ConfirmedKindRescueTruncated (turn 1's call, mirroring
+	// Turn1KindCoverageFloor* above) -- read via the new
+	// twoTurnTraceCapture.confirmedKindRescueEvent(), the same
+	// last-event-wins reader kindCoverageFloorEvent already uses. No merge
+	// arithmetic changes (Results concatenates verbatim); the mirror in
+	// cmd/acr-trial-merge-two-turn/main.go gained all six fields in the same
+	// change, same "an undeclared field is dropped on decode" reason every
+	// prior bump needed it for.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -6058,7 +6142,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "17",
+		ReportSchemaVersion: "18",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,

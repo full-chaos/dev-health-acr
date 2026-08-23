@@ -24,12 +24,39 @@ import (
 // for a kind still absent from the pool at that point, so kindOfferMaterial
 // has something to offer regardless of how the ordinary top-K ranked.
 
-// kindCoverageQueryLimit bounds each CHAOS-4038 SearchKind call -- a small,
-// fixed floor, not a competing top-K: this pass exists to prove AT LEAST
-// ONE candidate of an otherwise-absent kind exists, never to out-rank the
+// kindCoverageQueryLimit bounds each CHAOS-4038 SearchKind call -- a small
+// floor, not a competing top-K: this pass exists to prove AT LEAST ONE
+// candidate of an otherwise-absent kind exists, never to out-rank the
 // ordinary Search/SearchQuestion passes' own budget or displace what they
 // already found.
-const kindCoverageQueryLimit = 5
+//
+// SHARED WITH CHAOS-4132: applyConfirmedKindRescue (chaos4132_confirmed_kind_
+// rescue.go) reuses this SAME constant for its own deps.SearchKind calls --
+// deliberately one dial, not two independently-tuned ones (2026-08-23
+// scope-first report + chris ruling, CHAOS-4038 ticket comment thread). That
+// makes this value's blast radius wider than "turn-1 offers": when the
+// CHAOS-4132 rescue fires, its `truncated` output is folded into the commit
+// gate's own searchTruncated input (resolve.go's rescue call site), so
+// raising this limit can also change confirmed-kind rescue commit outcomes,
+// not just kindOfferMaterial's offer set. That coupling is an ACCEPTED,
+// DISCLOSED secondary effect of this value, not an oversight -- see the
+// CHAOS-4038 ticket comment for the full accounting and the
+// confirmed_kind_rescue trace-stage fields (resolve.go, tracer.go) that make
+// it observable from a run's own artifacts.
+//
+// 5 -> 20 (2026-08-23): 20 is not a fresh guess -- it is deps.CalibratedTopK
+// (falkorgraph/retrieval_policy.go), the SAME already-calibrated cross-kind
+// top-K this deployment already trusts for ordinary retrieval, safely under
+// falkorgraph's own MaxResults clamp (default 25, chaos4038_kind_coverage.go
+// falkorgraph implementation) so the value passes through unclamped. Tying
+// this floor's own limit to an existing calibrated constant, rather than
+// picking a new number blind, mirrors this file's own kindCoverageMaxTermsPerKind
+// doc comment's "a conservative, always-safe ceiling... not a calibrated
+// recall/cost tradeoff" caution -- this ticket has no live measurement slot
+// to calibrate a genuinely NEW value either, so reusing one this codebase
+// already validated is the safer choice available. kindCoverageMaxTermsPerKind
+// is UNCHANGED by this -- a separate dial, out of this ticket's scope.
+const kindCoverageQueryLimit = 20
 
 // kindCoverageMaxTermsPerKind bounds how many of this resolution's own terms
 // applyKindCoverageFloor will spend a SearchKind call on for any ONE still-

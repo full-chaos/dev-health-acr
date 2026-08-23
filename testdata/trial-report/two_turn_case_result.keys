@@ -13,6 +13,9 @@ census_ran
 commit_gate
 committed_count
 committed_subjects
+confirmed_kind_rescue_fired
+confirmed_kind_rescue_result_count
+confirmed_kind_rescue_truncated
 expected_id
 expected_in_pool
 expected_kind
@@ -48,6 +51,9 @@ tied_statistical_top
 tier_routed_correctly
 trace_events
 turn1_commit_gate
+turn1_confirmed_kind_rescue_fired
+turn1_confirmed_kind_rescue_result_count
+turn1_confirmed_kind_rescue_truncated
 turn1_kind_coverage_floor_fired
 turn1_kind_coverage_floor_truncated
 turn1_kind_coverage_missing_kinds
