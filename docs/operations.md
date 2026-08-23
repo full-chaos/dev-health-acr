@@ -1199,6 +1199,62 @@ prior epoch to roll back to), the only rollback is disabling the lifecycle
 flag application-wide, which reverts read/write to the legacy in-place
 path and leaves the just-built epoch orphaned until a future decision.
 
+### CHAOS-4076: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
+
+Two chart-level constraints found during the CHAOS-4034 live P6 auth
+validation run, both ratified (chris, 2026-08-23) rather than fixed, and
+recorded here so a future deployer does not re-open either as a bug.
+
+**NetworkPolicy apiserver egress is a documented posture, not a proven
+fix.** `workloadTokenExchange.enabled=true` renders a port-only egress
+rule for the Kubernetes apiserver (`templates/networkpolicy.yaml`, gated
+by `networkPolicy.egress.kubernetesAPIPort`) with no destination
+restriction (no `ipBlock`/`namespaceSelector` naming
+`kubernetes.default.svc` -- standard NetworkPolicy cannot name a Service
+that way at all; only `ipBlock`/`podSelector`/`namespaceSelector` on
+pods/CIDRs). This SHAPE (port-only, no `ipBlock`) is the accepted,
+ratified posture for local/dev scope (chris, 2026-08-23) -- the chart does
+not know the cluster's real apiserver ClusterIP at author time, so a
+tighter rule is not generically possible.
+
+**This is a documented bypass SHAPE, not a proven working fix -- do not
+read "the rule renders" as "TokenReview is reachable."** The CHAOS-4034
+live P6 A/B/A run found this exact rule PRESENT and RFC 8693 `TokenReview`
+STILL timed out on that kind+Calico cluster; only deleting the ENTIRE
+NetworkPolicy (not just this rule) restored a 200. Root cause is
+unresolved -- plausibly a Calico/kind ClusterIP DNAT interaction specific
+to that fixture, not ruled either way. Verify apiserver reachability for
+TokenReview on the actual target cluster/CNI before relying on this rule;
+do not assume it from the rendered manifest alone. A scale/multi-tenant
+deployment that needs the apiserver egress destination-restricted (an
+`ipBlock` pinned to the cluster's real apiserver Service IP, once that is
+known and stable per environment) is a chart change -- file a new ticket
+for it; do not narrow this rule silently, since an environment whose
+apiserver IP does not match a hand-pinned `ipBlock` fails closed with no
+obvious cause.
+
+**The in-release FalkorDB workload (`contextFabric.falkordb.enabled`)
+requires a `baseline` (or looser) PodSecurity Admission namespace.** The
+vendored image runs `redis-server` as root with no `USER` directive; a
+`restricted`-PSA namespace rejects the StatefulSet's Pod outright (0/1,
+`runAsNonRoot` violation). Label the target namespace explicitly before
+enabling:
+
+```bash
+kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline --overwrite
+```
+
+This relaxation is namespace-wide -- it does not scope to the FalkorDB
+Pod alone -- so prefer a dedicated namespace for the in-release FalkorDB
+workload over relaxing PSA on a shared namespace that also runs
+acr-api/acr-projector under the `restricted` contract those Deployments
+otherwise use. An externally-provisioned FalkorDB (the default posture --
+`falkordb.enabled: false`, `contextFabric.falkor.addr` pointed elsewhere)
+has no PSA implication for this chart's own namespace. See
+`values.yaml`'s `contextFabric.falkordb` comment for the container
+security context this workload does apply (dropped capabilities, no
+privilege escalation, `RuntimeDefault` seccomp) despite running as root.
+
 ## Backup and restore
 
 ACR PostgreSQL is operational state; ClickHouse evidence is read-only and is

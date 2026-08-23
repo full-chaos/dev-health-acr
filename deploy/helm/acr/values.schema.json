@@ -64,6 +64,24 @@
             "apiKeyKey": { "type": "string" }
           }
         },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "CHAOS-4076 acr-api Investigator model runtime (internal/contextfabric/modelprovider). Gated on its own explicit enabled switch, not a single field like falkor/embed, because modelprovider.Configured() opts in on ANY nonblank ACR_CONTEXT_FABRIC_MODEL* variable.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "provider": { "type": "string" },
+            "baseURL": { "type": "string" },
+            "model": { "type": "string" },
+            "fallbackModel": { "type": "string" },
+            "timeout": { "type": "string" },
+            "maxAttempts": { "type": "string" },
+            "maxTransportRetries": { "type": "string" },
+            "allowInsecureBaseURL": { "type": "boolean" },
+            "existingSecret": { "type": "string" },
+            "apiKeyKey": { "type": "string" }
+          }
+        },
         "falkordb": {
           "type": "object",
           "additionalProperties": false,
@@ -289,7 +307,17 @@
         "tolerations": { "type": "array" },
         "topologySpreadConstraints": { "type": "array" },
         "affinity": { "type": "object" },
-        "extraContainers": { "type": "array" }
+        "extraContainers": { "type": "array" },
+        "extraEnv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" }
+            }
+          }
+        }
       }
     },
     "migration": {

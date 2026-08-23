@@ -153,6 +153,32 @@ deployment:
   # restricted pod-security and no-MCP guarantees, so any non-empty value fails
   # closed and this list is never rendered. Keep empty.
   extraContainers: []
+  # CHAOS-4076: generic escape hatch for acr-api container env vars this
+  # chart has no first-class key for yet. A plain list of Kubernetes EnvVar
+  # entries ({name, value} or {name, valueFrom: {...}}), appended verbatim
+  # after every first-class env var above -- unlike extraContainers this DOES
+  # render, so it is the operator's responsibility to avoid duplicating a
+  # name already set above (Kubernetes takes the LAST entry for a duplicate
+  # name, so an extraEnv entry can deliberately override a first-class one).
+  # Prefer adding a first-class values key over reaching for this when the
+  # same env var will be set the same way across deployments.
+  #
+  # Two contracts this chart enforces elsewhere do NOT apply to this list --
+  # a raw EnvVar list cannot be schema-restricted to a closed name set:
+  #   1. Existing-Secret-only credentials. Every first-class credential
+  #      above is a secretKeyRef; extraEnv accepts a literal `value:` too,
+  #      so it CAN carry a literal credential string into the rendered
+  #      Deployment/values. Never put credential material here -- add a
+  #      first-class existingSecret-backed key instead (open a ticket if
+  #      one does not exist yet).
+  #   2. contextFabric.model's own `enabled` gate. That gate exists
+  #      specifically because modelprovider.Configured() (see its own
+  #      comment above) opts in on ANY nonblank ACR_CONTEXT_FABRIC_MODEL*
+  #      variable -- setting one here with contextFabric.model.enabled left
+  #      false silently opts this deployment into a model provider anyway.
+  #      Use contextFabric.model.enabled + its first-class fields for any
+  #      ACR_CONTEXT_FABRIC_MODEL* variable; do not set one through here.
+  extraEnv: []
 
 migration:
   enabled: true
@@ -254,6 +280,32 @@ contextFabric:
     maxTransportRetries: "5"
     existingSecret: ""
     apiKeyKey: ACR_CONTEXT_FABRIC_EMBED_API_KEY
+  # CHAOS-4076: acr-api's Investigator model runtime (internal/contextfabric/
+  # modelprovider), consumed by templates/deployment.yaml. Unlike falkor/embed
+  # above, modelprovider.Configured() opts in on ANY nonblank
+  # ACR_CONTEXT_FABRIC_MODEL* variable (not just baseURL/model), so this
+  # block uses its own explicit `enabled` switch rather than gating on a
+  # single field -- an implicit-opt-in gate here could enable a paid hosted
+  # provider from an unrelated tuning value alone. `enabled: false` renders
+  # none of this block's env vars, matching the falkor.addr /
+  # embed.baseURL "unset deployment never fails closed" contract. When
+  # enabling, `model` is required (validate() rejects a blank
+  # ACR_CONTEXT_FABRIC_MODEL); `provider`/`baseURL`/existingSecret select a
+  # BYO OpenAI-compatible endpoint, empty selects the hosted OpenAI default
+  # (api.openai.com) and then existingSecret is required. See
+  # internal/contextfabric/modelprovider/config.go for the full contract.
+  model:
+    enabled: false
+    provider: ""
+    baseURL: ""
+    model: ""
+    fallbackModel: ""
+    timeout: "45s"
+    maxAttempts: "2"
+    maxTransportRetries: "2"
+    allowInsecureBaseURL: false
+    existingSecret: ""
+    apiKeyKey: ACR_CONTEXT_FABRIC_MODEL_API_KEY
   # CHAOS-4055: optional in-release FalkorDB workload so the COMPLETE ACR
   # topology (api + migration + projector + graph backend) is deployable from
   # this chart alone on a local cluster. Disabled by default -- production
@@ -296,6 +348,21 @@ contextFabric:
     # does not apply to this vendored image; the template still drops all
     # capabilities, forbids privilege escalation, and pins seccomp to
     # RuntimeDefault.
+    #
+    # CHAOS-4076: this root requirement is a hard PodSecurity Admission (PSA)
+    # constraint, not just a note. A namespace enforcing the `restricted`
+    # level rejects this StatefulSet's Pod outright (0/1, runAsNonRoot
+    # violation) -- enabling falkordb.enabled here REQUIRES the target
+    # namespace to carry `pod-security.kubernetes.io/enforce: baseline` (or
+    # `privileged`), e.g.:
+    #   kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline --overwrite
+    # This is namespace-wide: it relaxes PSA for every workload in that
+    # namespace, not just this one, so prefer a dedicated namespace for the
+    # in-release FalkorDB workload over relaxing PSA on a shared namespace
+    # that also runs acr-api/acr-projector under the restricted contract
+    # above. Externally-provisioned FalkorDB (the default, falkordb.enabled
+    # false, contextFabric.falkor.addr pointed elsewhere) has no PSA
+    # implication for this chart's own namespace at all.
     podAnnotations: {}
     podLabels: {}
     nodeSelector: {}
