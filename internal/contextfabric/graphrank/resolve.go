@@ -900,7 +900,7 @@ type RawSignalObserver interface {
 // construction -- an absent basis reads back as CommitBasisUnknown, which
 // IdentityProven reports false, which is the STRICT treatment.
 func ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
-	resolution, offerMaterial, _, err := ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
+	resolution, offerMaterial, _, _, err := ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
 	return resolution, offerMaterial, err
 }
 
@@ -916,19 +916,25 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 // eleven three-value returns stay exactly as they were and this change
 // cannot silently alter any error path. Exactly three points write it, and
 // each RESETS rather than merges -- see their call sites below.
-func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, error) {
+//
+// commitDigests (CHAOS-4087) is threaded identically, in lockstep with
+// bases, at the SAME three write points -- see
+// contextfabric.CommitDecisionDigest's own doc comment for why this is a
+// wire-safe companion set rather than a widened CommitBasisSet.
+func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	bases := make(contextfabric.CommitBasisSet)
-	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases)
+	digests := make(contextfabric.CommitDecisionDigestSet)
+	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests)
 	if err != nil {
-		// An error path commits nothing, so a basis some partial pass
-		// happened to record describes a resolution no caller ever
-		// receives. Return an empty set rather than that debris.
-		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), err
+		// An error path commits nothing, so a basis (or digest) some
+		// partial pass happened to record describes a resolution no
+		// caller ever receives. Return empty sets rather than that debris.
+		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), make(contextfabric.CommitDecisionDigestSet), err
 	}
-	return resolution, offerMaterial, bases, nil
+	return resolution, offerMaterial, bases, digests, nil
 }
 
-func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet, commitDigests contextfabric.CommitDecisionDigestSet) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, errors.New("authenticated organization is required")
 	}
@@ -1010,8 +1016,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// circuit. Everything this exit commits was named by canonical id,
 		// re-read from the graph by keyed lookup and re-authorized in the
 		// hint loop above -- CommitBasisCallerCanonicalID for all of it.
-		exactResolution, exactBases := FinalizeExactResolutionWithBasis(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates)
+		exactResolution, exactBases, exactDigests := FinalizeExactResolutionWithBasis(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates)
 		commitBases.ResetTo(exactBases)
+		commitDigests.ResetTo(exactDigests)
 		return exactResolution, contextfabric.StructureOfferMaterial{}, nil
 	}
 	// observationParentKey maps an observation (document/episode) subject
@@ -1550,8 +1557,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// CHAOS-4085 commit-basis write site 2 of 3: the ordinary commit
 	// decision. ResetTo, not merge -- this is the first decision, and it
 	// defines the whole basis set for it.
-	resolution, firstPassBases := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
 	commitBases.ResetTo(firstPassBases)
+	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
 	// OR'd in HERE, informationally, AFTER the gate already decided using
 	// the un-widened retrievalDegraded -- see its own declaration above for
@@ -1598,8 +1606,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// basis attached to a subject nothing committed is exactly
 				// the failure mode this vocabulary exists to prevent.
 				var censusBases contextfabric.CommitBasisSet
-				resolution, censusBases = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey)
+				var censusDigests contextfabric.CommitDecisionDigestSet
+				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey)
 				commitBases.ResetTo(censusBases)
+				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
 			}
 		}

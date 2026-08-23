@@ -359,7 +359,7 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 // basis reads as CommitBasisUnknown, which IdentityProven reports false,
 // which is the STRICT treatment -- see contextfabric.CommitBasis.
 func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string) contextfabric.SubjectResolution {
-	resolution, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey)
+	resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey)
 	return resolution
 }
 
@@ -377,8 +377,13 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 // aliasIdentityComplete false (an unproven uniqueness claim): identical
 // candidates, different standing. See contextfabric.CommitBasis for the
 // full account.
-func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet) {
+func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bases := make(contextfabric.CommitBasisSet)
+	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
+	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
+	// comment for why this is a separate set rather than a widened
+	// CommitBasisSet value type.
+	digests := make(contextfabric.CommitDecisionDigestSet)
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -447,7 +452,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		if tracer != nil {
 			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated, SearchCandidateLimit: max})
 		}
-		return resolution, bases
+		return resolution, bases, digests
 	}
 
 	// Phase 3: commit decision over the FULL, untruncated ranked set.
@@ -485,6 +490,10 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			// before stamping Confidence=1/State=Committed. No ranking and
 			// no truncation boundary participate.
 			bases.Record(candidate.Subject, contextfabric.CommitBasisCallerCanonicalID)
+			digests.Record(candidate.Subject, contextfabric.CommitDecisionDigest{
+				CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisCallerCanonicalID.IdentityProven(),
+				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+			})
 		}
 	}
 	ambiguous := false
@@ -638,6 +647,10 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			// behavior changes here; only its standing before CHAOS-4085's
 			// affirmation gate does.
 			bases.Record(candidates[exactIndex[0]].Subject, contextfabric.CommitBasisStatistical)
+			digests.Record(candidates[exactIndex[0]].Subject, contextfabric.CommitDecisionDigest{
+				CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
+				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+			})
 		// CHAOS-3884: the identity fast path. Sits AFTER exactIndex
 		// (Finding 1's precedence: a candidate's own canonical label is a
 		// stronger identity claim than a derived alias/provider-key handle,
@@ -676,6 +689,10 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			// statistical below -- which is exactly the distinction the
 			// mechanism set alone cannot express.
 			bases.Record(candidates[identityIndex[0]].Subject, contextfabric.CommitBasisAuthoritativeIdentity)
+			digests.Record(candidates[identityIndex[0]].Subject, contextfabric.CommitDecisionDigest{
+				CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisAuthoritativeIdentity.IdentityProven(),
+				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+			})
 		case searchTruncated:
 			// Codex round-3 review of D11/AC-3778-0: truncation is a
 			// property of the RESOLUTION, not of any one candidate's
@@ -727,6 +744,10 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			// above declined it for want of a completeness proof, so this
 			// gate must not launder it back into one.
 			bases.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitBasisStatistical)
+			digests.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitDecisionDigest{
+				CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
+				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+			})
 		case len(commitIndex) >= 2 && gateValid:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
 			// CHAOS-3884 spot-check item 1: identityCollision applied here
@@ -757,6 +778,10 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				commitGate = "top_of_two"
 				// CHAOS-4085: statistical -- a gap between two scores.
 				bases.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitBasisStatistical)
+				digests.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitDecisionDigest{
+					CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
+					SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+				})
 			} else {
 				ambiguous = true
 			}
@@ -1038,6 +1063,10 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				// CHAOS-4085: statistical -- an embedding-similarity margin
 				// is the definitive score comparison.
 				bases.Record(candidates[index].Subject, contextfabric.CommitBasisStatistical)
+				digests.Record(candidates[index].Subject, contextfabric.CommitDecisionDigest{
+					CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
+					SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+				})
 			}
 		}
 		// CHAOS-3896 Slice C (design brief v6 §1.4, R5's amendment): the
@@ -1118,6 +1147,10 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				// signal, not a proof that this candidate is the subject
 				// the caller named.
 				bases.Record(candidates[index].Subject, contextfabric.CommitBasisStatistical)
+				digests.Record(candidates[index].Subject, contextfabric.CommitDecisionDigest{
+					CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
+					SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+				})
 			}
 		}
 	}
@@ -1238,7 +1271,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			})
 		}
 	}
-	return resolution, bases
+	return resolution, bases, digests
 }
 
 // tiedStatisticalTopUnderTruncation reports the ONE population CHAOS-4085
@@ -1510,17 +1543,32 @@ func FinalizeExactResolution(candidatesBySubject map[string]contextfabric.Subjec
 // Codex xhigh review round 3, HIGH: the previous version stamped every
 // retained subject CommitBasisCallerCanonicalID, which collapsed exactly
 // the distinction this function's own truncation rule exists to preserve.
-func FinalizeExactResolutionWithBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, callerSourced map[string]bool, max int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet) {
+func FinalizeExactResolutionWithBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, callerSourced map[string]bool, max int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	resolution := FinalizeExactResolution(candidatesBySubject, callerSourced, max)
 	bases := make(contextfabric.CommitBasisSet, len(resolution.Committed))
+	// digests (CHAOS-4087): recorded in lockstep with bases below.
+	// commitGateCallerHintShortCircuit names THIS function's own commit
+	// path -- resolve.go's own caller-hint short circuit, "write site 1 of
+	// 3" in CHAOS-4085's own numbering (see resolve.go's call site). No
+	// search runs and no identity trust gate is consulted here, so
+	// SearchTruncated/AliasLookupComplete are their honest zero value
+	// (inapplicable to this gate), never evaluated-and-passed.
+	const commitGateCallerHintShortCircuit = "caller_hint_short_circuit"
+	digests := make(contextfabric.CommitDecisionDigestSet, len(resolution.Committed))
 	for _, subject := range resolution.Committed {
 		if callerSourced[SubjectKey(subject)] {
 			bases.Record(subject, contextfabric.CommitBasisCallerCanonicalID)
+			digests.Record(subject, contextfabric.CommitDecisionDigest{
+				CommitGate: commitGateCallerHintShortCircuit, IdentityProven: contextfabric.CommitBasisCallerCanonicalID.IdentityProven(),
+			})
 			continue
 		}
 		bases.Record(subject, contextfabric.CommitBasisStatistical)
+		digests.Record(subject, contextfabric.CommitDecisionDigest{
+			CommitGate: commitGateCallerHintShortCircuit, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
+		})
 	}
-	return resolution, bases
+	return resolution, bases, digests
 }
 
 // ClarificationPrompt builds the caller-facing ambiguity prompt from the

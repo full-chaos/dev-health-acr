@@ -190,8 +190,12 @@ type GraphReader interface {
 	// not change behavior silently. An implementation that returns nil is
 	// nevertheless SAFE, not broken: every basis then reads back as
 	// CommitBasisUnknown, IdentityProven reports false, and every commit
-	// takes the strict path.
-	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error)
+	// takes the strict path. CommitDecisionDigestSet (CHAOS-4087) is the
+	// SAME record's wire-safe, persisted companion -- see that type's own
+	// doc comment -- with the identical nil-is-safe guarantee: an absent
+	// digest reads back as the zero CommitDecisionDigest (CommitGate==""),
+	// the fail-closed "nothing recorded" value.
+	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
 }
 

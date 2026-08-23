@@ -1893,11 +1893,53 @@
             },
             "graph_not_projected": {
               "type": "boolean"
+            },
+            "commit_decision_digests": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/CommitDecisionDigest"
+              },
+              "maxItems": 250
             }
           },
           "required": [
             "candidates",
             "committed"
+          ]
+        },
+        "CommitDecisionDigest": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subject": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
+            },
+            "commit_gate": {
+              "type": "string",
+              "enum": [
+                "",
+                "caller_hint_short_circuit",
+                "pre_committed_exact_hint",
+                "exact_index",
+                "identity_fast_path",
+                "lone_floor",
+                "top_of_two",
+                "vector_margin_rescue",
+                "evidence_census"
+              ]
+            },
+            "identity_proven": {
+              "type": "boolean"
+            },
+            "search_truncated": {
+              "type": "boolean"
+            },
+            "alias_lookup_complete": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "subject"
           ]
         },
         "Cohort": {

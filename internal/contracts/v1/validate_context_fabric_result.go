@@ -66,8 +66,65 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 	if !uniqueSubjects(r.Committed) {
 		return fmt.Errorf("committed subjects must be valid and unique")
 	}
+	// CommitDecisionDigests (CHAOS-4087) is additive-optional: nil is
+	// valid (a resolution engine that predates this field, or a resolution
+	// with nothing committed) and is the ONLY way to omit it -- once
+	// present, its own doc comment's "one entry per committed subject"
+	// claim is a hard invariant engine.go's own stamping logic always
+	// satisfies, so a mismatch here is a real defect, not a forward-compat
+	// gap to tolerate.
+	if r.CommitDecisionDigests != nil {
+		if len(r.CommitDecisionDigests) != len(r.Committed) || len(r.CommitDecisionDigests) > 250 {
+			return fmt.Errorf("commit decision digests must have exactly one entry per committed subject")
+		}
+		committedSet := make(map[string]struct{}, len(r.Committed))
+		for _, subject := range r.Committed {
+			committedSet[subjectKey(subject)] = struct{}{}
+		}
+		// seenDigestSubjects (codex R1 finding): the count-and-membership
+		// checks above accept two digests for the SAME committed subject and
+		// none for another, since neither check requires the digest subjects
+		// to be DISTINCT. Combined with r.Committed's own uniqueSubjects
+		// guarantee above, rejecting a repeat here plus the count match
+		// above forces a true bijection -- every committed subject gets
+		// EXACTLY one digest, never a silently-skipped one reading as
+		// fail-closed-unrecorded because a duplicate consumed its slot.
+		seenDigestSubjects := make(map[string]struct{}, len(r.CommitDecisionDigests))
+		for _, digest := range r.CommitDecisionDigests {
+			if err := digest.Validate(); err != nil {
+				return fmt.Errorf("commit decision digests: %w", err)
+			}
+			key := subjectKey(digest.Subject)
+			if _, ok := committedSet[key]; !ok {
+				return fmt.Errorf("commit decision digest names a subject not in committed")
+			}
+			if _, ok := seenDigestSubjects[key]; ok {
+				return fmt.Errorf("commit decision digest names the same committed subject more than once")
+			}
+			seenDigestSubjects[key] = struct{}{}
+		}
+	}
 	if !stringLengthBetween(r.ClarificationPrompt, 0, 2000) || strings.TrimSpace(r.ClarificationPrompt) != r.ClarificationPrompt {
 		return fmt.Errorf("clarification prompt violates v1 bounds")
+	}
+	return nil
+}
+
+// Validate enforces CHAOS-4087's own bounds on one commit-decision digest
+// entry: a structurally valid Subject, a recognized (possibly empty, the
+// fail-closed "unrecorded" reading) CommitGate, and an IdentityProven value
+// that gate could actually have produced (codex R1 finding: an
+// unconstrained bool let a statistical gate like lone_floor claim a proven
+// identity, which a trusting consumer would misclassify).
+func (d ContextFabricCommitDecisionDigest) Validate() error {
+	if err := d.Subject.Validate(); err != nil {
+		return fmt.Errorf("subject: %w", err)
+	}
+	if !validCommitGate(d.CommitGate) {
+		return fmt.Errorf("commit gate is not a recognized value")
+	}
+	if !validCommitDecisionDigestIdentityProven(d.CommitGate, d.IdentityProven) {
+		return fmt.Errorf("identity proven is not consistent with the commit gate")
 	}
 	return nil
 }

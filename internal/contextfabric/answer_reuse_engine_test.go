@@ -111,11 +111,11 @@ func (g bindingOnlyGraphReader) ResolveInvestigationBinding(context.Context, sto
 	return ResolvedGraphBinding{GraphKey: "binding-only-key", Epoch: 0}, nil
 }
 
-func (g bindingOnlyGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
+func (g bindingOnlyGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.t.Fatal("ResolveSubjects should not be reached on a reuse hit")
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
 	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
-	return SubjectResolution{}, StructureOfferMaterial{}, nil, nil
+	return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, nil
 }
 
 func (g bindingOnlyGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
@@ -944,11 +944,11 @@ func (g orderTrackingGraphReader) ResolveInvestigationBinding(context.Context, s
 	return ResolvedGraphBinding{GraphKey: "order-tracking-key", Epoch: 0}, nil
 }
 
-func (g orderTrackingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
+func (g orderTrackingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	*g.events = append(*g.events, "resolve_subjects")
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
 	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
-	return g.resolution, StructureOfferMaterial{}, nil, nil
+	return g.resolution, StructureOfferMaterial{}, nil, nil, nil
 }
 
 func (g orderTrackingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

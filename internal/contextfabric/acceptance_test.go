@@ -88,15 +88,15 @@ func (g *acceptanceGraphReader) ResolveInvestigationBinding(context.Context, sto
 	return ResolvedGraphBinding{GraphKey: "acceptance-fake-key", Epoch: 0}, nil
 }
 
-func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
+func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.resolveCalls++
 	g.lastRequest = request
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
 	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
 	if g.err != nil {
-		return SubjectResolution{}, StructureOfferMaterial{}, nil, g.err
+		return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, g.err
 	}
-	return g.resolution, StructureOfferMaterial{}, nil, nil
+	return g.resolution, StructureOfferMaterial{}, nil, nil, nil
 }
 
 func (g *acceptanceGraphReader) DiscoverContext(_ context.Context, _ storage.Principal, _ GraphDiscoveryRequest) (GraphContext, error) {

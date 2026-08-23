@@ -240,13 +240,13 @@ func (g liveGraphReader) ResolveInvestigationBinding(context.Context, storage.Pr
 	return contextfabric.ResolvedGraphBinding{GraphKey: "live-key", Epoch: 0}, nil
 }
 
-func (g liveGraphReader) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind, *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, error) {
+func (g liveGraphReader) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind, *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
 	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
 	return contextfabric.SubjectResolution{
 		Candidates: []contextfabric.SubjectCandidate{},
 		Committed:  []contextfabric.SubjectRef{g.project},
-	}, contextfabric.StructureOfferMaterial{}, nil, nil
+	}, contextfabric.StructureOfferMaterial{}, nil, nil, nil
 }
 
 func (g liveGraphReader) DiscoverContext(context.Context, storage.Principal, contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {

@@ -73,7 +73,7 @@ func TestLiveRelationshipProjectionPreservesPriorCanonicalEntityMetadata(t *test
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"Dev Agent"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) by previous name error = %v", err)
 	}
@@ -168,7 +168,7 @@ func TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization(t 
 	// repository must still see it after the edge write, even though the
 	// edge itself carried a completely different scope.
 	scopedPrincipal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -189,7 +189,7 @@ func TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization(t 
 	repoLessRequest := liveInvestigationRequest()
 	repoLessRequest.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: repoLess.Kind, ID: repoLess.CanonicalID, Label: repoLess.Label, Source: "live-test"}}
 
-	deniedResolution, _, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, repoLessRequest, repoLessInterpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	deniedResolution, _, _, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, repoLessRequest, repoLessInterpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) for repoLess with a repo-scoped principal error = %v", err)
 	}
@@ -198,7 +198,7 @@ func TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization(t 
 	}
 
 	orgWidePrincipal := storage.Principal{OrgID: orgID}
-	admittedResolution, _, _, err := adapter.ResolveSubjects(ctx, orgWidePrincipal, repoLessRequest, repoLessInterpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	admittedResolution, _, _, _, err := adapter.ResolveSubjects(ctx, orgWidePrincipal, repoLessRequest, repoLessInterpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) for repoLess with an org-wide principal error = %v", err)
 	}
@@ -263,7 +263,7 @@ func TestLiveContentProjectionNeverDowngradesTheAttachedSubjectsOwnAuthorization
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: repoBacked.Kind, ID: repoBacked.CanonicalID, Label: repoBacked.Label, Source: "live-test"}}
 
 	scopedPrincipal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -323,7 +323,7 @@ func TestLiveEpisodeProjectionNeverDowngradesTheAttachedSubjectsOwnAuthorization
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: repoBacked.Kind, ID: repoBacked.CanonicalID, Label: repoBacked.Label, Source: "live-test"}}
 
 	scopedPrincipal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -391,7 +391,7 @@ func TestLiveRelationshipProjectionNeverOverwritesAnEndpointsOwnLabel(t *testing
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
 	request := liveInvestigationRequest()
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: orgID}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: orgID}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) by canonical title error = %v", err)
 	}
@@ -451,7 +451,7 @@ func TestLiveApplyProjectionBatchSkipsStaleOutOfOrderTombstone(t *testing.T) {
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{work.Label},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -499,7 +499,7 @@ func TestLiveResolveSubjectsAcceptsPrincipalWildcardRepositoryScope(t *testing.T
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: project.Kind, ID: project.CanonicalID, Label: project.Label, Source: "live-test"}}
 
 	allowed := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/*"}}
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, allowed, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, allowed, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) owner-wildcard error = %v", err)
 	}
@@ -508,7 +508,7 @@ func TestLiveResolveSubjectsAcceptsPrincipalWildcardRepositoryScope(t *testing.T
 	}
 
 	denied := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"other-owner/*"}}
-	deniedResolution, _, _, err := adapter.ResolveSubjects(ctx, denied, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	deniedResolution, _, _, _, err := adapter.ResolveSubjects(ctx, denied, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) unrelated-owner error = %v", err)
 	}
@@ -582,7 +582,7 @@ func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *t
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "dependencies", SubjectTerms: []string{project.Label},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
 	}
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -672,7 +672,7 @@ func TestLivePartOfEdgeRoundTripsFromProjectionThroughDiscoverContext(t *testing
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "hierarchy", SubjectTerms: []string{child.Label},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactRequiredChildren}},
 	}
-	resolution, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
