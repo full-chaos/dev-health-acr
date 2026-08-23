@@ -744,6 +744,34 @@ func (entry twoTurnOracleEntry) positiveQuery() oracleOfferQuery {
 	}
 }
 
+// hasConstructiblePositiveOffer (CHAOS-4165, codex review round 2, P2,
+// confirmed) reports whether entry carries a positive oracle COMPLETE
+// enough for selectOracleOffer to ever possibly match it -- i.e. every
+// field that member's own switch case in selectOracleOffer actually
+// compares, mirrored here member-by-member rather than a single whole-
+// struct zero-value test. That looser test (entry.positiveQuery() !=
+// oracleOfferQuery{}) is NOT enough: adaptSignedOracleAnnex can leave a
+// NEGATIVE-ONLY subject_handle entry with PositiveKind and
+// PositiveHandlePatternID both non-empty (derived unconditionally from the
+// case's own kind) while PositiveHandleValue stays empty -- a query
+// selectOracleOffer's own three-way handle match (Value/PatternID/Kind)
+// can never satisfy, exactly like a genuinely all-empty entry, but the
+// whole-struct test would have missed it since two of the three fields
+// were non-empty. window is never eligible for the mutation arm at all
+// (see this function's own caller), so it is not handled here.
+func (entry twoTurnOracleEntry) hasConstructiblePositiveOffer() bool {
+	switch entry.Member {
+	case string(contractsv1.ContextFabricStructureNeedExpectedKind):
+		return entry.PositiveKind != ""
+	case string(contractsv1.ContextFabricStructureNeedSubjectAnchor):
+		return entry.PositiveKind != "" && entry.PositiveAnchorCanonicalID != ""
+	case string(contractsv1.ContextFabricStructureNeedSubjectHandle):
+		return entry.PositiveKind != "" && entry.PositiveHandlePatternID != "" && entry.PositiveHandleValue != ""
+	default:
+		return false
+	}
+}
+
 func (entry twoTurnOracleEntry) negativeQuery() oracleOfferQuery {
 	return oracleOfferQuery{
 		kind: entry.NegativeKind, anchorID: entry.NegativeAnchorCanonicalID,
@@ -3627,6 +3655,26 @@ type twoTurnReport struct {
 	// mirror needs only its expectedSchemaVersion constant updated, not a
 	// new field.
 	//
+	// "22" (CHAOS-4165, 2026-08-23): purely additive. twoTurnReport gains
+	// MutationProbeEligibleCount (a per-run structural count) and
+	// MutationProbeCoverage (a per-probe-kind {runs,required_min,adequate}
+	// verdict, computed by the new mutationProbeCoverage function) -- see
+	// mutationProbeCoverageFloor's own doc comment for why: the existing
+	// MutationProbesTripped/MutationProbesRun ratio reads a probe that ran
+	// once and tripped once identically to one with full statistical
+	// power, so a genuine run-count collapse under a given responder
+	// (CHAOS-4165's own finding, luna vs sol on the ext65 corpus) was
+	// invisible to every existing gate. This is a SOFT, informational
+	// signal only -- no hard gate changes, and MutationProbesTripped/
+	// MutationProbesRun's own zero-tolerance tripped==ran check is
+	// unchanged. No merge arithmetic beyond a plain sum for
+	// MutationProbeEligibleCount (Coverage itself is RECOMPUTED from the
+	// merged sums, never summed); the mirror in
+	// cmd/acr-trial-merge-two-turn/main.go gained the matching fields plus
+	// its own copy of mutationProbeKinds/mutationProbeCoverageFloor/
+	// mutationProbeCoverage (hand-maintained derivation logic, not only
+	// wire shape) in the same change.
+	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
 	// stale key under a new meaning.
@@ -3869,6 +3917,29 @@ type twoTurnReport struct {
 	AnchorNonEnumerableKindExcludedCount int            `json:"anchor_non_enumerable_kind_excluded_count"`
 	MutationProbesTripped                map[string]int `json:"mutation_probes_tripped"`
 	MutationProbesRun                    map[string]int `json:"mutation_probes_run"`
+	// MutationProbeEligibleCount (CHAOS-4165) is the count of oracle
+	// entries this run's own loop processed with Member != window -- the
+	// SAME entry.Member != window precondition (alongside positive.Applied)
+	// that gates whether runTwoTurnMutationArm ever runs for an entry.
+	// Recorded from the corpus/annex alone, UNCONDITIONALLY, before any
+	// live call and regardless of whether the positive arm ever applied --
+	// it measures the CEILING this run's mutation-probe population could
+	// have reached, not what it happened to reach, so it stays a fair,
+	// responder-independent denominator for mutationProbeCoverage.
+	MutationProbeEligibleCount int `json:"mutation_probe_eligible_count"`
+	// MutationProbeCoverage (CHAOS-4165) is mutationProbeCoverage's own
+	// output, computed once at report-assembly time -- see that function
+	// and twoTurnMutationProbeCoverage's own doc comments for what each
+	// field means and why a ratio alone (MutationProbesTripped/
+	// MutationProbesRun) cannot answer the statistical-power question this
+	// closes. Computed UNCONDITIONALLY here (mirrors AntiVacuityValid's own
+	// "always computed, gated only at check time" discipline) -- a caller
+	// checking this at the SHARD level (granularity=1: at most one entry
+	// per shard) will correctly read almost every kind as inadequate; the
+	// merged, full-corpus artifact (cmd/acr-trial-merge-two-turn) is the
+	// only place this is a meaningful signal, exactly like every other
+	// coverage/non-vacuity field on this struct.
+	MutationProbeCoverage map[string]twoTurnMutationProbeCoverage `json:"mutation_probe_coverage"`
 	// ControlsTotal/ControlsWitnessed: see controlSeen/controlOK's own doc
 	// comment at the call site for the exact definition.
 	//
@@ -4380,6 +4451,94 @@ func TestTwoTurnMutationProbe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := twoTurnMutationProbe(tc.applied, tc.status, tc.committedCount); got != tc.wantTripped {
 				t.Errorf("twoTurnMutationProbe(%v, %q, %d) = %v, want %v", tc.applied, tc.status, tc.committedCount, got, tc.wantTripped)
+			}
+		})
+	}
+}
+
+// TestMutationProbeCoverage (CHAOS-4165) pins mutationProbeCoverage's own
+// three behaviors: the floor caps required_min at mutationProbeCoverageFloor
+// when eligible exceeds it; a small eligible population caps required_min
+// at eligible itself instead (never demanding more runs than the
+// population could structurally supply); and a probe kind entirely ABSENT
+// from `ran` still gets a returned entry with Runs=0, never silently
+// dropped -- see mutationProbeKinds's own doc comment for the exact gap a
+// naive `range ran` would reintroduce.
+func TestMutationProbeCoverage(t *testing.T) {
+	t.Parallel()
+	t.Run("eligible exceeds floor: required_min is the floor", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{"remove_confirmation": 7, "corrupt_receipt": 7, "stale_superseded_offer": 7}, 65)
+		for _, kind := range mutationProbeKinds {
+			if got := cov[kind]; got.RequiredMin != mutationProbeCoverageFloor || !got.Adequate {
+				t.Errorf("%s = %+v, want required_min=%d adequate=true", kind, got, mutationProbeCoverageFloor)
+			}
+		}
+	})
+	t.Run("low run count under the floor: adequate is false", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{"remove_confirmation": 1, "corrupt_receipt": 1, "stale_superseded_offer": 1}, 65)
+		for _, kind := range mutationProbeKinds {
+			if got := cov[kind]; got.Runs != 1 || got.RequiredMin != mutationProbeCoverageFloor || got.Adequate {
+				t.Errorf("%s = %+v, want runs=1 required_min=%d adequate=false", kind, got, mutationProbeCoverageFloor)
+			}
+		}
+	})
+	t.Run("eligible population smaller than the floor: required_min caps at eligible, not the floor", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{"remove_confirmation": 2}, 2)
+		got := cov["remove_confirmation"]
+		if got.RequiredMin != 2 || !got.Adequate {
+			t.Errorf("remove_confirmation = %+v, want required_min=2 adequate=true -- a 2-case eligible population must never be held to a 5-run floor it cannot structurally reach", got)
+		}
+	})
+	t.Run("a probe kind absent from ran still gets an explicit zero-runs entry", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{"remove_confirmation": 7}, 65)
+		if len(cov) != len(mutationProbeKinds) {
+			t.Fatalf("mutationProbeCoverage returned %d kinds, want all %d of mutationProbeKinds regardless of what `ran` carries", len(cov), len(mutationProbeKinds))
+		}
+		if got := cov["stale_superseded_offer"]; got.Runs != 0 || got.Adequate {
+			t.Errorf("stale_superseded_offer (absent from ran) = %+v, want runs=0 adequate=false, not silently missing", got)
+		}
+	})
+	t.Run("zero eligible population: never adequate, even at runs=0 required_min=0", func(t *testing.T) {
+		cov := mutationProbeCoverage(map[string]int{}, 0)
+		for _, kind := range mutationProbeKinds {
+			if got := cov[kind]; got.Adequate {
+				t.Errorf("%s = %+v, want adequate=false -- a zero-eligible population's 0>=0 must never read as adequate (codex review finding)", kind, got)
+			}
+		}
+	})
+}
+
+// TestHasConstructiblePositiveOffer (CHAOS-4165, codex review round 2, P2)
+// pins the exact gap the whole-struct positiveQuery() zero-value test
+// missed: a negative-only subject_handle entry where
+// adaptSignedOracleAnnex still populates PositiveKind/PositiveHandlePatternID
+// unconditionally from the case's own kind, leaving only PositiveHandleValue
+// empty -- selectOracleOffer's own three-way match can never satisfy that,
+// so it must read as NOT constructible despite two of its three fields
+// being non-empty.
+func TestHasConstructiblePositiveOffer(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		entry twoTurnOracleEntry
+		want  bool
+	}{
+		{"expected_kind with a positive kind", twoTurnOracleEntry{Member: "expected_kind", PositiveKind: "repository"}, true},
+		{"expected_kind negative-only (no positive kind at all)", twoTurnOracleEntry{Member: "expected_kind"}, false},
+		{"subject_anchor with kind and canonical id", twoTurnOracleEntry{Member: "subject_anchor", PositiveKind: "repository", PositiveAnchorCanonicalID: "repository:acme/widgets"}, true},
+		{"subject_anchor negative-only (no positive canonical id)", twoTurnOracleEntry{Member: "subject_anchor", PositiveKind: "repository"}, false},
+		{"subject_handle fully populated", twoTurnOracleEntry{Member: "subject_handle", PositiveKind: "repository", PositiveHandlePatternID: "repo_slug", PositiveHandleValue: "acme/widgets"}, true},
+		{
+			"subject_handle negative-only: kind+pattern derived unconditionally, value empty -- THE exact codex-flagged gap",
+			twoTurnOracleEntry{Member: "subject_handle", PositiveKind: "repository", PositiveHandlePatternID: "repo_slug", PositiveHandleValue: ""},
+			false,
+		},
+		{"window is never constructible via this helper (caller excludes it separately)", twoTurnOracleEntry{Member: "window", PositiveWindowBand: "last_7d"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.entry.hasConstructiblePositiveOffer(); got != tc.want {
+				t.Errorf("hasConstructiblePositiveOffer() = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -6153,6 +6312,84 @@ func twoTurnMutationProbe(applied bool, status string, committedCount int) (trip
 	return !applied && committedCount == 0 && status != string(contractsv1.ContextFabricInvestigationComplete)
 }
 
+// mutationProbeKinds (CHAOS-4165) is the closed, fixed set of MutationProbe
+// values runTwoTurnMutationArm ever stamps ("remove_confirmation",
+// "corrupt_receipt", "stale_superseded_offer" -- that function's own three
+// run() calls). twoTurnReport.MutationProbesRun/MutationProbesTripped are
+// built by map-key auto-vivification (report.MutationProbesRun[probe]++),
+// so a probe kind that never ran even once this run is simply ABSENT from
+// those maps, never present with a zero value -- ranging over either map to
+// compute MutationProbeCoverage would silently skip exactly the
+// zero-runs case this ticket exists to surface. This fixed list is the
+// one place that closed vocabulary is named, so mutationProbeCoverage
+// (below) always reports all three kinds regardless of what happened.
+var mutationProbeKinds = []string{"remove_confirmation", "corrupt_receipt", "stale_superseded_offer"}
+
+// mutationProbeCoverageFloor (CHAOS-4165) is the absolute minimum
+// mutation-probe RUN count, per probe kind, a run needs before its own
+// MutationProbesTripped[kind]/MutationProbesRun[kind] ratio carries real
+// statistical weight -- see twoTurnMutationProbeCoverage's own doc comment
+// for what this decides and why the existing tripped==ran gate cannot see
+// this on its own (1/1 reads identically to 7/7).
+//
+// UNCALIBRATED, deliberately: chosen because it sits below every observed
+// sol-baseline value on the ext65 corpus (7 per kind, CHAOS-4113 RUN A,
+// 2026-08-23) while still requiring meaningfully more than the
+// single-run collapse CHAOS-4165 found under luna (1 per kind, same
+// corpus/tip) -- NOT a measured, live-corpus-calibrated ceiling the way
+// kindCoverageQueryLimit (chaos4038_kind_coverage.go) is tied to
+// CalibratedTopK. This repo's own CHAOS-3834/CHAOS-3829 calibration
+// discipline would reject treating this as anything more than a
+// conservative, always-safe starting default -- revisit once more
+// corpora/responders establish a real distribution.
+const mutationProbeCoverageFloor = 5
+
+// twoTurnMutationProbeCoverage (CHAOS-4165) is one probe kind's own
+// statistical-power verdict: Runs is MutationProbesRun[kind] (what
+// actually happened this run); RequiredMin is min(the run's own
+// MutationProbeEligibleCount, mutationProbeCoverageFloor) -- never
+// demanding more runs than this run's own eligible population could
+// structurally supply, so a genuinely small corpus/annex slice reads
+// adequate at its own achievable ceiling rather than falsely low_power.
+// Adequate is Runs >= RequiredMin. This is a SOFT, informational verdict
+// -- unlike MutationProbesTripped/MutationProbesRun's own tripped==ran
+// gate (a hard, zero-tolerance bar), an inadequate count is never itself
+// a run failure: a low offer/apply rate under a given responder is a
+// real PRODUCT finding (exactly what CHAOS-4165 found under luna), never
+// a reason to fail the run that measured it.
+type twoTurnMutationProbeCoverage struct {
+	Runs        int  `json:"runs"`
+	RequiredMin int  `json:"required_min"`
+	Adequate    bool `json:"adequate"`
+}
+
+// mutationProbeCoverage (CHAOS-4165) computes every probe kind's own
+// twoTurnMutationProbeCoverage from ran/eligible -- a pure function so the
+// producer (this file) and a future consumer can share one definition of
+// "adequate" rather than each re-deriving min()/comparison independently.
+// Always returns all of mutationProbeKinds, regardless of which keys
+// `ran` happens to carry -- see that variable's own doc comment for why.
+func mutationProbeCoverage(ran map[string]int, eligible int) map[string]twoTurnMutationProbeCoverage {
+	requiredMin := eligible
+	if requiredMin > mutationProbeCoverageFloor {
+		requiredMin = mutationProbeCoverageFloor
+	}
+	coverage := make(map[string]twoTurnMutationProbeCoverage, len(mutationProbeKinds))
+	for _, kind := range mutationProbeKinds {
+		runs := ran[kind]
+		// codex review finding (P2, confirmed): eligible==0 (a sharded
+		// single-case shard whose one entry is window-only or
+		// negative-only, or a limited run that happens to select no
+		// eligible entry at all) makes requiredMin==0 too, and runs==0
+		// >= 0 read as "adequate" -- a zero-population ratio is
+		// undefined, not clean. eligible>0 is required alongside
+		// runs>=requiredMin so the worst case (no evidence at all) can
+		// never read as adequate.
+		coverage[kind] = twoTurnMutationProbeCoverage{Runs: runs, RequiredMin: requiredMin, Adequate: eligible > 0 && runs >= requiredMin}
+	}
+	return coverage
+}
+
 // runTwoTurnMutationArm runs the three non-vacuity probes (design brief §5
 // head) against a case the positive arm already converted. Each probe's
 // twoTurnCaseResult.MutationProbe names which one ran, and MutationTripped
@@ -6506,7 +6743,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "21",
+		ReportSchemaVersion: "22",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -6809,6 +7046,28 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// vacuously-true X/X).
 		if tc.ExpectID == "" {
 			controlSeen[entry.Index] = true
+		}
+		// CHAOS-4165: recorded the SAME way as controlSeen above -- from
+		// the annex alone, unconditionally, before any live call -- the
+		// mutation arm's own scheduling precondition further down
+		// (entry.Member != window, alongside positive.Applied) is
+		// mirrored here minus the Applied half, so this counts the
+		// CEILING regardless of what this run's own positive arm does.
+		//
+		// codex review finding (P2, confirmed, round 2): entry.Member !=
+		// window alone is not enough, and neither is a whole-struct
+		// positiveQuery() zero-value test -- adaptSignedOracleAnnex can
+		// leave a negative-only entry with SOME positive fields
+		// unconditionally populated (a subject_handle entry derives
+		// PositiveKind/PositiveHandlePatternID from the case's own kind
+		// regardless of whether THIS member has a positive oracle at
+		// all), so a partial-field entry can read as eligible even though
+		// selectOracleOffer's own per-member match can never satisfy it.
+		// hasConstructiblePositiveOffer mirrors selectOracleOffer's own
+		// switch, field-by-field, so this can never drift from what that
+		// function actually requires to match.
+		if entry.Member != string(contractsv1.ContextFabricStructureNeedWindow) && entry.hasConstructiblePositiveOffer() {
+			report.MutationProbeEligibleCount++
 		}
 
 		turn1Req := twoTurnRequest(entry.Index, tc, "turn1")
@@ -7125,6 +7384,13 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	sort.Strings(unsatisfiedMembers)
 	report.AntiVacuityValid = len(applicableMembers) > 0 && len(unsatisfiedMembers) == 0
 
+	// CHAOS-4165: computed unconditionally here, mirroring AntiVacuityValid
+	// immediately above -- see MutationProbeCoverage's own doc comment for
+	// why this is only a meaningful signal at the merged, full-corpus
+	// level, and mutationProbeCoverage's own doc comment for the pure
+	// function shared with any future consumer.
+	report.MutationProbeCoverage = mutationProbeCoverage(report.MutationProbesRun, report.MutationProbeEligibleCount)
+
 	report.ControlsTotal = len(controlSeen)
 	report.ControlsWitnessed = len(controlOK)
 	report.ControlsWitnessedNoMatchCensusBacked = len(controlNoMatchCensusBacked)
@@ -7309,6 +7575,24 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	for probe, ran := range report.MutationProbesRun {
 		if tripped := report.MutationProbesTripped[probe]; tripped != ran {
 			t.Errorf("mutation probe %q tripped %d/%d attempts, want %d/%d -- the run is INVALID for this probe", probe, tripped, ran, ran, ran)
+		}
+	}
+	// CHAOS-4165: a SOFT, informational report only -- deliberately
+	// t.Logf, never t.Errorf. A low run count under a given responder is a
+	// real PRODUCT finding (a low offer/apply rate), not a harness defect
+	// to fail the run over; failing here would hide exactly the signal
+	// this ticket exists to surface behind a red run instead of a
+	// legible artifact field. Gated !sharded for the SAME reason every
+	// other coverage/non-vacuity check on this function is: at
+	// granularity=1 a single shard sees at most one entry, so almost
+	// every kind would read low_power there regardless of the full run's
+	// own health -- only the merged, full-corpus artifact (or an
+	// unsharded sequential run, this branch) is a meaningful population.
+	if !sharded {
+		for _, kind := range mutationProbeKinds {
+			if cov := report.MutationProbeCoverage[kind]; !cov.Adequate {
+				t.Logf("mutation probe %q: low_power (runs=%d, required_min=%d, eligible=%d) -- informational, not a failure", kind, cov.Runs, cov.RequiredMin, report.MutationProbeEligibleCount)
+			}
 		}
 	}
 	// Positive tier-routing proof (codex round-1 finding #6): every
