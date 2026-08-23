@@ -412,7 +412,8 @@ type ResolutionTraceEvent struct {
 	// "corroboration", "decision", "identity_gate", "identity_universe",
 	// "evidence_round", "evidence_probe" (CHAOS-3899), "evidence_census_commit"
 	// (CHAOS-3896 Slice C), "evidence_source_native", "evidence_source_native_probe"
-	// (CHAOS-3899 widening measurement, 2026-08-19).
+	// (CHAOS-3899 widening measurement, 2026-08-19), "slice_b_survivor_verdict"
+	// (CHAOS-4088).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -817,6 +818,31 @@ type ResolutionTraceEvent struct {
 	ShadowSourceNativeGrammar  string
 	ShadowSourceNativeResolved bool
 	ShadowSourceNativeKind     contextfabric.SubjectKind
+	// SurvivorVerdict (slice_b_survivor_verdict stage ONLY, CHAOS-4088):
+	// "neutral" or "eliminated" -- SurvivorsFirstOrder's own
+	// candidateSurvivorVerdict for Subject (chaos3896_slice_b_presentation.go),
+	// traced for the FIRST time by this field. Before it existed, a
+	// candidate's post-hoc position in a reordered list could not be
+	// attributed: a candidate sitting after the survivors could be
+	// positively census-eliminated OR simply have ranked lower on its own
+	// raw signal, and nothing distinguished the two from outside the
+	// process. One event per candidate SurvivorsFirstOrder actually
+	// classified (verdictNeutral included, not only eliminated -- the
+	// silence-vs-neutral ambiguity elsewhere on this file is exactly what
+	// evidence_round's own always-fires convention avoids, and this
+	// mirrors it): absence of ANY slice_b_survivor_verdict event for a
+	// resolution therefore means SurvivorsFirstOrder was never reached at
+	// all (ReasonBudgetExhausted's own short-circuit, or the outer
+	// deps.CensusFunc/stalled gate in resolve.go never opened), never that
+	// every candidate happened to classify as neutral. TRACE-ONLY, per
+	// team-lead's ruling on this ticket: nothing here feeds back into
+	// resolution.Status/Committed/Candidates order -- SurvivorsFirstOrder's
+	// own return value, computed identically whether or not a tracer is
+	// wired, is what actually decides that. Ephemeral (this log line is
+	// the only place the verdict is recorded) until CHAOS-4087 makes
+	// commit-basis-shaped traces durable, at which point this signal is a
+	// candidate for that same treatment.
+	SurvivorVerdict string
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -1588,7 +1614,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// resolution.Committed/Status (its own doc comment), so reordering
 		// the candidate list around an already-committed subject is
 		// harmless and keeps this call site's shape unconditional.
-		resolution.Candidates = SurvivorsFirstOrder(resolution.Candidates, attestation)
+		resolution.Candidates = SurvivorsFirstOrder(resolution.Candidates, attestation, deps.ResolutionTracer, request.RequestID)
 		if resolution.ClarificationPrompt != "" {
 			resolution.ClarificationPrompt = ClarificationPrompt(resolution.Candidates)
 		}

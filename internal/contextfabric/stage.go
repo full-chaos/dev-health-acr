@@ -18,11 +18,29 @@ type InvestigationStage string
 
 const (
 	StageInterpretation InvestigationStage = "interpretation"
-	StageResolution     InvestigationStage = "resolution"
-	StageGraph          InvestigationStage = "graph"
-	StageFactRead       InvestigationStage = "fact_read"
-	StageSynthesis      InvestigationStage = "synthesis"
-	StageValidation     InvestigationStage = "validation"
+	// StageResolution is HISTORICAL: Engine no longer emits it as of
+	// CHAOS-4088 (split below into StageGraphBinding and
+	// StageSubjectResolution, which used to share this one value even
+	// though they name two structurally distinct failure populations --
+	// a binding-lookup outage versus a commit-gate/subject-resolution
+	// defect). Kept in the enum, additive-only, so an existing log
+	// consumer or dashboard filtering on "resolution" still decodes rows
+	// written before this split; it is unreachable from new code.
+	StageResolution InvestigationStage = "resolution"
+	// StageGraphBinding covers ResolveInvestigationBinding failing: the
+	// graph key/epoch lookup that must happen before any other graph call
+	// this investigation makes. A binding outage is a dependency problem,
+	// never a subject/commit-gate defect -- see StageSubjectResolution.
+	StageGraphBinding InvestigationStage = "graph_binding"
+	// StageSubjectResolution covers ResolveSubjects failing, once the
+	// binding above already succeeded: a commit-gate or subject-matching
+	// defect against a graph ACR could actually reach, distinct from
+	// StageGraphBinding's own "never got as far as a query" population.
+	StageSubjectResolution InvestigationStage = "subject_resolution"
+	StageGraph             InvestigationStage = "graph"
+	StageFactRead          InvestigationStage = "fact_read"
+	StageSynthesis         InvestigationStage = "synthesis"
+	StageValidation        InvestigationStage = "validation"
 	// StagePersistence covers the immutable result store write, the one
 	// step that happens after a result is already valid. It is separate
 	// from StageValidation because the two have opposite meanings for an
@@ -42,8 +60,8 @@ const (
 // can never reach a log or metric label.
 func ValidInvestigationStage(stage InvestigationStage) bool {
 	switch stage {
-	case StageInterpretation, StageResolution, StageGraph, StageFactRead,
-		StageSynthesis, StageValidation, StagePersistence, StageUnknown:
+	case StageInterpretation, StageResolution, StageGraphBinding, StageSubjectResolution,
+		StageGraph, StageFactRead, StageSynthesis, StageValidation, StagePersistence, StageUnknown:
 		return true
 	default:
 		return false

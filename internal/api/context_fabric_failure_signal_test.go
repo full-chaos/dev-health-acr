@@ -113,6 +113,64 @@ func TestContextFabricInvestigationFailuresCarryStageAndClassification(t *testin
 	}
 }
 
+// CHAOS-4088. failure_error_type names WHAT fell into the unclassified
+// bucket -- the innermost error's own Go type -- instead of only that the
+// taxonomy missed it. It must appear on the unclassified branch and NOWHERE
+// else: every classified branch already names its cause via the sentinel,
+// so an extra field there would just be noise (and the corpus-safety
+// contract only needs to hold where raw error content is actually reachable).
+// contextFabricOpaqueTestError is a leaf error (no Unwrap) standing in for a
+// real dependency error type (e.g. *net.OpError, a driver-specific error
+// struct): the point is that its own package-qualified type name reaches
+// the log, not that it is literally a stdlib type.
+type contextFabricOpaqueTestError struct{ msg string }
+
+func (e contextFabricOpaqueTestError) Error() string { return e.msg }
+
+func TestContextFabricUnclassifiedFailureCarriesTheInnermostErrorType(t *testing.T) {
+	app, token, logs := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return contextfabric.InvestigationResult{}, fmt.Errorf("wrapped once: %w", contextFabricOpaqueTestError{msg: "connection refused"})
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", response.Code)
+	}
+	entry := decodeFailureLog(t, logs.String())
+	if got := entry["failure_classification"]; got != "unclassified" {
+		t.Fatalf("failure_classification = %v, want %q", got, "unclassified")
+	}
+	wantType := fmt.Sprintf("%T", contextFabricOpaqueTestError{})
+	if got := entry["failure_error_type"]; got != wantType {
+		t.Fatalf("failure_error_type = %v, want %q -- the innermost error's own type, not the wrapper's", got, wantType)
+	}
+	if strings.Contains(logs.String(), "connection refused") {
+		t.Fatalf("failure_error_type must never carry the error's message text: %s", logs.String())
+	}
+}
+
+// A CLASSIFIED failure (one matching a named sentinel) must never carry
+// failure_error_type: the sentinel already names the cause, and the field
+// exists specifically to fill the gap an unclassified line otherwise has.
+func TestContextFabricClassifiedFailureNeverCarriesErrorType(t *testing.T) {
+	app, token, logs := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return contextfabric.InvestigationResult{}, fmt.Errorf("discover graph context: %w", contextfabric.ErrUnavailable)
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	entry := decodeFailureLog(t, logs.String())
+	if got := entry["failure_classification"]; got != "dependency_unavailable" {
+		t.Fatalf("failure_classification = %v, want %q", got, "dependency_unavailable")
+	}
+	if _, present := entry["failure_error_type"]; present {
+		t.Fatalf("failure_error_type unexpectedly present on a classified failure: %v", entry["failure_error_type"])
+	}
+}
+
 // The standing rule: a bounded classification is a guarantee only if it holds
 // at every level. A failure whose cause carries a raw dependency message must
 // log the classification and NOTHING of that message -- no debug hatch.

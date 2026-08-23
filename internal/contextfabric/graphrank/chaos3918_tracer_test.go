@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // TestSlogResolutionTracer_EvidenceSourceNativeStages pins the codex xhigh
@@ -54,6 +56,38 @@ func TestSlogResolutionTracer_EvidenceSourceNativeStages(t *testing.T) {
 			t.Fatalf("evidence_source_native_probe log line missing expected fields: %q", out)
 		}
 	})
+}
+
+// TestSlogResolutionTracer_SliceBSurvivorVerdictStage is CHAOS-4088's own
+// sink-level pin (codex xhigh review round 1, non-blocking coverage gap,
+// confirmed and closed): every OTHER new-stage addition in this file gets
+// a test that actually exercises SlogResolutionTracer's Trace switch, not
+// only the in-process ResolutionTraceEvent shape
+// (chaos3896_slice_b_presentation_test.go's own tracer tests only ever
+// assert against a recording double, never the production sink). This
+// proves "slice_b_survivor_verdict" produces its own log line naming
+// subject_kind/subject_canonical_id/survivor_verdict, never falling to
+// "unknown stage" -- the exact defect class evidence_census_commit and
+// evidence_source_native/evidence_source_native_probe were each found
+// missing this coverage for.
+func TestSlogResolutionTracer_SliceBSurvivorVerdictStage(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	tracer := NewSlogResolutionTracer(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	tracer.Trace(ResolutionTraceEvent{
+		RequestID: "req-slice-b-1", Stage: "slice_b_survivor_verdict",
+		Subject:         contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:repo-1:1"},
+		SurvivorVerdict: "eliminated",
+	})
+	out := buf.String()
+	if strings.Contains(out, "unknown stage") {
+		t.Fatalf("slice_b_survivor_verdict fell to the unknown-stage branch: %q", out)
+	}
+	for _, want := range []string{"request_id=req-slice-b-1", "subject_kind=pull_request", "subject_canonical_id=pull_request:repo-1:1", "survivor_verdict=eliminated"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("slice_b_survivor_verdict log line missing %q: %q", want, out)
+		}
+	}
 }
 
 // TestSanitizeLogString pins sanitizeLogString's own contract (CodeQL

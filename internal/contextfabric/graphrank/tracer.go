@@ -226,6 +226,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"source_native_grammar", sanitizeLogString(event.ShadowSourceNativeGrammar),
 			"source_native_resolved", event.ShadowSourceNativeResolved,
 			"source_native_kind", string(event.ShadowSourceNativeKind))
+	case "slice_b_survivor_verdict":
+		// CHAOS-4088: SurvivorsFirstOrder's own candidateSurvivorVerdict,
+		// traced for the first time -- see ResolutionTraceEvent.SurvivorVerdict's
+		// own doc comment for the diagnostic gap this closes and the
+		// "silence means never reached, not everything neutral" contract.
+		// Content-safe: Subject is the graph's own stable kind+canonical_id,
+		// SurvivorVerdict is the closed "neutral"/"eliminated" vocabulary.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: slice b survivor verdict",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"survivor_verdict", event.SurvivorVerdict)
 	default:
 		t.logger.DebugContext(ctx, "context fabric resolution trace: unknown stage",
 			"request_id", event.RequestID, "stage", event.Stage)

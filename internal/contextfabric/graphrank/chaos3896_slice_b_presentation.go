@@ -133,7 +133,19 @@ const CensusSatisfierSetBudget = 999
 // verdictNeutral per classifyCandidate's own doc comment, so this function
 // needs no separate handling for them -- a partially-degraded round can
 // only ever produce FEWER eliminations, never a wrong one.
-func SurvivorsFirstOrder(candidates []contextfabric.SubjectCandidate, attestation Attestation) []contextfabric.SubjectCandidate {
+//
+// tracer/requestID (CHAOS-4088, trace-only -- team-lead ruling on this
+// ticket): when tracer is non-nil, EVERY candidate this call actually
+// classifies emits one slice_b_survivor_verdict event (verdictNeutral
+// included -- see ResolutionTraceEvent.SurvivorVerdict's own doc comment
+// for why silence must mean "never reached", not "everything neutral").
+// A nil tracer (every existing caller before this ticket, and every
+// caller that does not thread one) skips this with zero extra cost, the
+// same convention every other optional ResolveDeps-sourced tracer call in
+// this package already uses. This is READ-ONLY of the verdicts this
+// function was already computing for its own reordering -- it changes
+// nothing about which candidate ends up where.
+func SurvivorsFirstOrder(candidates []contextfabric.SubjectCandidate, attestation Attestation, tracer ResolutionTracer, requestID string) []contextfabric.SubjectCandidate {
 	ordered := make([]contextfabric.SubjectCandidate, len(candidates))
 	copy(ordered, candidates)
 	if attestation.Reason == ReasonBudgetExhausted {
@@ -149,6 +161,16 @@ func SurvivorsFirstOrder(candidates []contextfabric.SubjectCandidate, attestatio
 		verdicts[i] = classifyCandidate(candidate, byKind)
 		if verdicts[i] == verdictEliminated {
 			anyEliminated = true
+		}
+		if tracer != nil {
+			verdictName := "neutral"
+			if verdicts[i] == verdictEliminated {
+				verdictName = "eliminated"
+			}
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "slice_b_survivor_verdict",
+				Subject: candidate.Subject, SurvivorVerdict: verdictName,
+			})
 		}
 	}
 	if !anyEliminated {
