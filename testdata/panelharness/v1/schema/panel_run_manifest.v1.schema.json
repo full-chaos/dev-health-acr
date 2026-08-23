@@ -21,6 +21,11 @@
     "members": {
       "type": "array",
       "items": { "$ref": "#/$defs/panel_member_run" }
+    },
+    "clarification_logs": {
+      "type": "array",
+      "description": "CHAOS-4146(a): one entry per panelist that attempted at least one Investigate call, its own turn-by-turn clarification-loop history. Optional and additive -- absent on a manifest written before this field existed.",
+      "items": { "$ref": "#/$defs/panelist_clarification_log" }
     }
   },
   "$defs": {
@@ -60,6 +65,34 @@
         "applied_value": { "type": "string", "minLength": 1 },
         "accepted": { "type": "boolean" },
         "confirmed_result_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "panelist_clarification_log": {
+      "type": "object",
+      "required": ["canonical_model_identity", "turns"],
+      "additionalProperties": false,
+      "properties": {
+        "canonical_model_identity": { "type": "string", "minLength": 1 },
+        "turns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/clarification_turn_event" }
+        }
+      }
+    },
+    "clarification_turn_event": {
+      "type": "object",
+      "required": ["turn", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "turn": { "type": "integer", "minimum": 1 },
+        "outcome": {
+          "type": "string",
+          "enum": ["decisive", "refused_no_offers", "refused_not_confident", "continued", "turn_exhausted"]
+        },
+        "offer_kinds": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["expected_kind", "subject_anchor", "subject_handle"] }
+        }
       }
     },
     "consensus_summary": {

@@ -1,10 +1,11 @@
 // Package panelharness is the CHAOS-3860 P6 activation harness: a
 // standalone driver that speaks the hosted ACR contract directly over HTTP
 // (POST /api/v1/context-fabric/investigations), with a real per-panelist
-// bearer credential, to run a multi-model panel through the two-turn
-// select-and-continue confirmation flow the pivot-intent design brief names
-// (§2.4/§3.1) and the sol-max architectural ruling on CHAOS-3860 (2026-08-20,
-// adopting recommendation (b)) authorizes.
+// bearer credential, to run a multi-model panel through a bounded, N-turn
+// select-and-continue confirmation flow (CHAOS-4146(a) generalizes the
+// pivot-intent design brief's own two-turn flow, §2.4/§3.1, to as many
+// rounds as MaxClarificationTurns allows) the sol-max architectural ruling
+// on CHAOS-3860 (2026-08-20, adopting recommendation (b)) authorizes.
 //
 // SCOPE, PINNED BY THE RULING (do not relitigate here):
 //   - Every panelist redemption is a REAL, credentialed hosted-API call.
@@ -70,6 +71,63 @@ type PanelRunManifest struct {
 	// brief §2.4) and is out of this harness's scope, matching P4's own
 	// StructureSelectionEvent.Member boundary exactly.
 	Members []PanelMemberRun `json:"members"`
+	// ClarificationLogs is one entry per panelist that attempted at least
+	// one Investigate call, carrying that panelist's OWN turn-by-turn
+	// clarification-loop history (CHAOS-4146(a)) -- independent of Members,
+	// since a single turn's StructureNeeds can offer more than one member
+	// at once. Omitted (never present) for a panelist rejected before any
+	// call was attempted (e.g. the shared-credential guard). Capture-only,
+	// exactly like AgreementBits below: no consensus/disagreement labeling
+	// is derived from it here.
+	ClarificationLogs []PanelistClarificationLog `json:"clarification_logs,omitempty"`
+}
+
+// ClarificationTurnOutcome is the closed-vocabulary classification for one
+// clarification turn's own terminal-or-continuing outcome, CHAOS-4146(a)'s
+// own per-turn telemetry requirement.
+type ClarificationTurnOutcome string
+
+const (
+	// ClarificationTurnDecisive: the response carried no actionable
+	// StructureNeeds -- a real terminal answer.
+	ClarificationTurnDecisive ClarificationTurnOutcome = "decisive"
+	// ClarificationTurnRefusedNoOffers: StructureNeeds named members
+	// missing, but none of them are ones this package's Selector flow can
+	// act on (e.g. window-only, CHAOS-4118) -- terminal, not a Selector
+	// call.
+	ClarificationTurnRefusedNoOffers ClarificationTurnOutcome = "refused_no_offers"
+	// ClarificationTurnRefusedNotConfident: the Selector was invoked but
+	// chose nothing -- terminal, an explicit refusal.
+	ClarificationTurnRefusedNotConfident ClarificationTurnOutcome = "refused_not_confident"
+	// ClarificationTurnContinued: the Selector chose at least one receipt
+	// and the turn budget allows another round -- non-terminal.
+	ClarificationTurnContinued ClarificationTurnOutcome = "continued"
+	// ClarificationTurnExhausted: the Selector would have continued, but
+	// this was the last turn the configured bound allows -- terminal.
+	ClarificationTurnExhausted ClarificationTurnOutcome = "turn_exhausted"
+)
+
+// ClarificationTurnEvent is one turn's own outcome inside a single
+// panelist's bounded clarification loop.
+type ClarificationTurnEvent struct {
+	// Turn is 1-indexed, matching the loop's own Investigate call count
+	// (turn 1 is the initial ask, not a "turn 0").
+	Turn    int                      `json:"turn"`
+	Outcome ClarificationTurnOutcome `json:"outcome"`
+	// OfferKinds is the distinct StructureNeedKind values this turn's
+	// response actually offered (projectOffers' own member vocabulary),
+	// in first-seen order -- omitted for a decisive turn, which offered
+	// nothing.
+	OfferKinds []string `json:"offer_kinds,omitempty"`
+}
+
+// PanelistClarificationLog is one panelist's own full turn-by-turn history
+// for one panel run -- independent of Members, since a single turn's
+// StructureNeeds can offer (and a single Selector call can choose among)
+// more than one member at once.
+type PanelistClarificationLog struct {
+	CanonicalModelIdentity string                   `json:"canonical_model_identity"`
+	Turns                  []ClarificationTurnEvent `json:"turns"`
 }
 
 // PanelMemberRun is one structure-need member's panel outcome: every

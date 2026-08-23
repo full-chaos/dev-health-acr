@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -340,6 +341,374 @@ func TestFindConfirmedEntry_RequiresPriorResultIDToMatchNotJustReceiptID(t *test
 	}
 	if entry, ok := findConfirmedEntry(confirmed, member, "result_from_a_different_turn", receiptID); !ok || entry.AppliedValue != "pull_request" {
 		t.Errorf("expected a match on the correct PriorResultID tuple, got ok=%v entry=%+v", ok, entry)
+	}
+}
+
+// autoSelectTopRanked is a Selector that, for every member StructureNeeds
+// currently offers, always picks that member's rank-0 (first-listed) offer
+// -- unlike stubSelector's fixed map, it reads the needs argument, so it
+// works correctly across a multi-turn chain where each turn offers
+// different members and different receipt ids.
+type autoSelectTopRanked struct{}
+
+func (autoSelectTopRanked) SelectReceipts(_ context.Context, _ string, needs contractsv1.ContextFabricStructureNeeds) (map[string]string, error) {
+	selections := make(map[string]string)
+	if len(needs.KindOptions) > 0 {
+		selections[string(contractsv1.ContextFabricStructureNeedExpectedKind)] = needs.KindOptions[0].ReceiptID
+	}
+	if len(needs.AnchorOptions) > 0 {
+		selections[string(contractsv1.ContextFabricStructureNeedSubjectAnchor)] = needs.AnchorOptions[0].ReceiptID
+	}
+	if len(needs.HandleOptions) > 0 {
+		selections[string(contractsv1.ContextFabricStructureNeedSubjectHandle)] = needs.HandleOptions[0].ReceiptID
+	}
+	return selections, nil
+}
+
+// TestRun_ThreeTurnFlowAccumulatesReceiptsAndAppliesBothMembers is
+// CHAOS-4146(a)'s own central regression test: the hosted engine derives
+// confirmed structure fresh from what EACH request itself carries (no
+// server-side session state across calls -- see run.go's own runPanelist
+// doc comment), so turn 3's request must carry BOTH the turn-1-originated
+// kind receipt (resent) AND the turn-2-originated anchor receipt, or the
+// engine would see the kind confirmation silently dropped. Turn 1 offers
+// expected_kind; turn 2 confirms it AND offers subject_anchor; turn 3
+// confirms subject_anchor and is decisive.
+func TestRun_ThreeTurnFlowAccumulatesReceiptsAndAppliesBothMembers(t *testing.T) {
+	const kindReceipt, anchorReceipt = "kindr_receipt00000000000001", "ancr_receipt00000000000001"
+	var requests []contractsv1.ContextFabricInvestigationRequest
+	turn := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request contractsv1.ContextFabricInvestigationRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		requests = append(requests, request)
+		turn++
+		w.Header().Set("Content-Type", "application/json")
+		switch turn {
+		case 1:
+			result := minimalValidResult("result_turn1", request.RequestID)
+			result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+			result.SubjectResolution.ClarificationPrompt = "Which kind of work item is this about?"
+			result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+				Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+				KindOptions: []contractsv1.ContextFabricKindOption{{ReceiptID: kindReceipt, OptionID: "opt1", Label: "Pull request", Kind: "pull_request", OfferSource: contractsv1.ContextFabricStructureOfferEngine}},
+			}
+			_ = json.NewEncoder(w).Encode(result)
+		case 2:
+			result := minimalValidResult("result_turn2", request.RequestID)
+			result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+			result.SubjectResolution.ClarificationPrompt = "Which subject anchor?"
+			result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+				{
+					Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "pull_request",
+					Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_turn1", ReceiptID: kindReceipt,
+					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+				},
+			}
+			result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+				Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+				AnchorOptions: []contractsv1.ContextFabricAnchorOption{{
+					ReceiptID: anchorReceipt, OptionID: "opt2", Label: "acr repo",
+					Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository_acr",
+					MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+				}},
+			}
+			_ = json.NewEncoder(w).Encode(result)
+		default:
+			result := minimalValidResult("result_turn3", request.RequestID)
+			// ContextFabricConfirmedStructureEntry's own doc comment: the
+			// response carries "one entry PER carried member, INCLUDING
+			// vetoed ones" -- turn 3's request resends BOTH the kind and
+			// anchor receipts, so a realistic response echoes a disposition
+			// for BOTH, not only the newly-offered anchor member.
+			result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+				{
+					Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "pull_request",
+					Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_turn1", ReceiptID: kindReceipt,
+					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+				},
+				{
+					Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: "anchor-42",
+					Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_turn2", ReceiptID: anchorReceipt,
+					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(result)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, testBearerToken('n'), 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	panelist := Panelist{CanonicalModelIdentity: "anthropic/sol-max", Client: client, Selector: autoSelectTopRanked{}}
+	manifest, err := Run(context.Background(), RunConfig{
+		OrgID: "org-test", Question: "Was Ask Dev ready to ship?",
+		Panelists: []Panelist{panelist}, BaseRequest: validRequest(),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(requests) != 3 {
+		t.Fatalf("server received %d requests, want exactly 3", len(requests))
+	}
+	if len(requests[1].PriorKindReceipts) != 1 || requests[1].PriorKindReceipts[0].ReceiptID != kindReceipt || requests[1].PriorKindReceipts[0].ResultID != "result_turn1" {
+		t.Errorf("turn 2 request PriorKindReceipts = %+v, want the turn-1-originated kind receipt", requests[1].PriorKindReceipts)
+	}
+	if len(requests[2].PriorKindReceipts) != 1 || requests[2].PriorKindReceipts[0].ReceiptID != kindReceipt || requests[2].PriorKindReceipts[0].ResultID != "result_turn1" {
+		t.Errorf("turn 3 request PriorKindReceipts = %+v, want the turn-1-originated kind receipt RESENT", requests[2].PriorKindReceipts)
+	}
+	if len(requests[2].PriorAnchorReceipts) != 1 || requests[2].PriorAnchorReceipts[0].ReceiptID != anchorReceipt || requests[2].PriorAnchorReceipts[0].ResultID != "result_turn2" {
+		t.Errorf("turn 3 request PriorAnchorReceipts = %+v, want the turn-2-originated anchor receipt", requests[2].PriorAnchorReceipts)
+	}
+
+	byMember := make(map[string]PanelMemberRun, len(manifest.Members))
+	for _, m := range manifest.Members {
+		byMember[m.Member] = m
+	}
+	if len(manifest.Members) != 2 {
+		t.Fatalf("Members = %+v, want exactly two (expected_kind, subject_anchor)", manifest.Members)
+	}
+	kind, anchor := byMember["expected_kind"], byMember["subject_anchor"]
+	// ConfirmedResultID = result_turn3, not result_turn2: turn 3's own
+	// request resent the kind receipt (see the accumulation assertion
+	// above), and its response re-echoed an Applied disposition for it --
+	// the LATEST turn to have actually observed the confirmation, matching
+	// PanelistSelection.ConfirmedResultID's own doc comment.
+	if len(kind.Panelists) != 1 || kind.Panelists[0].AppliedValue != "pull_request" || kind.Panelists[0].ConfirmedResultID != "result_turn3" {
+		t.Errorf("expected_kind = %+v, want AppliedValue pull_request landed at result_turn3", kind)
+	}
+	if len(anchor.Panelists) != 1 || anchor.Panelists[0].AppliedValue != "anchor-42" || anchor.Panelists[0].ConfirmedResultID != "result_turn3" {
+		t.Errorf("subject_anchor = %+v, want AppliedValue anchor-42 landed at result_turn3", anchor)
+	}
+
+	if len(manifest.ClarificationLogs) != 1 {
+		t.Fatalf("ClarificationLogs = %+v, want exactly one panelist entry", manifest.ClarificationLogs)
+	}
+	turns := manifest.ClarificationLogs[0].Turns
+	wantOutcomes := []ClarificationTurnOutcome{ClarificationTurnContinued, ClarificationTurnContinued, ClarificationTurnDecisive}
+	if len(turns) != 3 {
+		t.Fatalf("Turns = %+v, want exactly 3 entries", turns)
+	}
+	for i, want := range wantOutcomes {
+		if turns[i].Turn != i+1 || turns[i].Outcome != want {
+			t.Errorf("Turns[%d] = %+v, want Turn=%d Outcome=%s", i, turns[i], i+1, want)
+		}
+	}
+	if len(turns[0].OfferKinds) != 1 || turns[0].OfferKinds[0] != "expected_kind" {
+		t.Errorf("Turns[0].OfferKinds = %v, want [expected_kind]", turns[0].OfferKinds)
+	}
+	if len(turns[1].OfferKinds) != 1 || turns[1].OfferKinds[0] != "subject_anchor" {
+		t.Errorf("Turns[1].OfferKinds = %v, want [subject_anchor]", turns[1].OfferKinds)
+	}
+	if len(turns[2].OfferKinds) != 0 {
+		t.Errorf("Turns[2].OfferKinds = %v, want none (decisive offers nothing)", turns[2].OfferKinds)
+	}
+}
+
+// TestRun_LaterTurnVetoDropsAnEarlierTurnsAlreadyAppliedConfirmation is a
+// regression test for codex xhigh review round 1, HIGH: a member confirmed
+// Applied on an EARLIER turn is resent (as an accumulated receipt) on every
+// later turn, and ContextFabricConfirmedStructureEntry's own doc comment
+// requires the response to carry a fresh disposition for EVERY carried
+// member each time -- so a later turn can legitimately flip that member to
+// vetoed_stale/vetoed_conflict (e.g. a graph epoch flip, or a conflict with
+// another confirmation in the same request). Before this fix, runPanelist
+// only reconciled the NEWEST turn's own selections against the response,
+// never re-checking already-accumulated ones -- a since-invalidated
+// confirmation would stay in the manifest forever. Turn 1 offers
+// expected_kind; turn 2 applies it and offers subject_anchor; turn 3
+// VETOES the (resent) kind confirmation while applying anchor. The final
+// manifest must carry ONLY subject_anchor.
+func TestRun_LaterTurnVetoDropsAnEarlierTurnsAlreadyAppliedConfirmation(t *testing.T) {
+	const kindReceipt, anchorReceipt = "kindr_receipt00000000000002", "ancr_receipt00000000000002"
+	turn := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request contractsv1.ContextFabricInvestigationRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		turn++
+		w.Header().Set("Content-Type", "application/json")
+		switch turn {
+		case 1:
+			result := minimalValidResult("result_turn1", request.RequestID)
+			result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+			result.SubjectResolution.ClarificationPrompt = "Which kind of work item is this about?"
+			result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+				Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+				KindOptions: []contractsv1.ContextFabricKindOption{{ReceiptID: kindReceipt, OptionID: "opt1", Label: "Pull request", Kind: "pull_request", OfferSource: contractsv1.ContextFabricStructureOfferEngine}},
+			}
+			_ = json.NewEncoder(w).Encode(result)
+		case 2:
+			result := minimalValidResult("result_turn2", request.RequestID)
+			result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+			result.SubjectResolution.ClarificationPrompt = "Which subject anchor?"
+			result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+				{
+					Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "pull_request",
+					Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_turn1", ReceiptID: kindReceipt,
+					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+				},
+			}
+			result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+				Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+				AnchorOptions: []contractsv1.ContextFabricAnchorOption{{
+					ReceiptID: anchorReceipt, OptionID: "opt2", Label: "acr repo",
+					Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository_acr",
+					MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+				}},
+			}
+			_ = json.NewEncoder(w).Encode(result)
+		default:
+			result := minimalValidResult("result_turn3", request.RequestID)
+			result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+				{
+					// The turn-1-originated kind confirmation, previously
+					// Applied on turn 2, is now VETOED on turn 3.
+					Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "pull_request",
+					Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_turn1", ReceiptID: kindReceipt,
+					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
+				},
+				{
+					Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: "anchor-42",
+					Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_turn2", ReceiptID: anchorReceipt,
+					Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(result)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, testBearerToken('v'), 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	panelist := Panelist{CanonicalModelIdentity: "anthropic/sol-max", Client: client, Selector: autoSelectTopRanked{}}
+	manifest, err := Run(context.Background(), RunConfig{
+		OrgID: "org-test", Question: "Was Ask Dev ready to ship?",
+		Panelists: []Panelist{panelist}, BaseRequest: validRequest(),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(manifest.Members) != 1 || manifest.Members[0].Member != "subject_anchor" {
+		t.Fatalf("Members = %+v, want ONLY subject_anchor: the kind confirmation was vetoed on a later turn and must not survive in the manifest", manifest.Members)
+	}
+}
+
+// TestRun_BlankSelectorValueIsTreatedAsRefusalNotAChoice is a regression
+// test for codex xhigh review round 1, MEDIUM: Selector's own doc comment
+// states a member mapped to an empty string means "no offer worth
+// confirming" -- a map containing ONLY such blank entries must be treated
+// exactly like an empty map (refused_not_confident), never as a genuine
+// continuation carrying an empty receipt id onto the wire.
+func TestRun_BlankSelectorValueIsTreatedAsRefusalNotAChoice(t *testing.T) {
+	var requestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request contractsv1.ContextFabricInvestigationRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		result := minimalValidResult("result_turn1", request.RequestID)
+		result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+		result.SubjectResolution.ClarificationPrompt = "Which kind of work item is this about?"
+		result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+			KindOptions: []contractsv1.ContextFabricKindOption{{ReceiptID: "kindr_receipt00000000000003", OptionID: "opt1", Label: "Pull request", Kind: "pull_request", OfferSource: contractsv1.ContextFabricStructureOfferEngine}},
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	}))
+	defer server.Close()
+
+	panelist := newTestPanelist(t, "anthropic/sol-max", server, map[string]string{"expected_kind": ""}, nil)
+	manifest, err := Run(context.Background(), RunConfig{
+		OrgID: "org-test", Question: "Was Ask Dev ready to ship?",
+		Panelists: []Panelist{panelist}, BaseRequest: validRequest(),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if requestCount != 1 {
+		t.Fatalf("server received %d requests, want exactly 1: a blank-valued selection must be treated as refusal, never a second turn", requestCount)
+	}
+	if len(manifest.Members) != 0 {
+		t.Errorf("Members = %+v, want none", manifest.Members)
+	}
+	if len(manifest.ClarificationLogs) != 1 || len(manifest.ClarificationLogs[0].Turns) != 1 {
+		t.Fatalf("ClarificationLogs = %+v, want exactly one turn", manifest.ClarificationLogs)
+	}
+	if manifest.ClarificationLogs[0].Turns[0].Outcome != ClarificationTurnRefusedNotConfident {
+		t.Errorf("Turns[0].Outcome = %q, want refused_not_confident", manifest.ClarificationLogs[0].Turns[0].Outcome)
+	}
+}
+
+// TestRun_TurnBudgetExhaustionStopsWithoutFurtherCalls is a regression test
+// for CHAOS-4146(a)'s own turn-exhaustion terminal state: a panelist that
+// would keep continuing forever (an engine that never actually resolves)
+// must stop at MaxClarificationTurns, record turn_exhausted, and never send
+// a request beyond the bound -- it must never spend a selection round the
+// loop cannot act on.
+func TestRun_TurnBudgetExhaustionStopsWithoutFurtherCalls(t *testing.T) {
+	var requestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request contractsv1.ContextFabricInvestigationRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		// Always re-offers the SAME member with a fresh receipt id, an
+		// engine that never actually terminates -- exactly what the turn
+		// bound exists to guard against.
+		result := minimalValidResult(fmt.Sprintf("result_turn%d", requestCount), request.RequestID)
+		result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+		result.SubjectResolution.ClarificationPrompt = "Which kind of work item is this about?"
+		result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+			KindOptions: []contractsv1.ContextFabricKindOption{
+				{ReceiptID: fmt.Sprintf("kindr_receipt%020d", requestCount), OptionID: "opt1", Label: "Pull request", Kind: "pull_request", OfferSource: contractsv1.ContextFabricStructureOfferEngine},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, testBearerToken('x'), 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	panelist := Panelist{CanonicalModelIdentity: "anthropic/sol-max", Client: client, Selector: autoSelectTopRanked{}}
+	manifest, err := Run(context.Background(), RunConfig{
+		OrgID: "org-test", Question: "Was Ask Dev ready to ship?",
+		Panelists: []Panelist{panelist}, BaseRequest: validRequest(),
+		MaxClarificationTurns: 2,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if requestCount != 2 {
+		t.Fatalf("server received %d requests, want exactly 2 (the configured MaxClarificationTurns bound)", requestCount)
+	}
+	if len(manifest.Members) != 0 {
+		t.Errorf("Members = %+v, want none: the loop was exhausted before any selection was ever confirmed by a later turn", manifest.Members)
+	}
+	if len(manifest.ClarificationLogs) != 1 {
+		t.Fatalf("ClarificationLogs = %+v, want exactly one panelist entry", manifest.ClarificationLogs)
+	}
+	turns := manifest.ClarificationLogs[0].Turns
+	if len(turns) != 2 {
+		t.Fatalf("Turns = %+v, want exactly 2 entries", turns)
+	}
+	if turns[0].Turn != 1 || turns[0].Outcome != ClarificationTurnContinued {
+		t.Errorf("Turns[0] = %+v, want Turn=1 Outcome=continued", turns[0])
+	}
+	if turns[1].Turn != 2 || turns[1].Outcome != ClarificationTurnExhausted {
+		t.Errorf("Turns[1] = %+v, want Turn=2 Outcome=turn_exhausted", turns[1])
 	}
 }
 

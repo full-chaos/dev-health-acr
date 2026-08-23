@@ -10,8 +10,10 @@ comment history for the full ruling text).
 ## 1. What this harness is, and is not
 
 `internal/panelharness` is the CHAOS-3860 P6 activation driver: it runs a
-multi-model panel through the two-turn select-and-continue confirmation flow
-(pivot-intent design brief §2.4/§3.1) against a REAL org's REAL data, speaking
+multi-model panel through a bounded, N-turn select-and-continue confirmation
+loop (pivot-intent design brief §2.4/§3.1, generalized past its original
+two-turn shape by CHAOS-4146(a) to as many rounds as
+`RunConfig.MaxClarificationTurns` allows) against a REAL org's REAL data, speaking
 the hosted ACR contract directly over HTTP
 (`POST /api/v1/context-fabric/investigations`) with a REAL, per-panelist
 bearer credential — the "3860 guard": no synthetic principal, no shared
@@ -92,6 +94,22 @@ threshold (when does multi-model consensus outrank single-model support) is
 P5/curation's own, separately-ratified rule (design brief §3.2's promotion
 rule) — this harness reports the raw histogram and the three booleans above;
 it does not guess the threshold.
+
+### 2.3 Clarification log (CHAOS-4146(a))
+
+`ClarificationLogs` carries one `PanelistClarificationLog` per panelist that
+attempted at least one `Investigate` call: that panelist's own turn-by-turn
+`ClarificationTurnEvent` history (turn index, closed-vocabulary outcome,
+offer kinds seen). It is independent of `Members` — a single turn's
+`StructureNeeds` can offer more than one member at once, so the log groups
+by panelist-and-turn, not by member. Capture-only, matching `AgreementBits`:
+no consensus/disagreement label is derived from it in this package (see §1).
+
+Turn-level receipt accumulation: the hosted engine derives confirmed
+structure fresh from what EACH request itself carries (no server-side
+session state across calls), so every turn after the first resends the FULL
+set of previously-applied receipts, not just the newest turn's — a request
+that dropped an earlier turn's receipt would silently un-confirm it.
 
 ## 3. Privacy discipline
 
