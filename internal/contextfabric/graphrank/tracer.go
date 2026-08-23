@@ -56,7 +56,19 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 	case "search":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: search",
 			"request_id", event.RequestID, "stage", event.Stage,
-			"term_hash", event.TermHash, "result_count", event.SearchResultCount)
+			"term_hash", event.TermHash, "result_count", event.SearchResultCount,
+			"truncated", event.Truncated)
+	case "search_question":
+		// CHAOS-4120: the question-level SearchQuestion pass's own event --
+		// before this case existed, this stage fell to the "unknown stage"
+		// branch below and silently dropped its result_count/truncated
+		// payload, the same defect class evidence_census_commit/
+		// evidence_source_native were each found missing this case for.
+		// No term_hash: this pass has no per-term identity, only ONE call
+		// per resolution.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: search question",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"result_count", event.SearchResultCount, "truncated", event.Truncated)
 	case "alias_lookup":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: alias lookup",
 			"request_id", event.RequestID, "stage", event.Stage,

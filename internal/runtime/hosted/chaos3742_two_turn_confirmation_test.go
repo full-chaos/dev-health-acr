@@ -582,6 +582,24 @@ type twoTurnTraceCapture struct {
 	events []graphrank.ResolutionTraceEvent
 	contextfabric.SlogEngineTelemetry
 	synthesisOverride *contextfabric.SynthesisStatusOverrideOutcome
+	// windowCanonicalization (CHAOS-4120) is the LAST captured
+	// EngineTelemetry.RecordWindowCanonicalization outcome for this call --
+	// "" means never recorded, distinct from every real outcome
+	// (WindowCanonicalizationNone's own value is the non-empty "none").
+	// "Last" matters, not merely "the only one": engine.go's own pre-Save
+	// call (windowConfirmationRequiredResult's gate path, or the decisive
+	// path after Interpret) fires unconditionally, but
+	// recordWindowSupersessionRaceTelemetry (window.go, CHAOS-4003) can
+	// issue a SECOND, corrective call after Save discovers a receipt-
+	// redeemed window lost its atomic claim race -- codex review round 2
+	// (P3, confirmed): an earlier version of this comment claimed the two
+	// always coincide, which is true for turn 1's own call specifically
+	// (it carries no window receipt to redeem, so that correction path is
+	// unreachable there) but was stated as a general fact about the method,
+	// which it is not. Reading the LAST value is what makes this correct
+	// regardless -- the same "last wins" discipline finalDecisionEvent
+	// already needs for a stalled resolution's re-decision.
+	windowCanonicalization contextfabric.WindowCanonicalizationOutcome
 }
 
 func (c *twoTurnTraceCapture) Trace(event graphrank.ResolutionTraceEvent) {
@@ -598,9 +616,25 @@ func (c *twoTurnTraceCapture) RecordSynthesisStatusOverride(ctx context.Context,
 	c.SlogEngineTelemetry.RecordSynthesisStatusOverride(ctx, principal, outcome)
 }
 
+// RecordWindowCanonicalization overrides SlogEngineTelemetry's own method
+// of the same name -- CHAOS-4120's regime stamp reads the engine's own
+// decision at its SOURCE (this telemetry stream already existed,
+// CHAOS-3900 W1) rather than re-deriving it from response shape
+// (WindowClarification presence etc.), which is exactly what the
+// question-results decomposition could not do reliably: 4/212 rows were
+// unplaceable, and CHAOS-4118 now makes the class-default gate ALSO
+// compose a window-only StructureNeeds (Missing=[window], WindowOptions),
+// which makes an output-shape inference (StructureNeeds/WindowClarification
+// presence) ambiguous in a way this direct capture never is.
+func (c *twoTurnTraceCapture) RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome contextfabric.WindowCanonicalizationOutcome) {
+	c.windowCanonicalization = outcome
+	c.SlogEngineTelemetry.RecordWindowCanonicalization(ctx, principal, outcome)
+}
+
 func (c *twoTurnTraceCapture) reset() {
 	c.events = nil
 	c.synthesisOverride = nil
+	c.windowCanonicalization = ""
 }
 
 // censusRan reports whether CensusFunc was actually INVOKED (the per-kind
@@ -752,6 +786,111 @@ func (c *twoTurnTraceCapture) kindCoverageFloorEvent() (event graphrank.Resoluti
 		}
 	}
 	return event, ok
+}
+
+// passTruncation (CHAOS-4120) reports per-pass truncation across the
+// captured call's retrieval: whether the per-term "search" pass truncated
+// on ANY term, and whether the question-level "search_question" pass
+// truncated -- the two-thirds of the breakdown resolve.go's own Truncated
+// field newly carries (kind_coverage_floor's own KindCoverageFloorTruncated,
+// read via kindCoverageFloorEvent above, is the third pass). Before
+// resolve.go's Truncated field existed, both passes only ever fed ONE
+// pooled resolution-wide flag (the decision event's own SearchTruncated),
+// so a reader could tell "something truncated" but never which pass --
+// exactly what the CHAOS-4120 question-results decomposition could not
+// answer from the artifact. "ANY term" for search (not "the last term"):
+// a resolution issues one search-stage event per term, and any one of them
+// truncating is as load-bearing for the resolution-wide gate as all of
+// them would be.
+func (c *twoTurnTraceCapture) passTruncation() (termSearchTruncated, questionSearchTruncated bool) {
+	for _, e := range c.events {
+		switch e.Stage {
+		case "search":
+			if e.Truncated {
+				termSearchTruncated = true
+			}
+		case "search_question":
+			if e.Truncated {
+				questionSearchTruncated = true
+			}
+		}
+	}
+	return termSearchTruncated, questionSearchTruncated
+}
+
+// poolContainsKind (CHAOS-4120, CHAOS-4038's exact question) reports
+// whether ANY candidate of kind reached the merged candidate pool during
+// the captured call -- read off the "corroboration" stage, which
+// resolution.go emits exactly once per candidate in the FULL merged pool,
+// before ranking or truncation to MaxSubjectCandidates. This is the fact
+// CHAOS-4038 needed and could not get from the artifact: kindOfferMaterial
+// only ever offers a kind already present in the pool (chaos3900_structure_
+// offers.go), so an offer-miss for the expected kind is either "in the pool
+// but the offer builder skipped it" (poolContainsKind==true -- an
+// offer-layer question, CHAOS-4012's scope) or "retrieval never found a
+// candidate of this kind at all" (poolContainsKind==false -- the candidate-
+// pool/search recall gap CHAOS-4038 itself is scoped to). An empty kind
+// always reports false: there is nothing to look for.
+func (c *twoTurnTraceCapture) poolContainsKind(kind string) bool {
+	if kind == "" {
+		return false
+	}
+	for _, e := range c.events {
+		if e.Stage == "corroboration" && string(e.Subject.Kind) == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// censusCount (CHAOS-4120) sums CensusCount across every "evidence_probe"
+// event the captured call traced -- the per-kind row count evidence_probe
+// carries (brief §1.3(3), "per-kind, never aggregated"), aggregated here
+// ONLY for this one row-level summary field; the per-kind breakdown still
+// lives in the underlying trace for anyone reading it directly.
+//
+// censusCount()==0 is NOT by itself "attested zero" -- codex review round 2
+// (P2, confirmed against chaos3899_evidence_round.go:556-558): a kind whose
+// CensusFunc call itself ERRORED traces CensusComplete=false with
+// CensusCount left at its Go zero value (never set on the error branch),
+// summing identically to a kind that genuinely attested zero rows. Reading
+// census_ran=true, census_count=0 as a real census-backed absence, without
+// also checking censusComplete(), would silently promote an unmeasured
+// (errored) kind to the same reading as a confirmed one -- see
+// censusComplete's own doc comment for the required pairing.
+func (c *twoTurnTraceCapture) censusCount() int {
+	var total int
+	for _, e := range c.events {
+		if e.Stage == "evidence_probe" {
+			total += e.CensusCount
+		}
+	}
+	return total
+}
+
+// censusComplete (CHAOS-4120, codex review round 2 P2 fix) reports whether
+// EVERY "evidence_probe" event the captured call traced attested
+// CensusComplete==true -- false when the census never ran at all (vacuously
+// unmeasured, the same reading censusRan()==false already gives) OR when it
+// ran but at least one probed kind's own CensusFunc call errored
+// (chaos3899_evidence_round.go's `if err != nil { ka.Complete = false }`
+// branch). The three-way read this exists to let a caller draw:
+// censusRan()==false -> never measured; censusRan()==true &&
+// censusComplete()==false -> ran but at least one kind is unmeasured
+// (censusCount() is NOT a trustworthy "attested zero" in this case);
+// censusRan()==true && censusComplete()==true && censusCount()==0 -> a REAL,
+// census-backed absence across every probed kind.
+func (c *twoTurnTraceCapture) censusComplete() bool {
+	ran := false
+	for _, e := range c.events {
+		if e.Stage == "evidence_probe" {
+			ran = true
+			if !e.CensusComplete {
+				return false
+			}
+		}
+	}
+	return ran
 }
 
 // memberApplied reports whether member was actually confirmed/applied on
@@ -1077,6 +1216,553 @@ func TestChaos4103_FoldSynthesisStatusOverridePreservesAnEarlierCall(t *testing.
 	})
 }
 
+// ---------------------------------------------------------------------------
+// CHAOS-4120 turn-1 fact stamping
+// ---------------------------------------------------------------------------
+//
+// THE GAP THIS CLOSES: every arm shares ONE turn-1 call, and its own
+// decision/kind-coverage/search-truncation trace and its own StructureNeeds
+// (AnchorOptions/HandleOptions counts) and candidate pool are read here,
+// captured immediately after turn 1's own Investigate call -- BEFORE the
+// first arm resets the shared trace capture for its own call (the SAME
+// "capture before the next reset" discipline turn1SynthesisOverride already
+// needs). Before this, none of it reached a row: twoTurnStampDecision only
+// ever reads the CALLING arm's own (turn-2) trace, so an offer-miss row --
+// which never makes a turn-2 call at all -- reported CommitGate=="" and
+// every kind-coverage field at its zero value, indistinguishable from "the
+// gate was empty" even though turn 1's own trace already explained exactly
+// why no offer existed.
+//
+// Deliberately separate, Turn1-prefixed fields rather than reusing
+// CommitGate/TiedStatisticalTop/SearchTruncated/KindCoverage* -- this file's
+// own established discipline for two provenances that must never be
+// conflated into one field (ArmInvalidStage kept separate from
+// ArmInvalidReason, CommitBasis kept separate from CommitGate,
+// BaselineCommittedSubjects/HintedCommittedSubjects kept as two fields
+// rather than one). Overloading the existing fields would make them mean
+// "turn 1's decision" on some rows and "turn 2's decision" on others,
+// depending on which arm happened to reach a turn-2 call -- exactly the
+// silent-provenance-drift class this file's ShadowKindInsensitivityMode
+// comment warns a reader must never be left to reconstruct.
+
+// twoTurnTurn1Facts carries every observational fact this ticket's own
+// decomposition needed that lives ONLY on turn 1's call: the same
+// corpus-safe discipline as twoTurnCaseResult itself (counts, bools, a
+// closed-vocabulary gate name) -- tc.Question is in scope at the one call
+// site that fills this and is deliberately never read.
+type twoTurnTurn1Facts struct {
+	CommitGate                 string
+	TiedStatisticalTop         bool
+	SearchTruncated            bool
+	KindCoverageFloorFired     bool
+	KindCoverageMissingKinds   int
+	KindCoverageFloorTruncated bool
+	TermSearchTruncated        bool
+	QuestionSearchTruncated    bool
+	// ExpectedInPool (CHAOS-4038's exact question) is poolContainsKind
+	// evaluated against THIS case's own oracle expected kind -- "in the
+	// pool but never offered" (true) versus "never retrieved at all"
+	// (false).
+	ExpectedInPool bool
+	// AnchorOptionsCount/HandleOptionsCount are turn 1's own
+	// StructureNeeds.AnchorOptions/HandleOptions counts, zero when turn 1
+	// carried no StructureNeeds at all (a window-only disclosure). They
+	// distinguish, for anchor, a designed single-candidate suppression
+	// (count==1 by construction) from a zero-claimant recall failure
+	// (count==0); for handle, a regex that matched nothing (count==0)
+	// from one that matched the WRONG claimant (count>0, just not the
+	// expected one).
+	AnchorOptionsCount int
+	HandleOptionsCount int
+	// CensusRan/CensusComplete/CensusCount mirror twoTurnTraceCapture's own
+	// censusRan()/censusComplete()/censusCount() -- see censusComplete's own
+	// doc comment (codex review round 2, P2 fix) for why CensusComplete is
+	// required alongside CensusCount: without it, a kind whose CensusFunc
+	// call ERRORED (CensusCount left at zero, never a real attested count)
+	// is indistinguishable from one that genuinely attested zero rows.
+	CensusRan      bool
+	CensusComplete bool
+	CensusCount    int
+	// Regime (CHAOS-4120, coined by the 2026-08-22 question-results
+	// decomposition off CHAOS-4118's own Mechanism section) is stamped from
+	// the engine's OWN gate-path telemetry (EngineTelemetry.
+	// RecordWindowCanonicalization, CHAOS-3900 W1 -- already wired), never
+	// re-derived from response shape. See
+	// twoTurnRegimeFromWindowCanonicalization's own doc comment for the
+	// exact classification: twoTurnRegimeAWindowGated when turn 1's call
+	// recorded WindowCanonicalizationGatedClassDefault (the CHAOS-4040
+	// class-default gate fired BEFORE ResolveSubjects ran at all);
+	// twoTurnRegimeBResolutionProceeded for the outcomes that genuinely
+	// mean ordinary resolution proceeded (None/RequestStated/
+	// ReceiptConfirmed/InferredDefault); empty ("") otherwise -- nothing was
+	// recorded at all, OR a gate-1/refused-no-clarification/Veto* outcome
+	// fired, none of which is "the class-default gate fired" or "resolution
+	// proceeded ordinarily" (codex review round 2: silently reading one of
+	// those as regime B would assert a claim the outcome does not support).
+	// This engine-native signal is deliberately NEVER inferred from
+	// WindowClarification/StructureNeeds presence -- CHAOS-4118 now makes
+	// the class-default gate ALSO compose a window-only StructureNeeds
+	// (Missing=[window], WindowOptions), which is exactly the ambiguity an
+	// output-shape-based inference would otherwise hit, and the reason the
+	// prior, shape-based inference left 4/212 rows unplaceable.
+	Regime string
+}
+
+const (
+	twoTurnRegimeAWindowGated         = "regime_a_window_gated"
+	twoTurnRegimeBResolutionProceeded = "regime_b_resolution_proceeded"
+)
+
+// twoTurnRegimeFromWindowCanonicalization is twoTurnTurn1Facts.Regime's own
+// derivation, extracted as a pure function (mirrors twoTurnCommittedWrong/
+// twoTurnPositiveFalseNoMatch's own precedent) for a direct unit-test
+// surface. outcome is the LAST captured RecordWindowCanonicalization value
+// for the call ("" if none was ever recorded).
+//
+// codex review round 2 (P3, confirmed): an earlier version of this function
+// mapped every non-GatedClassDefault outcome to regime B on the (partly
+// wrong) theory that every other WindowCanonicalizationOutcome value is
+// structurally unreachable for turn 1's own bare headless request.
+// windowVetoAxisConflict (window.go) is the counterexample -- unlike the
+// other vetoes, it does NOT require a PriorWindowReceipts entry: it fires
+// for a request_stated window (a time-window phrase the MODEL read out of
+// the corpus question's own free text, precedence step 1) whose axis the
+// model's own Interpret step then moved away from current -- a real corpus
+// question could trigger this with no receipt involved at all. Regime B is
+// team-lead's own positive claim that "turn-1 PROCEEDED THROUGH SUBJECT
+// RESOLUTION" -- an axis-conflict veto (or any other veto/gate-1/refused-
+// no-clarification outcome) is exactly as untrue for that claim as it is
+// for regime A's "the class-default gate fired" one, so none of them may
+// silently read as either. They classify as unobserved ("") instead --
+// this predicate is not the whole story for those rows anyway; ArmInvalidReason/
+// Turn1Status/Turn2Status still carry what actually happened.
+func twoTurnRegimeFromWindowCanonicalization(outcome contextfabric.WindowCanonicalizationOutcome) string {
+	switch outcome {
+	case contextfabric.WindowCanonicalizationGatedClassDefault:
+		return twoTurnRegimeAWindowGated
+	case contextfabric.WindowCanonicalizationNone,
+		contextfabric.WindowCanonicalizationRequestStated,
+		contextfabric.WindowCanonicalizationReceiptConfirmed,
+		contextfabric.WindowCanonicalizationInferredDefault:
+		return twoTurnRegimeBResolutionProceeded
+	default:
+		// "" (never recorded), gate 1 (ExplicitUnconfirmed),
+		// GatedRefusedNoClarification, and every Veto* value: none of these
+		// is "the class-default gate fired" or "resolution proceeded
+		// ordinarily" -- see this function's own doc comment.
+		return ""
+	}
+}
+
+// twoTurnCaptureTurn1Facts reads turn1Facts off turn 1's own result and its
+// (about-to-be-reset) trace. Safe to call with a nil trace (every field the
+// trace would have populated stays at its zero value, the same "not
+// evaluated" reading every other trace-derived field in this file uses).
+func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.ContextFabricInvestigationResult, tc trialCase) twoTurnTurn1Facts {
+	var facts twoTurnTurn1Facts
+	if turn1.StructureNeeds != nil {
+		facts.AnchorOptionsCount = len(turn1.StructureNeeds.AnchorOptions)
+		facts.HandleOptionsCount = len(turn1.StructureNeeds.HandleOptions)
+	}
+	if trace == nil {
+		return facts
+	}
+	if event, ok := trace.finalDecisionEvent(); ok {
+		facts.CommitGate = event.CommitGate
+		facts.TiedStatisticalTop = event.TiedStatisticalTop
+		facts.SearchTruncated = event.SearchTruncated
+	}
+	if event, ok := trace.kindCoverageFloorEvent(); ok {
+		facts.KindCoverageFloorFired = event.KindCoverageFloorFired
+		facts.KindCoverageMissingKinds = event.KindCoverageMissingKinds
+		facts.KindCoverageFloorTruncated = event.KindCoverageFloorTruncated
+	}
+	facts.TermSearchTruncated, facts.QuestionSearchTruncated = trace.passTruncation()
+	facts.ExpectedInPool = trace.poolContainsKind(tc.ExpectKind)
+	facts.CensusRan = trace.censusRan()
+	facts.CensusComplete = trace.censusComplete()
+	facts.CensusCount = trace.censusCount()
+	facts.Regime = twoTurnRegimeFromWindowCanonicalization(trace.windowCanonicalization)
+	return facts
+}
+
+// twoTurnStampTurn1Facts writes facts onto res unconditionally -- every arm
+// for this case gets the SAME turn-1 facts, the same "every row for this
+// case shares one turn 1" sharing turn1SynthesisOverride's own fold already
+// assumes, just without a severity gate: these are pure observations of a
+// call that already completed before any arm ran, so there is nothing to
+// arbitrate between "earlier" and "later" the way a synthesis-status
+// override's severity does.
+func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
+	if res == nil {
+		return
+	}
+	res.Turn1CommitGate = facts.CommitGate
+	res.Turn1TiedStatisticalTop = facts.TiedStatisticalTop
+	res.Turn1SearchTruncated = facts.SearchTruncated
+	res.Turn1KindCoverageFloorFired = facts.KindCoverageFloorFired
+	res.Turn1KindCoverageMissingKinds = facts.KindCoverageMissingKinds
+	res.Turn1KindCoverageFloorTruncated = facts.KindCoverageFloorTruncated
+	res.Turn1TermSearchTruncated = facts.TermSearchTruncated
+	res.Turn1QuestionSearchTruncated = facts.QuestionSearchTruncated
+	res.ExpectedInPool = facts.ExpectedInPool
+	res.AnchorOptionsCount = facts.AnchorOptionsCount
+	res.HandleOptionsCount = facts.HandleOptionsCount
+	res.CensusRan = facts.CensusRan
+	res.CensusComplete = facts.CensusComplete
+	res.CensusCount = facts.CensusCount
+	res.Regime = facts.Regime
+}
+
+// TestTwoTurnTraceCapturePassTruncation pins passTruncation's own per-pass
+// discrimination: a "search" event's Truncated must never leak into the
+// question reading and vice versa, and kind_coverage_floor (read via
+// kindCoverageFloorEvent elsewhere, not this method) must not be mistaken
+// for either.
+func TestTwoTurnTraceCapturePassTruncation(t *testing.T) {
+	t.Parallel()
+	t.Run("neither pass truncated", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "search", Truncated: false},
+			{Stage: "search_question", Truncated: false},
+		}}
+		term, question := trace.passTruncation()
+		if term || question {
+			t.Errorf("passTruncation() = (%v, %v), want (false, false)", term, question)
+		}
+	})
+	t.Run("only the term search pass truncated", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "search", Truncated: true},
+			{Stage: "search_question", Truncated: false},
+		}}
+		term, question := trace.passTruncation()
+		if !term || question {
+			t.Errorf("passTruncation() = (%v, %v), want (true, false)", term, question)
+		}
+	})
+	t.Run("only the question pass truncated", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "search", Truncated: false},
+			{Stage: "search_question", Truncated: true},
+		}}
+		term, question := trace.passTruncation()
+		if term || !question {
+			t.Errorf("passTruncation() = (%v, %v), want (false, true)", term, question)
+		}
+	})
+	t.Run("ANY per-term search event truncating counts, not just the last", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "search", Truncated: true},
+			{Stage: "search", Truncated: false},
+		}}
+		term, _ := trace.passTruncation()
+		if !term {
+			t.Error("passTruncation() term = false, want true when ANY search-stage event truncated")
+		}
+	})
+	t.Run("kind_coverage_floor truncation does not leak into either reading", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "kind_coverage_floor", KindCoverageFloorTruncated: true},
+		}}
+		term, question := trace.passTruncation()
+		if term || question {
+			t.Errorf("passTruncation() = (%v, %v), want (false, false) -- kind_coverage_floor is a THIRD, separate pass", term, question)
+		}
+	})
+}
+
+// TestTwoTurnTraceCapturePoolContainsKind pins CHAOS-4038's exact
+// distinction: a corroboration-stage event for the expected kind means it
+// reached the merged pool, regardless of what the (possibly absent)
+// decision event says; an empty kind never matches anything.
+func TestTwoTurnTraceCapturePoolContainsKind(t *testing.T) {
+	t.Parallel()
+	trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+		{Stage: "corroboration", Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository"}},
+		{Stage: "corroboration", Subject: contractsv1.ContextFabricSubjectRef{Kind: "work_item"}},
+	}}
+	if !trace.poolContainsKind("repository") {
+		t.Error("poolContainsKind(repository) = false, want true (a corroboration event for that kind was traced)")
+	}
+	if trace.poolContainsKind("team") {
+		t.Error("poolContainsKind(team) = true, want false (no corroboration event named that kind)")
+	}
+	if trace.poolContainsKind("") {
+		t.Error(`poolContainsKind("") = true, want false (an empty kind matches nothing)`)
+	}
+	if (&twoTurnTraceCapture{}).poolContainsKind("repository") {
+		t.Error("poolContainsKind on an empty trace = true, want false")
+	}
+}
+
+// TestTwoTurnTraceCaptureCensusCount pins the "attested zero vs never ran"
+// distinction censusCount exists to draw alongside censusRan(): summed
+// across every evidence_probe event (per-kind, CHAOS-3899's own
+// cardinality), never just the last.
+func TestTwoTurnTraceCaptureCensusCount(t *testing.T) {
+	t.Parallel()
+	t.Run("never ran", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{}
+		if trace.censusRan() {
+			t.Error("censusRan() = true on an empty trace, want false")
+		}
+		if trace.censusComplete() {
+			t.Error("censusComplete() = true on an empty trace, want false (nothing ran, so nothing completed)")
+		}
+		if got := trace.censusCount(); got != 0 {
+			t.Errorf("censusCount() = %d, want 0 on an empty trace", got)
+		}
+	})
+	t.Run("ran and attested zero rows for every kind", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "evidence_probe", CensusComplete: true, CensusCount: 0},
+		}}
+		if !trace.censusRan() {
+			t.Error("censusRan() = false, want true (an evidence_probe event was traced)")
+		}
+		if !trace.censusComplete() {
+			t.Error("censusComplete() = false, want true (the one probed kind completed)")
+		}
+		if got := trace.censusCount(); got != 0 {
+			t.Errorf("censusCount() = %d, want 0 (ran, attested zero)", got)
+		}
+	})
+	// codex review round 2 (P2, confirmed against chaos3899_evidence_round.go:
+	// 556-558): a kind whose CensusFunc call ERRORED traces
+	// CensusComplete=false with CensusCount left at zero -- indistinguishable
+	// from a genuine zero-attestation by censusCount() alone. censusComplete()
+	// is the required pairing that catches this.
+	t.Run("one probed kind errored: NOT an attested absence", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "evidence_probe", CensusComplete: true, CensusCount: 2},
+			{Stage: "evidence_probe", CensusComplete: false, CensusCount: 0},
+		}}
+		if !trace.censusRan() {
+			t.Error("censusRan() = false, want true")
+		}
+		if trace.censusComplete() {
+			t.Error("censusComplete() = true, want false -- one probed kind errored, so censusCount() cannot be read as a real attested absence")
+		}
+		if got := trace.censusCount(); got != 2 {
+			t.Errorf("censusCount() = %d, want 2 (the errored kind contributes its zero-valued Count, same as it does in production)", got)
+		}
+	})
+	t.Run("sums across multiple per-kind probes", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "evidence_probe", CensusComplete: true, CensusCount: 3},
+			{Stage: "evidence_probe", CensusComplete: true, CensusCount: 5},
+			{Stage: "decision", CensusCount: 99}, // wrong stage, must not be summed
+		}}
+		if got := trace.censusCount(); got != 8 {
+			t.Errorf("censusCount() = %d, want 8 (3+5 across the two evidence_probe events, decision-stage noise excluded)", got)
+		}
+		if !trace.censusComplete() {
+			t.Error("censusComplete() = false, want true (both probed kinds completed)")
+		}
+	})
+}
+
+// TestTwoTurnCaptureTurn1Facts pins twoTurnCaptureTurn1Facts's own
+// aggregation: every source (decision trace, kind-coverage-floor trace,
+// per-pass truncation, pool membership, StructureNeeds option counts,
+// census) reaches the returned struct, and a nil trace degrades to
+// "StructureNeeds-derived fields only, everything else zero" rather than
+// panicking.
+func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
+	t.Parallel()
+	tc := trialCase{ExpectKind: "repository", ExpectID: "repository:r1"}
+
+	t.Run("nil trace, no StructureNeeds", func(t *testing.T) {
+		facts := twoTurnCaptureTurn1Facts(nil, contractsv1.ContextFabricInvestigationResult{}, tc)
+		if facts != (twoTurnTurn1Facts{}) {
+			t.Errorf("twoTurnCaptureTurn1Facts(nil trace) = %+v, want the zero value", facts)
+		}
+	})
+
+	t.Run("StructureNeeds option counts survive a nil trace", func(t *testing.T) {
+		turn1 := contractsv1.ContextFabricInvestigationResult{
+			StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+				AnchorOptions: []contractsv1.ContextFabricAnchorOption{{OptionID: "a1"}},
+				HandleOptions: []contractsv1.ContextFabricHandleOption{{OptionID: "h1"}, {OptionID: "h2"}},
+			},
+		}
+		facts := twoTurnCaptureTurn1Facts(nil, turn1, tc)
+		if facts.AnchorOptionsCount != 1 || facts.HandleOptionsCount != 2 {
+			t.Errorf("AnchorOptionsCount=%d HandleOptionsCount=%d, want 1, 2", facts.AnchorOptionsCount, facts.HandleOptionsCount)
+		}
+	})
+
+	t.Run("every trace-derived field is read from the shared capture", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{
+			events: []graphrank.ResolutionTraceEvent{
+				{Stage: "corroboration", Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository"}},
+				{Stage: "search", Truncated: true},
+				{Stage: "search_question", Truncated: true},
+				{Stage: "kind_coverage_floor", KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true},
+				{Stage: "evidence_probe", CensusComplete: true, CensusCount: 4},
+				{Stage: "decision", CommitGate: "lone_floor", TiedStatisticalTop: true, SearchTruncated: true},
+			},
+			windowCanonicalization: contextfabric.WindowCanonicalizationGatedClassDefault,
+		}
+		facts := twoTurnCaptureTurn1Facts(trace, contractsv1.ContextFabricInvestigationResult{}, tc)
+		want := twoTurnTurn1Facts{
+			CommitGate: "lone_floor", TiedStatisticalTop: true, SearchTruncated: true,
+			KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true,
+			TermSearchTruncated: true, QuestionSearchTruncated: true,
+			ExpectedInPool: true, CensusRan: true, CensusComplete: true, CensusCount: 4,
+			Regime: twoTurnRegimeAWindowGated,
+		}
+		if facts != want {
+			t.Errorf("twoTurnCaptureTurn1Facts() = %+v, want %+v", facts, want)
+		}
+	})
+}
+
+// TestTwoTurnRegimeFromWindowCanonicalization pins CHAOS-4120's regime
+// derivation: an EMPTY captured outcome ("never recorded") must stay
+// unclassified rather than silently defaulting to regime B, since B's own
+// definition ("the gate did not fire, resolution proceeded") is a positive
+// claim about what DID happen, not merely the absence of A.
+func TestTwoTurnRegimeFromWindowCanonicalization(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		outcome contextfabric.WindowCanonicalizationOutcome
+		want    string
+	}{
+		{"never recorded stays unclassified", "", ""},
+		{"gated class-default is regime A", contextfabric.WindowCanonicalizationGatedClassDefault, twoTurnRegimeAWindowGated},
+		{"none (no window involvement) is regime B", contextfabric.WindowCanonicalizationNone, twoTurnRegimeBResolutionProceeded},
+		{"request_stated is regime B", contextfabric.WindowCanonicalizationRequestStated, twoTurnRegimeBResolutionProceeded},
+		{"receipt_confirmed is regime B", contextfabric.WindowCanonicalizationReceiptConfirmed, twoTurnRegimeBResolutionProceeded},
+		{"inferred_default is regime B", contextfabric.WindowCanonicalizationInferredDefault, twoTurnRegimeBResolutionProceeded},
+		// codex review round 2 (P3, confirmed): gate 1, the refused-no-
+		// clarification outcome, and every Veto* value are neither "the
+		// class-default gate fired" (regime A) nor "resolution proceeded
+		// ordinarily" (regime B) -- see this function's own doc comment,
+		// especially windowVetoAxisConflict, which is NOT receipt-gated and
+		// so is not simply unreachable the way the others are for turn 1.
+		// All of these must classify as unobserved rather than either
+		// regime.
+		{"gate 1 (explicit-unconfirmed) is unclassified, not regime B", contextfabric.WindowCanonicalizationGatedExplicitUnconfirmed, ""},
+		{"refused-no-clarification is unclassified, not regime B", contextfabric.WindowCanonicalizationGatedRefusedNoClarification, ""},
+		{"veto_unresolved is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoUnresolved, ""},
+		{"veto_conflict is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoConflict, ""},
+		{"veto_stale_superseded_offer is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoStaleSupersededOffer, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := twoTurnRegimeFromWindowCanonicalization(tc.outcome); got != tc.want {
+				t.Errorf("twoTurnRegimeFromWindowCanonicalization(%q) = %q, want %q", tc.outcome, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTwoTurnTraceCaptureRecordWindowCanonicalization pins the capture
+// method itself: it must record the LATEST outcome (mirroring
+// RecordSynthesisStatusOverride's own "captures, does not accumulate"
+// behavior) and reset() must clear it back to "never recorded" rather than
+// leaving a PRIOR call's outcome to leak into the next case's regime.
+func TestTwoTurnTraceCaptureRecordWindowCanonicalization(t *testing.T) {
+	t.Parallel()
+	trace := &twoTurnTraceCapture{SlogEngineTelemetry: contextfabric.NewSlogEngineTelemetry(nil)}
+	if trace.windowCanonicalization != "" {
+		t.Fatalf("windowCanonicalization = %q before any call, want \"\"", trace.windowCanonicalization)
+	}
+	trace.RecordWindowCanonicalization(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.WindowCanonicalizationGatedClassDefault)
+	if trace.windowCanonicalization != contextfabric.WindowCanonicalizationGatedClassDefault {
+		t.Fatalf("windowCanonicalization = %q, want %q", trace.windowCanonicalization, contextfabric.WindowCanonicalizationGatedClassDefault)
+	}
+	trace.RecordWindowCanonicalization(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.WindowCanonicalizationRequestStated)
+	if trace.windowCanonicalization != contextfabric.WindowCanonicalizationRequestStated {
+		t.Fatalf("windowCanonicalization = %q after a second call, want the LATEST outcome %q", trace.windowCanonicalization, contextfabric.WindowCanonicalizationRequestStated)
+	}
+	trace.reset()
+	if trace.windowCanonicalization != "" {
+		t.Fatalf("windowCanonicalization = %q after reset(), want \"\" -- a prior case's regime must never leak into the next", trace.windowCanonicalization)
+	}
+}
+
+// TestTwoTurnStampTurn1Facts pins twoTurnStampTurn1Facts's own field-for-field
+// write and its nil guard.
+func TestTwoTurnStampTurn1Facts(t *testing.T) {
+	t.Parallel()
+	t.Run("nil res is a no-op, never panics", func(t *testing.T) {
+		twoTurnStampTurn1Facts(nil, twoTurnTurn1Facts{CommitGate: "lone_floor"})
+	})
+	t.Run("every field lands on the row", func(t *testing.T) {
+		facts := twoTurnTurn1Facts{
+			CommitGate: "top_of_two", TiedStatisticalTop: true, SearchTruncated: true,
+			KindCoverageFloorFired: true, KindCoverageMissingKinds: 3, KindCoverageFloorTruncated: true,
+			TermSearchTruncated: true, QuestionSearchTruncated: true,
+			ExpectedInPool: true, AnchorOptionsCount: 1, HandleOptionsCount: 2,
+			CensusRan: true, CensusComplete: true, CensusCount: 7, Regime: twoTurnRegimeAWindowGated,
+		}
+		res := twoTurnCaseResult{}
+		twoTurnStampTurn1Facts(&res, facts)
+		// twoTurnCaseResult carries slice fields (CommittedSubjects etc.),
+		// so it is not `==`-comparable -- check the CHAOS-4120 fields this
+		// function actually writes, one by one, rather than the whole row.
+		switch {
+		case res.Turn1CommitGate != "top_of_two":
+			t.Errorf("Turn1CommitGate = %q, want %q", res.Turn1CommitGate, "top_of_two")
+		case !res.Turn1TiedStatisticalTop:
+			t.Error("Turn1TiedStatisticalTop = false, want true")
+		case !res.Turn1SearchTruncated:
+			t.Error("Turn1SearchTruncated = false, want true")
+		case !res.Turn1KindCoverageFloorFired:
+			t.Error("Turn1KindCoverageFloorFired = false, want true")
+		case res.Turn1KindCoverageMissingKinds != 3:
+			t.Errorf("Turn1KindCoverageMissingKinds = %d, want 3", res.Turn1KindCoverageMissingKinds)
+		case !res.Turn1KindCoverageFloorTruncated:
+			t.Error("Turn1KindCoverageFloorTruncated = false, want true")
+		case !res.Turn1TermSearchTruncated:
+			t.Error("Turn1TermSearchTruncated = false, want true")
+		case !res.Turn1QuestionSearchTruncated:
+			t.Error("Turn1QuestionSearchTruncated = false, want true")
+		case !res.ExpectedInPool:
+			t.Error("ExpectedInPool = false, want true")
+		case res.AnchorOptionsCount != 1:
+			t.Errorf("AnchorOptionsCount = %d, want 1", res.AnchorOptionsCount)
+		case res.HandleOptionsCount != 2:
+			t.Errorf("HandleOptionsCount = %d, want 2", res.HandleOptionsCount)
+		case !res.CensusRan:
+			t.Error("CensusRan = false, want true")
+		case !res.CensusComplete:
+			t.Error("CensusComplete = false, want true")
+		case res.CensusCount != 7:
+			t.Errorf("CensusCount = %d, want 7", res.CensusCount)
+		case res.Regime != twoTurnRegimeAWindowGated:
+			t.Errorf("Regime = %q, want %q", res.Regime, twoTurnRegimeAWindowGated)
+		}
+	})
+}
+
+// TestTwoTurnPositiveFalseNoMatch pins CHAOS-4120's own positive-arm
+// extension of the CHAOS-4039 false_no_match gate.
+func TestTwoTurnPositiveFalseNoMatch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		expectID string
+		status   contractsv1.ContextFabricInvestigationStatus
+		want     bool
+	}{
+		{"real expected answer, resolved no_match: false negative", "repository:r1", contractsv1.ContextFabricInvestigationNoMatch, true},
+		{"real expected answer, resolved complete: no finding", "repository:r1", contractsv1.ContextFabricInvestigationComplete, false},
+		{"no expected answer (a control case), no_match is not a false negative", "", contractsv1.ContextFabricInvestigationNoMatch, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := twoTurnPositiveFalseNoMatch(tc.expectID, tc.status); got != tc.want {
+				t.Errorf("twoTurnPositiveFalseNoMatch(%q, %q) = %v, want %v", tc.expectID, tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
 // twoTurnStampArmFailure is the ONE way an error-derived ArmInvalidReason is
 // set (codex xhigh review round 1, P2).
 //
@@ -1394,12 +2080,24 @@ type twoTurnCaseResult struct {
 	// baseline call is never silently absorbed into "unjustified" (which
 	// means "evaluated and found wanting", not "could not be evaluated").
 	PairInvalid bool `json:"pair_invalid,omitempty"`
-	// FalseNoMatch (inferred_tier arm, every member including window) is
-	// true when this outcome resolved to the literal no_match terminal on
-	// a case with a real expected answer (tc.ExpectID != "" -- every
-	// inferred-tier case has one, by construction) -- the no-match-direction
-	// mirror of WrongCommit, CHAOS-4039's own "false_no_match=0" pass
-	// condition.
+	// FalseNoMatch (positive AND inferred_tier arms, every member including
+	// window -- CHAOS-4120 widened this from inferred_tier alone) is true
+	// when this outcome resolved to the literal no_match terminal on a case
+	// with a real expected answer (tc.ExpectID != "" -- codex review round 2,
+	// P3, confirmed: absent for a CONTROL case, tc.ExpectID=="" by design,
+	// which both twoTurnPositiveFalseNoMatch and this arm's own inline check
+	// correctly exclude) -- the no-match-direction mirror of WrongCommit,
+	// CHAOS-4039's own "false_no_match=0" pass condition.
+	//
+	// CHAOS-4120 extended the gate to the positive arm (previously the ONLY
+	// arm this could not fire on): a positive-arm call redeems a
+	// receipt-confirmed offer, a STRONGER signal than the inferred-tier
+	// arm's mere explicit hint, so a no_match there is at least as much a
+	// correctness finding. Before this widening, a positive-arm no_match was
+	// structurally invisible to this bar (CHAOS-4108, ext65 index 57:
+	// recurred across 4 independent runs while false_no_match_count read 0)
+	// -- the gate failed toward fine exactly because it was scoped narrower
+	// than the outcome it exists to catch.
 	FalseNoMatch    bool   `json:"false_no_match,omitempty"`
 	CommittedCount  int    `json:"committed_count"`
 	WrongCommit     bool   `json:"wrong_commit"`
@@ -1571,6 +2269,86 @@ type twoTurnCaseResult struct {
 	SynthesisStatusOverrideTo             string `json:"synthesis_status_override_to,omitempty"`
 	SynthesisStatusOverrideReason         string `json:"synthesis_status_override_reason,omitempty"`
 	SynthesisStatusOverrideCommittedCount int    `json:"synthesis_status_override_committed_count"`
+	// ---------------------------------------------------------------
+	// CHAOS-4120 turn-1 facts (stamped identically onto EVERY arm's row
+	// for this case -- see twoTurnStampTurn1Facts's own doc comment for
+	// why these are separate, Turn1-prefixed fields rather than reusing
+	// CommitGate/TiedStatisticalTop/SearchTruncated/KindCoverage* above)
+	// ---------------------------------------------------------------
+	//
+	// Turn1CommitGate/Turn1TiedStatisticalTop/Turn1SearchTruncated mirror
+	// CommitGate/TiedStatisticalTop/SearchTruncated above, but read off
+	// TURN 1's own decision-stage trace event instead of this arm's own
+	// (turn-2) call. Populated on every row for the case, including an
+	// offer-miss row that never makes a turn-2 call at all -- the exact
+	// gap this ticket closes: "every offer_miss is a turn-1 fact".
+	Turn1CommitGate         string `json:"turn1_commit_gate,omitempty"`
+	Turn1TiedStatisticalTop bool   `json:"turn1_tied_statistical_top,omitempty"`
+	Turn1SearchTruncated    bool   `json:"turn1_search_truncated,omitempty"`
+	// Turn1KindCoverageFloorFired/Turn1KindCoverageMissingKinds/
+	// Turn1KindCoverageFloorTruncated mirror KindCoverageFloorFired/
+	// KindCoverageMissingKinds/KindCoverageFloorTruncated above, read off
+	// turn 1's own kind_coverage_floor trace stage.
+	Turn1KindCoverageFloorFired     bool `json:"turn1_kind_coverage_floor_fired,omitempty"`
+	Turn1KindCoverageMissingKinds   int  `json:"turn1_kind_coverage_missing_kinds,omitempty"`
+	Turn1KindCoverageFloorTruncated bool `json:"turn1_kind_coverage_floor_truncated,omitempty"`
+	// Turn1TermSearchTruncated/Turn1QuestionSearchTruncated (the
+	// per-pass truncation breakdown) are turn 1's own per-term "search"
+	// pass and question-level "search_question" pass truncation signals,
+	// read off resolve.go's newly per-event Truncated field
+	// (twoTurnTraceCapture.passTruncation) -- the coverage-floor SearchKind
+	// pass is the ALREADY-existing Turn1KindCoverageFloorTruncated above,
+	// completing the 3-way breakdown (Search vs SearchQuestion vs
+	// coverage-floor SearchKind) the decomposition could not draw from one
+	// pooled SearchTruncated flag alone.
+	Turn1TermSearchTruncated     bool `json:"turn1_term_search_truncated,omitempty"`
+	Turn1QuestionSearchTruncated bool `json:"turn1_question_search_truncated,omitempty"`
+	// ExpectedInPool (CHAOS-4038's exact question) is true when turn 1's
+	// own merged candidate pool contained ANY candidate of this case's
+	// oracle expected kind, whether or not it was ever offered back as a
+	// KindOption -- the "in the pool but not offered" versus "never
+	// retrieved" distinction CHAOS-4038 needed and could not draw from the
+	// artifact alone. See twoTurnTraceCapture.poolContainsKind.
+	ExpectedInPool bool `json:"expected_in_pool"`
+	// AnchorOptionsCount/HandleOptionsCount are turn 1's own
+	// StructureNeeds.AnchorOptions/HandleOptions counts (zero when turn 1
+	// carried no StructureNeeds). For anchor: count==1 is a designed
+	// single-candidate suppression, count==0 is a zero-claimant recall
+	// failure. For handle: count==0 is a regex that matched nothing,
+	// count>0 is a regex that matched something -- just possibly the
+	// wrong claimant.
+	AnchorOptionsCount int `json:"anchor_options_count"`
+	HandleOptionsCount int `json:"handle_options_count"`
+	// CensusRan/CensusComplete/CensusCount are turn 1's own
+	// twoTurnTraceCapture.censusRan()/censusComplete()/censusCount() --
+	// whether CensusFunc was invoked at all during turn 1, whether EVERY
+	// kind it probed completed without error, and if so the total row count
+	// attested summed across every kind. Read together: CensusRan==false
+	// means never ran (unmeasured); CensusRan==true && CensusComplete==false
+	// means it ran but at least one probed kind's own CensusFunc call
+	// errored (codex review round 2, P2 -- a kind whose call errors traces
+	// CensusCount==0 identically to one that genuinely attested zero rows,
+	// chaos3899_evidence_round.go's own `if err != nil` branch, so
+	// CensusCount is NOT a trustworthy "attested absence" reading here);
+	// CensusRan==true && CensusComplete==true && CensusCount==0 means a
+	// REAL, census-backed absence across every probed kind. No omitempty on
+	// any of the three: 0/false is exactly the value that distinguishes
+	// these states, and hiding it would reintroduce the very
+	// never-ran-vs-attested-zero (and now errored-vs-attested-zero)
+	// ambiguity these fields exist to resolve.
+	CensusRan      bool `json:"census_ran"`
+	CensusComplete bool `json:"census_complete"`
+	CensusCount    int  `json:"census_count"`
+	// Regime (CHAOS-4120) mirrors twoTurnTurn1Facts.Regime -- see that
+	// field's own doc comment for the engine-native (never output-shape-
+	// inferred) derivation and why this is a closed vocabulary string
+	// rather than a bool: "regime_a_window_gated" |
+	// "regime_b_resolution_proceeded", empty ("") when nothing was ever
+	// recorded OR when the recorded outcome is neither claim (gate 1,
+	// refused-no-clarification, or any Veto* value) -- see
+	// twoTurnRegimeFromWindowCanonicalization's own doc comment for exactly
+	// which outcomes fall into each bucket.
+	Regime string `json:"turn1_regime,omitempty"`
 }
 
 type twoTurnReport struct {
@@ -1711,6 +2489,54 @@ type twoTurnReport struct {
 	// regression) is FalseNoMatchCount's own concern and stays exactly as
 	// it was -- this count never widens it and never substitutes for it.
 	//
+	// "14" marks CHAOS-4120's three-part addition (the 2026-08-22
+	// question-results decomposition's own instrumentation gaps):
+	//
+	// (a) FalseNoMatch/FalseNoMatchCount widen from inferred_tier-only to
+	// ALSO cover the positive arm -- a MEANING change for an existing key
+	// (FalseNoMatch could structurally never be true on a positive-arm row
+	// before this), not merely an added one, which is why this bumps
+	// rather than riding along as additive passthrough. See FalseNoMatch's
+	// own doc comment (twoTurnCaseResult) for why a positive-arm no_match
+	// is at least as strong a finding as an inferred-tier one, and
+	// CHAOS-4108 for the live case (ext65 index 57) this widening exists
+	// to stop missing.
+	//
+	// (b) twoTurnCaseResult gained the CHAOS-4120 turn-1 facts block:
+	// Turn1CommitGate/Turn1TiedStatisticalTop/Turn1SearchTruncated,
+	// Turn1KindCoverageFloorFired/Turn1KindCoverageMissingKinds/
+	// Turn1KindCoverageFloorTruncated, Turn1TermSearchTruncated/
+	// Turn1QuestionSearchTruncated, ExpectedInPool, AnchorOptionsCount,
+	// HandleOptionsCount, CensusRan, CensusComplete, CensusCount --
+	// stamped identically onto every arm's row for a case from turn 1's
+	// own trace/result, closing the gap where an offer-miss row (which
+	// never makes a turn-2 call) carried NONE of the decision/kind-
+	// coverage/search-truncation facts turn 1's own call already knew. See
+	// twoTurnStampTurn1Facts's own doc comment for why these ride as
+	// separate, Turn1-prefixed fields rather than overloading the existing
+	// turn-2-scoped ones.
+	//
+	// (c) twoTurnCaseResult gained Regime ("regime_a_window_gated" |
+	// "regime_b_resolution_proceeded" | "" for unclassified -- see
+	// twoTurnRegimeFromWindowCanonicalization's own doc comment for exactly
+	// which outcomes fall into each bucket), coined by CHAOS-4118's own
+	// Mechanism section (team-lead ruling 2026-08-22): stamped from the
+	// engine's OWN EngineTelemetry.RecordWindowCanonicalization outcome
+	// (already-existing telemetry, CHAOS-3900 W1) rather than re-derived
+	// from response shape. Required because the prior shape-based
+	// inference left 4/212 rows unplaceable, and CHAOS-4118 now makes the
+	// class-default gate ALSO compose a window-only StructureNeeds, which
+	// makes an output-shape inference ambiguous in a way this direct
+	// capture never is. See
+	// twoTurnTurn1Facts.Regime's own doc comment.
+	//
+	// Purely additive per-row keys otherwise: no merge arithmetic changes,
+	// because Results concatenates verbatim and every field on the row
+	// rides along with it -- but the mirror in
+	// cmd/acr-trial-merge-two-turn/main.go still had to gain both changes
+	// in the SAME change, the same "an undeclared field is dropped on
+	// decode" reason "11"/"12"/"13" already needed it for.
+	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
 	// stale key under a new meaning.
@@ -1774,10 +2600,11 @@ type twoTurnReport struct {
 	StructureAndWindowDisclosureAbsentCount int            `json:"structure_and_window_disclosure_absent_count"`
 	OfferMissCount                          map[string]int `json:"offer_miss_count"`
 	WrongCommitCount                        int            `json:"wrong_commit_count"`
-	// FalseNoMatchCount (CHAOS-4039 v4 contract) sums twoTurnCaseResult.FalseNoMatch
-	// across every inferred_tier outcome, kind/handle AND window alike --
-	// one of the ruling's ZERO-tolerance pass conditions, alongside
-	// WrongCommitCount, regardless of member.
+	// FalseNoMatchCount (CHAOS-4039 v4 contract; CHAOS-4120 widened to also
+	// sum the positive arm) sums twoTurnCaseResult.FalseNoMatch across
+	// every inferred_tier outcome (kind/handle AND window alike) AND every
+	// positive-arm outcome -- one of the ruling's ZERO-tolerance pass
+	// conditions, alongside WrongCommitCount, regardless of member or arm.
 	FalseNoMatchCount int `json:"false_no_match_count"`
 	// SynthesisStatusOverrideUncommittedCount (CHAOS-4103, team-lead ruling
 	// 2026-08-22) sums twoTurnCaseResult rows whose
@@ -2864,9 +3691,26 @@ func runTwoTurnPositiveArm(ctx context.Context, investigator contextfabric.Inves
 	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	res.Reused = turn2.Reused
+	// FalseNoMatch (CHAOS-4120): extends CHAOS-4039's gate to the positive
+	// arm -- see FalseNoMatch's own doc comment (twoTurnCaseResult) for why
+	// a receipt-confirmed no_match here is at least as strong a finding as
+	// the inferred-tier arm's own version of this check.
+	res.FalseNoMatch = twoTurnPositiveFalseNoMatch(tc.ExpectID, turn2.Status)
 	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
 	return res
+}
+
+// twoTurnPositiveFalseNoMatch is CHAOS-4120's own positive-arm false_no_match
+// predicate, extracted as a pure function (mirrors twoTurnCommittedWrong/
+// twoTurnMutationProbe's own precedent) so it has a direct unit-test surface
+// independent of runTwoTurnPositiveArm's full investigator plumbing. True
+// when a case with a real expected answer (expectID != "") resolved to the
+// literal no_match terminal -- reachable here ONLY past the OfferMiss early
+// return above, i.e. only when the engine held a receipt-confirmed offer
+// and still failed to convert it.
+func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabricInvestigationStatus) bool {
+	return expectID != "" && status == contractsv1.ContextFabricInvestigationNoMatch
 }
 
 // setTwoTurnReceipt attaches receipt to the request field matching member.
@@ -3244,13 +4088,13 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 	// reads cannot be the baseline's.
 	twoTurnStampOutcome(&res, tc, result.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
-	// false_no_match (CHAOS-4039): every inferred-tier case carries a real
-	// expected answer (tc.ExpectID != "" by construction of this harness's
-	// own corpus selection) -- a literal no_match terminal here is as much
-	// a correctness finding as a wrong commit is, just in the opposite
-	// direction. Checked on BOTH calls (team-lead ruling): a baseline that
-	// falsely no-matches is just as much a measurement problem as a hinted
-	// call that does.
+	// false_no_match (CHAOS-4039): on a case with a real expected answer
+	// (tc.ExpectID != "" -- codex review round 2, P3: absent for a CONTROL
+	// case, excluded by this same check) a literal no_match terminal here is
+	// as much a correctness finding as a wrong commit is, just in the
+	// opposite direction. Checked on BOTH calls (team-lead ruling): a
+	// baseline that falsely no-matches is just as much a measurement
+	// problem as a hinted call that does.
 	if tc.ExpectID != "" && (result.Status == contractsv1.ContextFabricInvestigationNoMatch || (!isWindow && baseline.Status == contractsv1.ContextFabricInvestigationNoMatch)) {
 		res.FalseNoMatch = true
 	}
@@ -4089,7 +4933,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		transportLabel = "file_exchange"
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "13",
+		ReportSchemaVersion: "14",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -4406,6 +5250,15 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if traceCapture != nil {
 			turn1SynthesisOverride = traceCapture.synthesisOverride
 		}
+		// turn1Facts (CHAOS-4120): mirrors turn1SynthesisOverride's own
+		// capture discipline immediately above -- turn 1's own decision/
+		// kind-coverage/search-truncation trace and StructureNeeds/pool-
+		// membership facts, captured here before any arm resets the shared
+		// trace capture for its own call, and stamped onto EVERY row this
+		// case produces below (see twoTurnStampTurn1Facts's own doc
+		// comment for why this closes the offer-miss "only turn-2 is
+		// stamped" gap).
+		turn1Facts := twoTurnCaptureTurn1Facts(traceCapture, turn1, tc)
 		turn1Timing := buildTwoTurnArmTiming("turn1", turn1Started, modelCallCapture)
 		// positiveTiming/inferredTiming/confirmedWrongTiming/mutationTiming
 		// (CHAOS-4058) default to zero-duration/zero-call records naming
@@ -4489,6 +5342,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		positiveStarted := time.Now()
 		positive := runTwoTurnPositiveArm(ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture)
 		twoTurnFoldSynthesisStatusOverride(&positive, turn1SynthesisOverride)
+		twoTurnStampTurn1Facts(&positive, turn1Facts)
 		positiveTiming = buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
 		if positive.OfferMiss {
 			report.OfferMissCount[entry.Member]++
@@ -4526,12 +5380,19 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if positive.WrongCommit {
 			report.WrongCommitCount++
 		}
+		// FalseNoMatchCount (CHAOS-4120): the positive arm's own contribution
+		// to this widened, no-longer-inferred_tier-only bar -- see
+		// FalseNoMatch's own doc comment (twoTurnCaseResult).
+		if positive.FalseNoMatch {
+			report.FalseNoMatchCount++
+		}
 		report.Results = append(report.Results, positive)
 
 		modelCallCapture.reset()
 		inferredStarted := time.Now()
 		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
 		twoTurnFoldSynthesisStatusOverride(&inferred, turn1SynthesisOverride)
+		twoTurnStampTurn1Facts(&inferred, turn1Facts)
 		inferredTiming = buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
 		if inferred.PairInvalid {
 			report.InferredPairInvalidCount++
@@ -4588,6 +5449,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		confirmedWrongStarted := time.Now()
 		confirmedWrong := runTwoTurnConfirmedWrongArm(ctx, investigator, store, principal, entry.Index, tc, entry, caseTimeout, anchorTerms, runToken, traceCapture)
 		twoTurnFoldSynthesisStatusOverride(&confirmedWrong, turn1SynthesisOverride)
+		twoTurnStampTurn1Facts(&confirmedWrong, turn1Facts)
 		confirmedWrongTiming = buildTwoTurnArmTiming(string(twoTurnArmConfirmedWrong), confirmedWrongStarted, modelCallCapture)
 		if confirmedWrong.ArmInvalidReason == "" && confirmedWrong.Applied && entry.NegativeCommittable {
 			report.ConfirmedWrongRedeemedCount[entry.Member]++
@@ -4624,6 +5486,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 				mutationTiming = buildTwoTurnArmTiming(string(twoTurnArmMutation), mutationStarted, modelCallCapture)
 				for _, mutationResult := range mutationResults {
 					twoTurnFoldSynthesisStatusOverride(&mutationResult, turn1SynthesisOverride)
+					twoTurnStampTurn1Facts(&mutationResult, turn1Facts)
 					report.MutationProbesRun[mutationResult.MutationProbe]++
 					if mutationResult.MutationTripped {
 						report.MutationProbesTripped[mutationResult.MutationProbe]++
