@@ -76,8 +76,15 @@ func runCorpusBatch(ctx context.Context, cfg corpusBatchConfig, stdout io.Writer
 	// silently clamp to whatever remains -- a clamped shard boundary would
 	// make a parallel batch's case coverage silently incomplete with no
 	// signal an operator would ever see (this repo's "no silent caps"
-	// discipline).
-	if cfg.caseStart+count > len(cases) {
+	// discipline). Compared as count > (remaining), NOT caseStart+count >
+	// len(cases) (codex xhigh review, HIGH): caseStart+count can overflow
+	// int for a large -case-count (e.g. math.MaxInt), wrapping negative and
+	// silently PASSING this guard, then panicking on an out-of-range slice
+	// index below. len(cases)-cfg.caseStart cannot overflow -- both operands
+	// are bounded by the corpus's own (small, real) length, and caseStart
+	// < len(cases) is already established above.
+	remaining := len(cases) - cfg.caseStart
+	if count > remaining {
 		return fmt.Errorf("-case-start %d + -case-count %d exceeds corpus %s's %d case(s)", cfg.caseStart, count, cfg.corpusPath, len(cases))
 	}
 
@@ -109,8 +116,17 @@ func runCorpusBatch(ctx context.Context, cfg corpusBatchConfig, stdout io.Writer
 		if err := manifest.WriteFile(outputPath); err != nil {
 			return fmt.Errorf("write manifest for corpus case %d: %w", index, err)
 		}
-		fmt.Fprintf(stdout, "wrote panel run manifest %s (case_index=%d, panel_run_id=%s, %d member(s))\n", outputPath, index, manifest.PanelRunID, len(manifest.Members))
+		// codex xhigh review, MEDIUM: a progress-log write failure must fail
+		// the batch exactly like a manifest-write failure does immediately
+		// above -- letting it through silently while later cases keep
+		// running (and the batch ultimately returns nil) would violate this
+		// function's own fail-fast doc comment.
+		if _, err := fmt.Fprintf(stdout, "wrote panel run manifest %s (case_index=%d, panel_run_id=%s, %d member(s))\n", outputPath, index, manifest.PanelRunID, len(manifest.Members)); err != nil {
+			return fmt.Errorf("write progress line for corpus case %d: %w", index, err)
+		}
 	}
-	fmt.Fprintf(stdout, "corpus batch complete: run_tag=%s cases=%d..%d (%d total)\n", runTag, cfg.caseStart, cfg.caseStart+count-1, count)
+	if _, err := fmt.Fprintf(stdout, "corpus batch complete: run_tag=%s cases=%d..%d (%d total)\n", runTag, cfg.caseStart, cfg.caseStart+count-1, count); err != nil {
+		return fmt.Errorf("write corpus batch summary: %w", err)
+	}
 	return nil
 }

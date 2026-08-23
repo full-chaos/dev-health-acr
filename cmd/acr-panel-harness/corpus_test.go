@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -243,5 +245,74 @@ func TestRunCorpusBatch_RejectsCaseCountOverflow(t *testing.T) {
 	}, os.Stdout)
 	if err == nil {
 		t.Error("expected an error: case-start + case-count exceeds the corpus size")
+	}
+}
+
+// TestRunCorpusBatch_RejectsCaseCountThatOverflowsInt is a regression test
+// for codex xhigh review round 1, HIGH: the old range guard compared
+// cfg.caseStart+count > len(cases), which OVERFLOWS int for a large enough
+// -case-count (wrapping negative and silently passing the guard), then
+// panicked on an out-of-range slice index inside the batch loop. The fixed
+// guard (count > len(cases)-cfg.caseStart) must reject this without ever
+// reaching that index.
+func TestRunCorpusBatch_RejectsCaseCountThatOverflowsInt(t *testing.T) {
+	corpusDir := t.TempDir()
+	corpusPath := filepath.Join(corpusDir, "corpus.json")
+	if err := os.WriteFile(corpusPath, []byte(`[{"question":"a"},{"question":"b"}]`), 0o644); err != nil {
+		t.Fatalf("write corpus fixture: %v", err)
+	}
+	err := runCorpusBatch(context.Background(), corpusBatchConfig{
+		orgID: "org-test", corpusPath: corpusPath, caseStart: 1, caseCount: math.MaxInt, outputDir: t.TempDir(),
+	}, os.Stdout)
+	if err == nil {
+		t.Error("expected an error: an overflowing case-start+case-count must never panic or silently pass validation")
+	}
+}
+
+// failingWriter always returns an error, never writing anything -- used to
+// prove a progress-line write failure fails the whole batch (codex xhigh
+// review round 1, MEDIUM).
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errWriteFailed }
+
+var errWriteFailed = errors.New("simulated stdout write failure")
+
+// TestRunCorpusBatch_StdoutWriteFailureFailsTheBatch is a regression test
+// for codex xhigh review round 1, MEDIUM: a progress-log write failure
+// used to be silently ignored, letting later cases keep running and the
+// batch ultimately return nil -- violating this function's own fail-fast
+// doc comment. A single case is enough: the very first progress line must
+// now surface the write error.
+func TestRunCorpusBatch_StdoutWriteFailureFailsTheBatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request contractsv1.ContextFabricInvestigationRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(minimalDecisiveResult("result_"+request.RequestID, request.RequestID))
+	}))
+	defer server.Close()
+
+	client, err := panelharness.NewClient(server.URL, testValidBearerToken, 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	panelist := panelharness.Panelist{CanonicalModelIdentity: "anthropic/sol-max", Client: client, Selector: failSelector{t: t}}
+
+	corpusDir := t.TempDir()
+	corpusPath := filepath.Join(corpusDir, "corpus.json")
+	if err := os.WriteFile(corpusPath, []byte(`[{"question":"a"}]`), 0o644); err != nil {
+		t.Fatalf("write corpus fixture: %v", err)
+	}
+
+	batchErr := runCorpusBatch(context.Background(), corpusBatchConfig{
+		orgID: "org-test", panelists: []panelharness.Panelist{panelist}, baseRequest: buildBaseRequest(nil, nil, nil),
+		corpusPath: corpusPath, outputDir: t.TempDir(), runTag: "test-run-tag",
+	}, failingWriter{})
+	if batchErr == nil {
+		t.Fatal("expected an error: a stdout write failure must fail the batch")
+	}
+	if !errors.Is(batchErr, errWriteFailed) {
+		t.Errorf("runCorpusBatch error = %v, want it to wrap the simulated write failure", batchErr)
 	}
 }

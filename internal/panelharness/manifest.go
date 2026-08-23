@@ -26,7 +26,9 @@
 //     testdata/fullstack/v1's own "harness-owned schema... never enters
 //     contracts/, not subject to the contract-first rule" precedent,
 //     docs/fullstack-acceptance.md): it is the future P5 annotator's input,
-//     documented in-repo (testdata/panelharness/v1/schema/panel_run_manifest.v1.schema.json,
+//     documented in-repo (testdata/panelharness/v1/schema/panel_run_manifest.v{1,2}.schema.json,
+//     one file per ManifestSchemaVersion so an old artifact keeps
+//     validating against its OWN version's file even after a bump --
 //     docs/design/context-fabric-panel-run-manifest.md) as its own
 //     versioned artifact, never folded into internal/contracts/v1.
 package panelharness
@@ -38,8 +40,15 @@ import "time"
 // (see e.g. that package's ReportSchemaVersion v13/v17/v22 citations at
 // each field's own introduction) -- ONE evolving const in this package,
 // each new field's doc comment citing the ticket and version that added
-// it, rather than a new schema file or directory per bump (CHAOS-4146(c):
-// "started properly," this is that start).
+// it (CHAOS-4146(c): "started properly," this is that start). UNLIKE
+// contractsv1 (which has no per-version JSON Schema file to keep in
+// lockstep), this package's own testdata/panelharness/v1/schema/ directory
+// keeps ONE JSON Schema file PER version (panel_run_manifest.v1.schema.json,
+// panel_run_manifest.v2.schema.json, ...): a manifest a prior binary wrote
+// must keep validating against ITS OWN version's schema after a later
+// bump, never be silently invalidated by one shared, overwritten file
+// (codex xhigh review, MEDIUM, caught on the v1->v2 bump this ticket
+// makes).
 //
 //   - v1 (CHAOS-3860 P6): SchemaVersion, PanelRunID, OrgID, QuestionHash,
 //     AlgorithmVersion, StartedAt, CompletedAt, Members. Retroactively also

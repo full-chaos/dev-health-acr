@@ -40,15 +40,19 @@ It is **not**:
 
 ## 2. The manifest: a harness-owned schema, not a product contract
 
-`testdata/panelharness/v1/schema/panel_run_manifest.v1.schema.json` is this
-package's own versioned artifact — it mirrors
+`testdata/panelharness/v1/schema/panel_run_manifest.v{1,2}.schema.json` are
+this package's own versioned artifact — ONE JSON Schema file per
+`ManifestSchemaVersion` value, so a manifest a prior binary wrote keeps
+validating against its OWN version's file after a later bump, rather than
+one shared file being silently overwritten to require a shape older
+artifacts never had. This mirrors
 `testdata/fullstack/v1/schema/context_fabric_agent_result.v1.schema.json`'s
-own precedent exactly: it never enters `contracts/`, it is not subject to the
-CONTRACT-FIRST rule in `AGENTS.md`, because ACR itself does not produce or
-consume it as a wire contract — the harness produces it, and a future P5
-annotator consumes it. `internal/panelharness.PanelRunManifest` (Go) and the
-JSON Schema above are kept in lockstep by hand; there is no code generator
-between them (the schema is small and changes rarely enough that generation
+own precedent (never enters `contracts/`, not subject to the CONTRACT-FIRST
+rule in `AGENTS.md`, because ACR itself does not produce or consume it as a
+wire contract — the harness produces it, and a future P5 annotator consumes
+it). `internal/panelharness.PanelRunManifest` (Go) and the CURRENT version's
+JSON Schema are kept in lockstep by hand; there is no code generator between
+them (each schema file is small and changes rarely enough that generation
 would be more machinery than the problem needs).
 
 One manifest file is written per (org, question) panel activation, via
