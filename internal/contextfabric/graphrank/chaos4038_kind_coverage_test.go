@@ -471,18 +471,30 @@ func TestResolveSubjects_SearchKindCoverageTruncationNeverBlocksAnUnrelatedCommi
 // never runs once a caller already confirmed a kind (CHAOS-3900 P1.D) --
 // nothing is left to disambiguate on this axis, so spending extra
 // kind-scoped calls would be pure waste.
+//
+// CHAOS-4132: the ordinary pool here MUST already carry a candidate of the
+// confirmed kind. An earlier version of this fixture instead returned
+// NOTHING at all for its term -- which, before CHAOS-4132, only happened to
+// read as "the floor is skipped", but is exactly the starved-kind shape
+// CHAOS-4132's own confirmed-kind rescue exists to fix (see
+// TestResolveSubjects_ConfirmedKindRescueFiresWhenPoolEmptyAfterFiltering);
+// under the fix, that old fixture would make THIS test fail for the right
+// reason, not the wrong one. The negative control this test claims to be
+// only holds when the confirmed kind's candidates are already present.
 func TestResolveSubjects_SearchKindSkippedWhenConfirmedKindSet(t *testing.T) {
 	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "wi_1", Label: "Ask Dev"}
+	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.9, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind: true,
-		searchResults:    map[string][]CandidateNode{"alpha": {}},
+		searchResults:    map[string][]CandidateNode{"Ask Dev": {node}},
 	}
 	confirmed := &contextfabric.ConfirmedExpectedKind{Kind: contextfabric.SubjectWorkItem}
-	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), confirmed, nil); err != nil {
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps(), confirmed, nil); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 	if len(backend.searchKindCalls) != 0 {
-		t.Fatalf("searchKindCalls = %#v, want none once confirmedKind is set", backend.searchKindCalls)
+		t.Fatalf("searchKindCalls = %#v, want none once confirmedKind is set and the ordinary pool already covers it", backend.searchKindCalls)
 	}
 }
 

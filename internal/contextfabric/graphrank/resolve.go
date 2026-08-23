@@ -408,10 +408,10 @@ type ResolutionTraceEvent struct {
 	// "request.RequestID exists").
 	RequestID string
 	// Stage is a closed vocabulary: "search", "search_question"
-	// (CHAOS-4120), "alias_lookup", "corroboration", "decision",
-	// "identity_gate", "identity_universe", "evidence_round",
-	// "evidence_probe" (CHAOS-3899), "evidence_census_commit" (CHAOS-3896
-	// Slice C), "evidence_source_native", "evidence_source_native_probe"
+	// (CHAOS-4120), "confirmed_kind_rescue" (CHAOS-4132), "alias_lookup",
+	// "corroboration", "decision", "identity_gate", "identity_universe",
+	// "evidence_round", "evidence_probe" (CHAOS-3899), "evidence_census_commit"
+	// (CHAOS-3896 Slice C), "evidence_source_native", "evidence_source_native_probe"
 	// (CHAOS-3899 widening measurement, 2026-08-19).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
@@ -606,6 +606,32 @@ type ResolutionTraceEvent struct {
 	KindCoverageFloorFired     bool
 	KindCoverageMissingKinds   int
 	KindCoverageFloorTruncated bool
+	// ConfirmedKindRescueFired/ConfirmedKindRescueResultCount/
+	// ConfirmedKindRescueTruncated (stage=="confirmed_kind_rescue" ONLY,
+	// CHAOS-4132) describe applyConfirmedKindRescue's own outcome: a
+	// receipt-confirmed kind whose ordinary-search-filtered pool came up
+	// EMPTY (its only route into a prior turn's pool was the CHAOS-4038
+	// coverage floor, which a confirmed-kind call skips by design) gets a
+	// small, bounded, kind-scoped supplemental SearchKind pass before
+	// conceding to a guaranteed no_match. This event exists at all ONLY
+	// when that rescue was actually attempted (confirmedKind != nil, the
+	// filtered pool was empty, and deps.SearchKind != nil) -- its absence
+	// on a confirmed-kind call means the rescue was never needed, ordinary
+	// search already had the confirmed kind's candidates. Fired means the
+	// rescue actually found something (ResultCount > 0), the SAME "added
+	// something, not merely ran" convention KindCoverageFloorFired already
+	// uses.
+	//
+	// Truncated is NOT purely observational the way KindCoverageFloorTruncated
+	// is: unlike the coverage floor (which only ever adds ONE candidate
+	// among many other kinds' candidates already in the pool), this rescue
+	// is, when it fires, the SOLE source of the candidates the commit gate
+	// is about to decide over. resolve.go folds this value into
+	// searchTruncated for exactly that reason -- see its own call site
+	// comment.
+	ConfirmedKindRescueFired       bool
+	ConfirmedKindRescueResultCount int
+	ConfirmedKindRescueTruncated   bool
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -1435,6 +1461,66 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// ConfirmedExpectedKind's own doc comment (ports.go) for why
 	// non-confirmed narrowing cannot reach this same call.
 	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind)
+	// CHAOS-4132: filterCandidatesByConfirmedKind can legitimately empty the
+	// pool -- see applyConfirmedKindRescue's own doc comment for exactly
+	// when and why (a confirmed kind whose only route into a PRIOR turn's
+	// pool was the coverage floor, which THIS call skips by design just
+	// above). A small, bounded, kind-scoped supplemental retrieval pass
+	// rescues that case before conceding to a guaranteed no_match. Gated on
+	// the pool being empty AFTER filtering (not merely "confirmedKind !=
+	// nil") so the overwhelmingly common case -- ordinary search already
+	// found the confirmed kind's candidates -- issues ZERO extra calls,
+	// preserving CHAOS-3900 P1.D's own "nothing left to disambiguate"
+	// optimization intact; see
+	// TestResolveSubjects_ConfirmedKindRescueSkippedWhenPoolAlreadySatisfied.
+	var confirmedKindRescueAttempted bool
+	var confirmedKindRescueAdded []contextfabric.SubjectCandidate
+	var confirmedKindRescueTruncated bool
+	if confirmedKind != nil && len(candidatesBySubject) == 0 && deps.SearchKind != nil {
+		confirmedKindRescueAttempted = true
+		rescued, rescueTraversalDegraded, rescueAuthzDropped, rescueTruncated, rescueDegraded, rescueErr := applyConfirmedKindRescue(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, confirmedKind.Kind)
+		if rescueErr != nil {
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, rescueErr
+		}
+		confirmedKindRescueAdded = rescued
+		confirmedKindRescueTruncated = rescueTruncated
+		traversalDegraded += rescueTraversalDegraded
+		subjectCandidatesAuthzDropped += rescueAuthzDropped
+		// codex review round 1 (MEDIUM, confirmed): UNLIKE the coverage
+		// floor's own coverageTruncated/coverageFloorDegraded -- which
+		// describe a pass that only ever adds ONE candidate among many
+		// OTHER kinds' candidates already in the pool, so an unrelated
+		// commit must never see it -- this rescue is, when it fires, the
+		// SOLE source of every candidate the gate is about to decide over
+		// (candidatesBySubject was empty before it ran). Its own
+		// truncated/degraded state is therefore NOT unrelated noise: a
+		// truncated rescue call may have cut off a genuine rival candidate
+		// of the SAME confirmed kind, exactly the risk searchTruncated
+		// exists to gate on for ordinary search. Folding it in here (rather
+		// than leaving it a purely observational, gate-blind signal) is
+		// what keeps a same-shape non-exact commit from reading as
+		// falsely confident; TestResolveSubjects_ConfirmedKindRescueTruncationBlocksALoneCandidateCommit
+		// pins this, and
+		// TestResolveSubjects_ConfirmedKindRescueExactMatchSurvivesItsOwnTruncation
+		// pins that this does NOT reach the exact-label/identity-fast-path
+		// tiers, which sit ahead of the searchTruncated check for every
+		// caller (resolution.go) and are unaffected either way.
+		searchTruncated = searchTruncated || rescueTruncated
+		retrievalDegraded = retrievalDegraded || rescueDegraded
+	}
+	if confirmedKindRescueAttempted && deps.ResolutionTracer != nil {
+		// CHAOS-4132: this event's own PRESENCE already tells a reader the
+		// rescue was attempted (see ConfirmedKindRescueFired's own doc
+		// comment); Truncated is carried here too so an operator can see
+		// WHY a rescue that found something still deferred to ambiguous
+		// rather than committing.
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "confirmed_kind_rescue",
+			ConfirmedKindRescueFired:       len(confirmedKindRescueAdded) > 0,
+			ConfirmedKindRescueResultCount: len(confirmedKindRescueAdded),
+			ConfirmedKindRescueTruncated:   confirmedKindRescueTruncated,
+		})
+	}
 	// CHAOS-4085 commit-basis write site 2 of 3: the ordinary commit
 	// decision. ResetTo, not merge -- this is the first decision, and it
 	// defines the whole basis set for it.
