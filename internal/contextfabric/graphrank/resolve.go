@@ -771,17 +771,33 @@ type ResolutionTraceEvent struct {
 	//
 	// CHAOS-4183 phase 3 (sol design consult, team-lead ratified
 	// 2026-08-23): this field's own MEANING shifted -- it is now the
-	// POST-REPAIR boundary (subjectKindStrings(after), the kind-only
-	// projection projectKindOfferKinds computes, restricted to
-	// structureOfferKinds), not the raw candidate-slice snapshot it used
-	// to be. KindOfferBoundaryKindsBeforeRepair below carries the OLD
-	// value (distinctCandidateKinds(kindOfferCandidates), UNFILTERED --
-	// exactly what this field itself computed pre-phase-3) so a v25-vs-v26
-	// reader can still ask the pre-repair question this field used to
-	// answer alone. See projectKindOfferKinds' own doc comment for the
+	// UNFILTERED pre-phase-3 reading (distinctCandidateKinds(kindOfferCandidates),
+	// byte-identical to this field's own pre-phase-3 computation) PLUS,
+	// ONLY when a stalled resolution's kind-only repair genuinely admitted
+	// something, the repaired kind identities appended at the end, in the
+	// SAME fixed closed-vocab order projectKindOfferKinds' own `after`
+	// return uses. Codex CHAOS-4183 phase-3 review round 1, finding 1
+	// (MEDIUM): an earlier version of this field used
+	// subjectKindStrings(after) directly -- `after` is
+	// distinctOfferableKinds' own STRUCTUREOFFERKINDS-FILTERED value (the
+	// value that safely feeds kindOfferMaterial, which filters internally
+	// anyway), so a committed resolution whose pool held a non-offerable
+	// kind (e.g. document) would have reported FEWER kinds than this field
+	// ever did pre-phase-3 -- violating "committed resolutions get the
+	// pre-repair boundary unchanged" even though nothing was actually
+	// repaired. The corrected computation (call site, below) starts from
+	// the unfiltered reading and appends only the genuinely-new repaired
+	// tail, so a committed or nothing-absent resolution reduces to the
+	// unfiltered list verbatim -- byte-identical to pre-phase-3.
+	// KindOfferBoundaryKindsBeforeRepair below carries the SAME unfiltered
+	// pre-repair-only reading (distinctCandidateKinds(kindOfferCandidates))
+	// unconditionally, so a v25-vs-v26 reader can still ask the pre-repair
+	// question this field used to answer alone, even on a row this field
+	// itself repaired. See projectKindOfferKinds' own doc comment for the
 	// full repair mechanism -- candidate-list (candidateOfferMaterial) is
 	// completely UNTOUCHED by this: it still ranks the SAME
-	// kindOfferCandidates this field no longer reflects verbatim.
+	// kindOfferCandidates this field's own unfiltered half still reflects
+	// verbatim.
 	KindOfferBoundaryKinds []string
 	// KindOfferBoundaryKindsBeforeRepair/KindOfferDistinctKindCountBeforeRepair/
 	// KindOfferSuppressedByCardinalityBeforeRepair (CHAOS-4183 phase 3,
@@ -2082,14 +2098,37 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// no one is listening. See KindOfferBoundaryKinds' own doc
 			// comment for what this distinguishes.
 			//
-			// CHAOS-4183 phase 3: KindOfferBoundaryKinds is now POST-repair
-			// (subjectKindStrings(afterKinds)) -- BoundaryKindsBeforeRepair
-			// keeps the field's own pre-phase-3 computation verbatim
-			// (distinctCandidateKinds(kindOfferCandidates), UNFILTERED).
-			// DistinctKindCountBeforeRepair/SuppressedByCardinalityBeforeRepair
-			// come from beforeDiag above -- the SAME cardinality check
-			// kindOfferDiag itself uses, run over the un-repaired input.
-			KindOfferBoundaryKinds:                       subjectKindStrings(afterKinds),
+			// CHAOS-4183 phase 3: KindOfferBoundaryKinds is now POST-repair --
+			// BoundaryKindsBeforeRepair keeps the field's own pre-phase-3
+			// computation verbatim (distinctCandidateKinds(kindOfferCandidates),
+			// UNFILTERED). DistinctKindCountBeforeRepair/
+			// SuppressedByCardinalityBeforeRepair come from beforeDiag above --
+			// the SAME cardinality check kindOfferDiag itself uses, run over
+			// the un-repaired input.
+			//
+			// codex CHAOS-4183 phase-3 review round 1, finding 1 (MEDIUM):
+			// subjectKindStrings(afterKinds) alone is WRONG here -- afterKinds
+			// is projectKindOfferKinds' own kindOfferMaterial-feed value,
+			// filtered to structureOfferKinds (distinctOfferableKinds' own
+			// contract), so a committed/no-repair-needed resolution would
+			// report FEWER kinds than the pre-phase-3 field ever did (e.g. a
+			// "document" kind silently dropped), breaking "committed
+			// resolutions get the pre-repair boundary unchanged." The fix:
+			// start from the SAME unfiltered distinctCandidateKinds reading
+			// BoundaryKindsBeforeRepair uses, and append ONLY the tail
+			// projectKindOfferKinds genuinely added beyond beforeKinds --
+			// afterKinds always starts with beforeKinds verbatim (see that
+			// function's own "after = append(after, before...)"), so the tail
+			// is exactly the repaired kind identities, always disjoint from
+			// the unfiltered list (a repaired kind is, by construction, absent
+			// from beforeKinds' offerable subset, and beforeKinds' offerable
+			// subset is exactly the offerable portion of the unfiltered
+			// list). Committed or nothing-absent: this reduces to the
+			// unfiltered list verbatim, byte-identical to pre-phase-3.
+			KindOfferBoundaryKinds: append(
+				append([]string{}, distinctCandidateKinds(kindOfferCandidates)...),
+				subjectKindStrings(afterKinds[len(beforeKinds):])...,
+			),
 			KindOfferBoundaryKindsBeforeRepair:           distinctCandidateKinds(kindOfferCandidates),
 			KindOfferDistinctKindCountBeforeRepair:       beforeDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinalityBeforeRepair: beforeDiag.SuppressedByCardinality,

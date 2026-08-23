@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -131,5 +132,93 @@ func TestResolveSubjects_KindBoundaryRepairCausalFixture(t *testing.T) {
 	}
 	if !sawWorkItemOpt || !sawPROpt {
 		t.Fatalf("offer.KindOptions = %#v, want both work_item and pull_request offered", offer.KindOptions)
+	}
+
+	// codex CHAOS-4183 phase-3 review round 1, finding 2 (LOW): the
+	// length/kind checks above do not, by themselves, prove BYTE equality
+	// (IDs, labels, confidence, mechanisms, ordering) -- exactly what the
+	// design's own validation step 1 requires ("assert resolution.Candidates/
+	// .../top-5 CandidateOptions byte-unchanged"). A true differential proof
+	// beats a field-by-field manual comparison: run the IDENTICAL two
+	// work_item candidates through ResolveSubjects a second time, this time
+	// with NO pull_request anywhere in the pool -- nothing for this phase to
+	// repair at all. If phase 3 has zero effect on the commit-decision and
+	// candidate-list axes (as designed), the two runs' own
+	// resolution.Candidates/offer.CandidateOptions must be reflect.DeepEqual,
+	// repair-triggering or not.
+	controlBackend := &fakeGraphBackend{
+		searchResults: map[string][]CandidateNode{"outage": {workItemA, workItemB}},
+	}
+	controlResolution, controlOffer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("outage"), controlBackend.deps(), nil, nil)
+	if err != nil {
+		t.Fatalf("control ResolveSubjects() error = %v", err)
+	}
+	if !reflect.DeepEqual(resolution.Candidates, controlResolution.Candidates) {
+		t.Fatalf("resolution.Candidates diverged from the no-repair control:\nrepaired: %#v\ncontrol:  %#v", resolution.Candidates, controlResolution.Candidates)
+	}
+	if !reflect.DeepEqual(resolution.Committed, controlResolution.Committed) {
+		t.Fatalf("resolution.Committed diverged from the no-repair control:\nrepaired: %#v\ncontrol:  %#v", resolution.Committed, controlResolution.Committed)
+	}
+	if !reflect.DeepEqual(offer.CandidateOptions, controlOffer.CandidateOptions) {
+		t.Fatalf("offer.CandidateOptions diverged from the no-repair control:\nrepaired: %#v\ncontrol:  %#v", offer.CandidateOptions, controlOffer.CandidateOptions)
+	}
+}
+
+// TestResolveSubjects_KindOfferBoundaryKindsStaysUnfilteredWhenCommitted is
+// codex CHAOS-4183 phase-3 review round 1, finding 1's own regression
+// (MEDIUM): a committed resolution must report the trace event's
+// KindOfferBoundaryKinds byte-identical to the field's own pre-phase-3
+// (UNFILTERED) computation -- including a NON-offerable kind like document,
+// which distinctOfferableKinds/projectKindOfferKinds' own `after` value
+// (correctly) never admits, but which the pre-phase-3 field always showed.
+// An earlier version of the resolve.go call site emitted afterKinds
+// directly, silently dropping document from a committed row's own boundary
+// telemetry -- exactly the "committed resolutions get the pre-repair
+// boundary unchanged" violation this fixture pins.
+func TestResolveSubjects_KindOfferBoundaryKindsStaysUnfilteredWhenCommitted(t *testing.T) {
+	t.Parallel()
+	strongWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "Outage work item", 0.95, "*")
+	weakDocument := candidateNode(contextfabric.SubjectDocument, "doc_1", "Outage doc", 0.1, "*")
+	backend := &fakeGraphBackend{
+		searchResults: map[string][]CandidateNode{"outage": {strongWorkItem, weakDocument}},
+	}
+	tracer := &captureResolutionTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+
+	request := testRequest()
+	request.Options.MaxSubjectCandidates = 2
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("outage"), deps, nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) == 0 {
+		t.Fatal("resolution.Committed is empty -- this fixture requires a committed resolution to exercise the committed no-repair path; adjust the candidate scores")
+	}
+
+	kindOfferEvents := tracer.eventsForStage("kind_offer")
+	if len(kindOfferEvents) != 1 {
+		t.Fatalf("kind_offer trace events = %d, want exactly 1", len(kindOfferEvents))
+	}
+	event := kindOfferEvents[0]
+	if len(event.KindOfferBoundaryKinds) != 2 {
+		t.Fatalf("KindOfferBoundaryKinds = %v, want [work_item document] -- a committed resolution must report the SAME unfiltered boundary this field always reported pre-phase-3, document included", event.KindOfferBoundaryKinds)
+	}
+	sawWorkItem, sawDocument := false, false
+	for _, kind := range event.KindOfferBoundaryKinds {
+		switch kind {
+		case "work_item":
+			sawWorkItem = true
+		case "document":
+			sawDocument = true
+		}
+	}
+	if !sawWorkItem || !sawDocument {
+		t.Fatalf("KindOfferBoundaryKinds = %v, want both work_item and document -- document must NOT be silently dropped just because it is not an offerable kind", event.KindOfferBoundaryKinds)
+	}
+	// The committed no-repair path must be byte-identical to BeforeRepair --
+	// nothing was, or could be, repaired here.
+	if len(event.KindOfferBoundaryKindsBeforeRepair) != len(event.KindOfferBoundaryKinds) {
+		t.Fatalf("KindOfferBoundaryKinds = %v, KindOfferBoundaryKindsBeforeRepair = %v, want identical on a committed resolution", event.KindOfferBoundaryKinds, event.KindOfferBoundaryKindsBeforeRepair)
 	}
 }
