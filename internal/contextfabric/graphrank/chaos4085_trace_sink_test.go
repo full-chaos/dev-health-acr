@@ -156,3 +156,39 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 		t.Fatalf("boundary_kinds = %v, want [work_item repository]", record["boundary_kinds"])
 	}
 }
+
+// TestChaos4085_ProductionTraceEmitsKindCoverageFloorDiagnostics is the
+// sink-level pin for CHAOS-4038's kind_coverage_floor stage -- same
+// file-doc-comment obligation as every field above. This stage had NO
+// sink-level test until CHAOS-4183 phase 2 (2026-08-23): the fields existed,
+// were populated, and were read by the harness's own in-memory tracer, but
+// nothing proved they survived the PRODUCTION SlogResolutionTracer sink --
+// exactly the CommitBasis/TiedStatisticalTop gap this file's own doc comment
+// (top of file) exists to prevent from recurring.
+func TestChaos4085_ProductionTraceEmitsKindCoverageFloorDiagnostics(t *testing.T) {
+	record := captureTraceJSON(t, ResolutionTraceEvent{
+		RequestID: "request_sink_0004", Stage: "kind_coverage_floor",
+		KindCoverageFloorFired:       true,
+		KindCoverageMissingKinds:     1,
+		KindCoverageFloorTruncated:   true,
+		KindCoverageMissingKindsList: []string{"work_item"},
+	})
+
+	if got, ok := record["fired"].(bool); !ok || !got {
+		t.Fatalf("fired = %v, want true", record["fired"])
+	}
+	if got, ok := record["missing_kinds"].(float64); !ok || got != 1 {
+		t.Fatalf("missing_kinds = %v, want 1", record["missing_kinds"])
+	}
+	if got, ok := record["truncated"].(bool); !ok || !got {
+		t.Fatalf("truncated = %v, want true", record["truncated"])
+	}
+	// CHAOS-4183 phase 2: missing_kinds_list is the kind-IDENTITY twin of
+	// missing_kinds -- must reach the sink as the actual kind values, not
+	// merely a count, or a future reader hits the SAME re-smoke ambiguity
+	// this field exists to resolve.
+	missingKindsList, ok := record["missing_kinds_list"].([]any)
+	if !ok || len(missingKindsList) != 1 || missingKindsList[0] != "work_item" {
+		t.Fatalf("missing_kinds_list = %v, want [work_item]", record["missing_kinds_list"])
+	}
+}

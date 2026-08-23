@@ -104,11 +104,27 @@ func TestChaos4086_TheReportRowCarriesEveryDiagnosisKey(t *testing.T) {
 		"committed_subjects", "expected_kind", "expected_id",
 		"commit_gate", "tied_statistical_top", "search_truncated",
 		"kind_coverage_floor_fired", "kind_coverage_missing_kinds",
-		"kind_coverage_floor_truncated",
+		"kind_coverage_floor_truncated", "kind_coverage_missing_kinds_list",
 	} {
 		if _, present := decoded[key]; !present {
 			t.Errorf("row omits %q -- the reader is back to re-reading the trace", key)
 		}
+	}
+	// CHAOS-4183 phase 2 (codex xhigh review, LOW finding): the presence
+	// check above would pass for a `null` kind_coverage_missing_kinds_list
+	// just as readily as for real content -- this asserts the actual VALUE
+	// the fixture stamps, so a regression that wired the field but left it
+	// perpetually empty would be caught here, not just "omitempty was
+	// dropped."
+	// codex xhigh R2 (2026-08-23, LOW finding): len(list) must equal the
+	// sibling KindCoverageMissingKinds COUNT above (3) -- production always
+	// keeps them in lockstep (both derive from the SAME pre-search `missing`
+	// slice, chaos4038_kind_coverage.go:270), so a fixture with a
+	// mismatched count/list pair could mask a future regression that broke
+	// that invariant.
+	missingKindsList, ok := decoded["kind_coverage_missing_kinds_list"].([]any)
+	if !ok || len(missingKindsList) != 3 || missingKindsList[0] != "work_item" || missingKindsList[1] != "repository" || missingKindsList[2] != "project" {
+		t.Errorf("kind_coverage_missing_kinds_list = %v, want [work_item repository project]", decoded["kind_coverage_missing_kinds_list"])
 	}
 }
 
@@ -201,7 +217,14 @@ func marshalDiagnosisRow(t *testing.T, commitGate string) []byte {
 		outcome = "ambiguous"
 	}
 	trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
-		{Stage: "kind_coverage_floor", KindCoverageFloorFired: true, KindCoverageMissingKinds: 3, KindCoverageFloorTruncated: true},
+		{Stage: "kind_coverage_floor", KindCoverageFloorFired: true, KindCoverageMissingKinds: 3, KindCoverageFloorTruncated: true,
+			// CHAOS-4183 phase 2 (codex xhigh review, LOW finding): a real
+			// value here, not left at its zero value, so
+			// TestChaos4086_TheReportRowCarriesEveryDiagnosisKey's own
+			// key-presence check actually proves content, not merely that
+			// omitempty was dropped -- a `null` value would otherwise pass
+			// that check silently.
+			KindCoverageMissingKindsList: []string{"work_item", "repository", "project"}},
 		{Stage: "decision", Outcome: outcome, CommitGate: commitGate, TiedStatisticalTop: true, SearchTruncated: true},
 	}}
 

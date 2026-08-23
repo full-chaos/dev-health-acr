@@ -1623,6 +1623,7 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 		res.KindCoverageFloorFired = event.KindCoverageFloorFired
 		res.KindCoverageMissingKinds = event.KindCoverageMissingKinds
 		res.KindCoverageFloorTruncated = event.KindCoverageFloorTruncated
+		res.KindCoverageMissingKindsList = event.KindCoverageMissingKindsList
 	}
 	// CHAOS-4038 v18: confirmed_kind_rescue's own twin capture, same
 	// last-event-wins reader as kind_coverage_floor above.
@@ -1792,12 +1793,13 @@ func TestChaos4103_FoldSynthesisStatusOverridePreservesAnEarlierCall(t *testing.
 // closed-vocabulary gate name) -- tc.Question is in scope at the one call
 // site that fills this and is deliberately never read.
 type twoTurnTurn1Facts struct {
-	CommitGate                 string
-	TiedStatisticalTop         bool
-	SearchTruncated            bool
-	KindCoverageFloorFired     bool
-	KindCoverageMissingKinds   int
-	KindCoverageFloorTruncated bool
+	CommitGate                   string
+	TiedStatisticalTop           bool
+	SearchTruncated              bool
+	KindCoverageFloorFired       bool
+	KindCoverageMissingKinds     int
+	KindCoverageFloorTruncated   bool
+	KindCoverageMissingKindsList []string
 	// ConfirmedKindRescueFired/ResultCount/Truncated (CHAOS-4038 v18) mirror
 	// KindCoverageFloorFired/MissingKinds/Truncated above, read off turn 1's
 	// own confirmed_kind_rescue stage (CHAOS-4132) instead.
@@ -1971,6 +1973,7 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 		facts.KindCoverageFloorFired = event.KindCoverageFloorFired
 		facts.KindCoverageMissingKinds = event.KindCoverageMissingKinds
 		facts.KindCoverageFloorTruncated = event.KindCoverageFloorTruncated
+		facts.KindCoverageMissingKindsList = event.KindCoverageMissingKindsList
 	}
 	if event, ok := trace.confirmedKindRescueEvent(); ok {
 		facts.ConfirmedKindRescueFired = event.ConfirmedKindRescueFired
@@ -2015,6 +2018,7 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.Turn1KindCoverageFloorFired = facts.KindCoverageFloorFired
 	res.Turn1KindCoverageMissingKinds = facts.KindCoverageMissingKinds
 	res.Turn1KindCoverageFloorTruncated = facts.KindCoverageFloorTruncated
+	res.Turn1KindCoverageMissingKindsList = facts.KindCoverageMissingKindsList
 	res.Turn1ConfirmedKindRescueFired = facts.ConfirmedKindRescueFired
 	res.Turn1ConfirmedKindRescueResultCount = facts.ConfirmedKindRescueResultCount
 	res.Turn1ConfirmedKindRescueTruncated = facts.ConfirmedKindRescueTruncated
@@ -2277,7 +2281,12 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 
 	t.Run("nil trace, no StructureNeeds", func(t *testing.T) {
 		facts := twoTurnCaptureTurn1Facts(nil, contractsv1.ContextFabricInvestigationResult{}, tc)
-		if facts != (twoTurnTurn1Facts{}) {
+		// CHAOS-4183 phase 2: twoTurnTurn1Facts gained a []string field
+		// (KindCoverageMissingKindsList), which makes the struct no longer
+		// `==`-comparable -- reflect.DeepEqual is the direct replacement,
+		// same "the struct grew a slice" reasoning twoTurnCaseResult's own
+		// field-by-field checks already document elsewhere in this file.
+		if !reflect.DeepEqual(facts, twoTurnTurn1Facts{}) {
 			t.Errorf("twoTurnCaptureTurn1Facts(nil trace) = %+v, want the zero value", facts)
 		}
 	})
@@ -2301,7 +2310,8 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 				{Stage: "corroboration", Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository"}},
 				{Stage: "search", Truncated: true},
 				{Stage: "search_question", Truncated: true},
-				{Stage: "kind_coverage_floor", KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true},
+				{Stage: "kind_coverage_floor", KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true,
+					KindCoverageMissingKindsList: []string{"work_item", "repository"}},
 				{Stage: "confirmed_kind_rescue", ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true},
 				{Stage: "kind_offer", KindOfferExplicitHintCount: 1, KindOfferDistinctKindCount: 2, KindOfferSuppressedByCardinality: false,
 					KindOfferCandidateOfferCount: 5, KindOfferOfferKind: "both",
@@ -2316,7 +2326,8 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 		want := twoTurnTurn1Facts{
 			CommitGate: "lone_floor", TiedStatisticalTop: true, SearchTruncated: true,
 			KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true,
-			ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
+			KindCoverageMissingKindsList: []string{"work_item", "repository"},
+			ConfirmedKindRescueFired:     true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
 			KindOfferExplicitHintCount: 1, KindOfferDistinctKindCount: 2, KindOfferSuppressedByCardinality: false,
 			CandidateOfferCount: 5, OfferKind: "both",
 			TermSearchTruncated: true, QuestionSearchTruncated: true,
@@ -2324,7 +2335,9 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 			EvidenceRoundEntered: true, EvidenceRoundReason: "",
 			Regime: twoTurnRegimeAWindowGated,
 		}
-		if facts != want {
+		// CHAOS-4183 phase 2: reflect.DeepEqual, same reason as the nil-trace
+		// subtest above -- the struct grew a []string field.
+		if !reflect.DeepEqual(facts, want) {
 			t.Errorf("twoTurnCaptureTurn1Facts() = %+v, want %+v", facts, want)
 		}
 	})
@@ -2520,7 +2533,12 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 		facts := twoTurnTurn1Facts{
 			CommitGate: "top_of_two", TiedStatisticalTop: true, SearchTruncated: true,
 			KindCoverageFloorFired: true, KindCoverageMissingKinds: 3, KindCoverageFloorTruncated: true,
-			ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
+			// codex xhigh R2 (2026-08-23, LOW finding): three entries, matching
+			// KindCoverageMissingKinds' count above -- production always keeps
+			// them in lockstep (chaos4038_kind_coverage.go:270), so a
+			// mismatched fixture could mask a future regression.
+			KindCoverageMissingKindsList: []string{"work_item", "repository", "project"},
+			ConfirmedKindRescueFired:     true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
 			KindOfferExplicitHintCount: 0, KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true,
 			CandidateOfferCount: 5, OfferKind: "candidate",
 			TermSearchTruncated: true, QuestionSearchTruncated: true,
@@ -2547,6 +2565,10 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			t.Errorf("Turn1KindCoverageMissingKinds = %d, want 3", res.Turn1KindCoverageMissingKinds)
 		case !res.Turn1KindCoverageFloorTruncated:
 			t.Error("Turn1KindCoverageFloorTruncated = false, want true")
+		// CHAOS-4183 phase 2 (codex xhigh review, LOW finding): this test
+		// previously omitted the new list field entirely.
+		case !reflect.DeepEqual(res.Turn1KindCoverageMissingKindsList, []string{"work_item", "repository", "project"}):
+			t.Errorf("Turn1KindCoverageMissingKindsList = %v, want [work_item repository project]", res.Turn1KindCoverageMissingKindsList)
 		case !res.Turn1ConfirmedKindRescueFired:
 			t.Error("Turn1ConfirmedKindRescueFired = false, want true")
 		case res.Turn1ConfirmedKindRescueResultCount != 1:
@@ -3179,9 +3201,36 @@ type twoTurnCaseResult struct {
 	// comment). Read off a DIFFERENT stage than the three fields above, and
 	// that separation is deliberate rather than incidental -- the floor's
 	// truncation is explicitly not a commit-gate input.
-	KindCoverageFloorFired     bool `json:"kind_coverage_floor_fired,omitempty"`
-	KindCoverageMissingKinds   int  `json:"kind_coverage_missing_kinds,omitempty"`
-	KindCoverageFloorTruncated bool `json:"kind_coverage_floor_truncated,omitempty"`
+	//
+	// CHAOS-4183 phase 2 (team-lead ruling, 2026-08-23): `omitempty` DROPPED
+	// on all three. This is the motivating incident, not a hypothetical --
+	// a live CHAOS-4183 investigation queried this artifact with `jq` and
+	// read a `null`/absent key as "the kind_coverage_floor event never
+	// fired," when the event HAD fired with the real values
+	// Fired=false/MissingKinds=0 (Go zero values), just dropped from the
+	// JSON by `omitempty`. For a boolean/count field a reader uses to GATE
+	// further analysis (this exact field decided which of two investigation
+	// branches to follow), "absent" and "false/0" must be the SAME
+	// observable state, or a query tool with no way to distinguish
+	// key-absent from Go-zero-value silently reintroduces the
+	// never-ran-vs-attested-zero ambiguity CensusRan/EvidenceRoundEntered
+	// (CHAOS-3899/CHAOS-4161) and KindOfferDistinctKindCount (CHAOS-4012)
+	// were each already filed specifically to resolve. Same reasoning,
+	// applied retroactively to a field pair that predates it.
+	KindCoverageFloorFired     bool `json:"kind_coverage_floor_fired"`
+	KindCoverageMissingKinds   int  `json:"kind_coverage_missing_kinds"`
+	KindCoverageFloorTruncated bool `json:"kind_coverage_floor_truncated"`
+	// KindCoverageMissingKindsList (CHAOS-4183 phase 2) is
+	// KindCoverageMissingKinds' own kind-IDENTITY twin -- closed-vocabulary
+	// contextfabric SubjectKind values only (corpus-safe, same discipline
+	// KindOfferBoundaryKinds/distinctCandidateKinds already established,
+	// CHAOS-4012). Added because the bare COUNT alone could not disambiguate
+	// a real re-smoke finding: whether the floor searched for the SAME kind
+	// a later analysis cares about, or a different one, once more than one
+	// floor kind could be missing for a single call. No omitempty, same
+	// reasoning as the trio above -- an empty/nil list must read as
+	// "genuinely nothing missing," not "never measured."
+	KindCoverageMissingKindsList []string `json:"kind_coverage_missing_kinds_list"`
 	// ConfirmedKindRescueFired/ConfirmedKindRescueResultCount/
 	// ConfirmedKindRescueTruncated (CHAOS-4038 v18) mirror the three
 	// KindCoverageFloor* fields above, read off the confirmed_kind_rescue
@@ -3301,10 +3350,16 @@ type twoTurnCaseResult struct {
 	// Turn1KindCoverageFloorFired/Turn1KindCoverageMissingKinds/
 	// Turn1KindCoverageFloorTruncated mirror KindCoverageFloorFired/
 	// KindCoverageMissingKinds/KindCoverageFloorTruncated above, read off
-	// turn 1's own kind_coverage_floor trace stage.
-	Turn1KindCoverageFloorFired     bool `json:"turn1_kind_coverage_floor_fired,omitempty"`
-	Turn1KindCoverageMissingKinds   int  `json:"turn1_kind_coverage_missing_kinds,omitempty"`
-	Turn1KindCoverageFloorTruncated bool `json:"turn1_kind_coverage_floor_truncated,omitempty"`
+	// turn 1's own kind_coverage_floor trace stage. `omitempty` DROPPED
+	// (CHAOS-4183 phase 2) for the SAME reason as the arm-level trio above
+	// -- see that field's own doc comment for the motivating incident.
+	Turn1KindCoverageFloorFired     bool `json:"turn1_kind_coverage_floor_fired"`
+	Turn1KindCoverageMissingKinds   int  `json:"turn1_kind_coverage_missing_kinds"`
+	Turn1KindCoverageFloorTruncated bool `json:"turn1_kind_coverage_floor_truncated"`
+	// Turn1KindCoverageMissingKindsList (CHAOS-4183 phase 2) mirrors
+	// KindCoverageMissingKindsList above, read off turn 1's own
+	// kind_coverage_floor trace stage. No omitempty, same reasoning.
+	Turn1KindCoverageMissingKindsList []string `json:"turn1_kind_coverage_missing_kinds_list"`
 	// Turn1ConfirmedKindRescueFired/Turn1ConfirmedKindRescueResultCount/
 	// Turn1ConfirmedKindRescueTruncated (CHAOS-4038 v18) mirror
 	// ConfirmedKindRescueFired/ResultCount/Truncated above, read off turn
@@ -3920,6 +3975,45 @@ type twoTurnReport struct {
 	// same shape as ExpectedInPool itself, the field it refines. No merge
 	// arithmetic changes; the mirror in cmd/acr-trial-merge-two-turn/main.go
 	// gained the field in the same change, same reason as above.
+	//
+	// "24" (CHAOS-4183 phase 2, team-lead ruling, 2026-08-23): two changes,
+	// both requiring the bump.
+	//
+	// (a) twoTurnCaseResult gains KindCoverageMissingKindsList and
+	// Turn1KindCoverageMissingKindsList -- KindCoverageMissingKinds' own
+	// kind-IDENTITY twin, closed-vocabulary (contextfabric.SubjectKind
+	// values only, corpus-safe, same discipline KindOfferBoundaryKinds
+	// already established). Purely additive. Motivated directly by a
+	// CHAOS-4183 re-smoke finding the bare COUNT could not resolve: whether
+	// the coverage floor searched for the SAME kind a later analysis cares
+	// about, or a different one, once more than one floor kind could be
+	// missing for a single call.
+	//
+	// (b) `omitempty` DROPPED from KindCoverageFloorFired/
+	// KindCoverageMissingKinds/KindCoverageFloorTruncated and their
+	// Turn1-prefixed twins -- a MEANING change on existing keys, not merely
+	// additive. This is the motivating incident, not a hypothetical: a live
+	// CHAOS-4183 investigation queried a v23 artifact with jq and read an
+	// OMITTED key as "the kind_coverage_floor event never fired," when the
+	// event had fired with the real values Fired=false/MissingKinds=0 (Go
+	// zero values) that `omitempty` then silently dropped from the JSON.
+	// For a boolean/count field a reader uses to GATE further analysis
+	// (exactly what happened here -- the field decided which investigation
+	// branch to follow), "key absent" and "key present with a zero value"
+	// must be the SAME observable state, or a query tool with no way to
+	// distinguish the two silently reintroduces the never-ran-vs-attested-
+	// zero ambiguity CensusRan/EvidenceRoundEntered (CHAOS-3899/CHAOS-4161)
+	// and KindOfferDistinctKindCount (CHAOS-4012) were each already filed
+	// specifically to resolve -- applied here retroactively to a field
+	// trio that predates both fixes. A v23 row with these six keys absent
+	// and a v24 row with them present-as-false/0 are NOT the same claim;
+	// this version number is what tells a reader which reading applies.
+	//
+	// No merge arithmetic changes for either (a) or (b) (Results
+	// concatenates verbatim); the mirror in
+	// cmd/acr-trial-merge-two-turn/main.go gained both in the same change,
+	// same "an undeclared field is dropped on decode" reason every prior
+	// bump needed it for.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -7103,7 +7197,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "23",
+		ReportSchemaVersion: "24",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
