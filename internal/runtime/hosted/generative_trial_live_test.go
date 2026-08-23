@@ -1544,6 +1544,31 @@ type trialProvenance struct {
 	// as comparable in kind to a real invoice line.
 	CostMethodology string `json:"cost_methodology,omitempty"`
 	SandboxMode     string `json:"sandbox_mode,omitempty"`
+	// ResponderModel (CHAOS-4135, schema v15, provenance gap flagged by
+	// lane-4118's CHAOS-4113 scoping) is which model actually answered a
+	// file-exchange run's calls: run-responder-codex.sh passes no -m to
+	// `codex exec`, so a bare CODEX_HOME resolves to whatever model that
+	// codex configuration defaults to (gpt-5.6-sol at CHAOS-4113 scoping
+	// time) -- and until now NO artifact recorded this at all, so every
+	// engine-arm result to date is silently attributable to "whatever the
+	// ambient default happened to be" with no artifact to check it against.
+	// ACR_TEST_TRIAL_RESPONDER_MODEL is lane-4118's own scripts-only
+	// plumbing (a separate PR) for pinning it explicitly; this field
+	// records that env var's value when the launcher set it, or the
+	// literal "ambient-default" otherwise -- NOT a guess at what codex
+	// actually resolved to. codex's own default model lives in codex's own
+	// runtime config/session state, not anywhere this harness can cheaply
+	// or reliably read from Go without shelling out to codex itself purely
+	// to populate a provenance field -- exactly the kind of speculative
+	// model invocation the "subscription-only, harnesses not API keys"
+	// standing rule bars. Set only for the file-exchange transport (a
+	// real_api run never shells out to a responder at all, so there is
+	// nothing to attribute); empty (omitempty) for every run before this
+	// field existed and for every trial script other than
+	// TestChaos3742TwoTurnConfirmationReplay, matching
+	// AnchorMembershipOffersEnabled's own "only one script populates this
+	// today" precedent immediately above.
+	ResponderModel string `json:"responder_model,omitempty"`
 }
 
 // trialCommitGateProvenance is the CHAOS-3857 sweep-cell config a report

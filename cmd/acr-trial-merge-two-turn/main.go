@@ -104,7 +104,26 @@ import (
 // comment on twoTurnTurn1Facts.Regime) -- also purely additive passthrough.
 // For the SAME "an undeclared field is dropped on decode" reason
 // "11"/"12"/"13" each needed the mirror updated in the same change.
-const expectedSchemaVersion = "14"
+// "15" (CHAOS-4135, follow-up from the shard-54 CHAOS-4117 diagnosis,
+// 2026-08-22, team-lead ruling "D-plus"): twoTurnCaseResult gained
+// TraceEvents/BaselineTraceEvents -- the harness's already-captured
+// per-call ResolutionTraceEvent stream, persisted for anomalous rows only
+// (see the producer's own doc comment and twoTurnCaseResultIsAnomalous).
+// Purely additive passthrough per row (Results concatenates verbatim, no
+// merge arithmetic), mirrored here as json.RawMessage rather than a full
+// struct -- see the field's own doc comment below for why. The mirror
+// still had to gain it in the same change for the SAME "an undeclared
+// field is dropped on decode" reason every prior bump needed it for.
+// Rides the SAME v15 bump (scope addition, team-lead, 2026-08-22, from
+// lane-4118's CHAOS-4113 scoping): trialProvenance also gained
+// ResponderModel -- see that field's own doc comment in the producer
+// (generative_trial_live_test.go) for the provenance gap it closes.
+// Purely additive; no merge arithmetic (Provenance rides through from the
+// FIRST shard, see mergeReports, and every shard of one run shares one
+// responder model by construction) -- mirrored here for the same
+// undeclared-field-dropped-on-decode reason as everything else on this
+// list.
+const expectedSchemaVersion = "15"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -156,6 +175,13 @@ type trialProvenance struct {
 	CommitGate                    trialCommitGateProvenance `json:"commit_gate"`
 	CostMethodology               string                    `json:"cost_methodology,omitempty"`
 	SandboxMode                   string                    `json:"sandbox_mode,omitempty"`
+	// ResponderModel (CHAOS-4135, schema v15) mirrors trialProvenance's
+	// identically-named field -- see the producer's own doc comment
+	// (generative_trial_live_test.go) for the provenance gap this closes.
+	// Purely additive passthrough; no merge arithmetic (Provenance rides
+	// through from the FIRST shard, see mergeReports, and every shard of
+	// one run shares one responder model by construction).
+	ResponderModel string `json:"responder_model,omitempty"`
 }
 
 type twoTurnCaseResult struct {
@@ -194,6 +220,21 @@ type twoTurnCaseResult struct {
 	ShadowKindInsensitivityMode string                 `json:"shadow_kind_insensitivity_mode,omitempty"`
 	BaselineCommittedSubjects   []twoTurnSubjectKindID `json:"baseline_committed_subjects,omitempty"`
 	HintedCommittedSubjects     []twoTurnSubjectKindID `json:"hinted_committed_subjects,omitempty"`
+	// TraceEvents/BaselineTraceEvents (CHAOS-4135, schema v15) mirror
+	// twoTurnCaseResult's identically-named fields -- populated by the
+	// producer ONLY on anomalous rows (see that file's own doc comment and
+	// twoTurnCaseResultIsAnomalous). json.RawMessage, deliberately NOT a
+	// full mirror of graphrank.ResolutionTraceEvent: this tool never reads
+	// or computes anything from trace-event content (no gate, no merge
+	// arithmetic touches it), so mirroring that still-growing struct here
+	// would create a maintenance coupling this tool does not need -- every
+	// future field the graphrank package adds would otherwise force a
+	// matching edit here for a type this tool only ever passes through
+	// unread. RawMessage preserves whatever the producer wrote byte-for-byte
+	// regardless, the same "concatenates verbatim, no arithmetic" treatment
+	// every other purely-observational block on this row already gets.
+	TraceEvents         json.RawMessage `json:"trace_events,omitempty"`
+	BaselineTraceEvents json.RawMessage `json:"baseline_trace_events,omitempty"`
 	// CHAOS-4086 (schema v11) instant-diagnosis fields, mirroring
 	// twoTurnCaseResult's identically-named block. Rows ride through
 	// mergeReports verbatim, so these need no merge arithmetic -- but they
@@ -463,6 +504,17 @@ func validateShardSet(shards []twoTurnReport, paths []string) error {
 			return mismatchErr(paths[i], paths[0], "provenance.source_dirty", fmt.Sprint(s.Provenance.SourceDirty), fmt.Sprint(first.Provenance.SourceDirty))
 		case s.Provenance.SourceDiffDigest != first.Provenance.SourceDiffDigest:
 			return mismatchErr(paths[i], paths[0], "provenance.source_diff_digest", s.Provenance.SourceDiffDigest, first.Provenance.SourceDiffDigest)
+		// ResponderModel (CHAOS-4135, codex xhigh review, MEDIUM, confirmed):
+		// mergeReports inherits Provenance from shards[0] alone (see below),
+		// so without this check a mixed run -- shards launched with
+		// different ACR_TEST_TRIAL_RESPONDER_MODEL values, or one with it
+		// set and one without -- would silently merge under the FIRST
+		// shard's own label, misattributing every other shard's answers to
+		// a model that did not actually produce them. Same "launch-level,
+		// not shard-level" reasoning as the sharding fields immediately
+		// below.
+		case s.Provenance.ResponderModel != first.Provenance.ResponderModel:
+			return mismatchErr(paths[i], paths[0], "provenance.responder_model", s.Provenance.ResponderModel, first.Provenance.ResponderModel)
 		// CHAOS-4100: the three sharding fields that describe the LAUNCH
 		// rather than the shard. Granularity, concurrency cap and
 		// provisioning mode are decided once for the whole fan-out, so

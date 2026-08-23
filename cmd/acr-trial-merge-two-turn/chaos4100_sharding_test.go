@@ -311,3 +311,28 @@ func TestChaos4100_LaunchWideShardingFieldsMustAgreeAcrossShards(t *testing.T) {
 		})
 	}
 }
+
+// TestChaos4135_ResponderModelMustAgreeAcrossShards mirrors
+// TestChaos4100_LaunchWideShardingFieldsMustAgreeAcrossShards' own pattern
+// for the SAME reason (codex xhigh review, MEDIUM, confirmed): ResponderModel
+// is a launch-level fact -- one responder model answers a whole run -- so two
+// shards disagreeing about it means artifacts from two different launches
+// (or a launcher that changed ACR_TEST_TRIAL_RESPONDER_MODEL mid-run) are
+// being merged into one, which mergeReports' own "Provenance: first.Provenance"
+// (inheriting only the FIRST shard's value) would otherwise silently
+// misattribute.
+func TestChaos4135_ResponderModelMustAgreeAcrossShards(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.Provenance.ResponderModel = "gpt-5.6-luna"
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.Provenance.ResponderModel = "gpt-5.6-sol"
+	dir, paths := writeShards(t, []twoTurnReport{a, b})
+	var stdout bytes.Buffer
+	err := run(filepath.Join(dir, "merged.json"), paths, &stdout)
+	if err == nil {
+		t.Fatal("merging shards that disagree about responder_model must be refused")
+	}
+	if !strings.Contains(err.Error(), "provenance.responder_model") {
+		t.Errorf("error = %q, want it to name provenance.responder_model", err.Error())
+	}
+}

@@ -770,6 +770,44 @@ func (c *twoTurnTraceCapture) finalDecisionEvent() (event graphrank.ResolutionTr
 	return event, ok
 }
 
+// snapshot (CHAOS-4135) returns a COPY of every event captured for the call
+// most recently made against this tracer -- the full stream
+// finalDecisionEvent/kindCoverageFloorEvent/passTruncation each already read
+// a narrow projection of, now preserved whole. A copy, not the live slice:
+// callers stash this onto a twoTurnCaseResult that outlives the next
+// reset()/append() this same *twoTurnTraceCapture will do for the NEXT call
+// in the same arm (runTwoTurnInferredTierArm's baseline-then-hinted pair,
+// in particular) -- returning c.events directly would let that later call's
+// append silently mutate an earlier snapshot still referenced by a result
+// row already returned. nil in, nil out (an empty snapshot serializes to
+// nothing under omitempty, matching every other optional field on
+// twoTurnCaseResult).
+//
+// Also strips Subject.Label off every event (codex xhigh review, HIGH,
+// confirmed): ResolutionTraceEvent's own doc comment (resolve.go) claims
+// its Subject field carries "kind+canonical_id... never a label or matched
+// term", but contextfabric.SubjectRef.Label has no such enforcement at the
+// type level -- NodeCandidate populates it from the graph's real subject
+// labels (PR/issue/repo titles), so a corroboration- or decision-stage
+// event's Subject.Label DOES carry real content in production. That gap
+// was harmless while ResolutionTraceEvent only ever reached
+// SlogResolutionTracer's Debug-level log line; THIS function is the first
+// place anything from that stream gets written to a FILE this harness
+// persists as a shared artifact, so the label must be scrubbed here rather
+// than trusted from upstream. Kind+CanonicalID (the graph's own stable,
+// non-presentational identifier) are untouched -- only the free-text
+// display label is cleared.
+func (c *twoTurnTraceCapture) snapshot() []graphrank.ResolutionTraceEvent {
+	if len(c.events) == 0 {
+		return nil
+	}
+	events := append([]graphrank.ResolutionTraceEvent(nil), c.events...)
+	for i := range events {
+		events[i].Subject.Label = ""
+	}
+	return events
+}
+
 // kindCoverageFloorEvent returns the LAST captured "kind_coverage_floor"
 // event (CHAOS-4086/CHAOS-4038), the same last-wins rule finalDecisionEvent
 // applies and for the same reason: ResolveSubjects can resolve twice (the
@@ -1094,6 +1132,15 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 	if res == nil || trace == nil {
 		return
 	}
+	// CHAOS-4135: unconditional -- every row stages its own decisive call's
+	// full trace stream here, in memory only; the redaction pass at the end
+	// of TestChaos3742TwoTurnConfirmationReplay (twoTurnCaseResultIsAnomalous)
+	// clears it back to nil before the report is serialized unless this row
+	// is anomalous. Staging here rather than at each of the ~5 call sites
+	// makes this the ONE place every arm's own decisive-call capture lives,
+	// the same "single site, not five" reasoning SynthesisStatusOverrideUncommittedCount's
+	// own doc comment already applies to counting.
+	res.TraceEvents = trace.snapshot()
 	if event, ok := trace.finalDecisionEvent(); ok {
 		res.CommitGate = event.CommitGate
 		res.TiedStatisticalTop = event.TiedStatisticalTop
@@ -1468,6 +1515,85 @@ func TestTwoTurnTraceCapturePassTruncation(t *testing.T) {
 		term, question := trace.passTruncation()
 		if term || question {
 			t.Errorf("passTruncation() = (%v, %v), want (false, false) -- kind_coverage_floor is a THIRD, separate pass", term, question)
+		}
+	})
+}
+
+// TestTwoTurnTraceCaptureSnapshot (CHAOS-4135) pins snapshot()'s two
+// properties: nil in yields nil out (so an empty capture never turns into a
+// non-nil-but-empty slice that would defeat omitempty on the serialized
+// field), and a NON-nil result is an independent copy -- a later reset()+
+// Trace() on the SAME *twoTurnTraceCapture (runTwoTurnInferredTierArm's
+// baseline-then-hinted sequence, in particular) must never retroactively
+// mutate a snapshot a caller already stashed on an earlier row.
+func TestTwoTurnTraceCaptureSnapshot(t *testing.T) {
+	t.Parallel()
+	t.Run("empty capture snapshots to nil", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{}
+		if got := trace.snapshot(); got != nil {
+			t.Errorf("snapshot() = %#v, want nil", got)
+		}
+	})
+	t.Run("snapshot is independent of later mutation", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{{Stage: "decision", Outcome: "committed"}}}
+		baseline := trace.snapshot()
+		trace.reset()
+		trace.Trace(graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "ambiguous"})
+		if len(baseline) != 1 || baseline[0].Outcome != "committed" {
+			t.Errorf("baseline snapshot mutated by a later call: %+v", baseline)
+		}
+		hinted := trace.snapshot()
+		if len(hinted) != 1 || hinted[0].Outcome != "ambiguous" {
+			t.Errorf("hinted snapshot = %+v, want the later call's own event", hinted)
+		}
+	})
+	// CHAOS-4135 codex xhigh review (HIGH, confirmed): ResolutionTraceEvent's
+	// own doc comment claims Subject carries "never a label", but
+	// contextfabric.SubjectRef.Label has no such enforcement and DOES carry
+	// real content in production -- this function is what makes that
+	// content-safe once it reaches a persisted artifact, so this pin is
+	// load-bearing, not incidental.
+	t.Run("Subject.Label is stripped, Kind/CanonicalID survive", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{{
+			Stage: "corroboration",
+			Subject: contractsv1.ContextFabricSubjectRef{
+				Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-1", Label: "a real subject title from the corpus",
+			},
+		}}}
+		got := trace.snapshot()
+		if len(got) != 1 {
+			t.Fatalf("snapshot() returned %d events, want 1", len(got))
+		}
+		if got[0].Subject.Label != "" {
+			t.Errorf("Subject.Label = %q, want stripped to empty", got[0].Subject.Label)
+		}
+		if got[0].Subject.Kind != "work_item" || got[0].Subject.CanonicalID != "work_item:linear:CHAOS-1" {
+			t.Errorf("Subject Kind/CanonicalID = %+v, want untouched", got[0].Subject)
+		}
+	})
+}
+
+// TestTwoTurnResponderModel (CHAOS-4135) pins the fallback: unset (or
+// blank/whitespace-only) reads as the literal "ambient-default", never
+// empty -- an empty ResponderModel would be indistinguishable from the
+// real_api transport, which never populates it at all (see this field's
+// call site: gated on exchangeDir != "").
+func TestTwoTurnResponderModel(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		if got := twoTurnResponderModel(); got != "ambient-default" {
+			t.Errorf("twoTurnResponderModel() = %q, want %q", got, "ambient-default")
+		}
+	})
+	t.Run("blank", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_RESPONDER_MODEL", "   ")
+		if got := twoTurnResponderModel(); got != "ambient-default" {
+			t.Errorf("twoTurnResponderModel() = %q, want %q for a whitespace-only value", got, "ambient-default")
+		}
+	})
+	t.Run("set", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_RESPONDER_MODEL", "gpt-5.6-sol")
+		if got := twoTurnResponderModel(); got != "gpt-5.6-sol" {
+			t.Errorf("twoTurnResponderModel() = %q, want the explicit value", got)
 		}
 	})
 }
@@ -1992,6 +2118,18 @@ func twoTurnShardProvisioningMode(t *testing.T) string {
 	}
 }
 
+// twoTurnResponderModel (CHAOS-4135) reads ACR_TEST_TRIAL_RESPONDER_MODEL
+// -- see trialProvenance.ResponderModel's own doc comment
+// (generative_trial_live_test.go) for the provenance gap this closes and
+// why "ambient-default" is a deliberate placeholder rather than an attempt
+// to read codex's own actual resolved model.
+func twoTurnResponderModel() string {
+	if v := strings.TrimSpace(os.Getenv("ACR_TEST_TRIAL_RESPONDER_MODEL")); v != "" {
+		return v
+	}
+	return "ambient-default"
+}
+
 // twoTurnUnjustifiedShadowProbe computes the CHAOS-4062 trace-observability
 // fields for an "unjustified"-classified inferred commit: whether
 // kindInsensitivityProof was evaluated on the hinted call and its verdict
@@ -2149,6 +2287,47 @@ type twoTurnCaseResult struct {
 	// identical commit reached by two independent, kind-insensitive paths.
 	BaselineCommittedSubjects []twoTurnSubjectKindID `json:"baseline_committed_subjects,omitempty"`
 	HintedCommittedSubjects   []twoTurnSubjectKindID `json:"hinted_committed_subjects,omitempty"`
+	// ---------------------------------------------------------------
+	// CHAOS-4135 anomalous-row trace persistence
+	// ---------------------------------------------------------------
+	//
+	// THE BAR THIS EXISTS FOR: the shard-54 CHAOS-4117 diagnosis (2026-08-22)
+	// could narrow a mismatched inferred_tier pairing to "the hinted call
+	// committed, the paired no-hint baseline did not" -- BaselineCommittedSubjects
+	// above already proved that half -- but could not go one level deeper
+	// (WHY the two legs' own candidate pools/tie states diverged) without a
+	// raw ResolutionTraceEvent stream neither leg's row persisted. The
+	// harness already builds that full stream in-process for every call
+	// (twoTurnTraceCapture.events); this closes the gap between capturing it
+	// and being able to read it after the fact.
+	//
+	// TraceEvents is THIS row's own decisive call's full event stream (the
+	// same call CommitGate/TiedStatisticalTop/SearchTruncated/KindCoverage*
+	// above already read a narrow projection of -- see twoTurnStampDecision,
+	// which stamps both). BaselineTraceEvents (inferred_tier, non-window
+	// members only) is the SAME row's PAIRED no-hint baseline call's own
+	// stream, captured immediately after that call, before its own reset for
+	// the hinted call -- the SAME point BaselineCommittedSubjects' own
+	// baseline.SubjectResolution.Committed is read from (runTwoTurnInferredTierArm).
+	//
+	// NEITHER is populated unconditionally: twoTurnCaseResultIsAnomalous
+	// gates a redaction pass (TestChaos3742TwoTurnConfirmationReplay, run
+	// immediately before the report is serialized) that clears both back to
+	// nil on every row that does not trip one of this test's own
+	// zero-tolerance bars and is not an inferred_tier pairing classified
+	// "unjustified" -- a full per-call trace on every one of a run's ~800+
+	// rows is a standing cost this diagnostic exists to avoid, not to add.
+	//
+	// CORPUS-SAFE BY CONSTRUCTION, inherited from ResolutionTraceEvent's own
+	// doc comment (resolve.go): closed-vocabulary stage/gate/outcome
+	// strings, SHA-256 term hashes, counts, confidences, and bools only --
+	// never raw term or question text, by a rule that file calls having "no
+	// exception". The standing rule downstream is unchanged regardless: a
+	// persisted event's fields are for diagnosis in the raw JSON artifact,
+	// never quoted into Linear/PR/commit text -- mechanism and index only,
+	// as ever.
+	TraceEvents         []graphrank.ResolutionTraceEvent `json:"trace_events,omitempty"`
+	BaselineTraceEvents []graphrank.ResolutionTraceEvent `json:"baseline_trace_events,omitempty"`
 	// ---------------------------------------------------------------
 	// CHAOS-4086 instant-diagnosis fields
 	// ---------------------------------------------------------------
@@ -2351,6 +2530,94 @@ type twoTurnCaseResult struct {
 	Regime string `json:"turn1_regime,omitempty"`
 }
 
+// twoTurnCaseResultIsAnomalous (CHAOS-4135) reports whether res trips one of
+// this test's own zero-tolerance bars, or is an inferred_tier pairing this
+// run could not vouch for -- the exact population TraceEvents/
+// BaselineTraceEvents (above) are retained for; the redaction pass at the
+// tail of TestChaos3742TwoTurnConfirmationReplay clears both back to nil on
+// every row this reports false for, immediately before the report is
+// serialized.
+//
+// Mirrors the LITERAL per-row conditions the final gate loop
+// (TestChaos3742TwoTurnConfirmationReplay) already computes its aggregate
+// counts from (WrongCommitCount, FalseNoMatchCount,
+// SynthesisStatusOverrideUncommittedCount, InferredPairInvalidCount,
+// InferredUnjustifiedCount, window's own per-row WindowCommitCount and
+// WindowGatedCount contributions, the tier-routing proof loop, and a
+// mutation probe that ran without tripping) -- deliberately NOT re-derived
+// from those run-level totals, which cannot be mapped back to the ONE row
+// that caused them. See TestTwoTurnCaseResultIsAnomalous for the pin
+// proving each bar is covered.
+func twoTurnCaseResultIsAnomalous(res twoTurnCaseResult) bool {
+	if res.WrongCommit || res.FalseNoMatch || res.PairInvalid {
+		return true
+	}
+	if res.InferredClassification == "unjustified" {
+		return true
+	}
+	if res.SynthesisStatusOverrideFired &&
+		res.SynthesisStatusOverrideReason == string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted) {
+		return true
+	}
+	// window's own "ANY commit fails" bar (WindowCommitCount): mirrors the
+	// run-level counting block's own three guards -- inferred_tier arm,
+	// window member, a call that did not error (ArmInvalidReason=="" --
+	// an errored call never reaches a commit at all).
+	if res.Arm == string(twoTurnArmInferredTier) && res.Member == string(contractsv1.ContextFabricStructureNeedWindow) &&
+		res.ArmInvalidReason == "" && res.CommittedCount > 0 {
+		return true
+	}
+	// Tier-routing proof (codex xhigh review, MEDIUM, confirmed): mirrors
+	// the "Positive tier-routing proof" loop at the end of
+	// TestChaos3742TwoTurnConfirmationReplay -- every inferred_tier row
+	// that ran (ArmInvalidReason=="") must show the injected value routed
+	// to explicit_unattributed/inferred_default (window's own version:
+	// EffectiveEvidenceWindow.Provenance==inferred_default). A miss here
+	// is its own finding, independent of whether the row also committed
+	// correctly.
+	if res.Arm == string(twoTurnArmInferredTier) && res.ArmInvalidReason == "" && !res.TierRoutedCorrectly {
+		return true
+	}
+	// window's own CHAOS-4040 gate-signature bar (codex xhigh review,
+	// MEDIUM, confirmed): mirrors WindowGatedCount != WindowInferredTierRanCount
+	// -- the per-row shape that increments WindowGatedCount at its own call
+	// site is clarification_required + TierRoutedCorrectly + CommittedCount==0
+	// TOGETHER (the gate's own signature), not merely "committed nothing".
+	// A ran window row missing any of the three is exactly the population
+	// that mismatch bar exists to catch; overlaps the CommittedCount>0
+	// bar above for that one case, which is harmless (either check alone
+	// already reports true).
+	if res.Arm == string(twoTurnArmInferredTier) && res.Member == string(contractsv1.ContextFabricStructureNeedWindow) &&
+		res.ArmInvalidReason == "" &&
+		!(res.Turn2Status == string(contractsv1.ContextFabricInvestigationClarificationRequired) && res.TierRoutedCorrectly && res.CommittedCount == 0) {
+		return true
+	}
+	// A mutation probe that ran but did not trip (design brief's own
+	// fails-toward-fine discipline for that arm) -- MutationProbe is only
+	// ever non-empty on a mutation-arm row.
+	if res.MutationProbe != "" && !res.MutationTripped {
+		return true
+	}
+	return false
+}
+
+// twoTurnRedactNonAnomalousTraceEvents (CHAOS-4135) clears TraceEvents/
+// BaselineTraceEvents back to nil, in place, on every row
+// twoTurnCaseResultIsAnomalous reports false for -- called exactly once,
+// immediately before TestChaos3742TwoTurnConfirmationReplay serializes its
+// report, and extracted to its own function (rather than left inline at
+// that one call site) purely so it has a unit-test surface independent of
+// that function's full investigator/live-corpus machinery
+// (TestTwoTurnRedactNonAnomalousTraceEvents).
+func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
+	for i := range results {
+		if !twoTurnCaseResultIsAnomalous(results[i]) {
+			results[i].TraceEvents = nil
+			results[i].BaselineTraceEvents = nil
+		}
+	}
+}
+
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
 	// renames are otherwise invisible to a consumer parsing the JSON --
@@ -2536,6 +2803,30 @@ type twoTurnReport struct {
 	// cmd/acr-trial-merge-two-turn/main.go still had to gain both changes
 	// in the SAME change, the same "an undeclared field is dropped on
 	// decode" reason "11"/"12"/"13" already needed it for.
+	//
+	// "15" (CHAOS-4135, follow-up from the shard-54 CHAOS-4117 diagnosis,
+	// 2026-08-22, team-lead ruling "D-plus"): twoTurnCaseResult gained
+	// TraceEvents/BaselineTraceEvents -- the harness's already-captured
+	// per-call graphrank.ResolutionTraceEvent stream, persisted (not newly
+	// captured) for ANOMALOUS rows only (twoTurnCaseResultIsAnomalous: a row
+	// tripping one of this test's own zero-tolerance bars, or an
+	// inferred_tier pairing classified "unjustified") -- every other row has
+	// both redacted to nil immediately before serialization (see the
+	// redaction pass at this function's tail). Purely additive and
+	// conditionally empty: no merge arithmetic changes (Results concatenates
+	// verbatim), but the mirror in cmd/acr-trial-merge-two-turn/main.go
+	// still had to gain both fields in the SAME change for the same
+	// "an undeclared field is dropped on decode" reason every prior bump
+	// needed it for -- there as json.RawMessage rather than a full mirror of
+	// graphrank.ResolutionTraceEvent, since that tool never reads trace
+	// content (see its own doc comment on why).
+	//
+	// Same v15 bump, scope addition (team-lead, 2026-08-22, from lane-4118's
+	// CHAOS-4113 scoping): trialProvenance (generative_trial_live_test.go)
+	// also gained ResponderModel -- see that field's own doc comment for the
+	// provenance gap it closes (no artifact recorded which model actually
+	// answered a file-exchange run's calls). Purely additive; the mirror
+	// gained it too, for the same reason.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -3349,6 +3640,117 @@ func TestTwoTurnInferredClassification(t *testing.T) {
 	}
 }
 
+// TestTwoTurnCaseResultIsAnomalous (CHAOS-4135) pins every bar
+// twoTurnCaseResultIsAnomalous mirrors against the final gate loop
+// (TestChaos3742TwoTurnConfirmationReplay) -- one true case per zero-
+// tolerance bar, plus an ordinary row for each that must read false, so a
+// future gate added to that loop without a matching case here is visible as
+// a gap in this table, not a silent miss.
+func TestTwoTurnCaseResultIsAnomalous(t *testing.T) {
+	t.Parallel()
+	ordinary := twoTurnCaseResult{Index: 1, Member: "expected_kind", Arm: string(twoTurnArmPositive), CommittedCount: 1}
+	if twoTurnCaseResultIsAnomalous(ordinary) {
+		t.Errorf("ordinary row reported anomalous: %+v", ordinary)
+	}
+
+	tests := []struct {
+		name string
+		res  twoTurnCaseResult
+	}{
+		{"wrong_commit", twoTurnCaseResult{WrongCommit: true}},
+		{"false_no_match", twoTurnCaseResult{FalseNoMatch: true}},
+		{"pair_invalid", twoTurnCaseResult{PairInvalid: true}},
+		{"inferred_unjustified", twoTurnCaseResult{InferredClassification: "unjustified"}},
+		{
+			"synthesis_status_override_uncommitted",
+			twoTurnCaseResult{
+				SynthesisStatusOverrideFired:  true,
+				SynthesisStatusOverrideReason: string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted),
+			},
+		},
+		{
+			"window_any_commit",
+			twoTurnCaseResult{
+				Arm: string(twoTurnArmInferredTier), Member: string(contractsv1.ContextFabricStructureNeedWindow),
+				CommittedCount: 1,
+			},
+		},
+		{
+			"tier_routing_failure",
+			twoTurnCaseResult{Arm: string(twoTurnArmInferredTier), Member: "expected_kind", TierRoutedCorrectly: false},
+		},
+		{
+			"window_gate_signature_mismatch_wrong_status",
+			twoTurnCaseResult{
+				Arm: string(twoTurnArmInferredTier), Member: string(contractsv1.ContextFabricStructureNeedWindow),
+				Turn2Status: "no_match", TierRoutedCorrectly: true, CommittedCount: 0,
+			},
+		},
+		{"mutation_probe_ran_not_tripped", twoTurnCaseResult{MutationProbe: "remove_confirmation", MutationTripped: false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !twoTurnCaseResultIsAnomalous(tt.res) {
+				t.Errorf("twoTurnCaseResultIsAnomalous(%+v) = false, want true", tt.res)
+			}
+		})
+	}
+
+	// Narrowness checks: each bar's OWN non-triggering shape must not false-
+	// positive on an unrelated field.
+	notAnomalous := []struct {
+		name string
+		res  twoTurnCaseResult
+	}{
+		{"kind_insensitivity_attested is a justified outcome", twoTurnCaseResult{InferredClassification: "kind_insensitivity_attested"}},
+		{"baseline_equivalent is a justified outcome", twoTurnCaseResult{InferredClassification: "baseline_equivalent"}},
+		{"synthesis override fired but ordinary reason", twoTurnCaseResult{SynthesisStatusOverrideFired: true, SynthesisStatusOverrideReason: "clarification_unavailable"}},
+		{"window arm errored before any commit could happen", twoTurnCaseResult{
+			Arm: string(twoTurnArmInferredTier), Member: string(contractsv1.ContextFabricStructureNeedWindow),
+			ArmInvalidReason: "investigate error", CommittedCount: 0,
+		}},
+		{"non-window inferred_tier commit is not the window bar", twoTurnCaseResult{
+			Arm: string(twoTurnArmInferredTier), Member: "expected_kind", CommittedCount: 1, TierRoutedCorrectly: true,
+		}},
+		{"tier routing failure on a non-inferred_tier arm does not apply", twoTurnCaseResult{
+			Arm: string(twoTurnArmPositive), Member: "expected_kind", TierRoutedCorrectly: false,
+		}},
+		{"window row satisfying the full CHAOS-4040 gate signature", twoTurnCaseResult{
+			Arm: string(twoTurnArmInferredTier), Member: string(contractsv1.ContextFabricStructureNeedWindow),
+			Turn2Status: string(contractsv1.ContextFabricInvestigationClarificationRequired), TierRoutedCorrectly: true, CommittedCount: 0,
+		}},
+		{"mutation probe ran and tripped", twoTurnCaseResult{MutationProbe: "remove_confirmation", MutationTripped: true}},
+	}
+	for _, tt := range notAnomalous {
+		t.Run(tt.name, func(t *testing.T) {
+			if twoTurnCaseResultIsAnomalous(tt.res) {
+				t.Errorf("twoTurnCaseResultIsAnomalous(%+v) = true, want false", tt.res)
+			}
+		})
+	}
+}
+
+// TestTwoTurnRedactNonAnomalousTraceEvents (CHAOS-4135) is the redaction
+// pass's own pin: an anomalous row keeps both trace fields, an ordinary row
+// loses both, in place, over a mixed slice -- proving the pass does not
+// simply clear (or simply keep) everything regardless of content.
+func TestTwoTurnRedactNonAnomalousTraceEvents(t *testing.T) {
+	t.Parallel()
+	events := []graphrank.ResolutionTraceEvent{{Stage: "decision", Outcome: "committed"}}
+	results := []twoTurnCaseResult{
+		{Index: 1, WrongCommit: true, TraceEvents: events, BaselineTraceEvents: events},
+		{Index: 2, TraceEvents: events, BaselineTraceEvents: events},
+	}
+	twoTurnRedactNonAnomalousTraceEvents(results)
+
+	if len(results[0].TraceEvents) == 0 || len(results[0].BaselineTraceEvents) == 0 {
+		t.Errorf("anomalous row (index 1) had its trace events redacted: %+v", results[0])
+	}
+	if results[1].TraceEvents != nil || results[1].BaselineTraceEvents != nil {
+		t.Errorf("ordinary row (index 2) kept its trace events: %+v", results[1])
+	}
+}
+
 // TestWindowBoundsAgree covers windowBoundsAgree's own doc comment cases
 // (team-lead verification request, 2026-08-21): all_time (nil/nil) must
 // agree with ZERO tolerance -- checked here by passing tolerance=0, so a
@@ -4030,12 +4432,32 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			// bucket (InferredPairInvalidCount's own doc comment).
 			res.PairInvalid = true
 			twoTurnStampArmFailure(&res, "baseline investigate error: "+contextFabricRejectionClass(baselineErr), baselineErr)
+			// CHAOS-4135 (codex xhigh review, MEDIUM, confirmed): PairInvalid
+			// makes this row anomalous (twoTurnCaseResultIsAnomalous), but
+			// this return predates twoTurnStampDecision -- without this,
+			// whatever partial trace the baseline call DID produce before
+			// erroring would be silently discarded, and this row would
+			// serialize with a nil BaselineTraceEvents despite tripping the
+			// exact bar TraceEvents exists to explain. Whatever c.events
+			// holds at the moment of the error (possibly nothing, if it
+			// failed before resolution ever ran) is exactly as informative
+			// here as on the success path just below.
+			if trace != nil {
+				res.BaselineTraceEvents = trace.snapshot()
+			}
 			return res
 		}
 		if trace != nil {
 			// Captured BEFORE the hinted call's own reset below -- the
 			// baseline's decision event would otherwise be lost.
 			baselineDecision, _ = trace.finalDecisionEvent()
+			// CHAOS-4135: same "before the reset" urgency, for the SAME
+			// reason -- staged unconditionally, redacted later by
+			// twoTurnCaseResultIsAnomalous if this pairing turns out
+			// ordinary. See TraceEvents/BaselineTraceEvents' own doc
+			// comment (twoTurnCaseResult) for why this leg's full stream,
+			// not just its decision event, is worth keeping around.
+			res.BaselineTraceEvents = trace.snapshot()
 		}
 	}
 
@@ -4077,6 +4499,16 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		// unevaluable pair.
 		if !isWindow {
 			res.PairInvalid = true
+		}
+		// CHAOS-4135 (codex xhigh review, MEDIUM, confirmed): same reason as
+		// the baseline error branch above -- this return predates
+		// twoTurnStampDecision, so without this a PairInvalid row (the
+		// non-window case) would lose whatever partial trace the hinted
+		// call produced before erroring. Captured unconditionally (window
+		// included): harmless there since window's own error path never
+		// trips the anomalous predicate, and the redaction pass clears it.
+		if trace != nil {
+			res.TraceEvents = trace.snapshot()
 		}
 		return res
 	}
@@ -4683,6 +5115,15 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 			// rather than a false pass.
 			res.Turn2Status = "error:" + contextFabricRejectionClass(err)
 			twoTurnStampArmFailure(&res, "investigate error (inconclusive, not counted as a trip): "+contextFabricRejectionClass(err), err)
+			// CHAOS-4135 (codex xhigh review, MEDIUM, confirmed): res.MutationTripped
+			// stays at its zero value (false) on this path, and MutationProbe
+			// is already non-empty (set above) -- twoTurnCaseResultIsAnomalous
+			// reports this row anomalous (a probe that "ran" without
+			// tripping), but this return predates twoTurnStampDecision.
+			// Same reasoning as the inferred_tier arm's own error branches.
+			if trace != nil {
+				res.TraceEvents = trace.snapshot()
+			}
 			return res
 		}
 		res.Turn2Status = string(result.Status)
@@ -4929,15 +5370,22 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// finding #10: hard-coding "real_api" while a file-exchange runtime is
 	// wired gives the acceptance artifact false provenance).
 	transportLabel := "real_api"
+	// responderModel (CHAOS-4135): empty for real_api -- that transport
+	// never shells out to a responder script at all, so there is nothing
+	// to attribute an answer to; see trialProvenance.ResponderModel's own
+	// doc comment.
+	var responderModel string
 	if exchangeDir != "" {
 		transportLabel = "file_exchange"
+		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "14",
+		ReportSchemaVersion: "15",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 			AnchorMembershipOffersEnabled: cfg.AnchorMembershipOffersEnabled,
+			ResponderModel:                responderModel,
 			// ExecutionShape (CHAOS-4033 follow-up, team-lead ruling
 			// 2026-08-21): defaults to "sequential" here -- an unsharded run
 			// WRITES this explicitly rather than relying on absence-means-
@@ -5570,6 +6018,18 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if report.Provenance.ExecutionShape == "parallel" {
 		report.Provenance.Sharding.CaseIndices = twoTurnCaseIndicesFromResults(report.Results)
 	}
+
+	// CHAOS-4135: the redaction pass. Every row staged its own decisive
+	// call's (and, for inferred_tier, its paired baseline's) full trace
+	// stream unconditionally as it was produced (twoTurnStampDecision,
+	// runTwoTurnInferredTierArm) -- immediately before serialization,
+	// exactly ONCE, every row that is not anomalous
+	// (twoTurnCaseResultIsAnomalous) has both cleared back to nil. Run here
+	// rather than at each arm's own return so it applies uniformly
+	// regardless of which of the four arms produced the row, mirroring
+	// SynthesisStatusOverrideUncommittedCount's own "derived from results,
+	// not accumulated in the loop" discipline immediately above.
+	twoTurnRedactNonAnomalousTraceEvents(report.Results)
 
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
