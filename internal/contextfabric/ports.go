@@ -338,6 +338,9 @@ type StructureOfferMaterial struct {
 	// "JSON fields may remain identical"), so this bool is the ONLY signal
 	// that distinguishes the two on this struct.
 	AnchorOptionsRequireV2 bool
+	// CandidateOptions (CHAOS-4012) fires INDEPENDENTLY of KindOptions above
+	// -- see ContextFabricStructureNeedSubjectCandidate's own doc comment.
+	CandidateOptions []contractsv1.ContextFabricCandidateOption
 }
 
 type GraphDiscoveryRequest struct {

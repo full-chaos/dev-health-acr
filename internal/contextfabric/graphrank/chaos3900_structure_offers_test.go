@@ -132,6 +132,232 @@ func TestKindOfferMaterial_NonOfferableKindsAreIgnoredForDisambiguation(t *testi
 	}
 }
 
+// TestCandidateOfferMaterial_EmptyPoolOffersNothing pins the "genuinely
+// nothing to rank" case -- distinct from the cardinality question
+// kindOfferMaterial's own gate asks; candidateOfferMaterial has no
+// cardinality gate at all, only "is there anything to rank."
+func TestCandidateOfferMaterial_EmptyPoolOffersNothing(t *testing.T) {
+	t.Parallel()
+	material, diag := candidateOfferMaterial(nil, 0)
+	if len(material.Missing) != 0 || len(material.CandidateOptions) != 0 {
+		t.Errorf("candidateOfferMaterial(nil, 0) = %+v, want empty", material)
+	}
+	if diag != (candidateOfferDiagnostics{}) {
+		t.Errorf("diag = %+v, want the zero value", diag)
+	}
+}
+
+// TestCandidateOfferMaterial_CommittedSuppressesTheOffer pins chris's own
+// precondition: candidate-list fires ONLY when nothing committed, mirroring
+// kindOfferMaterial/anchorOfferMaterial's own "nothing committed" scoping
+// (CHAOS-3900 P1.C's own doc comment) -- a committed resolution has nothing
+// left to disambiguate on ANY axis.
+func TestCandidateOfferMaterial_CommittedSuppressesTheOffer(t *testing.T) {
+	t.Parallel()
+	candidates := []contextfabric.SubjectCandidate{
+		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
+	}
+	material, diag := candidateOfferMaterial(candidates, 1)
+	if len(material.Missing) != 0 || len(material.CandidateOptions) != 0 {
+		t.Errorf("candidateOfferMaterial(candidates, committedCount=1) = %+v, want empty", material)
+	}
+	if diag != (candidateOfferDiagnostics{}) {
+		t.Errorf("diag = %+v, want the zero value", diag)
+	}
+}
+
+// TestCandidateOfferMaterial_SingleCandidateIsAListOfOne pins chris's own
+// framing: "a single candidate is a list of one" -- the exact "1 distinct
+// kind, cardinality-suppressed" shape kindOfferMaterial refuses to offer on
+// its own axis must still be offered here, unconditionally on kind count.
+func TestCandidateOfferMaterial_SingleCandidateIsAListOfOne(t *testing.T) {
+	t.Parallel()
+	candidates := []contextfabric.SubjectCandidate{
+		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
+	}
+	material, diag := candidateOfferMaterial(candidates, 0)
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectCandidate {
+		t.Fatalf("material.Missing = %v, want exactly [subject_candidate]", material.Missing)
+	}
+	if len(material.CandidateOptions) != 1 || material.CandidateOptions[0].CanonicalID != "wi_1" {
+		t.Fatalf("material.CandidateOptions = %+v, want exactly one entry naming wi_1", material.CandidateOptions)
+	}
+	if diag.CandidateOfferCount != 1 || diag.OfferKind != "candidate" {
+		t.Errorf("diag = %+v, want {CandidateOfferCount: 1, OfferKind: \"candidate\"}", diag)
+	}
+}
+
+// TestCandidateOfferMaterial_CapsAtTopN pins candidateOfferTopN=5: a pool
+// bigger than the cap contributes only its first N candidates, in the SAME
+// order the (already-ranked) pool arrived in -- this function never
+// re-sorts.
+func TestCandidateOfferMaterial_CapsAtTopN(t *testing.T) {
+	t.Parallel()
+	var candidates []contextfabric.SubjectCandidate
+	for i := 0; i < 8; i++ {
+		candidates = append(candidates, candidateOf(contractsv1.ContextFabricSubjectWorkItem, fmt.Sprintf("wi_%d", i)))
+	}
+	material, diag := candidateOfferMaterial(candidates, 0)
+	if len(material.CandidateOptions) != candidateOfferTopN {
+		t.Fatalf("len(material.CandidateOptions) = %d, want %d (candidateOfferTopN)", len(material.CandidateOptions), candidateOfferTopN)
+	}
+	if diag.CandidateOfferCount != candidateOfferTopN {
+		t.Errorf("diag.CandidateOfferCount = %d, want %d", diag.CandidateOfferCount, candidateOfferTopN)
+	}
+	for i, opt := range material.CandidateOptions {
+		want := fmt.Sprintf("wi_%d", i)
+		if opt.CanonicalID != want {
+			t.Errorf("material.CandidateOptions[%d].CanonicalID = %q, want %q (rank order preserved, never re-sorted)", i, opt.CanonicalID, want)
+		}
+	}
+}
+
+// TestCandidateOfferMaterial_LabelAndOfferSource pins the minted option's
+// own field contents -- Label is the candidate's own Subject.Label
+// verbatim (candidateOfferLabel's own "show the entity's own name"
+// discipline), OfferSource is always engine (this axis has no prior/Bridge
+// concept).
+func TestCandidateOfferMaterial_LabelAndOfferSource(t *testing.T) {
+	t.Parallel()
+	candidates := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repoA", Label: "full-chaos/widget-service"}},
+	}
+	material, _ := candidateOfferMaterial(candidates, 0)
+	if len(material.CandidateOptions) != 1 {
+		t.Fatalf("len(material.CandidateOptions) = %d, want 1", len(material.CandidateOptions))
+	}
+	opt := material.CandidateOptions[0]
+	if opt.Label != "full-chaos/widget-service" {
+		t.Errorf("opt.Label = %q, want the candidate's own Subject.Label verbatim", opt.Label)
+	}
+	if opt.Kind != contractsv1.ContextFabricSubjectRepository {
+		t.Errorf("opt.Kind = %q, want repository", opt.Kind)
+	}
+	if opt.OfferSource != contractsv1.ContextFabricStructureOfferEngine {
+		t.Errorf("opt.OfferSource = %q, want engine", opt.OfferSource)
+	}
+}
+
+// TestDistinctCandidateKinds_DedupedFirstOccurrenceOrder pins the
+// call-boundary telemetry helper (CHAOS-4012 v22, team-lead ruling
+// 2026-08-23): deduped, first-occurrence order, string-valued.
+func TestDistinctCandidateKinds_DedupedFirstOccurrenceOrder(t *testing.T) {
+	t.Parallel()
+	candidates := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "wi_1"}},
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repo_1"}},
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "wi_2"}},
+	}
+	got := distinctCandidateKinds(candidates)
+	want := []string{"work_item", "repository"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("distinctCandidateKinds() = %v, want %v", got, want)
+	}
+}
+
+// TestDistinctCandidateKinds_EmptyPoolReturnsNil pins the empty case: no
+// candidates means nothing survived to this boundary, distinguishable from
+// a populated-but-filtered-to-nothing result.
+func TestDistinctCandidateKinds_EmptyPoolReturnsNil(t *testing.T) {
+	t.Parallel()
+	if got := distinctCandidateKinds(nil); got != nil {
+		t.Errorf("distinctCandidateKinds(nil) = %v, want nil", got)
+	}
+}
+
+// TestUnionCandidatesForOffer_NoOverlapConcatenates is the ordinary case:
+// disjoint subjects, resolutionCandidates first, coverageCandidates after,
+// in each side's own order.
+func TestUnionCandidatesForOffer_NoOverlapConcatenates(t *testing.T) {
+	t.Parallel()
+	resolutionCandidates := []contextfabric.SubjectCandidate{candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1")}
+	coverageCandidates := []contextfabric.SubjectCandidate{candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1")}
+	got := unionCandidatesForOffer(resolutionCandidates, coverageCandidates)
+	want := []contextfabric.SubjectCandidate{
+		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
+		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+	}
+	if len(got) != len(want) || got[0].Subject.CanonicalID != want[0].Subject.CanonicalID || got[1].Subject.CanonicalID != want[1].Subject.CanonicalID {
+		t.Errorf("unionCandidatesForOffer() = %+v, want %+v", got, want)
+	}
+}
+
+// TestUnionCandidatesForOffer_OverlapDedupesBySubject is the codex xhigh R2
+// regression pin (2026-08-23, NEW HIGH): a coverage-floor find that SURVIVED
+// ResolveFromMergedCandidatesWithGate's own final truncation appears in
+// BOTH resolutionCandidates (the ranked pool) and coverageCandidates
+// (applyKindCoverageFloor's own `added` return) -- see this function's own
+// doc comment for the mechanism. A naive concatenation would emit that
+// subject TWICE, which candidateOfferMaterial would then turn into two
+// CandidateOptions minting the SAME deterministic receipt id, failing
+// structure.go's uniqueness validation. This pins that the union instead
+// contains the subject exactly ONCE.
+func TestUnionCandidatesForOffer_OverlapDedupesBySubject(t *testing.T) {
+	t.Parallel()
+	// codex xhigh R3 (2026-08-23, LOW test-gap note): the resolution-side
+	// and coverage-side copies carry DIFFERENT Label values -- same subject
+	// key, different content -- so this proves resolution.Candidates' own
+	// metadata wins the collision, not merely that object identity happens
+	// to match.
+	resolutionSideCopy := candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1")
+	resolutionSideCopy.Subject.Label = "resolution-side label"
+	coverageSideCopy := candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1")
+	coverageSideCopy.Subject.Label = "coverage-side label"
+	resolutionCandidates := []contextfabric.SubjectCandidate{
+		resolutionSideCopy,
+		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
+	}
+	// The SAME subject key, also returned by applyKindCoverageFloor's own
+	// `added` -- exactly the overlap the doc comment describes.
+	coverageCandidates := []contextfabric.SubjectCandidate{coverageSideCopy}
+
+	got := unionCandidatesForOffer(resolutionCandidates, coverageCandidates)
+	if len(got) != 2 {
+		t.Fatalf("unionCandidatesForOffer() = %+v (len %d), want exactly 2 -- the overlapping subject must appear once", got, len(got))
+	}
+	var wi1 *contextfabric.SubjectCandidate
+	count := 0
+	for i, c := range got {
+		if c.Subject.Kind == contractsv1.ContextFabricSubjectWorkItem && c.Subject.CanonicalID == "wi_1" {
+			count++
+			wi1 = &got[i]
+		}
+	}
+	if count != 1 {
+		t.Fatalf("wi_1 appears %d times in unionCandidatesForOffer(), want exactly 1", count)
+	}
+	if wi1.Subject.Label != "resolution-side label" {
+		t.Errorf("surviving wi_1 label = %q, want the resolution-side copy's own label -- resolution.Candidates must win a collision, never coverageCandidates", wi1.Subject.Label)
+	}
+}
+
+// TestUnionCandidatesForOffer_DroppedCoverageFindStillIncluded is
+// CHAOS-4038 finding 1's own case, still exercised through the extracted
+// helper: a coverage-floor find that truncation DROPPED from
+// resolutionCandidates entirely (present in coverageCandidates only) must
+// still reach the union.
+func TestUnionCandidatesForOffer_DroppedCoverageFindStillIncluded(t *testing.T) {
+	t.Parallel()
+	resolutionCandidates := []contextfabric.SubjectCandidate{candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1")}
+	droppedFind := candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_dropped")
+	got := unionCandidatesForOffer(resolutionCandidates, []contextfabric.SubjectCandidate{droppedFind})
+	if len(got) != 2 {
+		t.Fatalf("unionCandidatesForOffer() = %+v, want 2 -- the dropped coverage find must still be included", got)
+	}
+	if got[1].Subject.CanonicalID != "pr_dropped" {
+		t.Errorf("unionCandidatesForOffer()[1] = %+v, want the dropped coverage find", got[1])
+	}
+}
+
+// TestUnionCandidatesForOffer_EmptyInputsReturnEmpty pins the zero-value
+// boundary: no panics, a non-nil-but-empty slice either way.
+func TestUnionCandidatesForOffer_EmptyInputsReturnEmpty(t *testing.T) {
+	t.Parallel()
+	if got := unionCandidatesForOffer(nil, nil); len(got) != 0 {
+		t.Errorf("unionCandidatesForOffer(nil, nil) = %+v, want empty", got)
+	}
+}
+
 func poolOf(candidates ...contextfabric.SubjectCandidate) map[string]contextfabric.SubjectCandidate {
 	pool := make(map[string]contextfabric.SubjectCandidate, len(candidates))
 	for _, c := range candidates {
@@ -450,9 +676,14 @@ func TestResolveSubjects_AnchorAndHandleOffersEndToEnd(t *testing.T) {
 		t.Fatalf("resolution.Committed = %#v, want NOTHING committed: two terms disagree on the anchor, genuinely ambiguous", resolution.Committed)
 	}
 
+	// CHAOS-4012: subject_candidate joins Missing here too -- it fires
+	// independently of kind-pick (nothing committed, pool non-empty is the
+	// whole precondition), so "kind is unambiguous" no longer means
+	// "nothing else is offered."
 	wantMissing := map[contractsv1.ContextFabricStructureNeedKind]bool{
-		contractsv1.ContextFabricStructureNeedSubjectAnchor: true,
-		contractsv1.ContextFabricStructureNeedSubjectHandle: true,
+		contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
+		contractsv1.ContextFabricStructureNeedSubjectHandle:    true,
+		contractsv1.ContextFabricStructureNeedSubjectCandidate: true,
 	}
 	if len(material.Missing) != len(wantMissing) {
 		t.Fatalf("material.Missing = %v, want exactly %v (kind is unambiguous here: only repositories are in the pool)", material.Missing, wantMissing)
@@ -479,6 +710,18 @@ func TestResolveSubjects_AnchorAndHandleOffersEndToEnd(t *testing.T) {
 	}
 	if material.HandleOptions[0].Value != "532" || material.HandleOptions[0].Kind != contractsv1.ContextFabricSubjectPullRequest {
 		t.Errorf("material.HandleOptions[0] = %+v, want value=532 kind=pull_request", material.HandleOptions[0])
+	}
+	// CHAOS-4012: candidate-list fired too -- both repoA and repoB are
+	// ranked candidates in the (uncommitted) pool.
+	if len(material.CandidateOptions) != 2 {
+		t.Fatalf("len(material.CandidateOptions) = %d, want 2", len(material.CandidateOptions))
+	}
+	seenCandidates := map[string]bool{}
+	for _, opt := range material.CandidateOptions {
+		seenCandidates[opt.CanonicalID] = true
+	}
+	if !seenCandidates["repoA"] || !seenCandidates["repoB"] {
+		t.Errorf("material.CandidateOptions = %+v, want repoA AND repoB", material.CandidateOptions)
 	}
 }
 

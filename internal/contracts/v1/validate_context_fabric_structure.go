@@ -14,6 +14,9 @@ func hasAnchorReceiptPrefix(id string) bool {
 func hasHandleReceiptPrefix(id string) bool {
 	return hasPrefixLen(id, ContextFabricHandleOptionReceiptPrefix)
 }
+func hasCandidateReceiptPrefix(id string) bool {
+	return hasPrefixLen(id, ContextFabricCandidateOptionReceiptPrefix)
+}
 
 func hasPrefixLen(id, prefix string) bool {
 	return len(id) >= len(prefix) && id[:len(prefix)] == prefix
@@ -28,10 +31,11 @@ func hasPrefixLen(id, prefix string) bool {
 // -- e.g. a kindr_ id inside prior_anchor_receipts, or any of the four
 // inside prior_subject_receipts.
 var contextFabricStructureReceiptPrefixCheckers = map[string]func(string) bool{
-	ContextFabricKindOptionReceiptPrefix:   hasKindReceiptPrefix,
-	ContextFabricAnchorOptionReceiptPrefix: hasAnchorReceiptPrefix,
-	ContextFabricHandleOptionReceiptPrefix: hasHandleReceiptPrefix,
-	ContextFabricWindowOptionReceiptPrefix: hasWindowReceiptPrefix,
+	ContextFabricKindOptionReceiptPrefix:      hasKindReceiptPrefix,
+	ContextFabricAnchorOptionReceiptPrefix:    hasAnchorReceiptPrefix,
+	ContextFabricHandleOptionReceiptPrefix:    hasHandleReceiptPrefix,
+	ContextFabricWindowOptionReceiptPrefix:    hasWindowReceiptPrefix,
+	ContextFabricCandidateOptionReceiptPrefix: hasCandidateReceiptPrefix,
 }
 
 // validateStructureReceiptField validates one prior_*_receipts field
@@ -144,6 +148,28 @@ func (o ContextFabricHandleOption) Validate() error {
 	return nil
 }
 
+func (o ContextFabricCandidateOption) Validate() error {
+	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasCandidateReceiptPrefix(o.ReceiptID) {
+		return fmt.Errorf("candidate option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricCandidateOptionReceiptPrefix)
+	}
+	if !stringLengthBetween(o.OptionID, 1, 256) || !stringLengthBetween(o.Label, 1, 200) {
+		return fmt.Errorf("candidate option option_id or label violates v1 bounds")
+	}
+	if !validContextFabricSubjectKind(o.Kind) {
+		return fmt.Errorf("candidate option kind is invalid")
+	}
+	if !stringLengthBetween(o.CanonicalID, 1, 256) {
+		return fmt.Errorf("candidate option canonical_id violates v1 bounds")
+	}
+	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
+		return fmt.Errorf("candidate option offer_source is invalid")
+	}
+	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
+		return fmt.Errorf("candidate option prior_version_id or prior_entry_id violates v1 bounds")
+	}
+	return nil
+}
+
 func (g ContextFabricAcceptedGrammar) Validate() error {
 	if !ValidContextFabricStructureNeedKind(g.Member) {
 		return fmt.Errorf("accepted grammar member is invalid")
@@ -180,11 +206,12 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		len(n.AnchorOptions) > contextFabricStructureNeedsMaxOptions ||
 		len(n.HandleOptions) > contextFabricStructureNeedsMaxOptions ||
 		len(n.WindowOptions) > contextFabricStructureNeedsMaxOptions ||
-		len(n.AcceptedGrammars) > contextFabricStructureNeedsMaxOptions {
+		len(n.AcceptedGrammars) > contextFabricStructureNeedsMaxOptions ||
+		len(n.CandidateOptions) > contextFabricStructureNeedsMaxOptions {
 		return fmt.Errorf("structure needs offer lists violate v1 bounds")
 	}
-	seenReceipt := make(map[string]struct{}, len(n.KindOptions)+len(n.AnchorOptions)+len(n.HandleOptions)+len(n.WindowOptions))
-	seenOption := make(map[string]struct{}, len(n.KindOptions)+len(n.AnchorOptions)+len(n.HandleOptions)+len(n.WindowOptions))
+	seenReceipt := make(map[string]struct{}, len(n.KindOptions)+len(n.AnchorOptions)+len(n.HandleOptions)+len(n.WindowOptions)+len(n.CandidateOptions))
+	seenOption := make(map[string]struct{}, len(n.KindOptions)+len(n.AnchorOptions)+len(n.HandleOptions)+len(n.WindowOptions)+len(n.CandidateOptions))
 	addUnique := func(receiptID, optionID string) error {
 		if _, exists := seenReceipt[receiptID]; exists {
 			return fmt.Errorf("structure needs option receipt_id must be unique across every offer list")
@@ -226,6 +253,14 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		}
 		if err := addUnique(opt.ReceiptID, opt.OptionID); err != nil {
 			return fmt.Errorf("window_options: %w", err)
+		}
+	}
+	for _, opt := range n.CandidateOptions {
+		if err := opt.Validate(); err != nil {
+			return fmt.Errorf("candidate_options: %w", err)
+		}
+		if err := addUnique(opt.ReceiptID, opt.OptionID); err != nil {
+			return fmt.Errorf("candidate_options: %w", err)
 		}
 	}
 	for _, grammar := range n.AcceptedGrammars {

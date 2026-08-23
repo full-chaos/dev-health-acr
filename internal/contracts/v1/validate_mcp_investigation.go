@@ -64,6 +64,12 @@ func (r MCPInvestigateQuestionRequest) Validate() error {
 	if err := validateStructureReceiptField("prior_window_receipts", r.PriorWindowReceipts, ContextFabricWindowOptionReceiptPrefix); err != nil {
 		return err
 	}
+	// CHAOS-4012: prior_candidate_receipts is this surface's own candr_
+	// twin of the four fields above -- same tool-boundary validation
+	// discipline.
+	if err := validateStructureReceiptField("prior_candidate_receipts", r.PriorCandidateReceipts, ContextFabricCandidateOptionReceiptPrefix); err != nil {
+		return err
+	}
 	if len(r.ExpectedKinds) > ContextFabricExpectedKindsMaxCount {
 		return fmt.Errorf("investigate_question expected_kinds exceeds v1 bounds")
 	}

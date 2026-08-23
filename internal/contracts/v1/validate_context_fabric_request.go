@@ -65,6 +65,10 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 	if err := validateStructureReceiptField("prior_handle_receipts", r.PriorHandleReceipts, ContextFabricHandleOptionReceiptPrefix); err != nil {
 		return err
 	}
+	// CHAOS-4012: the fifth structure-receipt field, same shared shape.
+	if err := validateStructureReceiptField("prior_candidate_receipts", r.PriorCandidateReceipts, ContextFabricCandidateOptionReceiptPrefix); err != nil {
+		return err
+	}
 	// CHAOS-3972 P3 (design brief §2.3): explicit structure fields, bounded
 	// the same order-of-magnitude as their receipt counterparts.
 	if len(r.ExpectedKinds) > ContextFabricExpectedKindsMaxCount {

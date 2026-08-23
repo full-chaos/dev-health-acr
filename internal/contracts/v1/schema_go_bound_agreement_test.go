@@ -173,6 +173,9 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.StructureNeeds.properties.handle_options.maxItems":    contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeeds.properties.window_options.maxItems":    contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeeds.properties.accepted_grammars.maxItems": contextFabricStructureNeedsMaxOptions,
+		// CHAOS-4012: candidate_options shares the SAME bound as every
+		// other StructureNeeds offer list above.
+		"common#$defs.StructureNeeds.properties.candidate_options.maxItems": contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeeds.properties.missing.maxItems":           ContextFabricStructureNeedKindCount,
 		"common#$defs.StructureNeeds.properties.missing.minItems":           1,
 		"common#$defs.HandleOption.properties.value.minLength":              1,
@@ -199,6 +202,7 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.StructureNeedsV2.properties.handle_options.maxItems":        contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeedsV2.properties.window_options.maxItems":        contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeedsV2.properties.accepted_grammars.maxItems":     contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.candidate_options.maxItems":     contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeedsV2.properties.missing.maxItems":               ContextFabricStructureNeedKindCount,
 		"common#$defs.StructureNeedsV2.properties.missing.minItems":               1,
 		"common#$defs.HandleOption.properties.source_column.minLength":            1,

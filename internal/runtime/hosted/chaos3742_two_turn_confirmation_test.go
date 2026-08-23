@@ -1198,6 +1198,43 @@ func (c *twoTurnTraceCapture) poolContainsKind(kind string) bool {
 	return false
 }
 
+// boundaryContainsKind (CHAOS-4012 v22, team-lead ruling 2026-08-23,
+// re-smoke follow-up) is poolContainsKind's call-boundary-scoped twin: it
+// reads the kind_offer event's own KindOfferBoundaryKinds -- the distinct
+// kinds present in the EXACT slice kindOfferMaterial/candidateOfferMaterial
+// read at their shared call boundary (resolve.go) -- via the SAME
+// last-event-wins kindOfferEvent() reader every other kind_offer field
+// already uses.
+//
+// poolContainsKind reads "corroboration" instead, emitted for the FULL
+// merged pool BEFORE ResolveFromMergedCandidatesWithGate's own final
+// ranked-set truncation -- so it over-reports presence relative to what
+// kindOfferMaterial/candidateOfferMaterial actually see: a candidate can
+// corroborate early and still be gone from kindOfferCandidates by the time
+// this stage fires (truncated upstream, e.g. by a small MaxSubjectCandidates
+// already full of higher-confidence other-kind candidates). This function
+// answers the narrower, boundary-scoped question instead: distinguishing
+// "genuinely absent at the boundary -- candidate-list cannot fix this, a
+// CHAOS-4038 upstream-truncation question" from "present at the boundary,
+// still not ranked into CandidateOptions -- an offer-layer question,
+// CHAOS-4012's own scope." An empty kind always reports false, same as
+// poolContainsKind.
+func (c *twoTurnTraceCapture) boundaryContainsKind(kind string) bool {
+	if kind == "" {
+		return false
+	}
+	event, ok := c.kindOfferEvent()
+	if !ok {
+		return false
+	}
+	for _, boundaryKind := range event.KindOfferBoundaryKinds {
+		if boundaryKind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // censusCount (CHAOS-4120) sums CensusCount across every "evidence_probe"
 // event the captured call traced -- the per-kind row count evidence_probe
 // carries (brief §1.3(3), "per-kind, never aggregated"), aggregated here
@@ -1603,6 +1640,10 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 		res.KindOfferExplicitHintCount = event.KindOfferExplicitHintCount
 		res.KindOfferDistinctKindCount = event.KindOfferDistinctKindCount
 		res.KindOfferSuppressedByCardinality = event.KindOfferSuppressedByCardinality
+		// CHAOS-4012 v22: the candidate-list axis's own pair, same
+		// unconditional last-event-wins reader as the kind-pick fields above.
+		res.CandidateOfferCount = event.KindOfferCandidateOfferCount
+		res.OfferKind = event.KindOfferOfferKind
 	}
 	// CHAOS-4103: folded (severity-gated), NOT set unconditionally -- by the
 	// time this is called, an EARLIER call's override may already have been
@@ -1769,13 +1810,30 @@ type twoTurnTurn1Facts struct {
 	KindOfferExplicitHintCount       int
 	KindOfferDistinctKindCount       int
 	KindOfferSuppressedByCardinality bool
-	TermSearchTruncated              bool
-	QuestionSearchTruncated          bool
+	// CandidateOfferCount/OfferKind (CHAOS-4012 v22) mirror the same
+	// kind_offer trace stage's candidate-list axis pair, read off turn 1's
+	// own kindOfferMaterial call.
+	CandidateOfferCount     int
+	OfferKind               string
+	TermSearchTruncated     bool
+	QuestionSearchTruncated bool
 	// ExpectedInPool (CHAOS-4038's exact question) is poolContainsKind
 	// evaluated against THIS case's own oracle expected kind -- "in the
 	// pool but never offered" (true) versus "never retrieved at all"
 	// (false).
 	ExpectedInPool bool
+	// ExpectedKindAtOfferBoundary (CHAOS-4012 v22, team-lead ruling
+	// 2026-08-23, re-smoke follow-up) is boundaryContainsKind evaluated
+	// against THIS case's own oracle expected kind -- ExpectedInPool's own
+	// call-boundary-scoped refinement, needed because ExpectedInPool
+	// over-reports: it is trace-wide ("corroboration," the full merged pool
+	// before final truncation), while this reads the EXACT slice
+	// kindOfferMaterial/candidateOfferMaterial actually read. Separates
+	// "present at the boundary, still not ranked into CandidateOptions" (an
+	// offer-layer question, CHAOS-4012's own scope -- candidate-list CAN fix
+	// this) from "already absent at the boundary" (upstream truncation
+	// already lost it -- candidate-list reads the SAME slice, so it cannot).
+	ExpectedKindAtOfferBoundary bool
 	// AnchorOptionsCount/HandleOptionsCount are turn 1's own
 	// StructureNeeds.AnchorOptions/HandleOptions counts, zero when turn 1
 	// carried no StructureNeeds at all (a window-only disclosure). They
@@ -1923,9 +1981,12 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 		facts.KindOfferExplicitHintCount = event.KindOfferExplicitHintCount
 		facts.KindOfferDistinctKindCount = event.KindOfferDistinctKindCount
 		facts.KindOfferSuppressedByCardinality = event.KindOfferSuppressedByCardinality
+		facts.CandidateOfferCount = event.KindOfferCandidateOfferCount
+		facts.OfferKind = event.KindOfferOfferKind
 	}
 	facts.TermSearchTruncated, facts.QuestionSearchTruncated = trace.passTruncation()
 	facts.ExpectedInPool = trace.poolContainsKind(tc.ExpectKind)
+	facts.ExpectedKindAtOfferBoundary = trace.boundaryContainsKind(tc.ExpectKind)
 	facts.CensusRan = trace.censusRan()
 	facts.CensusComplete = trace.censusComplete()
 	facts.CensusCount = trace.censusCount()
@@ -1960,9 +2021,12 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.Turn1KindOfferExplicitHintCount = facts.KindOfferExplicitHintCount
 	res.Turn1KindOfferDistinctKindCount = facts.KindOfferDistinctKindCount
 	res.Turn1KindOfferSuppressedByCardinality = facts.KindOfferSuppressedByCardinality
+	res.Turn1CandidateOfferCount = facts.CandidateOfferCount
+	res.Turn1OfferKind = facts.OfferKind
 	res.Turn1TermSearchTruncated = facts.TermSearchTruncated
 	res.Turn1QuestionSearchTruncated = facts.QuestionSearchTruncated
 	res.ExpectedInPool = facts.ExpectedInPool
+	res.ExpectedKindAtOfferBoundary = facts.ExpectedKindAtOfferBoundary
 	res.AnchorOptionsCount = facts.AnchorOptionsCount
 	res.HandleOptionsCount = facts.HandleOptionsCount
 	res.CensusRan = facts.CensusRan
@@ -2239,7 +2303,9 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 				{Stage: "search_question", Truncated: true},
 				{Stage: "kind_coverage_floor", KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true},
 				{Stage: "confirmed_kind_rescue", ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true},
-				{Stage: "kind_offer", KindOfferExplicitHintCount: 1, KindOfferDistinctKindCount: 2, KindOfferSuppressedByCardinality: false},
+				{Stage: "kind_offer", KindOfferExplicitHintCount: 1, KindOfferDistinctKindCount: 2, KindOfferSuppressedByCardinality: false,
+					KindOfferCandidateOfferCount: 5, KindOfferOfferKind: "both",
+					KindOfferBoundaryKinds: []string{"repository"}},
 				{Stage: "evidence_round", ShadowReason: ""},
 				{Stage: "evidence_probe", CensusComplete: true, CensusCount: 4},
 				{Stage: "decision", CommitGate: "lone_floor", TiedStatisticalTop: true, SearchTruncated: true},
@@ -2252,8 +2318,9 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 			KindCoverageFloorFired: true, KindCoverageMissingKinds: 2, KindCoverageFloorTruncated: true,
 			ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
 			KindOfferExplicitHintCount: 1, KindOfferDistinctKindCount: 2, KindOfferSuppressedByCardinality: false,
+			CandidateOfferCount: 5, OfferKind: "both",
 			TermSearchTruncated: true, QuestionSearchTruncated: true,
-			ExpectedInPool: true, CensusRan: true, CensusComplete: true, CensusCount: 4,
+			ExpectedInPool: true, ExpectedKindAtOfferBoundary: true, CensusRan: true, CensusComplete: true, CensusCount: 4,
 			EvidenceRoundEntered: true, EvidenceRoundReason: "",
 			Regime: twoTurnRegimeAWindowGated,
 		}
@@ -2319,7 +2386,8 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 	t.Run("kind_offer suppressed with exactly one distinct kind in pool", func(t *testing.T) {
 		trace := &twoTurnTraceCapture{
 			events: []graphrank.ResolutionTraceEvent{
-				{Stage: "kind_offer", KindOfferExplicitHintCount: 0, KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true},
+				{Stage: "kind_offer", KindOfferExplicitHintCount: 0, KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true,
+					KindOfferCandidateOfferCount: 5, KindOfferOfferKind: "candidate"},
 				{Stage: "decision", CommitGate: ""},
 			},
 		}
@@ -2332,6 +2400,45 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 		}
 		if !facts.KindOfferSuppressedByCardinality {
 			t.Error("KindOfferSuppressedByCardinality = false, want true")
+		}
+		// CHAOS-4012 v22: the exact scenario the candidate-list axis exists
+		// for -- kind-pick suppressed, candidate-list still fires
+		// independently.
+		if facts.CandidateOfferCount != 5 {
+			t.Errorf("CandidateOfferCount = %d, want 5", facts.CandidateOfferCount)
+		}
+		if facts.OfferKind != "candidate" {
+			t.Errorf("OfferKind = %q, want %q", facts.OfferKind, "candidate")
+		}
+	})
+
+	// CHAOS-4012 v22 (re-smoke follow-up, team-lead ruling 2026-08-23): the
+	// exact gap that motivated ExpectedKindAtOfferBoundary -- a candidate
+	// corroborates early (ExpectedInPool reads true) but is gone from the
+	// exact slice kindOfferMaterial/candidateOfferMaterial read by the time
+	// kind_offer fires (upstream truncation). ExpectedInPool must stay true
+	// (it is trace-wide, unaffected by this change); ExpectedKindAtOfferBoundary
+	// must read false, proving the two fields answer genuinely different
+	// questions rather than one silently mirroring the other.
+	t.Run("corroborated early but absent from the kind_offer call boundary", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{
+			events: []graphrank.ResolutionTraceEvent{
+				{Stage: "corroboration", Subject: contractsv1.ContextFabricSubjectRef{Kind: "repository"}},
+				// The boundary slice survived with only "work_item" -- the
+				// corroborated "repository" candidate did not make it this
+				// far (e.g. dropped by MaxSubjectCandidates truncation
+				// upstream).
+				{Stage: "kind_offer", KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true,
+					KindOfferBoundaryKinds: []string{"work_item"}},
+				{Stage: "decision", CommitGate: ""},
+			},
+		}
+		facts := twoTurnCaptureTurn1Facts(trace, contractsv1.ContextFabricInvestigationResult{}, tc)
+		if !facts.ExpectedInPool {
+			t.Error("ExpectedInPool = false, want true -- a corroboration event for the expected kind was traced")
+		}
+		if facts.ExpectedKindAtOfferBoundary {
+			t.Error("ExpectedKindAtOfferBoundary = true, want false -- the expected kind is absent from the boundary slice despite corroborating earlier")
 		}
 	})
 }
@@ -2415,8 +2522,9 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			KindCoverageFloorFired: true, KindCoverageMissingKinds: 3, KindCoverageFloorTruncated: true,
 			ConfirmedKindRescueFired: true, ConfirmedKindRescueResultCount: 1, ConfirmedKindRescueTruncated: true,
 			KindOfferExplicitHintCount: 0, KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true,
+			CandidateOfferCount: 5, OfferKind: "candidate",
 			TermSearchTruncated: true, QuestionSearchTruncated: true,
-			ExpectedInPool: true, AnchorOptionsCount: 1, HandleOptionsCount: 2,
+			ExpectedInPool: true, ExpectedKindAtOfferBoundary: true, AnchorOptionsCount: 1, HandleOptionsCount: 2,
 			CensusRan: true, CensusComplete: true, CensusCount: 7,
 			EvidenceRoundEntered: true, EvidenceRoundReason: string(graphrank.ReasonNoDiscriminators),
 			Regime: twoTurnRegimeAWindowGated,
@@ -2451,6 +2559,8 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			t.Error("Turn1QuestionSearchTruncated = false, want true")
 		case !res.ExpectedInPool:
 			t.Error("ExpectedInPool = false, want true")
+		case !res.ExpectedKindAtOfferBoundary:
+			t.Error("ExpectedKindAtOfferBoundary = false, want true")
 		case res.AnchorOptionsCount != 1:
 			t.Errorf("AnchorOptionsCount = %d, want 1", res.AnchorOptionsCount)
 		case res.HandleOptionsCount != 2:
@@ -2467,6 +2577,10 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			t.Errorf("Turn1KindOfferDistinctKindCount = %d, want 1", res.Turn1KindOfferDistinctKindCount)
 		case !res.Turn1KindOfferSuppressedByCardinality:
 			t.Error("Turn1KindOfferSuppressedByCardinality = false, want true")
+		case res.Turn1CandidateOfferCount != 5:
+			t.Errorf("Turn1CandidateOfferCount = %d, want 5", res.Turn1CandidateOfferCount)
+		case res.Turn1OfferKind != "candidate":
+			t.Errorf("Turn1OfferKind = %q, want %q", res.Turn1OfferKind, "candidate")
 		case !res.EvidenceRoundEntered:
 			t.Error("EvidenceRoundEntered = false, want true")
 		case res.EvidenceRoundReason != string(graphrank.ReasonNoDiscriminators):
@@ -3097,6 +3211,15 @@ type twoTurnCaseResult struct {
 	KindOfferExplicitHintCount       int  `json:"kind_offer_explicit_hint_count"`
 	KindOfferDistinctKindCount       int  `json:"kind_offer_distinct_kind_count"`
 	KindOfferSuppressedByCardinality bool `json:"kind_offer_suppressed_by_cardinality"`
+	// CandidateOfferCount/OfferKind (CHAOS-4012 v22) are the candidate-list
+	// axis's own pair on the SAME kind_offer stage above -- both axes fire
+	// independently (kind-pick unchanged; candidate-list on Committed==0 &&
+	// pool non-empty), so OfferKind's closed vocabulary ("kind"/"candidate"/
+	// "both"/"") is what tells a reader WHICH axis(es) actually fired on this
+	// call, same unconditional no-omitempty reasoning as the trio above: ""
+	// is exactly "neither axis fired," not an absent capture.
+	CandidateOfferCount int    `json:"candidate_offer_count"`
+	OfferKind           string `json:"offer_kind"`
 	// ArmInvalidStage/ArmInvalidErrorType pair with ArmInvalidReason, whose
 	// closed vocabulary names the error CLASS but not where it came from.
 	//
@@ -3199,6 +3322,11 @@ type twoTurnCaseResult struct {
 	Turn1KindOfferExplicitHintCount       int  `json:"turn1_kind_offer_explicit_hint_count"`
 	Turn1KindOfferDistinctKindCount       int  `json:"turn1_kind_offer_distinct_kind_count"`
 	Turn1KindOfferSuppressedByCardinality bool `json:"turn1_kind_offer_suppressed_by_cardinality"`
+	// Turn1CandidateOfferCount/Turn1OfferKind (CHAOS-4012 v22) mirror
+	// CandidateOfferCount/OfferKind above, read off turn 1's own kind_offer
+	// trace stage instead of this arm's own turn-2 call.
+	Turn1CandidateOfferCount int    `json:"turn1_candidate_offer_count"`
+	Turn1OfferKind           string `json:"turn1_offer_kind"`
 	// Turn1TermSearchTruncated/Turn1QuestionSearchTruncated (the
 	// per-pass truncation breakdown) are turn 1's own per-term "search"
 	// pass and question-level "search_question" pass truncation signals,
@@ -3217,6 +3345,16 @@ type twoTurnCaseResult struct {
 	// retrieved" distinction CHAOS-4038 needed and could not draw from the
 	// artifact alone. See twoTurnTraceCapture.poolContainsKind.
 	ExpectedInPool bool `json:"expected_in_pool"`
+	// ExpectedKindAtOfferBoundary (CHAOS-4012 v22, team-lead ruling
+	// 2026-08-23, re-smoke follow-up) is ExpectedInPool's call-boundary-
+	// scoped refinement: true only when the expected kind survived to the
+	// EXACT slice kindOfferMaterial/candidateOfferMaterial read at their
+	// shared call boundary, distinct from ExpectedInPool's trace-wide
+	// "corroborated ANYWHERE, before final truncation" reading. Same
+	// no-omitempty reasoning as CensusRan/ExpectedInPool's own siblings:
+	// false is a real, meaningful boundary-absence signal, not an unset
+	// field. See twoTurnTraceCapture.boundaryContainsKind.
+	ExpectedKindAtOfferBoundary bool `json:"expected_kind_at_offer_boundary"`
 	// AnchorOptionsCount/HandleOptionsCount are turn 1's own
 	// StructureNeeds.AnchorOptions/HandleOptions counts (zero when turn 1
 	// carried no StructureNeeds). For anchor: count==1 is a designed
@@ -3729,6 +3867,59 @@ type twoTurnReport struct {
 	// (Fatalf's, naming the case index, the instant that guarantee stops
 	// holding for a real result) -- no wire-shape or measured-value change,
 	// so no version bump (team-lead ruling, CHAOS-4121 close-out).
+	//
+	// "23" (CHAOS-4012, 2026-08-23, rebased onto "22"/CHAOS-4165 -- this
+	// branch independently claimed "22" before that landed on main,
+	// renumbered here): purely additive, telemetry-only --
+	// candidateOfferMaterial (chaos3900_structure_offers.go) mints the
+	// ranked-candidate-list offer axis, independent of kind_offer's own
+	// kind-pick axis above (kind-pick unchanged; candidate-list fires on
+	// Committed==0 && the read-only Slice-B candidate pool non-empty).
+	// twoTurnCaseResult gains CandidateOfferCount/OfferKind (this arm's own
+	// turn-2 call, read off the SAME kind_offer trace stage's new
+	// KindOfferCandidateOfferCount/KindOfferOfferKind fields via the
+	// existing twoTurnTraceCapture.kindOfferEvent() last-event-wins reader --
+	// no new trace stage, no new capture method) and the Turn1-prefixed twin
+	// of both (turn 1's own call), same two-twin shape as "20"'s trio. No
+	// omitempty on either, same reasoning as the kind_offer trio: 0/""
+	// distinguishes "genuinely neither axis fired" from an absent capture.
+	//
+	// Same "23" (team-lead ruling, 2026-08-23, re-smoke follow-up): also
+	// gains ExpectedKindAtOfferBoundary -- ExpectedInPool's own
+	// call-boundary-scoped refinement, needed because the 9-index re-smoke
+	// found ExpectedInPool over-reports (trace-wide "corroborated anywhere,
+	// before final truncation") relative to what kindOfferMaterial/
+	// candidateOfferMaterial actually read at their shared call boundary.
+	// Backed by the kind_offer trace stage's own new KindOfferBoundaryKinds
+	// field (distinctCandidateKinds(kindOfferCandidates),
+	// chaos3900_structure_offers.go) via the new
+	// twoTurnTraceCapture.boundaryContainsKind() reader -- same
+	// last-event-wins kindOfferEvent() this stage's every other field
+	// already uses. Single field, turn-1-only, no Turn1-prefixed twin --
+	// same shape as ExpectedInPool itself, the field it refines.
+	//
+	// No merge arithmetic changes for any of "23"'s fields (Results
+	// concatenates verbatim); the mirror in
+	// cmd/acr-trial-merge-two-turn/main.go gained all of them in the same
+	// change, same "an undeclared field is dropped on decode" reason every
+	// prior bump needed it for.
+	//
+	// Same "22" (team-lead ruling, 2026-08-23, re-smoke follow-up, folded
+	// into this SAME unreleased bump rather than a new one): twoTurnCaseResult
+	// also gains ExpectedKindAtOfferBoundary -- ExpectedInPool's own
+	// call-boundary-scoped refinement, needed because the 9-index re-smoke
+	// found ExpectedInPool over-reports (trace-wide "corroborated anywhere,
+	// before final truncation") relative to what kindOfferMaterial/
+	// candidateOfferMaterial actually read at their shared call boundary.
+	// Backed by the kind_offer trace stage's own new KindOfferBoundaryKinds
+	// field (distinctCandidateKinds(kindOfferCandidates),
+	// chaos3900_structure_offers.go) via the new
+	// twoTurnTraceCapture.boundaryContainsKind() reader -- same
+	// last-event-wins kindOfferEvent() this stage's every other field
+	// already uses. Single field, turn-1-only, no Turn1-prefixed twin --
+	// same shape as ExpectedInPool itself, the field it refines. No merge
+	// arithmetic changes; the mirror in cmd/acr-trial-merge-two-turn/main.go
+	// gained the field in the same change, same reason as above.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -4981,10 +5172,12 @@ func TestTwoTurnRedactNonAnomalousTraceEvents(t *testing.T) {
 	results := []twoTurnCaseResult{
 		{Index: 1, WrongCommit: true, TraceEvents: events, BaselineTraceEvents: events,
 			CensusRan: true, EvidenceRoundEntered: true, EvidenceRoundReason: string(graphrank.ReasonNoDiscriminators),
-			KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true},
+			KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true,
+			CandidateOfferCount: 5, OfferKind: "candidate", ExpectedKindAtOfferBoundary: true},
 		{Index: 2, TraceEvents: events, BaselineTraceEvents: events,
 			CensusRan: true, EvidenceRoundEntered: true, EvidenceRoundReason: string(graphrank.ReasonNoDiscriminators),
-			KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true},
+			KindOfferDistinctKindCount: 1, KindOfferSuppressedByCardinality: true,
+			CandidateOfferCount: 5, OfferKind: "candidate", ExpectedKindAtOfferBoundary: true},
 	}
 	twoTurnRedactNonAnomalousTraceEvents(results)
 
@@ -5019,6 +5212,19 @@ func TestTwoTurnRedactNonAnomalousTraceEvents(t *testing.T) {
 		}
 		if !res.KindOfferSuppressedByCardinality {
 			t.Errorf("row %d: KindOfferSuppressedByCardinality redacted to false, want true", res.Index)
+		}
+		// CHAOS-4012 v22: same survival guarantee for the candidate-list
+		// axis's own pair.
+		if res.CandidateOfferCount != 5 {
+			t.Errorf("row %d: CandidateOfferCount redacted to %d, want 5", res.Index, res.CandidateOfferCount)
+		}
+		if res.OfferKind != "candidate" {
+			t.Errorf("row %d: OfferKind redacted to %q, want %q", res.Index, res.OfferKind, "candidate")
+		}
+		// CHAOS-4012 v22 (re-smoke follow-up): ExpectedKindAtOfferBoundary is
+		// the SAME kind of pre-redaction summary scalar as the fields above.
+		if !res.ExpectedKindAtOfferBoundary {
+			t.Errorf("row %d: ExpectedKindAtOfferBoundary redacted to false, want true", res.Index)
 		}
 	}
 }
@@ -6897,7 +7103,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "22",
+		ReportSchemaVersion: "23",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,

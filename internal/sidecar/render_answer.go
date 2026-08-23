@@ -267,7 +267,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		if skipWindow {
 			windowOptions = nil
 		}
-		if len(missing) > 0 || len(needs.KindOptions) > 0 || len(needs.AnchorOptions) > 0 || len(needs.HandleOptions) > 0 || len(windowOptions) > 0 {
+		if len(missing) > 0 || len(needs.KindOptions) > 0 || len(needs.AnchorOptions) > 0 || len(needs.HandleOptions) > 0 || len(needs.CandidateOptions) > 0 || len(windowOptions) > 0 {
 			b.writeLine("")
 			if !b.writeLine("## Structure needed") {
 				return b.finishWithTruncation()
@@ -293,6 +293,18 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 				line := fmt.Sprintf("- Handle option `%s`/`%s` (receipt `%s`): %s = %s (source %s)",
 					safeInline(string(opt.Kind)), safeInline(opt.PatternID), safeInline(opt.ReceiptID),
 					untrustedInline(opt.Label), untrustedInline(opt.Value), untrustedInline(opt.SourceColumn))
+				if !b.writeLine(line) {
+					return b.finishWithTruncation()
+				}
+			}
+			// CHAOS-4012: CandidateOptions is StructureNeeds' 5th member's
+			// own offer list -- same untrustedInline(opt.Label) discipline
+			// as every option list above, and the SAME "kind + canonical_id"
+			// shape AnchorOptions uses (CandidateOption is AnchorOption's
+			// field shape minus MatchedTermHash), never a
+			// MatchedTermHash line since this member has none.
+			for _, opt := range needs.CandidateOptions {
+				line := fmt.Sprintf("- Candidate option `%s`/`%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.CanonicalID), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
 				if !b.writeLine(line) {
 					return b.finishWithTruncation()
 				}

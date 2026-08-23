@@ -731,6 +731,36 @@ type ResolutionTraceEvent struct {
 	KindOfferExplicitHintCount       int
 	KindOfferDistinctKindCount       int
 	KindOfferSuppressedByCardinality bool
+	// KindOfferCandidateOfferCount/KindOfferOfferKind (stage=="kind_offer"
+	// ONLY, CHAOS-4012 v22) describe candidateOfferMaterial's own
+	// independent axis (chaos3900_structure_offers.go): the ranked-
+	// candidate-list offer chris ruled for (2026-08-23) fires whenever
+	// nothing committed and the pool is non-empty, regardless of
+	// KindOfferSuppressedByCardinality -- the two axes are independent, so
+	// this pair rides the SAME unconditional "kind_offer" event the three
+	// fields above already use, rather than a separate stage.
+	// KindOfferCandidateOfferCount is len(CandidateOptions) this call
+	// minted (0 when the axis did not fire). KindOfferOfferKind is the
+	// closed vocabulary "kind" | "candidate" | "both" | "" summarizing
+	// which axis (or both, or neither) fired THIS call, so a reader never
+	// has to cross-reference KindOfferSuppressedByCardinality and
+	// KindOfferCandidateOfferCount by hand to answer that one question.
+	KindOfferCandidateOfferCount int
+	KindOfferOfferKind           string
+	// KindOfferBoundaryKinds (stage=="kind_offer" ONLY, CHAOS-4012 v22,
+	// team-lead ruling 2026-08-23) is distinctCandidateKinds(kindOfferCandidates)
+	// -- the distinct subject kinds present in the EXACT slice
+	// kindOfferMaterial/candidateOfferMaterial both read at this call
+	// boundary, closed-vocabulary and corpus-safe (kind values only, no
+	// canonical ids). This is call-boundary-scoped, unlike the existing
+	// trace-wide ExpectedInPool (poolContainsKind reads the "corroboration"
+	// stage, emitted for the FULL merged pool before final truncation) --
+	// see distinctCandidateKinds' own doc comment (chaos3900_structure_
+	// offers.go) for why a candidate can corroborate early and still be gone
+	// by the time this stage fires, and why that gap matters for telling
+	// "candidate-list can fix this" apart from "upstream truncation already
+	// lost it."
+	KindOfferBoundaryKinds []string
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -1935,24 +1965,40 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// through (never used for option content) so anchorOfferMaterial can
 	// detect and suppress a mixed-visibility ambiguous term -- see its own
 	// doc comment.
-	// CHAOS-4038 (codex review finding 1): kindOfferMaterial's input is
-	// resolution.Candidates UNIONED with coverageCandidates, never
+	// CHAOS-4038 (codex review finding 1) / CHAOS-4012 (codex xhigh R2
+	// review, 2026-08-23): kindOfferMaterial/candidateOfferMaterial's shared
+	// input is resolution.Candidates UNIONED with coverageCandidates, never
 	// resolution.Candidates alone -- a coverage-floor find that
 	// ResolveFromMergedCandidatesWithGate's own final ranked-set truncation
-	// dropped (a small MaxSubjectCandidates plus a pool already full of
-	// higher-confidence OTHER-kind candidates) must still reach the offer,
-	// or this whole pass is silently defeated for exactly the resolutions
-	// it exists to help. kindOfferMaterial's own seen-by-kind dedup
-	// (chaos3900_structure_offers.go) makes this union safe regardless of
-	// overlap: a coverage candidate whose kind IS already represented in
-	// resolution.Candidates contributes nothing new. A fresh slice, never an
-	// in-place append to resolution.Candidates' own backing array.
-	kindOfferCandidates := make([]contextfabric.SubjectCandidate, 0, len(resolution.Candidates)+len(coverageCandidates))
-	kindOfferCandidates = append(kindOfferCandidates, resolution.Candidates...)
-	kindOfferCandidates = append(kindOfferCandidates, coverageCandidates...)
+	// dropped must still reach the offer, or this whole pass is silently
+	// defeated for exactly the resolutions it exists to help. See
+	// unionCandidatesForOffer's own doc comment (chaos3900_structure_
+	// offers.go) for why this union must dedupe by subject, not merely
+	// concatenate.
+	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageCandidates)
 	kindOffer, kindOfferDiag := kindOfferMaterial(kindOfferCandidates, request.ExpectedKinds)
-	// CHAOS-4012 v20: UNCONDITIONAL, unlike kind_coverage_floor/
-	// confirmed_kind_rescue above -- kindOfferMaterial runs on EVERY
+	// CHAOS-4012: the SAME union kindOfferMaterial reads above is also the
+	// read-only pool candidateOfferMaterial ranks over -- one candidate
+	// pool, two independent offer axes, never two different views of it.
+	candidateOffer, candidateOfferDiag := candidateOfferMaterial(kindOfferCandidates, len(resolution.Committed))
+	// CHAOS-4012 v22: offerKind/candidateOfferCount ride the SAME
+	// unconditional "kind_offer" stage kind_offer's own fields already use
+	// (team-lead ruling: same-change telemetry) -- offerKind is "kind",
+	// "candidate", "both", or "" (closed vocabulary), so a reader can tell
+	// which axis (or both, or neither) actually fired without cross-
+	// referencing KindOfferSuppressedByCardinality and
+	// CandidateOfferCount by hand.
+	offerKind := ""
+	switch {
+	case !kindOfferDiag.SuppressedByCardinality && candidateOfferDiag.OfferKind == "candidate":
+		offerKind = "both"
+	case !kindOfferDiag.SuppressedByCardinality:
+		offerKind = "kind"
+	case candidateOfferDiag.OfferKind == "candidate":
+		offerKind = "candidate"
+	}
+	// UNCONDITIONAL, unlike kind_coverage_floor/confirmed_kind_rescue above
+	// -- kindOfferMaterial/candidateOfferMaterial both run on EVERY
 	// resolution, not gated behind a "still missing" precondition, so this
 	// stage fires every time a tracer is wired, corpus-wide. See
 	// ResolutionTraceEvent's own "kind_offer" field doc comment.
@@ -1962,10 +2008,20 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			KindOfferExplicitHintCount:       kindOfferDiag.ExplicitHintCount,
 			KindOfferDistinctKindCount:       kindOfferDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinality: kindOfferDiag.SuppressedByCardinality,
+			KindOfferCandidateOfferCount:     candidateOfferDiag.CandidateOfferCount,
+			KindOfferOfferKind:               offerKind,
+			// CHAOS-4012 v22 (team-lead ruling, re-smoke follow-up): computed
+			// only when a tracer is actually wired -- this is telemetry-only,
+			// never consulted by kindOfferMaterial/candidateOfferMaterial
+			// themselves, so it must not cost anything on the hot path when
+			// no one is listening. See KindOfferBoundaryKinds' own doc
+			// comment for what this distinguishes.
+			KindOfferBoundaryKinds: distinctCandidateKinds(kindOfferCandidates),
 		})
 	}
 	offerMaterial := combineStructureOfferMaterial(
 		kindOffer,
+		candidateOffer,
 		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled),
 		handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker),
 	)

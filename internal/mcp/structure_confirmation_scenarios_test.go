@@ -85,6 +85,8 @@ func receiptPrefixForMember(member string) string {
 		return contractsv1.ContextFabricHandleOptionReceiptPrefix
 	case string(contractsv1.ContextFabricStructureNeedWindow):
 		return contractsv1.ContextFabricWindowOptionReceiptPrefix
+	case string(contractsv1.ContextFabricStructureNeedSubjectCandidate):
+		return contractsv1.ContextFabricCandidateOptionReceiptPrefix
 	default:
 		return ""
 	}
@@ -119,6 +121,15 @@ func buildRefusalResult(scenario structureConfirmationScenario, resultID, receip
 			ReceiptID: receiptID, OptionID: "opt_" + scenario.Label, Label: "PR " + scenario.Value,
 			Kind: contractsv1.ContextFabricSubjectKind(scenario.Kind), PatternID: scenario.PatternID,
 			Value: scenario.Value, SourceColumn: scenario.SourceColumn, OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+		}}
+	case string(contractsv1.ContextFabricStructureNeedSubjectCandidate):
+		// CHAOS-4012: CandidateOption's shape is AnchorOption minus
+		// MatchedTermHash -- see ContextFabricCandidateOption's own doc
+		// comment.
+		needs.CandidateOptions = []contractsv1.ContextFabricCandidateOption{{
+			ReceiptID: receiptID, OptionID: "opt_" + scenario.Label, Label: "the " + scenario.Kind,
+			Kind: contractsv1.ContextFabricSubjectKind(scenario.Kind), CanonicalID: scenario.CanonicalID,
+			OfferSource: contractsv1.ContextFabricStructureOfferEngine,
 		}}
 	}
 	result.StructureNeeds = needs
@@ -185,6 +196,8 @@ func setReceipt(req *contractsv1.MCPInvestigateQuestionRequest, member string, r
 		req.PriorHandleReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{receipt}
 	case string(contractsv1.ContextFabricStructureNeedWindow):
 		req.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{receipt}
+	case string(contractsv1.ContextFabricStructureNeedSubjectCandidate):
+		req.PriorCandidateReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{receipt}
 	}
 }
 
@@ -224,6 +237,8 @@ func twoTurnFixtureBootstrap(t *testing.T, refusal, converted contractsv1.Contex
 				receiptsForMember = seen.PriorHandleReceipts
 			case string(contractsv1.ContextFabricStructureNeedWindow):
 				receiptsForMember = seen.PriorWindowReceipts
+			case string(contractsv1.ContextFabricStructureNeedSubjectCandidate):
+				receiptsForMember = seen.PriorCandidateReceipts
 			}
 			sawReceipt := false
 			for _, r := range receiptsForMember {
@@ -266,6 +281,12 @@ func TestStructureConfirmationScenarios(t *testing.T) {
 		{"subject_anchor", "internal/mcp/testdata/structure_confirmation_scenarios/subject_anchor.json"},
 		{"subject_handle", "internal/mcp/testdata/structure_confirmation_scenarios/subject_handle.json"},
 		{"window", "internal/mcp/testdata/structure_confirmation_scenarios/window.json"},
+		// CHAOS-4012 (codex xhigh review, 2026-08-23): the 5th closed
+		// StructureNeeds member this acceptance suite's own doc comment
+		// (top of file, "design brief §2.1's four-member frame") predates --
+		// the suite's job is proving every closed member end to end, not
+		// only the four the design brief originally named.
+		{"subject_candidate", "internal/mcp/testdata/structure_confirmation_scenarios/subject_candidate.json"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -395,6 +416,11 @@ func extractOfferReceipt(t *testing.T, structured contractsv1.ContextFabricAnswe
 			t.Fatalf("window_clarification.options = %+v, want exactly one offer", structured.WindowClarification)
 		}
 		return structured.WindowClarification.Options[0].ReceiptID
+	case string(contractsv1.ContextFabricStructureNeedSubjectCandidate):
+		if len(needs.CandidateOptions) != 1 {
+			t.Fatalf("candidate_options = %+v, want exactly one offer", needs.CandidateOptions)
+		}
+		return needs.CandidateOptions[0].ReceiptID
 	default:
 		t.Fatalf("unknown member %q", member)
 		return ""

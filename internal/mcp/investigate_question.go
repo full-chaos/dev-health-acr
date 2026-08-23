@@ -80,8 +80,16 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		PriorAnchorReceipts: input.PriorAnchorReceipts,
 		PriorHandleReceipts: input.PriorHandleReceipts,
 		PriorWindowReceipts: input.PriorWindowReceipts,
-		ExpectedKinds:       input.ExpectedKinds,
-		SubjectHandles:      input.SubjectHandles,
+		// PriorCandidateReceipts (CHAOS-4012) is the candr_ twin of the four
+		// fields above -- same straight-through mapping, no translation.
+		// codex xhigh review (2026-08-23) caught this mapping missing on
+		// first pass: the wire schema and MCPInvestigateQuestionRequest both
+		// carried prior_candidate_receipts, but this handler still only
+		// mapped the four older fields, so a valid candr_ receipt reached
+		// here and was silently dropped rather than forwarded.
+		PriorCandidateReceipts: input.PriorCandidateReceipts,
+		ExpectedKinds:          input.ExpectedKinds,
+		SubjectHandles:         input.SubjectHandles,
 		// Fixed rather than caller-driven because the tool schema
 		// deliberately exposes no axis field -- a SURFACE decision, not a
 		// capability one. CHAOS-3781 made all three historical axes

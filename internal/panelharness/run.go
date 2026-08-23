@@ -437,6 +437,12 @@ func clearPriorReceipts(request *contractsv1.ContextFabricInvestigationRequest) 
 	request.PriorKindReceipts = nil
 	request.PriorAnchorReceipts = nil
 	request.PriorHandleReceipts = nil
+	// CHAOS-4012: PriorCandidateReceipts joins the reset for the SAME
+	// reason PriorWindowReceipts already does above -- this function resets
+	// EVERY Prior*Receipts field, not only the ones applyReceiptRefs'
+	// switch below populates (candidate selection, like window, is out of
+	// this package's scope -- see that switch's own doc comment).
+	request.PriorCandidateReceipts = nil
 }
 
 // applyReceiptRefs buckets refs into request's own three Prior*Receipts

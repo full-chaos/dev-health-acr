@@ -355,6 +355,15 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				ReceiptID: "winr_injection000000000", OptionID: "opt_window1", Label: "a window label",
 				RelativeID: contractsv1.ContextFabricRelativeWindowTrailing90D,
 			}},
+			// CHAOS-4012: the 5th StructureNeeds member's own offer list,
+			// same "populated so the reflection-based planting walk can
+			// reach every declared leaf" reasoning as KindOptions/
+			// AnchorOptions/HandleOptions/WindowOptions above.
+			CandidateOptions: []contractsv1.ContextFabricCandidateOption{{
+				ReceiptID: "candr_injection00000000", OptionID: "opt_candidate1", Label: "a candidate label",
+				Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repo_candidate_x",
+				OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}},
 		},
 		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{{
 			Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "a confirmed value",

@@ -127,6 +127,9 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 		KindOfferExplicitHintCount:       1,
 		KindOfferDistinctKindCount:       1,
 		KindOfferSuppressedByCardinality: true,
+		KindOfferCandidateOfferCount:     5,
+		KindOfferOfferKind:               "candidate",
+		KindOfferBoundaryKinds:           []string{"work_item", "repository"},
 	})
 
 	if got, ok := record["explicit_hint_count"].(float64); !ok || got != 1 {
@@ -137,5 +140,19 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 	}
 	if got, ok := record["suppressed_by_cardinality"].(bool); !ok || !got {
 		t.Fatalf("suppressed_by_cardinality = %v, want true", record["suppressed_by_cardinality"])
+	}
+	// CHAOS-4012 v22: the candidate-list axis's own pair, same sink.
+	if got, ok := record["candidate_offer_count"].(float64); !ok || got != 5 {
+		t.Fatalf("candidate_offer_count = %v, want 5", record["candidate_offer_count"])
+	}
+	if got := record["offer_kind"]; got != "candidate" {
+		t.Fatalf("offer_kind = %v, want %q", got, "candidate")
+	}
+	// CHAOS-4012 v22 (re-smoke follow-up): boundary_kinds is the
+	// call-boundary-scoped pair's own field -- must reach the sink as the
+	// actual kind values, not merely a count.
+	boundaryKinds, ok := record["boundary_kinds"].([]any)
+	if !ok || len(boundaryKinds) != 2 || boundaryKinds[0] != "work_item" || boundaryKinds[1] != "repository" {
+		t.Fatalf("boundary_kinds = %v, want [work_item repository]", record["boundary_kinds"])
 	}
 }

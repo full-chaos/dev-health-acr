@@ -188,7 +188,19 @@ import (
 // mutationProbeCoverageFloor/mutationProbeCoverage (derivation logic, not
 // only wire shape) so the merge-time recomputation agrees with the
 // producer's. No hard-gate changes.
-const expectedSchemaVersion = "22"
+// "23" (CHAOS-4012, 2026-08-23, rebased onto "22"/CHAOS-4165 -- this branch
+// independently claimed "22" before that landed on main, renumbered here):
+// purely additive, telemetry-only -- see the producer's own
+// ReportSchemaVersion doc comment for the full mechanism. twoTurnCaseResult
+// gained CandidateOfferCount/OfferKind and the Turn1-prefixed twin of both
+// (the candidate-list offer axis's own pair on the SAME kind_offer stage
+// "20" added fields for), plus ExpectedKindAtOfferBoundary (ExpectedInPool's
+// call-boundary-scoped refinement, re-smoke follow-up -- single field,
+// turn-1-only). No merge arithmetic changes (Results concatenates
+// verbatim); mirrored here in the same change for the same
+// undeclared-field-dropped-on-decode reason as everything else on this
+// list.
+const expectedSchemaVersion = "23"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -347,11 +359,16 @@ type twoTurnCaseResult struct {
 	// CHAOS-4012 v20: kind_offer's own block, mirroring twoTurnCaseResult's
 	// identically-named fields byte-for-byte (no omitempty, same reasoning
 	// as CensusRan/CensusComplete/CensusCount below).
-	KindOfferExplicitHintCount       int    `json:"kind_offer_explicit_hint_count"`
-	KindOfferDistinctKindCount       int    `json:"kind_offer_distinct_kind_count"`
-	KindOfferSuppressedByCardinality bool   `json:"kind_offer_suppressed_by_cardinality"`
-	ArmInvalidStage                  string `json:"arm_invalid_stage,omitempty"`
-	ArmInvalidErrorType              string `json:"arm_invalid_error_type,omitempty"`
+	KindOfferExplicitHintCount       int  `json:"kind_offer_explicit_hint_count"`
+	KindOfferDistinctKindCount       int  `json:"kind_offer_distinct_kind_count"`
+	KindOfferSuppressedByCardinality bool `json:"kind_offer_suppressed_by_cardinality"`
+	// CHAOS-4012 v22: the candidate-list axis's own pair on the SAME
+	// kind_offer stage above, mirroring twoTurnCaseResult's identically-named
+	// fields byte-for-byte (no omitempty, same reasoning as the trio above).
+	CandidateOfferCount int    `json:"candidate_offer_count"`
+	OfferKind           string `json:"offer_kind"`
+	ArmInvalidStage     string `json:"arm_invalid_stage,omitempty"`
+	ArmInvalidErrorType string `json:"arm_invalid_error_type,omitempty"`
 	// CHAOS-4103 (schema v13) synthesis-status override provenance, mirroring
 	// twoTurnCaseResult's identically-named block byte-for-byte -- see that
 	// file's own doc comment for what each field means and why
@@ -386,14 +403,22 @@ type twoTurnCaseResult struct {
 	Turn1KindOfferExplicitHintCount       int  `json:"turn1_kind_offer_explicit_hint_count"`
 	Turn1KindOfferDistinctKindCount       int  `json:"turn1_kind_offer_distinct_kind_count"`
 	Turn1KindOfferSuppressedByCardinality bool `json:"turn1_kind_offer_suppressed_by_cardinality"`
-	Turn1TermSearchTruncated              bool `json:"turn1_term_search_truncated,omitempty"`
-	Turn1QuestionSearchTruncated          bool `json:"turn1_question_search_truncated,omitempty"`
-	ExpectedInPool                        bool `json:"expected_in_pool"`
-	AnchorOptionsCount                    int  `json:"anchor_options_count"`
-	HandleOptionsCount                    int  `json:"handle_options_count"`
-	CensusRan                             bool `json:"census_ran"`
-	CensusComplete                        bool `json:"census_complete"`
-	CensusCount                           int  `json:"census_count"`
+	// CHAOS-4012 v22: turn 1's own candidate-list twin, mirroring
+	// twoTurnCaseResult's identically-named fields byte-for-byte.
+	Turn1CandidateOfferCount     int    `json:"turn1_candidate_offer_count"`
+	Turn1OfferKind               string `json:"turn1_offer_kind"`
+	Turn1TermSearchTruncated     bool   `json:"turn1_term_search_truncated,omitempty"`
+	Turn1QuestionSearchTruncated bool   `json:"turn1_question_search_truncated,omitempty"`
+	ExpectedInPool               bool   `json:"expected_in_pool"`
+	// CHAOS-4012 v22 (re-smoke follow-up): ExpectedInPool's call-boundary-
+	// scoped refinement, mirroring twoTurnCaseResult's identically-named
+	// field byte-for-byte.
+	ExpectedKindAtOfferBoundary bool `json:"expected_kind_at_offer_boundary"`
+	AnchorOptionsCount          int  `json:"anchor_options_count"`
+	HandleOptionsCount          int  `json:"handle_options_count"`
+	CensusRan                   bool `json:"census_ran"`
+	CensusComplete              bool `json:"census_complete"`
+	CensusCount                 int  `json:"census_count"`
 	// CHAOS-4161 v19: mirrors twoTurnCaseResult's identically-named fields
 	// byte-for-byte -- see that file's own doc comment.
 	EvidenceRoundEntered bool   `json:"evidence_round_entered"`
