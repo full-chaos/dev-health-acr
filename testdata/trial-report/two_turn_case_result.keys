@@ -5,6 +5,7 @@ arm_invalid_error_type
 arm_invalid_reason
 arm_invalid_stage
 baseline_committed_subjects
+baseline_trace_events
 census_complete
 census_count
 census_ran
@@ -39,6 +40,7 @@ synthesis_status_override_reason
 synthesis_status_override_to
 tied_statistical_top
 tier_routed_correctly
+trace_events
 turn1_commit_gate
 turn1_kind_coverage_floor_fired
 turn1_kind_coverage_floor_truncated
