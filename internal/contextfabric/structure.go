@@ -316,6 +316,52 @@ type AnchorVerifier func(ctx context.Context, orgID string, kind contractsv1.Con
 // implementation: internal/runtime/hosted/open.go.
 type AnchorMembershipVerifier func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason)
 
+// CandidateVerificationReason is the closed vocabulary Engine's candidate
+// re-verification dependency reports (CHAOS-4012). Deliberately a SMALLER
+// vocabulary than AnchorVerificationReason: a candidate offer claims no
+// per-term uniqueness (see ContextFabricCandidateOption's own CHANGE LOG-
+// style doc comment), so there is no "contested"/"incomplete enumeration"
+// case to distinguish -- only "still exists and is authorized" or not, and
+// "the graph binding itself could not be read at all."
+type CandidateVerificationReason string
+
+const (
+	CandidateVerificationValid CandidateVerificationReason = "valid"
+	// CandidateVerificationClaimLost is CandidateVerifier's own "the node
+	// no longer exists, or is no longer authorized for this principal, at
+	// the pinned binding epoch" -- the SAME generic vetoed_unresolved wire
+	// disposition every other lost/unresolved reason in this file maps to.
+	CandidateVerificationClaimLost CandidateVerificationReason = "candidate_claim_lost"
+	// CandidateVerificationGraphUnverifiable mirrors
+	// AnchorVerificationGraphUnverifiable's own reasoning exactly: the
+	// pinned binding's own graph key could not be read at all (a retired
+	// epoch) or the graph-side read errored -- CANNOT-VERIFY, distinct from
+	// ClaimLost (a stale binding proves nothing about whether the
+	// candidate still exists in a LIVE epoch).
+	CandidateVerificationGraphUnverifiable CandidateVerificationReason = "graph_binding_unverifiable"
+)
+
+// CandidateVerifier is canonicalizeStructure's own redemption-time
+// re-verification dependency for the subject_candidate member (CHAOS-4012,
+// team-lead ratified design): re-proves that (kind, canonicalID) still
+// exists as a real, authorized node at the PINNED ResolvedGraphBinding
+// epoch -- a keyed graph existence + re-authorization read, the SAME
+// primitive AnchorMembershipVerifier's own graph-side half already uses
+// (graphrank.GraphAnchorMemberFunc / falkorgraph.Adapter.AnchorMember),
+// reused directly rather than duplicated: a candidate offer claims nothing
+// beyond "this subject ranked in the resolution's own top N," so there is
+// no ClickHouse identity-universe/term-uniqueness layer to check first the
+// way anchor redemption needs -- the graph-side existence+authorization
+// check IS the entire proof.
+//
+// The production implementation (internal/runtime/hosted/open.go) adapts
+// the SAME graphReader.AnchorMember construction anchorMembershipVerifier
+// already wires, over the SAME binding this request already resolved --
+// no new graph backend method, no new composition-root dependency. A nil
+// CandidateVerifier is NOT "trust the stored offer": same fail-CLOSED
+// default as every other reverify dependency in this file.
+type CandidateVerifier func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID string) (bool, CandidateVerificationReason)
+
 // HandleGrammarChecker is the OFFER-TIME (never redemption-time) grammar
 // check for an explicit request.SubjectHandles entry (CHAOS-3972 P3,
 // design brief §2.1: "offered when a grammar-valid value arrived
@@ -386,7 +432,7 @@ type structureReceiptMember struct {
 // canonicalizeEvidenceWindow's own reasoning (a canonicalization failure is
 // an ordinary, expected, clarification-shaped outcome).
 func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding) requestStructureCanonicalization {
-	hasReceipts := len(request.PriorKindReceipts) > 0 || len(request.PriorAnchorReceipts) > 0 || len(request.PriorHandleReceipts) > 0
+	hasReceipts := len(request.PriorKindReceipts) > 0 || len(request.PriorAnchorReceipts) > 0 || len(request.PriorHandleReceipts) > 0 || len(request.PriorCandidateReceipts) > 0
 	hasExplicit := len(request.ExpectedKinds) > 0 || len(request.SubjectHandles) > 0
 	if !hasReceipts && !hasExplicit {
 		return requestStructureCanonicalization{}
@@ -566,6 +612,55 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 						// inconsistent (true, non-valid-reason) result.
 						ok, reason := e.handleVerifier(ctx, principal.OrgID, opt.Kind, opt.PatternID, opt.Value)
 						return ok && reason == HandleVerificationValid
+					}
+				}
+				return false
+			},
+		},
+		{
+			member:   contractsv1.ContextFabricStructureNeedSubjectCandidate,
+			receipts: request.PriorCandidateReceipts,
+			appliedValueFor: func(stored InvestigationResult, receiptID string) (string, contractsv1.ContextFabricSubjectKind, contractsv1.ContextFabricStructureOfferSource, string, string, bool) {
+				if stored.StructureNeeds == nil {
+					return "", "", "", "", "", false
+				}
+				for _, opt := range stored.StructureNeeds.CandidateOptions {
+					if opt.ReceiptID == receiptID {
+						return opt.CanonicalID, opt.Kind, opt.OfferSource, opt.PriorVersionID, opt.PriorEntryID, true
+					}
+				}
+				return "", "", "", "", "", false
+			},
+			offerSnapshot: func(stored InvestigationResult) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
+				if stored.StructureNeeds == nil {
+					return nil
+				}
+				return candidateOptionsSnapshot(stored.StructureNeeds.CandidateOptions)
+			},
+			offeredOptions: func(stored InvestigationResult) []StructureOfferedOption {
+				if stored.StructureNeeds == nil {
+					return nil
+				}
+				return candidateOptionsOffered(stored.StructureNeeds.CandidateOptions)
+			},
+			// reverify (CHAOS-4012): a candr_ redemption re-proves the
+			// stored (kind, canonical_id) still exists as a real, authorized
+			// node at the PINNED binding epoch -- CandidateVerifier's own
+			// doc comment for why this is the graph-side-only half of
+			// anchor membership verification, never a term-uniqueness
+			// proof. e.candidateVerifier == nil fails CLOSED, not open --
+			// same reasoning as every other reverify above: an unwired
+			// verifier means this deployment cannot uphold the
+			// re-verification this member requires, and applying the
+			// stored value anyway would be a false sense of safety.
+			reverify: func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool {
+				if e.candidateVerifier == nil || stored.StructureNeeds == nil {
+					return false
+				}
+				for _, opt := range stored.StructureNeeds.CandidateOptions {
+					if opt.ReceiptID == receiptID {
+						ok, reason := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, opt.Kind, opt.CanonicalID)
+						return ok && reason == CandidateVerificationValid
 					}
 				}
 				return false
@@ -1034,6 +1129,37 @@ func handleOptionsOffered(opts []contractsv1.ContextFabricHandleOption) []Struct
 	return out
 }
 
+// candidateOptionsSnapshot/candidateOptionsOffered (CHAOS-4012) are
+// kindOptionsSnapshot/kindOptionsOffered's own twins for the
+// subject_candidate member.
+func candidateOptionsSnapshot(opts []contractsv1.ContextFabricCandidateOption) []contractsv1.ContextFabricStructureOfferSnapshotEntry {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]contractsv1.ContextFabricStructureOfferSnapshotEntry, 0, len(opts))
+	for i, opt := range opts {
+		out = append(out, contractsv1.ContextFabricStructureOfferSnapshotEntry{
+			Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, OfferID: opt.OptionID, Rank: i,
+			OfferSource: opt.OfferSource, PriorVersionID: opt.PriorVersionID, PriorEntryID: opt.PriorEntryID,
+		})
+	}
+	return out
+}
+
+func candidateOptionsOffered(opts []contractsv1.ContextFabricCandidateOption) []StructureOfferedOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]StructureOfferedOption, 0, len(opts))
+	for i, opt := range opts {
+		out = append(out, StructureOfferedOption{
+			ReceiptID: opt.ReceiptID, AppliedValue: opt.CanonicalID, Rank: i,
+			OfferSource: string(opt.OfferSource), PriorVersionID: opt.PriorVersionID, PriorEntryID: opt.PriorEntryID,
+		})
+	}
+	return out
+}
+
 // structureVetoLimitation names the single fixed disclosure a structure
 // veto attaches, mirroring windowVetoLimitations' own closed map -- both
 // veto reasons currently share one sentence (unlike window's three), so a
@@ -1317,6 +1443,8 @@ func structureReceiptPrefixForMember(member contractsv1.ContextFabricStructureNe
 		return contractsv1.ContextFabricHandleOptionReceiptPrefix
 	case contractsv1.ContextFabricStructureNeedWindow:
 		return contractsv1.ContextFabricWindowOptionReceiptPrefix
+	case contractsv1.ContextFabricStructureNeedSubjectCandidate:
+		return contractsv1.ContextFabricCandidateOptionReceiptPrefix
 	default:
 		return ""
 	}
@@ -1459,6 +1587,17 @@ func composeStructureNeeds(material StructureOfferMaterial, resultID string) *co
 			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectHandle, resultID, content)
 			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectHandle, resultID, content)
 			needs.HandleOptions = append(needs.HandleOptions, opt)
+		}
+	}
+	if len(material.CandidateOptions) > 0 {
+		needs.CandidateOptions = make([]contractsv1.ContextFabricCandidateOption, 0, len(material.CandidateOptions))
+		for _, opt := range material.CandidateOptions {
+			contentSrc := opt
+			contentSrc.ReceiptID, contentSrc.OptionID = "", ""
+			content := structureOfferContent(contentSrc)
+			opt.ReceiptID = mintStructureReceiptID(contractsv1.ContextFabricStructureNeedSubjectCandidate, resultID, content)
+			opt.OptionID = mintStructureOptionID(contractsv1.ContextFabricStructureNeedSubjectCandidate, resultID, content)
+			needs.CandidateOptions = append(needs.CandidateOptions, opt)
 		}
 	}
 	return needs

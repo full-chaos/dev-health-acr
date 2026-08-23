@@ -56,6 +56,13 @@
       },
       "maxItems": 20
     },
+    "prior_candidate_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CandidateBoundReceipt"
+      },
+      "maxItems": 20
+    },
     "expected_kinds": {
       "type": "array",
       "items": {
@@ -271,6 +278,28 @@
           "minLength": 8,
           "maxLength": 256,
           "pattern": "^handr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "CandidateBoundReceipt": {
+      "description": "CHAOS-4012: same shape as BoundSubjectReceipt, but receipt_id is additionally constrained to the closed candr_ namespace -- mirrors WindowBoundReceipt's own reasoning exactly.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^candr_"
         }
       },
       "required": [

@@ -150,6 +150,13 @@ type EngineDependencies struct {
 	// offers never exercises this path regardless, so leaving it nil is
 	// safe ONLY until they exist.
 	AnchorMembershipVerifier AnchorMembershipVerifier
+	// CandidateVerifier is CHAOS-4012's redemption-time re-verification
+	// dependency for candr_ structure receipts -- same fail-CLOSED-when-nil
+	// contract as HandleVerifier/AnchorVerifier above, see CandidateVerifier's
+	// own doc comment (structure.go). A deployment that never mints
+	// candidate offers never exercises this path regardless, so leaving it
+	// nil is safe ONLY until they exist.
+	CandidateVerifier CandidateVerifier
 	// StructureSelectionSink is optional (CHAOS-3927 P4, capture-only
 	// phase, mirroring ClarificationSelectionSink's own contract exactly).
 	// When set, Engine notifies it every time a caller's kindr_/ancr_/
@@ -447,6 +454,7 @@ type Engine struct {
 	handleVerifier             HandleVerifier
 	anchorVerifier             AnchorVerifier
 	anchorMembershipVerifier   AnchorMembershipVerifier
+	candidateVerifier          CandidateVerifier
 	priorConsultant            PriorConsultant
 	priorHandleGrammarChecker  HandleGrammarChecker
 	serviceVersion             string
@@ -478,6 +486,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		handleVerifier:             dependencies.HandleVerifier,
 		anchorVerifier:             dependencies.AnchorVerifier,
 		anchorMembershipVerifier:   dependencies.AnchorMembershipVerifier,
+		candidateVerifier:          dependencies.CandidateVerifier,
 		priorConsultant:            dependencies.PriorConsultant,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,

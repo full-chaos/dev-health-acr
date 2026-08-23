@@ -233,6 +233,7 @@ type StructureNeeds = contractsv1.ContextFabricStructureNeeds
 type KindOption = contractsv1.ContextFabricKindOption
 type AnchorOption = contractsv1.ContextFabricAnchorOption
 type HandleOption = contractsv1.ContextFabricHandleOption
+type CandidateOption = contractsv1.ContextFabricCandidateOption
 type AcceptedGrammar = contractsv1.ContextFabricAcceptedGrammar
 type ConfirmedStructureEntry = contractsv1.ContextFabricConfirmedStructureEntry
 type StructureOfferSnapshotEntry = contractsv1.ContextFabricStructureOfferSnapshotEntry

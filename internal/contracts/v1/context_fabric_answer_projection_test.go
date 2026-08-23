@@ -405,8 +405,13 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	// window_clarification/structure_needs/confirmed_structure, copied
 	// verbatim from common.v1 into the projection's own self-contained
 	// $defs (design brief §2.3/§4).
+	//
+	// CHAOS-4012: CandidateOption joins the intersection deliberately --
+	// StructureNeeds gained candidate_options, the SAME "copied verbatim
+	// from common.v1" reasoning as every other structure-frame shape above.
 	expected := []string{
-		"AcceptedGrammar", "AnchorOption", "BoundSubjectReceipt", "ConfirmedStructureEntry",
+		"AcceptedGrammar", "AnchorOption", "BoundSubjectReceipt", "CandidateOption",
+		"ConfirmedStructureEntry",
 		"EffectiveEvidenceWindow", "HandleOption", "KindOption", "RelativeWindowID",
 		"RequestedEvidenceWindow", "ScalarValue", "StructureDisposition", "StructureNeedKind",
 		"StructureNeeds", "StructureOfferSource", "StructureProvenance", "StructureSource",

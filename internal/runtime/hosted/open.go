@@ -543,6 +543,27 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ok, reason := graphrank.VerifyAnchorClaimantMembership(ctx, principal, scope, binding, kind, canonicalID, matchedTermHash, identityUniverse, graphReader.AnchorMember)
 		return ok, contextfabric.AnchorVerificationReason(reason)
 	})
+	// candidateVerifier (CHAOS-4012) adapts the SAME graphReader.AnchorMember
+	// construction anchorMembershipVerifier above uses -- the graph-side
+	// existence+re-authorization half ALONE, no identityUniverse layer:
+	// see CandidateVerifier's own doc comment (structure.go) for why a
+	// candidate offer's redemption proof stops at "does this (kind,
+	// canonical_id) still exist and remain authorized," never a term-
+	// uniqueness claim. No new graph backend method, no new composition-
+	// root dependency.
+	candidateVerifier := contextfabric.CandidateVerifier(func(ctx context.Context, principal storage.Principal, scope contractsv1.ContextFabricRequestedScope, binding contextfabric.ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID string) (bool, contextfabric.CandidateVerificationReason) {
+		result, err := graphReader.AnchorMember(ctx, principal, scope, binding, kind, canonicalID)
+		if err != nil {
+			return false, contextfabric.CandidateVerificationGraphUnverifiable
+		}
+		if result.Unverifiable {
+			return false, contextfabric.CandidateVerificationGraphUnverifiable
+		}
+		if !result.Exists || !result.Authorized {
+			return false, contextfabric.CandidateVerificationClaimLost
+		}
+		return true, contextfabric.CandidateVerificationValid
+	})
 	// priorConsultant (CHAOS-3977 P5, design brief §3.4) is nil unless
 	// ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED is set -- the deployment-
 	// wide half of the "flag-gated per org, default OFF" gate; the per-org
@@ -747,6 +768,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// CHAOS-4042: see anchorMembershipVerifier's own construction
 		// comment above.
 		AnchorMembershipVerifier: anchorMembershipVerifier,
+		// CHAOS-4012: see candidateVerifier's own construction comment above.
+		CandidateVerifier: candidateVerifier,
 		// CHAOS-3977 P5: nil unless ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED
 		// -- see priorConsultant's own construction comment above.
 		PriorConsultant:           priorConsultant,

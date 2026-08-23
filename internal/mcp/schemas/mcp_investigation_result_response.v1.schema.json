@@ -1098,6 +1098,28 @@
             "receipt_id"
           ]
         },
+        "CandidateBoundReceipt": {
+          "description": "CHAOS-4012: same shape as BoundSubjectReceipt, but receipt_id is additionally constrained to the closed candr_ namespace -- mirrors WindowBoundReceipt's own reasoning exactly.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "result_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            },
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256,
+              "pattern": "^candr_"
+            }
+          },
+          "required": [
+            "result_id",
+            "receipt_id"
+          ]
+        },
         "StructureNeedKind": {
           "description": "CHAOS-3900 P1: the closed enum for which intent-frame member is missing or ambiguous (pivot-intent design brief section 2.1).",
           "type": "string",
@@ -1105,7 +1127,8 @@
             "expected_kind",
             "subject_anchor",
             "subject_handle",
-            "window"
+            "window",
+            "subject_candidate"
           ]
         },
         "StructureOfferSource": {
@@ -1218,6 +1241,58 @@
             "kind",
             "canonical_id",
             "matched_term_hash",
+            "offer_source"
+          ]
+        },
+        "CandidateOption": {
+          "description": "CHAOS-4012: one server-offered top-ranked SubjectCandidate from the resolution's own pool, minted onto a stored result so a later turn can confirm it via candr_ receipt redemption. Fires independently of KindOption above -- offered whenever nothing committed and the pool is non-empty, regardless of how many distinct kinds it spans. Field shape mirrors AnchorOption minus matched_term_hash: a candidate claims no per-term uniqueness, so there is no hash to re-verify.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256,
+              "pattern": "^candr_"
+            },
+            "option_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
+            },
+            "canonical_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "offer_source": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSource"
+            },
+            "prior_version_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "prior_entry_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "receipt_id",
+            "option_id",
+            "label",
+            "kind",
+            "canonical_id",
             "offer_source"
           ]
         },
@@ -1377,7 +1452,7 @@
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
               },
               "minItems": 1,
-              "maxItems": 4,
+              "maxItems": 5,
               "uniqueItems": true
             },
             "kind_options": {
@@ -1414,6 +1489,13 @@
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/AcceptedGrammar"
               },
               "maxItems": 20
+            },
+            "candidate_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/CandidateOption"
+              },
+              "maxItems": 20
             }
           },
           "required": [
@@ -1438,6 +1520,13 @@
               "maxItems": 20,
               "type": "array"
             },
+            "candidate_options": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/CandidateOption"
+              },
+              "maxItems": 20,
+              "type": "array"
+            },
             "handle_options": {
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/HandleOption"
@@ -1456,7 +1545,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
               },
-              "maxItems": 4,
+              "maxItems": 5,
               "minItems": 1,
               "type": "array",
               "uniqueItems": true

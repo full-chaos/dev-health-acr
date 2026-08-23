@@ -338,6 +338,7 @@ func TestInvestigateQuestionMapsStructureAndWindowRequestFields(t *testing.T) {
 	anchorReceipts := []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "ancr_" + strings.Repeat("b", 24)}}
 	handleReceipts := []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "handr_" + strings.Repeat("c", 24)}}
 	windowReceipts := []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "winr_" + strings.Repeat("d", 24)}}
+	candidateReceipts := []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "candr_" + strings.Repeat("e", 24)}}
 	expectedKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}
 	subjectHandles := []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
 	windowStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -349,6 +350,7 @@ func TestInvestigateQuestionMapsStructureAndWindowRequestFields(t *testing.T) {
 		PriorAnchorReceipts:    anchorReceipts,
 		PriorHandleReceipts:    handleReceipts,
 		PriorWindowReceipts:    windowReceipts,
+		PriorCandidateReceipts: candidateReceipts,
 		ExpectedKinds:          expectedKinds,
 		SubjectHandles:         subjectHandles,
 		EvidenceWindow:         &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &windowStart, End: &windowEnd},
@@ -366,6 +368,14 @@ func TestInvestigateQuestionMapsStructureAndWindowRequestFields(t *testing.T) {
 	}
 	if !reflect.DeepEqual(seen.PriorWindowReceipts, windowReceipts) {
 		t.Errorf("prior_window_receipts = %+v, want %+v", seen.PriorWindowReceipts, windowReceipts)
+	}
+	// CHAOS-4012 (codex xhigh review, 2026-08-23): this assertion is the
+	// regression test the HIGH finding needed -- prior_candidate_receipts
+	// was declared on the wire schema and this Go type but never mapped
+	// through the handler, so a valid candr_ receipt was silently dropped
+	// by ordinary json.Unmarshal instead of reaching the hosted request.
+	if !reflect.DeepEqual(seen.PriorCandidateReceipts, candidateReceipts) {
+		t.Errorf("prior_candidate_receipts = %+v, want %+v", seen.PriorCandidateReceipts, candidateReceipts)
 	}
 	if !reflect.DeepEqual(seen.ExpectedKinds, expectedKinds) {
 		t.Errorf("expected_kinds = %+v, want %+v", seen.ExpectedKinds, expectedKinds)

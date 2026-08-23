@@ -1368,6 +1368,136 @@ func TestCHAOS3900_HandleReceiptReverification_InconsistentVerifierVetoes(t *tes
 	}
 }
 
+// candidateReceiptTestSetup builds a prior result carrying one
+// CandidateOption offer and a request naming its receipt -- shared fixture
+// for the four TestCHAOS4012_CandidateReceiptReverification* tests below,
+// same shape as handleReceiptTestSetup above.
+func candidateReceiptTestSetup() (priorResult InvestigationResult, request InvestigationRequest) {
+	priorResult = validInvestigationResult()
+	priorResult.ResultID = "result_prior_structure_0004"
+	priorResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_candidate"},
+		CandidateOptions: []CandidateOption{
+			{
+				ReceiptID: "candr_confirm0001", OptionID: "opt_candidate", Label: "repo-b",
+				Kind: SubjectRepository, CanonicalID: "repository:r2",
+				OfferSource: "engine",
+			},
+		},
+	}
+	request = validInvestigationRequest()
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "candr_confirm0001"}}
+	return priorResult, request
+}
+
+// TestCHAOS4012_CandidateReceiptReverification_NilVerifierVetoes pins the
+// SAME fail-CLOSED default HandleVerifier/AnchorMembershipVerifier already
+// uphold (CandidateVerifier's own doc comment): an unwired
+// Engine.candidateVerifier is NOT "trust the stored offer".
+func TestCHAOS4012_CandidateReceiptReverification_NilVerifierVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := candidateReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: store})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+}
+
+// TestCHAOS4012_CandidateReceiptReverification_VerifierRejectsVetoes proves a
+// wired CandidateVerifier that reports the stored (kind, canonical_id) gone
+// or unauthorized vetoes the whole request exactly like an unresolved
+// receipt -- no partial application, same atomic-veto discipline as every
+// other structure veto in this file.
+func TestCHAOS4012_CandidateReceiptReverification_VerifierRejectsVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := candidateReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	calls := 0
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		CandidateVerifier: func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID string) (bool, CandidateVerificationReason) {
+			calls++
+			if kind != SubjectRepository || canonicalID != "repository:r2" {
+				t.Errorf("CandidateVerifier called with (kind=%q, canonical_id=%q), want the stored offer's own content", kind, canonicalID)
+			}
+			return false, CandidateVerificationClaimLost
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+	if calls != 1 {
+		t.Errorf("CandidateVerifier called %d times, want 1", calls)
+	}
+}
+
+// TestCHAOS4012_CandidateReceiptReverification_VerifierAcceptsConfirms is
+// this test's positive twin: a wired CandidateVerifier that reports the
+// stored (kind, canonical_id) still valid lets the receipt confirm
+// normally.
+func TestCHAOS4012_CandidateReceiptReverification_VerifierAcceptsConfirms(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := candidateReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		CandidateVerifier: func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID string) (bool, CandidateVerificationReason) {
+			return true, CandidateVerificationValid
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+	if canon.Veto != structureVetoNone {
+		t.Errorf("canon.Veto = %q, want structureVetoNone", canon.Veto)
+	}
+	if len(canon.Confirmed) != 1 {
+		t.Fatalf("len(canon.Confirmed) = %d, want 1", len(canon.Confirmed))
+	}
+	entry := canon.Confirmed[0]
+	if entry.Member != "subject_candidate" || entry.AppliedValue != "repository:r2" {
+		t.Errorf("canon.Confirmed[0] = %+v, want member=subject_candidate applied_value=repository:r2", entry)
+	}
+}
+
+// TestCHAOS4012_CandidateReceiptReverification_InconsistentVerifierVetoes
+// pins the same reasoning as the anchor/handle twins above: ok=true with a
+// non-Valid reason must not confirm.
+func TestCHAOS4012_CandidateReceiptReverification_InconsistentVerifierVetoes(t *testing.T) {
+	t.Parallel()
+
+	priorResult, request := candidateReceiptTestSetup()
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		CandidateVerifier: func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID string) (bool, CandidateVerificationReason) {
+			// Inconsistent on purpose: ok=true but a failure reason.
+			return true, CandidateVerificationGraphUnverifiable
+		},
+	})
+
+	canon := engine.canonicalizeStructure(context.Background(), reusePrincipal(), request, ResolvedGraphBinding{})
+	if canon.Veto != structureVetoConfirmationUnresolved {
+		t.Errorf("canon.Veto = %q, want %q (an inconsistent verifier result must fail closed)", canon.Veto, structureVetoConfirmationUnresolved)
+	}
+	if len(canon.Confirmed) != 0 {
+		t.Errorf("len(canon.Confirmed) = %d, want 0", len(canon.Confirmed))
+	}
+}
+
 // TestMintStructureReceiptID_DeterministicAndUniqueWithinResult pins the
 // P1.C receipt-minting contract (team-lead ruling): deterministic from
 // (result identity, member, content) -- same inputs mint the SAME id

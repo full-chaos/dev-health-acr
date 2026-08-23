@@ -7,6 +7,7 @@ arm_invalid_stage
 baseline_commit_affirmation
 baseline_committed_subjects
 baseline_trace_events
+candidate_offer_count
 census_complete
 census_count
 census_ran
@@ -21,6 +22,7 @@ evidence_round_reason
 expected_id
 expected_in_pool
 expected_kind
+expected_kind_at_offer_boundary
 false_no_match
 handle_options_count
 hinted_commit_affirmation
@@ -36,6 +38,7 @@ kind_offer_suppressed_by_cardinality
 member
 mutation_probe
 mutation_tripped
+offer_kind
 offer_miss
 pair_invalid
 pair_retried
@@ -55,6 +58,7 @@ synthesis_status_override_to
 tied_statistical_top
 tier_routed_correctly
 trace_events
+turn1_candidate_offer_count
 turn1_commit_gate
 turn1_confirmed_kind_rescue_fired
 turn1_confirmed_kind_rescue_result_count
@@ -65,6 +69,7 @@ turn1_kind_coverage_missing_kinds
 turn1_kind_offer_distinct_kind_count
 turn1_kind_offer_explicit_hint_count
 turn1_kind_offer_suppressed_by_cardinality
+turn1_offer_kind
 turn1_question_search_truncated
 turn1_regime
 turn1_search_truncated

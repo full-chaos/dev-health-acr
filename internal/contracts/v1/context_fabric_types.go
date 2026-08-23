@@ -538,6 +538,15 @@ type ContextFabricInvestigationRequest struct {
 	PriorKindReceipts   []ContextFabricBoundSubjectReceipt `json:"prior_kind_receipts,omitempty"`
 	PriorAnchorReceipts []ContextFabricBoundSubjectReceipt `json:"prior_anchor_receipts,omitempty"`
 	PriorHandleReceipts []ContextFabricBoundSubjectReceipt `json:"prior_handle_receipts,omitempty"`
+	// PriorCandidateReceipts (CHAOS-4012) names candr_-prefixed receipts
+	// from an earlier stored result's own StructureNeeds.CandidateOptions --
+	// a FIFTH, PARALLEL field following the same precedent: a candidate
+	// receipt's match target (a stored ContextFabricCandidateOption) and
+	// effect (binds a specific ranked-candidate subject, never narrows a
+	// census scope) differ from all four other namespaces, so it may never
+	// accept another's prefix either -- see Validate's closed
+	// structure-receipt-prefix check.
+	PriorCandidateReceipts []ContextFabricBoundSubjectReceipt `json:"prior_candidate_receipts,omitempty"`
 	// ExpectedKinds and SubjectHandles (CHAOS-3972 P3, pivot-intent design
 	// brief §2.3/§2.0) are the caller's own EXPLICIT structure fields --
 	// the wire concept structure.go's own P1.B scope note deferred to this

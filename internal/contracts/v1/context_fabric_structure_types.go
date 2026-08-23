@@ -31,6 +31,19 @@ const (
 	ContextFabricStructureNeedSubjectAnchor ContextFabricStructureNeedKind = "subject_anchor"
 	ContextFabricStructureNeedSubjectHandle ContextFabricStructureNeedKind = "subject_handle"
 	ContextFabricStructureNeedWindow        ContextFabricStructureNeedKind = "window"
+	// ContextFabricStructureNeedSubjectCandidate (CHAOS-4012) is a SEPARATE
+	// disambiguation axis from expected_kind: a ranked list of the
+	// resolution's own top candidates ("did you mean one of these?"),
+	// offered whenever nothing committed and the pool is non-empty --
+	// regardless of whether the pool spans one or many distinct kinds (chris
+	// ruling, 2026-08-23: "why not offer the highest ranking list just like
+	// codex, claude, and chatgpt"). Appended at the end of the vocabulary,
+	// never reordering the existing three -- see
+	// ContextFabricStructureNeedKindVocabulary's own elicitation-priority
+	// doc comment; kind-pick still takes elicitation priority over
+	// candidate-pick when both fire (kindOfferMaterial's own >=2-distinct
+	// gate is UNCHANGED by this addition).
+	ContextFabricStructureNeedSubjectCandidate ContextFabricStructureNeedKind = "subject_candidate"
 )
 
 var contextFabricStructureNeedKinds = [...]ContextFabricStructureNeedKind{
@@ -38,6 +51,7 @@ var contextFabricStructureNeedKinds = [...]ContextFabricStructureNeedKind{
 	ContextFabricStructureNeedSubjectAnchor,
 	ContextFabricStructureNeedSubjectHandle,
 	ContextFabricStructureNeedWindow,
+	ContextFabricStructureNeedSubjectCandidate,
 }
 
 // ContextFabricStructureNeedKindCount is the closed vocabulary's size.
@@ -173,6 +187,38 @@ type ContextFabricHandleOption struct {
 	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
 }
 
+// ContextFabricCandidateOptionReceiptPrefix is the closed namespace prefix
+// for subject_candidate offer receipts (CHAOS-4012), following
+// ContextFabricAnchorOptionReceiptPrefix's exact precedent.
+const ContextFabricCandidateOptionReceiptPrefix = "candr_"
+
+// ContextFabricCandidateOption offers one top-ranked SubjectCandidate from
+// the resolution's own pool, minted onto a stored result so a later turn
+// can confirm it via candr_ receipt redemption (chris ruling, 2026-08-23:
+// "did you mean one of these" -- a ranked-candidate list, offered
+// independently of whether the pool spans one or many distinct KINDS,
+// unlike ContextFabricKindOption above).
+//
+// Field shape deliberately reuses ContextFabricAnchorOption's, minus
+// MatchedTermHash: an anchor option claims per-TERM uniqueness (the reason
+// MatchedTermHash exists at all -- see that type's own CHANGE LOG), a
+// candidate option claims nothing beyond "this subject ranked in the
+// resolution's own top N" -- no term-matching proof to re-verify, so no
+// hash to carry. A NEW type, not a widened ContextFabricAnchorOption,
+// mirroring the ContextFabricAnchorOptionV2 precedent (context_fabric_structure_types_v2.go):
+// never repurpose an existing option type's meaning in place when the
+// underlying claim differs.
+type ContextFabricCandidateOption struct {
+	ReceiptID      string                            `json:"receipt_id"`
+	OptionID       string                            `json:"option_id"`
+	Label          string                            `json:"label"`
+	Kind           ContextFabricSubjectKind          `json:"kind"`
+	CanonicalID    string                            `json:"canonical_id"`
+	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
+	PriorVersionID string                            `json:"prior_version_id,omitempty"`
+	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+}
+
 // ContextFabricAcceptedGrammar discloses one grammar the engine accepts for
 // explicit supply, so an agent (or a power user) can supply structure
 // directly next turn instead of picking from offers (design brief §2.1).
@@ -202,6 +248,10 @@ type ContextFabricStructureNeeds struct {
 	// copy (design brief §2.1: "3900's type, verbatim").
 	WindowOptions    []ContextFabricWindowOption    `json:"window_options,omitempty"`
 	AcceptedGrammars []ContextFabricAcceptedGrammar `json:"accepted_grammars,omitempty"`
+	// CandidateOptions (CHAOS-4012) fires INDEPENDENTLY of KindOptions above
+	// -- both may be present on the same StructureNeeds -- see
+	// ContextFabricStructureNeedSubjectCandidate's own doc comment.
+	CandidateOptions []ContextFabricCandidateOption `json:"candidate_options,omitempty"`
 }
 
 // ContextFabricStructureSource is the closed vocabulary for how a

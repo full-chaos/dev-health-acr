@@ -220,11 +220,16 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// effective_evidence_window/window_clarification/structure_needs/
 		// confirmed_structure (design brief §2.3/§4), each contributing
 		// their own new string leaves.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 131},
+		// CHAOS-4012: 131 -> 139 -- CandidateOption contributed eight new
+		// string leaves (receipt_id, option_id, label, kind, canonical_id,
+		// offer_source, prior_version_id, prior_entry_id).
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 139},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 217},
+		// CHAOS-4012: 217 -> 225 -- CandidateOption's own eight new string
+		// leaves, same reasoning as the answer_projection surface above.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 225},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

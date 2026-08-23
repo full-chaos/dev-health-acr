@@ -139,11 +139,25 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// "exactly one, still suppressed" (1) -- CHAOS-4012's own open
 		// question -- without needing a harness. Counts and a bool only --
 		// no kind name, no candidate identity.
+		// CHAOS-4012 v22: candidate_offer_count/offer_kind ride the SAME
+		// unconditional event -- see KindOfferOfferKind's own doc comment
+		// (ResolutionTraceEvent) for the closed vocabulary.
+		//
+		// boundary_kinds (CHAOS-4012 v22, team-lead ruling 2026-08-23) is the
+		// deliberate exception to "no kind name" above: closed-vocabulary
+		// subject-kind VALUES only (never a canonical id, never candidate
+		// identity), naming which kinds survived to this exact call boundary
+		// -- see KindOfferBoundaryKinds' own doc comment (ResolutionTraceEvent)
+		// for why boundary-scoped presence, distinct from the trace-wide
+		// ExpectedInPool, is what this re-smoke follow-up needed.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: kind offer",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"explicit_hint_count", event.KindOfferExplicitHintCount,
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
-			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality)
+			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
+			"candidate_offer_count", event.KindOfferCandidateOfferCount,
+			"offer_kind", event.KindOfferOfferKind,
+			"boundary_kinds", event.KindOfferBoundaryKinds)
 	case "confirmed_kind_scope":
 		// CHAOS-4154: the operator-visible half of the confirmed-kind
 		// truncation-scoping mechanism -- this event's own presence in a

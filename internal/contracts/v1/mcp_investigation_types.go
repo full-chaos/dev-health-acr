@@ -66,6 +66,18 @@ type MCPInvestigateQuestionRequest struct {
 	PriorAnchorReceipts []ContextFabricBoundSubjectReceipt `json:"prior_anchor_receipts,omitempty"`
 	PriorHandleReceipts []ContextFabricBoundSubjectReceipt `json:"prior_handle_receipts,omitempty"`
 	PriorWindowReceipts []ContextFabricBoundSubjectReceipt `json:"prior_window_receipts,omitempty"`
+	// PriorCandidateReceipts (CHAOS-4012) is this surface's own candr_ twin
+	// of the four fields above -- same "mapped straight through, never
+	// overloaded onto PriorSubjectReceipts" discipline, naming a receipt
+	// from an earlier turn's own StructureNeeds.CandidateOptions offer set.
+	// codex xhigh review (2026-08-23) caught this field missing on first
+	// pass: the wire schema (mcp_investigate_question_request.v1.schema.json)
+	// already declared prior_candidate_receipts, but this Go type, MCP
+	// validation, and the handler's own field-by-field mapping
+	// (internal/mcp/investigate_question.go) had not caught up -- a valid
+	// candr_ receipt would have been silently dropped by ordinary
+	// json.Unmarshal rather than rejected or forwarded.
+	PriorCandidateReceipts []ContextFabricBoundSubjectReceipt `json:"prior_candidate_receipts,omitempty"`
 	// ExpectedKinds and SubjectHandles (CHAOS-3972 P3) are this surface's
 	// own explicit structure fields -- see
 	// ContextFabricInvestigationRequest.ExpectedKinds/SubjectHandles for
@@ -192,6 +204,9 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.structure_needs.window_options[].label",
 	"structured.structure_needs.handle_options[].value",
 	"structured.structure_needs.handle_options[].source_column",
+	// CHAOS-4012: CandidateOption.Label gets the SAME conservative
+	// treatment as every other StructureNeeds offer label above.
+	"structured.structure_needs.candidate_options[].label",
 	"structured.confirmed_structure[].applied_value",
 	"structured.window_clarification.options[].label",
 	"full_result",
@@ -291,6 +306,11 @@ var MCPInvestigationResultUntrustedFields = []string{
 	// list already treats as retrieved/configured content, not a closed
 	// enum).
 	"structured.structure_needs.handle_options[].source_column",
+	// CHAOS-4012: CandidateOption.Label gets the SAME conservative
+	// treatment as every other StructureNeeds offer label above --
+	// server-rendered today, but classified untrusted rather than
+	// widening the leaf-name-based "label" trust pattern globally.
+	"structured.structure_needs.candidate_options[].label",
 	// ConfirmedStructureEntry.AppliedValue is DESIGNED to be "the typed
 	// id/enum actually applied ... closed vocabulary or registry id,
 	// never free text" (pivot-intent design brief section 2.1), but

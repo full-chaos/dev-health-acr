@@ -171,6 +171,175 @@ func kindOfferLabel(kind contractsv1.ContextFabricSubjectKind) string {
 	}
 }
 
+// candidateOfferTopN (CHAOS-4012) bounds candidateOfferMaterial's own
+// ranked-candidate list -- chris ruling, 2026-08-23: "why not offer the
+// highest ranking list just like codex, claude, and chatgpt". 5 is an
+// UNCALIBRATED pick (this ticket has no live measurement slot to calibrate
+// one either, same caveat kindCoverageMaxTermsPerKind's own doc comment
+// already flags for exactly this situation, chaos4038_kind_coverage.go) --
+// a conservative starting point, not a tuned recall/cost tradeoff. Capped
+// again by structureOfferMaxOptions below regardless, so this can never
+// itself produce an invalid offer list even if raised carelessly later.
+const candidateOfferTopN = 5
+
+// candidateOfferDiagnostics (CHAOS-4012, telemetry) mirrors
+// kindOfferDiagnostics' own shape for the SAME reason: a caller traces WHY
+// (or whether) CandidateOptions fired, without re-deriving it from the
+// wire result.
+type candidateOfferDiagnostics struct {
+	// CandidateOfferCount is len(CandidateOptions) on the returned material
+	// -- 0 when the round did not fire (nothing committed is false, or the
+	// pool was empty).
+	CandidateOfferCount int
+	// OfferKind is "candidate" when this call actually minted
+	// CandidateOptions, "" otherwise -- the closed vocabulary
+	// resolve.go's own "kind_offer" trace event carries (team-lead ruling:
+	// "telemetry offer_kind + candidate_offer_count on the kind_offer
+	// stage").
+	OfferKind string
+}
+
+// unionCandidatesForOffer (CHAOS-4038 finding 1 / CHAOS-4012 codex xhigh R2
+// review, 2026-08-23) builds resolve.go's shared kindOfferMaterial/
+// candidateOfferMaterial input: resolutionCandidates (resolution.Candidates,
+// already ranked) followed by every coverageCandidates entry whose SUBJECT
+// is not already present, in coverageCandidates' own order.
+//
+// A plain concatenation is UNSAFE: applyKindCoverageFloor
+// (chaos4038_kind_coverage.go) merges its finds directly into the SAME pool
+// map resolution.Candidates is later ranked/truncated from, so a
+// coverage-floor find confident enough to SURVIVE that truncation appears
+// in BOTH resolutionCandidates (via the ranked pool) AND coverageCandidates
+// (via applyKindCoverageFloor's own `added` return) -- only a find that
+// truncation actually DROPPED is exclusive to coverageCandidates.
+// kindOfferMaterial's own per-KIND dedup silently absorbed this
+// identical-subject duplication (it mints one KindOption per distinct kind,
+// never per candidate, so a duplicate subject of an already-represented
+// kind was always a no-op there) -- but candidateOfferMaterial ranks
+// individual SUBJECTS, so an unfiltered duplicate would mint two
+// CandidateOptions for the SAME subject, both minting the SAME
+// deterministic (result, member, content) receipt id, which fails
+// structure.go's uniqueness validation (ErrInvalidResult). This function is
+// the ONE place both builders' shared input is assembled, so the dedup only
+// needs to exist here.
+//
+// resolutionCandidates' own entries always win a duplicate (its ranking
+// order is preserved verbatim, never reordered) -- same "a coverage
+// candidate already represented contributes nothing new" property
+// kindOfferMaterial's own per-kind dedup already relied on, now made
+// subject-exact. Returns a fresh slice; never mutates resolutionCandidates'
+// own backing array.
+func unionCandidatesForOffer(resolutionCandidates, coverageCandidates []contextfabric.SubjectCandidate) []contextfabric.SubjectCandidate {
+	union := make([]contextfabric.SubjectCandidate, 0, len(resolutionCandidates)+len(coverageCandidates))
+	union = append(union, resolutionCandidates...)
+	seen := make(map[string]bool, len(resolutionCandidates)+len(coverageCandidates))
+	for _, candidate := range resolutionCandidates {
+		seen[SubjectKey(candidate.Subject)] = true
+	}
+	for _, candidate := range coverageCandidates {
+		key := SubjectKey(candidate.Subject)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		union = append(union, candidate)
+	}
+	return union
+}
+
+// candidateOfferMaterial builds the subject_candidate disclosure: the
+// resolution's own top candidateOfferTopN candidates, offered whenever
+// NOTHING committed and the pool is non-empty -- independent of
+// kindOfferMaterial's own >=2-distinct-KIND cardinality gate above, and
+// independent of whether it fires (chris ruling: a candidate-list offer is
+// not a substitute for kind-pick, the two axes fire together when both
+// apply; kind-pick still takes elicitation priority in Missing's own
+// ordering -- see combineStructureOfferMaterial's call-order contract).
+//
+// candidates is READ-ONLY: the SAME final pool (resolution.Candidates
+// unioned with any CHAOS-4038 coverage-floor find) kindOfferMaterial
+// already reads at its own call site (resolve.go), already ranked by the
+// resolution's own decision order -- this function never re-ranks, re-
+// scores, or mutates it, and never feeds anything back into the commit
+// gate that already decided over it (CHAOS-3900 P1.C's own "derived from
+// the SAME final candidate pool the resolution above committed to"
+// discipline, applied identically here).
+func candidateOfferMaterial(candidates []contextfabric.SubjectCandidate, committedCount int) (contextfabric.StructureOfferMaterial, candidateOfferDiagnostics) {
+	if committedCount > 0 || len(candidates) == 0 {
+		return contextfabric.StructureOfferMaterial{}, candidateOfferDiagnostics{}
+	}
+	limit := candidateOfferTopN
+	if limit > structureOfferMaxOptions {
+		limit = structureOfferMaxOptions
+	}
+	if limit > len(candidates) {
+		limit = len(candidates)
+	}
+	options := make([]contractsv1.ContextFabricCandidateOption, 0, limit)
+	for _, candidate := range candidates[:limit] {
+		options = append(options, contractsv1.ContextFabricCandidateOption{
+			Kind:        candidate.Subject.Kind,
+			CanonicalID: candidate.Subject.CanonicalID,
+			Label:       candidateOfferLabel(candidate.Subject.Label),
+			OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+		})
+	}
+	return contextfabric.StructureOfferMaterial{
+			Missing:          []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate},
+			CandidateOptions: options,
+		}, candidateOfferDiagnostics{
+			CandidateOfferCount: len(options),
+			OfferKind:           "candidate",
+		}
+}
+
+// candidateOfferLabel renders a CandidateOption's display label from the
+// candidate's own Subject.Label -- the SAME "show the entity's own name"
+// discipline anchorOfferLabel already uses (not new disclosure: the SAME
+// label a SubjectCandidate already shows in resolution.Candidates).
+func candidateOfferLabel(label string) string {
+	return label
+}
+
+// distinctCandidateKinds (CHAOS-4012 v22, telemetry-only) returns the
+// distinct contractsv1.ContextFabricSubjectKind values present in
+// candidates, first-occurrence order, deduped -- UNFILTERED by
+// structureOfferKinds, deliberately: this answers "did a candidate of this
+// kind survive to this exact slice," not "would kindOfferMaterial's own
+// offerable-kind gate have surfaced it." kindOfferMaterial's own
+// poolDistinct is filtered and deliberately not reused here, so a kind
+// outside structureOfferKinds (were one ever added to the pool) still shows
+// up in this boundary telemetry rather than silently agreeing with the
+// offer gate's narrower question.
+//
+// team-lead ruling (2026-08-23, CHAOS-4012 re-smoke follow-up): the
+// existing ExpectedInPool (poolContainsKind, "corroboration" stage,
+// chaos3742_two_turn_confirmation_test.go) is TRACE-WIDE -- true if the
+// expected kind ever reached the merged pool ANYWHERE in the call, before
+// ResolveFromMergedCandidatesWithGate's own final ranked-set truncation.
+// That over-reports presence at THIS call boundary: a candidate can be
+// corroborated early and still be gone from kindOfferCandidates by the time
+// kindOfferMaterial/candidateOfferMaterial actually read it. This function
+// is call-boundary-scoped -- fed the SAME kindOfferCandidates slice both
+// offer builders read (resolve.go) -- so the harness can distinguish
+// "genuinely absent at the boundary, candidate-list cannot fix it" (a
+// CHAOS-4038 upstream-truncation question) from "present at the boundary,
+// still not ranked into CandidateOptions" (an offer-layer question,
+// CHAOS-4012's own scope).
+func distinctCandidateKinds(candidates []contextfabric.SubjectCandidate) []string {
+	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(candidates))
+	var kinds []string
+	for _, candidate := range candidates {
+		kind := candidate.Subject.Kind
+		if seen[kind] {
+			continue
+		}
+		seen[kind] = true
+		kinds = append(kinds, string(kind))
+	}
+	return kinds
+}
+
 // filterCandidatesByConfirmedKind (CHAOS-3900 P1.D) narrows
 // candidatesBySubject to ONLY the confirmed kind, when one is present --
 // design brief §2.1: "the confirmed kind becomes the census scope (drops
@@ -1020,6 +1189,10 @@ func combineStructureOfferMaterial(materials ...contextfabric.StructureOfferMate
 		combined.AnchorOptions = append(combined.AnchorOptions, m.AnchorOptions...)
 		combined.HandleOptions = append(combined.HandleOptions, m.HandleOptions...)
 		combined.AnchorOptionsRequireV2 = combined.AnchorOptionsRequireV2 || m.AnchorOptionsRequireV2
+		// CHAOS-4012: candidate-list fires INDEPENDENTLY of KindOptions --
+		// both may be non-empty on the SAME combined material, so this is a
+		// plain concatenation, same as every other list above.
+		combined.CandidateOptions = append(combined.CandidateOptions, m.CandidateOptions...)
 	}
 	return combined
 }
