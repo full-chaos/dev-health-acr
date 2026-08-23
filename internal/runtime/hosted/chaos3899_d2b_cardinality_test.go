@@ -242,7 +242,7 @@ func TestChaos3899D2BCardinality(t *testing.T) {
 			ExchangeModelName: arm, ExchangeSessionID: exchangeRuntime.nonce,
 			ControlsContinue: os.Getenv("ACR_TEST_TRIAL_CONTROLS_CONTINUE") == "true",
 		},
-		BaseSHA:   requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
+		BaseSHA:   source.commit,
 		DiffTally: map[replayDiffClass]int{},
 	}
 

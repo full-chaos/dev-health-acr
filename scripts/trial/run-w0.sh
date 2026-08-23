@@ -33,7 +33,8 @@ fi
 if [[ -n "${ACR_TRIAL_CORPUS_SHA256:-}" ]]; then
   export ACR_TEST_TRIAL_CORPUS_SHA256="$ACR_TRIAL_CORPUS_SHA256"
 fi
-export ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
+# ACR_TEST_TRIAL_BASE_SHA (CHAOS-4157 fix-forward, 2026-08-23): DROPPED --
+# see run-two-turn.sh's own comment. This export has no reader left.
 
 exdir="$repo_root/.trial-exchange-w0-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$exdir/requests" "$exdir/responses"

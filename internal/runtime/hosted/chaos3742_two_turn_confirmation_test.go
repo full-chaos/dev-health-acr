@@ -3601,10 +3601,20 @@ type twoTurnReport struct {
 	ReportSchemaVersion string          `json:"report_schema_version"`
 	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
-	// (codex round-3 finding #3: the wrapper script already exports
-	// ACR_TEST_TRIAL_BASE_SHA -- required provenance, team-lead ruling
-	// 2026-08-17 -- but the report never captured it, so the artifact could
-	// not prove which origin/main baseline the run was based on).
+	// (codex round-3 finding #3: required provenance, team-lead ruling
+	// 2026-08-17 -- the artifact must prove what code produced it).
+	//
+	// CHAOS-4157 fix-forward (2026-08-23): this used to be
+	// requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"), a wrapper-script-exported
+	// `git rev-parse origin/main` read AT LAUNCH TIME -- a genuine
+	// provenance defect, caught live: origin/main can (and during a real
+	// ~15min run did) move while the run is in flight, so that value can
+	// name a commit that never actually ran. source.commit
+	// (requireGitSourceIdentity's own `git rev-parse HEAD`, the SAME value
+	// SourceCommit below is stamped from) is the worktree's actual
+	// checked-out commit -- the code that is genuinely running -- so
+	// BaseSHA and SourceCommit are now the identical value by construction,
+	// never two independently-sourced facts that can silently diverge.
 	BaseSHA              string `json:"base_sha"`
 	OracleAnnexPath      string `json:"oracle_annex_path"`
 	OracleAnnexCorpusSHA string `json:"oracle_annex_corpus_sha256"`
@@ -6266,6 +6276,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if len(corpusHash) < 8 || annex.CorpusSHA256 != corpusHash[:8] {
 		t.Fatalf("oracle annex corpus_sha8=%s does not match the loaded corpus hash prefix=%.8s -- refusing to run against a mismatched annex/corpus pair", annex.CorpusSHA256, corpusHash)
 	}
+	// CHAOS-4157 preflight: fail closed before any live measurement work
+	// begins if either fixture's own work_item identifiers have drifted
+	// out of the live v2 canonical scheme (chaos4157_v2_scheme_preflight_test.go).
+	twoTurnValidateWorkItemV2Scheme(t, annex, corpus)
 	source := requireGitSourceIdentity(t)
 
 	// Subscription-only, no metered key, ever (standing rule for this
@@ -6490,7 +6504,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			// is active.
 			ExecutionShape: "sequential",
 		},
-		BaseSHA:         requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
+		BaseSHA:         source.commit,
 		OracleAnnexPath: annexPath, OracleAnnexCorpusSHA: annex.CorpusSHA256, OracleAnnexSignedOff: annex.SignedOff,
 		OfferMissCount:              map[string]int{},
 		MutationProbesTripped:       map[string]int{},
