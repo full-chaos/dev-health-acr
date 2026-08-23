@@ -1903,6 +1903,18 @@ type twoTurnTurn1Facts struct {
 	// output-shape-based inference would otherwise hit, and the reason the
 	// prior, shape-based inference left 4/212 rows unplaceable.
 	Regime string
+	// TraceEvents (CHAOS-4183 phase "2c", team-lead ruling 2026-08-23) is
+	// turn 1's own RAW ResolutionTraceEvent stream -- NOT populated by
+	// twoTurnCaptureTurn1Facts itself (this struct is otherwise pure
+	// scalar-summary fields, deliberately). Set by the ONE call site that
+	// has both the shared trace capture and the corpus INDEX in scope
+	// (TestChaos3742TwoTurnConfirmationReplay, immediately after
+	// twoTurnCaptureTurn1Facts runs, before the first arm's own
+	// trace.reset()), and ONLY when that index appears in
+	// twoTurnForceTraceIndices' own set -- see that function's own doc
+	// comment for the corpus-safety and debug-only discipline this field
+	// exists under. nil on every ordinary run.
+	TraceEvents []graphrank.ResolutionTraceEvent
 }
 
 const (
@@ -2039,6 +2051,10 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.EvidenceRoundEntered = facts.EvidenceRoundEntered
 	res.EvidenceRoundReason = facts.EvidenceRoundReason
 	res.Regime = facts.Regime
+	// CHAOS-4183 phase "2c": nil on every ordinary run (facts.TraceEvents is
+	// only ever non-nil when the call site force-traced this case) -- see
+	// twoTurnTurn1Facts.TraceEvents' own doc comment.
+	res.Turn1TraceEvents = facts.TraceEvents
 }
 
 // TestTwoTurnTraceCapturePassTruncation pins passTruncation's own per-pass
@@ -2546,6 +2562,12 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			CensusRan: true, CensusComplete: true, CensusCount: 7,
 			EvidenceRoundEntered: true, EvidenceRoundReason: string(graphrank.ReasonNoDiscriminators),
 			Regime: twoTurnRegimeAWindowGated,
+			// CHAOS-4183 phase "2c": a non-nil value here proves
+			// twoTurnStampTurn1Facts copies it through -- an ordinary run
+			// leaves this nil (twoTurnCaptureForcedTurn1Trace's own doc
+			// comment), so a real value here is what proves the plumbing,
+			// not merely the zero-value default.
+			TraceEvents: []graphrank.ResolutionTraceEvent{{Stage: "decision", CommitGate: "top_of_two"}},
 		}
 		res := twoTurnCaseResult{}
 		twoTurnStampTurn1Facts(&res, facts)
@@ -2609,6 +2631,95 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			t.Errorf("EvidenceRoundReason = %q, want %q", res.EvidenceRoundReason, graphrank.ReasonNoDiscriminators)
 		case res.Regime != twoTurnRegimeAWindowGated:
 			t.Errorf("Regime = %q, want %q", res.Regime, twoTurnRegimeAWindowGated)
+		case !reflect.DeepEqual(res.Turn1TraceEvents, facts.TraceEvents):
+			t.Errorf("Turn1TraceEvents = %+v, want %+v", res.Turn1TraceEvents, facts.TraceEvents)
+		}
+	})
+}
+
+// TestTwoTurnForceTraceIndices pins ACR_TEST_TRIAL_FORCE_TRACE_INDICES'
+// parsing -- same shape as twoTurnShardCaseIndices' own contract
+// (comma-separated, fail-closed on a malformed value), deliberately
+// simpler: membership only, no "none" sentinel (a debug knob, not a
+// correctness-load-bearing sharding assignment).
+func TestTwoTurnForceTraceIndices(t *testing.T) {
+	t.Run("unset returns nil", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_FORCE_TRACE_INDICES", "")
+		if got := twoTurnForceTraceIndices(t); got != nil {
+			t.Errorf("twoTurnForceTraceIndices() = %v, want nil", got)
+		}
+	})
+	t.Run("parses a comma-separated list", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_FORCE_TRACE_INDICES", "5, 18, 12")
+		got := twoTurnForceTraceIndices(t)
+		want := map[int]struct{}{5: {}, 18: {}, 12: {}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("twoTurnForceTraceIndices() = %v, want %v", got, want)
+		}
+	})
+}
+
+// TestParseTwoTurnForceTraceIndices pins the pure parser's own fail-closed
+// path directly -- see parseTwoTurnForceTraceIndices' own doc comment for
+// why this lives on the pure function rather than twoTurnForceTraceIndices
+// itself (t.Fatal is unsafe to provoke under direct test invocation).
+func TestParseTwoTurnForceTraceIndices(t *testing.T) {
+	t.Parallel()
+	// codex xhigh R1 (2026-08-23, LOW finding): a value that is SET but
+	// names nothing must fail loud, not silently return an empty (nil-like)
+	// set indistinguishable from "unset".
+	for _, raw := range []string{",", " , ", ",,,"} {
+		if _, err := parseTwoTurnForceTraceIndices(raw); err == nil {
+			t.Errorf("parseTwoTurnForceTraceIndices(%q) = nil error, want a fail-closed error -- a launcher that meant to force a capture and got the syntax wrong must never silently run an ordinary, uncaptured pass instead", raw)
+		}
+	}
+	if _, err := parseTwoTurnForceTraceIndices("5,not-a-number"); err == nil {
+		t.Error("parseTwoTurnForceTraceIndices(\"5,not-a-number\") = nil error, want a fail-closed error")
+	}
+	if _, err := parseTwoTurnForceTraceIndices(""); err != nil {
+		t.Errorf("parseTwoTurnForceTraceIndices(\"\") = %v, want nil error (unset is not a malformed value)", err)
+	}
+}
+
+// TestTwoTurnCaptureForcedTurn1Trace pins the ONE decision point
+// ACR_TEST_TRIAL_FORCE_TRACE_INDICES controls: a nil trace, an unforced
+// index, and a forced index each produce the exact output
+// twoTurnCaseResult.Turn1TraceEvents' own doc comment promises.
+func TestTwoTurnCaptureForcedTurn1Trace(t *testing.T) {
+	t.Parallel()
+	forceIndices := map[int]struct{}{18: {}}
+	t.Run("nil trace returns nil regardless of forcing", func(t *testing.T) {
+		if got := twoTurnCaptureForcedTurn1Trace(nil, 18, forceIndices); got != nil {
+			t.Errorf("twoTurnCaptureForcedTurn1Trace(nil trace) = %v, want nil", got)
+		}
+	})
+	t.Run("unforced index returns nil even with a populated trace", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{{Stage: "decision"}}}
+		if got := twoTurnCaptureForcedTurn1Trace(trace, 7, forceIndices); got != nil {
+			t.Errorf("twoTurnCaptureForcedTurn1Trace(unforced index) = %v, want nil", got)
+		}
+	})
+	// codex xhigh R1 (2026-08-23, LOW finding): comparing against a
+	// SECOND, freshly-computed trace.snapshot() call would not catch the
+	// helper returning the LIVE slice (reflect.DeepEqual would still agree
+	// on content) -- this subtest instead asserts real content, THEN
+	// mutates the trace's own backing events afterward and confirms the
+	// already-captured result is unaffected, directly proving the
+	// no-aliasing claim this function's own doc comment makes.
+	t.Run("forced index returns real content, independent of later mutation", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{{Stage: "decision", CommitGate: "lone_floor"}}}
+		got := twoTurnCaptureForcedTurn1Trace(trace, 18, forceIndices)
+		want := []graphrank.ResolutionTraceEvent{{Stage: "decision", CommitGate: "lone_floor"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("twoTurnCaptureForcedTurn1Trace(forced index) = %+v, want %+v", got, want)
+		}
+		// Mutate the trace's OWN backing slice, the same way a later arm's
+		// trace.reset() (append after zeroing len) would -- got must not
+		// see this.
+		trace.events[0].CommitGate = "mutated_after_capture"
+		trace.events = append(trace.events, graphrank.ResolutionTraceEvent{Stage: "kind_offer"})
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("twoTurnCaptureForcedTurn1Trace(forced index) = %+v after mutating the source trace, want it unchanged at %+v -- this proves an aliasing regression", got, want)
 		}
 	})
 }
@@ -2812,6 +2923,97 @@ func twoTurnShardCaseIndices(t *testing.T) ([]int, map[int]struct{}) {
 	}
 	sort.Ints(indices)
 	return indices, set
+}
+
+// twoTurnForceTraceIndices reads ACR_TEST_TRIAL_FORCE_TRACE_INDICES -- a
+// comma-separated list of corpus positions whose turn-1 raw
+// ResolutionTraceEvent stream should be captured onto every row that corpus
+// case produces (twoTurnTurn1Facts.TraceEvents / twoTurnCaseResult.
+// Turn1TraceEvents), mirroring ACR_TEST_TRIAL_SHARD_CASE_INDICES's own
+// parsing discipline (twoTurnShardCaseIndices) -- same fail-closed-on-
+// malformed-value reasoning, deliberately simpler otherwise: this is a
+// DEBUG affordance, not a correctness-load-bearing sharding assignment, so
+// it carries no "none" sentinel and returns membership only, no ordered
+// slice.
+//
+// CHAOS-4183 phase "2c" (team-lead ruling, 2026-08-23): this is Option B
+// from phase 2b's own proposal -- surgical, opt-in, and it generalizes to
+// every future "I need one case's raw trace" investigation without
+// redefining twoTurnCaseResultIsAnomalous's own general measurement-policy
+// predicate (phase 2b's Option A, rejected: "a new anomaly predicate is
+// measurement policy, not debug tooling").
+//
+// Returns nil when unset -- every ordinary run (measurement or otherwise)
+// leaves this at its zero state, forcing nothing, exactly like an unset
+// ACR_TEST_TRIAL_SHARD_CASE_INDICES falls back to modulo selection.
+func twoTurnForceTraceIndices(t *testing.T) map[int]struct{} {
+	t.Helper()
+	set, err := parseTwoTurnForceTraceIndices(os.Getenv("ACR_TEST_TRIAL_FORCE_TRACE_INDICES"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
+
+// parseTwoTurnForceTraceIndices is twoTurnForceTraceIndices' own parsing
+// logic, extracted as a pure function (error return, no *testing.T) so its
+// fail-closed path is directly unit-testable -- calling t.Fatal from inside
+// a helper under direct test invokes runtime.Goexit, which is unsafe to
+// provoke and recover from outside the test framework's own goroutine
+// machinery (this file's own established convention -- see
+// twoTurnWindowSurfacesAgree's own doc comment for the identical
+// split-into-a-pure-predicate reasoning, "a genuinely FAILING subtest would
+// cascade its parent test... even though catching [it] IS the correct,
+// intended behavior being tested").
+func parseTwoTurnForceTraceIndices(raw string) (map[int]struct{}, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	set := make(map[int]struct{}, 8)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		index, err := strconv.Atoi(part)
+		if err != nil || index < 0 {
+			return nil, fmt.Errorf("ACR_TEST_TRIAL_FORCE_TRACE_INDICES: %q is not a non-negative integer", part)
+		}
+		set[index] = struct{}{}
+	}
+	// codex xhigh R1 (2026-08-23, LOW finding): a value that is set but
+	// names nothing (e.g. a bare ",") must fail loud, same as
+	// twoTurnShardCaseIndices' own "named no index" check -- a launcher
+	// that meant to force a capture and got the syntax wrong should never
+	// silently run an ordinary, uncaptured pass instead.
+	if len(set) == 0 {
+		return nil, fmt.Errorf("ACR_TEST_TRIAL_FORCE_TRACE_INDICES is set but names no index -- unset it to disable force-tracing instead")
+	}
+	return set, nil
+}
+
+// twoTurnCaptureForcedTurn1Trace (CHAOS-4183 phase "2c") returns turn 1's
+// own raw ResolutionTraceEvent stream when index appears in forceIndices,
+// nil otherwise -- the ONE decision point twoTurnForceTraceIndices' own
+// opt-in knob controls. trace.snapshot() is a defensive copy
+// (twoTurnTraceCapture's own contract), so the returned slice never aliases
+// the shared capture's backing array a later arm's own trace.reset() would
+// otherwise clobber.
+//
+// DEBUG AFFORDANCE, not a measurement-artifact mechanism: see
+// twoTurnCaseResult.Turn1TraceEvents' own doc comment for why this output
+// is never part of a ratified measurement and must stay LOCAL-ONLY --
+// never quoted, attached, or paraphrased into Linear, a PR, or any other
+// durable/shared report.
+func twoTurnCaptureForcedTurn1Trace(trace *twoTurnTraceCapture, index int, forceIndices map[int]struct{}) []graphrank.ResolutionTraceEvent {
+	if trace == nil {
+		return nil
+	}
+	if _, forced := forceIndices[index]; !forced {
+		return nil
+	}
+	return trace.snapshot()
 }
 
 // twoTurnDistinctCaseIndices returns the ascending set of corpus positions
@@ -3122,6 +3324,32 @@ type twoTurnCaseResult struct {
 	// as ever.
 	TraceEvents         []graphrank.ResolutionTraceEvent `json:"trace_events,omitempty"`
 	BaselineTraceEvents []graphrank.ResolutionTraceEvent `json:"baseline_trace_events,omitempty"`
+	// Turn1TraceEvents (CHAOS-4183 phase "2c", team-lead ruling 2026-08-23)
+	// is a DEBUG AFFORDANCE, distinct in kind from TraceEvents/
+	// BaselineTraceEvents above: those two persist on the SAME
+	// anomaly-gated redaction pass every ordinary measurement run already
+	// applies. This field is gated on an entirely SEPARATE, opt-in knob --
+	// ACR_TEST_TRIAL_FORCE_TRACE_INDICES (twoTurnForceTraceIndices' own doc
+	// comment) -- and is NEVER touched by twoTurnRedactNonAnomalousTraceEvents;
+	// it is nil on every run that does not explicitly name this row's own
+	// corpus index. Turn 1's own raw stream was previously UNRECOVERABLE
+	// from any artifact this harness could produce (CHAOS-4183 phase 2b's
+	// own finding: twoTurnCaptureTurn1Facts consumes it into scalar
+	// summary fields only, then every arm resets the shared capture before
+	// its own call) -- this is the minimal addition phase 2b proposed to
+	// close that gap for a targeted, single-case investigation.
+	//
+	// This output is NEVER part of a ratified measurement artifact -- a
+	// force-traced run is a ONE-OFF debug capture, not a run whose report
+	// gets merged, cited, or archived as evidence. And UNLIKE TraceEvents/
+	// BaselineTraceEvents above (documented corpus-safe by construction,
+	// "no exception"), this field is treated MORE conservatively per
+	// team-lead's own ruling: a force-traced artifact stays LOCAL-ONLY on
+	// the machine that produced it -- never quoted, attached, or
+	// paraphrased into Linear, a PR, or any other durable/shared report.
+	// Only mechanism and index (never trace content) belong in anything
+	// durable, same standing rule as ever.
+	Turn1TraceEvents []graphrank.ResolutionTraceEvent `json:"turn1_trace_events,omitempty"`
 	// HintedCommitAffirmation/BaselineCommitAffirmation (CHAOS-4139,
 	// inferred_tier non-window members only) are each leg's OWN
 	// twoTurnCommitAffirmationState: "" (nothing committed at the decision
@@ -4014,6 +4242,25 @@ type twoTurnReport struct {
 	// cmd/acr-trial-merge-two-turn/main.go gained both in the same change,
 	// same "an undeclared field is dropped on decode" reason every prior
 	// bump needed it for.
+	//
+	// "25" (CHAOS-4183 phase "2c", team-lead ruling, 2026-08-23): purely
+	// additive. twoTurnCaseResult gains Turn1TraceEvents -- turn 1's own
+	// raw ResolutionTraceEvent stream, nil on every ordinary run, populated
+	// ONLY when a launcher explicitly names this case's own corpus index
+	// via ACR_TEST_TRIAL_FORCE_TRACE_INDICES (twoTurnForceTraceIndices).
+	// This is a DEBUG AFFORDANCE, not a measurement-artifact field:
+	// distinct in kind from TraceEvents/BaselineTraceEvents above (which
+	// persist on the anomaly-gated redaction pass every ordinary run
+	// already applies) -- Turn1TraceEvents is gated on an entirely
+	// separate, opt-in knob, and is never touched by
+	// twoTurnRedactNonAnomalousTraceEvents. A force-traced run's own
+	// artifact is never part of a ratified measurement and stays
+	// LOCAL-ONLY -- see Turn1TraceEvents' own doc comment for the full
+	// corpus-safety discipline. No merge arithmetic changes (Results
+	// concatenates verbatim); the mirror in
+	// cmd/acr-trial-merge-two-turn/main.go gained the field in the same
+	// change, same "an undeclared field is dropped on decode" reason every
+	// prior bump needed it for.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -7197,7 +7444,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "24",
+		ReportSchemaVersion: "25",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -7297,6 +7544,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_INDEX"); raw != "" && os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT") == "" {
 		t.Fatalf("ACR_TEST_TRIAL_SHARD_INDEX=%q is set but ACR_TEST_TRIAL_SHARD_COUNT is not -- both or neither", raw)
 	}
+	// forceTraceIndices (CHAOS-4183 phase "2c") is read UNCONDITIONALLY,
+	// independent of sharding -- a debug capture request is orthogonal to
+	// how the run's own case set was assigned. See
+	// twoTurnForceTraceIndices' own doc comment.
+	forceTraceIndices := twoTurnForceTraceIndices(t)
 	// explicitIndices is declared out here so the post-limit provenance
 	// block below can still consult what the launcher ASKED for after the
 	// shard block's own scope has closed.
@@ -7554,6 +7806,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// comment for why this closes the offer-miss "only turn-2 is
 		// stamped" gap).
 		turn1Facts := twoTurnCaptureTurn1Facts(traceCapture, turn1, tc)
+		// CHAOS-4183 phase "2c": captured HERE, before the first arm's own
+		// trace.reset() below -- the SAME "before the reset" urgency
+		// turn1SynthesisOverride's own capture above already documents. See
+		// twoTurnCaptureForcedTurn1Trace's own doc comment for the
+		// debug-only, local-artifacts-only discipline this exists under.
+		turn1Facts.TraceEvents = twoTurnCaptureForcedTurn1Trace(traceCapture, entry.Index, forceTraceIndices)
 		turn1Timing := buildTwoTurnArmTiming("turn1", turn1Started, modelCallCapture)
 		// positiveTiming/inferredTiming/confirmedWrongTiming/mutationTiming
 		// (CHAOS-4058) default to zero-duration/zero-call records naming

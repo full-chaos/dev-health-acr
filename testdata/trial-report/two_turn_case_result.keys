@@ -78,5 +78,6 @@ turn1_search_truncated
 turn1_status
 turn1_term_search_truncated
 turn1_tied_statistical_top
+turn1_trace_events
 turn2_status
 wrong_commit
