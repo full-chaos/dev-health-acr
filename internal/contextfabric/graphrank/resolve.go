@@ -211,6 +211,29 @@ type ResolveDeps struct {
 	// would duplicate, not extend. A backend with no kind-scoped query path
 	// can safely leave this nil.
 	SearchKind func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
+	// VectorMechanismConfigured (CHAOS-4154) reports whether this deployment
+	// has a LIVE vector-similarity mechanism at all (falkorgraph: a.embedder
+	// != nil) -- distinct from VectorMarginCommitThreshold/CalibratedTopK
+	// below, which describe whether the CHAOS-3829 margin RESCUE is
+	// calibrated, not whether the mechanism runs. The confirmed-kind
+	// truncation-scoping mechanism (chaos4154_confirmed_kind_scope.go) needs
+	// this because SearchKind has no kind-scoped vector-arm counterpart --
+	// kindScopedFulltextSearchNodes' own doc comment (falkorgraph) is
+	// explicit that calibrating one blind, with no live corpus to validate
+	// an over-fetch depth against, is exactly the kind of guess this repo's
+	// CHAOS-3834/CHAOS-3829 calibration discipline rejects. So an exhaustive
+	// per-term SearchKind pass can prove the LEXICAL channel complete, but
+	// can only be trusted to prove the WHOLE candidate population complete
+	// (sol-max's CHAOS-4154 ruling, amendment 2: "SearchQuestion() is also
+	// candidate-producing... without one of [the three completeness
+	// contracts], kindScopedComplete is a false proof") when this field is
+	// false -- no live vector mechanism exists to have surfaced a same-kind
+	// rival the lexical pass could not see. false (the zero value) is the
+	// safe default for any backend that does not set this: it makes the
+	// confirmed-kind-scoped bypass a permanent no-op rather than a false
+	// completeness claim, exactly matching a backend with no vector arm at
+	// all.
+	VectorMechanismConfigured bool
 	// VectorMarginCommitThreshold is CHAOS-3829's per-embedder-identity
 	// calibrated M (falkorgraph's retrieval_policy.go RetrievalPolicy.
 	// VectorMarginCommitThreshold): the vector-arm top-1/top-2 similarity
@@ -398,6 +421,51 @@ type ResolutionTracer interface {
 	Trace(event ResolutionTraceEvent)
 }
 
+// discardableDecisionTracer (CHAOS-4154, codex R2, Medium, confirmed) wraps
+// a real ResolutionTracer for exactly one ResolveFromMergedCandidatesWithGateAndBasis
+// call whose OWN resolution the caller may go on to discard. It holds back
+// only the "decision"-stage event that call produces -- every other stage
+// (corroboration, etc.) still reaches real immediately, unbuffered -- until
+// keep() is called, which the caller does only when it actually retains
+// this call's resolution. Never call Trace concurrently with itself or with
+// keep(): this type has no synchronization, matching every other
+// single-goroutine caller in this file.
+//
+// Why this exists: every OTHER "decision"-stage producer in this file
+// traces unconditionally because the resolution it decides IS the one
+// returned (see the CHAOS-3896 evidence-census re-decision, which
+// unconditionally keeps whatever ResolveFromMergedCandidatesWithGateAndBasis
+// returns). CHAOS-4154's own scoped re-decision is the first case in this
+// file where that is NOT true -- it is discarded whenever it does not
+// commit -- so tracing it unconditionally could leave a "decision" event
+// as the LAST one describing a resolution that was never returned,
+// contradicting the "last decision event describes the returned
+// resolution" invariant readers of this trace (production and this
+// ticket's own test helpers alike) rely on.
+type discardableDecisionTracer struct {
+	real     ResolutionTracer
+	captured *ResolutionTraceEvent
+}
+
+func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
+	if event.Stage == "decision" {
+		captured := event
+		d.captured = &captured
+		return
+	}
+	if d.real != nil {
+		d.real.Trace(event)
+	}
+}
+
+// keep forwards the held-back "decision" event (if any) to the real
+// tracer -- call ONLY when the caller is retaining this call's resolution.
+func (d *discardableDecisionTracer) keep() {
+	if d.captured != nil && d.real != nil {
+		d.real.Trace(*d.captured)
+	}
+}
+
 // ResolutionTraceEvent is ONE stage event. Stage names which fields are
 // populated; every other field stays at its zero value, which is why this
 // is one struct rather than one type per stage -- adding a field here is
@@ -408,11 +476,12 @@ type ResolutionTraceEvent struct {
 	// "request.RequestID exists").
 	RequestID string
 	// Stage is a closed vocabulary: "search", "search_question"
-	// (CHAOS-4120), "confirmed_kind_rescue" (CHAOS-4132), "alias_lookup",
-	// "corroboration", "decision", "identity_gate", "identity_universe",
-	// "evidence_round", "evidence_probe" (CHAOS-3899), "evidence_census_commit"
-	// (CHAOS-3896 Slice C), "evidence_source_native", "evidence_source_native_probe"
-	// (CHAOS-3899 widening measurement, 2026-08-19), "slice_b_survivor_verdict"
+	// (CHAOS-4120), "confirmed_kind_rescue" (CHAOS-4132), "confirmed_kind_scope"
+	// (CHAOS-4154), "alias_lookup", "corroboration", "decision",
+	// "identity_gate", "identity_universe", "evidence_round", "evidence_probe"
+	// (CHAOS-3899), "evidence_census_commit" (CHAOS-3896 Slice C),
+	// "evidence_source_native", "evidence_source_native_probe" (CHAOS-3899
+	// widening measurement, 2026-08-19), "slice_b_survivor_verdict"
 	// (CHAOS-4088).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
@@ -843,6 +912,37 @@ type ResolutionTraceEvent struct {
 	// commit-basis-shaped traces durable, at which point this signal is a
 	// candidate for that same treatment.
 	SurvivorVerdict string
+	// PopulationBasis (decision stage ONLY, CHAOS-4154): closed vocabulary
+	// naming WHICH candidate population a STATISTICAL commit (CommitBasis ==
+	// "statistical") was actually decided over --
+	// "resolution_wide_untruncated" (the ordinary, unscoped pool; this
+	// resolution's own SearchTruncated, on this SAME event, was false),
+	// "confirmed_kind_scoped_complete" (the isolated, exhaustively-proven-
+	// complete confirmed-kind census chaos4154_confirmed_kind_scope.go
+	// builds when the ordinary pool's own truncation would otherwise have
+	// blocked an already-decisive confirmed-kind commit), or "none" (no
+	// commit, a NON-statistical commit, OR the narrow CHAOS-3810
+	// exact-label-survives-truncation carve-out -- that carve-out trusts
+	// STRING EQUALITY, not any claim about population completeness, so it
+	// deliberately makes no population-basis claim either). See
+	// ResolveFromMergedCandidatesWithGateAndBasis's own populationBasis
+	// local for the exact derivation. NEVER "resolution_wide_untruncated"
+	// on an event whose own SearchTruncated is true -- see
+	// TestResolveFromMergedCandidatesWithGateAndBasis_PopulationBasisInvariant's
+	// "confirmed-kind-scoped commit" case.
+	PopulationBasis string
+	// ConfirmedKindScopeState/ConfirmedKindScopeCandidateCount (stage ==
+	// "confirmed_kind_scope" ONLY, CHAOS-4154): describes
+	// buildConfirmedKindScopedSnapshot's own outcome for this resolution --
+	// see that function's doc comment (chaos4154_confirmed_kind_scope.go)
+	// for the closed vocabulary ConfirmedKindScopeState carries
+	// ("not_attempted" | "complete" | "truncated" | "failed" |
+	// "plan_incomplete") and exactly what each means.
+	// ConfirmedKindScopeCandidateCount is the isolated snapshot's own
+	// candidate count (0 whenever State != "complete", since an incomplete
+	// snapshot is never handed to the gate as a decision population).
+	ConfirmedKindScopeState          string
+	ConfirmedKindScopeCandidateCount int
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -1557,7 +1657,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// CHAOS-4085 commit-basis write site 2 of 3: the ordinary commit
 	// decision. ResetTo, not merge -- this is the first decision, and it
 	// defines the whole basis set for it.
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "")
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "", false)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -1565,6 +1665,158 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// the un-widened retrievalDegraded -- see its own declaration above for
 	// why it must never reach the gate call itself.
 	resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+	// CHAOS-4154: confirmed-kind truncation scoping. Reachable ONLY when
+	// this resolution confirmed a kind, the resolution-wide searchTruncated
+	// bit is true, and the ordinary (unscoped) decision above committed
+	// nothing -- which, given resolution.go's switch ordering (searchTruncated
+	// sits BEFORE LoneFloor/TopFloor, first-match wins), is EXACTLY the
+	// population case 57 (see chaos4154_confirmed_kind_scope.go) names: the
+	// truncation-preempt branch fired, so LoneFloor/TopFloor never even ran.
+	// exact_index/identity_fast_path already had first refusal in the call
+	// above -- if either had fired, resolution.Committed would be non-empty
+	// and this block would not run.
+	if confirmedKind != nil && searchTruncated && len(resolution.Committed) == 0 {
+		scopedPool, scopedObservationParentKey, scopedObservationBlocked, scopedIdentity, scopedIdentityTerms, scopeState, scopeTraversalDegraded, scopeAuthzDropped, scopeErr := buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, confirmedKind.Kind, effectiveSearchLimit)
+		if scopeErr != nil {
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, scopeErr
+		}
+		if scopeTraversalDegraded > 0 && deps.TraversalDegraded != nil {
+			deps.TraversalDegraded(ctx, principal.OrgID, scopeTraversalDegraded)
+		}
+		// codex R2 (Medium, confirmed): call ONLY deps.SubjectCandidatesAuthzDropped,
+		// exactly like the pre-existing unscoped call site above (~line 1460)
+		// -- a production SubjectCandidatesAuthzDropped implementation
+		// (falkorgraph/reader.go) already forwards to
+		// contextfabric.RecordSubjectCandidatesAuthzDropped itself; an
+		// earlier version of this branch ALSO called it directly here,
+		// double-counting every scoped-pass authz drop into the ctx-attached
+		// recorder.
+		if scopeAuthzDropped > 0 && deps.SubjectCandidatesAuthzDropped != nil {
+			deps.SubjectCandidatesAuthzDropped(ctx, principal.OrgID, scopeAuthzDropped)
+		}
+		if deps.ResolutionTracer != nil {
+			// ConfirmedKindScopeCandidateCount (codex review finding, LOW/
+			// HIGH confidence, confirmed): 0 whenever scopeState !=
+			// confirmedKindScopeComplete -- see that field's own doc
+			// comment. buildConfirmedKindScopedSnapshot can return a
+			// non-empty (but discarded) pool on a truncated/failed/
+			// plan_incomplete outcome (a partial read still merges what it
+			// found before the disqualifying signal arrives), and reporting
+			// that count would both contradict the documented contract and
+			// leak a size signal from a population the gate never sees.
+			candidateCount := 0
+			if scopeState == confirmedKindScopeComplete {
+				candidateCount = len(scopedPool)
+			}
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "confirmed_kind_scope",
+				ConfirmedKindScopeState:          scopeState,
+				ConfirmedKindScopeCandidateCount: candidateCount,
+			})
+		}
+		// gateValid: the SAME conjunct every other commit path in this
+		// resolution requires -- an invalid gate must disable this one too,
+		// not just leave it to fire because the ordinary gates individually
+		// declined (mirrors the evidence-census call site's own identical
+		// guard below).
+		if scopeState == confirmedKindScopeComplete && gateValid {
+			// CHAOS-4085 commit-basis write site: the confirmed-kind-scoped
+			// re-decision. ResetTo only when it actually commits (below) --
+			// an ambiguous scoped re-decision must never discard the first
+			// pass's own (unscoped) candidates/clarification prompt, which
+			// is the caller-visible fallback sol's routing keeps: "evaluate
+			// lone_floor and top_of_two from the scoped snapshot... [when
+			// complete]; otherwise: fail closed as today." In practice the
+			// FULL switch runs unmodified over the scoped population
+			// (resolution.go), so exact_index/identity_fast_path can also
+			// fire here, not only lone_floor/top_of_two -- deliberately: an
+			// exact-label or genuinely-proven-unique identity match within
+			// an isolated, proven-complete population is a STRONGER
+			// commit-worthiness signal than a floor/gap comparison, never a
+			// weaker one, so widening beyond sol's own two named tiers adds
+			// no new risk (do-not-build's "do not change... veto semantics"
+			// is honored: no gate's OWN threshold or check changes, only
+			// which population it evaluates).
+			//
+			// searchTruncated=false: this call's own population is the
+			// isolated, exhaustively-proven-complete census -- see
+			// confirmedKindScopedBasis's own doc comment (resolution.go) for
+			// why that, not this literal parameter, is what the decision
+			// trace records.
+			//
+			// vectorArmSimilarity=nil, vectorMarginCommitThreshold=0,
+			// calibratedTopK=0: SearchKind is lexical-only (nothing to feed
+			// the CHAOS-3829 carve-out) and the carve-out is deliberately
+			// disabled outright for this call -- sol's ratified routing
+			// names only "evaluate lone_floor and top_of_two from the
+			// scoped snapshot", not a NEW, unreviewed interaction between
+			// two novel-population mechanisms.
+			//
+			// scopedIdentity/scopedIdentityTerms: buildConfirmedKindScopedSnapshot's
+			// OWN fresh, scoped-only collision-detection maps (codex review
+			// finding, Medium, confirmed) -- NEVER the caller's
+			// whole-resolution identity/identityTerms here. See that
+			// function's own doc comment for why reusing the shared maps
+			// was wrong (an unrelated, possibly cross-kind unscoped
+			// claimant could veto a scoped candidate, and mutation residue
+			// leaked into the later evidence-census re-decision) and why a
+			// genuine same-kind collision is still caught regardless (this
+			// pass's own exhaustiveness finds it too).
+			//
+			// aliasIdentityComplete: the REAL value this resolution's own
+			// AliasLookup call proved (not hardcoded) -- it is an honest,
+			// independently-true fact about this org's identity universe,
+			// unrelated to which population the gate is currently deciding
+			// over. For confirmedKind.Kind outside isAliasLookupScopedKind
+			// (work_item) identity_fast_path is structurally unreachable
+			// regardless, so this can only ever let a genuinely-proven
+			// unique identity claimant commit through the STRONGEST tier
+			// rather than falling to lone_floor/top_of_two -- never the
+			// reverse.
+			// scopedDecisionTracer (codex R2, Medium, confirmed): every OTHER
+			// decision-stage event producer in this file traces
+			// unconditionally because the resolution it decides is always
+			// the one returned (see the CHAOS-3896 evidence-census
+			// re-decision just below, which unconditionally keeps whatever
+			// it decides). This call is different -- it is DISCARDED
+			// (resolution stays the first pass's) whenever
+			// scopedResolution.Committed is empty -- so tracing its
+			// "decision" event unconditionally could leave that event as
+			// the LAST one a reader sees while the actual returned
+			// resolution is the discarded call's sibling, not itself:
+			// exactly the "last decision event describes the returned
+			// resolution" invariant every consumer of this trace (including
+			// this ticket's own lastDecisionEvent test helper) relies on,
+			// broken. scopedDecisionTracer holds the ONE "decision" event
+			// this call produces back from the real tracer until keep() is
+			// called below, which happens only when this resolution is
+			// actually retained; every other stage (corroboration, etc.)
+			// still passes through immediately, unaffected. The
+			// "confirmed_kind_scope" stage event traced above already
+			// records this attempt's own completeness/candidate-count
+			// regardless of outcome, so nothing about the attempt itself
+			// becomes undiagnosable by holding back just the decision event.
+			scopedDecisionTracer := &discardableDecisionTracer{real: deps.ResolutionTracer}
+			scopedResolution, scopedBases, scopedDigests := ResolveFromMergedCandidatesWithGateAndBasis(
+				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
+				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
+				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
+				scopedDecisionTracer, request.RequestID, "", true,
+			)
+			if len(scopedResolution.Committed) > 0 {
+				resolution = scopedResolution
+				// ResetTo, not merge -- same CHAOS-4085/4087 discipline every
+				// other re-decision call site in this function follows: this
+				// call returns a WHOLLY FRESH resolution over an isolated
+				// population, so the basis/digest sets must be replaced, not
+				// merged with the first pass's.
+				commitBases.ResetTo(scopedBases)
+				commitDigests.ResetTo(scopedDigests)
+				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+				scopedDecisionTracer.keep()
+			}
+		}
+	}
 	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round
 	// for measurement, strictly AFTER resolution's own COMMIT-GATE decision
 	// is already final -- CHAOS-3896 Slice B (below) may reorder
@@ -1607,7 +1859,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// the failure mode this vocabulary exists to prevent.
 				var censusBases contextfabric.CommitBasisSet
 				var censusDigests contextfabric.CommitDecisionDigestSet
-				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey)
+				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false)
 				commitBases.ResetTo(censusBases)
 				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded

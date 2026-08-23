@@ -84,6 +84,12 @@ type fakeGraphBackend struct {
 	searchKindErr       error
 	searchKindTruncated bool
 	searchKindDegraded  bool
+
+	// CHAOS-4154 VectorMechanismConfigured fixture. Defaults to false, so
+	// every pre-existing test in this file -- which never sets it -- gets
+	// ResolveDeps.VectorMechanismConfigured == false, exactly the pre-ticket
+	// wiring (this field did not exist before CHAOS-4154).
+	vectorMechanismConfigured bool
 }
 
 // searchKindCall records one ResolveDeps.SearchKind(term, kind, ...) call --
@@ -126,6 +132,7 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 		},
 		VectorMarginCommitThreshold: f.vectorMarginCommitThreshold,
 		RawSignalObserver:           f.rawSignalObserver,
+		VectorMechanismConfigured:   f.vectorMechanismConfigured,
 	}
 	if f.enableSearchQuestion {
 		deps.SearchQuestion = func(ctx context.Context, question string, limit int) ([]CandidateNode, bool, bool, error) {

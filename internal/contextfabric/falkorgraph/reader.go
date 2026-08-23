@@ -123,6 +123,11 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		SearchKind: func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 			return a.kindScopedFulltextSearchNodes(ctx, key, principal.OrgID, term, kind, limit, temporal)
 		},
+		// CHAOS-4154: whether THIS deployment has a live vector mechanism at
+		// all -- see ResolveDeps.VectorMechanismConfigured's own doc comment
+		// for why the confirmed-kind truncation-scoping mechanism needs
+		// this rather than any per-call signal.
+		VectorMechanismConfigured: a.embedder != nil,
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject, allowExactMatch,
 				func(ctx context.Context, uuid string) ([]graphrank.CandidateEdge, error) {
