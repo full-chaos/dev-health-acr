@@ -111,13 +111,34 @@ func TestMergeReportsConcatenatesTimingsAndRecomputesSummary(t *testing.T) {
 	}
 }
 
-// TestRunEndToEndMergesValidV10Shards is the real JSON round-trip codex
+// TestMergeReportsSumsPairRetriedCountAcrossShards (CHAOS-4138, schema v17)
+// is the direct proof PairRetriedCount survives a merge -- the same
+// direct-mergeReports-call style TestMergeReportsConcatenatesTimingsAndRecomputesSummary
+// above uses, not the round-trip test (which never asserts this specific
+// field's arithmetic). InferredPairInvalidCount rides along unset (0) on
+// both shards here deliberately: this test pins ONLY the new field's own
+// `+=` correctness, not InferredPairInvalidCount==0's own zero-tolerance
+// gate (main's own evaluateGates, exercised elsewhere).
+func TestMergeReportsSumsPairRetriedCountAcrossShards(t *testing.T) {
+	shard0 := shardReport(0, 2, nil)
+	shard0.PairRetriedCount = 1
+	shard1 := shardReport(1, 2, nil)
+	shard1.PairRetriedCount = 2
+
+	merged := mergeReports([]twoTurnReport{shard0, shard1})
+
+	if got, want := merged.PairRetriedCount, 3; got != want {
+		t.Errorf("merged.PairRetriedCount = %d, want %d (1 + 2, summed across both shards)", got, want)
+	}
+}
+
+// TestRunEndToEndMergesValidShards is the real JSON round-trip codex
 // round-3 review demanded: TestMergeReportsConcatenatesTimingsAndRecomputesSummary
 // above calls mergeReports directly on in-memory structs, which never
 // proves this tool's actual entrypoint -- json.Unmarshal of a real shard
 // file, run()'s validation gates, json.Marshal of the merged output, and a
-// second independent decode of what landed on disk -- handles a valid v10
-// artifact at all. Two real shard files go in; the written merged file is
+// second independent decode of what landed on disk -- handles a valid
+// current-schema artifact at all. Two real shard files go in; the written merged file is
 // read back and its Timings/TimingSummary/Provenance, plus (CHAOS-4062)
 // each shard's "unjustified" row's Shadow*/*CommittedSubjects fields
 // (including CHAOS-4079's ShadowKindInsensitivityMode), are

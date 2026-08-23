@@ -138,7 +138,14 @@ import (
 // below) -- mirrored here in the SAME change for the SAME
 // undeclared-field-dropped-on-decode reason as everything else on this
 // list.
-const expectedSchemaVersion = "16"
+// "17" (CHAOS-4138, 2026-08-23): purely additive -- see the producer's own
+// ReportSchemaVersion doc comment for the full mechanism (the bounded
+// one-shot pair retry). twoTurnCaseResult gained PairRetried/
+// PairRetryFirstArmInvalidReason/Stage/ErrorType and this report gained
+// PairRetriedCount; mirrored here in the same change for the same
+// undeclared-field-dropped-on-decode reason as everything else on this
+// list.
+const expectedSchemaVersion = "17"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -211,12 +218,21 @@ type twoTurnCaseResult struct {
 	TierRoutedCorrectly    bool   `json:"tier_routed_correctly,omitempty"`
 	InferredClassification string `json:"inferred_classification,omitempty"`
 	PairInvalid            bool   `json:"pair_invalid,omitempty"`
-	FalseNoMatch           bool   `json:"false_no_match,omitempty"`
-	CommittedCount         int    `json:"committed_count"`
-	WrongCommit            bool   `json:"wrong_commit"`
-	MutationProbe          string `json:"mutation_probe,omitempty"`
-	MutationTripped        bool   `json:"mutation_tripped,omitempty"`
-	ArmInvalidReason       string `json:"arm_invalid_reason,omitempty"`
+	// PairRetried/PairRetryFirstArmInvalidReason/Stage/ErrorType
+	// (CHAOS-4138, schema v17) mirror twoTurnCaseResult's identically-named
+	// fields byte-for-byte -- see that file's own doc comments. This tool
+	// never re-decides retry eligibility; it only carries the fields
+	// through the merge.
+	PairRetried                       bool   `json:"pair_retried,omitempty"`
+	PairRetryFirstArmInvalidReason    string `json:"pair_retry_first_arm_invalid_reason,omitempty"`
+	PairRetryFirstArmInvalidStage     string `json:"pair_retry_first_arm_invalid_stage,omitempty"`
+	PairRetryFirstArmInvalidErrorType string `json:"pair_retry_first_arm_invalid_error_type,omitempty"`
+	FalseNoMatch                      bool   `json:"false_no_match,omitempty"`
+	CommittedCount                    int    `json:"committed_count"`
+	WrongCommit                       bool   `json:"wrong_commit"`
+	MutationProbe                     string `json:"mutation_probe,omitempty"`
+	MutationTripped                   bool   `json:"mutation_tripped,omitempty"`
+	ArmInvalidReason                  string `json:"arm_invalid_reason,omitempty"`
 	// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome and
 	// BaselineCommittedSubjects/HintedCommittedSubjects (CHAOS-4062,
 	// schema v8) mirror twoTurnCaseResult's identically-named fields in
@@ -379,28 +395,33 @@ type twoTurnReport struct {
 	// twoTurnReport's identically-named field -- see that file's own doc
 	// comment. A THIRD zero-tolerance bar alongside WrongCommitCount/
 	// FalseNoMatchCount below.
-	SynthesisStatusOverrideUncommittedCount int                 `json:"synthesis_status_override_uncommitted_count"`
-	WindowCommitCount                       int                 `json:"window_commit_count"`
-	WindowInferredTierRanCount              int                 `json:"window_inferred_tier_ran_count"`
-	WindowArmErrorCount                     int                 `json:"window_arm_error_count"`
-	WindowGatedCount                        int                 `json:"window_gated_count"`
-	WindowClassDefaultGatedCount            int                 `json:"window_class_default_gated_count"`
-	InferredKindHandleDecisiveCount         int                 `json:"inferred_kind_handle_decisive_count"`
-	InferredBaselineEquivalentCount         int                 `json:"inferred_baseline_equivalent_count"`
-	InferredKindInsensitivityAttestedCount  int                 `json:"inferred_kind_insensitivity_attested_count"`
-	InferredUnjustifiedCount                int                 `json:"inferred_unjustified_count"`
-	InferredPairInvalidCount                int                 `json:"inferred_pair_invalid_count"`
-	ConfirmedWrongRedeemedCount             map[string]int      `json:"confirmed_wrong_redeemed_committable_count"`
-	ApplicableMembers                       []string            `json:"applicable_members"`
-	AntiVacuityValid                        bool                `json:"anti_vacuity_valid"`
-	AnchorAntiVacuityDenominator            int                 `json:"anchor_anti_vacuity_denominator"`
-	AnchorNonEnumerableKindExcludedCount    int                 `json:"anchor_non_enumerable_kind_excluded_count"`
-	MutationProbesTripped                   map[string]int      `json:"mutation_probes_tripped"`
-	MutationProbesRun                       map[string]int      `json:"mutation_probes_run"`
-	ControlsTotal                           int                 `json:"controls_total"`
-	ControlsWitnessed                       int                 `json:"controls_witnessed"`
-	ControlsWitnessedNoMatchCensusBacked    int                 `json:"controls_witnessed_no_match_census_backed"`
-	Results                                 []twoTurnCaseResult `json:"results"`
+	SynthesisStatusOverrideUncommittedCount int `json:"synthesis_status_override_uncommitted_count"`
+	WindowCommitCount                       int `json:"window_commit_count"`
+	WindowInferredTierRanCount              int `json:"window_inferred_tier_ran_count"`
+	WindowArmErrorCount                     int `json:"window_arm_error_count"`
+	WindowGatedCount                        int `json:"window_gated_count"`
+	WindowClassDefaultGatedCount            int `json:"window_class_default_gated_count"`
+	InferredKindHandleDecisiveCount         int `json:"inferred_kind_handle_decisive_count"`
+	InferredBaselineEquivalentCount         int `json:"inferred_baseline_equivalent_count"`
+	InferredKindInsensitivityAttestedCount  int `json:"inferred_kind_insensitivity_attested_count"`
+	InferredUnjustifiedCount                int `json:"inferred_unjustified_count"`
+	InferredPairInvalidCount                int `json:"inferred_pair_invalid_count"`
+	// PairRetriedCount (CHAOS-4138, schema v17) mirrors twoTurnReport's
+	// identically-named field -- see that file's own doc comment.
+	// Observational only; summed across shards like every other count
+	// field below, never itself gated.
+	PairRetriedCount                     int                 `json:"pair_retried_count"`
+	ConfirmedWrongRedeemedCount          map[string]int      `json:"confirmed_wrong_redeemed_committable_count"`
+	ApplicableMembers                    []string            `json:"applicable_members"`
+	AntiVacuityValid                     bool                `json:"anti_vacuity_valid"`
+	AnchorAntiVacuityDenominator         int                 `json:"anchor_anti_vacuity_denominator"`
+	AnchorNonEnumerableKindExcludedCount int                 `json:"anchor_non_enumerable_kind_excluded_count"`
+	MutationProbesTripped                map[string]int      `json:"mutation_probes_tripped"`
+	MutationProbesRun                    map[string]int      `json:"mutation_probes_run"`
+	ControlsTotal                        int                 `json:"controls_total"`
+	ControlsWitnessed                    int                 `json:"controls_witnessed"`
+	ControlsWitnessedNoMatchCensusBacked int                 `json:"controls_witnessed_no_match_census_backed"`
+	Results                              []twoTurnCaseResult `json:"results"`
 	// Timings/TimingSummary (CHAOS-4058, purely additive, observational
 	// only): Timings concatenates across shards exactly like Results
 	// does (each shard's cases are disjoint); TimingSummary is never
@@ -677,6 +698,7 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.InferredKindInsensitivityAttestedCount += s.InferredKindInsensitivityAttestedCount
 		merged.InferredUnjustifiedCount += s.InferredUnjustifiedCount
 		merged.InferredPairInvalidCount += s.InferredPairInvalidCount
+		merged.PairRetriedCount += s.PairRetriedCount
 		merged.AnchorAntiVacuityDenominator += s.AnchorAntiVacuityDenominator
 		merged.AnchorNonEnumerableKindExcludedCount += s.AnchorNonEnumerableKindExcludedCount
 		merged.ControlsTotal += s.ControlsTotal

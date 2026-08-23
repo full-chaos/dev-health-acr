@@ -2522,6 +2522,40 @@ type twoTurnCaseResult struct {
 	// baseline call is never silently absorbed into "unjustified" (which
 	// means "evaluated and found wanting", not "could not be evaluated").
 	PairInvalid bool `json:"pair_invalid,omitempty"`
+	// PairRetried (CHAOS-4138) is true when this row's baseline/hinted-leg
+	// pairing needed and used its ONE bounded retry: the first attempt's
+	// own baseline-leg or hinted-leg Investigate() call itself errored --
+	// an instrument failure, the harness could not take the measurement at
+	// all -- so runTwoTurnInferredTierArmWithPairRetry re-ran the whole
+	// pairing exactly once with a distinct request-ID prefix. Never set
+	// for a pairing-precondition failure (Reused/VersionSet mismatch/
+	// window-bounds disagreement, the pairInvalid check inside
+	// runTwoTurnInferredTierArm), the subject_anchor structural exemption,
+	// or a missing window-oracle-entry/window-precondition-setup failure:
+	// every one of those is the harness correctly detecting an invalid
+	// comparison or an unconstructable precondition, not an instrument
+	// failure -- see twoTurnPairInvalidIsInstrumentFailure's own doc
+	// comment for the exact, narrow eligibility test. A PairInvalid row
+	// with PairRetried==false was never eligible for retry at all (the
+	// first attempt's own failure, unretried). A PairInvalid row with
+	// PairRetried==true IS the retry attempt's own row after the retry
+	// ALSO failed -- bounded to exactly one retry, never a loop: a call
+	// that fails twice is a real, reportable instrument failure, reported
+	// exactly as failed as an unretried row would be, never silently
+	// absorbed or retried again.
+	PairRetried bool `json:"pair_retried,omitempty"`
+	// PairRetryFirstArmInvalidReason/Stage/ErrorType (CHAOS-4138) preserve
+	// the FIRST attempt's own error-derived fields when PairRetried is
+	// true. This row's own ArmInvalidReason/ArmInvalidStage/
+	// ArmInvalidErrorType always describe the RETRY attempt's own outcome
+	// (empty on a successful retry; its own distinct failure otherwise) --
+	// these three fields are the only place the first attempt's error
+	// survives, so a reader can see both attempts' errors on one row
+	// exactly the way they can already see turn1_regime, census_ran, etc.
+	// Empty when PairRetried is false.
+	PairRetryFirstArmInvalidReason    string `json:"pair_retry_first_arm_invalid_reason,omitempty"`
+	PairRetryFirstArmInvalidStage     string `json:"pair_retry_first_arm_invalid_stage,omitempty"`
+	PairRetryFirstArmInvalidErrorType string `json:"pair_retry_first_arm_invalid_error_type,omitempty"`
 	// FalseNoMatch (positive AND inferred_tier arms, every member including
 	// window -- CHAOS-4120 widened this from inferred_tier alone) is true
 	// when this outcome resolved to the literal no_match terminal on a case
@@ -3176,6 +3210,19 @@ type twoTurnReport struct {
 	// bump since they are one ticket's own before/after pair, not two
 	// unrelated additions.
 	//
+	// "17" (CHAOS-4138, 2026-08-23): purely additive. twoTurnCaseResult
+	// gained PairRetried/PairRetryFirstArmInvalidReason/
+	// PairRetryFirstArmInvalidStage/PairRetryFirstArmInvalidErrorType (the
+	// bounded-one-shot-retry disclosure contract for a baseline/hinted-leg
+	// Investigate() error -- an instrument failure, never a product bar --
+	// see PairRetried's own doc comment for the exact scope and why a
+	// pairing-precondition failure or structural exemption never retries)
+	// and this report gained PairRetriedCount, its own aggregate. No
+	// merge arithmetic changes (Results still concatenates verbatim); the
+	// mirror in cmd/acr-trial-merge-two-turn/main.go gained all five
+	// fields in the same change, same "an undeclared field is dropped on
+	// decode" reason every prior bump needed it for.
+	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
 	// stale key under a new meaning.
@@ -3365,6 +3412,16 @@ type twoTurnReport struct {
 	InferredKindInsensitivityAttestedCount int `json:"inferred_kind_insensitivity_attested_count"`
 	InferredUnjustifiedCount               int `json:"inferred_unjustified_count"`
 	InferredPairInvalidCount               int `json:"inferred_pair_invalid_count"`
+	// PairRetriedCount (CHAOS-4138) is every row whose PairRetried==true --
+	// a pairing that needed and used its ONE bounded retry after an
+	// instrument failure (see twoTurnCaseResult.PairRetried's own doc
+	// comment). Purely observational: it does not gate this test's own
+	// pass/fail (InferredPairInvalidCount already does, on whatever the
+	// retry's own final outcome was) -- it exists so a reader can tell "0
+	// pair-invalid, 0 retries needed" apart from "0 pair-invalid, 1 retry
+	// quietly recovered a stochastic instrument failure" without diffing
+	// individual rows.
+	PairRetriedCount int `json:"pair_retried_count"`
 	// ConfirmedWrongRedeemedCount is PER APPLICABLE MEMBER (codex round-1
 	// finding #4: a global scalar lets one member's success mask another
 	// member's permanently-unredeemable designated negative).
@@ -4699,14 +4756,21 @@ func windowBoundsAgree(a, b contractsv1.ContextFabricInvestigationResult, tolera
 	return drift <= tolerance
 }
 
-func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string) twoTurnCaseResult {
+// requestIDPrefix (CHAOS-4138) roots every Investigate() call this function
+// makes (the main/hinted request, both window-precondition setups, and the
+// baseline leg) -- every production caller passes the fixed
+// twoTurnInferredTierRequestIDPrefix, but runTwoTurnInferredTierArmWithPairRetry's
+// own retry attempt passes a distinct prefix instead, so a retried pairing's
+// four calls never collide (same RequestID) with the first attempt's own,
+// already-exchanged four calls in the SAME run's file-exchange directory.
+func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string, requestIDPrefix string) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmInferredTier)}
 	// CHAOS-4086: stamped up front for the same reason the other arms do
 	// it -- this arm has many early returns (structurally exempt anchor, a
 	// missing window precondition, a failed baseline) and every one of them
 	// produces a row a reader has to interpret.
 	twoTurnStampOutcome(&res, tc, nil)
-	req := twoTurnRequest(index, tc, "inferredtier")
+	req := twoTurnRequest(index, tc, requestIDPrefix)
 	switch entry.Member {
 	case string(contractsv1.ContextFabricStructureNeedExpectedKind):
 		req.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectKind(entry.NegativeKind)}
@@ -4843,7 +4907,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		var windowReason string
 		var windowCause error
 		var windowOverride *contextfabric.SynthesisStatusOverrideOutcome
-		baselineWindow, windowReason, windowCause, windowOverride = mintWindowPrecondition("inferredtierwindowsetupbaseline")
+		baselineWindow, windowReason, windowCause, windowOverride = mintWindowPrecondition(requestIDPrefix + "windowsetupbaseline")
 		// CHAOS-4103 (codex review round 3, confirmed): folded IMMEDIATELY,
 		// before the windowReason early return just below -- round 2's
 		// shape deferred this to a single fold call at the function's
@@ -4855,7 +4919,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 			twoTurnStampArmFailure(&res, windowReason, windowCause)
 			return res
 		}
-		hintedWindow, windowReason, windowCause, windowOverride = mintWindowPrecondition("inferredtierwindowsetuphinted")
+		hintedWindow, windowReason, windowCause, windowOverride = mintWindowPrecondition(requestIDPrefix + "windowsetuphinted")
 		twoTurnFoldSynthesisStatusOverride(&res, windowOverride)
 		if windowReason != "" {
 			res.PairInvalid = true
@@ -4870,7 +4934,7 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		if trace != nil {
 			trace.reset()
 		}
-		baselineReq := twoTurnRequest(index, tc, "inferredtierbaseline")
+		baselineReq := twoTurnRequest(index, tc, requestIDPrefix+"baseline")
 		baselineReq.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{baselineWindow}
 		baselineCtx, baselineCancel := context.WithTimeout(ctx, timeout)
 		var baselineErr error
@@ -5128,6 +5192,89 @@ func runTwoTurnInferredTierArm(ctx context.Context, investigator contextfabric.I
 		}
 	}
 	return res
+}
+
+// twoTurnInferredTierRequestIDPrefix/twoTurnInferredTierRetryRequestIDPrefix
+// (CHAOS-4138) are the two request-ID prefixes runTwoTurnInferredTierArm's
+// own requestIDPrefix parameter takes in this file: the first attempt (every
+// production call before this ticket) and runTwoTurnInferredTierArmWithPairRetry's
+// own retry attempt. Distinct prefixes, not a shared one with a suffix
+// appended at the call site, so the two attempts' request IDs can never
+// collide inside the same run's file-exchange directory even if a future
+// edit reorders which leg runs first.
+const (
+	twoTurnInferredTierRequestIDPrefix      = "inferredtier"
+	twoTurnInferredTierRetryRequestIDPrefix = "inferredtierretry"
+)
+
+// twoTurnPairInvalidIsInstrumentFailure (CHAOS-4138) is the ONE place this
+// retry's narrow eligibility is decided -- see CHAOS-4138's own ticket
+// text for the full design rationale ("a smudged photo, never a failed
+// bar"). A row qualifies ONLY when PairInvalid is true AND ArmInvalidReason
+// carries one of the two literal prefixes runTwoTurnInferredTierArm's own
+// baseline-leg or hinted-leg Investigate() error branches stamp
+// (twoTurnStampArmFailure's own call sites, "baseline investigate error: "
+// and "investigate error: "). Every OTHER PairInvalid reason in that
+// function is deliberately excluded by this same prefix test, without a
+// second, parallel exclusion list to keep in sync:
+//
+//   - the missing-window-oracle-entry structural gap ("no confirmed-window
+//     precondition available...") -- not an Investigate() call at all;
+//   - a window-precondition SETUP call's own failure ("window precondition
+//     setup failed: ..." / "...did not offer..." -- a THIRD kind of call,
+//     preceding both legs, not itself the baseline or hinted leg this
+//     ticket scopes the retry to);
+//   - the pairing-precondition check (Reused/VersionSet mismatch/
+//     window-bounds disagreement) -- ArmInvalidReason stays empty there
+//     (PairInvalid is set with no twoTurnStampArmFailure call), so it can
+//     never match either prefix;
+//   - subject_anchor's structural exemption -- PairInvalid is never even
+//     set on that early return.
+//
+// A PairInvalid==false row (WrongCommit, FalseNoMatch, or an
+// InferredClassification=="unjustified" outcome on a call that completed --
+// every one of them a PRODUCT bar on a call that FINISHED, never an
+// instrument failure) fails the leading PairInvalid check immediately and
+// is never retried, regardless of ArmInvalidReason's content.
+func twoTurnPairInvalidIsInstrumentFailure(res twoTurnCaseResult) bool {
+	if !res.PairInvalid {
+		return false
+	}
+	return strings.HasPrefix(res.ArmInvalidReason, "baseline investigate error: ") ||
+		strings.HasPrefix(res.ArmInvalidReason, "investigate error: ")
+}
+
+// runTwoTurnInferredTierArmWithPairRetry (CHAOS-4138) wraps
+// runTwoTurnInferredTierArm with a bounded, single retry -- never a retry
+// loop -- when, and only when, twoTurnPairInvalidIsInstrumentFailure judges
+// the first attempt's own failure an instrument failure rather than a
+// product bar. The retry runs the WHOLE pairing again from scratch (both
+// window preconditions, the baseline leg, the hinted leg), under a distinct
+// request-ID prefix so its four calls cannot collide with the first
+// attempt's already-exchanged four calls in the same run's file-exchange
+// directory (see requestIDPrefix's own doc comment on
+// runTwoTurnInferredTierArm).
+//
+// The row this function returns is the RETRY's own row whenever a retry
+// ran (its own success, or its own distinct failure) -- never a merge of
+// the two -- with PairRetried and the three PairRetryFirst* fields layered
+// on top so the first attempt's own error is never lost (twoTurnCaseResult.
+// PairRetried's own doc comment is the disclosure contract this satisfies).
+// A retry that also fails is reported exactly as failed as a first attempt
+// would be (report.InferredPairInvalidCount's own zero-tolerance gate still
+// fires on it) -- this function only ever removes a STOCHASTIC instrument
+// failure from the report, never a genuine, reproducing one.
+func runTwoTurnInferredTierArmWithPairRetry(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, timeout time.Duration, trace *twoTurnTraceCapture, windowBand string) twoTurnCaseResult {
+	first := runTwoTurnInferredTierArm(ctx, investigator, principal, index, tc, entry, timeout, trace, windowBand, twoTurnInferredTierRequestIDPrefix)
+	if !twoTurnPairInvalidIsInstrumentFailure(first) {
+		return first
+	}
+	retry := runTwoTurnInferredTierArm(ctx, investigator, principal, index, tc, entry, timeout, trace, windowBand, twoTurnInferredTierRetryRequestIDPrefix)
+	retry.PairRetried = true
+	retry.PairRetryFirstArmInvalidReason = first.ArmInvalidReason
+	retry.PairRetryFirstArmInvalidStage = first.ArmInvalidStage
+	retry.PairRetryFirstArmInvalidErrorType = first.ArmInvalidErrorType
+	return retry
 }
 
 // twoTurnResultStoreSaver is the narrow slice of contextfabric.InvestigationResultStore
@@ -5871,7 +6018,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "16",
+		ReportSchemaVersion: "17",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -6329,12 +6476,15 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 		modelCallCapture.reset()
 		inferredStarted := time.Now()
-		inferred := runTwoTurnInferredTierArm(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
+		inferred := runTwoTurnInferredTierArmWithPairRetry(ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
 		twoTurnFoldSynthesisStatusOverride(&inferred, turn1SynthesisOverride)
 		twoTurnStampTurn1Facts(&inferred, turn1Facts)
 		inferredTiming = buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
 		if inferred.PairInvalid {
 			report.InferredPairInvalidCount++
+		}
+		if inferred.PairRetried {
+			report.PairRetriedCount++
 		}
 		if inferred.FalseNoMatch {
 			report.FalseNoMatchCount++
