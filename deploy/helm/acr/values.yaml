@@ -181,6 +181,29 @@ service:
 # healthy-disabled state, so there is no reason to run the extra pod until
 # one exists.
 contextFabric:
+  # CHAOS-3916/CHAOS-3898 S2a-2: shared master switch for the
+  # build-aside-and-swap graph rebuild path
+  # (ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED). A SINGLE shared key here
+  # -- rather than one per Deployment -- makes it structurally impossible
+  # to set it on only one of acr-api/acr-projector: both resolve an
+  # organization's graph key through the SAME epoch pointer once either
+  # has it on (see templates/deployment.yaml and
+  # templates/projector-deployment.yaml, which both read this one value).
+  # Flag-off routes `acr-projector rebuild --org` through the legacy
+  # in-place purge instead of build-aside-and-swap. See
+  # docs/operations.md's "CHAOS-3916 production graph cutover runbook"
+  # before flipping this in a real deployment -- it is inert without
+  # readsEnabled below AND a correctly-populated embed.existingSecret (see
+  # CHAOS-4147: a set embed.baseURL with a blank/absent key silently
+  # constructs a broken embedder that destroys vectors on first use).
+  lifecycleEnabled: false
+  # Independent graph-READ enablement lever for acr-api's Investigator
+  # (ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED,
+  # internal/config/hosted_runtime.go). lifecycleEnabled above is INERT on
+  # acr-api unless this is ALSO true -- internal/runtime/hosted/open.go
+  # only constructs the falkorgraph adapter when both
+  # EnableContextFabricInvestigations and falkorgraph.Configured() hold.
+  readsEnabled: false
   # FalkorDB graph backend (ADR 0009), consumed by acr-projector's
   # ProjectionBackend (contextFabric.projector below wires these values
   # into that Deployment). Empty addr leaves Context Fabric unconfigured --
@@ -207,6 +230,30 @@ contextFabric:
     graphPrefix: "acr-cf"
     existingSecret: ""
     passwordKey: ACR_CONTEXT_FABRIC_FALKOR_PASSWORD
+  # Embedding provider for acr-projector's vector projection (CHAOS-3778),
+  # consumed by templates/projector-deployment.yaml. Empty baseURL leaves
+  # the embedder unconfigured -- embedprovider.Configured() constructs
+  # nothing, matching the falkor.addr contract above.
+  #
+  # CHAOS-4147 (read before setting baseURL): Configured() checks ONLY
+  # baseURL, never the API key. A set baseURL with an absent or blank
+  # existingSecret key constructs a FULLY "configured", silently-broken
+  # embedder -- every projection batch it processes then clears the
+  # vector for every row whose text it just rewrote, by design (stale
+  # vector vs. new text), which during a full `rebuild --org` means
+  # losing the WHOLE organization's vectors in one pass. Never set
+  # baseURL without existingSecret pointing at a real, live key, and
+  # verify by inspecting the resolved Pod env after deploy -- not by
+  # inspecting this file or confirming the Secret merely exists.
+  embed:
+    baseURL: ""
+    provider: ""
+    model: ""
+    dimension: ""
+    timeout: "45s"
+    maxTransportRetries: "5"
+    existingSecret: ""
+    apiKeyKey: ACR_CONTEXT_FABRIC_EMBED_API_KEY
   # CHAOS-4055: optional in-release FalkorDB workload so the COMPLETE ACR
   # topology (api + migration + projector + graph backend) is deployable from
   # this chart alone on a local cluster. Disabled by default -- production

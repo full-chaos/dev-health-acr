@@ -28,6 +28,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "lifecycleEnabled": {
+          "type": "boolean",
+          "description": "CHAOS-3916/CHAOS-3898 S2a-2 shared master switch (ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED) rendered into BOTH acr-api and acr-projector from this single key. Inert without readsEnabled and a correctly-populated embed.existingSecret; see docs/operations.md's CHAOS-3916 cutover runbook."
+        },
+        "readsEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED for acr-api's Investigator. lifecycleEnabled is inert on acr-api without this also being true."
+        },
         "falkor": {
           "type": "object",
           "additionalProperties": false,
@@ -39,6 +47,21 @@
             "graphPrefix": { "type": "string" },
             "existingSecret": { "type": "string" },
             "passwordKey": { "type": "string" }
+          }
+        },
+        "embed": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "CHAOS-3778 embedding provider for acr-projector's vector projection. CHAOS-4147: never set baseURL without existingSecret pointing at a real key -- Configured() checks only baseURL, so a blank key still constructs a broken, vector-destroying embedder.",
+          "properties": {
+            "baseURL": { "type": "string" },
+            "provider": { "type": "string" },
+            "model": { "type": "string" },
+            "dimension": { "type": "string" },
+            "timeout": { "type": "string" },
+            "maxTransportRetries": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "apiKeyKey": { "type": "string" }
           }
         },
         "falkordb": {

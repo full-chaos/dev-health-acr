@@ -140,6 +140,16 @@ spec:
                   name: {{ .Values.credentials.runtime.existingSecret | quote }}
                   key: {{ .Values.credentials.runtime.poolerAdminDsnKey | quote }}
             {{- end }}
+            # CHAOS-3916: always rendered (never conditional) so an unset
+            # deployment explicitly declares itself off, matching how
+            # contextFabric.projector.projectionEnabled is always rendered
+            # in projector-configmap.yaml. See values.yaml's own comment:
+            # lifecycleEnabled MUST be set the same way on acr-projector
+            # (templates/projector-deployment.yaml reads the SAME value).
+            - name: ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED
+              value: {{ .Values.contextFabric.readsEnabled | quote }}
+            - name: ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED
+              value: {{ .Values.contextFabric.lifecycleEnabled | quote }}
             {{- if .Values.contextFabric.falkor.addr }}
             - name: ACR_CONTEXT_FABRIC_FALKOR_ADDR
               value: {{ .Values.contextFabric.falkor.addr | quote }}

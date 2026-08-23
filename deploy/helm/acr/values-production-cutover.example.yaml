@@ -1,0 +1,135 @@
+# CHAOS-3916 production Context Fabric graph cutover -- DOCUMENTED EXAMPLE,
+# NOT a working values file and NOT deployed anywhere by this chart or any
+# script in this repo. Copy the relevant keys into the real production
+# values source (kept outside this repo -- see deploy/README.md and
+# docs/operations.md's "CHAOS-3916 production graph cutover runbook") once
+# a production cluster exists to deploy onto. Placeholders below
+# (`<...>`) are not resolvable values; render/lint against this file as-is
+# fails on purpose (mutable-image / invalid-secret-ref guards), which is
+# the point -- it forces every placeholder to be replaced with the real
+# thing before a real `helm upgrade` can succeed.
+#
+# Chris's ruling (2026-08-23, via team-lead): chart-ready only for this
+# changeset -- no live deploy. Pilot allowlist is the ground-truth org
+# only (70d529e0-3c06-4597-8480-794fd02328b6); expand the allowlist after
+# per-org verify-by-exercise (docs/operations.md runbook, step 5) passes
+# for this one. Read the runbook's 5 mandatory pre-flights before ever
+# applying a real version of this file.
+
+image:
+  # Must already contain: TeamsProjectsSourceVersion v3, ClickHouseSourceVersion
+  # v6 (internal/contextfabric/devhealthsource/{teams_projects,clickhouse}.go),
+  # and PR #216 (CHAOS-4108's join-arm fix). Pre-flight 3.
+  reference: "ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64-hex-digest-containing-v6-v3-and-4108>"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: acr-registry-pull
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+
+config:
+  environment: production
+  logLevel: warn
+  requireBackingStores: true
+  postgresConnectionKind: direct
+  deviceVerificationUrl: "https://<dev-health-web-host>/acr/device"
+  entitlement:
+    url: "<remote-entitlement-url>"
+  entitlementCaBundle:
+    existingSecret: ""
+  webAssertion:
+    issuer: dev-health-web
+    audience: dev-health-acr
+    existingSecret: ""
+    key: web-jwks.json
+
+credentials:
+  runtime:
+    existingSecret: acr-runtime-credentials
+    postgresDsnKey: ACR_POSTGRES_DSN
+    clickhouseDsnKey: ACR_CLICKHOUSE_DSN
+    evidenceIdActiveKidKey: ACR_EVIDENCE_ID_ACTIVE_KID
+    evidenceIdKeysKey: ACR_EVIDENCE_ID_KEYS
+  migration:
+    existingSecret: acr-migration-credentials
+    postgresDsnKey: ACR_POSTGRES_MIGRATION_DSN
+  entitlementToken:
+    existingSecret: "<entitlement-token-secret>"
+    key: token
+
+deployment:
+  replicaCount: 2
+
+# --- CHAOS-3916 cutover-specific keys below ---
+
+contextFabric:
+  # Pre-flight 2: set the SAME on acr-api and acr-projector -- this single
+  # key renders into both Deployments, so there is no drift to check for.
+  lifecycleEnabled: true
+  # acr-api's Investigator master switch. lifecycleEnabled above does
+  # nothing on acr-api without this also being true.
+  readsEnabled: true
+
+  falkor:
+    addr: "<falkordb-host>:6379"
+    tls: true
+    allowInsecure: false
+    graphPrefix: "acr-cf"
+    # Only if the FalkorDB deployment requires auth; self-hosted FalkorDB
+    # has none by default.
+    existingSecret: ""
+
+  # Pre-flight 1 lives here. baseURL alone is not a completeness check --
+  # existingSecret MUST resolve to a real, live key. Verify via
+  # `kubectl exec`/`kubectl get pod -o jsonpath` against the RUNNING Pod,
+  # never by confirming this Secret merely exists.
+  embed:
+    baseURL: "https://api.openai.com/v1"
+    provider: "openai"
+    model: "text-embedding-3-large"
+    dimension: "3072"
+    timeout: "45s"
+    maxTransportRetries: "5"
+    existingSecret: "acr-embed-credentials"
+    apiKeyKey: ACR_CONTEXT_FABRIC_EMBED_API_KEY
+
+  projector:
+    enabled: true
+    replicaCount: 1
+    projectionEnabled: true
+    teamsProjectsEnabled: true
+    # PILOT (chris's ruling): ground-truth org only. Expand one at a time,
+    # each addition followed by its own `rebuild --org` and
+    # verify-by-exercise pass (runbook step 5) before adding the next.
+    orgIds:
+      - "70d529e0-3c06-4597-8480-794fd02328b6"
+    pollInterval: "15s"
+    concurrency: 4
+
+gateway:
+  enabled: true
+  httpRoute:
+    parentRefs:
+      - name: acr-gateway
+        namespace: gateway-system
+        sectionName: https
+    hostnames:
+      - "<acr-production-hostname>"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceSelectors:
+    - matchLabels:
+        kubernetes.io/metadata.name: gateway-system

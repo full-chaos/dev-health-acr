@@ -9,6 +9,7 @@ replica count, its own enable/disable lever
 {{- if .Values.contextFabric.projector.enabled }}
 {{- include "acr.validateCredentials" . -}}
 {{- include "acr.validateConnectionKind" . -}}
+{{- include "acr.validateContextFabricGraph" . -}}
 {{- $image := include "acr.image" . -}}
 {{- $projector := .Values.contextFabric.projector -}}
 apiVersion: apps/v1
@@ -87,6 +88,11 @@ spec:
                   name: {{ .Values.credentials.runtime.existingSecret | quote }}
                   key: {{ .Values.credentials.runtime.poolerAdminDsnKey | quote }}
             {{- end }}
+            # CHAOS-3916: always rendered -- see templates/deployment.yaml's
+            # matching comment. Same values.yaml key as acr-api, so the two
+            # cannot drift.
+            - name: ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED
+              value: {{ .Values.contextFabric.lifecycleEnabled | quote }}
             {{- if .Values.contextFabric.falkor.addr }}
             - name: ACR_CONTEXT_FABRIC_FALKOR_ADDR
               value: {{ .Values.contextFabric.falkor.addr | quote }}
@@ -102,6 +108,32 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.contextFabric.falkor.existingSecret | quote }}
                   key: {{ .Values.contextFabric.falkor.passwordKey | default "ACR_CONTEXT_FABRIC_FALKOR_PASSWORD" | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.contextFabric.embed.baseURL }}
+            # CHAOS-4147: baseURL alone gates construction of a NON-NIL
+            # embedder -- existingSecret below MUST resolve to a real, live
+            # key or every projection batch silently clears the vectors it
+            # touches. See values.yaml's embed block comment before setting
+            # baseURL in any real deployment.
+            - name: ACR_CONTEXT_FABRIC_EMBED_BASE_URL
+              value: {{ .Values.contextFabric.embed.baseURL | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_PROVIDER
+              value: {{ .Values.contextFabric.embed.provider | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_MODEL
+              value: {{ .Values.contextFabric.embed.model | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_DIMENSION
+              value: {{ .Values.contextFabric.embed.dimension | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_TIMEOUT
+              value: {{ .Values.contextFabric.embed.timeout | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES
+              value: {{ .Values.contextFabric.embed.maxTransportRetries | quote }}
+            {{- if .Values.contextFabric.embed.existingSecret }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.contextFabric.embed.existingSecret | quote }}
+                  key: {{ .Values.contextFabric.embed.apiKeyKey | default "ACR_CONTEXT_FABRIC_EMBED_API_KEY" | quote }}
             {{- end }}
             {{- end }}
           livenessProbe:
