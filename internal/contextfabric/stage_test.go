@@ -40,6 +40,27 @@ func stageTestEngine(t *testing.T, graph GraphReader, facts CanonicalFactReader,
 	return engine
 }
 
+// bindingFailingGraphReader fails at ResolveInvestigationBinding itself --
+// the CHAOS-4088 StageGraphBinding population, distinct from
+// acceptanceGraphReader's err field, which only ever fails inside
+// ResolveSubjects. ResolveSubjects/DiscoverContext must never be reached: a
+// binding failure means there is no graph key to query with yet.
+type bindingFailingGraphReader struct {
+	err error
+}
+
+func (g bindingFailingGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{}, g.err
+}
+
+func (g bindingFailingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, error) {
+	panic("bindingFailingGraphReader.ResolveSubjects must never be called: ResolveInvestigationBinding already failed")
+}
+
+func (g bindingFailingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	panic("bindingFailingGraphReader.DiscoverContext must never be called: ResolveInvestigationBinding already failed")
+}
+
 func committedGraphReader() *acceptanceGraphReader {
 	project := acceptanceProject()
 	return &acceptanceGraphReader{
@@ -109,10 +130,21 @@ func TestInvestigateTagsTheFailingStage(t *testing.T) {
 		stage  InvestigationStage
 	}{
 		{
-			name:  "resolution",
-			stage: StageResolution,
+			// acceptanceGraphReader.err fails inside ResolveSubjects, not
+			// ResolveInvestigationBinding -- see its own implementation --
+			// so this pins the StageSubjectResolution half of the CHAOS-4088
+			// split. bindingFailingGraphReader below pins the other half.
+			name:  "subject_resolution",
+			stage: StageSubjectResolution,
 			engine: func(t *testing.T) *Engine {
 				return stageTestEngine(t, &acceptanceGraphReader{err: boom}, nil, nil, nil)
+			},
+		},
+		{
+			name:  "graph_binding",
+			stage: StageGraphBinding,
+			engine: func(t *testing.T) *Engine {
+				return stageTestEngine(t, bindingFailingGraphReader{err: boom}, nil, nil, nil)
 			},
 		},
 		{

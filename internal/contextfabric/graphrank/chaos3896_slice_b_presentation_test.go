@@ -28,7 +28,7 @@ func TestSurvivorsFirstOrder_EliminatesOnCountZero(t *testing.T) {
 	attestation := Attestation{Kinds: []KindAttestation{
 		{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 0},
 	}}
-	got := SurvivorsFirstOrder(candidates, attestation)
+	got := SurvivorsFirstOrder(candidates, attestation, nil, "")
 	if len(got) != 2 || got[0].Subject.CanonicalID != survivor.Subject.CanonicalID || got[1].Subject.CanonicalID != eliminated.Subject.CanonicalID {
 		t.Fatalf("SurvivorsFirstOrder = %#v, want [survivor, eliminated]", got)
 	}
@@ -44,7 +44,7 @@ func TestSurvivorsFirstOrder_EliminatesNonMatchingSingleWitness(t *testing.T) {
 	attestation := Attestation{Kinds: []KindAttestation{
 		{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, SatisfierCanonicalID: "pull_request:repo-1:1"},
 	}}
-	got := SurvivorsFirstOrder(candidates, attestation)
+	got := SurvivorsFirstOrder(candidates, attestation, nil, "")
 	if len(got) != 2 || got[0].Subject.CanonicalID != survivor.Subject.CanonicalID || got[1].Subject.CanonicalID != eliminated.Subject.CanonicalID {
 		t.Fatalf("SurvivorsFirstOrder = %#v, want [survivor, eliminated]", got)
 	}
@@ -61,7 +61,7 @@ func TestSurvivorsFirstOrder_EliminatesOutsideSatisfierSet(t *testing.T) {
 	attestation := Attestation{Kinds: []KindAttestation{
 		{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 2, SatisfierCanonicalIDs: []string{"pull_request:repo-1:1", "pull_request:repo-1:2"}},
 	}}
-	got := SurvivorsFirstOrder(candidates, attestation)
+	got := SurvivorsFirstOrder(candidates, attestation, nil, "")
 	if len(got) != 3 {
 		t.Fatalf("SurvivorsFirstOrder returned %d candidates, want 3", len(got))
 	}
@@ -86,7 +86,7 @@ func TestSurvivorsFirstOrder_NonCensusedKindNeverEliminated(t *testing.T) {
 		// over onto a non-censused one.
 		{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 0},
 	}}
-	got := SurvivorsFirstOrder([]contextfabric.SubjectCandidate{candidate}, attestation)
+	got := SurvivorsFirstOrder([]contextfabric.SubjectCandidate{candidate}, attestation, nil, "")
 	if len(got) != 1 || got[0].Subject.CanonicalID != candidate.Subject.CanonicalID {
 		t.Fatalf("SurvivorsFirstOrder = %#v, want the non-censused candidate untouched", got)
 	}
@@ -104,7 +104,7 @@ func TestSurvivorsFirstOrder_ClosureMismatchGoesNeutral(t *testing.T) {
 		attestation := Attestation{Kinds: []KindAttestation{
 			{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, ClosureMismatch: true, SatisfierCanonicalID: "pull_request:repo-1:1"},
 		}}
-		got := SurvivorsFirstOrder([]contextfabric.SubjectCandidate{candidate}, attestation)
+		got := SurvivorsFirstOrder([]contextfabric.SubjectCandidate{candidate}, attestation, nil, "")
 		if len(got) != 1 || got[0].Subject.CanonicalID != candidate.Subject.CanonicalID {
 			t.Fatalf("SurvivorsFirstOrder = %#v, want the candidate untouched (ClosureMismatch -> neutral)", got)
 		}
@@ -115,7 +115,7 @@ func TestSurvivorsFirstOrder_ClosureMismatchGoesNeutral(t *testing.T) {
 		attestation := Attestation{Kinds: []KindAttestation{
 			{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 2, SatisfierSetClosureMismatch: true},
 		}}
-		got := SurvivorsFirstOrder([]contextfabric.SubjectCandidate{candidate}, attestation)
+		got := SurvivorsFirstOrder([]contextfabric.SubjectCandidate{candidate}, attestation, nil, "")
 		if len(got) != 1 || got[0].Subject.CanonicalID != candidate.Subject.CanonicalID {
 			t.Fatalf("SurvivorsFirstOrder = %#v, want the candidate untouched (SatisfierSetClosureMismatch -> neutral)", got)
 		}
@@ -135,7 +135,7 @@ func TestSurvivorsFirstOrder_BudgetExhaustedPreservesOrder(t *testing.T) {
 		Reason: ReasonBudgetExhausted,
 		Kinds:  []KindAttestation{{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 1, SatisfierCanonicalID: first.Subject.CanonicalID}},
 	}
-	got := SurvivorsFirstOrder(candidates, attestation)
+	got := SurvivorsFirstOrder(candidates, attestation, nil, "")
 	if !reflect.DeepEqual(got, candidates) {
 		t.Fatalf("SurvivorsFirstOrder = %#v, want candidates unchanged verbatim on budget_exhausted", got)
 	}
@@ -157,7 +157,7 @@ func TestSurvivorsFirstOrder_NeverChangesMembership(t *testing.T) {
 		{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 0},
 		{Kind: contextfabric.SubjectWorkItem, Complete: true, Count: 1, SatisfierCanonicalID: "widget-1"},
 	}}
-	got := SurvivorsFirstOrder(candidates, attestation)
+	got := SurvivorsFirstOrder(candidates, attestation, nil, "")
 	if len(got) != len(candidates) {
 		t.Fatalf("len(got) = %d, want %d", len(got), len(candidates))
 	}
@@ -204,6 +204,75 @@ func TestReorderingWasReachable(t *testing.T) {
 				t.Fatalf("ReorderingWasReachable(%q) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
+	}
+}
+
+// slice3896Tracer records every event, mirroring chaos4086Tracer's own
+// minimal recording-double shape elsewhere in this package.
+type slice3896Tracer struct{ events []ResolutionTraceEvent }
+
+func (t *slice3896Tracer) Trace(event ResolutionTraceEvent) { t.events = append(t.events, event) }
+
+// TestSurvivorsFirstOrder_TracesEveryClassifiedCandidate is CHAOS-4088: the
+// trace-only signal team-lead approved for the Slice B survivor verdict.
+// Every candidate SurvivorsFirstOrder actually classifies -- neutral
+// included, not only eliminated -- must emit exactly one
+// slice_b_survivor_verdict event, so a reader can attribute a candidate's
+// post-hoc position to census elimination specifically, rather than merely
+// inferring it from where it landed in the reordered list.
+func TestSurvivorsFirstOrder_TracesEveryClassifiedCandidate(t *testing.T) {
+	t.Parallel()
+	survivor := candidateFor(contextfabric.SubjectWorkItem, "widget-1")
+	eliminated := candidateFor(contextfabric.SubjectPullRequest, "pull_request:repo-1:1")
+	candidates := []contextfabric.SubjectCandidate{eliminated, survivor}
+	attestation := Attestation{Kinds: []KindAttestation{
+		{Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 0},
+	}}
+	tracer := &slice3896Tracer{}
+
+	got := SurvivorsFirstOrder(candidates, attestation, tracer, "request_slice3896_001")
+
+	if len(got) != 2 {
+		t.Fatalf("SurvivorsFirstOrder returned %d candidates, want 2", len(got))
+	}
+	if len(tracer.events) != 2 {
+		t.Fatalf("tracer recorded %d events, want exactly one per classified candidate (2)", len(tracer.events))
+	}
+	byCanonicalID := map[string]ResolutionTraceEvent{}
+	for _, event := range tracer.events {
+		if event.Stage != "slice_b_survivor_verdict" {
+			t.Fatalf("event.Stage = %q, want %q", event.Stage, "slice_b_survivor_verdict")
+		}
+		if event.RequestID != "request_slice3896_001" {
+			t.Fatalf("event.RequestID = %q, want the threaded request id", event.RequestID)
+		}
+		byCanonicalID[event.Subject.CanonicalID] = event
+	}
+	if got := byCanonicalID[eliminated.Subject.CanonicalID].SurvivorVerdict; got != "eliminated" {
+		t.Fatalf("eliminated candidate's SurvivorVerdict = %q, want %q", got, "eliminated")
+	}
+	if got := byCanonicalID[survivor.Subject.CanonicalID].SurvivorVerdict; got != "neutral" {
+		t.Fatalf("survivor candidate's SurvivorVerdict = %q, want %q", got, "neutral")
+	}
+}
+
+// TestSurvivorsFirstOrder_BudgetExhaustedTracesNothing pins the
+// "silence means never reached, not everything neutral" contract from
+// ResolutionTraceEvent.SurvivorVerdict's own doc comment: the
+// budget_exhausted short-circuit returns before classifyCandidate ever
+// runs, so it must trace ZERO events, not len(candidates) neutral ones.
+func TestSurvivorsFirstOrder_BudgetExhaustedTracesNothing(t *testing.T) {
+	t.Parallel()
+	candidates := []contextfabric.SubjectCandidate{
+		candidateFor(contextfabric.SubjectPullRequest, "pull_request:repo-1:1"),
+	}
+	attestation := Attestation{Reason: ReasonBudgetExhausted}
+	tracer := &slice3896Tracer{}
+
+	SurvivorsFirstOrder(candidates, attestation, tracer, "request_slice3896_002")
+
+	if len(tracer.events) != 0 {
+		t.Fatalf("tracer recorded %d events on a budget_exhausted round, want 0 -- classifyCandidate must never run", len(tracer.events))
 	}
 }
 

@@ -672,3 +672,28 @@ func TestContextFabricInvestigationRouteCountsClaimedFactsTowardItemBudget(t *te
 		t.Fatalf("status = %d, want 413 -- %d claimed facts must exceed the 50-item budget body=%s", response.Code, overBudget, response.Body.String())
 	}
 }
+
+// CHAOS-4088. contextFabricInnermostErrorType walks to the deepest
+// single-Unwrap() node and stops there: it must not panic or infinite-loop
+// on a plain error, a single wrap, or a double wrap (Unwrap() []error,
+// which errors.Unwrap deliberately does not follow).
+func TestContextFabricInnermostErrorType(t *testing.T) {
+	plain := errors.New("boom")
+	if got := contextFabricInnermostErrorType(plain); got != "*errors.errorString" {
+		t.Fatalf("contextFabricInnermostErrorType(plain) = %q, want %q", got, "*errors.errorString")
+	}
+
+	wrapped := fmt.Errorf("outer: %w", plain)
+	if got := contextFabricInnermostErrorType(wrapped); got != "*errors.errorString" {
+		t.Fatalf("contextFabricInnermostErrorType(wrapped) = %q, want the wrapped cause's type %q", got, "*errors.errorString")
+	}
+
+	// A double-%w wrap implements Unwrap() []error, which errors.Unwrap does
+	// not follow -- the walk must stop AT this node (its own type), not
+	// panic or pick one branch arbitrarily.
+	doubleWrapped := fmt.Errorf("%w: %w", plain, errors.New("second"))
+	got := contextFabricInnermostErrorType(doubleWrapped)
+	if got == "*errors.errorString" {
+		t.Fatalf("contextFabricInnermostErrorType(doubleWrapped) = %q, want it to stop at the multi-error node's own type, not descend into it", got)
+	}
+}

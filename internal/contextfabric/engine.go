@@ -532,7 +532,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// failure here fails the whole investigation.
 	binding, err := e.graph.ResolveInvestigationBinding(ctx, principal)
 	if err != nil {
-		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve graph binding: %w", err))
+		// CHAOS-4088: StageGraphBinding, not StageResolution -- a binding
+		// outage never got as far as a subject/commit-gate query, and
+		// conflating the two populations is exactly what this split fixes.
+		return InvestigationResult{}, stageError(StageGraphBinding, fmt.Errorf("resolve graph binding: %w", err))
 	}
 
 	// CHAOS-3900 W1: canonicalize the REQUEST-side evidence window --
@@ -898,7 +901,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}
 			return e.terminalResult(ctx, principal, request, interpretation, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow)
 		}
-		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
+		// CHAOS-4088: StageSubjectResolution, not StageResolution -- the
+		// binding above already succeeded, so this is the distinct
+		// commit-gate/subject-matching failure population StageGraphBinding
+		// deliberately does not cover.
+		return InvestigationResult{}, stageError(StageSubjectResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	// priorEntries: fetched ABOVE, before this call (CHAOS-4040 reordering
 	// -- see that call site's own comment for why it moved), reused here

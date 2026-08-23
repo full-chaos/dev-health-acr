@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -323,19 +324,53 @@ func (a *App) writeContextFabricFailure(w http.ResponseWriter, r *http.Request, 
 // the context, and this line must survive the very cancellation that makes it
 // worth having. RequestID is read from the same context, which carries its
 // values either way.
+//
+// CHAOS-4088: an "unclassified" line ONLY names the taxonomy's own gap, never
+// what specifically fell into it. failure_error_type closes that for the
+// residual unclassified branch (the population left after CHAOS-4077 carved
+// the never-projected-org case out of it): the Go %T type name of the
+// innermost error in err's chain, e.g. "*net.OpError" -- never err.Error()
+// text, which is exactly the raw dependency content this whole classifier
+// exists to keep out of a log line. It is omitted for every classified
+// branch, where the sentinel already names the cause.
 func (a *App) logContextFabricFailure(r *http.Request, err error, classification string, status int) {
 	stage, _ := contextfabric.FailureStage(err)
 	level := slog.LevelWarn
 	if status >= http.StatusInternalServerError || classification == contextFabricClassUnclassified {
 		level = slog.LevelError
 	}
-	a.logger.Log(context.WithoutCancel(r.Context()), level, "context fabric investigation failed",
+	fields := []any{
 		"request_id", RequestID(r.Context()),
 		"failure_class", contextFabricInvestigationFailureName,
 		"failure_stage", string(stage),
 		"failure_classification", classification,
 		"http_status", status,
-	)
+	}
+	if classification == contextFabricClassUnclassified {
+		fields = append(fields, "failure_error_type", contextFabricInnermostErrorType(err))
+	}
+	a.logger.Log(context.WithoutCancel(r.Context()), level, "context fabric investigation failed", fields...)
+}
+
+// contextFabricInnermostErrorType walks err's Unwrap chain to the deepest
+// node and returns its Go type name (%T). It never reads Error() text, so
+// the result is corpus-safe by construction: a type name is static per
+// error implementation, never a rendering of the dependency's own message,
+// an org identifier, or any other request-derived content.
+//
+// A multi-error node (Unwrap() []error, e.g. a fmt.Errorf("%w: %w", ...)
+// double-wrap) ends the walk there rather than picking one branch to
+// descend into arbitrarily -- errors.Unwrap only follows the single-error
+// Unwrap() error shape, so the walk naturally stops at the first node that
+// doesn't implement it, and that node's own type is still real signal.
+func contextFabricInnermostErrorType(err error) string {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return fmt.Sprintf("%T", err)
+		}
+		err = next
+	}
 }
 
 // writeContextFabricRejectionError writes the shared 422 response shape for
