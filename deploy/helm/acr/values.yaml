@@ -162,6 +162,22 @@ deployment:
   # name, so an extraEnv entry can deliberately override a first-class one).
   # Prefer adding a first-class values key over reaching for this when the
   # same env var will be set the same way across deployments.
+  #
+  # Two contracts this chart enforces elsewhere do NOT apply to this list --
+  # a raw EnvVar list cannot be schema-restricted to a closed name set:
+  #   1. Existing-Secret-only credentials. Every first-class credential
+  #      above is a secretKeyRef; extraEnv accepts a literal `value:` too,
+  #      so it CAN carry a literal credential string into the rendered
+  #      Deployment/values. Never put credential material here -- add a
+  #      first-class existingSecret-backed key instead (open a ticket if
+  #      one does not exist yet).
+  #   2. contextFabric.model's own `enabled` gate. That gate exists
+  #      specifically because modelprovider.Configured() (see its own
+  #      comment above) opts in on ANY nonblank ACR_CONTEXT_FABRIC_MODEL*
+  #      variable -- setting one here with contextFabric.model.enabled left
+  #      false silently opts this deployment into a model provider anyway.
+  #      Use contextFabric.model.enabled + its first-class fields for any
+  #      ACR_CONTEXT_FABRIC_MODEL* variable; do not set one through here.
   extraEnv: []
 
 migration:
@@ -339,7 +355,7 @@ contextFabric:
     # violation) -- enabling falkordb.enabled here REQUIRES the target
     # namespace to carry `pod-security.kubernetes.io/enforce: baseline` (or
     # `privileged`), e.g.:
-    #   kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline
+    #   kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline --overwrite
     # This is namespace-wide: it relaxes PSA for every workload in that
     # namespace, not just this one, so prefer a dedicated namespace for the
     # in-release FalkorDB workload over relaxing PSA on a shared namespace

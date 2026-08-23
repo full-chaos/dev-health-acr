@@ -308,7 +308,16 @@
         "topologySpreadConstraints": { "type": "array" },
         "affinity": { "type": "object" },
         "extraContainers": { "type": "array" },
-        "extraEnv": { "type": "array" }
+        "extraEnv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" }
+            }
+          }
+        }
       }
     },
     "migration": {

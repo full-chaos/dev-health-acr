@@ -1205,18 +1205,27 @@ Two chart-level constraints found during the CHAOS-4034 live P6 auth
 validation run, both ratified (chris, 2026-08-23) rather than fixed, and
 recorded here so a future deployer does not re-open either as a bug.
 
-**NetworkPolicy apiserver egress is a documented bypass, not an
-oversight.** `workloadTokenExchange.enabled=true` renders a port-only
-egress rule for the Kubernetes apiserver
-(`templates/networkpolicy.yaml`, gated by
-`networkPolicy.egress.kubernetesAPIPort`) with no destination restriction
-(no `ipBlock`/`namespaceSelector` naming `kubernetes.default.svc`) --
-standard NetworkPolicy cannot express "the in-cluster apiserver ClusterIP"
-without a cluster-specific `ipBlock` this chart does not know at author
-time. Verified A/B/A on a kind cluster: a pod carrying acr-api's
-podSelector labels cannot reach the apiserver ClusterIP under the default
-policy without this rule; RFC 8693 `TokenReview` calls 503 without it.
-Port-only egress is accepted for local/dev scope. A scale/multi-tenant
+**NetworkPolicy apiserver egress is a documented posture, not a proven
+fix.** `workloadTokenExchange.enabled=true` renders a port-only egress
+rule for the Kubernetes apiserver (`templates/networkpolicy.yaml`, gated
+by `networkPolicy.egress.kubernetesAPIPort`) with no destination
+restriction (no `ipBlock`/`namespaceSelector` naming
+`kubernetes.default.svc` -- standard NetworkPolicy cannot name a Service
+that way at all; only `ipBlock`/`podSelector`/`namespaceSelector` on
+pods/CIDRs). This SHAPE (port-only, no `ipBlock`) is the accepted,
+ratified posture for local/dev scope (chris, 2026-08-23) -- the chart does
+not know the cluster's real apiserver ClusterIP at author time, so a
+tighter rule is not generically possible.
+
+**This is a documented bypass SHAPE, not a proven working fix -- do not
+read "the rule renders" as "TokenReview is reachable."** The CHAOS-4034
+live P6 A/B/A run found this exact rule PRESENT and RFC 8693 `TokenReview`
+STILL timed out on that kind+Calico cluster; only deleting the ENTIRE
+NetworkPolicy (not just this rule) restored a 200. Root cause is
+unresolved -- plausibly a Calico/kind ClusterIP DNAT interaction specific
+to that fixture, not ruled either way. Verify apiserver reachability for
+TokenReview on the actual target cluster/CNI before relying on this rule;
+do not assume it from the rendered manifest alone. A scale/multi-tenant
 deployment that needs the apiserver egress destination-restricted (an
 `ipBlock` pinned to the cluster's real apiserver Service IP, once that is
 known and stable per environment) is a chart change -- file a new ticket
@@ -1232,7 +1241,7 @@ vendored image runs `redis-server` as root with no `USER` directive; a
 enabling:
 
 ```bash
-kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline
+kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline --overwrite
 ```
 
 This relaxation is namespace-wide -- it does not scope to the FalkorDB

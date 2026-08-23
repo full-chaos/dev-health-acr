@@ -66,18 +66,28 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.entitlementPort }}
     {{- end }}
-    {{- /* CHAOS-4076: port-only, no destination restriction (no ipBlock/
-         namespaceSelector naming kubernetes.default.svc). This is a
-         DELIBERATE, RATIFIED BYPASS (chris, 2026-08-23), not an oversight --
-         workloadTokenExchange's RFC 8693 TokenReview call needs apiserver
-         egress and standard NetworkPolicy cannot express "the in-cluster
-         apiserver ClusterIP" without a cluster-specific ipBlock, which this
-         chart does not know at author time. Port-only egress is accepted for
-         local/dev scope; a destination-restricted rule (ipBlock pinned to
-         the cluster's actual apiserver Service IP, or a namespaceSelector
-         once one is stable across environments) becomes a chart change when
-         a scale/multi-tenant deployment needs it -- track that separately,
-         do not silently narrow this rule without a new ticket. */}}
+    {{- /* CHAOS-4076: port-only, no destination restriction (standard
+         NetworkPolicy has no way to name a Service like
+         kubernetes.default.svc -- only ipBlock/podSelector/namespaceSelector
+         on pods/CIDRs -- and this chart does not know the cluster's real
+         apiserver ClusterIP at author time). This SHAPE is a DELIBERATE,
+         RATIFIED POSTURE (chris, 2026-08-23), not an oversight: standard
+         NetworkPolicy cannot express "the in-cluster apiserver" any more
+         precisely without a cluster-specific ipBlock, so port-only is what
+         this chart can offer generically.
+         IMPORTANT, do not overclaim from this rule alone: the CHAOS-4034
+         live P6 validation run's A/B/A evidence found this exact rule
+         PRESENT and RFC 8693 TokenReview STILL timed out on that
+         kind+Calico cluster -- only deleting the ENTIRE NetworkPolicy
+         restored a 200. Root cause is unresolved (a Calico/kind ClusterIP
+         DNAT interaction is suspected, not ruled). Do not read "this rule
+         renders" as "workloadTokenExchange is proven reachable" on every
+         CNI; verify apiserver reachability for TokenReview on the actual
+         target cluster/CNI before relying on this rule. A destination-
+         restricted rule (an ipBlock pinned to the cluster's actual
+         apiserver Service IP) becomes a chart change when a scale/
+         multi-tenant deployment needs one -- track that separately, do not
+         silently narrow this rule without a new ticket. */}}
     {{- if and .Values.workloadTokenExchange.enabled .Values.networkPolicy.egress.kubernetesAPIPort }}
     - ports:
         - protocol: TCP
