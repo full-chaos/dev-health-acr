@@ -167,6 +167,41 @@ spec:
                   key: {{ .Values.contextFabric.falkor.passwordKey | default "ACR_CONTEXT_FABRIC_FALKOR_PASSWORD" | quote }}
             {{- end }}
             {{- end }}
+            {{- /* CHAOS-4076: acr-api's optional Investigator model runtime
+                 (internal/contextfabric/modelprovider). Gated on its own
+                 explicit `enabled` switch rather than a single field like
+                 falkor.addr/embed.baseURL above -- see values.yaml's
+                 contextFabric.model comment for why an implicit-opt-in gate
+                 is unsafe here (modelprovider.Configured() triggers on ANY
+                 nonblank ACR_CONTEXT_FABRIC_MODEL* variable). */}}
+            {{- if .Values.contextFabric.model.enabled }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_PROVIDER
+              value: {{ .Values.contextFabric.model.provider | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_BASE_URL
+              value: {{ .Values.contextFabric.model.baseURL | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL
+              value: {{ .Values.contextFabric.model.model | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_FALLBACK
+              value: {{ .Values.contextFabric.model.fallbackModel | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_TIMEOUT
+              value: {{ .Values.contextFabric.model.timeout | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS
+              value: {{ .Values.contextFabric.model.maxAttempts | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES
+              value: {{ .Values.contextFabric.model.maxTransportRetries | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_ALLOW_INSECURE_BASE_URL
+              value: {{ .Values.contextFabric.model.allowInsecureBaseURL | quote }}
+            {{- if .Values.contextFabric.model.existingSecret }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.contextFabric.model.existingSecret | quote }}
+                  key: {{ .Values.contextFabric.model.apiKeyKey | default "ACR_CONTEXT_FABRIC_MODEL_API_KEY" | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.deployment.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

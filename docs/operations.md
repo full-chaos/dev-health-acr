@@ -1199,6 +1199,53 @@ prior epoch to roll back to), the only rollback is disabling the lifecycle
 flag application-wide, which reverts read/write to the legacy in-place
 path and leaves the just-built epoch orphaned until a future decision.
 
+### CHAOS-4076: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
+
+Two chart-level constraints found during the CHAOS-4034 live P6 auth
+validation run, both ratified (chris, 2026-08-23) rather than fixed, and
+recorded here so a future deployer does not re-open either as a bug.
+
+**NetworkPolicy apiserver egress is a documented bypass, not an
+oversight.** `workloadTokenExchange.enabled=true` renders a port-only
+egress rule for the Kubernetes apiserver
+(`templates/networkpolicy.yaml`, gated by
+`networkPolicy.egress.kubernetesAPIPort`) with no destination restriction
+(no `ipBlock`/`namespaceSelector` naming `kubernetes.default.svc`) --
+standard NetworkPolicy cannot express "the in-cluster apiserver ClusterIP"
+without a cluster-specific `ipBlock` this chart does not know at author
+time. Verified A/B/A on a kind cluster: a pod carrying acr-api's
+podSelector labels cannot reach the apiserver ClusterIP under the default
+policy without this rule; RFC 8693 `TokenReview` calls 503 without it.
+Port-only egress is accepted for local/dev scope. A scale/multi-tenant
+deployment that needs the apiserver egress destination-restricted (an
+`ipBlock` pinned to the cluster's real apiserver Service IP, once that is
+known and stable per environment) is a chart change -- file a new ticket
+for it; do not narrow this rule silently, since an environment whose
+apiserver IP does not match a hand-pinned `ipBlock` fails closed with no
+obvious cause.
+
+**The in-release FalkorDB workload (`contextFabric.falkordb.enabled`)
+requires a `baseline` (or looser) PodSecurity Admission namespace.** The
+vendored image runs `redis-server` as root with no `USER` directive; a
+`restricted`-PSA namespace rejects the StatefulSet's Pod outright (0/1,
+`runAsNonRoot` violation). Label the target namespace explicitly before
+enabling:
+
+```bash
+kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline
+```
+
+This relaxation is namespace-wide -- it does not scope to the FalkorDB
+Pod alone -- so prefer a dedicated namespace for the in-release FalkorDB
+workload over relaxing PSA on a shared namespace that also runs
+acr-api/acr-projector under the `restricted` contract those Deployments
+otherwise use. An externally-provisioned FalkorDB (the default posture --
+`falkordb.enabled: false`, `contextFabric.falkor.addr` pointed elsewhere)
+has no PSA implication for this chart's own namespace. See
+`values.yaml`'s `contextFabric.falkordb` comment for the container
+security context this workload does apply (dropped capabilities, no
+privilege escalation, `RuntimeDefault` seccomp) despite running as root.
+
 ## Backup and restore
 
 ACR PostgreSQL is operational state; ClickHouse evidence is read-only and is
