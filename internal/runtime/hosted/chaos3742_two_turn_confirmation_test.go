@@ -267,6 +267,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
@@ -442,6 +443,21 @@ func handlePatternIDForKind(kind string) (string, bool) {
 // taking only the FIRST colon (a canonical id may itself contain colons,
 // e.g. "work_item:linear:CHAOS-2476" -> ("work_item", "linear:CHAOS-2476")).
 func splitAnchorKey(key string) (kind, canonicalID string, ok bool) {
+	// CHAOS-4157 fix (codex sol/high review, P1): a v2-scheme canonical id
+	// ("<kind>.v2:<repo_id>:<enc(external_id)>", identity.Derive's own
+	// format) carries its OWN internal colon before the traditional
+	// kind/id boundary this function used to assume was always the FIRST
+	// one -- a plain SplitN(key, ":", 2) on "work_item.v2:00000000-...
+	// :linear%3ACHAOS-3792" returned kind="work_item.v2", not "work_item".
+	// Try every registered kind's v2 form FIRST (identity.Segments is the
+	// authoritative parser, the exact inverse of Derive) before falling
+	// back to the legacy single-colon split every non-v2-scheme kind
+	// (repository, project's pre-migration form, ...) still uses.
+	for _, reg := range identity.Registry {
+		if _, segOK := identity.Segments(reg.Kind, key); segOK {
+			return reg.Kind, key, true
+		}
+	}
 	parts := strings.SplitN(key, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false
@@ -3595,16 +3611,42 @@ type twoTurnReport struct {
 	// same change, same "an undeclared field is dropped on decode" reason
 	// every prior bump needed it for.
 	//
+	// "21" (CHAOS-4157, 2026-08-23): a MEANING change on an existing key,
+	// not an added one -- BaseSHA used to be a wrapper-script-exported
+	// `git rev-parse origin/main`, read AT LAUNCH TIME, a genuine
+	// provenance defect caught live: origin/main can (and during a real
+	// clean CHAOS-4100 re-measure DID -- three unrelated PRs landed mid-run)
+	// move while a run is in flight, so the field could name a commit that
+	// never actually produced the artifact. BaseSHA now reads
+	// source.commit (requireGitSourceIdentity's own `git rev-parse HEAD`,
+	// the SAME value SourceCommit already uses) on all four trial report
+	// types (two-turn, replay, W0, D2B cardinality), so a v20 artifact's
+	// base_sha is not comparable to a v21 one field-for-field even though
+	// the wire shape is unchanged -- exactly the v8->v9/v16 class of bump.
+	// No field added or removed, so cmd/acr-trial-merge-two-turn's own
+	// mirror needs only its expectedSchemaVersion constant updated, not a
+	// new field.
+	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
 	// stale key under a new meaning.
 	ReportSchemaVersion string          `json:"report_schema_version"`
 	Provenance          trialProvenance `json:"provenance"`
 	// BaseSHA mirrors chaos3884_replay_harness_test.go's replayReport.BaseSHA
-	// (codex round-3 finding #3: the wrapper script already exports
-	// ACR_TEST_TRIAL_BASE_SHA -- required provenance, team-lead ruling
-	// 2026-08-17 -- but the report never captured it, so the artifact could
-	// not prove which origin/main baseline the run was based on).
+	// (codex round-3 finding #3: required provenance, team-lead ruling
+	// 2026-08-17 -- the artifact must prove what code produced it).
+	//
+	// CHAOS-4157 fix-forward (2026-08-23): this used to be
+	// requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"), a wrapper-script-exported
+	// `git rev-parse origin/main` read AT LAUNCH TIME -- a genuine
+	// provenance defect, caught live: origin/main can (and during a real
+	// ~15min run did) move while the run is in flight, so that value can
+	// name a commit that never actually ran. source.commit
+	// (requireGitSourceIdentity's own `git rev-parse HEAD`, the SAME value
+	// SourceCommit below is stamped from) is the worktree's actual
+	// checked-out commit -- the code that is genuinely running -- so
+	// BaseSHA and SourceCommit are now the identical value by construction,
+	// never two independently-sourced facts that can silently diverge.
 	BaseSHA              string `json:"base_sha"`
 	OracleAnnexPath      string `json:"oracle_annex_path"`
 	OracleAnnexCorpusSHA string `json:"oracle_annex_corpus_sha256"`
@@ -6266,6 +6308,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if len(corpusHash) < 8 || annex.CorpusSHA256 != corpusHash[:8] {
 		t.Fatalf("oracle annex corpus_sha8=%s does not match the loaded corpus hash prefix=%.8s -- refusing to run against a mismatched annex/corpus pair", annex.CorpusSHA256, corpusHash)
 	}
+	// CHAOS-4157 preflight: fail closed before any live measurement work
+	// begins if either fixture's own work_item identifiers have drifted
+	// out of the live v2 canonical scheme (chaos4157_v2_scheme_preflight_test.go).
+	twoTurnValidateWorkItemV2Scheme(t, annex, corpus)
 	source := requireGitSourceIdentity(t)
 
 	// Subscription-only, no metered key, ever (standing rule for this
@@ -6460,7 +6506,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "20",
+		ReportSchemaVersion: "21",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -6490,7 +6536,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			// is active.
 			ExecutionShape: "sequential",
 		},
-		BaseSHA:         requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
+		BaseSHA:         source.commit,
 		OracleAnnexPath: annexPath, OracleAnnexCorpusSHA: annex.CorpusSHA256, OracleAnnexSignedOff: annex.SignedOff,
 		OfferMissCount:              map[string]int{},
 		MutationProbesTripped:       map[string]int{},

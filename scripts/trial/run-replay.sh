@@ -60,10 +60,8 @@ fi
 if [[ -n "${ACR_TRIAL_CORPUS_SHA256:-}" ]]; then
   export ACR_TEST_TRIAL_CORPUS_SHA256="$ACR_TRIAL_CORPUS_SHA256"
 fi
-# ACR_TEST_TRIAL_BASE_SHA: origin/main's tip THIS run's branch was rebased
-# onto -- required provenance (team-lead ruling 2026-08-17), read directly
-# from git rather than trusted to an operator-supplied value.
-export ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
+# ACR_TEST_TRIAL_BASE_SHA (CHAOS-4157 fix-forward, 2026-08-23): DROPPED --
+# see run-two-turn.sh's own comment. This export has no reader left.
 
 # $$ (independent codex xhigh review finding, confirmed and fixed): a
 # timestamp alone still collides for two invocations started in the SAME

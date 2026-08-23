@@ -272,7 +272,7 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 			ExchangeModelName: arm, ExchangeSessionID: exchangeRuntime.nonce,
 			ControlsContinue: os.Getenv("ACR_TEST_TRIAL_CONTROLS_CONTINUE") == "true",
 		},
-		BaseSHA:                  requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
+		BaseSHA:                  source.commit,
 		DiffTally:                map[replayDiffClass]int{},
 		ClassDistribution:        map[string]int{},
 		ClassSourceDistribution:  map[string]int{},

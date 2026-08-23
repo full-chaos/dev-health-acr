@@ -279,9 +279,18 @@ type replayShadowOutcome struct {
 // replayReport is the whole run's artifact, written to ACR_TEST_REPLAY_OUT.
 type replayReport struct {
 	Provenance trialProvenance `json:"provenance"`
-	// BaseSHA is the origin/main commit this branch was rebased onto
-	// immediately before this run (team-lead ruling 2026-08-17) --
-	// SourceCommit above is this BRANCH's own tip, a separate fact.
+	// BaseSHA (team-lead ruling 2026-08-17; CHAOS-4157 fix-forward,
+	// 2026-08-23): used to be a wrapper-script-exported
+	// `git rev-parse origin/main`, read AT LAUNCH TIME, deliberately kept
+	// distinct from SourceCommit below on the theory that it named "the
+	// main commit this branch was rebased onto" while SourceCommit named
+	// "this branch's own tip." In practice origin/main can (and, caught
+	// live, did) move WHILE a run is in flight or across repeated runs of
+	// the same never-rebased worktree, so the field could name a commit
+	// that never actually produced this artifact -- a genuine provenance
+	// defect, not a distinct fact. Now the same value as SourceCommit
+	// (requireGitSourceIdentity's own `git rev-parse HEAD`): the code that
+	// is genuinely running.
 	BaseSHA string `json:"base_sha"`
 	// PartAMeasurementDeferred (team-lead ruling 2026-08-17, item 4):
 	// Part A's clarification-retrievability half is NOT measured by this
@@ -830,7 +839,7 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 			ResolvedActiveEpoch:   resolvedActiveEpoch,
 			GraphLifecycleEnabled: epochResolver != nil,
 		},
-		BaseSHA:                  requireEnv(t, "ACR_TEST_TRIAL_BASE_SHA"),
+		BaseSHA:                  source.commit,
 		PartAMeasurementDeferred: true,
 		ArmBaselineLabel:         "baseline (identity-universe dependency nil, pre-CHAOS-3884 resolver behavior)",
 		ArmWiredLabel:            "wired (identity-universe dependency set, exactly as production composes it)",

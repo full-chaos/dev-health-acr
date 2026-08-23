@@ -59,10 +59,13 @@ fi
 if [[ -n "${ACR_TRIAL_CORPUS_SHA256:-}" ]]; then
   export ACR_TEST_TRIAL_CORPUS_SHA256="$ACR_TRIAL_CORPUS_SHA256"
 fi
-# ACR_TEST_TRIAL_BASE_SHA: origin/main's tip this run's branch was rebased
-# onto -- required provenance (team-lead ruling 2026-08-17), read directly
-# from git rather than trusted to an operator-supplied value.
-export ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
+# ACR_TEST_TRIAL_BASE_SHA (CHAOS-4157 fix-forward, 2026-08-23): DROPPED.
+# Used to export `git rev-parse origin/main` here for the report's own
+# BaseSHA field -- a genuine provenance defect, caught live: origin/main
+# can move mid-run, so the value could name a commit that never actually
+# produced the artifact. The report now stamps BaseSHA from
+# requireGitSourceIdentity's own `git rev-parse HEAD` (the SAME value
+# SourceCommit already used) instead, so this export has no reader left.
 
 # $$ + timestamp (chaos3884's own collision lesson, applied identically
 # here): two invocations started in the same second still get distinct

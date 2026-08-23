@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -338,7 +339,7 @@ func requireGitSourceIdentity(t *testing.T) gitSourceIdentity {
 		// --porcelain` paths are REPO-ROOT-relative regardless of the
 		// process's own cwd (verified live), so they are joined against
 		// repoRoot here, not read as-is.
-		for _, path := range untrackedPaths(t, statusOut) {
+		for _, path := range untrackedFilePaths(t, repoRoot, untrackedPaths(t, statusOut)) {
 			content, err := os.ReadFile(filepath.Join(repoRoot, path))
 			if err != nil {
 				t.Fatalf("hash untracked file %s for provenance digest: %v", path, err)
@@ -352,8 +353,12 @@ func requireGitSourceIdentity(t *testing.T) gitSourceIdentity {
 	return identity
 }
 
-// untrackedPaths extracts the "??"-prefixed (untracked) file paths from
-// `git status --porcelain` output, sorted for deterministic digest input.
+// untrackedPaths extracts the "??"-prefixed (untracked) paths from `git
+// status --porcelain` output, sorted for deterministic digest input. A
+// wholly-untracked DIRECTORY appears as ONE entry with a trailing "/"
+// (git's default --untracked-files=normal mode never recurses into one) --
+// the caller (requireGitSourceIdentity) is responsible for expanding that
+// into its own file list rather than treating the path as a file itself.
 func untrackedPaths(t *testing.T, porcelain []byte) []string {
 	t.Helper()
 	var paths []string
@@ -364,6 +369,51 @@ func untrackedPaths(t *testing.T, porcelain []byte) []string {
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+// untrackedFilePaths expands untrackedPaths' own output into a flat,
+// sorted list of actual FILE paths only -- recursively walking any entry
+// git reported as a directory (trailing "/").
+//
+// CHAOS-4157 fix (codex sol/high review, P2): the caller used to
+// os.ReadFile every raw untrackedPaths() entry directly, which panics-via-
+// Fatalf the instant one of them is a directory -- and `git status
+// --porcelain`'s default mode ALWAYS collapses a wholly-untracked
+// directory into one such entry (this harness's own `.trial-exchange-*`
+// scratch dirs, deliberately untracked -- see run-two-turn-parallel.sh's
+// own comment on why -- are exactly this shape). Recursing preserves the
+// original digest-completeness intent (sol review R1: "fold every
+// untracked path's content in") instead of silently dropping a directory's
+// contents from the digest just to avoid the crash.
+func untrackedFilePaths(t *testing.T, repoRoot string, rawPaths []string) []string {
+	t.Helper()
+	var files []string
+	for _, path := range rawPaths {
+		if !strings.HasSuffix(path, "/") {
+			files = append(files, path)
+			continue
+		}
+		root := filepath.Join(repoRoot, path)
+		walkErr := filepath.WalkDir(root, func(walkPath string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			rel, relErr := filepath.Rel(repoRoot, walkPath)
+			if relErr != nil {
+				return relErr
+			}
+			files = append(files, rel)
+			return nil
+		})
+		if walkErr != nil {
+			t.Fatalf("walk untracked directory %s for provenance digest: %v", path, walkErr)
+		}
+	}
+	sort.Strings(files)
+	return files
 }
 
 func requireEnv(t *testing.T, key string) string {
@@ -403,6 +453,14 @@ func loadTrialCorpus(t *testing.T, path string) ([]trialCase, string) {
 	if len(corpus) < 50 {
 		t.Fatalf("trial corpus has %d cases; CHAOS-3742 requires at least 50", len(corpus))
 	}
+	// CHAOS-4157 preflight (codex sol/high review, P2): folded in HERE,
+	// not at each of this function's six call sites, so every LIVE corpus
+	// consumer -- present and future -- is guarded automatically; safe to
+	// do because, unlike loadTwoTurnOracleAnnex/adaptSignedOracleAnnex,
+	// no unit test in this package calls loadTrialCorpus with a synthetic
+	// fixture (it always reads a real on-disk file), so there is nothing
+	// this check could break that isn't itself a real trial run.
+	validateCorpusWorkItemV2Scheme(t, corpus)
 	return corpus, hash
 }
 

@@ -211,14 +211,8 @@ fi
 if [[ -n "${ACR_TRIAL_CORPUS_SHA256:-}" ]]; then
   export ACR_TEST_TRIAL_CORPUS_SHA256="$ACR_TRIAL_CORPUS_SHA256"
 fi
-# ACR_TEST_TRIAL_BASE_SHA/ACR_TEST_TRIAL_ARM: see run-two-turn.sh's own
-# comments for why these are required exactly this way.
-if plan_only_requested; then
-  export ACR_TEST_TRIAL_BASE_SHA="plan-only"
-else
-  ACR_TEST_TRIAL_BASE_SHA="$(cd "$repo_root" && git rev-parse origin/main)"
-  export ACR_TEST_TRIAL_BASE_SHA
-fi
+# ACR_TEST_TRIAL_BASE_SHA (CHAOS-4157 fix-forward, 2026-08-23): DROPPED --
+# see run-two-turn.sh's own comment. This export has no reader left.
 export ACR_TEST_TRIAL_ARM="twoturn"
 
 # annex_case_indices reads the annex's own DISTINCT case indices, ascending.
