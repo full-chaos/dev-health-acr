@@ -85,6 +85,21 @@ func TestMaxTextRunesFloorIsTheLargestCompleteTemplate(t *testing.T) {
 	}
 }
 
+// blankCredentialOutcome names EXACTLY what ConfigFromEnv must do for a
+// case, closed-vocabulary -- codex xhigh review (round 1) correctly found
+// the original bool wantErr + a shared "any non-nil, non-ErrNotConfigured
+// error fails" fallthrough could not tell "constructed successfully" apart
+// from "returned ErrNotConfigured", so a case asserting success could
+// silently pass even if construction had actually short-circuited as
+// unconfigured. Each outcome below asserts its own distinct condition.
+type blankCredentialOutcome int
+
+const (
+	outcomeHardFail          blankCredentialOutcome = iota // must return a non-nil error naming EnvAllowNoCredential
+	outcomeCleanConstruct                                  // must return (Config, nil) with the given fields
+	outcomeCleanUnconfigured                               // must return ErrNotConfigured specifically
+)
+
 // TestBlankCredentialFailsClosed pins CHAOS-4192's fail-loud guard through
 // the same entry point acr-projector/acr-api actually call
 // (ConfigFromEnv), not just Config.validate() in isolation: a configured
@@ -119,47 +134,77 @@ func TestBlankCredentialFailsClosed(t *testing.T) {
 	}
 
 	cases := []struct {
-		name       string
-		env        map[string]string
-		wantErr    bool
-		wantErrLog string // substring the error must contain, when wantErr
+		name            string
+		env             map[string]string
+		outcome         blankCredentialOutcome
+		wantAPIKey      string
+		wantAllowNoCred bool
 	}{
 		{
-			name:       "configured with blank credential and no opt-in fails closed",
-			env:        withEnv(nil),
-			wantErr:    true,
-			wantErrLog: EnvAllowNoCredential,
+			name:    "configured with blank credential and no opt-in fails closed",
+			env:     withEnv(nil),
+			outcome: outcomeHardFail,
 		},
 		{
-			name: "configured with blank credential and explicit opt-in succeeds",
-			env:  withEnv(map[string]string{EnvAllowNoCredential: "true"}),
+			name:            "configured with blank credential and explicit opt-in succeeds",
+			env:             withEnv(map[string]string{EnvAllowNoCredential: "true"}),
+			outcome:         outcomeCleanConstruct,
+			wantAPIKey:      "",
+			wantAllowNoCred: true,
 		},
 		{
-			name: "configured with a real credential succeeds without the opt-in",
-			env:  withEnv(map[string]string{EnvAPIKey: "sk-real-credential"}),
+			name:            "configured with a real credential succeeds without the opt-in",
+			env:             withEnv(map[string]string{EnvAPIKey: "sk-real-credential"}),
+			outcome:         outcomeCleanConstruct,
+			wantAPIKey:      "sk-real-credential",
+			wantAllowNoCred: false,
 		},
 		{
-			name: "unconfigured (no base URL) stays a clean no-op regardless of credential state",
-			env:  map[string]string{EnvModel: "test-model", EnvDimension: "768"},
+			name:    "unconfigured (no base URL) stays a clean no-op with a blank credential",
+			env:     map[string]string{EnvModel: "test-model", EnvDimension: "768"},
+			outcome: outcomeCleanUnconfigured,
+		},
+		{
+			name:    "unconfigured (no base URL) stays a clean no-op even with the opt-in set",
+			env:     map[string]string{EnvModel: "test-model", EnvDimension: "768", EnvAllowNoCredential: "true"},
+			outcome: outcomeCleanUnconfigured,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := ConfigFromEnv(lookupOf(tc.env))
-			switch {
-			case tc.wantErr:
+			cfg, err := ConfigFromEnv(lookupOf(tc.env))
+			switch tc.outcome {
+			case outcomeHardFail:
 				if err == nil {
 					t.Fatal("ConfigFromEnv = nil error, want a fail-closed error")
 				}
-				if tc.wantErrLog != "" && !strings.Contains(err.Error(), tc.wantErrLog) {
-					t.Fatalf("ConfigFromEnv error = %q, want it to name %q", err, tc.wantErrLog)
+				if errors.Is(err, ErrNotConfigured) {
+					t.Fatalf("ConfigFromEnv error = %v (ErrNotConfigured), want the credential-specific fail-closed error -- a configured deployment must not be mistaken for an unconfigured one", err)
 				}
-			case errors.Is(err, ErrNotConfigured):
-				// The unconfigured case: ErrNotConfigured itself IS the
-				// expected clean no-op signal, not a test failure.
-			case err != nil:
-				t.Fatalf("ConfigFromEnv error = %v, want a clean construction", err)
+				if !strings.Contains(err.Error(), EnvAllowNoCredential) {
+					t.Fatalf("ConfigFromEnv error = %q, want it to name %q", err, EnvAllowNoCredential)
+				}
+			case outcomeCleanConstruct:
+				if err != nil {
+					t.Fatalf("ConfigFromEnv error = %v, want a clean construction (nil error)", err)
+				}
+				if cfg.APIKey != tc.wantAPIKey {
+					t.Fatalf("cfg.APIKey = %q, want %q", cfg.APIKey, tc.wantAPIKey)
+				}
+				if cfg.AllowNoCredential != tc.wantAllowNoCred {
+					t.Fatalf("cfg.AllowNoCredential = %v, want %v", cfg.AllowNoCredential, tc.wantAllowNoCred)
+				}
+				if cfg.BaseURL == "" {
+					t.Fatal("cfg.BaseURL is empty -- construction did not actually configure the embedder")
+				}
+			case outcomeCleanUnconfigured:
+				if !errors.Is(err, ErrNotConfigured) {
+					t.Fatalf("ConfigFromEnv error = %v, want ErrNotConfigured specifically (the clean no-op signal)", err)
+				}
+				if cfg != (Config{}) {
+					t.Fatalf("cfg = %+v, want the zero Config alongside ErrNotConfigured", cfg)
+				}
 			}
 		})
 	}
