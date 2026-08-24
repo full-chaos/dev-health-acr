@@ -269,11 +269,20 @@ trial_wire_common_env() {
     # stdout only, deliberately NOT `2>&1`: an incidental kubectl warning
     # on stderr must never reach this loop. On failure only, the command
     # is re-run once with stderr merged purely for the diagnostic message.
+    #
+    # ACR_TRIAL_KIAC_DSN_BIN overrides which executable is asked for
+    # `dsn --env`, defaulting to the real trial-data.sh -- a testability
+    # hook (same shape as ACR_TRIAL_PSQL_ADMIN_SELFTEST elsewhere in this
+    # directory) letting test-kiac-dsn-reader.sh exercise this parser
+    # against fabricated output without a live cluster. Substituting the
+    # BINARY, never the args or an eval'd command string, so this stays
+    # inert to injection the same way the real path is.
+    local kiac_dsn_bin="${ACR_TRIAL_KIAC_DSN_BIN:-deploy/local/trial-data.sh}"
     local kiac_env_output
-    if ! kiac_env_output="$(cd "$repo_root" && deploy/local/trial-data.sh dsn --env 2>/dev/null)"; then
+    if ! kiac_env_output="$(cd "$repo_root" && "$kiac_dsn_bin" dsn --env 2>/dev/null)"; then
       local kiac_env_diag
-      kiac_env_diag="$(cd "$repo_root" && deploy/local/trial-data.sh dsn --env 2>&1 >/dev/null)"
-      echo "common.sh: ACR_TRIAL_DATA_PLANE=kiac but 'deploy/local/trial-data.sh dsn --env' failed -- is the kiac trial data plane applied and KUBECONFIG set? output:" >&2
+      kiac_env_diag="$(cd "$repo_root" && "$kiac_dsn_bin" dsn --env 2>&1 >/dev/null)"
+      echo "common.sh: ACR_TRIAL_DATA_PLANE=kiac but '$kiac_dsn_bin dsn --env' failed -- is the kiac trial data plane applied and KUBECONFIG set? output:" >&2
       echo "$kiac_env_diag" >&2
       exit 1
     fi

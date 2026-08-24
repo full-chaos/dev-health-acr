@@ -93,7 +93,8 @@ deploy/local/trial-data.sh apply && deploy/local/trial-data.sh wait
 deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ts>.sql.gz
 deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ts>.zip
 deploy/local/trial-data.sh dsn        # prints the ACR_TEST_TRIAL_* DSN recipe
-deploy/local/trial-data.sh dsn --env  # same, as printf-%q-quoted KEY=value lines (scripting)
+deploy/local/trial-data.sh dsn --env  # same, as raw KEY=value lines (scripting; the consumer
+                                       # never evals this -- see common.sh's kiac branch)
 deploy/local/trial-data.sh wipe       # namespace `acr-trial-data` ONLY -- ignores
                                        # ACR_TRIAL_DATA_NAMESPACE; a differently-named
                                        # instance's resources are the caller's to remove
