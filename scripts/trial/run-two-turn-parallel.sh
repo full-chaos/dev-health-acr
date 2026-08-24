@@ -75,6 +75,13 @@ else
   trial_secret() { printf 'plan-only'; }
   require_outside_repo_tree() { :; }
   ACR_TRIAL_RESULTS_DIR="${ACR_TRIAL_RESULTS_DIR:-${TMPDIR:-/tmp}}"
+  # Unset any ACR_TEST_TRIAL_PG_* left exported by an EARLIER live
+  # invocation in this same shell (codex xhigh review, fresh cycle round 1,
+  # P2): the stub above never sets these, but PG_HOST/PG_PORT's own
+  # fallback chain below checks them first -- without this, a stale
+  # ambient value would silently override what THIS plan-only invocation's
+  # own ACR_TRIAL_PG_HOST/PORT diagnostic-relay tier was asked to preview.
+  unset ACR_TEST_TRIAL_PG_HOST ACR_TEST_TRIAL_PG_PORT ACR_TEST_TRIAL_PG_USER ACR_TEST_TRIAL_PG_PASSWORD
 fi
 
 ANNEX_PATH="${1:?usage: run-two-turn-parallel.sh <oracle-annex-path> [limit] [shard-count]}"

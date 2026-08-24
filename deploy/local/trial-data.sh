@@ -93,8 +93,31 @@ validate_namespace() {
 }
 validate_namespace
 
+# validate_render_vars (codex xhigh review, fresh cycle round 1, P1): every
+# one of these is `sed`-interpolated straight into the YAML template with
+# no escaping -- validate_password was the only one actually checked. sed
+# is not YAML-aware: a value containing a literal newline (or YAML
+# metacharacters positioned to close/reopen a mapping) can inject an
+# ENTIRELY NEW DOCUMENT into the stream, including a CLUSTER-SCOPED kind
+# (e.g. PersistentVolume) that `kubectl -n $NAMESPACE delete -f -` would
+# still act on regardless of the -n flag. Reproduced live by the reviewer
+# via a crafted ACR_TRIAL_PG_STORAGE value. Storage sizes must be a bare
+# Kubernetes quantity (digits + an optional binary/decimal suffix, no
+# multi-char runs that could smuggle a colon or newline); the image ref
+# is restricted to the character set real image references actually use
+# (no whitespace, quotes, or newlines -- the injection vector itself).
+validate_render_vars() {
+  local -r qty_re='^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|[EPTGMK])?$'
+  [[ "$PG_STORAGE" =~ $qty_re ]] || die "ACR_TRIAL_PG_STORAGE=$PG_STORAGE is not a plain Kubernetes storage quantity (e.g. 20Gi)"
+  [[ "$CH_STORAGE" =~ $qty_re ]] || die "ACR_TRIAL_CH_STORAGE=$CH_STORAGE is not a plain Kubernetes storage quantity (e.g. 30Gi)"
+  [[ "$CH_BACKUPS_STORAGE" =~ $qty_re ]] || die "ACR_TRIAL_CH_BACKUPS_STORAGE=$CH_BACKUPS_STORAGE is not a plain Kubernetes storage quantity (e.g. 5Gi)"
+  [[ "$FALKOR_STORAGE" =~ $qty_re ]] || die "ACR_TRIAL_FALKOR_STORAGE=$FALKOR_STORAGE is not a plain Kubernetes storage quantity (e.g. 5Gi)"
+  [[ "$CH_IMAGE" =~ ^[A-Za-z0-9./_:@-]+$ ]] || die "ACR_TRIAL_CH_IMAGE=$CH_IMAGE contains characters outside a plain image reference (no whitespace/quotes/newlines)"
+}
+
 render() {
   validate_password
+  validate_render_vars
   sed \
     -e "s|__NAMESPACE__|$NAMESPACE|g" \
     -e "s|__PG_PASSWORD__|$PG_PASSWORD|g" \

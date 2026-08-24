@@ -216,17 +216,12 @@ via `docker exec` (its own frontier baseline, a separate measurement family)
 One-time sequential-subset smoke against the kiac trial data plane, per the
 ratified plan: seed from `@backups` (no re-baseline), rebuild the graph with
 real embeddings (see trap 6/8), then compare a small live run against the
-established compose-stack baseline. DSN recipe: `deploy/local/trial-data.sh
-dsn` (see Contract table above); harness invocation follows
-`scripts/trial/run-two-turn.sh`'s own recipe with the three endpoint vars
-(`ACR_TEST_TRIAL_FALKOR_ADDR`/`POSTGRES_DSN`/`CLICKHOUSE_DSN`) overridden to
-the kiac NodePort endpoints instead of compose's `127.0.0.1` defaults --
-`scripts/trial/common.sh`'s `trial_wire_common_env` now defaults these
-three with `:=` rather than an unconditional `export` (codex xhigh review,
-P1: it used to clobber an explicit override back to compose every time),
-so exporting the kiac values BEFORE calling `trial_wire_common_env` is
-sufficient; no ordering trick needed. `ACR_TRIAL_CORPUS` explicitly pointed
-at `.remember/acr-3778-corpus-ext65.json`
+established compose-stack baseline. **Historical note**: this smoke ran
+before the `ACR_TRIAL_DATA_PLANE` switch (Launcher coverage, above) existed
+-- it manually exported the three `ACR_TEST_TRIAL_*` endpoint vars ahead of
+calling `trial_wire_common_env`, which worked at the time but is no longer
+how a kiac run should be driven; use `ACR_TRIAL_DATA_PLANE=kiac` instead.
+`ACR_TRIAL_CORPUS` was explicitly pointed at `.remember/acr-3778-corpus-ext65.json`
 -- at the time of this run, `scripts/trial/common.sh`'s own default pointed
 at a STALE corpus file (the CHAOS-3860 eval-only holdout, never meant as a
 live-trial default) that fails the CHAOS-4157 v2-scheme preflight against

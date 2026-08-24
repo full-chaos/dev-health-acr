@@ -226,14 +226,24 @@ trial_wire_common_env() {
   export ACR_TEST_TRIAL_CORPUS="$ACR_TRIAL_CORPUS"
   export ACR_TEST_TRIAL_ORG="$ACR_TRIAL_ORG"
 
-  local pg_host pg_port pg_user pg_password ch_dsn falkor_addr
+  local pg_host pg_port pg_user pg_password ch_dsn falkor_addr data_plane_label
 
   if [[ "$_acr_trial_override_set" == "1" ]]; then
+    # data_plane_label is deliberately NOT "$ACR_TRIAL_DATA_PLANE" here
+    # (codex xhigh review, fresh cycle round 1, P1): the six-var escape
+    # hatch's all-or-none check only proves COMPLETENESS (all six set),
+    # never COHERENCE -- nothing stops an operator pointing the PG pair at
+    # kiac and the CH/Falkor pair at compose, an explicit mixed-plane run.
+    # Reporting that as "kiac" (or "compose") in the provenance/telemetry
+    # line below would be a false claim about which stack the run actually
+    # hit; "override" self-declares as non-standard instead.
+    data_plane_label="override"
     pg_host="$ACR_TRIAL_PG_HOST"; pg_port="$ACR_TRIAL_PG_PORT"
     pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
     ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@${ACR_TRIAL_CH_HOST}:${ACR_TRIAL_CH_PORT}/$(trial_secret CLICKHOUSE_DB)"
     falkor_addr="${ACR_TRIAL_FALKOR_HOST}:${ACR_TRIAL_FALKOR_PORT}"
   elif [[ "$ACR_TRIAL_DATA_PLANE" == "kiac" ]]; then
+    data_plane_label="kiac"
     # deploy/local/trial-data.sh dsn resolves ALL THREE endpoints in one
     # call, reading the credential from the LIVE cluster secret -- never
     # independently re-derived here, so this can never drift from what the
@@ -256,6 +266,7 @@ trial_wire_common_env() {
     local kiac_pg_hostport="${kiac_pg_dsn#*@}"; kiac_pg_hostport="${kiac_pg_hostport%%/*}"
     pg_host="${kiac_pg_hostport%%:*}"; pg_port="${kiac_pg_hostport##*:}"
   elif [[ "$ACR_TRIAL_DATA_PLANE" == "compose" ]]; then
+    data_plane_label="compose"
     pg_host="127.0.0.1"; pg_port="5432"
     pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
     ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@127.0.0.1:9000/$(trial_secret CLICKHOUSE_DB)"
@@ -283,10 +294,14 @@ trial_wire_common_env() {
   export ACR_TEST_TRIAL_EMBED_API_KEY="$(trial_secret OPENAI_API_KEY)"
 
   # Seeds the queued `data_plane` report-provenance field (schema tip+1,
-  # separate small PR): printed at every launcher's own start, so which
-  # stack a run hit is visible immediately rather than inferred after the
-  # fact from a host string buried in a DSN. Never prints a credential.
-  echo "common.sh: data_plane=$ACR_TRIAL_DATA_PLANE pg=${pg_host}:${pg_port} ch=$(sed -E 's#.*@##' <<<"$ch_dsn") falkor=$falkor_addr" >&2
+  # separate small PR): exported so a future producer can read it directly
+  # rather than re-inferring it from a host string, and printed at every
+  # launcher's own start so which stack a run hit is visible immediately.
+  # "override" (not a false "compose"/"kiac" claim) when the six-var escape
+  # hatch is in play -- see that branch's own comment on why coherence
+  # isn't provable here. Never prints a credential.
+  export ACR_TEST_TRIAL_DATA_PLANE="$data_plane_label"
+  echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port} ch=$(sed -E 's#.*@##' <<<"$ch_dsn") falkor=$falkor_addr" >&2
 }
 
 # trial_wire_graph_lifecycle_env (CHAOS-3916, local/trial slice) is
