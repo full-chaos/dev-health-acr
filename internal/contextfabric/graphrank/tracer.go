@@ -178,7 +178,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"boundary_kinds", event.KindOfferBoundaryKinds,
 			"boundary_kinds_before_repair", event.KindOfferBoundaryKindsBeforeRepair,
 			"distinct_kind_count_before_repair", event.KindOfferDistinctKindCountBeforeRepair,
-			"suppressed_by_cardinality_before_repair", event.KindOfferSuppressedByCardinalityBeforeRepair)
+			"suppressed_by_cardinality_before_repair", event.KindOfferSuppressedByCardinalityBeforeRepair,
+			// CHAOS-4119: handleOfferMaterial's own graph-derived-source
+			// diagnostics, riding this SAME unconditional event -- see
+			// HandleOfferGraphDerivedCount's own doc comment
+			// (ResolutionTraceEvent) for what each key measures.
+			"handle_offer_count_before_graph_source", event.HandleOfferCountBeforeGraphSource,
+			"handle_offer_graph_derived_count", event.HandleOfferGraphDerivedCount,
+			"handle_offer_graph_derived_rejected_count", event.HandleOfferGraphDerivedRejectedCount)
 	case "confirmed_kind_scope":
 		// CHAOS-4154: the operator-visible half of the confirmed-kind
 		// truncation-scoping mechanism -- this event's own presence in a

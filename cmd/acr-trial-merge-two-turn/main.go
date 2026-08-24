@@ -248,7 +248,19 @@ import (
 // concatenates verbatim); mirrored here in the same change, same
 // undeclared-field-dropped-on-decode reason as every prior bump needed it
 // for.
-const expectedSchemaVersion = "26"
+// "27" (CHAOS-4119, team-lead ratified 2026-08-24): handleOfferMaterial
+// gains a THIRD handle source -- the resolution's own candidate pool,
+// beside explicit and BindHandles' own question-text scan -- closing the
+// 25/25 handle offer_miss gap. Two changes, both requiring the bump. (a)
+// MEANING change on an existing key: HandleOptionsCount can now include
+// graph-derived entries; HandleOptionsCountBeforeGraphSource (new) carries
+// the pre-CHAOS-4119 reading. (b) Purely additive: HandleOfferGraphDerivedCount/
+// HandleOfferGraphDerivedRejectedCount and their Turn1-prefixed twins, on
+// the SAME kind_offer stage every other offer-axis diagnostic already
+// rides. No merge arithmetic changes (Results concatenates verbatim);
+// mirrored here in the same change, same undeclared-field-dropped-on-decode
+// reason as every prior bump needed it for.
+const expectedSchemaVersion = "27"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -431,8 +443,13 @@ type twoTurnCaseResult struct {
 	// fields byte-for-byte (no omitempty, same reasoning as the trio above).
 	CandidateOfferCount int    `json:"candidate_offer_count"`
 	OfferKind           string `json:"offer_kind"`
-	ArmInvalidStage     string `json:"arm_invalid_stage,omitempty"`
-	ArmInvalidErrorType string `json:"arm_invalid_error_type,omitempty"`
+	// CHAOS-4119 (schema v27): the handle-offer graph-derived-source axis's
+	// own pair on the SAME kind_offer stage above, mirroring
+	// twoTurnCaseResult's identically-named fields byte-for-byte.
+	HandleOfferGraphDerivedCount         int    `json:"handle_offer_graph_derived_count"`
+	HandleOfferGraphDerivedRejectedCount int    `json:"handle_offer_graph_derived_rejected_count"`
+	ArmInvalidStage                      string `json:"arm_invalid_stage,omitempty"`
+	ArmInvalidErrorType                  string `json:"arm_invalid_error_type,omitempty"`
 	// CHAOS-4103 (schema v13) synthesis-status override provenance, mirroring
 	// twoTurnCaseResult's identically-named block byte-for-byte -- see that
 	// file's own doc comment for what each field means and why
@@ -478,11 +495,16 @@ type twoTurnCaseResult struct {
 	Turn1KindOfferSuppressedByCardinalityBeforeRepair bool `json:"turn1_kind_offer_suppressed_by_cardinality_before_repair"`
 	// CHAOS-4012 v22: turn 1's own candidate-list twin, mirroring
 	// twoTurnCaseResult's identically-named fields byte-for-byte.
-	Turn1CandidateOfferCount     int    `json:"turn1_candidate_offer_count"`
-	Turn1OfferKind               string `json:"turn1_offer_kind"`
-	Turn1TermSearchTruncated     bool   `json:"turn1_term_search_truncated,omitempty"`
-	Turn1QuestionSearchTruncated bool   `json:"turn1_question_search_truncated,omitempty"`
-	ExpectedInPool               bool   `json:"expected_in_pool"`
+	Turn1CandidateOfferCount int    `json:"turn1_candidate_offer_count"`
+	Turn1OfferKind           string `json:"turn1_offer_kind"`
+	// CHAOS-4119 (schema v27): turn 1's own handle-offer graph-derived-source
+	// twin, mirroring twoTurnCaseResult's identically-named fields
+	// byte-for-byte.
+	Turn1HandleOfferGraphDerivedCount         int  `json:"turn1_handle_offer_graph_derived_count"`
+	Turn1HandleOfferGraphDerivedRejectedCount int  `json:"turn1_handle_offer_graph_derived_rejected_count"`
+	Turn1TermSearchTruncated                  bool `json:"turn1_term_search_truncated,omitempty"`
+	Turn1QuestionSearchTruncated              bool `json:"turn1_question_search_truncated,omitempty"`
+	ExpectedInPool                            bool `json:"expected_in_pool"`
 	// CHAOS-4012 v22 (re-smoke follow-up): ExpectedInPool's call-boundary-
 	// scoped refinement, mirroring twoTurnCaseResult's identically-named
 	// field byte-for-byte.
@@ -493,9 +515,13 @@ type twoTurnCaseResult struct {
 	ExpectedKindAtOfferBoundaryBeforeRepair bool `json:"expected_kind_at_offer_boundary_before_repair"`
 	AnchorOptionsCount                      int  `json:"anchor_options_count"`
 	HandleOptionsCount                      int  `json:"handle_options_count"`
-	CensusRan                               bool `json:"census_ran"`
-	CensusComplete                          bool `json:"census_complete"`
-	CensusCount                             int  `json:"census_count"`
+	// CHAOS-4119 (schema v27): HandleOptionsCount's own pre-graph-source
+	// twin, mirroring twoTurnCaseResult's identically-named field
+	// byte-for-byte.
+	HandleOptionsCountBeforeGraphSource int  `json:"handle_options_count_before_graph_source"`
+	CensusRan                           bool `json:"census_ran"`
+	CensusComplete                      bool `json:"census_complete"`
+	CensusCount                         int  `json:"census_count"`
 	// CHAOS-4161 v19: mirrors twoTurnCaseResult's identically-named fields
 	// byte-for-byte -- see that file's own doc comment.
 	EvidenceRoundEntered bool   `json:"evidence_round_entered"`

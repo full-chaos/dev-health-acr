@@ -138,6 +138,12 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 		KindOfferBoundaryKindsBeforeRepair:           []string{"repository"},
 		KindOfferDistinctKindCountBeforeRepair:       1,
 		KindOfferSuppressedByCardinalityBeforeRepair: true,
+		// CHAOS-4119: deliberately non-zero/distinct values, so the
+		// assertions below prove the sink carries THIS call's own numbers,
+		// not a coincidental zero-value match.
+		HandleOfferCountBeforeGraphSource:    2,
+		HandleOfferGraphDerivedCount:         3,
+		HandleOfferGraphDerivedRejectedCount: 4,
 	})
 
 	if got, ok := record["explicit_hint_count"].(float64); !ok || got != 1 {
@@ -175,6 +181,18 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 	}
 	if got, ok := record["suppressed_by_cardinality_before_repair"].(bool); !ok || !got {
 		t.Fatalf("suppressed_by_cardinality_before_repair = %v, want true", record["suppressed_by_cardinality_before_repair"])
+	}
+	// CHAOS-4119: handleOfferMaterial's own graph-derived-source
+	// diagnostics must reach the PRODUCTION sink too -- same
+	// file-doc-comment obligation as every field above.
+	if got, ok := record["handle_offer_count_before_graph_source"].(float64); !ok || got != 2 {
+		t.Fatalf("handle_offer_count_before_graph_source = %v, want 2", record["handle_offer_count_before_graph_source"])
+	}
+	if got, ok := record["handle_offer_graph_derived_count"].(float64); !ok || got != 3 {
+		t.Fatalf("handle_offer_graph_derived_count = %v, want 3", record["handle_offer_graph_derived_count"])
+	}
+	if got, ok := record["handle_offer_graph_derived_rejected_count"].(float64); !ok || got != 4 {
+		t.Fatalf("handle_offer_graph_derived_rejected_count = %v, want 4", record["handle_offer_graph_derived_rejected_count"])
 	}
 }
 
