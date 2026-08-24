@@ -31,6 +31,14 @@
 # Environment:
 #   ACR_KIAC_CLUSTER_NAME        cluster name (default: acr-local)
 #   ACR_KIAC_WORKERS             worker node count (default: 0; control plane untainted)
+#   ACR_KIAC_CPUS                vCPUs per node VM (default: kiac's own, currently 4)
+#   ACR_KIAC_CP_MEMORY           control-plane VM memory, e.g. "16G" (default: kiac's
+#                                own, currently 4G) -- on a single-node cluster
+#                                (workers=0) this is EVERY workload's memory ceiling,
+#                                not just etcd/apiserver's (CHAOS-4186 resize finding:
+#                                there is no live-resize path -- this is create-time
+#                                only, see that section of the runbook below for the
+#                                recreate=data-loss recipe)
 #   ACR_KIAC_KUBECONFIG          kubeconfig path override
 #   ACR_KIAC_ALLOW_VERSION_DRIFT set to 1 to downgrade the version-pin failure to a warning
 set -euo pipefail
@@ -44,12 +52,18 @@ CLUSTER_NAME="${ACR_KIAC_CLUSTER_NAME:-acr-local}"
 STATE_DIR="$REPO_ROOT/.tmp/kiac/$CLUSTER_NAME"
 KUBECONFIG_PATH="${ACR_KIAC_KUBECONFIG:-$STATE_DIR/kubeconfig}"
 WORKERS="${ACR_KIAC_WORKERS:-0}"
+# Left unset (not defaulted here) so an unset var means "let kiac use its
+# own default" rather than this script silently re-asserting one -- kiac's
+# actual current defaults (4 vCPU / 4G control-plane) are documented in the
+# env comment above, not hardcoded twice.
+CPUS="${ACR_KIAC_CPUS:-}"
+CP_MEMORY="${ACR_KIAC_CP_MEMORY:-}"
 
 log() { printf '[kiac.sh] %s\n' "$*" >&2; }
 die() { printf '[kiac.sh] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -103,11 +117,19 @@ cmd_up() {
     die "cluster '$CLUSTER_NAME' already exists; refusing to reuse or mutate it (delete it with 'kiac.sh down' first)"
   fi
   mkdir -p "$STATE_DIR"
-  log "creating k3s cluster '$CLUSTER_NAME' (workers=$WORKERS, kubeconfig=$KUBECONFIG_PATH)"
+  # Extra args built as an array, not string-interpolated into one -- an
+  # empty CPUS/CP_MEMORY means "omit the flag entirely" (kiac's own
+  # default applies), never "pass an empty value" (which `kiac create
+  # cluster --cpus ""` would reject outright rather than silently ignore).
+  local -a size_args=()
+  [[ -n "$CPUS" ]] && size_args+=(--cpus "$CPUS")
+  [[ -n "$CP_MEMORY" ]] && size_args+=(--cp-memory "$CP_MEMORY")
+  log "creating k3s cluster '$CLUSTER_NAME' (workers=$WORKERS, cpus=${CPUS:-kiac default}, cp-memory=${CP_MEMORY:-kiac default}, kubeconfig=$KUBECONFIG_PATH)"
   KUBECONFIG="$KUBECONFIG_PATH" kiac create cluster \
     --name "$CLUSTER_NAME" \
     --distro k3s \
     --workers "$WORKERS" \
+    "${size_args[@]}" \
     --wait 5m
   [[ -s "$KUBECONFIG_PATH" ]] || die "kiac did not write the isolated kubeconfig at $KUBECONFIG_PATH"
   KUBECONFIG="$KUBECONFIG_PATH" kubectl wait --for=condition=Ready nodes --all --timeout=180s

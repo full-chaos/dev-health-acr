@@ -222,6 +222,49 @@ fixed here.
    `ACR_TEST_TRIAL_INDICES` (exact corpus indices) instead of `LIMIT` when
    you need every selected case to be complete.
 
+## Resizing the control-plane VM (CHAOS-4186)
+
+**WARNING: recreate is destructive.** `acr-local` is single-node --
+`kiac-acr-local-control-plane` (untainted) runs every workload, including
+both `acr-trial-data` and any other namespace on the cluster (e.g.
+`acr-pilot`). Neither `kiac` nor the underlying `container` CLI expose a
+live-resize path: `--cpus`/`--cp-memory` are `kiac create cluster`-only
+flags, and hand-editing the node's on-disk state files while stopped
+(`~/Library/Application Support/com.apple.container/containers/<id>/
+config.json` and `runtime-configuration.json`) does NOT work either --
+confirmed empirically on a disposable throwaway cluster: both edits
+persisted on disk but were silently ignored on the next `container
+start`, which still reported the original create-time cpus/memory. The
+node's PVC storage (local-path-provisioner, hostPath-backed) lives
+entirely inside that same directory's `rootfs.ext4`, with no separate
+volume object `container` could reattach -- so the ONLY way to change
+CPU/memory is `kiac.sh down` + `kiac.sh up`, which provisions a fresh
+`rootfs.ext4` and **destroys all PVC-backed data on the node**.
+
+Recipe (run only when no lane is mid-run on kiac; coordinate first):
+
+```bash
+deploy/local/kiac.sh down                                    # destroys acr-trial-data + acr-pilot data
+ACR_KIAC_CPUS=4 ACR_KIAC_CP_MEMORY=16G deploy/local/kiac.sh up
+deploy/local/trial-data.sh apply && deploy/local/trial-data.sh wait
+deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ORIGINAL Aug-17 ts>.sql.gz
+deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ORIGINAL Aug-17 ts>.zip
+# apply acr DB migrations up to the ratified schema version (NOT the dump's
+# own version -- the dump predates several migrations)
+# rebuild the falkordb graph via acr-projector (CHAOS-3898 build-aside-and-
+# swap: rollback if a stale epoch exists, rebuild to completion, THEN serve
+# -- CHAOS-4208 is fixed upstream now, so no special unblock recipe needed)
+# re-verify embedding coverage / KNN before calling it done
+# redeploy acr-pilot via its own owner's normal deploy path (stateless, no
+# PVC -- no data loss there, just needs a fresh rollout after the recreate)
+```
+
+No parity re-run needed (chris ruling: seed data and schema are identical
+to what was already ratified -- only the VM's resource ceiling changes).
+Verify: `container inspect kiac-acr-local-control-plane` shows the new
+cpus/memoryInBytes, all pods Ready in both namespaces, DSN reachable,
+falkordb node count unchanged from the pre-recreate graph.
+
 ## Parity verification (CHAOS-4186, 2026-08-24)
 
 One-time sequential-subset smoke against the kiac trial data plane, per the
