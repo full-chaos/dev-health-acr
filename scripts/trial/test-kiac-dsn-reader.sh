@@ -82,9 +82,11 @@ ACR_TEST_TRIAL_CH_USER=ch
 ACR_TEST_TRIAL_CH_PASSWORD=pw
 ACR_TEST_TRIAL_CH_DB=default
 ACR_TEST_TRIAL_FALKOR_HOST=127.0.0.1
-ACR_TEST_TRIAL_FALKOR_PORT=30503'
+ACR_TEST_TRIAL_FALKOR_PORT=30503
+ACR_CONTEXT_FABRIC_FALKOR_TLS=false
+ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true'
 
-# 1. Happy path: all 13 expected keys, correctly assigned and exported to
+# 1. Happy path: all 15 expected keys, correctly assigned and exported to
 # the calling shell (not just visible inside trial_wire_common_env).
 fake_dsn_bin "$VALID_LINES"
 check "happy path: 13 valid keys resolve pg/ch/falkor" \
@@ -135,6 +137,28 @@ fake_dsn_bin "$(sed 's/ACR_TEST_TRIAL_FALKOR_PORT=30503/ACR_TEST_TRIAL_PG_HOST=1
 check "duplicate key + one truly-missing key still hard-fails (count==13 alone is not enough)" \
   "ERR 1" \
   "$(run_reader)"
+
+
+# 6. Producer pin (CHAOS-4186 follow-up, real incident): the REAL
+# trial-data.sh (not the fake used above) must emit
+# ACR_CONTEXT_FABRIC_FALKOR_TLS=false and
+# ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true against the live kiac
+# plane -- both are static (the trial FalkorDB is always plaintext), so
+# this is the one check in this file with a live-cluster requirement
+# (same as test-connect-retry.sh's own live dependency elsewhere in
+# this directory), guarded rather than silently skipped: KUBECONFIG
+# must already point at a running acr-trial-data plane.
+if [[ -n "${KUBECONFIG:-}" && -f "${KUBECONFIG:-/nonexistent}" ]]; then
+  producer_output="$(cd "$script_dir/../.." && deploy/local/trial-data.sh dsn --env 2>/dev/null || true)"
+  check "producer emits ACR_CONTEXT_FABRIC_FALKOR_TLS=false" \
+    "1" \
+    "$(grep -c '^ACR_CONTEXT_FABRIC_FALKOR_TLS=false$' <<<"$producer_output")"
+  check "producer emits ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true" \
+    "1" \
+    "$(grep -c '^ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true$' <<<"$producer_output")"
+else
+  echo "skip: producer pin (KUBECONFIG not set -- needs a live kiac plane, same requirement test-connect-retry.sh has elsewhere)"
+fi
 
 if [[ "$failures" -gt 0 ]]; then
   echo "kiac-dsn-reader checks FAILED ($failures)" >&2

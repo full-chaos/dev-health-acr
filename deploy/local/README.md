@@ -271,7 +271,18 @@ procs --json 'acr-projector'                                  # MUST be empty be
                                                                 # Step 0 above; kill any survivor first
 # rebuild the falkordb graph via acr-projector (CHAOS-3898 build-aside-and-
 # swap: rollback if a stale epoch exists, rebuild to completion, THEN serve
-# -- CHAOS-4208 is fixed upstream now, so no special unblock recipe needed)
+# -- CHAOS-4208 is fixed upstream now, so no special unblock recipe needed).
+# `deploy/local/trial-data.sh dsn --env` includes
+# ACR_CONTEXT_FABRIC_FALKOR_TLS=false and
+# ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true -- BOTH required together
+# (TLS=false alone is refused by acr-projector's own config validation,
+# ALLOW_INSECURE=true alone does nothing since it only permits skipping
+# cert verification when TLS IS used). Without them acr-projector
+# defaults to TLS=true, sends a TLS ClientHello at the trial FalkorDB's
+# plaintext port, and every projection tick hangs until
+# ACR_CONTEXT_FABRIC_FALKOR_REQUEST_TIMEOUT (default 30s) -- a real
+# incident hit live during this exact recipe, root-caused via `deja
+# recall` on the "failed to dial ... context deadline exceeded" line.
 # re-verify embedding coverage / KNN before calling it done
 # redeploy acr-pilot via its own owner's normal deploy path (stateless, no
 # PVC -- no data loss there, just needs a fresh rollout after the recreate)
