@@ -74,6 +74,19 @@ validate_password() {
     || die "ACR_TRIAL_PG_PASSWORD may only contain [A-Za-z0-9._~-] (substituted into YAML and a DSN verbatim)"
 }
 
+# validate_namespace (codex xhigh review, P1): a namespace override that
+# starts with "-" (e.g. ACR_TRIAL_DATA_NAMESPACE=--all) would be parsed by
+# kubectl as a FLAG, not the namespace argument -- `kubectl delete namespace
+# --all --ignore-not-found ...` deletes every namespace in whatever cluster
+# KUBECONFIG points at, not just this trial's own state. This is a shared
+# kiac cluster (also hosts acr-pilot) -- fail closed on anything that is not
+# a plain, valid Kubernetes namespace name.
+validate_namespace() {
+  [[ "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] \
+    || die "ACR_TRIAL_DATA_NAMESPACE=$NAMESPACE is not a valid Kubernetes namespace name (lowercase alphanumeric and '-', must not start with '-') -- refusing, this is a shared cluster"
+}
+validate_namespace
+
 render() {
   validate_password
   sed \
@@ -197,7 +210,7 @@ cmd_restore_clickhouse() {
 
 cmd_wipe() {
   require_kubeconfig
-  kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=180s
+  kubectl delete namespace --ignore-not-found --wait=true --timeout=180s -- "$NAMESPACE"
   log "trial data plane wiped (namespace $NAMESPACE deleted, PVCs gone)"
 }
 

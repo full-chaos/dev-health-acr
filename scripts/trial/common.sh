@@ -190,9 +190,18 @@ trial_wire_common_env() {
   export ACR_POSTGRES_CONNECTION_KIND=direct
   export ACR_TEST_TRIAL_CORPUS="$ACR_TRIAL_CORPUS"
   export ACR_TEST_TRIAL_ORG="$ACR_TRIAL_ORG"
-  export ACR_TEST_TRIAL_FALKOR_ADDR=127.0.0.1:16379
-  export ACR_TEST_TRIAL_POSTGRES_DSN="postgres://$(trial_secret POSTGRES_USER):$(trial_secret POSTGRES_PASSWORD)@127.0.0.1:5432/acr?sslmode=disable"
-  export ACR_TEST_TRIAL_CLICKHOUSE_DSN="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@127.0.0.1:9000/$(trial_secret CLICKHOUSE_DB)"
+  # `:=`, not unconditional `export ... =` (CHAOS-4186, codex xhigh review,
+  # P1): these three used to be clobbered to the compose endpoints even when
+  # a caller had already exported an explicit override (e.g. the kiac trial
+  # data plane's DSNs from `deploy/local/trial-data.sh dsn`) -- the
+  # documented kiac handoff silently reconnected to compose instead. Nothing
+  # in this codebase pre-sets these before calling trial_wire_common_env
+  # today except that exact override case, so this is a no-op for every
+  # existing compose-only caller.
+  : "${ACR_TEST_TRIAL_FALKOR_ADDR:=127.0.0.1:16379}"
+  : "${ACR_TEST_TRIAL_POSTGRES_DSN:=postgres://$(trial_secret POSTGRES_USER):$(trial_secret POSTGRES_PASSWORD)@127.0.0.1:5432/acr?sslmode=disable}"
+  : "${ACR_TEST_TRIAL_CLICKHOUSE_DSN:=clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@127.0.0.1:9000/$(trial_secret CLICKHOUSE_DB)}"
+  export ACR_TEST_TRIAL_FALKOR_ADDR ACR_TEST_TRIAL_POSTGRES_DSN ACR_TEST_TRIAL_CLICKHOUSE_DSN
   export ACR_TEST_TRIAL_EMBED_MODEL=text-embedding-3-large
   export ACR_TEST_TRIAL_EMBED_DIMENSION=3072
   export ACR_TEST_TRIAL_EMBED_API_KEY="$(trial_secret OPENAI_API_KEY)"

@@ -209,8 +209,13 @@ established compose-stack baseline. DSN recipe: `deploy/local/trial-data.sh
 dsn` (see Contract table above); harness invocation follows
 `scripts/trial/run-two-turn.sh`'s own recipe with the three endpoint vars
 (`ACR_TEST_TRIAL_FALKOR_ADDR`/`POSTGRES_DSN`/`CLICKHOUSE_DSN`) overridden to
-the kiac NodePort endpoints instead of compose's `127.0.0.1` defaults, and
-`ACR_TRIAL_CORPUS` explicitly pointed at `.remember/acr-3778-corpus-ext65.json`
+the kiac NodePort endpoints instead of compose's `127.0.0.1` defaults --
+`scripts/trial/common.sh`'s `trial_wire_common_env` now defaults these
+three with `:=` rather than an unconditional `export` (codex xhigh review,
+P1: it used to clobber an explicit override back to compose every time),
+so exporting the kiac values BEFORE calling `trial_wire_common_env` is
+sufficient; no ordering trick needed. `ACR_TRIAL_CORPUS` explicitly pointed
+at `.remember/acr-3778-corpus-ext65.json`
 -- at the time of this run, `scripts/trial/common.sh`'s own default pointed
 at a STALE corpus file (the CHAOS-3860 eval-only holdout, never meant as a
 live-trial default) that fails the CHAOS-4157 v2-scheme preflight against
