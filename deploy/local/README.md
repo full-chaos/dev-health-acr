@@ -188,12 +188,15 @@ fixed here.
    35,989 structural nodes built with 0 errors and 0 embeddings.
 
    The `ACR_CONTEXT_FABRIC_EMBED_*` family (7 vars) is NOT in `ops/.env` --
-   that file only has `OPENAI_API_KEY`. The compose plane's
-   `compose.override.yml:119-127` does the mapping for you (`docker compose
-   --env-file ops/.env up` substitutes `${OPENAI_API_KEY:-}` into
-   `ACR_CONTEXT_FABRIC_EMBED_API_KEY`); a bare `go run` launch on the kiac
-   plane is NOT docker compose, so no substitution happens -- you must set the
-   whole family yourself, sourcing the key from `ops/.env`'s `OPENAI_API_KEY`:
+   that file only has `OPENAI_API_KEY`. The compose plane gets the mapping
+   from `compose.override.yml` **at the workspace root, one level above this
+   `acr` checkout -- a file that lives OUTSIDE this repository** (not tracked
+   here, not covered by this repo's git history, and its line numbers will
+   drift independently of this README): `docker compose --env-file ops/.env
+   up` substitutes `${OPENAI_API_KEY:-}` into `ACR_CONTEXT_FABRIC_EMBED_API_KEY`
+   there. A bare `go run` launch on the kiac plane is NOT docker compose, so
+   no substitution happens -- you must set the whole family yourself, sourcing
+   the key from `ops/.env`'s `OPENAI_API_KEY`:
    ```
    ACR_CONTEXT_FABRIC_EMBED_BASE_URL=https://api.openai.com/v1
    ACR_CONTEXT_FABRIC_EMBED_PROVIDER=openai
@@ -203,13 +206,18 @@ fixed here.
    ACR_CONTEXT_FABRIC_EMBED_TIMEOUT=45s
    ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES=5
    ```
-   Keep this list in sync with `compose.override.yml` (that file, not ops/.env,
-   is the source of truth for these 7 names and their known-working values) --
-   if it drifts, fix here to match there, not the other way around. If a
-   rebuild/serve run ever completes with `embedded:0` on every batch and no
-   ERROR lines, this is the first thing to check: `ps eww -p <pid> | tr ' '
-   '\n' | grep ACR_CONTEXT_FABRIC_EMBED_` against the launched process and
-   confirm all 7 names are present (never print the values).
+   Keep this list in sync with the workspace root's `compose.override.yml`
+   (that file, not ops/.env, is the source of truth for these 7 names and
+   their known-working values) -- if it drifts, fix here to match there, not
+   the other way around. Don't cite line numbers for it (they live in a
+   different, untracked file and will go stale); find them live instead:
+   `grep -n ACR_CONTEXT_FABRIC_EMBED_ <workspace-root>/compose.override.yml`.
+   If a rebuild/serve run ever completes with `embedded:0` on every batch and
+   no ERROR lines, this is the first thing to check -- confirm all 7 names are
+   present on the launched process WITHOUT printing any value:
+   `ps eww -p <pid> | tr ' ' '\n' | grep -oE '^ACR_CONTEXT_FABRIC_EMBED_[A-Z_]+=' | sed 's/=$//'`
+   (the bare `grep ACR_CONTEXT_FABRIC_EMBED_` form prints the full
+   `NAME=value` line, including the API key -- never use it here).
 7. **A rebuild opens a 24h-graced epoch** (default
    `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_GRACE_WINDOW`) -- running `rebuild`
    again (e.g. because the first attempt lacked embed credentials) hits
@@ -220,30 +228,42 @@ fixed here.
    know to do it rather than wait out the 24h.
 
    **Ordering rule -- never `rollback` while a `serve` process is still
-   alive.** A live `serve` loop's coordinator re-checks every organization's
-   freshness on each poll tick (`ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL`,
-   15s by default) and will autonomously call `BeginBuild` on its own the
-   moment it observes a source-version mismatch (`internal/contextfabric/
-   projectionrun/coordinator.go`'s `runOrgLifecycle`/`tickFreshnessStats` --
-   this is the CHAOS-3916 "flag-off rebuild" mechanism working as designed,
-   not a bug). If you `rollback` while that process is still running, its
-   very next tick can reopen a build before your own following `rebuild`
+   alive.** A live `serve` loop's per-tick freshness check
+   (`runOrgLifecycle`/`tickFreshnessStats` in `internal/contextfabric/
+   projectionrun/coordinator.go`) only records a `rebuild_required` COUNTER
+   on a source-version mismatch -- it does NOT call `BeginBuild` by itself,
+   so it is not a path that can reopen a build on its own. The real path
+   that can is `checkpointStoreDiverged` + `recoverFromDivergenceLifecycle`
+   (the CHAOS-3882 automatic divergence-recovery mechanism, same file): each
+   tick compares the durable checkpoint's `BackendWatermark` against the
+   graph backend's own watermark for the CURRENT active epoch, and if they
+   disagree, treats this as a live incident and opens a fresh build-aside
+   epoch via `beginLifecycleBuild` -- entirely automatically, by design,
+   working as intended (CHAOS-3882's whole point is never serving resolution
+   against a silently stale/empty graph). `rollback` changes the active
+   epoch out from under a still-running `serve` process while its
+   in-progress checkpoint watermarks still describe the OLD epoch -- exactly
+   the mismatch this mechanism exists to catch. So the very next tick after
+   your `rollback` can open a NEW build before your own following `rebuild`
    command gets there -- your `rebuild` then loses a `lifecycle CAS conflict`
    against a build you never intended to start by hand, with a target/last-
    allocated epoch you didn't choose. Real incident during the CHAOS-4186
    embed-credential fix: this raced in the ~76s between `rollback` and
    manually killing the still-running `serve`, opening epoch 2 before the
    deliberate `rebuild --org` call ran (harmless here -- same org, same
-   corrected env, no data lost -- but confusing to debug after the fact).
-   Correct order:
+   corrected env, no data lost -- but confusing to debug after the fact, and
+   worth ruling out explicitly rather than assuming a second actor). Correct
+   order:
    1. Kill every `serve`/`rebuild` process for this org first (scoped,
       `procs --json 'acr-projector'` + cwd-verify each match) and confirm
       none remain.
    2. `rollback --org <id>`.
-   3. Launch `serve` with the full corrected env (FALKOR TLS pair +
-      `ACR_CONTEXT_FABRIC_EMBED_*` family) and let its own freshness tick
-      open the build, OR run `rebuild --org <id>` explicitly first -- either
-      is fine once nothing else is running, but never interleave the two.
+   3. With nothing else running, `rebuild --org <id>` explicitly, THEN
+      launch `serve` with the full corrected env (FALKOR TLS pair +
+      `ACR_CONTEXT_FABRIC_EMBED_*` family). Don't rely on a `serve` process
+      to open the build for you -- the only path that does so is the
+      divergence-recovery incident path above, not something to trigger on
+      purpose.
 8. **CHAOS-4208 post-flip divergence loop -- FIXED (#252 c53042d0), this
    section is now HISTORY only**: a `serve` run against a freshly-seeded
    trial cluster used to be able to hit a reproducible infinite loop
