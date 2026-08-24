@@ -185,22 +185,25 @@ cmd_dsn() {
     # the raw host/port/user/password components run-two-turn-parallel.sh
     # needs -- delimiter-dependent, and fragile against an IPv6 host or a
     # password containing `@`. Emitting each component as its own
-    # `printf %q`-quoted KEY=value line means there is no string to parse:
-    # %q shell-escapes whatever the value actually contains, byte for byte,
-    # so the consumer `eval`s these lines instead of splitting a DSN.
-    printf 'ACR_TEST_TRIAL_PG_HOST=%q\n' "$ip"
-    printf 'ACR_TEST_TRIAL_PG_PORT=%q\n' "$PG_NODEPORT"
-    printf 'ACR_TEST_TRIAL_PG_USER=%q\n' "devhealth"
-    printf 'ACR_TEST_TRIAL_PG_PASSWORD=%q\n' "$password"
-    printf 'ACR_TEST_TRIAL_PG_DB=%q\n' "acr"
-    printf 'ACR_TEST_TRIAL_CH_HOST=%q\n' "$ip"
-    printf 'ACR_TEST_TRIAL_CH_PORT=%q\n' "$CH_NATIVE_NODEPORT"
-    printf 'ACR_TEST_TRIAL_CH_HTTP_PORT=%q\n' "$CH_HTTP_NODEPORT"
-    printf 'ACR_TEST_TRIAL_CH_USER=%q\n' "ch"
-    printf 'ACR_TEST_TRIAL_CH_PASSWORD=%q\n' "$password"
-    printf 'ACR_TEST_TRIAL_CH_DB=%q\n' "default"
-    printf 'ACR_TEST_TRIAL_FALKOR_HOST=%q\n' "$ip"
-    printf 'ACR_TEST_TRIAL_FALKOR_PORT=%q\n' "$FALKOR_NODEPORT"
+    # KEY=value line means there is no DSN string to split on `:`/`@`.
+    # Raw, UNQUOTED values (round-3 follow-up ruling): the consumer reads
+    # this output line-by-line and splits on the first `=` -- it never
+    # `eval`s it, so there is nothing here for shell quoting to protect
+    # against, and `printf %q` quoting would just be a layer the reader
+    # would have to strip back off for no benefit.
+    printf 'ACR_TEST_TRIAL_PG_HOST=%s\n' "$ip"
+    printf 'ACR_TEST_TRIAL_PG_PORT=%s\n' "$PG_NODEPORT"
+    printf 'ACR_TEST_TRIAL_PG_USER=%s\n' "devhealth"
+    printf 'ACR_TEST_TRIAL_PG_PASSWORD=%s\n' "$password"
+    printf 'ACR_TEST_TRIAL_PG_DB=%s\n' "acr"
+    printf 'ACR_TEST_TRIAL_CH_HOST=%s\n' "$ip"
+    printf 'ACR_TEST_TRIAL_CH_PORT=%s\n' "$CH_NATIVE_NODEPORT"
+    printf 'ACR_TEST_TRIAL_CH_HTTP_PORT=%s\n' "$CH_HTTP_NODEPORT"
+    printf 'ACR_TEST_TRIAL_CH_USER=%s\n' "ch"
+    printf 'ACR_TEST_TRIAL_CH_PASSWORD=%s\n' "$password"
+    printf 'ACR_TEST_TRIAL_CH_DB=%s\n' "default"
+    printf 'ACR_TEST_TRIAL_FALKOR_HOST=%s\n' "$ip"
+    printf 'ACR_TEST_TRIAL_FALKOR_PORT=%s\n' "$FALKOR_NODEPORT"
     return
   fi
 

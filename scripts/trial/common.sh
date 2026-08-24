@@ -253,16 +253,22 @@ trial_wire_common_env() {
     # output (team-lead design ruling, CHAOS-4186 fresh review cycle,
     # residual finding 6), NOT a DSN string to split on `:`/`@` -- that
     # was delimiter-dependent and broke on an IPv6 host or an `@` in the
-    # password. Each line is `printf %q`-quoted on the producer side, so
-    # `eval` here is exactly as safe as a normal shell assignment; only
-    # ACR_TEST_TRIAL_PG_*/CH_*/FALKOR_* names are ever assigned this way.
-    # stdout only, deliberately NOT `2>&1`: kubectl can put an incidental
-    # warning on stderr on an otherwise-successful call (e.g. a deprecation
-    # notice), and that text would land in $kiac_env_output and then get
-    # `eval`'d below -- round-3 review caught this live (a stray "Warning:"
-    # line made eval try to run it as a command). On failure only, the
-    # command is re-run once with stderr merged purely for the diagnostic
-    # message; the eval'd value itself never sees stderr.
+    # password.
+    #
+    # Read line-by-line and assign directly -- NEVER `eval` subprocess
+    # output (team-lead ruling, CHAOS-4186 round 3 follow-up): round 3
+    # found that even `printf %q`-quoted eval'd text isn't safe, because
+    # merged stderr (an incidental kubectl warning) could reach the
+    # eval'd string, and the key-renaming rewrite done before eval could
+    # corrupt a value. Both were symptoms of shell-interpreting a
+    # subprocess's output at all. Splitting on the first `=` and
+    # allowlisting the key via a fixed `case` (any other key is a hard
+    # error, as is a missing expected key) closes the injection class
+    # structurally instead of patching each symptom.
+    #
+    # stdout only, deliberately NOT `2>&1`: an incidental kubectl warning
+    # on stderr must never reach this loop. On failure only, the command
+    # is re-run once with stderr merged purely for the diagnostic message.
     local kiac_env_output
     if ! kiac_env_output="$(cd "$repo_root" && deploy/local/trial-data.sh dsn --env 2>/dev/null)"; then
       local kiac_env_diag
@@ -279,16 +285,42 @@ trial_wire_common_env() {
     # returns, silently discarding it from every caller (confirmed live:
     # "ACR_TEST_TRIAL_PG_HOST: unbound variable" in the calling shell
     # despite this function completing without error).
-    local _kiac_env_PG_HOST _kiac_env_PG_PORT _kiac_env_PG_USER _kiac_env_PG_PASSWORD _kiac_env_PG_DB
-    local _kiac_env_CH_HOST _kiac_env_CH_PORT _kiac_env_CH_USER _kiac_env_CH_PASSWORD _kiac_env_CH_DB
-    local _kiac_env_FALKOR_HOST _kiac_env_FALKOR_PORT
-    # Line-anchored (sed `^`), not a bash `${var//pat/repl}` global
-    # substring replace: the blanket form also rewrites the pattern
-    # anywhere it appears, including inside a `printf %q`-quoted VALUE
-    # (e.g. a password that happens to contain the literal text
-    # "ACR_TEST_TRIAL_"), corrupting it before assignment. Anchoring to
-    # line-start only ever touches the KEY side of each `KEY=value` line.
-    eval "$(printf '%s\n' "$kiac_env_output" | sed -E 's/^ACR_TEST_TRIAL_/_kiac_env_/')"
+    local _kiac_env_PG_HOST="" _kiac_env_PG_PORT="" _kiac_env_PG_USER="" _kiac_env_PG_PASSWORD="" _kiac_env_PG_DB=""
+    local _kiac_env_CH_HOST="" _kiac_env_CH_PORT="" _kiac_env_CH_HTTP_PORT="" _kiac_env_CH_USER="" _kiac_env_CH_PASSWORD="" _kiac_env_CH_DB=""
+    local _kiac_env_FALKOR_HOST="" _kiac_env_FALKOR_PORT=""
+    local kiac_env_count=0 kiac_line kiac_key kiac_value
+    while IFS= read -r kiac_line; do
+      [[ -z "$kiac_line" ]] && continue
+      kiac_key="${kiac_line%%=*}"
+      kiac_value="${kiac_line#*=}"
+      kiac_env_count=$((kiac_env_count + 1))
+      case "$kiac_key" in
+        ACR_TEST_TRIAL_PG_HOST) _kiac_env_PG_HOST="$kiac_value" ;;
+        ACR_TEST_TRIAL_PG_PORT) _kiac_env_PG_PORT="$kiac_value" ;;
+        ACR_TEST_TRIAL_PG_USER) _kiac_env_PG_USER="$kiac_value" ;;
+        ACR_TEST_TRIAL_PG_PASSWORD) _kiac_env_PG_PASSWORD="$kiac_value" ;;
+        ACR_TEST_TRIAL_PG_DB) _kiac_env_PG_DB="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_HOST) _kiac_env_CH_HOST="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_PORT) _kiac_env_CH_PORT="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_HTTP_PORT) _kiac_env_CH_HTTP_PORT="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_USER) _kiac_env_CH_USER="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_PASSWORD) _kiac_env_CH_PASSWORD="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_DB) _kiac_env_CH_DB="$kiac_value" ;;
+        ACR_TEST_TRIAL_FALKOR_HOST) _kiac_env_FALKOR_HOST="$kiac_value" ;;
+        ACR_TEST_TRIAL_FALKOR_PORT) _kiac_env_FALKOR_PORT="$kiac_value" ;;
+        *)
+          echo "common.sh: 'trial-data.sh dsn --env' emitted an unrecognized key '$kiac_key' -- refusing to assign it" >&2
+          exit 1
+          ;;
+      esac
+    done <<<"$kiac_env_output"
+    [[ "$kiac_env_count" -eq 13 ]] || { echo "common.sh: 'trial-data.sh dsn --env' emitted $kiac_env_count line(s), expected exactly 13" >&2; exit 1; }
+    local _kiac_env_v
+    for _kiac_env_v in _kiac_env_PG_HOST _kiac_env_PG_PORT _kiac_env_PG_USER _kiac_env_PG_PASSWORD _kiac_env_PG_DB \
+                       _kiac_env_CH_HOST _kiac_env_CH_PORT _kiac_env_CH_HTTP_PORT _kiac_env_CH_USER _kiac_env_CH_PASSWORD _kiac_env_CH_DB \
+                       _kiac_env_FALKOR_HOST _kiac_env_FALKOR_PORT; do
+      [[ -n "${!_kiac_env_v}" ]] || { echo "common.sh: 'trial-data.sh dsn --env' did not set $_kiac_env_v (empty or missing)" >&2; exit 1; }
+    done
     pg_host="$_kiac_env_PG_HOST"; pg_port="$_kiac_env_PG_PORT"
     pg_user="$_kiac_env_PG_USER"; pg_password="$_kiac_env_PG_PASSWORD"
     ch_dsn="clickhouse://${_kiac_env_CH_USER}:${_kiac_env_CH_PASSWORD}@${_kiac_env_CH_HOST}:${_kiac_env_CH_PORT}/${_kiac_env_CH_DB}"
