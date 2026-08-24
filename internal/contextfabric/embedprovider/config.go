@@ -22,6 +22,11 @@
 // The whole feature is OFF unless a base URL is configured. An unconfigured
 // deployment constructs no embedder, makes no call, and leaves the lexical
 // retrieval path exactly as it was.
+//
+// Full pathway diagram (env resolution -> projector write path -> per-epoch
+// FalkorDB storage -> KNN read path, including the stored-vector
+// invalidation fence and the epoch build-aside/swap hop): CHAOS-4133,
+// docs/design/context-fabric-vector-retrieval.md §8.
 package embedprovider
 
 import (

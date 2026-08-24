@@ -372,3 +372,135 @@ machinery already covers them. Stating it explicitly:
 - Similarity as an authorization mechanism. Authorization stays ahead of ranking.
 - Choosing the production embedder. `gpt-5-nano` fallback is a later decision.
 - Routes, MCP surface, and answer projection (lane-3746 owns those).
+
+---
+
+## 8. Pathway diagram (CHAOS-4133)
+
+Full pathway from bring-up to a served vector-search result, code-grounded
+against `internal/contextfabric/embedprovider` and
+`internal/contextfabric/falkorgraph`. Two hops get their own explicit
+callout rather than being left as an implicit side effect of "the write
+path" or "the read path":
+
+- **The INVALIDATION hop** is the **stored-vector identity fence**
+  (`verifyStoredEmbedderIdentity`): a vector written under one embedder
+  identity is treated as unusable the moment the CURRENTLY configured
+  embedder no longer matches it. This is the actual invalidation
+  mechanism in this flow — nothing else in it decides "this cached
+  artifact is now stale."
+- **The VISIBILITY-ISOLATION hop** is the epoch **build-aside** mechanism
+  (CHAOS-3898): a write during an open rebuild targets the BUILD epoch,
+  which is invisible to every reader (readers always resolve the ACTIVE
+  epoch) until the swap promotes it. This is isolation, not invalidation
+  — nothing is being marked stale, a whole epoch simply is not visible
+  yet.
+
+```mermaid
+flowchart TD
+    subgraph ENV["Env resolution & config (embedprovider)"]
+        A1["docker compose --env-file ops/.env up<br/>(CHAOS-4192: omitting --env-file<br/>silently resolves ${VAR:-} blank)"] --> A2["ACR_CONTEXT_FABRIC_EMBED_BASE_URL / _API_KEY / ...<br/>process environment"]
+        A2 --> A3["embedprovider.ConfigFromEnv(os.LookupEnv)"]
+        A3 --> A4{"Configured()?<br/>(BaseURL nonblank)"}
+        A4 -- "no" --> A5["ErrNotConfigured<br/>clean no-op: vector retrieval OFF,<br/>lexical path unchanged"]
+        A4 -- "yes" --> A6["Config.validate()"]
+        A6 --> A7{"APIKey blank AND<br/>NOT AllowNoCredential?"}
+        A7 -- "yes (CHAOS-4192 guard)" --> A8["hard error at STARTUP<br/>composition aborts before any batch runs<br/>(ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL<br/>is the explicit opt-in for a real no-auth<br/>endpoint, e.g. loopback LM Studio/Ollama/TEI)"]
+        A7 -- "no" --> A9["embedprovider.New(cfg) returns Embedder"]
+    end
+
+    A9 --> B1
+
+    subgraph WRITE["Write path: acr-projector batch loop (embedProjectionBatch)"]
+        B1["projectionrun.Coordinator tick"] --> B2["ApplyProjectionBatch"]
+        B2 --> B3["resolveWriteKey(orgID)<br/>BUILD epoch if a rebuild is open,<br/>else ACTIVE epoch"]
+        B3 --> B5{"embedder == nil?"}
+        B5 -- "yes (feature off)" --> B6["collectEmbedTargets + clearNodeVectors(id-only)<br/>embedded=0, cleared=0 (routine, not an error)<br/>commits"]
+        B5 -- "no" --> BIX["vectorIndexDimension(key)<br/>PRE-EMBED gate, checked BEFORE any Embed() call"]
+        BIX --> BIX2{"probe error, OR<br/>index absent/unknown?"}
+        BIX2 -- "yes" --> BREPLAY["REPLAY: batch FAILS,<br/>checkpoint holds, next tick retries<br/>(recordVectorDegraded)"]
+        BIX2 -- "no" --> BIX3{"dimension != embedder's<br/>configured dimension?"}
+        BIX3 -- "yes (PERSISTENT failure)" --> B9b["clearNodeVectors(all targets)<br/>recordVectorDegraded + Warn<br/>commits (reads already fenced off<br/>by the same mismatch)"]
+        BIX3 -- "no" --> B4["collectEmbedTargets(batch)"]
+        B4 --> B4z{"zero embed targets?"}
+        B4z -- "yes" --> B6z["clearNodeVectors(id-only only)<br/>cleared=0, commits"]
+        B4z -- "no" --> B7["embedder.Embed(texts)"]
+        B7 --> B8{"Embed() error, or<br/>vector count mismatch?<br/>(TRANSIENT failure design:<br/>one bad batch must not stall<br/>projection forever)"}
+        B8 -- "yes" --> B9["clearNodeVectors(targets)<br/>recordVectorDegraded + Warn log<br/>(embedded:0, cleared:N) -- commits"]
+        B8 -- "no" --> B10["writeNodeVector per target<br/>stamps embedder identity + composition tag<br/>commits"]
+    end
+
+    B10 --> C1
+    B9 --> C1
+    B9b --> C1
+    B6 --> C1
+    B6z --> C1
+
+    subgraph STORE["FalkorDB per-epoch storage"]
+        C1["Subject.embedding vector index<br/>(the write path's own vectorIndexDimension gate<br/>above IS the per-batch check;<br/>ensureVectorIndex is the separate bootstrap-time<br/>create/verify path)"]
+        C1 -.->|"VISIBILITY-ISOLATION HOP (CHAOS-3898),<br/>NOT invalidation -- nothing is marked stale here:<br/>a BUILD epoch simply is not visible to any reader<br/>until the active-epoch pointer flips atomically.<br/>Old epoch survives its grace window, then a<br/>retire sweep issues GRAPH.DELETE."| C2["epoch build-aside-and-swap<br/>graphKeyForEpoch(prefix, org, epoch)"]
+    end
+
+    C1 --> D0
+
+    subgraph READ["Read path: KNN"]
+        D0["Engine.ResolveInvestigationBinding<br/>(once per investigation, BEFORE any graph call)<br/>resolveActiveEpoch + graphKeyForEpoch<br/>= the ACTIVE epoch key, never BUILD"]
+        D0 --> D1b["ResolveSubjects(key, binding)<br/>constructs ONE resolutionFence{}<br/>for this whole resolution call"]
+        D1b --> D1["hybridSearchNodes / questionVectorSearchNodes<br/>(receive the already-resolved key + fence;<br/>they do NOT re-resolve a key themselves)"]
+        D1 --> D3{"embedder == nil?"}
+        D3 -- "yes" --> D4["skip vector arm, lexical only<br/>degraded=false (nothing was expected)"]
+        D3 -- "no" --> D5["fence.readable() -&gt; vectorFenceCheck(key, orgID)<br/>MEMOIZED per resolutionFence: the FIRST term/call<br/>in this resolution probes, every later one in the<br/>SAME resolution reuses that verdict"]
+        D5 --> D6{"index_absent /<br/>index_unknown /<br/>dim_mismatch?"}
+        D6 -- "yes" --> D7["degraded=true, vector arm skipped<br/>RecordVectorFence: Warn-logged<br/>(no dedicated metric/dashboard, but not silent --<br/>grep for 'vector read fence did not pass')"]
+        D6 -- "no" --> D8["verifyStoredEmbedderIdentity<br/>(THE ACTUAL INVALIDATION CHECK:<br/>a node's stamped identity vs the<br/>CURRENTLY configured embedder --<br/>same-dimension model swaps are the<br/>failure this specifically closes)"]
+        D8 -- "mismatch" --> D7
+        D8 -- "match" --> D9["embed query text (task-prefixed)<br/>CALL db.idx.vector.queryNodes<br/>similarity floor (tau) drops far neighbors"]
+        D9 --> D10["candidates merged into the<br/>normalized lexical+vector ladder (§4)"]
+    end
+```
+
+Hops most likely to be missing from an investigator's mental model, per
+CHAOS-4133's own evidence class:
+
+1. **The blank-credential guard fires at STARTUP, not per-batch.** Before
+   CHAOS-4192, a blank credential produced no error anywhere — only a
+   scrolling `embedded:0, cleared:N` Warn per batch, indistinguishable
+   from routine degraded operation unless someone was watching closely
+   enough to notice `cleared` was never zero.
+2. **Write and read resolve DIFFERENT epochs by design.** A write during
+   an open rebuild targets the BUILD epoch; every read stays on the
+   ACTIVE epoch until the swap. This is intentional isolation, not a bug
+   — but it means "I just wrote a vector" and "a read can see it" are not
+   the same moment.
+3. **The stored-vector identity fence is memoized per resolution, not
+   re-probed per read.** `resolutionFence` holds one verdict for the
+   whole `ResolveSubjects` call; the first term/question that needs the
+   vector arm pays the probe, every later one in the same resolution
+   reuses it. It is not silent — any non-OK result is Warn-logged via
+   `RecordVectorFence` (`"vector read fence did not pass"`) — but there
+   is no dedicated metric or dashboard for it, so an investigator still
+   has to know to grep logs rather than check a panel.
+4. **A cleared vector and a never-written vector are indistinguishable
+   downstream.** Both read as "no embedding" — the batch-level Warn log is
+   the only place the difference (something was cleared vs. nothing was
+   ever there) is recorded.
+5. **The write path's index-dimension check runs BEFORE any `Embed()`
+   call, and it does not always clear-and-commit.** A transient probe
+   failure or an absent/unknown index REPLAYS the whole batch (the
+   checkpoint holds, the next tick retries) — only a genuine, PERSISTENT
+   dimension mismatch clears vectors and commits. This is a different,
+   earlier gate than the post-`Embed()` clear-and-continue everyone
+   remembers from the CHAOS-4192 incident, and conflating the two
+   misses that some write-path failures never touch `Embed()` at all.
+
+See also: `internal/contextfabric/embedprovider/config.go` (env
+resolution + the CHAOS-4192 guard), `internal/contextfabric/falkorgraph/vector_projection.go`
+(write path, the fence, index-state classification),
+`internal/contextfabric/falkorgraph/lifecycle.go` (epoch resolution),
+`internal/contextfabric/falkorgraph/reader.go` (`ResolveInvestigationBinding`
+resolving the key once per investigation, `ResolveSubjects` constructing
+the one `resolutionFence` a whole resolution shares),
+`docs/operations.md`'s CHAOS-3916 cutover runbook (operational epoch
+pre-flights) and CHAOS-4192 incident note (the `--env-file`/falkordb
+volume traps this diagram's env-resolution box exists to prevent
+re-deriving from scratch).

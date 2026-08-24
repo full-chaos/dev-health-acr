@@ -45,6 +45,17 @@ func ProducedRelationshipTypes() []contextfabric.RelationshipType {
 	}
 }
 
+// ApplyProjectionBatch is the write path's own entry point: graph/edge
+// projection for one batch, plus (when an embedder is configured) the
+// vector-embedding write path -- resolveWriteKey (lifecycle.go), the
+// embed-or-clear decision (transient-failure design: an Embed() error
+// clears rather than stalls the batch forever), and writeNodeVector's
+// embedder-identity stamp that the READ path's fence later checks.
+//
+// Full pathway diagram (env resolution -> this write path -> per-epoch
+// FalkorDB storage, incl. the epoch build-aside/swap hop -> KNN read path
+// and its stored-vector invalidation fence): CHAOS-4133,
+// docs/design/context-fabric-vector-retrieval.md §8.
 func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.ProjectionBatch) (contextfabric.ProjectionReceipt, error) {
 	if err := batch.Validate(); err != nil {
 		return contextfabric.ProjectionReceipt{}, fmt.Errorf("projection batch: %w", err)
