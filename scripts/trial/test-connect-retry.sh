@@ -75,10 +75,18 @@ run_selftest() {
   echo $?
 }
 
-# 1. Default host/port (no override): psql_admin calls -h 127.0.0.1 -p 5432.
+# 1. compose plane (no per-store override): psql_admin calls -h 127.0.0.1
+# -p 5432. CHAOS-4186 fresh review cycle: ACR_TRIAL_DATA_PLANE now
+# defaults to "kiac" (chris's standing order), so this case pins
+# ACR_TRIAL_DATA_PLANE=compose explicitly -- it is testing the psql_admin
+# wiring itself (does PG_HOST/PG_PORT reach its -h/-p flags unmodified),
+# not which plane the ambient default happens to be, and letting it run
+# against whatever plane is ambient-default would make this test's
+# result depend on live infrastructure (a kiac cluster) that may or may
+# not exist wherever it runs.
 fake_psql "0"
-run_selftest >/dev/null
-check "default host/port reaches psql_admin" \
+run_selftest env ACR_TRIAL_DATA_PLANE=compose >/dev/null
+check "compose plane's default host/port reaches psql_admin" \
   "1" \
   "$(grep -c -- '-h 127.0.0.1 -p 5432' "$tmp/calls.log")"
 

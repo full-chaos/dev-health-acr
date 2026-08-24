@@ -92,15 +92,18 @@ export KUBECONFIG="$(deploy/local/kiac.sh kubeconfig)"
 deploy/local/trial-data.sh apply && deploy/local/trial-data.sh wait
 deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ts>.sql.gz
 deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ts>.zip
-deploy/local/trial-data.sh dsn      # prints the ACR_TEST_TRIAL_* DSN recipe
-deploy/local/trial-data.sh wipe     # destroys the namespace INCL. PVCs
+deploy/local/trial-data.sh dsn        # prints the ACR_TEST_TRIAL_* DSN recipe
+deploy/local/trial-data.sh dsn --env  # same, as printf-%q-quoted KEY=value lines (scripting)
+deploy/local/trial-data.sh wipe       # namespace `acr-trial-data` ONLY -- ignores
+                                       # ACR_TRIAL_DATA_NAMESPACE; a differently-named
+                                       # instance's resources are the caller's to remove
 ```
 
 ### Contract
 
 | Item | Value |
 | --- | --- |
-| Namespace | `acr-trial-data` (override: `ACR_TRIAL_DATA_NAMESPACE`) |
+| Namespace | `acr-trial-data` (`apply`/`render`/`dsn`/`restore-*` honor `ACR_TRIAL_DATA_NAMESPACE`; `wipe` does NOT -- it operates on the hardcoded default only, see traps) |
 | Postgres endpoint | NodePort 30500; role `devhealth` (matches the seed dump, NOT a dedicated `acr` role -- see trap below) |
 | ClickHouse endpoint | NodePort 30501 (HTTP), 30502 (native); user `ch` |
 | FalkorDB endpoint | NodePort 30503; no auth |
@@ -110,8 +113,10 @@ deploy/local/trial-data.sh wipe     # destroys the namespace INCL. PVCs
 **Launcher coverage**: every trial script (`run-two-turn.sh`, the sharded
 `run-two-turn-parallel.sh`, replay/W0/D2B/generative/frontier -- everything
 sharing `scripts/trial/common.sh`) reads ONE switch,
-`ACR_TRIAL_DATA_PLANE=compose|kiac` (default `compose` until this note is
-updated to say otherwise). `kiac` resolves postgres, clickhouse, AND
+`ACR_TRIAL_DATA_PLANE=kiac|compose` (default **`kiac`** -- chris's standing
+order: kiac is THE trial stack for every run, no comparability exception;
+`compose` is the legacy fallback for anyone still standing that up locally).
+`kiac` resolves postgres, clickhouse, AND
 falkordb together from `trial-data.sh dsn` in one call -- there is no
 per-store partial state to land in, so a launcher can never end up
 measuring against a hybrid of the two stacks. An `ACR_TRIAL_{PG,CH,FALKOR}_

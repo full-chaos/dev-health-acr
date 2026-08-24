@@ -107,7 +107,14 @@ validate_namespace
 # is restricted to the character set real image references actually use
 # (no whitespace, quotes, or newlines -- the injection vector itself).
 validate_render_vars() {
-  local -r qty_re='^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|[EPTGMK])?$'
+  # Kubernetes quantity grammar (codex xhigh review, fresh cycle round 2,
+  # LOW): binary suffixes (Ki/Mi/.../Ei), decimal SI suffixes (m/k/M/G/T/P/E
+  # -- lowercase k specifically, not K), and a bare decimal exponent form
+  # (1e3) are all real quantity forms; the previous regex rejected the
+  # exponent form and accepted a nonstandard uppercase K. Purely a
+  # strictness fix -- rejecting valid operator input, never an injection
+  # path either way (still anchored, still no metacharacters possible).
+  local -r qty_re='^[0-9]+(\.[0-9]+)?(e[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|[mkMGTPE])?$'
   [[ "$PG_STORAGE" =~ $qty_re ]] || die "ACR_TRIAL_PG_STORAGE=$PG_STORAGE is not a plain Kubernetes storage quantity (e.g. 20Gi)"
   [[ "$CH_STORAGE" =~ $qty_re ]] || die "ACR_TRIAL_CH_STORAGE=$CH_STORAGE is not a plain Kubernetes storage quantity (e.g. 30Gi)"
   [[ "$CH_BACKUPS_STORAGE" =~ $qty_re ]] || die "ACR_TRIAL_CH_BACKUPS_STORAGE=$CH_BACKUPS_STORAGE is not a plain Kubernetes storage quantity (e.g. 5Gi)"
@@ -156,6 +163,8 @@ cmd_wait() {
 cmd_dsn() {
   require_kubeconfig
   validate_password
+  local env_mode=0
+  [[ "${1:-}" == "--env" ]] && env_mode=1
   local ip password
   ip="$(node_ip)"
   [[ -n "$ip" ]] || die "could not resolve a node InternalIP from KUBECONFIG"
@@ -168,10 +177,38 @@ cmd_dsn() {
   # command's output always matches what is actually running, not intent.
   password="$(kubectl -n "$NAMESPACE" get secret trial-postgres -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null | base64 -d)"
   [[ -n "$password" ]] || die "could not read secret trial-postgres/POSTGRES_PASSWORD in namespace $NAMESPACE -- has 'apply' been run?"
+
+  if [[ "$env_mode" == "1" ]]; then
+    # Structured key=value handoff (team-lead design ruling, CHAOS-4186
+    # fresh review cycle, residual finding 6): common.sh used to parse this
+    # command's DSN strings back apart with `:`/`@` splitting to recover
+    # the raw host/port/user/password components run-two-turn-parallel.sh
+    # needs -- delimiter-dependent, and fragile against an IPv6 host or a
+    # password containing `@`. Emitting each component as its own
+    # `printf %q`-quoted KEY=value line means there is no string to parse:
+    # %q shell-escapes whatever the value actually contains, byte for byte,
+    # so the consumer `eval`s these lines instead of splitting a DSN.
+    printf 'ACR_TEST_TRIAL_PG_HOST=%q\n' "$ip"
+    printf 'ACR_TEST_TRIAL_PG_PORT=%q\n' "$PG_NODEPORT"
+    printf 'ACR_TEST_TRIAL_PG_USER=%q\n' "devhealth"
+    printf 'ACR_TEST_TRIAL_PG_PASSWORD=%q\n' "$password"
+    printf 'ACR_TEST_TRIAL_PG_DB=%q\n' "acr"
+    printf 'ACR_TEST_TRIAL_CH_HOST=%q\n' "$ip"
+    printf 'ACR_TEST_TRIAL_CH_PORT=%q\n' "$CH_NATIVE_NODEPORT"
+    printf 'ACR_TEST_TRIAL_CH_HTTP_PORT=%q\n' "$CH_HTTP_NODEPORT"
+    printf 'ACR_TEST_TRIAL_CH_USER=%q\n' "ch"
+    printf 'ACR_TEST_TRIAL_CH_PASSWORD=%q\n' "$password"
+    printf 'ACR_TEST_TRIAL_CH_DB=%q\n' "default"
+    printf 'ACR_TEST_TRIAL_FALKOR_HOST=%q\n' "$ip"
+    printf 'ACR_TEST_TRIAL_FALKOR_PORT=%q\n' "$FALKOR_NODEPORT"
+    return
+  fi
+
   printf 'ACR_TEST_TRIAL_POSTGRES_DSN=postgres://devhealth:%s@%s:%d/acr?sslmode=disable\n' "$password" "$ip" "$PG_NODEPORT"
   printf 'ACR_TEST_TRIAL_CLICKHOUSE_DSN=clickhouse://ch:%s@%s:%d/default\n' "$password" "$ip" "$CH_NATIVE_NODEPORT"
   printf 'ACR_TEST_TRIAL_FALKOR_ADDR=%s:%d\n' "$ip" "$FALKOR_NODEPORT"
   printf '# clickhouse HTTP (for RESTORE/BACKUP admin queries): http://%s:%d\n' "$ip" "$CH_HTTP_NODEPORT"
+  printf '# structured key=value handoff for scripting: trial-data.sh dsn --env\n'
   # Rotating the effective password: changing ACR_TRIAL_PG_PASSWORD and
   # re-running `apply` updates the Secret object, but that alone does NOT
   # rotate either running database's actual credential -- postgres only
@@ -258,34 +295,25 @@ cmd_restore_clickhouse() {
 
 cmd_wipe() {
   require_kubeconfig
-  # PRIMITIVE (team-lead design ruling, CHAOS-4186 round 3): three rounds
-  # of P1s against a label-based ownership check (fails open on an empty
-  # or erroring lookup; the label itself is adoptable by pointing
-  # ACR_TRIAL_DATA_NAMESPACE at an existing namespace and re-`apply`ing;
-  # get-then-delete is TOCTOU-racy with no UID/resourceVersion precondition)
-  # means the check was the wrong primitive, not under-guarded -- replaced
-  # rather than patched again. `wipe` never infers ownership: it deletes
-  # EXACTLY the named resources `apply` renders (Secret/Deployment/
-  # Service/PVC/ConfigMap, matched by kind+name, never "everything in this
-  # namespace"), which cannot touch an unrelated pre-existing resource no
-  # matter what ACR_TRIAL_DATA_NAMESPACE names. The Namespace document is
-  # filtered out of the stream first -- namespace deletion is handled
-  # separately below, deliberately NOT via -f, so it can never be driven
-  # by an operator-controlled value.
-  render | yq eval-all 'select(.kind != "Namespace")' - \
-    | kubectl -n "$NAMESPACE" delete --ignore-not-found --wait=true --timeout=180s -f -
-  # The namespace ITSELF is deleted only when it equals this script's own
-  # HARDCODED default -- a literal string compare against a constant, never
-  # the (possibly operator-overridden) $NAMESPACE variable, so no env
-  # value can ever point this specific delete at a different namespace.
-  # A non-default namespace keeps its own (now-empty) namespace object;
-  # the resources inside it are still gone from the delete above.
-  if [[ "$NAMESPACE" == "acr-trial-data" ]]; then
-    kubectl delete namespace --ignore-not-found --wait=true --timeout=180s -- acr-trial-data
-    log "trial data plane wiped (resources + namespace acr-trial-data deleted, PVCs gone)"
-  else
-    log "trial data plane resources wiped in namespace $NAMESPACE (namespace left in place -- wipe only ever deletes the namespace object itself when it is the hardcoded default acr-trial-data)"
+  # PRIMITIVE, narrowed further (team-lead design ruling, CHAOS-4186 fresh
+  # review cycle, residual finding 1): three rounds of P1s against a
+  # label-based ownership check, then a name-scoped-but-namespace-flexible
+  # delete that could still collide with same-named resources in an
+  # unrelated namespace, means the right fix is to shrink what `wipe` can
+  # ever touch, not to keep guarding a wider surface. `wipe` operates on
+  # the HARDCODED default namespace ONLY -- it does not read
+  # ACR_TRIAL_DATA_NAMESPACE at all. `apply`/`render`/`dsn`/`restore-*`
+  # still honor the override (a caller CAN stand up a differently-named
+  # instance), but that instance's resources are then this script's
+  # responsibility to remove manually -- there is no namespace argument
+  # here for an operator-controlled value to ever reach.
+  if [[ "$NAMESPACE" != "acr-trial-data" ]]; then
+    die "wipe operates only on acr-trial-data; remove resources in $NAMESPACE manually"
   fi
+  render | yq eval-all 'select(.kind != "Namespace")' - \
+    | kubectl -n acr-trial-data delete --ignore-not-found --wait=true --timeout=180s -f -
+  kubectl delete namespace --ignore-not-found --wait=true --timeout=180s -- acr-trial-data
+  log "trial data plane wiped (resources + namespace acr-trial-data deleted, PVCs gone)"
 }
 
 [[ $# -ge 1 ]] || usage
