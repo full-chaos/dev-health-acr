@@ -237,3 +237,9 @@ trial_wire_graph_lifecycle_env() {
 trial_run_go_test() {
   ( cd "$repo_root" && go test -run TestGenerativeTrialCorpus -count=1 -v -timeout "${1:?timeout required}" ./internal/runtime/hosted )
 }
+
+# Manual two-turn sharding (2026-08-24): if you hand-set
+# ACR_TEST_TRIAL_SHARD_CASE_INDICES yourself instead of going through
+# run-two-turn-parallel.sh, also set ACR_TEST_TRIAL_SHARD_COUNT and
+# ACR_TEST_TRIAL_SHARD_INDEX -- all three, or the go test fails closed now
+# (it used to silently run the full corpus).

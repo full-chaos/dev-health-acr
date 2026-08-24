@@ -2993,6 +2993,29 @@ func twoTurnShardCaseIndices(t *testing.T) ([]int, map[int]struct{}) {
 	return indices, set
 }
 
+// twoTurnShardCaseIndicesEnvTripleError returns a non-nil error when
+// ACR_TEST_TRIAL_SHARD_CASE_INDICES is set but ACR_TEST_TRIAL_SHARD_COUNT is
+// not (the SHARD_INDEX/SHARD_COUNT pairing has its own guard, immediately
+// above this check's call site).
+//
+// twoTurnShardCaseIndices is only ever called from inside the
+// ACR_TEST_TRIAL_SHARD_COUNT block: an operator who sets CASE_INDICES alone
+// gets no error and no filtering -- the run silently processes the FULL
+// corpus, which is exactly the shape of the documented env trap that has
+// bitten three separate lanes. A plain function (rather than one more
+// t.Fatal call inline) so the trigger condition is unit-testable without
+// running the live two-turn test.
+func twoTurnShardCaseIndicesEnvTripleError() error {
+	caseIndices := strings.TrimSpace(os.Getenv("ACR_TEST_TRIAL_SHARD_CASE_INDICES"))
+	if caseIndices == "" {
+		return nil
+	}
+	if os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT") == "" {
+		return fmt.Errorf("ACR_TEST_TRIAL_SHARD_CASE_INDICES=%q is set but ACR_TEST_TRIAL_SHARD_COUNT/ACR_TEST_TRIAL_SHARD_INDEX are not -- CASE_INDICES only takes effect inside the sharding block and is otherwise silently ignored, running the FULL corpus. Set all three together: ACR_TEST_TRIAL_SHARD_CASE_INDICES, ACR_TEST_TRIAL_SHARD_COUNT, ACR_TEST_TRIAL_SHARD_INDEX", caseIndices)
+	}
+	return nil
+}
+
 // twoTurnForceTraceIndices reads ACR_TEST_TRIAL_FORCE_TRACE_INDICES -- a
 // comma-separated list of corpus positions whose turn-1 raw
 // ResolutionTraceEvent stream should be captured onto every row that corpus
@@ -7743,6 +7766,17 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// must fail closed, not fall back to "sequential" without saying so.
 	if raw := os.Getenv("ACR_TEST_TRIAL_SHARD_INDEX"); raw != "" && os.Getenv("ACR_TEST_TRIAL_SHARD_COUNT") == "" {
 		t.Fatalf("ACR_TEST_TRIAL_SHARD_INDEX=%q is set but ACR_TEST_TRIAL_SHARD_COUNT is not -- both or neither", raw)
+	}
+	// twoTurnShardCaseIndices (below) is only ever CALLED inside the
+	// ACR_TEST_TRIAL_SHARD_COUNT block a few lines down -- so
+	// ACR_TEST_TRIAL_SHARD_CASE_INDICES set WITHOUT SHARD_COUNT (and its
+	// required partner SHARD_INDEX) is never read at all, and this run
+	// silently executes the FULL corpus instead of the launcher's named
+	// slice. Documented env trap, recurred across three separate lanes --
+	// fail closed instead of relying on the operator to notice a coverage
+	// artifact that looks plausible but measured the wrong cases.
+	if err := twoTurnShardCaseIndicesEnvTripleError(); err != nil {
+		t.Fatal(err)
 	}
 	// forceTraceIndices (CHAOS-4183 phase "2c") is read UNCONDITIONALLY,
 	// independent of sharding -- a debug capture request is orthogonal to

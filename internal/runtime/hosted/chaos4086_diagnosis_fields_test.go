@@ -442,3 +442,35 @@ func TestChaos4100_AnEmptyShardAssignmentIsDistinctFromNoAssignment(t *testing.T
 		t.Fatalf("an unset assignment must fall back to modulo, got indices=%v set=%v", indices, set)
 	}
 }
+
+// TestTwoTurnShardCaseIndicesEnvTripleError is the regression test for the
+// env trap that bit three separate lanes: ACR_TEST_TRIAL_SHARD_CASE_INDICES
+// set alone (SHARD_COUNT/SHARD_INDEX absent) is never read by
+// twoTurnShardCaseIndices, so the run silently processes the FULL corpus.
+func TestTwoTurnShardCaseIndicesEnvTripleError(t *testing.T) {
+	t.Run("case indices set without the shard count/index pair fails", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_SHARD_CASE_INDICES", "3,5")
+		t.Setenv("ACR_TEST_TRIAL_SHARD_COUNT", "")
+		t.Setenv("ACR_TEST_TRIAL_SHARD_INDEX", "")
+		if err := twoTurnShardCaseIndicesEnvTripleError(); err == nil {
+			t.Fatal("want an error when CASE_INDICES is set without SHARD_COUNT, got nil -- this run would silently process the full corpus")
+		}
+	})
+
+	t.Run("the full triple passes", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_SHARD_CASE_INDICES", "3,5")
+		t.Setenv("ACR_TEST_TRIAL_SHARD_COUNT", "4")
+		t.Setenv("ACR_TEST_TRIAL_SHARD_INDEX", "0")
+		if err := twoTurnShardCaseIndicesEnvTripleError(); err != nil {
+			t.Fatalf("want nil with the full triple set, got %v", err)
+		}
+	})
+
+	t.Run("case indices unset never errors regardless of shard count/index", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_SHARD_CASE_INDICES", "")
+		t.Setenv("ACR_TEST_TRIAL_SHARD_COUNT", "")
+		if err := twoTurnShardCaseIndicesEnvTripleError(); err != nil {
+			t.Fatalf("want nil when CASE_INDICES is unset, got %v", err)
+		}
+	})
+}
