@@ -77,6 +77,105 @@ Migrations: run `acr-migrate` from the host against the printed DSN (the
 databases are single-tenant and ephemeral, so the compose role split does not
 apply).
 
+## Standing trial data plane (CHAOS-4186)
+
+`trial-data.sh` stands up a PERSISTENT single instance of postgres +
+clickhouse + falkordb -- unlike `shard.sh` (ephemeral, no PVCs, reseeded per
+trial), this is seeded ONCE from a `dev-health/backups/` dump and reused
+across runs, ending the trial harness's dependence on the shared Docker
+compose stack. Reuses whatever cluster `KUBECONFIG` points at (normally the
+same `acr-local` kiac cluster the helm chart pilot already runs in, in its
+own `acr-trial-data` namespace) -- it does not create a second cluster.
+
+```bash
+export KUBECONFIG="$(deploy/local/kiac.sh kubeconfig)"
+deploy/local/trial-data.sh apply && deploy/local/trial-data.sh wait
+deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ts>.sql.gz
+deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ts>.zip
+deploy/local/trial-data.sh dsn      # prints the ACR_TEST_TRIAL_* DSN recipe
+deploy/local/trial-data.sh wipe     # destroys the namespace INCL. PVCs
+```
+
+### Contract
+
+| Item | Value |
+| --- | --- |
+| Namespace | `acr-trial-data` (override: `ACR_TRIAL_DATA_NAMESPACE`) |
+| Postgres endpoint | NodePort 30500; role `devhealth` (matches the seed dump, NOT a dedicated `acr` role -- see trap below) |
+| ClickHouse endpoint | NodePort 30501 (HTTP), 30502 (native); user `ch` |
+| FalkorDB endpoint | NodePort 30503; no auth |
+| Persistence | PVCs for postgres/clickhouse/falkordb data (`ACR_TRIAL_PG_STORAGE`/`ACR_TRIAL_CH_STORAGE`/`ACR_TRIAL_FALKOR_STORAGE`, defaults 20Gi/30Gi/5Gi) -- survives `apply`/pod restarts; only `wipe` destroys it |
+| Images | postgres:18-alpine (same digest as `shard.yaml`), falkordb (same digest), clickhouse pinned to the digest resolved from the live compose container at build time (`ACR_TRIAL_CH_IMAGE` override) -- parity with whatever the compose baseline was measured under, not an arbitrary tag |
+
+### Traps hit standing this up (read before repeating)
+
+1. **Seed source**: `dev-health/backups/` accumulates timestamped snapshots
+   over time from the periodic backup script -- only the ORIGINAL dataset is
+   the sanctioned trial seed (chris ruling, banked in the repo's ops memory:
+   "@backups = the ORIGINAL pg+ch dataset"). A newer-looking timestamped
+   subdirectory is a snapshot of the LIVE (possibly drifted) compose stack,
+   not the seed. Check with whoever owns the trial measurement plan before
+   assuming "newest" is "correct" -- seeding from the wrong one silently
+   breaks baseline comparability.
+2. **Postgres bootstrap role collision**: do NOT bootstrap the postgres
+   container with `POSTGRES_USER=devhealth` before restoring a plain (no
+   `--clean`) `pg_dumpall` that itself does `CREATE ROLE devhealth`. Bootstrap
+   as the default `postgres` superuser/db instead; restore as that role.
+   `restore-postgres` pins the `devhealth` role's password afterward
+   (the dump's own `ALTER ROLE ... PASSWORD` overwrites whatever
+   `POSTGRES_PASSWORD` the container started with, to whatever the SOURCE
+   stack's password was, which is unknown here).
+3. **ClickHouse has no `Zip` backup engine compiled in on this image** --
+   `RESTORE ... FROM Zip(...)` fails `BACKUP_ENGINE_NOT_FOUND`. `trial-data.sh`
+   unzips client-side and restores via `FROM Disk('trial_backups', <dir>)`
+   instead (see the `backup-disk.xml` ConfigMap in the manifest).
+4. **`kubectl cp` does not reliably carry local file permissions into the
+   container** -- ClickHouse's own `.backup` metadata file lands unreadable
+   by the server's UID regardless of local `chmod`. Fixed server-side
+   (`kubectl exec ... chmod -R a+rwX` after the copy, not trusted to the
+   transport).
+5. **Schema migrations**: a seed dump captures whatever migration state the
+   SOURCE stack was at when it was taken -- almost certainly behind the
+   worktree's current tip. Run `acr-migrate up` (env `ACR_POSTGRES_MIGRATION_DSN`
+   = the same postgres DSN) before any code that assumes current schema
+   (e.g. `acr-projector rebuild`, which needs `acr.context_fabric_graph_lifecycle`
+   from a migration well after 08-17). This is schema DDL (deterministic
+   code), not measurement data -- doesn't conflict with a "no re-baseline"
+   data discipline.
+6. **Graph state is NOT restorable from a dump**: FalkorDB only gets
+   populated via a live `acr-projector rebuild --org <id>` + `serve` run
+   against the seeded postgres/clickhouse (build-aside-and-swap). Needs
+   `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED=true`,
+   `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS=<id>`, and (for a real, non-lexical-only
+   graph) `ACR_CONTEXT_FABRIC_EMBED_*` pointed at a working embed credential --
+   an unconfigured or blank-key embedder is either skipped cleanly (unset) or
+   refused at startup (configured-but-blank, CHAOS-4192 guard); never silently
+   degrades.
+7. **A rebuild opens a 24h-graced epoch** (default
+   `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_GRACE_WINDOW`) -- running `rebuild`
+   again (e.g. because the first attempt lacked embed credentials) hits
+   `lifecycle CAS conflict ... observed_status=grace` and refuses to open a
+   fresh epoch. `acr-projector rollback --org <id>` reverts to the previous
+   epoch while still inside the grace window and unblocks a clean re-`rebuild`
+   -- costs nothing (the org's own dataset is unaffected), but you have to
+   know to do it rather than wait out the 24h.
+8. **KNOWN ISSUE, unresolved as of 2026-08-24**: both a lexical-only and an
+   embedded `serve` run hit an identical, reproducible infinite loop starting
+   ~1-2s after the LAST projection source reaches `cursor_exhausted` --
+   repeating `checkpoint-store divergence detected (CHAOS-3882)` ERROR ->
+   `lifecycle CAS conflict, observed_status=grace` -> `build-aside epoch
+   already open; not restarting` -> a self-contradicting WARN claiming
+   recovery opened an epoch anyway -- every ~2s, no forward progress. Real
+   data and (in the embedded run) real embeddings DO get written before the
+   loop takes over (confirmed live: 82.84% Subject-node embedding coverage,
+   KNN vector index present and OPERATIONAL on the resulting epoch key), but
+   the epoch never gets a chance to converge/flip cleanly, so that coverage
+   number is a mid-loop snapshot, not a settled state. `go run`'s wrapper
+   process does not reliably signal its compiled child on `kill` -- match by
+   full command (`procs --json 'acr-projector'`) and kill the actual binary,
+   not just the wrapper PID. Under investigation; do not treat an epoch flip
+   as reliable until this is understood.
+
 ## Constraints
 
 - Apple Silicon/macOS only; kind/k3d remain the portable fallback.
