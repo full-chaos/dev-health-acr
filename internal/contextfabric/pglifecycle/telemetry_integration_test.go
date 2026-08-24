@@ -84,6 +84,9 @@ func (f *fakeLifecycleTelemetry) RecordLifecycleCASConflict(_ context.Context, o
 func (f *fakeLifecycleTelemetry) RecordCheckpointEpochState(context.Context, string, int64, contextfabric.CheckpointEpochState, time.Duration) {
 }
 
+func (f *fakeLifecycleTelemetry) RecordEpochResolverInvalidation(context.Context, string, contextfabric.LifecycleTransition) {
+}
+
 func (f *fakeLifecycleTelemetry) RecordBuildSourceProgress(_ context.Context, orgID string, epoch int64, source string, mode contextfabric.BuildCompletionMode, _ int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

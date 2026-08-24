@@ -159,6 +159,16 @@ type Config struct {
 	// reads (checkpoint cursor ages) that pglifecycle/falkorgraph have no
 	// visibility into on their own.
 	LifecycleTelemetry contextfabric.GraphLifecycleTelemetry
+	// EpochResolverInvalidator (CHAOS-4208) is optional: when set,
+	// Coordinator calls Invalidate(orgID) on it immediately after a
+	// beginLifecycleBuild or Flip transition commits, so the FalkorDB
+	// adapter's OrgEpochResolver (a separate object over the same
+	// Postgres store -- see EpochResolverInvalidator's own doc comment)
+	// stops serving a stale pre-transition epoch for the rest of its
+	// bounded lease. Nil preserves the pre-CHAOS-4208 behavior: readers
+	// simply wait out the lease, which is bounded staleness, not
+	// incorrectness. pglifecycle.CachedResolver satisfies this directly.
+	EpochResolverInvalidator contextfabric.EpochResolverInvalidator
 	// GraceWindow (design brief D11, operator-set) is how long a flipped
 	// epoch's predecessor is retained before it becomes eligible for
 	// retirement -- Flip's own graceWindow parameter. Defaults to 24h
@@ -208,6 +218,7 @@ type Coordinator struct {
 	epochCheckpoints func(int64) contextfabric.ProjectionCheckpointStore
 	retireScheduler  RetireScheduler
 	lifecycleTelem   contextfabric.GraphLifecycleTelemetry
+	epochInvalidator contextfabric.EpochResolverInvalidator
 	graceWindow      time.Duration
 	poll             time.Duration
 	concurrency      int
@@ -308,7 +319,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		backend: cfg.Backend, checkpoints: cfg.Checkpoints, rebuildMarkers: cfg.RebuildMarkers,
 		locker: cfg.Locker, observer: cfg.Observer, reuseInvalidator: cfg.ReuseInvalidator,
 		lifecycle: cfg.Lifecycle, epochCheckpoints: cfg.EpochCheckpoints, retireScheduler: cfg.RetireScheduler,
-		lifecycleTelem: cfg.LifecycleTelemetry, graceWindow: cfg.GraceWindow,
+		lifecycleTelem: cfg.LifecycleTelemetry, epochInvalidator: cfg.EpochResolverInvalidator, graceWindow: cfg.GraceWindow,
 		poll: cfg.PollInterval, concurrency: cfg.Concurrency,
 		maxBackoff: cfg.MaxBackoff, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
@@ -342,7 +353,8 @@ func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 		}
 	}()
 	if c.lifecycle != nil {
-		return c.beginLifecycleBuild(ctx, orgID)
+		_, err := c.beginLifecycleBuild(ctx, orgID)
+		return err
 	}
 	return c.performRebuild(ctx, orgID)
 }
@@ -397,6 +409,7 @@ func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
 		return fmt.Errorf("projectionrun: rollback: %w", err)
 	}
 	c.logger.WarnContext(ctx, "context_fabric: graph epoch rollback", "org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", rolled.ActiveEpoch)
+	c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionRollback)
 	if c.reuseInvalidator != nil {
 		if invalidateErr := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); invalidateErr != nil {
 			c.logger.WarnContext(ctx, "invalidate answer reuse after rollback failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
@@ -420,17 +433,68 @@ func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
 // rather than an error -- an operator re-running `rebuild --org` while a
 // prior rebuild is still replaying must not fail loudly for doing the
 // obviously safe thing.
-func (c *Coordinator) beginLifecycleBuild(ctx context.Context, orgID string) error {
-	_, err := c.lifecycle.BeginBuild(ctx, orgID, c.sourceNames, c.now())
-	if err != nil {
-		if errors.Is(err, contextfabric.ErrLifecycleTransitionRefused) {
-			c.logger.InfoContext(ctx, "context_fabric: build-aside epoch already open for this organization; not restarting", "org_id", orgID)
-			return nil
-		}
-		return fmt.Errorf("projectionrun: begin build-aside epoch: %w", err)
+//
+// Returns opened=true only when THIS call actually transitioned the row
+// serving->building (CHAOS-4208): a caller (recoverFromDivergenceLifecycle)
+// must be able to tell that apart from every other reason BeginBuild can
+// return a nil error -- a build genuinely already in progress, OR the row
+// being refused for an entirely different, non-error reason such as a
+// post-flip grace window, which BeginBuild's own SQL predicate (WHERE
+// status = 'serving') refuses identically to "already building" but which
+// is NOT "already in progress": nothing will start replaying, and a caller
+// that can't tell the difference ends up logging that it did (the
+// self-contradicting "opened a build-aside epoch" WARN this ticket fixes).
+func (c *Coordinator) beginLifecycleBuild(ctx context.Context, orgID string) (opened bool, err error) {
+	_, err = c.lifecycle.BeginBuild(ctx, orgID, c.sourceNames, c.now())
+	if err == nil {
+		c.logger.InfoContext(ctx, "context_fabric: build-aside epoch opened; replay will proceed over subsequent ticks", "org_id", orgID)
+		c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionBeginBuild)
+		return true, nil
 	}
-	c.logger.InfoContext(ctx, "context_fabric: build-aside epoch opened; replay will proceed over subsequent ticks", "org_id", orgID)
-	return nil
+	if !errors.Is(err, contextfabric.ErrLifecycleTransitionRefused) {
+		return false, fmt.Errorf("projectionrun: begin build-aside epoch: %w", err)
+	}
+	// Refused. Re-read to report WHY, distinguishing "a build is already
+	// open" (routine, matches this call's own intent) from any other
+	// observed status (e.g. grace) that refuses BeginBuild for a reason
+	// that has nothing to do with a build already running. A re-read
+	// FAILURE (a transient dependency error, context cancellation) must
+	// propagate as an error, never default to "serving" and report success
+	// -- CHAOS-4208 round-2: silently treating "I don't know the current
+	// state" as a benign, already-handled refusal let an operator's Rebuild
+	// call report nil and let automatic recovery clear its backoff as
+	// though nothing were wrong.
+	row, found, getErr := c.lifecycle.Get(ctx, orgID)
+	if getErr != nil {
+		return false, fmt.Errorf("projectionrun: begin build-aside epoch: re-read lifecycle row after CAS refusal: %w", getErr)
+	}
+	if found && row.Status == contextfabric.LifecycleStatusBuilding {
+		c.logger.InfoContext(ctx, "context_fabric: build-aside epoch already open for this organization; not restarting", "org_id", orgID)
+		return false, nil
+	}
+	status := contextfabric.LifecycleStatusServing
+	if found {
+		status = row.Status
+	}
+	c.logger.InfoContext(ctx, "context_fabric: cannot open a build-aside epoch right now; organization is not in a rebuildable state",
+		"org_id", orgID, "observed_status", string(status))
+	return false, nil
+}
+
+// invalidateEpochResolution notifies a wired EpochResolverInvalidator that
+// a lifecycle transition just committed for orgID (CHAOS-4208's fix for
+// the missing "flip/rollback call this as a courtesy" wiring
+// EpochResolverInvalidator's own doc comment describes). Nil-safe --
+// EpochResolverInvalidator is optional, matching every other invalidator
+// field on Config (e.g. ReuseInvalidator).
+func (c *Coordinator) invalidateEpochResolution(ctx context.Context, orgID string, transition contextfabric.LifecycleTransition) {
+	if c.epochInvalidator == nil {
+		return
+	}
+	c.epochInvalidator.Invalidate(orgID)
+	if c.lifecycleTelem != nil {
+		c.lifecycleTelem.RecordEpochResolverInvalidation(ctx, orgID, transition)
+	}
 }
 
 // performRebuild is the crash-resumable rebuild sequence, callable either as
@@ -836,6 +900,7 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 	switch {
 	case err == nil:
 		c.logger.InfoContext(ctx, "context_fabric: graph epoch flip", "org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", flipped.ActiveEpoch)
+		c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionFlip)
 		if c.reuseInvalidator != nil {
 			if invalidateErr := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); invalidateErr != nil {
 				c.logger.WarnContext(ctx, "invalidate answer reuse after flip failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
@@ -1097,12 +1162,21 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID 
 	hash := orgIDHash(orgID)
 	c.logger.ErrorContext(ctx, "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic build-aside recovery instead of serving resolution against a silently empty or stale graph",
 		"org_id_hash", hash)
-	err := c.beginLifecycleBuild(ctx, orgID)
+	opened, err := c.beginLifecycleBuild(ctx, orgID)
 	c.recordBackoff(key, err)
 	stats.recordDivergenceRecovered()
 	if err != nil {
 		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed to open a build-aside epoch; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
+		return
+	}
+	if !opened {
+		// beginLifecycleBuild already logged WHY (a build already in
+		// progress, or the organization isn't in a rebuildable state right
+		// now, e.g. a post-flip grace window) -- nothing NEW happened this
+		// tick, so don't claim otherwise (CHAOS-4208: this used to fire the
+		// WARN below unconditionally, including when the CAS was refused
+		// for an unrelated reason and no epoch was opened).
 		return
 	}
 	c.logger.WarnContext(ctx, "context_fabric: automatic projection-liveness recovery opened a build-aside epoch; replay will proceed over subsequent ticks",

@@ -95,8 +95,9 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	lifecycleTelemetry := graphLifecycleTelemetry(logger)
 
 	var (
-		lifecycleStore *pglifecycle.Store
-		epochResolver  contextfabric.OrgEpochResolver
+		lifecycleStore           *pglifecycle.Store
+		epochResolver            contextfabric.OrgEpochResolver
+		epochResolverInvalidator contextfabric.EpochResolverInvalidator
 	)
 	if lifecycleEnvCfg.Enabled {
 		lifecycleStore, err = pglifecycle.NewStore(db)
@@ -113,6 +114,11 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 			return nil, errors.Join(fmt.Errorf("context fabric graph lifecycle resolver: %w", err), runtime.Close())
 		}
 		epochResolver = cachedResolver
+		// CHAOS-4208: the SAME cached resolver instance the falkorgraph
+		// adapter reads through, so Coordinator can invalidate the exact
+		// cache entry it primed -- see EpochResolverInvalidator's own doc
+		// comment for why this closes the missing-invalidation gap.
+		epochResolverInvalidator = cachedResolver
 	}
 
 	backend, falkorCheck, err := openProjectionBackend(logger, epochResolver, lifecycleTelemetry)
@@ -205,6 +211,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		coordinatorConfig.RetireScheduler = retireScheduler
 		coordinatorConfig.LifecycleTelemetry = lifecycleTelemetry
 		coordinatorConfig.GraceWindow = lifecycleEnvCfg.GraceWindow
+		coordinatorConfig.EpochResolverInvalidator = epochResolverInvalidator
 	}
 	coordinator, err := projectionrun.NewCoordinator(coordinatorConfig)
 	if err != nil {
