@@ -107,17 +107,23 @@ deploy/local/trial-data.sh wipe     # destroys the namespace INCL. PVCs
 | Persistence | PVCs for postgres/clickhouse/falkordb data (`ACR_TRIAL_PG_STORAGE`/`ACR_TRIAL_CH_STORAGE`/`ACR_TRIAL_FALKOR_STORAGE`, defaults 20Gi/30Gi/5Gi) -- survives `apply`/pod restarts; only `wipe` destroys it |
 | Images | postgres:18-alpine (same digest as `shard.yaml`), falkordb (same digest), clickhouse pinned to the digest resolved from the live compose container at build time (`ACR_TRIAL_CH_IMAGE` override) -- parity with whatever the compose baseline was measured under, not an arbitrary tag |
 
-**Launcher coverage**: `trial-data.sh dsn`'s `ACR_TEST_TRIAL_*` vars are consumed
-by `scripts/trial/run-two-turn.sh` (and the other single-process trial
-scripts sharing `common.sh`'s `trial_wire_common_env`). The SHARDED launcher,
-`scripts/trial/run-two-turn-parallel.sh`, reads a SEPARATE var pair
-(`ACR_TRIAL_PG_HOST`/`PORT`, also printed by `dsn`) plus `ops/.env`'s own
-`POSTGRES_USER`/`POSTGRES_PASSWORD` for its per-shard database cloning --
-`USER` already matches (the seed dump always creates `devhealth`), but
-`PASSWORD` only matches if `restore-postgres` was run with
-`ACR_TRIAL_PG_PASSWORD` set to `ops/.env`'s own value. Not yet exercised
-against a real parallel/sharded run on this data plane -- CHAOS-4186's own
-smoke was sequential-subset only, per the ratified plan.
+**Launcher coverage**: every trial script (`run-two-turn.sh`, the sharded
+`run-two-turn-parallel.sh`, replay/W0/D2B/generative/frontier -- everything
+sharing `scripts/trial/common.sh`) reads ONE switch,
+`ACR_TRIAL_DATA_PLANE=compose|kiac` (default `compose` until this note is
+updated to say otherwise). `kiac` resolves postgres, clickhouse, AND
+falkordb together from `trial-data.sh dsn` in one call -- there is no
+per-store partial state to land in, so a launcher can never end up
+measuring against a hybrid of the two stacks. An `ACR_TRIAL_{PG,CH,FALKOR}_
+{HOST,PORT}` escape hatch exists for one-off diagnostics (e.g. a relay
+bypassing a misbehaving host port-forward); setting any one of those six
+vars requires setting all six, enforced at `common.sh` source time.
+Not yet exercised against a real parallel/sharded run on this data plane --
+CHAOS-4186's own smoke was sequential-subset only, per the ratified plan.
+One harness remains compose-bound regardless of this switch:
+`run-frontier-arm.sh` talks to the compose clickhouse container directly
+via `docker exec` (its own frontier baseline, a separate measurement family)
+-- tracked as CHAOS-4220 (Low), not fixed here.
 
 ### Traps hit standing this up (read before repeating)
 
@@ -171,37 +177,30 @@ smoke was sequential-subset only, per the ratified plan.
    epoch while still inside the grace window and unblocks a clean re-`rebuild`
    -- costs nothing (the org's own dataset is unaffected), but you have to
    know to do it rather than wait out the 24h.
-8. **CHAOS-4208 post-flip divergence loop (root-caused, workaround below;
-   fix pending)**: a `serve` run against a freshly-seeded trial cluster can
-   hit a reproducible infinite loop starting ~1-2s after the LAST
-   projection source reaches `cursor_exhausted` -- repeating
-   `checkpoint-store divergence detected (CHAOS-3882)` ERROR -> `lifecycle
-   CAS conflict, observed_status=grace` -> `build-aside epoch already open;
-   not restarting` -> a self-contradicting WARN claiming recovery opened an
-   epoch anyway -- every ~2s, no forward progress. lane-3882-loop
-   root-caused it (CHAOS-4208): unwired epoch-resolver cache invalidation --
-   if a `serve` process (or any process with a warm resolver cache) is
-   already running when `rebuild` fires `BeginBuild`, writes can misroute to
-   the stale cached epoch key, and the mismatch deadlocks the recovery path
-   in `grace`. Severity correction (also from that investigation): the loop
-   itself is a bounded, self-healing false-alarm storm -- data written
-   before it starts is NOT corrupted (confirmed live twice: 82.84%
-   Subject-node embedding coverage + an OPERATIONAL KNN vector index landed
-   cleanly both times) -- but it never converges/flips on its own, so an
-   epoch stuck in this loop must not be treated as ready.
-   **WORKAROUND (confirmed live, unblocks reliably)**: (a) `acr-projector
-   rollback --org <id>` first (valid inside the grace window; clears
-   `grace` back to `serving`); (b) use a FRESH, cold process for the
-   retry -- no `serve` may already be running; (c) order matters: run
-   `rebuild --org <id>` to completion FIRST (BeginBuild commits before any
-   resolver read primes the cache), THEN start `serve` -- never the reverse;
-   (d) set `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_LEASE=1s` (the practical
-   floor -- the env only requires a positive duration, no separate minimum
-   constant) to shrink any residual stale-cache window further. This
-   recipe produced a clean flip with zero divergence errors on the very
-   next attempt. **Once CHAOS-4208's fix merges, this workaround's ordering
-   requirement is superseded** -- check that ticket before assuming the
-   rollback-first/rebuild-before-serve dance is still required.
+8. **CHAOS-4208 post-flip divergence loop -- FIXED (#252 c53042d0), this
+   section is now HISTORY only**: a `serve` run against a freshly-seeded
+   trial cluster used to be able to hit a reproducible infinite loop
+   starting ~1-2s after the LAST projection source reaches
+   `cursor_exhausted` -- repeating `checkpoint-store divergence detected
+   (CHAOS-3882)` ERROR -> `lifecycle CAS conflict, observed_status=grace`
+   -> `build-aside epoch already open; not restarting` -> a
+   self-contradicting WARN claiming recovery opened an epoch anyway --
+   every ~2s, no forward progress. Root cause (lane-3882-loop): unwired
+   epoch-resolver cache invalidation -- if a `serve` process (or any
+   process with a warm resolver cache) was already running when `rebuild`
+   fired `BeginBuild`, writes could misroute to the stale cached epoch key,
+   deadlocking the recovery path in `grace`. Severity correction from that
+   investigation: the loop was always a bounded, self-healing false-alarm
+   storm -- data written before it starts was never corrupted (confirmed
+   live twice: 82.84% Subject-node embedding coverage + an OPERATIONAL KNN
+   vector index landed cleanly both times) -- it just never converged/
+   flipped on its own. **Fix**: `CachedResolver.Invalidate` now wired into
+   BeginBuild/Flip/Rollback (#252). The workaround that unblocked this
+   before the fix -- rollback the stuck epoch, use a fresh cold process,
+   run `rebuild` to completion BEFORE starting `serve` (never the reverse),
+   set `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_LEASE` low -- should no longer
+   be necessary on any worktree built from #252 or later; kept here as a
+   fallback recipe only, not a step to follow by default.
 9. **`ACR_TEST_TRIAL_LIMIT` is a ROW budget, not a case count.** It caps
    the harness's own (member x arm) result rows, not distinct corpus case
    indices -- `LIMIT=16` actually ran only 6 distinct corpus cases (indices

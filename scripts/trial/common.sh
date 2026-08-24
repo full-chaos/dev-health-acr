@@ -186,25 +186,107 @@ trial_secret() {
   grep -E "^$1=" "$ops_env" | cut -d= -f2- | tr -d '"'
 }
 
+# ACR_TRIAL_DATA_PLANE (CHAOS-4186 round-3 design ruling; replaces the
+# per-store `:=` override this file carried before): ONE switch moves ALL
+# THREE trial stores together -- "compose" (default, until the cutover
+# note in deploy/local/README.md flips it) or "kiac". The prior design let
+# a caller override individual ACR_TEST_TRIAL_* endpoints piecemeal; codex
+# xhigh review round 3 found that run-two-turn-parallel.sh's own Postgres
+# override reached only Postgres, silently leaving FalkorDB/ClickHouse on
+# compose -- a hybrid measurement with no error. A single switch makes that
+# class of bug structurally impossible: there is no partial state to land
+# in between "compose" and "kiac".
+: "${ACR_TRIAL_DATA_PLANE:=compose}"
+
+# Escape hatch, ALL-OR-NONE: six raw host/port vars (postgres, clickhouse,
+# falkor) let an operator point at something neither switch value names
+# (e.g. a one-off diagnostic relay -- see run-two-turn-parallel.sh's own
+# CHAOS-4100 A/B incident note). Setting ANY one requires setting every
+# other one too -- a partial set is indistinguishable from "forgot one",
+# which is exactly the silent-hybrid bug class this file exists to close,
+# so it fails closed with the missing names listed rather than filling the
+# gap from whichever switch value happens to be in effect.
+_acr_trial_override_names=(ACR_TRIAL_PG_HOST ACR_TRIAL_PG_PORT ACR_TRIAL_CH_HOST ACR_TRIAL_CH_PORT ACR_TRIAL_FALKOR_HOST ACR_TRIAL_FALKOR_PORT)
+_acr_trial_override_set=0
+_acr_trial_override_missing=()
+for _acr_trial_override_name in "${_acr_trial_override_names[@]}"; do
+  if [[ -n "${!_acr_trial_override_name:-}" ]]; then
+    _acr_trial_override_set=1
+  else
+    _acr_trial_override_missing+=("$_acr_trial_override_name")
+  fi
+done
+if [[ "$_acr_trial_override_set" == "1" && "${#_acr_trial_override_missing[@]}" -gt 0 ]]; then
+  echo "common.sh: partial per-store override -- set ${_acr_trial_override_names[*]} together, or set none of them (missing: ${_acr_trial_override_missing[*]})" >&2
+  exit 1
+fi
+
 trial_wire_common_env() {
   export ACR_POSTGRES_CONNECTION_KIND=direct
   export ACR_TEST_TRIAL_CORPUS="$ACR_TRIAL_CORPUS"
   export ACR_TEST_TRIAL_ORG="$ACR_TRIAL_ORG"
-  # `:=`, not unconditional `export ... =` (CHAOS-4186, codex xhigh review,
-  # P1): these three used to be clobbered to the compose endpoints even when
-  # a caller had already exported an explicit override (e.g. the kiac trial
-  # data plane's DSNs from `deploy/local/trial-data.sh dsn`) -- the
-  # documented kiac handoff silently reconnected to compose instead. Nothing
-  # in this codebase pre-sets these before calling trial_wire_common_env
-  # today except that exact override case, so this is a no-op for every
-  # existing compose-only caller.
-  : "${ACR_TEST_TRIAL_FALKOR_ADDR:=127.0.0.1:16379}"
-  : "${ACR_TEST_TRIAL_POSTGRES_DSN:=postgres://$(trial_secret POSTGRES_USER):$(trial_secret POSTGRES_PASSWORD)@127.0.0.1:5432/acr?sslmode=disable}"
-  : "${ACR_TEST_TRIAL_CLICKHOUSE_DSN:=clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@127.0.0.1:9000/$(trial_secret CLICKHOUSE_DB)}"
-  export ACR_TEST_TRIAL_FALKOR_ADDR ACR_TEST_TRIAL_POSTGRES_DSN ACR_TEST_TRIAL_CLICKHOUSE_DSN
+
+  local pg_host pg_port pg_user pg_password ch_dsn falkor_addr
+
+  if [[ "$_acr_trial_override_set" == "1" ]]; then
+    pg_host="$ACR_TRIAL_PG_HOST"; pg_port="$ACR_TRIAL_PG_PORT"
+    pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
+    ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@${ACR_TRIAL_CH_HOST}:${ACR_TRIAL_CH_PORT}/$(trial_secret CLICKHOUSE_DB)"
+    falkor_addr="${ACR_TRIAL_FALKOR_HOST}:${ACR_TRIAL_FALKOR_PORT}"
+  elif [[ "$ACR_TRIAL_DATA_PLANE" == "kiac" ]]; then
+    # deploy/local/trial-data.sh dsn resolves ALL THREE endpoints in one
+    # call, reading the credential from the LIVE cluster secret -- never
+    # independently re-derived here, so this can never drift from what the
+    # kiac data plane actually has seeded.
+    local kiac_dsn_output
+    if ! kiac_dsn_output="$(cd "$repo_root" && deploy/local/trial-data.sh dsn 2>&1)"; then
+      echo "common.sh: ACR_TRIAL_DATA_PLANE=kiac but 'deploy/local/trial-data.sh dsn' failed -- is the kiac trial data plane applied and KUBECONFIG set? output:" >&2
+      echo "$kiac_dsn_output" >&2
+      exit 1
+    fi
+    local kiac_pg_dsn
+    kiac_pg_dsn="$(grep '^ACR_TEST_TRIAL_POSTGRES_DSN=' <<<"$kiac_dsn_output" | cut -d= -f2-)"
+    ch_dsn="$(grep '^ACR_TEST_TRIAL_CLICKHOUSE_DSN=' <<<"$kiac_dsn_output" | cut -d= -f2-)"
+    falkor_addr="$(grep '^ACR_TEST_TRIAL_FALKOR_ADDR=' <<<"$kiac_dsn_output" | cut -d= -f2-)"
+    # Parse the postgres DSN back into components: run-two-turn-parallel.sh
+    # needs the RAW pieces (it swaps the database name per shard), not one
+    # fixed DSN -- see this variable's own consumer for the full story.
+    pg_user="${kiac_pg_dsn#postgres://}"; pg_user="${pg_user%%:*}"
+    pg_password="${kiac_pg_dsn#postgres://*:}"; pg_password="${pg_password%%@*}"
+    local kiac_pg_hostport="${kiac_pg_dsn#*@}"; kiac_pg_hostport="${kiac_pg_hostport%%/*}"
+    pg_host="${kiac_pg_hostport%%:*}"; pg_port="${kiac_pg_hostport##*:}"
+  elif [[ "$ACR_TRIAL_DATA_PLANE" == "compose" ]]; then
+    pg_host="127.0.0.1"; pg_port="5432"
+    pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
+    ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@127.0.0.1:9000/$(trial_secret CLICKHOUSE_DB)"
+    falkor_addr="127.0.0.1:16379"
+  else
+    echo "common.sh: ACR_TRIAL_DATA_PLANE must be 'compose' or 'kiac', got '$ACR_TRIAL_DATA_PLANE'" >&2
+    exit 1
+  fi
+
+  export ACR_TEST_TRIAL_FALKOR_ADDR="$falkor_addr"
+  export ACR_TEST_TRIAL_POSTGRES_DSN="postgres://${pg_user}:${pg_password}@${pg_host}:${pg_port}/acr?sslmode=disable"
+  export ACR_TEST_TRIAL_CLICKHOUSE_DSN="$ch_dsn"
+  # Raw components, not just the composed DSN above: run-two-turn-parallel.sh
+  # needs these to build a PER-SHARD Postgres DSN (same host/port/user/
+  # password, different database name each shard) -- see that script's own
+  # PG_HOST/PG_PORT/PG_USER/PG_PASSWORD, which read these instead of
+  # deriving their own connection independently (the exact class of bug
+  # that produced round 3's hybrid-measurement finding).
+  export ACR_TEST_TRIAL_PG_HOST="$pg_host"
+  export ACR_TEST_TRIAL_PG_PORT="$pg_port"
+  export ACR_TEST_TRIAL_PG_USER="$pg_user"
+  export ACR_TEST_TRIAL_PG_PASSWORD="$pg_password"
   export ACR_TEST_TRIAL_EMBED_MODEL=text-embedding-3-large
   export ACR_TEST_TRIAL_EMBED_DIMENSION=3072
   export ACR_TEST_TRIAL_EMBED_API_KEY="$(trial_secret OPENAI_API_KEY)"
+
+  # Seeds the queued `data_plane` report-provenance field (schema tip+1,
+  # separate small PR): printed at every launcher's own start, so which
+  # stack a run hit is visible immediately rather than inferred after the
+  # fact from a host string buried in a DSN. Never prints a credential.
+  echo "common.sh: data_plane=$ACR_TRIAL_DATA_PLANE pg=${pg_host}:${pg_port} ch=$(sed -E 's#.*@##' <<<"$ch_dsn") falkor=$falkor_addr" >&2
 }
 
 # trial_wire_graph_lifecycle_env (CHAOS-3916, local/trial slice) is

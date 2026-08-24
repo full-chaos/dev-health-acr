@@ -12,7 +12,13 @@
 #   deploy/local/trial-data.sh dsn
 #   deploy/local/trial-data.sh restore-postgres <dump.sql.gz>
 #   deploy/local/trial-data.sh restore-clickhouse <zip1> [zip2 ...]
-#   deploy/local/trial-data.sh wipe     # deletes the namespace incl. PVCs
+#   deploy/local/trial-data.sh wipe     # deletes the rendered resources
+#                              (never namespace-wide); also deletes the
+#                              namespace ITSELF only when it is the
+#                              hardcoded default acr-trial-data
+#
+# Also requires `yq` (mikefarah, already used elsewhere in this repo's
+# e2e/ci scripts) in addition to kubectl.
 #
 # Environment:
 #   ACR_TRIAL_DATA_NAMESPACE   namespace (default: acr-trial-data)
@@ -60,7 +66,7 @@ log() { printf '[trial-data.sh] %s\n' "$*" >&2; }
 die() { printf '[trial-data.sh] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -126,32 +132,35 @@ cmd_wait() {
 
 cmd_dsn() {
   require_kubeconfig
-  local ip
+  validate_password
+  local ip password
   ip="$(node_ip)"
   [[ -n "$ip" ]] || die "could not resolve a node InternalIP from KUBECONFIG"
-  printf 'ACR_TEST_TRIAL_POSTGRES_DSN=postgres://devhealth:%s@%s:%d/acr?sslmode=disable\n' "$PG_PASSWORD" "$ip" "$PG_NODEPORT"
-  printf 'ACR_TEST_TRIAL_CLICKHOUSE_DSN=clickhouse://ch:%s@%s:%d/default\n' "$PG_PASSWORD" "$ip" "$CH_NATIVE_NODEPORT"
+  # Cluster secret is the credential source of truth (team-lead design
+  # ruling, CHAOS-4186 round 3), not the local ACR_TRIAL_PG_PASSWORD env --
+  # that only reflects what the operator's CURRENT shell happens to hold,
+  # which can silently diverge from what the running postgres/clickhouse
+  # pods were actually seeded with (e.g. changed after apply, before a
+  # matching restore-postgres). Reading the live secret means this
+  # command's output always matches what is actually running, not intent.
+  password="$(kubectl -n "$NAMESPACE" get secret trial-postgres -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null | base64 -d)"
+  [[ -n "$password" ]] || die "could not read secret trial-postgres/POSTGRES_PASSWORD in namespace $NAMESPACE -- has 'apply' been run?"
+  printf 'ACR_TEST_TRIAL_POSTGRES_DSN=postgres://devhealth:%s@%s:%d/acr?sslmode=disable\n' "$password" "$ip" "$PG_NODEPORT"
+  printf 'ACR_TEST_TRIAL_CLICKHOUSE_DSN=clickhouse://ch:%s@%s:%d/default\n' "$password" "$ip" "$CH_NATIVE_NODEPORT"
   printf 'ACR_TEST_TRIAL_FALKOR_ADDR=%s:%d\n' "$ip" "$FALKOR_NODEPORT"
   printf '# clickhouse HTTP (for RESTORE/BACKUP admin queries): http://%s:%d\n' "$ip" "$CH_HTTP_NODEPORT"
-  # scripts/trial/run-two-turn-parallel.sh (codex xhigh review round 2, P1):
-  # this launcher does NOT read ACR_TEST_TRIAL_POSTGRES_DSN above -- it opens
-  # its own connection from ACR_TRIAL_PG_HOST/PORT (default 127.0.0.1:5432)
-  # plus POSTGRES_USER/POSTGRES_PASSWORD read from ops/.env, independently of
-  # every var this command prints. Point it at this data plane with:
-  printf 'ACR_TRIAL_PG_HOST=%s\n' "$ip"
-  printf 'ACR_TRIAL_PG_PORT=%d\n' "$PG_NODEPORT"
-  # CREDENTIAL COUPLING: ops/.env's POSTGRES_USER/POSTGRES_PASSWORD must
-  # match what this data plane's devhealth role actually has -- USER already
-  # matches (the seed dump always creates "devhealth"), but PASSWORD does
-  # NOT unless restore-postgres was run with ACR_TRIAL_PG_PASSWORD set to
-  # ops/.env's own POSTGRES_PASSWORD (this data plane's default,
-  # acr-trial-dev, will NOT match ops/.env's compose credential). Re-run
-  # restore-postgres with that override, or run the parallel launcher with a
-  # temporary POSTGRES_PASSWORD override of its own, before pointing it here.
+  # Rotating the effective password: changing ACR_TRIAL_PG_PASSWORD and
+  # re-running `apply` updates the Secret object, but that alone does NOT
+  # rotate either running database's actual credential -- postgres only
+  # picks up a new devhealth password via restore-postgres's explicit
+  # ALTER ROLE step, and clickhouse only reads its `ch` user's password at
+  # container start, so its pod must be recreated too. `dsn`'s output
+  # above is only ever as current as those two steps.
 }
 
 cmd_restore_postgres() {
   require_kubeconfig
+  validate_password
   [[ $# -ge 1 ]] || die "usage: trial-data.sh restore-postgres <dump.sql.gz>"
   local dump="$1"
   [[ -f "$dump" ]] || die "not found: $dump"
@@ -172,6 +181,7 @@ cmd_restore_postgres() {
 
 cmd_restore_clickhouse() {
   require_kubeconfig
+  validate_password
   [[ $# -ge 1 ]] || die "usage: trial-data.sh restore-clickhouse <zip1> [zip2 ...]"
   local pod
   pod="$(kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')"
@@ -225,21 +235,34 @@ cmd_restore_clickhouse() {
 
 cmd_wipe() {
   require_kubeconfig
-  # Ownership check, not just name-format validation (codex xhigh review
-  # round 2, P1): a format-valid namespace name is not necessarily THIS
-  # script's own namespace -- ACR_TRIAL_DATA_NAMESPACE=acr-pilot passes the
-  # format check above and would otherwise let this delete an unrelated,
-  # pre-existing namespace (and everything in it) on this shared cluster.
-  # Every namespace this script creates carries the acr-trial-data-plane
-  # part-of label (trial-data.yaml); refuse to touch anything that either
-  # doesn't exist (nothing to protect) or doesn't carry it.
-  local owner
-  owner="$(kubectl get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/part-of}' 2>/dev/null || true)"
-  if [[ -n "$owner" && "$owner" != "acr-trial-data-plane" ]]; then
-    die "namespace $NAMESPACE exists but is NOT labeled app.kubernetes.io/part-of=acr-trial-data-plane (found: '$owner') -- refusing to wipe a namespace this script did not create"
+  # PRIMITIVE (team-lead design ruling, CHAOS-4186 round 3): three rounds
+  # of P1s against a label-based ownership check (fails open on an empty
+  # or erroring lookup; the label itself is adoptable by pointing
+  # ACR_TRIAL_DATA_NAMESPACE at an existing namespace and re-`apply`ing;
+  # get-then-delete is TOCTOU-racy with no UID/resourceVersion precondition)
+  # means the check was the wrong primitive, not under-guarded -- replaced
+  # rather than patched again. `wipe` never infers ownership: it deletes
+  # EXACTLY the named resources `apply` renders (Secret/Deployment/
+  # Service/PVC/ConfigMap, matched by kind+name, never "everything in this
+  # namespace"), which cannot touch an unrelated pre-existing resource no
+  # matter what ACR_TRIAL_DATA_NAMESPACE names. The Namespace document is
+  # filtered out of the stream first -- namespace deletion is handled
+  # separately below, deliberately NOT via -f, so it can never be driven
+  # by an operator-controlled value.
+  render | yq eval-all 'select(.kind != "Namespace")' - \
+    | kubectl -n "$NAMESPACE" delete --ignore-not-found --wait=true --timeout=180s -f -
+  # The namespace ITSELF is deleted only when it equals this script's own
+  # HARDCODED default -- a literal string compare against a constant, never
+  # the (possibly operator-overridden) $NAMESPACE variable, so no env
+  # value can ever point this specific delete at a different namespace.
+  # A non-default namespace keeps its own (now-empty) namespace object;
+  # the resources inside it are still gone from the delete above.
+  if [[ "$NAMESPACE" == "acr-trial-data" ]]; then
+    kubectl delete namespace --ignore-not-found --wait=true --timeout=180s -- acr-trial-data
+    log "trial data plane wiped (resources + namespace acr-trial-data deleted, PVCs gone)"
+  else
+    log "trial data plane resources wiped in namespace $NAMESPACE (namespace left in place -- wipe only ever deletes the namespace object itself when it is the hardcoded default acr-trial-data)"
   fi
-  kubectl delete namespace --ignore-not-found --wait=true --timeout=180s -- "$NAMESPACE"
-  log "trial data plane wiped (namespace $NAMESPACE deleted, PVCs gone)"
 }
 
 [[ $# -ge 1 ]] || usage
