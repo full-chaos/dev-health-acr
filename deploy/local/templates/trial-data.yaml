@@ -1,0 +1,397 @@
+# Standing trial data plane: postgres + clickhouse + falkordb (CHAOS-4186).
+#
+# Unlike deploy/local/templates/shard.yaml (ephemeral, no PVCs, reseeded per
+# trial), this is a PERSISTENT single instance of each store, seeded once
+# from a dev-health/backups/ dump and reused across trial runs -- the
+# two-turn harness's per-shard databases are then created as
+# CREATE DATABASE ... TEMPLATE clones INSIDE this standing postgres (the
+# same "template_clone" provisioning_mode the harness already uses against
+# compose postgres today; see internal/runtime/hosted's trialShardingProvenance
+# doc comment). Rendered by deploy/local/trial-data.sh, which substitutes
+# every __PLACEHOLDER__.
+#
+# Images match deploy/compose/acr.compose.yml and the root compose.yml
+# exactly: postgres:18-alpine (same digest shard.yaml pins), FalkorDB
+# 4.20.2/module 42002/Redis 8.6.3 (same digest), clickhouse/clickhouse-server
+# (compose runs :latest; pinned here to the digest resolved at build time by
+# trial-data.sh so the manifest stays reproducible -- see that script).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+---
+# Dev-only credentials for a local trial data plane. Not a production secret
+# contract -- trial-data.sh owns/overrides these.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trial-postgres
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "__PG_PASSWORD__"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trial-postgres-data
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: __PG_STORAGE__
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trial-postgres
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+    app.kubernetes.io/component: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: acr-trial-data-plane
+        app.kubernetes.io/component: postgres
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44
+          env:
+            # Bootstrap as the image's DEFAULT "postgres" superuser/db, not
+            # "devhealth": the seed dump (dev-health/backups/postgres-all-*
+            # .sql.gz, a plain pg_dumpall with no --clean) itself declares
+            # CREATE ROLE devhealth ... SUPERUSER and CREATE DATABASE acr --
+            # bootstrapping the container with POSTGRES_USER=devhealth would
+            # pre-create that role at initdb time and collide with the
+            # dump's own unconditional CREATE ROLE on restore (confirmed
+            # live: "ERROR: role devhealth already exists" on first attempt).
+            # "postgres"/"postgres" never appears in the dump's CREATE
+            # ROLE/CREATE DATABASE statements, so it never collides. The
+            # compose stack's own ACR_POSTGRES_DSN connects as devhealth
+            # post-restore (postgres://${POSTGRES_USER:-devhealth}@postgres/acr) --
+            # trial-data.sh's restore-postgres pins that role's password
+            # afterward so the printed DSN (cmd_dsn) matches.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trial-postgres
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: trial-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trial-postgres
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+    app.kubernetes.io/component: postgres
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      nodePort: __PG_NODEPORT__
+      protocol: TCP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trial-clickhouse-data
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: __CH_STORAGE__
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trial-clickhouse
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+    app.kubernetes.io/component: clickhouse
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: clickhouse
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: acr-trial-data-plane
+        app.kubernetes.io/component: clickhouse
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: clickhouse
+          image: __CH_IMAGE__
+          env:
+            - name: CLICKHOUSE_USER
+              value: ch
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trial-postgres
+                  key: POSTGRES_PASSWORD
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8123
+              protocol: TCP
+            - name: native
+              containerPort: 9000
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: backups
+              mountPath: /backups
+            - name: backup-disk-config
+              mountPath: /etc/clickhouse-server/config.d/backup-disk.xml
+              subPath: backup-disk.xml
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          startupProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: trial-clickhouse-data
+        - name: backups
+          persistentVolumeClaim:
+            claimName: trial-clickhouse-backups
+        - name: backup-disk-config
+          configMap:
+            name: trial-clickhouse-backup-disk
+---
+# /backups is where the restore job (trial-data.sh restore-clickhouse)
+# extracts dev-health/backups/clickhouse-*.zip (each one a `BACKUP DATABASE
+# ... TO Disk(...)` archive tree -- metadata/+data/ -- that the zip merely
+# wraps for transport) and copies the extracted directory in. This registers
+# that path as a named backup disk so `RESTORE DATABASE ... FROM
+# Disk('trial_backups', '<dirname>')` can read it -- this server build has
+# no 'Zip' backup engine compiled in (confirmed live: BACKUP_ENGINE_NOT_FOUND
+# restoring straight from the .zip), so the client-side unzip in
+# trial-data.sh is required, not optional.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trial-clickhouse-backup-disk
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+data:
+  backup-disk.xml: |
+    <clickhouse>
+      <storage_configuration>
+        <disks>
+          <trial_backups>
+            <type>local</type>
+            <path>/backups/</path>
+          </trial_backups>
+        </disks>
+      </storage_configuration>
+      <backups>
+        <allowed_disk>trial_backups</allowed_disk>
+        <allowed_path>/backups/</allowed_path>
+      </backups>
+    </clickhouse>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trial-clickhouse-backups
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: __CH_BACKUPS_STORAGE__
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trial-clickhouse
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+    app.kubernetes.io/component: clickhouse
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: http
+      nodePort: __CH_HTTP_NODEPORT__
+      protocol: TCP
+    - name: native
+      port: 9000
+      targetPort: native
+      nodePort: __CH_NATIVE_NODEPORT__
+      protocol: TCP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trial-falkordb-data
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: __FALKOR_STORAGE__
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trial-falkordb
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+    app.kubernetes.io/component: falkordb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: falkordb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: acr-trial-data-plane
+        app.kubernetes.io/component: falkordb
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: falkordb
+          image: falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3
+          env:
+            - name: BROWSER
+              value: "0"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          # /var/lib/falkordb/data, not /data -- matches the FALKORDB_DATA_PATH
+          # correction the helm chart's own falkordb block documents (the
+          # compose service's /data mount predates that image layout and does
+          # not capture where redis-server --dir actually writes).
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/falkordb/data
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          startupProbe:
+            exec:
+              command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: trial-falkordb-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trial-falkordb
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: acr-trial-data-plane
+    app.kubernetes.io/component: falkordb
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: falkordb
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      nodePort: __FALKOR_NODEPORT__
+      protocol: TCP

@@ -75,6 +75,13 @@ else
   trial_secret() { printf 'plan-only'; }
   require_outside_repo_tree() { :; }
   ACR_TRIAL_RESULTS_DIR="${ACR_TRIAL_RESULTS_DIR:-${TMPDIR:-/tmp}}"
+  # Unset any ACR_TEST_TRIAL_PG_* left exported by an EARLIER live
+  # invocation in this same shell (codex xhigh review, fresh cycle round 1,
+  # P2): the stub above never sets these, but PG_HOST/PG_PORT's own
+  # fallback chain below checks them first -- without this, a stale
+  # ambient value would silently override what THIS plan-only invocation's
+  # own ACR_TRIAL_PG_HOST/PORT diagnostic-relay tier was asked to preview.
+  unset ACR_TEST_TRIAL_PG_HOST ACR_TEST_TRIAL_PG_PORT ACR_TEST_TRIAL_PG_USER ACR_TEST_TRIAL_PG_PASSWORD
 fi
 
 ANNEX_PATH="${1:?usage: run-two-turn-parallel.sh <oracle-annex-path> [limit] [shard-count]}"
@@ -115,39 +122,10 @@ export ACR_TEST_TRIAL_RESPONDER_MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}"
 # only observable by running a full trial.
 PLAN_ONLY="${ACR_TRIAL_SHARD_PLAN_ONLY:-0}"
 
-# PG_HOST/PG_PORT (CHAOS-4116): the standing instance's own host/port,
-# overridable via ACR_TRIAL_PG_HOST/ACR_TRIAL_PG_PORT -- default UNCHANGED
-# (127.0.0.1:5432, every existing invocation byte-identical). Defined here,
-# early and ONCE, so psql_admin/template_dsn/SHARD_DSN below all read the
-# SAME two variables rather than each carrying its own copy of the literal
-# -- before this ticket 127.0.0.1:5432 was hardcoded independently in all
-# three places, so an override could reach two sites and silently miss the
-# third. Set before the PLAN_ONLY exit below (and printed there) so the
-# override is verifiable offline, without a live stack.
-#
-# Exists for the CHAOS-4100 A/B incident's own diagnostic pattern (a
-# same-network relay bypassing a misbehaving Docker Desktop host
-# port-forward -- see the scoped-kill skill) and for future kiac/remote
-# postgres substrates, neither of which should ever need a script edit.
-PG_HOST="${ACR_TRIAL_PG_HOST:-127.0.0.1}"
-PG_PORT="${ACR_TRIAL_PG_PORT:-5432}"
-
-# PG_USER/PG_PASSWORD moved up from their pre-CHAOS-4116 position (just
-# before template provisioning) to sit beside PG_HOST/PG_PORT -- trial_pg_dsn
-# just below needs all four, and the PLAN_ONLY block further down needs to
-# call it. trial_secret is a no-op stand-in (returns "plan-only") in
-# PLAN_ONLY mode, so this costs nothing there; for a live run it is
-# unchanged from before, just executed a few lines earlier.
-PG_USER="$(trial_secret POSTGRES_USER)"
-PG_PASSWORD="$(trial_secret POSTGRES_PASSWORD)"
-
-# trial_pg_dsn (CHAOS-4116) is the ONE place a postgres:// DSN is built --
-# template_dsn and SHARD_DSN below both call this rather than each carrying
-# its own copy of the string template, so a host/port override is
-# structurally incapable of reaching one and missing the other.
-trial_pg_dsn() {
-  printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' "$PG_USER" "$PG_PASSWORD" "$PG_HOST" "$PG_PORT" "$1"
-}
+# PG_HOST/PG_PORT/PG_USER/PG_PASSWORD and trial_pg_dsn are defined further
+# down, right after trial_wire_common_env is called -- see that site's own
+# comment (CHAOS-4186 round-3 design ruling) for why this moved off of
+# ACR_TRIAL_PG_HOST/PORT + its own ops/.env read.
 
 if ! [[ "$MAX_CONCURRENT" =~ ^[0-9]+$ ]] || [[ "$MAX_CONCURRENT" -lt 1 ]]; then
   echo "run-two-turn-parallel.sh: ACR_TRIAL_MAX_CONCURRENT_SHARDS must be a positive integer, got $MAX_CONCURRENT" >&2
@@ -192,6 +170,36 @@ require_outside_repo_tree() {
 plan_only_requested || require_outside_repo_tree "TMPDIR" "${TMPDIR:-/tmp}"
 
 trial_wire_common_env
+
+# PG_HOST/PG_PORT/PG_USER/PG_PASSWORD (CHAOS-4116, re-anchored CHAOS-4186
+# round-3 design ruling): this script derives NOTHING of its own postgres
+# connection anymore -- it reads exactly what trial_wire_common_env just
+# resolved for ACR_TRIAL_DATA_PLANE, the SAME single switch every other
+# trial store (Falkor/ClickHouse) moves with. This used to independently
+# read ACR_TRIAL_PG_HOST/PORT plus its own ops/.env credential lookup,
+# which let an operator move ONLY Postgres to kiac while Falkor/ClickHouse
+# silently stayed on compose (codex xhigh review round 3, P1/High) -- a
+# hybrid measurement with no error. The middle-tier ACR_TRIAL_PG_HOST/PORT
+# fallback below is PLAN-ONLY-ONLY: ACR_TRIAL_SHARD_PLAN_ONLY=1 stubs
+# trial_wire_common_env to a no-op (see the top of this file) specifically
+# so the offline layout preview needs no live stack or ops/.env -- its own
+# CHAOS-4100 A/B diagnostic-relay override still works exactly as before,
+# entirely offline. This tier is inert for a live run: the all-or-none
+# guard above refuses a lone ACR_TRIAL_PG_HOST before trial_wire_common_env
+# is ever called, so live mode always falls through to what
+# trial_wire_common_env actually resolved (or its own 127.0.0.1 default).
+PG_HOST="${ACR_TEST_TRIAL_PG_HOST:-${ACR_TRIAL_PG_HOST:-127.0.0.1}}"
+PG_PORT="${ACR_TEST_TRIAL_PG_PORT:-${ACR_TRIAL_PG_PORT:-5432}}"
+PG_USER="${ACR_TEST_TRIAL_PG_USER:-$(trial_secret POSTGRES_USER)}"
+PG_PASSWORD="${ACR_TEST_TRIAL_PG_PASSWORD:-$(trial_secret POSTGRES_PASSWORD)}"
+
+# trial_pg_dsn (CHAOS-4116) is the ONE place a postgres:// DSN is built --
+# template_dsn and SHARD_DSN below both call this rather than each carrying
+# its own copy of the string template, so a host/port override is
+# structurally incapable of reaching one and missing the other.
+trial_pg_dsn() {
+  printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' "$PG_USER" "$PG_PASSWORD" "$PG_HOST" "$PG_PORT" "$1"
+}
 # CHAOS-4100 (post-4108-fix graph rebuild incident): trial_wire_graph_lifecycle_env
 # is only DEFINED by the real common.sh sourced above -- plan-only mode never
 # sources it (its trial_wire_common_env stub reaches no database and needs

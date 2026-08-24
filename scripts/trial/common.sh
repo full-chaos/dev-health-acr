@@ -186,16 +186,191 @@ trial_secret() {
   grep -E "^$1=" "$ops_env" | cut -d= -f2- | tr -d '"'
 }
 
+# ACR_TRIAL_DATA_PLANE (CHAOS-4186 round-3 design ruling; replaces the
+# per-store `:=` override this file carried before): ONE switch moves ALL
+# THREE trial stores together -- "kiac" (default -- chris's standing order,
+# 2026-08-24: kiac is THE trial stack for every run, no comparability
+# exception) or "compose" (legacy fallback, kept for anyone still standing
+# up compose locally). The prior design let a caller override individual
+# ACR_TEST_TRIAL_* endpoints piecemeal; codex xhigh review round 3 found
+# that run-two-turn-parallel.sh's own Postgres override reached only
+# Postgres, silently leaving FalkorDB/ClickHouse on compose -- a hybrid
+# measurement with no error. A single switch makes that class of bug
+# structurally impossible: there is no partial state to land in between
+# "compose" and "kiac".
+: "${ACR_TRIAL_DATA_PLANE:=kiac}"
+
+# Escape hatch, ALL-OR-NONE: six raw host/port vars (postgres, clickhouse,
+# falkor) let an operator point at something neither switch value names
+# (e.g. a one-off diagnostic relay -- see run-two-turn-parallel.sh's own
+# CHAOS-4100 A/B incident note). Setting ANY one requires setting every
+# other one too -- a partial set is indistinguishable from "forgot one",
+# which is exactly the silent-hybrid bug class this file exists to close,
+# so it fails closed with the missing names listed rather than filling the
+# gap from whichever switch value happens to be in effect.
+_acr_trial_override_names=(ACR_TRIAL_PG_HOST ACR_TRIAL_PG_PORT ACR_TRIAL_CH_HOST ACR_TRIAL_CH_PORT ACR_TRIAL_FALKOR_HOST ACR_TRIAL_FALKOR_PORT)
+_acr_trial_override_set=0
+_acr_trial_override_missing=()
+for _acr_trial_override_name in "${_acr_trial_override_names[@]}"; do
+  if [[ -n "${!_acr_trial_override_name:-}" ]]; then
+    _acr_trial_override_set=1
+  else
+    _acr_trial_override_missing+=("$_acr_trial_override_name")
+  fi
+done
+if [[ "$_acr_trial_override_set" == "1" && "${#_acr_trial_override_missing[@]}" -gt 0 ]]; then
+  echo "common.sh: partial per-store override -- set ${_acr_trial_override_names[*]} together, or set none of them (missing: ${_acr_trial_override_missing[*]})" >&2
+  exit 1
+fi
+
 trial_wire_common_env() {
   export ACR_POSTGRES_CONNECTION_KIND=direct
   export ACR_TEST_TRIAL_CORPUS="$ACR_TRIAL_CORPUS"
   export ACR_TEST_TRIAL_ORG="$ACR_TRIAL_ORG"
-  export ACR_TEST_TRIAL_FALKOR_ADDR=127.0.0.1:16379
-  export ACR_TEST_TRIAL_POSTGRES_DSN="postgres://$(trial_secret POSTGRES_USER):$(trial_secret POSTGRES_PASSWORD)@127.0.0.1:5432/acr?sslmode=disable"
-  export ACR_TEST_TRIAL_CLICKHOUSE_DSN="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@127.0.0.1:9000/$(trial_secret CLICKHOUSE_DB)"
+
+  local pg_host pg_port pg_user pg_password ch_dsn falkor_addr data_plane_label
+
+  if [[ "$_acr_trial_override_set" == "1" ]]; then
+    # data_plane_label is deliberately NOT "$ACR_TRIAL_DATA_PLANE" here
+    # (codex xhigh review, fresh cycle round 1, P1): the six-var escape
+    # hatch's all-or-none check only proves COMPLETENESS (all six set),
+    # never COHERENCE -- nothing stops an operator pointing the PG pair at
+    # kiac and the CH/Falkor pair at compose, an explicit mixed-plane run.
+    # Reporting that as "kiac" (or "compose") in the provenance/telemetry
+    # line below would be a false claim about which stack the run actually
+    # hit; "override" self-declares as non-standard instead.
+    data_plane_label="override"
+    pg_host="$ACR_TRIAL_PG_HOST"; pg_port="$ACR_TRIAL_PG_PORT"
+    pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
+    ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@${ACR_TRIAL_CH_HOST}:${ACR_TRIAL_CH_PORT}/$(trial_secret CLICKHOUSE_DB)"
+    falkor_addr="${ACR_TRIAL_FALKOR_HOST}:${ACR_TRIAL_FALKOR_PORT}"
+  elif [[ "$ACR_TRIAL_DATA_PLANE" == "kiac" ]]; then
+    data_plane_label="kiac"
+    # deploy/local/trial-data.sh dsn --env resolves ALL THREE endpoints in
+    # one call, reading the credential from the LIVE cluster secret --
+    # never independently re-derived here, so this can never drift from
+    # what the kiac data plane actually has seeded. Structured key=value
+    # output (team-lead design ruling, CHAOS-4186 fresh review cycle,
+    # residual finding 6), NOT a DSN string to split on `:`/`@` -- that
+    # was delimiter-dependent and broke on an IPv6 host or an `@` in the
+    # password.
+    #
+    # Read line-by-line and assign directly -- NEVER `eval` subprocess
+    # output (team-lead ruling, CHAOS-4186 round 3 follow-up): round 3
+    # found that even `printf %q`-quoted eval'd text isn't safe, because
+    # merged stderr (an incidental kubectl warning) could reach the
+    # eval'd string, and the key-renaming rewrite done before eval could
+    # corrupt a value. Both were symptoms of shell-interpreting a
+    # subprocess's output at all. Splitting on the first `=` and
+    # allowlisting the key via a fixed `case` (any other key is a hard
+    # error, as is a missing expected key) closes the injection class
+    # structurally instead of patching each symptom.
+    #
+    # stdout only, deliberately NOT `2>&1`: an incidental kubectl warning
+    # on stderr must never reach this loop. On failure only, the command
+    # is re-run once with stderr merged purely for the diagnostic message.
+    #
+    # ACR_TRIAL_KIAC_DSN_BIN overrides which executable is asked for
+    # `dsn --env`, defaulting to the real trial-data.sh -- a testability
+    # hook (same shape as ACR_TRIAL_PSQL_ADMIN_SELFTEST elsewhere in this
+    # directory) letting test-kiac-dsn-reader.sh exercise this parser
+    # against fabricated output without a live cluster. Substituting the
+    # BINARY, never the args or an eval'd command string, so this stays
+    # inert to injection the same way the real path is.
+    local kiac_dsn_bin="${ACR_TRIAL_KIAC_DSN_BIN:-deploy/local/trial-data.sh}"
+    local kiac_env_output
+    if ! kiac_env_output="$(cd "$repo_root" && "$kiac_dsn_bin" dsn --env 2>/dev/null)"; then
+      local kiac_env_diag
+      kiac_env_diag="$(cd "$repo_root" && "$kiac_dsn_bin" dsn --env 2>&1 >/dev/null)"
+      echo "common.sh: ACR_TRIAL_DATA_PLANE=kiac but '$kiac_dsn_bin dsn --env' failed -- is the kiac trial data plane applied and KUBECONFIG set? output:" >&2
+      echo "$kiac_env_diag" >&2
+      exit 1
+    fi
+    # Prefixed _kiac_env_* names, deliberately NOT the ACR_TEST_TRIAL_*
+    # names this function exports further down: `local
+    # ACR_TEST_TRIAL_PG_HOST` here would shadow that later `export
+    # ACR_TEST_TRIAL_PG_HOST=...` -- export on an already-local variable
+    # exports the LOCAL binding, which is erased the moment this function
+    # returns, silently discarding it from every caller (confirmed live:
+    # "ACR_TEST_TRIAL_PG_HOST: unbound variable" in the calling shell
+    # despite this function completing without error).
+    local _kiac_env_PG_HOST="" _kiac_env_PG_PORT="" _kiac_env_PG_USER="" _kiac_env_PG_PASSWORD="" _kiac_env_PG_DB=""
+    local _kiac_env_CH_HOST="" _kiac_env_CH_PORT="" _kiac_env_CH_HTTP_PORT="" _kiac_env_CH_USER="" _kiac_env_CH_PASSWORD="" _kiac_env_CH_DB=""
+    local _kiac_env_FALKOR_HOST="" _kiac_env_FALKOR_PORT=""
+    local kiac_env_count=0 kiac_line kiac_key kiac_value
+    while IFS= read -r kiac_line; do
+      [[ -z "$kiac_line" ]] && continue
+      kiac_key="${kiac_line%%=*}"
+      kiac_value="${kiac_line#*=}"
+      kiac_env_count=$((kiac_env_count + 1))
+      case "$kiac_key" in
+        ACR_TEST_TRIAL_PG_HOST) _kiac_env_PG_HOST="$kiac_value" ;;
+        ACR_TEST_TRIAL_PG_PORT) _kiac_env_PG_PORT="$kiac_value" ;;
+        ACR_TEST_TRIAL_PG_USER) _kiac_env_PG_USER="$kiac_value" ;;
+        ACR_TEST_TRIAL_PG_PASSWORD) _kiac_env_PG_PASSWORD="$kiac_value" ;;
+        ACR_TEST_TRIAL_PG_DB) _kiac_env_PG_DB="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_HOST) _kiac_env_CH_HOST="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_PORT) _kiac_env_CH_PORT="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_HTTP_PORT) _kiac_env_CH_HTTP_PORT="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_USER) _kiac_env_CH_USER="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_PASSWORD) _kiac_env_CH_PASSWORD="$kiac_value" ;;
+        ACR_TEST_TRIAL_CH_DB) _kiac_env_CH_DB="$kiac_value" ;;
+        ACR_TEST_TRIAL_FALKOR_HOST) _kiac_env_FALKOR_HOST="$kiac_value" ;;
+        ACR_TEST_TRIAL_FALKOR_PORT) _kiac_env_FALKOR_PORT="$kiac_value" ;;
+        *)
+          echo "common.sh: 'trial-data.sh dsn --env' emitted an unrecognized key '$kiac_key' -- refusing to assign it" >&2
+          exit 1
+          ;;
+      esac
+    done <<<"$kiac_env_output"
+    [[ "$kiac_env_count" -eq 13 ]] || { echo "common.sh: 'trial-data.sh dsn --env' emitted $kiac_env_count line(s), expected exactly 13" >&2; exit 1; }
+    local _kiac_env_v
+    for _kiac_env_v in _kiac_env_PG_HOST _kiac_env_PG_PORT _kiac_env_PG_USER _kiac_env_PG_PASSWORD _kiac_env_PG_DB \
+                       _kiac_env_CH_HOST _kiac_env_CH_PORT _kiac_env_CH_HTTP_PORT _kiac_env_CH_USER _kiac_env_CH_PASSWORD _kiac_env_CH_DB \
+                       _kiac_env_FALKOR_HOST _kiac_env_FALKOR_PORT; do
+      [[ -n "${!_kiac_env_v}" ]] || { echo "common.sh: 'trial-data.sh dsn --env' did not set $_kiac_env_v (empty or missing)" >&2; exit 1; }
+    done
+    pg_host="$_kiac_env_PG_HOST"; pg_port="$_kiac_env_PG_PORT"
+    pg_user="$_kiac_env_PG_USER"; pg_password="$_kiac_env_PG_PASSWORD"
+    ch_dsn="clickhouse://${_kiac_env_CH_USER}:${_kiac_env_CH_PASSWORD}@${_kiac_env_CH_HOST}:${_kiac_env_CH_PORT}/${_kiac_env_CH_DB}"
+    falkor_addr="${_kiac_env_FALKOR_HOST}:${_kiac_env_FALKOR_PORT}"
+  elif [[ "$ACR_TRIAL_DATA_PLANE" == "compose" ]]; then
+    data_plane_label="compose"
+    pg_host="127.0.0.1"; pg_port="5432"
+    pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
+    ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@127.0.0.1:9000/$(trial_secret CLICKHOUSE_DB)"
+    falkor_addr="127.0.0.1:16379"
+  else
+    echo "common.sh: ACR_TRIAL_DATA_PLANE must be 'compose' or 'kiac', got '$ACR_TRIAL_DATA_PLANE'" >&2
+    exit 1
+  fi
+
+  export ACR_TEST_TRIAL_FALKOR_ADDR="$falkor_addr"
+  export ACR_TEST_TRIAL_POSTGRES_DSN="postgres://${pg_user}:${pg_password}@${pg_host}:${pg_port}/acr?sslmode=disable"
+  export ACR_TEST_TRIAL_CLICKHOUSE_DSN="$ch_dsn"
+  # Raw components, not just the composed DSN above: run-two-turn-parallel.sh
+  # needs these to build a PER-SHARD Postgres DSN (same host/port/user/
+  # password, different database name each shard) -- see that script's own
+  # PG_HOST/PG_PORT/PG_USER/PG_PASSWORD, which read these instead of
+  # deriving their own connection independently (the exact class of bug
+  # that produced round 3's hybrid-measurement finding).
+  export ACR_TEST_TRIAL_PG_HOST="$pg_host"
+  export ACR_TEST_TRIAL_PG_PORT="$pg_port"
+  export ACR_TEST_TRIAL_PG_USER="$pg_user"
+  export ACR_TEST_TRIAL_PG_PASSWORD="$pg_password"
   export ACR_TEST_TRIAL_EMBED_MODEL=text-embedding-3-large
   export ACR_TEST_TRIAL_EMBED_DIMENSION=3072
   export ACR_TEST_TRIAL_EMBED_API_KEY="$(trial_secret OPENAI_API_KEY)"
+
+  # Seeds the queued `data_plane` report-provenance field (schema tip+1,
+  # separate small PR): exported so a future producer can read it directly
+  # rather than re-inferring it from a host string, and printed at every
+  # launcher's own start so which stack a run hit is visible immediately.
+  # "override" (not a false "compose"/"kiac" claim) when the six-var escape
+  # hatch is in play -- see that branch's own comment on why coherence
+  # isn't provable here. Never prints a credential.
+  export ACR_TEST_TRIAL_DATA_PLANE="$data_plane_label"
+  echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port} ch=$(sed -E 's#.*@##' <<<"$ch_dsn") falkor=$falkor_addr" >&2
 }
 
 # trial_wire_graph_lifecycle_env (CHAOS-3916, local/trial slice) is

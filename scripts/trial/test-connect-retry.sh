@@ -20,6 +20,16 @@
 # real SQL error" FAIL. Both confirmed during development, then reverted.
 set -euo pipefail
 
+# CHAOS-4186 fresh review cycle: ACR_TRIAL_DATA_PLANE now defaults to
+# "kiac" (chris's standing order). Pinned to "compose" for the WHOLE file,
+# not just one case: every check here tests psql_admin's own -h/-p wiring
+# against a fake psql, never the real kiac cluster, so none of them should
+# depend on live infra (a kiac cluster with KUBECONFIG set) being present
+# wherever this runs. Cases exercising the six-var escape hatch (2, 2b)
+# are unaffected -- that override branch takes priority over
+# ACR_TRIAL_DATA_PLANE regardless of its value.
+export ACR_TRIAL_DATA_PLANE=compose
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 launcher="$script_dir/run-two-turn-parallel.sh"
 tmp="$(mktemp -d)"
@@ -75,21 +85,41 @@ run_selftest() {
   echo $?
 }
 
-# 1. Default host/port (no override): psql_admin calls -h 127.0.0.1 -p 5432.
+# 1. compose plane (no per-store override, this file's pinned plane):
+# psql_admin calls -h 127.0.0.1 -p 5432.
 fake_psql "0"
 run_selftest >/dev/null
-check "default host/port reaches psql_admin" \
+check "compose plane's default host/port reaches psql_admin" \
   "1" \
   "$(grep -c -- '-h 127.0.0.1 -p 5432' "$tmp/calls.log")"
 
-# 2. ACR_TRIAL_PG_HOST/PORT override reaches psql_admin's actual -h/-p flags
-# (the third construction site -- template_dsn/SHARD_DSN are covered by
-# test-shard-plan.sh's trial_pg_dsn check; this one is psql_admin's own).
+# 2. The six-var escape hatch's PG pair reaches psql_admin's actual -h/-p
+# flags (the third construction site -- template_dsn/SHARD_DSN are covered
+# by test-shard-plan.sh's trial_pg_dsn check; this one is psql_admin's
+# own). CHAOS-4186 round-3 design ruling: common.sh now requires ALL SIX
+# ACR_TRIAL_{PG,CH,FALKOR}_{HOST,PORT} vars together (partial set = hard
+# error) -- the postgres-only override this test used to exercise is
+# exactly the gap that let a caller move Postgres to kiac while
+# Falkor/ClickHouse silently stayed on compose, so setting only the PG
+# pair now correctly refuses rather than reaching psql_admin.
 fake_psql "0"
-run_selftest env ACR_TRIAL_PG_HOST=pgrelay.internal ACR_TRIAL_PG_PORT=15432 >/dev/null
-check "host/port override reaches psql_admin" \
+run_selftest env \
+  ACR_TRIAL_PG_HOST=pgrelay.internal ACR_TRIAL_PG_PORT=15432 \
+  ACR_TRIAL_CH_HOST=chrelay.internal ACR_TRIAL_CH_PORT=19000 \
+  ACR_TRIAL_FALKOR_HOST=falkorrelay.internal ACR_TRIAL_FALKOR_PORT=16380 \
+  >/dev/null
+check "six-var escape hatch's PG pair reaches psql_admin" \
   "1" \
   "$(grep -c -- '-h pgrelay.internal -p 15432' "$tmp/calls.log")"
+
+# 2b. A PARTIAL set (PG pair only, the old single-store override shape)
+# must be refused, not silently reach psql_admin with the other two
+# stores left on whatever ACR_TRIAL_DATA_PLANE resolves.
+fake_psql "0"
+partial_status="$(run_selftest env ACR_TRIAL_PG_HOST=pgrelay.internal ACR_TRIAL_PG_PORT=15432 || echo "$?")"
+check "partial PG-only override is refused, not silently accepted" \
+  "1" \
+  "$([[ "$partial_status" != "0" ]] && echo 1 || echo 0)"
 
 # 3. Retry: exit 2 ("could not connect") twice, then succeed. psql_admin
 # must retry exactly twice more (3 calls total) and return success.
