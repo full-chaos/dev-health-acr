@@ -45,8 +45,11 @@ kiac resume cluster --name <cluster> --wait 5m
 ```
 Two things to check afterward, every time:
 - **The node's IP can change** -- vmnet reassigns addresses on VM boot.
-  Check `container list -a` for the live IP and compare against what
-  `deploy/local/trial-data.sh dsn --env` / your kubeconfig say.
+  Check `container list -a` for the live IP and compare against the
+  kubeconfig's own `server:` line (`grep server .tmp/kiac/<cluster>/
+  kubeconfig`) -- don't reach for `trial-data.sh dsn --env` just to check
+  an IP: it also prints the live PG/CH passwords to stdout as a side
+  effect, which this check doesn't need.
 - **`kiac resume` does NOT reliably rewrite the kubeconfig's server IP** --
   if `kubectl` times out with `dial tcp <old-ip>:6443` after a resume that
   reported success, hand-edit `.tmp/kiac/<cluster>/kubeconfig`'s `server:`
@@ -437,16 +440,23 @@ kiac load image dev-health-acr:dev --name acr-local
 # (that reads ops/.env, a completely different, host-side credential
 # store unrelated to what the trial data plane pods were actually
 # seeded with):
-kubectl -n acr-trial-data get secret trial-postgres \
-  -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d
-# Build each DSN as postgres://devhealth:<that password>@trial-postgres.
+# Capture into a shell variable -- never let the raw password reach stdout
+# (no bare `| base64 -d` with no destination):
+PG_PASSWORD=$(kubectl -n acr-trial-data get secret trial-postgres \
+  -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
+# Build each DSN as postgres://devhealth:$PG_PASSWORD@trial-postgres.
 # acr-trial-data.svc.cluster.local:5432/acr?sslmode=disable (clickhouse
 # analogous, user `ch`, same password -- see trial-data.sh's own Secret
-# comment for why postgres/clickhouse share one password), base64-encode
-# into acr-runtime-credentials' ACR_POSTGRES_DSN/ACR_POSTGRES_MIGRATION_DSN/
-# ACR_CLICKHOUSE_DSN keys, and `kubectl -n acr-pilot apply -f` the result.
+# comment for why postgres/clickhouse share one password). Generate the
+# Secret manifest directly from the variable (`kubectl create secret
+# generic ... --from-literal=ACR_POSTGRES_DSN="postgres://devhealth:
+# $PG_PASSWORD@..." --dry-run=client -o yaml | kubectl apply -f -`) rather
+# than writing the DSN to an intermediate file or printing it to compose
+# one by hand -- the goal throughout is that the password is never
+# rendered to a terminal or a file you'd have to remember to delete.
 # Never hand-edit an EXISTING Secret's password to "whatever looks
 # right" -- always re-derive it from the live trial-postgres Secret above.
+unset PG_PASSWORD
 # redeploy acr-pilot via its own owner's normal deploy path (stateless, no
 # PVC -- no data loss there, just needs a fresh rollout after the recreate)
 ```
