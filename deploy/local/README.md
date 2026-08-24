@@ -179,7 +179,37 @@ fixed here.
    graph) `ACR_CONTEXT_FABRIC_EMBED_*` pointed at a working embed credential --
    an unconfigured or blank-key embedder is either skipped cleanly (unset) or
    refused at startup (configured-but-blank, CHAOS-4192 guard); never silently
-   degrades.
+   degrades in the sense of erroring, but "skipped cleanly" LOOKS identical to a
+   healthy run in the logs -- zero ERROR lines, structural projection completes
+   normally, `embedded:0` on every batch is the only tell. Real incident hit
+   live during the CHAOS-4186 VM resize: a bare `go run ./cmd/acr-projector
+   serve/rebuild` on the kiac plane carried the FALKOR/PG/CH/lifecycle vars but
+   NONE of the embed family, so the embedder was never constructed at all --
+   35,989 structural nodes built with 0 errors and 0 embeddings.
+
+   The `ACR_CONTEXT_FABRIC_EMBED_*` family (7 vars) is NOT in `ops/.env` --
+   that file only has `OPENAI_API_KEY`. The compose plane's
+   `compose.override.yml:119-127` does the mapping for you (`docker compose
+   --env-file ops/.env up` substitutes `${OPENAI_API_KEY:-}` into
+   `ACR_CONTEXT_FABRIC_EMBED_API_KEY`); a bare `go run` launch on the kiac
+   plane is NOT docker compose, so no substitution happens -- you must set the
+   whole family yourself, sourcing the key from `ops/.env`'s `OPENAI_API_KEY`:
+   ```
+   ACR_CONTEXT_FABRIC_EMBED_BASE_URL=https://api.openai.com/v1
+   ACR_CONTEXT_FABRIC_EMBED_PROVIDER=openai
+   ACR_CONTEXT_FABRIC_EMBED_MODEL=text-embedding-3-large
+   ACR_CONTEXT_FABRIC_EMBED_DIMENSION=3072
+   ACR_CONTEXT_FABRIC_EMBED_API_KEY=<value of OPENAI_API_KEY from ops/.env>
+   ACR_CONTEXT_FABRIC_EMBED_TIMEOUT=45s
+   ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES=5
+   ```
+   Keep this list in sync with `compose.override.yml` (that file, not ops/.env,
+   is the source of truth for these 7 names and their known-working values) --
+   if it drifts, fix here to match there, not the other way around. If a
+   rebuild/serve run ever completes with `embedded:0` on every batch and no
+   ERROR lines, this is the first thing to check: `ps eww -p <pid> | tr ' '
+   '\n' | grep ACR_CONTEXT_FABRIC_EMBED_` against the launched process and
+   confirm all 7 names are present (never print the values).
 7. **A rebuild opens a 24h-graced epoch** (default
    `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_GRACE_WINDOW`) -- running `rebuild`
    again (e.g. because the first attempt lacked embed credentials) hits
