@@ -165,7 +165,14 @@ fi
 # The withheld corpus and the trial-results output dir live in the parent
 # dev-health checkout's .remember/ (outside this repo, never committed
 # anywhere) -- overridable, defaulted to this trial's known paths.
-: "${ACR_TRIAL_CORPUS:=$dev_health_root/.remember/acr-3778-corpus-frozen-annotated.json}"
+#
+# CURRENT default (2026-08-24): ext65, paired with the signed
+# .remember/trial-results/oracle-annex-v2-ext65.json -- acr-3778-corpus-frozen-annotated.json
+# is the CHAOS-3860 holdout and is eval-only forever (never a live-trial
+# default; see docs/design/context-fabric-panel-run-manifest.md §4). Before
+# changing this default again, confirm the new corpus's sha256 against a
+# recent successful run's own provenance.corpus_sha256.
+: "${ACR_TRIAL_CORPUS:=$dev_health_root/.remember/acr-3778-corpus-ext65.json}"
 : "${ACR_TRIAL_RESULTS_DIR:=$dev_health_root/.remember/trial-results}"
 : "${ACR_TRIAL_ORG:=70d529e0-3c06-4597-8480-794fd02328b6}"
 mkdir -p "$ACR_TRIAL_RESULTS_DIR"
