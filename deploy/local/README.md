@@ -241,6 +241,20 @@ volume object `container` could reattach -- so the ONLY way to change
 CPU/memory is `kiac.sh down` + `kiac.sh up`, which provisions a fresh
 `rootfs.ext4` and **destroys all PVC-backed data on the node**.
 
+**Step 0, before any of the below: kill every process holding connections to
+the OLD cluster.** The recreated VM reuses the same NodePort IP:port pairs
+(container networking assigns them fresh, but kiac's fixed NodePorts mean a
+leftover `acr-projector serve`/`rebuild` from an earlier session can end up
+pointed at the NEW cluster's endpoints without anyone restarting it -- CHAOS-
+4186 hit this live: a 7-hour-old orphaned `acr-projector serve` from an
+unrelated earlier investigation raced the fresh rebuild's epoch lifecycle
+over the SAME org, producing a `checkpoint held for replay`/`failure_class:
+canceled` tick-cancellation storm indistinguishable at first glance from a
+genuine infra problem). Pre-flight before `rebuild`/`serve`:
+`procs --json 'acr-projector'` must return empty (besides the one you are
+about to launch). Kill anything it finds via the scoped-kill discipline
+(confirm ownership via cwd first) before proceeding.
+
 Recipe (run only when no lane is mid-run on kiac; coordinate first):
 
 ```bash
@@ -253,6 +267,8 @@ deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ORIGINAL Aug-1
 deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ORIGINAL Aug-17 ts>.zip
 # apply acr DB migrations up to the ratified schema version (NOT the dump's
 # own version -- the dump predates several migrations)
+procs --json 'acr-projector'                                  # MUST be empty before the next step -- see
+                                                                # Step 0 above; kill any survivor first
 # rebuild the falkordb graph via acr-projector (CHAOS-3898 build-aside-and-
 # swap: rollback if a stale epoch exists, rebuild to completion, THEN serve
 # -- CHAOS-4208 is fixed upstream now, so no special unblock recipe needed)
