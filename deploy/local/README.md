@@ -107,6 +107,18 @@ deploy/local/trial-data.sh wipe     # destroys the namespace INCL. PVCs
 | Persistence | PVCs for postgres/clickhouse/falkordb data (`ACR_TRIAL_PG_STORAGE`/`ACR_TRIAL_CH_STORAGE`/`ACR_TRIAL_FALKOR_STORAGE`, defaults 20Gi/30Gi/5Gi) -- survives `apply`/pod restarts; only `wipe` destroys it |
 | Images | postgres:18-alpine (same digest as `shard.yaml`), falkordb (same digest), clickhouse pinned to the digest resolved from the live compose container at build time (`ACR_TRIAL_CH_IMAGE` override) -- parity with whatever the compose baseline was measured under, not an arbitrary tag |
 
+**Launcher coverage**: `trial-data.sh dsn`'s `ACR_TEST_TRIAL_*` vars are consumed
+by `scripts/trial/run-two-turn.sh` (and the other single-process trial
+scripts sharing `common.sh`'s `trial_wire_common_env`). The SHARDED launcher,
+`scripts/trial/run-two-turn-parallel.sh`, reads a SEPARATE var pair
+(`ACR_TRIAL_PG_HOST`/`PORT`, also printed by `dsn`) plus `ops/.env`'s own
+`POSTGRES_USER`/`POSTGRES_PASSWORD` for its per-shard database cloning --
+`USER` already matches (the seed dump always creates `devhealth`), but
+`PASSWORD` only matches if `restore-postgres` was run with
+`ACR_TRIAL_PG_PASSWORD` set to `ops/.env`'s own value. Not yet exercised
+against a real parallel/sharded run on this data plane -- CHAOS-4186's own
+smoke was sequential-subset only, per the ratified plan.
+
 ### Traps hit standing this up (read before repeating)
 
 1. **Seed source**: `dev-health/backups/` accumulates timestamped snapshots

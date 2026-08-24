@@ -133,6 +133,21 @@ cmd_dsn() {
   printf 'ACR_TEST_TRIAL_CLICKHOUSE_DSN=clickhouse://ch:%s@%s:%d/default\n' "$PG_PASSWORD" "$ip" "$CH_NATIVE_NODEPORT"
   printf 'ACR_TEST_TRIAL_FALKOR_ADDR=%s:%d\n' "$ip" "$FALKOR_NODEPORT"
   printf '# clickhouse HTTP (for RESTORE/BACKUP admin queries): http://%s:%d\n' "$ip" "$CH_HTTP_NODEPORT"
+  # scripts/trial/run-two-turn-parallel.sh (codex xhigh review round 2, P1):
+  # this launcher does NOT read ACR_TEST_TRIAL_POSTGRES_DSN above -- it opens
+  # its own connection from ACR_TRIAL_PG_HOST/PORT (default 127.0.0.1:5432)
+  # plus POSTGRES_USER/POSTGRES_PASSWORD read from ops/.env, independently of
+  # every var this command prints. Point it at this data plane with:
+  printf 'ACR_TRIAL_PG_HOST=%s\n' "$ip"
+  printf 'ACR_TRIAL_PG_PORT=%d\n' "$PG_NODEPORT"
+  # CREDENTIAL COUPLING: ops/.env's POSTGRES_USER/POSTGRES_PASSWORD must
+  # match what this data plane's devhealth role actually has -- USER already
+  # matches (the seed dump always creates "devhealth"), but PASSWORD does
+  # NOT unless restore-postgres was run with ACR_TRIAL_PG_PASSWORD set to
+  # ops/.env's own POSTGRES_PASSWORD (this data plane's default,
+  # acr-trial-dev, will NOT match ops/.env's compose credential). Re-run
+  # restore-postgres with that override, or run the parallel launcher with a
+  # temporary POSTGRES_PASSWORD override of its own, before pointing it here.
 }
 
 cmd_restore_postgres() {
@@ -210,6 +225,19 @@ cmd_restore_clickhouse() {
 
 cmd_wipe() {
   require_kubeconfig
+  # Ownership check, not just name-format validation (codex xhigh review
+  # round 2, P1): a format-valid namespace name is not necessarily THIS
+  # script's own namespace -- ACR_TRIAL_DATA_NAMESPACE=acr-pilot passes the
+  # format check above and would otherwise let this delete an unrelated,
+  # pre-existing namespace (and everything in it) on this shared cluster.
+  # Every namespace this script creates carries the acr-trial-data-plane
+  # part-of label (trial-data.yaml); refuse to touch anything that either
+  # doesn't exist (nothing to protect) or doesn't carry it.
+  local owner
+  owner="$(kubectl get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/part-of}' 2>/dev/null || true)"
+  if [[ -n "$owner" && "$owner" != "acr-trial-data-plane" ]]; then
+    die "namespace $NAMESPACE exists but is NOT labeled app.kubernetes.io/part-of=acr-trial-data-plane (found: '$owner') -- refusing to wipe a namespace this script did not create"
+  fi
   kubectl delete namespace --ignore-not-found --wait=true --timeout=180s -- "$NAMESPACE"
   log "trial data plane wiped (namespace $NAMESPACE deleted, PVCs gone)"
 }
