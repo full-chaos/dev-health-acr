@@ -159,22 +159,126 @@ deploy/local/trial-data.sh wipe     # destroys the namespace INCL. PVCs
    epoch while still inside the grace window and unblocks a clean re-`rebuild`
    -- costs nothing (the org's own dataset is unaffected), but you have to
    know to do it rather than wait out the 24h.
-8. **KNOWN ISSUE, unresolved as of 2026-08-24**: both a lexical-only and an
-   embedded `serve` run hit an identical, reproducible infinite loop starting
-   ~1-2s after the LAST projection source reaches `cursor_exhausted` --
-   repeating `checkpoint-store divergence detected (CHAOS-3882)` ERROR ->
-   `lifecycle CAS conflict, observed_status=grace` -> `build-aside epoch
-   already open; not restarting` -> a self-contradicting WARN claiming
-   recovery opened an epoch anyway -- every ~2s, no forward progress. Real
-   data and (in the embedded run) real embeddings DO get written before the
-   loop takes over (confirmed live: 82.84% Subject-node embedding coverage,
-   KNN vector index present and OPERATIONAL on the resulting epoch key), but
-   the epoch never gets a chance to converge/flip cleanly, so that coverage
-   number is a mid-loop snapshot, not a settled state. `go run`'s wrapper
-   process does not reliably signal its compiled child on `kill` -- match by
-   full command (`procs --json 'acr-projector'`) and kill the actual binary,
-   not just the wrapper PID. Under investigation; do not treat an epoch flip
-   as reliable until this is understood.
+8. **CHAOS-4208 post-flip divergence loop (root-caused, workaround below;
+   fix pending)**: a `serve` run against a freshly-seeded trial cluster can
+   hit a reproducible infinite loop starting ~1-2s after the LAST
+   projection source reaches `cursor_exhausted` -- repeating
+   `checkpoint-store divergence detected (CHAOS-3882)` ERROR -> `lifecycle
+   CAS conflict, observed_status=grace` -> `build-aside epoch already open;
+   not restarting` -> a self-contradicting WARN claiming recovery opened an
+   epoch anyway -- every ~2s, no forward progress. lane-3882-loop
+   root-caused it (CHAOS-4208): unwired epoch-resolver cache invalidation --
+   if a `serve` process (or any process with a warm resolver cache) is
+   already running when `rebuild` fires `BeginBuild`, writes can misroute to
+   the stale cached epoch key, and the mismatch deadlocks the recovery path
+   in `grace`. Severity correction (also from that investigation): the loop
+   itself is a bounded, self-healing false-alarm storm -- data written
+   before it starts is NOT corrupted (confirmed live twice: 82.84%
+   Subject-node embedding coverage + an OPERATIONAL KNN vector index landed
+   cleanly both times) -- but it never converges/flips on its own, so an
+   epoch stuck in this loop must not be treated as ready.
+   **WORKAROUND (confirmed live, unblocks reliably)**: (a) `acr-projector
+   rollback --org <id>` first (valid inside the grace window; clears
+   `grace` back to `serving`); (b) use a FRESH, cold process for the
+   retry -- no `serve` may already be running; (c) order matters: run
+   `rebuild --org <id>` to completion FIRST (BeginBuild commits before any
+   resolver read primes the cache), THEN start `serve` -- never the reverse;
+   (d) set `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_LEASE=1s` (the practical
+   floor -- the env only requires a positive duration, no separate minimum
+   constant) to shrink any residual stale-cache window further. This
+   recipe produced a clean flip with zero divergence errors on the very
+   next attempt. **Once CHAOS-4208's fix merges, this workaround's ordering
+   requirement is superseded** -- check that ticket before assuming the
+   rollback-first/rebuild-before-serve dance is still required.
+9. **`ACR_TEST_TRIAL_LIMIT` is a ROW budget, not a case count.** It caps
+   the harness's own (member x arm) result rows, not distinct corpus case
+   indices -- `LIMIT=16` actually ran only 6 distinct corpus cases (indices
+   0-5), and the LAST case in that set was truncated mid-case (some
+   members/arms never ran, because the row budget was exhausted first).
+   For a genuine parity/flip-rate comparison against another run, either
+   drop the last (possibly-partial) case from the comparison, or use
+   `ACR_TEST_TRIAL_INDICES` (exact corpus indices) instead of `LIMIT` when
+   you need every selected case to be complete.
+
+## Parity verification (CHAOS-4186, 2026-08-24)
+
+One-time sequential-subset smoke against the kiac trial data plane, per the
+ratified plan: seed from `@backups` (no re-baseline), rebuild the graph with
+real embeddings (see trap 6/8), then compare a small live run against the
+established compose-stack baseline. DSN recipe: `deploy/local/trial-data.sh
+dsn` (see Contract table above); harness invocation follows
+`scripts/trial/run-two-turn.sh`'s own recipe with the three endpoint vars
+(`ACR_TEST_TRIAL_FALKOR_ADDR`/`POSTGRES_DSN`/`CLICKHOUSE_DSN`) overridden to
+the kiac NodePort endpoints instead of compose's `127.0.0.1` defaults, and
+`ACR_TRIAL_CORPUS` explicitly pointed at `.remember/acr-3778-corpus-ext65.json`
+-- at the time of this run, `scripts/trial/common.sh`'s own default pointed
+at a STALE corpus file (the CHAOS-3860 eval-only holdout, never meant as a
+live-trial default) that fails the CHAOS-4157 v2-scheme preflight against
+the current oracle annex; fixed upstream since (#251, common.sh's default
+now matches). Still worth the habit: verify `provenance.corpus_sha256` on
+any artifact matches the annex's expected corpus sha before trusting a run.
+
+**Methodology**: row-level and cell-level flip rate over the regime/offer/pool/outcome
+field set (18 fields: `turn1_regime`; `offer_kind`, `turn1_offer_kind`,
+`candidate_offer_count`, `turn1_candidate_offer_count`,
+`kind_offer_distinct_kind_count`, `turn1_kind_offer_distinct_kind_count`,
+`kind_offer_explicit_hint_count`, `turn1_kind_offer_explicit_hint_count`,
+`kind_offer_suppressed_by_cardinality`, `turn1_kind_offer_suppressed_by_cardinality`,
+`offer_miss`; `expected_in_pool`, `expected_kind_at_offer_boundary`,
+`expected_kind_at_offer_boundary_before_repair`; `turn1_status`,
+`turn2_status`, `applied`, `committed_count`, `inferred_classification`),
+computed over result rows keyed by (index, member, arm, mutation_probe) --
+the same key shape `acr-trial-merge-two-turn` uses -- restricted to corpus
+indices 0-4 (index 5 excluded: truncated by the LIMIT-is-a-row-budget trap
+above, not comparable). Compared against the two full-65 compose-stack
+replicates from the CHAOS-4183 validation
+(`gen-trial-chaos3742_twoturn-parallel-20260824T013649Z-38193-merged.json`,
+`...-20260824T024828Z-21131-merged.json`), same corpus sha (`b981ac40...`),
+same schema v26.
+
+| comparison | cell-level flip | row-level flip (>=1 field differs) |
+| --- | --- | --- |
+| compose rep1 vs rep2 (noise floor) | 7.56% (68/900) | 35.56% (16/45) |
+| kiac vs rep1 | 7.11% (64/900) | 40.00% (18/45) |
+| kiac vs rep2 | 11.00% (99/900) | 51.11% (23/45) |
+
+Commit-safety fields (`wrong_commit`, `pair_invalid`): ZERO mismatches across
+every pairwise comparison, every row. Aggregate gates (positive_applied_count,
+wrong_commit_count, false_no_match_count, gate_reachable_count, all
+inferred_* counts) identical between kiac and the compose baseline.
+
+**VERDICT (team-lead ruling, chris-carried, 2026-08-24): PARITY HOLDS --
+baselines carry over, no re-baseline.** Rationale: triangle distances (floor
+35.6 / kiac-rep1 40.0 / kiac-rep2 51.1) point at rep2 as the outlier draw,
+not kiac -- a systematically different kiac population would exceed the
+floor on BOTH pairings, and one pairing sits at/below floor. Row-level
+23/45 vs 16/45 is not statistically significant (two-proportion z~1.5,
+p~0.14). Commit-safety and aggregate agreement hold everywhere. The
+Aug-17 seed vs drifted-compose data-vintage difference makes some
+divergence expected, and it still landed in-band.
+**CAVEAT**: n=45 rows is small; one pairing (kiac-vs-rep2) ran elevated
+above the floor. A tie-breaker replicate may be ordered later -- this
+verdict is not a claim that kiac is proven identical to compose, only that
+the evidence available does not disqualify it.
+
+**Timing head-to-head** (per-responder-call latency, isolating model
+round-trip time from case-selection noise -- both environments hit the same
+external codex-subscription backend for the actual model call):
+
+| arm | kiac / call | compose / call | delta |
+| --- | --- | --- | --- |
+| turn1 | 18064ms | 15657ms | +15.4% |
+| positive | 16251ms | 14501ms | +12.1% |
+| inferred_tier | 17002ms | 15034ms | +13.1% |
+| confirmed_wrong | 17026ms | 14922ms | +14.1% |
+| mutation | 17503ms | 16376ms | +6.9% |
+
+Uniform ~7-15% higher per-call latency on kiac across every arm -- since the
+model call itself hits the same external backend either way, a uniform gap
+across all arms (not concentrated in one) reads as DB/graph-side overhead
+baked into the measured call window (NodePort routing to the kiac node vs
+compose's more direct container-network path), not model variance.
+Informational; did not affect the parity verdict.
 
 ## Constraints
 
