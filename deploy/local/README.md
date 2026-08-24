@@ -33,6 +33,35 @@ The kubeconfig is isolated under `.tmp/kiac/<cluster>/kubeconfig`; the user's
 StorageClass and metrics-server, which satisfies the helm chart's PVC needs
 (e.g. the optional `contextFabric.falkordb` workload) with no extra addons.
 
+**Recovering from a host-wide container stop** (e.g. `container system
+stop`/`start`, reloading the apple/container builder config, or a host
+reboot -- any of these halts EVERY node VM on the Mac, this cluster
+included): this is a stop, not a delete -- the VM rootfs/PVCs survive.
+Recover with the native verb, not `kiac.sh up` (which provisions a cluster,
+not resumes one) and not a raw `container start <name>` (it won't heal the
+k3s-side state):
+```bash
+kiac resume cluster --name <cluster> --wait 5m
+```
+Two things to check afterward, every time:
+- **The node's IP can change** -- vmnet reassigns addresses on VM boot.
+  Check `container list -a` for the live IP and compare against what
+  `deploy/local/trial-data.sh dsn --env` / your kubeconfig say.
+- **`kiac resume` does NOT reliably rewrite the kubeconfig's server IP** --
+  if `kubectl` times out with `dial tcp <old-ip>:6443` after a resume that
+  reported success, hand-edit `.tmp/kiac/<cluster>/kubeconfig`'s `server:`
+  line to the current IP (back the file up first). Confirmed live during
+  the CHAOS-4186 embed-credential fix: `resume` reported success and a
+  healthy API-reachability check, but the node had moved 192.168.64.14 ->
+  192.168.64.3 and the kubeconfig still pointed at .14. Fix upstream is a
+  kiac issue, not something to work around here permanently -- this is the
+  known state as of kiac v0.5.1.
+Pods themselves generally survive with 1-2 restarts and their PVC data
+intact; anything with a hardcoded node IP in its OWN launch env (e.g. a
+bare `go run ./cmd/acr-projector serve` per the resize recipe below) will
+NOT auto-heal on an IP change and needs a scoped kill + relaunch with the
+corrected IP.
+
 ## Image path (no registry, no Docker)
 
 ```bash
