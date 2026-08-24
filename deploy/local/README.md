@@ -235,15 +235,19 @@ fixed here.
    so it is not a path that can reopen a build on its own. The real path
    that can is `checkpointStoreDiverged` + `recoverFromDivergenceLifecycle`
    (the CHAOS-3882 automatic divergence-recovery mechanism, same file): each
-   tick compares the durable checkpoint's `BackendWatermark` against the
-   graph backend's own watermark for the CURRENT active epoch, and if they
-   disagree, treats this as a live incident and opens a fresh build-aside
-   epoch via `beginLifecycleBuild` -- entirely automatically, by design,
-   working as intended (CHAOS-3882's whole point is never serving resolution
-   against a silently stale/empty graph). `rollback` changes the active
-   epoch out from under a still-running `serve` process while its
-   in-progress checkpoint watermarks still describe the OLD epoch -- exactly
-   the mismatch this mechanism exists to catch. So the very next tick after
+   tick checks whether the durable checkpoint's `BackendWatermark` is
+   non-empty (something was durably projected here before) while the graph
+   backend's own watermark for the CURRENT active epoch comes back absent --
+   not a comparison of the two values, a presence/absence check. When the
+   backend sentinel is confirmed missing like that, it treats this as a live
+   incident and opens a fresh build-aside epoch via `beginLifecycleBuild` --
+   entirely automatically, by design, working as intended (CHAOS-3882's
+   whole point is never serving resolution against a silently stale/empty
+   graph). `rollback` changes the active epoch out from under a still-running
+   `serve` process while its in-progress checkpoint still carries a
+   BackendWatermark from the OLD epoch, and the new active epoch's backend
+   watermark comes back absent -- exactly the condition this mechanism exists
+   to catch. So the very next tick after
    your `rollback` can open a NEW build before your own following `rebuild`
    command gets there -- your `rebuild` then loses a `lifecycle CAS conflict`
    against a build you never intended to start by hand, with a target/last-
