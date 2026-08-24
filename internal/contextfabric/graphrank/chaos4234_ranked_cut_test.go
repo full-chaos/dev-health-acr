@@ -223,6 +223,63 @@ func TestCHAOS4234_OffersOnlyResolution_SkipsCensusAndFlagsTheKindOfferEvent(t *
 	}
 }
 
+func TestCHAOS4234_OffersOnlyResolution_TagsTheDecisionEventNotJustKindOffer(t *testing.T) {
+	t.Parallel()
+	// codex round-1 finding 3: the "decision" event Turn1CommitGate reads
+	// from must itself carry OfferedUnderWindowGate under offers-only
+	// mode -- the kind_offer flag alone left a reader with no way to
+	// tell an offers-only pass's own "Outcome=committed" apart from a
+	// real one.
+	// Exact-label match via ordinary Search (NOT a caller-sourced hint --
+	// that short-circuits BEFORE the decision-stage call this test
+	// exercises, via FinalizeExactResolutionWithBasis, resolve.go's own
+	// AnyCallerSourced branch). Same fixture shape as
+	// TestResolveSubjectsWrongSubjectControlNeverCommitsTheDecoy.
+	target := candidateNode(contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", 0.4, "*")
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Ask Dev": {target}}}
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	request := testRequest()
+
+	resolution, _, err := ResolveSubjects(contextfabric.WithOffersOnlyResolution(context.Background()), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Ask Dev"), deps, nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	events := tracer.eventsForStage("decision")
+	if len(events) == 0 {
+		t.Fatal("no decision event traced -- fixture must reach a real commit/no-commit decision for this test to mean anything")
+	}
+	last := events[len(events)-1]
+	if last.Outcome != "committed" {
+		t.Fatalf("decision event Outcome = %q, want committed (control: the exact-hint fixture must actually decide to commit)", last.Outcome)
+	}
+	if !last.OfferedUnderWindowGate {
+		t.Fatalf("decision event %#v: OfferedUnderWindowGate = false, want true under offers-only mode", last)
+	}
+	// graphrank.ResolveSubjects itself still returns whatever it committed
+	// -- the DISCARD is an engine-level guarantee (chaos4234_offers_only.go's
+	// gatedOfferMaterial), proven separately by the contextfabric-package
+	// gate tests (e.g. TestCHAOS4234_ClassDefaultGate_ComposesKindAndHandleOffersBesideTheWindowOffer's
+	// fake graph, whose ResolveSubjects returns a committed subject the
+	// engine result never carries). This test's own scope is narrower: the
+	// TAG on the event that would otherwise be misread as a real commit.
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_ask_dev" {
+		t.Fatalf("resolution.Committed = %#v, want the exact-label match (control: this graphrank-level call genuinely committed, which is exactly why the tag matters)", resolution.Committed)
+	}
+
+	// Control: the SAME fixture decisive (no mark) must NOT carry the tag.
+	decisiveTracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = decisiveTracer
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("Ask Dev"), deps, nil, nil); err != nil {
+		t.Fatalf("decisive ResolveSubjects() error = %v", err)
+	}
+	decisiveEvents := decisiveTracer.eventsForStage("decision")
+	if len(decisiveEvents) == 0 || decisiveEvents[len(decisiveEvents)-1].OfferedUnderWindowGate {
+		t.Fatalf("decisive decision event = %#v, want OfferedUnderWindowGate=false", decisiveEvents)
+	}
+}
+
 func TestCHAOS4234_DiscardableDecisionTracer_DiscardsRankedCutWithItsDecision(t *testing.T) {
 	t.Parallel()
 	real := &captureResolutionTracer{}

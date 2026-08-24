@@ -81,6 +81,23 @@ func twoTurnRegimeAWindowReceipt(turn1 contractsv1.ContextFabricInvestigationRes
 	return contractsv1.ContextFabricBoundSubjectReceipt{ResultID: turn1.ResultID, ReceiptID: receiptID}, true
 }
 
+// twoTurnRegimeAOfferComposed (CHAOS-4234, codex round-1 finding 2,
+// confirmed and fixed) is the "composed" predicate behind
+// RegimeAOfferComposedCount. turn1's own OfferComposedUnderWindowGate
+// (the kind_offer trace's OfferedUnderWindowGate) is true whenever the
+// offers-only PASS RAN, not whether it actually produced an offer -- an
+// empty pool or a single-kind pool runs the pass and still discloses
+// window-only, so gating the counter on that flag alone counted
+// resolution MODE, not composed offers. This reads turn 1's OWN
+// persisted StructureNeeds.Missing directly instead:
+// composeGatedStructureNeeds always prepends window first, so more than
+// one entry means the offers-only material genuinely added a member --
+// the SAME "composed" outcome chaos4234_offers_only.go's own
+// GatedOfferResolutionComposed reports engine-side.
+func twoTurnRegimeAOfferComposed(turn1 contractsv1.ContextFabricInvestigationResult) bool {
+	return turn1.StructureNeeds != nil && len(turn1.StructureNeeds.Missing) > 1
+}
+
 // twoTurnStatusAnswered is the closed "the case actually answered"
 // predicate behind regime_a_turn2_answered_count: complete or partial.
 // degraded/clarification_required/no_match/errors are not answers.
@@ -190,6 +207,29 @@ func TestCHAOS4234_RegimeAWindowReceipt_AttachedOnlyForNonWindowMembersWithAnOff
 	}
 	if _, ok := twoTurnRegimeAWindowReceipt(turn1, string(contractsv1.ContextFabricStructureNeedExpectedKind), "trailing_30d"); ok {
 		t.Fatal("band turn 1 never offered: attached, want not attached")
+	}
+}
+
+func TestCHAOS4234_RegimeAOfferComposed_TrueOnlyWhenTurn1AddedAMemberBeyondWindow(t *testing.T) {
+	t.Parallel()
+	windowOnly := contractsv1.ContextFabricInvestigationResult{
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+		},
+	}
+	if twoTurnRegimeAOfferComposed(windowOnly) {
+		t.Fatal("window-only Missing (offers-only pass ran, nothing to offer): composed = true, want false")
+	}
+	composed := contractsv1.ContextFabricInvestigationResult{
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow, contractsv1.ContextFabricStructureNeedExpectedKind},
+		},
+	}
+	if !twoTurnRegimeAOfferComposed(composed) {
+		t.Fatal("window + expected_kind in Missing: composed = false, want true")
+	}
+	if twoTurnRegimeAOfferComposed(contractsv1.ContextFabricInvestigationResult{}) {
+		t.Fatal("nil StructureNeeds: composed = true, want false")
 	}
 }
 

@@ -219,6 +219,68 @@ func TestCHAOS4234_OneTurnRedemption_WindowAndKindReceiptsFromOneGatedResult(t *
 	}
 }
 
+// TestCHAOS4234_ClassDefaultGate_V2AnchorOffersGetV2SchemaAndValidator is
+// codex round-1 finding 1, confirmed and fixed: gatedOfferMaterial's
+// ResolveSubjects call is the SAME unconditional anchorOfferMaterial path
+// the decisive turn uses (resolve.go's combineStructureOfferMaterial),
+// which can mint membership-verify (V2) anchor offers -- the gate must
+// not silently persist them under the V1 schema/validator.
+func TestCHAOS4234_ClassDefaultGate_V2AnchorOffersGetV2SchemaAndValidator(t *testing.T) {
+	t.Parallel()
+	v2Material := StructureOfferMaterial{
+		Missing: []StructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+		AnchorOptions: []contractsv1.ContextFabricAnchorOption{
+			contractsv1.ContextFabricAnchorOptionV2{
+				Kind: SubjectRepository, CanonicalID: "repository_ask_dev", Label: "ask-dev",
+				MatchedTermHash: "aaaaaaaaaaaaaaaaaaaaaaaa", OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}.ToV1Wire(),
+		},
+		AnchorOptionsRequireV2: true,
+	}
+	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	graph := chaos4234GatedGraph()
+	graph.material = v2Material
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	engine := buildWindowGateEngine(t, interpreter, graph, store)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a valid V2 gated result, not a validation error", err)
+	}
+	if result.SchemaVersion != InvestigationResultSchemaV2 {
+		t.Fatalf("result.SchemaVersion = %q, want %q: V2 anchor offers under the gate must stamp the V2 schema, same as the decisive path (unresolved.go)", result.SchemaVersion, InvestigationResultSchemaV2)
+	}
+	if result.Versions.ContractVersion != InvestigationResultSchemaV2 {
+		t.Fatalf("result.Versions.ContractVersion = %q, want %q", result.Versions.ContractVersion, InvestigationResultSchemaV2)
+	}
+	if len(result.StructureNeeds.AnchorOptions) != 1 {
+		t.Fatalf("result.StructureNeeds.AnchorOptions = %#v, want the 1 V2-minted anchor offer to survive", result.StructureNeeds.AnchorOptions)
+	}
+	if store.saved == nil || store.saved.SchemaVersion != InvestigationResultSchemaV2 {
+		t.Fatalf("store.saved.SchemaVersion = %#v, want %q persisted", store.saved, InvestigationResultSchemaV2)
+	}
+}
+
+// TestCHAOS4234_ClassDefaultGate_V1MaterialStillGetsV1Schema is the
+// control for the test above: ordinary V1 kind/handle material (the
+// shape every other CHAOS-4234 test in this file uses) must be
+// completely unaffected by the V2 dispatch this fix added.
+func TestCHAOS4234_ClassDefaultGate_V1MaterialStillGetsV1Schema(t *testing.T) {
+	t.Parallel()
+	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	graph := chaos4234GatedGraph()
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	engine := buildWindowGateEngine(t, interpreter, graph, store)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.SchemaVersion != InvestigationResultSchemaV1 || result.Versions.ContractVersion != InvestigationResultSchemaV1 {
+		t.Fatalf("SchemaVersion/ContractVersion = %q/%q, want V1/V1 unchanged", result.SchemaVersion, result.Versions.ContractVersion)
+	}
+}
+
 func buildWindowGateEngineWithTelemetry(t *testing.T, interpreter QuestionInterpreter, graph *acceptanceGraphReader, results InvestigationResultStore, telemetry EngineTelemetry) *Engine {
 	t.Helper()
 	engine, err := NewEngine(EngineDependencies{

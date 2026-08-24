@@ -8182,7 +8182,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			continue
 		}
 		report.CasesRun++
-		if turn1Facts.Regime == twoTurnRegimeAWindowGated && turn1Facts.OfferComposedUnderWindowGate {
+		if turn1Facts.Regime == twoTurnRegimeAWindowGated && twoTurnRegimeAOfferComposed(turn1) {
 			report.RegimeAOfferComposedCount++
 		}
 		// codex round-2 finding #1: StructureNeeds and WindowClarification

@@ -1317,9 +1317,23 @@ func (e *Engine) windowConfirmationRequiredResult(
 	if windowClarification != nil {
 		structureNeeds = composeGatedStructureNeeds(gatedMaterial, resultID, windowClarification.Options)
 	}
+	// CHAOS-4234 (codex round-1 finding, confirmed): gatedMaterial's
+	// AnchorOptions can carry membership-verify (V2) offers -- the SAME
+	// anchorOfferMaterial call resolve.go's decisive path already uses,
+	// unconditionally part of every ResolveSubjects return, offers-only
+	// mode included. Mirrors unresolved.go's terminalResult schema
+	// dispatch exactly: gatedMaterial is the zero value (AnchorOptionsRequireV2
+	// false) on every OTHER origin this function serves (explicit-
+	// unconfirmed, RegimeAOffersDisabled, a failed offers-only read), so
+	// this schemaVersion stays V1 there, unchanged from before this
+	// ticket.
+	schemaVersion := InvestigationResultSchemaV1
+	if gatedMaterial.AnchorOptionsRequireV2 {
+		schemaVersion = InvestigationResultSchemaV2
+	}
 
 	result := InvestigationResult{
-		SchemaVersion:           InvestigationResultSchemaV1,
+		SchemaVersion:           schemaVersion,
 		ResultID:                resultID,
 		RequestID:               request.RequestID,
 		GeneratedAt:             e.now().UTC(),
@@ -1350,6 +1364,12 @@ func (e *Engine) windowConfirmationRequiredResult(
 		DeterministicAnswer:     limitation,
 		Warnings:                []string{},
 	}
+	// CHAOS-4234 (codex round-1 finding, confirmed): terminalVersions()
+	// always stamps V1 -- override to the SAME schemaVersion just chosen,
+	// mirroring unresolved.go's terminalResult (result.Versions.ContractVersion
+	// = schemaVersion) exactly, so a V2 gated result's Versions block
+	// agrees with its own SchemaVersion.
+	result.Versions.ContractVersion = schemaVersion
 	// Codex round-2 finding (confirmed): mirrors the decisive/terminal
 	// paths' own ContextFabricWindowConfirmationNudge handling exactly
 	// (engine.go, terminalResult) -- a caller that asked to be nudged must
@@ -1369,7 +1389,15 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// branch (structureNeeds is nil there) -- same discipline
 	// terminalResult's own call (unresolved.go) already applies.
 	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
-	if err := result.Validate(); err != nil {
+	// CHAOS-4234 (codex round-1 finding, confirmed): ValidateResult, not
+	// result.Validate() directly -- the latter is UNCONDITIONALLY the V1
+	// validator regardless of result.SchemaVersion (ValidateResult's own
+	// doc comment: "every storage adapter's Save must use this instead of
+	// calling result.Validate() directly, or a genuinely valid v2 result
+	// would be rejected"). A V2 gated result (membership-verify anchor
+	// offers) would fail V1's own AnchorOptions shape check here
+	// otherwise. Mirrors terminalResult's identical dispatch (unresolved.go).
+	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {

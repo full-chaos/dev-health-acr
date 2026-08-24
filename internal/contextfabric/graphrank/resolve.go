@@ -448,6 +448,26 @@ type discardableDecisionTracer struct {
 	capturedRankedCut []ResolutionTraceEvent
 }
 
+// offersOnlyDecisionTracer (CHAOS-4234, codex round-1 finding 3) tags
+// every "decision" stage event with OfferedUnderWindowGate=true before
+// forwarding it, and passes every other stage through unchanged. Used
+// ONLY at the offers-only pass's own first-pass decision call site
+// (resolveSubjects, above) -- see that call site's own comment for why
+// the tag matters: the resolution this decision belongs to is discarded
+// unconditionally, so "Outcome=committed" on an untagged event would read
+// as a real commit to anything consuming ResolutionTraceEvent without
+// also cross-referencing which mode produced it.
+type offersOnlyDecisionTracer struct{ real ResolutionTracer }
+
+func (o offersOnlyDecisionTracer) Trace(event ResolutionTraceEvent) {
+	if event.Stage == "decision" {
+		event.OfferedUnderWindowGate = true
+	}
+	if o.real != nil {
+		o.real.Trace(event)
+	}
+}
+
 func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
 	switch event.Stage {
 	case "decision":
@@ -845,13 +865,23 @@ type ResolutionTraceEvent struct {
 	HandleOfferCountBeforeGraphSource    int
 	HandleOfferGraphDerivedCount         int
 	HandleOfferGraphDerivedRejectedCount int
-	// OfferedUnderWindowGate (stage=="kind_offer" ONLY, CHAOS-4234) is
-	// true when this resolution ran in offers-only mode under the
-	// class-default window gate (contextfabric.OffersOnlyResolution) --
-	// the trace-visible twin of the engine's RecordGatedOfferResolution
-	// telemetry, so a report row can tell "offers composed beside the
-	// window offer" apart from an ordinary decisive turn without cross-
-	// referencing the window canonicalization outcome by hand.
+	// OfferedUnderWindowGate (CHAOS-4234) is true when this resolution
+	// ran in offers-only mode under the class-default window gate
+	// (contextfabric.OffersOnlyResolution). Set on TWO stages, for two
+	// different reasons -- both real events under offers-only mode, no
+	// stage this resolution emits leaves it unset:
+	//   - "kind_offer" (unconditional, every resolution): the trace-
+	//     visible twin of the engine's RecordGatedOfferResolution
+	//     telemetry, so a report row can tell "offers composed beside the
+	//     window offer" apart from an ordinary decisive turn without
+	//     cross-referencing the window canonicalization outcome by hand.
+	//   - "decision" (offers-only mode ONLY, codex round-1 finding 3,
+	//     offersOnlyDecisionTracer): a "decision" event's own
+	//     Outcome=="committed" would otherwise read as a real commit --
+	//     under this mode the engine discards resolution/commitBases/
+	//     commitDigests unconditionally, so nothing this event describes
+	//     ever reaches anywhere decisive. A reader of a "decision" event
+	//     MUST check this field before trusting its CommitGate/Outcome.
 	OfferedUnderWindowGate bool
 	// Rank/Survived/CoverageBypass (stage=="ranked_cut" ONLY, CHAOS-4234)
 	// describe ONE candidate's fate at ResolveFromMergedCandidatesWithGateAndBasis'
@@ -1840,7 +1870,25 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// CHAOS-4085 commit-basis write site 2 of 3: the ordinary commit
 	// decision. ResetTo, not merge -- this is the first decision, and it
 	// defines the whole basis set for it.
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "", false)
+	//
+	// CHAOS-4234 (codex round-1 finding 3, confirmed): firstPassTracer
+	// tags this call's OWN "decision" stage event with OfferedUnderWindowGate
+	// under offers-only mode -- the engine discards resolution/
+	// commitBases/commitDigests for this SAME call unconditionally
+	// (chaos4234_offers_only.go's gatedOfferMaterial), so an
+	// "Outcome=committed" reading here never reaches anywhere decisive.
+	// Without the tag a reader of the two-turn harness's own
+	// finalDecisionEvent() (Turn1CommitGate/Outcome) cannot tell this
+	// pass's own would-be commit apart from a real one. ranked_cut events
+	// from this SAME call are left untouched -- they drive the offer
+	// builders' own input under offers-only mode too, so they stay
+	// accurate regardless of which mode produced them. See
+	// offersOnlyDecisionTracer's own doc comment.
+	firstPassTracer := deps.ResolutionTracer
+	if offersOnly && firstPassTracer != nil {
+		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
+	}
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
