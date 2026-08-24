@@ -130,6 +130,14 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 		KindOfferCandidateOfferCount:     5,
 		KindOfferOfferKind:               "candidate",
 		KindOfferBoundaryKinds:           []string{"work_item", "repository"},
+		// CHAOS-4183 phase 3: the pre-repair twins, deliberately DIFFERENT
+		// from the post-repair values above (one fewer boundary kind, a
+		// different distinct count, suppressed flipped) -- proves the sink
+		// carries the repair's own before/after delta, not the same value
+		// twice under two keys.
+		KindOfferBoundaryKindsBeforeRepair:           []string{"repository"},
+		KindOfferDistinctKindCountBeforeRepair:       1,
+		KindOfferSuppressedByCardinalityBeforeRepair: true,
 	})
 
 	if got, ok := record["explicit_hint_count"].(float64); !ok || got != 1 {
@@ -154,6 +162,19 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 	boundaryKinds, ok := record["boundary_kinds"].([]any)
 	if !ok || len(boundaryKinds) != 2 || boundaryKinds[0] != "work_item" || boundaryKinds[1] != "repository" {
 		t.Fatalf("boundary_kinds = %v, want [work_item repository]", record["boundary_kinds"])
+	}
+	// CHAOS-4183 phase 3 (sol design consult, team-lead ratified
+	// 2026-08-23): the three pre-repair twins must reach the PRODUCTION
+	// sink too -- same file-doc-comment obligation as every field above.
+	beforeKinds, ok := record["boundary_kinds_before_repair"].([]any)
+	if !ok || len(beforeKinds) != 1 || beforeKinds[0] != "repository" {
+		t.Fatalf("boundary_kinds_before_repair = %v, want [repository]", record["boundary_kinds_before_repair"])
+	}
+	if got, ok := record["distinct_kind_count_before_repair"].(float64); !ok || got != 1 {
+		t.Fatalf("distinct_kind_count_before_repair = %v, want 1", record["distinct_kind_count_before_repair"])
+	}
+	if got, ok := record["suppressed_by_cardinality_before_repair"].(bool); !ok || !got {
+		t.Fatalf("suppressed_by_cardinality_before_repair = %v, want true", record["suppressed_by_cardinality_before_repair"])
 	}
 }
 

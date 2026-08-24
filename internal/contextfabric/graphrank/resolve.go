@@ -760,19 +760,65 @@ type ResolutionTraceEvent struct {
 	KindOfferCandidateOfferCount int
 	KindOfferOfferKind           string
 	// KindOfferBoundaryKinds (stage=="kind_offer" ONLY, CHAOS-4012 v22,
-	// team-lead ruling 2026-08-23) is distinctCandidateKinds(kindOfferCandidates)
-	// -- the distinct subject kinds present in the EXACT slice
-	// kindOfferMaterial/candidateOfferMaterial both read at this call
-	// boundary, closed-vocabulary and corpus-safe (kind values only, no
-	// canonical ids). This is call-boundary-scoped, unlike the existing
-	// trace-wide ExpectedInPool (poolContainsKind reads the "corroboration"
-	// stage, emitted for the FULL merged pool before final truncation) --
-	// see distinctCandidateKinds' own doc comment (chaos3900_structure_
-	// offers.go) for why a candidate can corroborate early and still be gone
-	// by the time this stage fires, and why that gap matters for telling
-	// "candidate-list can fix this" apart from "upstream truncation already
-	// lost it."
+	// team-lead ruling 2026-08-23) is call-boundary-scoped, unlike the
+	// existing trace-wide ExpectedInPool (poolContainsKind reads the
+	// "corroboration" stage, emitted for the FULL merged pool before final
+	// truncation) -- see distinctCandidateKinds' own doc comment
+	// (chaos3900_structure_offers.go) for why a candidate can corroborate
+	// early and still be gone by the time this stage fires, and why that
+	// gap matters for telling "candidate-list can fix this" apart from
+	// "upstream truncation already lost it."
+	//
+	// CHAOS-4183 phase 3 (sol design consult, team-lead ratified
+	// 2026-08-23): this field's own MEANING shifted -- it is now the
+	// UNFILTERED pre-phase-3 reading (distinctCandidateKinds(kindOfferCandidates),
+	// byte-identical to this field's own pre-phase-3 computation) PLUS,
+	// ONLY when a stalled resolution's kind-only repair genuinely admitted
+	// something, the repaired kind identities appended at the end, in the
+	// SAME fixed closed-vocab order projectKindOfferKinds' own `after`
+	// return uses. Codex CHAOS-4183 phase-3 review round 1, finding 1
+	// (MEDIUM): an earlier version of this field used
+	// subjectKindStrings(after) directly -- `after` is
+	// distinctOfferableKinds' own STRUCTUREOFFERKINDS-FILTERED value (the
+	// value that safely feeds kindOfferMaterial, which filters internally
+	// anyway), so a committed resolution whose pool held a non-offerable
+	// kind (e.g. document) would have reported FEWER kinds than this field
+	// ever did pre-phase-3 -- violating "committed resolutions get the
+	// pre-repair boundary unchanged" even though nothing was actually
+	// repaired. The corrected computation (call site, below) starts from
+	// the unfiltered reading and appends only the genuinely-new repaired
+	// tail, so a committed or nothing-absent resolution reduces to the
+	// unfiltered list verbatim -- byte-identical to pre-phase-3.
+	// KindOfferBoundaryKindsBeforeRepair below carries the SAME unfiltered
+	// pre-repair-only reading (distinctCandidateKinds(kindOfferCandidates))
+	// unconditionally, so a v25-vs-v26 reader can still ask the pre-repair
+	// question this field used to answer alone, even on a row this field
+	// itself repaired. See projectKindOfferKinds' own doc comment for the
+	// full repair mechanism -- candidate-list (candidateOfferMaterial) is
+	// completely UNTOUCHED by this: it still ranks the SAME
+	// kindOfferCandidates this field's own unfiltered half still reflects
+	// verbatim.
 	KindOfferBoundaryKinds []string
+	// KindOfferBoundaryKindsBeforeRepair/KindOfferDistinctKindCountBeforeRepair/
+	// KindOfferSuppressedByCardinalityBeforeRepair (CHAOS-4183 phase 3,
+	// schema v26) are the PRE-repair twins of KindOfferBoundaryKinds/
+	// KindOfferDistinctKindCount/KindOfferSuppressedByCardinality --
+	// exactly what those three fields computed before this phase's
+	// post-decision kind-only boundary completion existed.
+	// BoundaryKindsBeforeRepair is UNFILTERED (distinctCandidateKinds'
+	// own discipline, matching this field's pre-phase-3 behavior
+	// verbatim); DistinctKindCountBeforeRepair/
+	// SuppressedByCardinalityBeforeRepair come from calling
+	// kindOfferMaterial over the PRE-repair kind list (`before`,
+	// projectKindOfferKinds' own return) -- the IDENTICAL cardinality-
+	// check logic the post-repair fields use, over the un-repaired input,
+	// so the two readings can never drift apart by hand-duplicating that
+	// check. Together with the post-repair fields, these are what let a
+	// reader measure the repair's own effect directly from one event,
+	// rather than needing a v25 artifact to diff against.
+	KindOfferBoundaryKindsBeforeRepair           []string
+	KindOfferDistinctKindCountBeforeRepair       int
+	KindOfferSuppressedByCardinalityBeforeRepair bool
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -1989,10 +2035,32 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// offers.go) for why this union must dedupe by subject, not merely
 	// concatenate.
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageCandidates)
-	kindOffer, kindOfferDiag := kindOfferMaterial(kindOfferCandidates, request.ExpectedKinds)
-	// CHAOS-4012: the SAME union kindOfferMaterial reads above is also the
-	// read-only pool candidateOfferMaterial ranks over -- one candidate
-	// pool, two independent offer axes, never two different views of it.
+	// CHAOS-4183 phase 3 (sol design consult, team-lead ratified
+	// 2026-08-23): projectKindOfferKinds' own POST-DECISION, KIND-ONLY
+	// boundary completion for Shape A -- see its own doc comment for the
+	// full mechanism and what it deliberately does NOT do.
+	// candidatesBySubject is the FULL, pre-truncation merged pool (this
+	// SAME function's own local map, built up throughout Search/
+	// SearchQuestion/AliasLookup/the coverage floor above) -- a kind can
+	// have real representation there and still never reach
+	// kindOfferCandidates once ResolveFromMergedCandidatesWithGateAndBasis's
+	// own MaxSubjectCandidates ranking/truncation has run.
+	beforeKinds, afterKinds := projectKindOfferKinds(kindOfferCandidates, candidatesBySubject, len(resolution.Committed))
+	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
+	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
+	// (once per kind list) keeps both diagnostics computed by the
+	// IDENTICAL cardinality-check logic, rather than duplicating that
+	// check by hand and risking the two readings drifting apart.
+	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds)
+	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds)
+	// CHAOS-4012: the SAME union kindOfferMaterial read (pre-repair) above
+	// is also the read-only pool candidateOfferMaterial ranks over -- one
+	// candidate pool, two independent offer axes, never two different
+	// views of it. Deliberately kindOfferCandidates, NOT afterKinds/
+	// projectKindOfferKinds' own output: phase 3 is a kind-identity-only
+	// projection for the expected_kind axis alone -- the candidate-list
+	// axis's own top-five ranking is completely untouched by this phase
+	// (sol design consult's own explicit scope boundary).
 	candidateOffer, candidateOfferDiag := candidateOfferMaterial(kindOfferCandidates, len(resolution.Committed))
 	// CHAOS-4012 v22: offerKind/candidateOfferCount ride the SAME
 	// unconditional "kind_offer" stage kind_offer's own fields already use
@@ -2016,6 +2084,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// stage fires every time a tracer is wired, corpus-wide. See
 	// ResolutionTraceEvent's own "kind_offer" field doc comment.
 	if deps.ResolutionTracer != nil {
+		// boundaryKindsPostRepair (CHAOS-4183 phase 3): see
+		// KindOfferBoundaryKinds' own doc comment for the full mechanism.
+		// codex CHAOS-4183 phase-3 review round 2, finding 1 (LOW): an
+		// earlier version unconditionally seeded this with append([]string{},
+		// ...), so an empty pre-repair reading (distinctCandidateKinds
+		// returns nil for an empty kindOfferCandidates) became a non-nil
+		// []string{} whenever nothing was repaired -- observable as JSON
+		// `[]` where the pre-phase-3 field always serialized `null`. Fixed:
+		// only allocate/append when the repaired tail is genuinely
+		// non-empty; otherwise this is distinctCandidateKinds' own return
+		// value verbatim, nil included.
+		boundaryKindsPostRepair := distinctCandidateKinds(kindOfferCandidates)
+		if repairedTail := subjectKindStrings(afterKinds[len(beforeKinds):]); len(repairedTail) > 0 {
+			boundaryKindsPostRepair = append(append([]string{}, boundaryKindsPostRepair...), repairedTail...)
+		}
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "kind_offer",
 			KindOfferExplicitHintCount:       kindOfferDiag.ExplicitHintCount,
@@ -2029,7 +2112,38 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// themselves, so it must not cost anything on the hot path when
 			// no one is listening. See KindOfferBoundaryKinds' own doc
 			// comment for what this distinguishes.
-			KindOfferBoundaryKinds: distinctCandidateKinds(kindOfferCandidates),
+			//
+			// CHAOS-4183 phase 3: KindOfferBoundaryKinds is now POST-repair --
+			// BoundaryKindsBeforeRepair keeps the field's own pre-phase-3
+			// computation verbatim (distinctCandidateKinds(kindOfferCandidates),
+			// UNFILTERED). DistinctKindCountBeforeRepair/
+			// SuppressedByCardinalityBeforeRepair come from beforeDiag above --
+			// the SAME cardinality check kindOfferDiag itself uses, run over
+			// the un-repaired input.
+			//
+			// codex CHAOS-4183 phase-3 review round 1, finding 1 (MEDIUM):
+			// subjectKindStrings(afterKinds) alone is WRONG here -- afterKinds
+			// is projectKindOfferKinds' own kindOfferMaterial-feed value,
+			// filtered to structureOfferKinds (distinctOfferableKinds' own
+			// contract), so a committed/no-repair-needed resolution would
+			// report FEWER kinds than the pre-phase-3 field ever did (e.g. a
+			// "document" kind silently dropped), breaking "committed
+			// resolutions get the pre-repair boundary unchanged." The fix:
+			// start from the SAME unfiltered distinctCandidateKinds reading
+			// BoundaryKindsBeforeRepair uses, and append ONLY the tail
+			// projectKindOfferKinds genuinely added beyond beforeKinds --
+			// afterKinds always starts with beforeKinds verbatim (see that
+			// function's own "after = append(after, before...)"), so the tail
+			// is exactly the repaired kind identities, always disjoint from
+			// the unfiltered list (a repaired kind is, by construction, absent
+			// from beforeKinds' offerable subset, and beforeKinds' offerable
+			// subset is exactly the offerable portion of the unfiltered
+			// list). Committed or nothing-absent: this reduces to the
+			// unfiltered list verbatim, byte-identical to pre-phase-3.
+			KindOfferBoundaryKinds:                       boundaryKindsPostRepair,
+			KindOfferBoundaryKindsBeforeRepair:           distinctCandidateKinds(kindOfferCandidates),
+			KindOfferDistinctKindCountBeforeRepair:       beforeDiag.DistinctKindCount,
+			KindOfferSuppressedByCardinalityBeforeRepair: beforeDiag.SuppressedByCardinality,
 		})
 	}
 	offerMaterial := combineStructureOfferMaterial(

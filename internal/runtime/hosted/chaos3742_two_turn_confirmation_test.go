@@ -1235,6 +1235,32 @@ func (c *twoTurnTraceCapture) boundaryContainsKind(kind string) bool {
 	return false
 }
 
+// boundaryContainsKindBeforeRepair (CHAOS-4183 phase 3, sol design consult,
+// team-lead ratified 2026-08-23) is boundaryContainsKind's PRE-repair twin:
+// it reads KindOfferBoundaryKindsBeforeRepair instead of KindOfferBoundaryKinds
+// -- the exact pre-phase-3 boundary reading boundaryContainsKind itself used
+// to compute, before that field's own meaning shifted to post-repair. See
+// KindOfferBoundaryKindsBeforeRepair's own doc comment (ResolutionTraceEvent)
+// for why the two readings can now diverge on a Shape-A row: this one still
+// answers "was the kind actually present at the boundary before the repair
+// ran," which is what a v25-vs-v26 diff needs to measure the repair's own
+// effect.
+func (c *twoTurnTraceCapture) boundaryContainsKindBeforeRepair(kind string) bool {
+	if kind == "" {
+		return false
+	}
+	event, ok := c.kindOfferEvent()
+	if !ok {
+		return false
+	}
+	for _, boundaryKind := range event.KindOfferBoundaryKindsBeforeRepair {
+		if boundaryKind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // censusCount (CHAOS-4120) sums CensusCount across every "evidence_probe"
 // event the captured call traced -- the per-kind row count evidence_probe
 // carries (brief §1.3(3), "per-kind, never aggregated"), aggregated here
@@ -1836,6 +1862,23 @@ type twoTurnTurn1Facts struct {
 	// this) from "already absent at the boundary" (upstream truncation
 	// already lost it -- candidate-list reads the SAME slice, so it cannot).
 	ExpectedKindAtOfferBoundary bool
+	// ExpectedKindAtOfferBoundaryBeforeRepair/
+	// KindOfferDistinctKindCountBeforeRepair/
+	// KindOfferSuppressedByCardinalityBeforeRepair (CHAOS-4183 phase 3, sol
+	// design consult, team-lead ratified 2026-08-23, schema v26) are the
+	// PRE-repair twins of ExpectedKindAtOfferBoundary/
+	// KindOfferDistinctKindCount/KindOfferSuppressedByCardinality above --
+	// exactly what those three fields would have read had this phase's
+	// post-decision kind-only boundary completion not run. Reading BOTH
+	// readings off the SAME event is what lets a single artifact measure
+	// the repair's own effect directly, without needing a v25 artifact to
+	// diff against. ExpectedKindAtOfferBoundaryBeforeRepair is
+	// boundaryContainsKindBeforeRepair evaluated against this case's own
+	// oracle expected kind, same convention as ExpectedKindAtOfferBoundary
+	// itself.
+	ExpectedKindAtOfferBoundaryBeforeRepair      bool
+	KindOfferDistinctKindCountBeforeRepair       int
+	KindOfferSuppressedByCardinalityBeforeRepair bool
 	// AnchorOptionsCount/HandleOptionsCount are turn 1's own
 	// StructureNeeds.AnchorOptions/HandleOptions counts, zero when turn 1
 	// carried no StructureNeeds at all (a window-only disclosure). They
@@ -1998,10 +2041,13 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 		facts.KindOfferSuppressedByCardinality = event.KindOfferSuppressedByCardinality
 		facts.CandidateOfferCount = event.KindOfferCandidateOfferCount
 		facts.OfferKind = event.KindOfferOfferKind
+		facts.KindOfferDistinctKindCountBeforeRepair = event.KindOfferDistinctKindCountBeforeRepair
+		facts.KindOfferSuppressedByCardinalityBeforeRepair = event.KindOfferSuppressedByCardinalityBeforeRepair
 	}
 	facts.TermSearchTruncated, facts.QuestionSearchTruncated = trace.passTruncation()
 	facts.ExpectedInPool = trace.poolContainsKind(tc.ExpectKind)
 	facts.ExpectedKindAtOfferBoundary = trace.boundaryContainsKind(tc.ExpectKind)
+	facts.ExpectedKindAtOfferBoundaryBeforeRepair = trace.boundaryContainsKindBeforeRepair(tc.ExpectKind)
 	facts.CensusRan = trace.censusRan()
 	facts.CensusComplete = trace.censusComplete()
 	facts.CensusCount = trace.censusCount()
@@ -2037,12 +2083,15 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.Turn1KindOfferExplicitHintCount = facts.KindOfferExplicitHintCount
 	res.Turn1KindOfferDistinctKindCount = facts.KindOfferDistinctKindCount
 	res.Turn1KindOfferSuppressedByCardinality = facts.KindOfferSuppressedByCardinality
+	res.Turn1KindOfferDistinctKindCountBeforeRepair = facts.KindOfferDistinctKindCountBeforeRepair
+	res.Turn1KindOfferSuppressedByCardinalityBeforeRepair = facts.KindOfferSuppressedByCardinalityBeforeRepair
 	res.Turn1CandidateOfferCount = facts.CandidateOfferCount
 	res.Turn1OfferKind = facts.OfferKind
 	res.Turn1TermSearchTruncated = facts.TermSearchTruncated
 	res.Turn1QuestionSearchTruncated = facts.QuestionSearchTruncated
 	res.ExpectedInPool = facts.ExpectedInPool
 	res.ExpectedKindAtOfferBoundary = facts.ExpectedKindAtOfferBoundary
+	res.ExpectedKindAtOfferBoundaryBeforeRepair = facts.ExpectedKindAtOfferBoundaryBeforeRepair
 	res.AnchorOptionsCount = facts.AnchorOptionsCount
 	res.HandleOptionsCount = facts.HandleOptionsCount
 	res.CensusRan = facts.CensusRan
@@ -3605,6 +3654,16 @@ type twoTurnCaseResult struct {
 	Turn1KindOfferExplicitHintCount       int  `json:"turn1_kind_offer_explicit_hint_count"`
 	Turn1KindOfferDistinctKindCount       int  `json:"turn1_kind_offer_distinct_kind_count"`
 	Turn1KindOfferSuppressedByCardinality bool `json:"turn1_kind_offer_suppressed_by_cardinality"`
+	// Turn1KindOfferDistinctKindCountBeforeRepair/
+	// Turn1KindOfferSuppressedByCardinalityBeforeRepair (CHAOS-4183 phase 3,
+	// sol design consult, team-lead ratified 2026-08-23, schema v26) mirror
+	// KindOfferDistinctKindCountBeforeRepair/
+	// KindOfferSuppressedByCardinalityBeforeRepair (ResolutionTraceEvent),
+	// read off turn 1's own kind_offer trace stage -- the PRE-repair twins
+	// of Turn1KindOfferDistinctKindCount/Turn1KindOfferSuppressedByCardinality
+	// above, same no-omitempty reasoning.
+	Turn1KindOfferDistinctKindCountBeforeRepair       int  `json:"turn1_kind_offer_distinct_kind_count_before_repair"`
+	Turn1KindOfferSuppressedByCardinalityBeforeRepair bool `json:"turn1_kind_offer_suppressed_by_cardinality_before_repair"`
 	// Turn1CandidateOfferCount/Turn1OfferKind (CHAOS-4012 v22) mirror
 	// CandidateOfferCount/OfferKind above, read off turn 1's own kind_offer
 	// trace stage instead of this arm's own turn-2 call.
@@ -3638,6 +3697,18 @@ type twoTurnCaseResult struct {
 	// false is a real, meaningful boundary-absence signal, not an unset
 	// field. See twoTurnTraceCapture.boundaryContainsKind.
 	ExpectedKindAtOfferBoundary bool `json:"expected_kind_at_offer_boundary"`
+	// ExpectedKindAtOfferBoundaryBeforeRepair (CHAOS-4183 phase 3, sol
+	// design consult, team-lead ratified 2026-08-23, schema v26) is
+	// ExpectedKindAtOfferBoundary's PRE-repair twin: true only when the
+	// expected kind survived to the boundary WITHOUT this phase's
+	// post-decision kind-only completion -- exactly what
+	// ExpectedKindAtOfferBoundary itself measured before this phase
+	// existed. A row where this reads false but ExpectedKindAtOfferBoundary
+	// reads true is a Shape-A row the repair fixed; a row where both stay
+	// false the repair could not reach (fullPool itself lacked the kind, or
+	// something already committed). See
+	// twoTurnTraceCapture.boundaryContainsKindBeforeRepair.
+	ExpectedKindAtOfferBoundaryBeforeRepair bool `json:"expected_kind_at_offer_boundary_before_repair"`
 	// AnchorOptionsCount/HandleOptionsCount are turn 1's own
 	// StructureNeeds.AnchorOptions/HandleOptions counts (zero when turn 1
 	// carried no StructureNeeds). For anchor: count==1 is a designed
@@ -4261,6 +4332,49 @@ type twoTurnReport struct {
 	// cmd/acr-trial-merge-two-turn/main.go gained the field in the same
 	// change, same "an undeclared field is dropped on decode" reason every
 	// prior bump needed it for.
+	//
+	// "26" (CHAOS-4183 phase 3, sol design consult, team-lead ratified
+	// 2026-08-23): the POST-DECISION KIND-ONLY BOUNDARY COMPLETION for
+	// Shape A -- stalled resolutions only (committedCount==0), no candidate
+	// added, no score changed, no extra SearchKind call, no displacement.
+	// projectKindOfferKinds (chaos3900_structure_offers.go) appends, in
+	// FIXED closed-vocab order, every offerable kind present in the full
+	// merged pool (candidatesBySubject) but absent from the visible
+	// kind_offer boundary -- the exact Shape-A gap the CHAOS-4183 re-smoke
+	// confirmed for 5/9 investigated indices (expected_in_pool=true,
+	// expected_kind_at_offer_boundary=false). Two changes, both requiring
+	// the bump.
+	//
+	// (a) MEANING change on an existing key: KindOfferBoundaryKinds
+	// (ResolutionTraceEvent) is now the POST-repair boundary, not the raw
+	// kindOfferCandidates snapshot it used to be -- so
+	// ExpectedKindAtOfferBoundary (this struct) and boundaryContainsKind()
+	// now read POST-repair too, automatically, with no code change of
+	// their own. A v25 row's expected_kind_at_offer_boundary=false and a
+	// v26 row's own false are NOT the same claim for a Shape-A case; this
+	// version number is what tells a reader which reading applies -- same
+	// "22"/"23" class of retroactive meaning shift.
+	//
+	// (b) Purely additive: ResolutionTraceEvent gains
+	// KindOfferBoundaryKindsBeforeRepair/
+	// KindOfferDistinctKindCountBeforeRepair/
+	// KindOfferSuppressedByCardinalityBeforeRepair -- the PRE-repair twins
+	// of the now-shifted trio, so a reader can still ask the OLD question
+	// off the SAME event. twoTurnCaseResult gains
+	// ExpectedKindAtOfferBoundaryBeforeRepair (single, turn-1-only, same
+	// shape as ExpectedInPool/ExpectedKindAtOfferBoundary themselves) and
+	// the Turn1-prefixed KindOfferDistinctKindCountBeforeRepair/
+	// KindOfferSuppressedByCardinalityBeforeRepair twins (same shape as
+	// "20"'s trio). candidateOfferMaterial/CandidateOptions and
+	// resolution.Candidates/Committed are byte-unchanged by this phase --
+	// see projectKindOfferKinds' own doc comment for the full mechanism
+	// and TestResolveSubjects_KindBoundaryRepairCausalFixture
+	// (chaos4183_kind_boundary_repair_test.go) for the causal proof.
+	//
+	// No merge arithmetic changes (Results concatenates verbatim); the
+	// mirror in cmd/acr-trial-merge-two-turn/main.go gained all of it in
+	// the same change, same "an undeclared field is dropped on decode"
+	// reason every prior bump needed it for.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -7444,7 +7558,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "25",
+		ReportSchemaVersion: "26",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,

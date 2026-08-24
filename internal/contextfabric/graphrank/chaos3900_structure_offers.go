@@ -100,8 +100,19 @@ type kindOfferDiagnostics struct {
 	SuppressedByCardinality bool
 }
 
-func kindOfferMaterial(candidates []contextfabric.SubjectCandidate, explicitKinds []contractsv1.ContextFabricSubjectKind) (contextfabric.StructureOfferMaterial, kindOfferDiagnostics) {
-	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(candidates)+len(explicitKinds))
+// poolKinds (CHAOS-4183 phase 3, sol design consult, team-lead ratified
+// 2026-08-23) used to be candidates []contextfabric.SubjectCandidate --
+// changed to a bare kind slice because this function only ever reads
+// candidate.Subject.Kind from each entry, and its own callers now have two
+// genuinely different sources for that: the ordinary pool-derived kind list
+// (distinctOfferableKinds(candidates)) AND projectKindOfferKinds' own
+// post-repair `after` projection, which has no candidate objects backing
+// its repaired entries at all (kind identity only, by design -- see that
+// function's own doc comment). Accepting kinds directly means this
+// function's own cardinality/dedup logic is identical regardless of which
+// source produced its input.
+func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explicitKinds []contractsv1.ContextFabricSubjectKind) (contextfabric.StructureOfferMaterial, kindOfferDiagnostics) {
+	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(poolKinds)+len(explicitKinds))
 	var ranked []contractsv1.ContextFabricSubjectKind
 	for _, kind := range explicitKinds {
 		if seen[kind] || !structureOfferKinds[kind] {
@@ -112,8 +123,7 @@ func kindOfferMaterial(candidates []contextfabric.SubjectCandidate, explicitKind
 	}
 	explicitCount := len(ranked)
 	var poolDistinct []contractsv1.ContextFabricSubjectKind
-	for _, candidate := range candidates {
-		kind := candidate.Subject.Kind
+	for _, kind := range poolKinds {
 		if seen[kind] || !structureOfferKinds[kind] {
 			continue
 		}
@@ -169,6 +179,97 @@ func kindOfferLabel(kind contractsv1.ContextFabricSubjectKind) string {
 		// kindOfferMaterial never calls this with a kind outside that map.
 		return string(kind)
 	}
+}
+
+// distinctOfferableKinds returns candidates' own distinct offerable kinds,
+// first-occurrence order, restricted to structureOfferKinds -- the EXACT
+// "poolDistinct" computation kindOfferMaterial itself used to do inline
+// before its own CHAOS-4183 phase 3 signature change, extracted here as
+// its own reusable function so projectKindOfferKinds' `before` return can
+// compute it independently of any particular kindOfferMaterial call.
+func distinctOfferableKinds(candidates []contextfabric.SubjectCandidate) []contractsv1.ContextFabricSubjectKind {
+	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(candidates))
+	var kinds []contractsv1.ContextFabricSubjectKind
+	for _, candidate := range candidates {
+		kind := candidate.Subject.Kind
+		if seen[kind] || !structureOfferKinds[kind] {
+			continue
+		}
+		seen[kind] = true
+		kinds = append(kinds, kind)
+	}
+	return kinds
+}
+
+// projectKindOfferKinds (CHAOS-4183 phase 3, sol design consult, team-lead
+// ratified 2026-08-23) is the Shape-A POST-DECISION, KIND-ONLY boundary
+// completion: a kind can be genuinely present in the full merged candidate
+// pool (fullPool, resolve.go's own candidatesBySubject, pre-truncation) yet
+// never reach `visible` (kindOfferCandidates, the SAME pool
+// kindOfferMaterial/candidateOfferMaterial already read) at all --
+// ResolveFromMergedCandidatesWithGateAndBasis's own MaxSubjectCandidates
+// ranking/truncation can drop every candidate of a kind before either offer
+// builder ever sees it, even though that kind had real representation in
+// the pool the commit decision itself considered. CHAOS-4183's own
+// re-smoke confirmed this for 5/9 investigated indices: expected_in_pool
+// (true -- corroborated somewhere) alongside expected_kind_at_offer_boundary
+// (false -- absent from kindOfferCandidates specifically).
+//
+// before: distinct offerable kinds in `visible`, first-occurrence order --
+// distinctOfferableKinds(visible), i.e. EXACTLY what kindOfferMaterial's
+// own pool-derived ranking already computes when fed `visible` (recomputed
+// here, independently, so this function is a pure function of its own
+// inputs rather than threading a value through from elsewhere).
+//
+// after: `before`, followed by every offerable kind present in `fullPool`
+// but ABSENT from `before`, appended in a FIXED closed-vocabulary order
+// (sortedKinds(structureOfferKinds), lexicographic -- corpus-safe, never a
+// function of retrieval score, candidate confidence, or pool iteration
+// order). At most one kind IDENTITY is admitted per repaired kind -- never
+// a candidate, never a score, never a Label beyond the fixed
+// kindOfferLabel() sentence every kind already carries.
+//
+// committedCount gates this to STALLED resolutions only, mirroring
+// candidateOfferMaterial's own identically-shaped precondition
+// (committedCount > 0 returns nothing) -- nothing is ever added after a
+// successful commit. When committedCount > 0, after == before exactly (no
+// repair attempted), so this function degrades to a no-op identical to
+// today's pre-phase-3 behavior for every committed resolution.
+//
+// What this does NOT do, by design (sol design consult's own risk
+// containment, all REJECTED as separate directions): it never adds a
+// candidate to resolution.Candidates, kindOfferCandidates, or
+// CandidateOptions; it never changes a commit basis, a commit digest, or
+// the candidate-list axis's own top-five ranking (candidateOfferMaterial
+// is called with the UNCHANGED, un-repaired `visible` pool, exactly as
+// before this phase); it never issues an additional SearchKind call (no
+// retrieval happens here at all -- fullPool is read-only, already-merged
+// state). This is the "ordinary-search provenance hole" fix, deliberately
+// narrower than a per-kind retrieval quota (CHAOS-4149 territory,
+// rejected) or a boundary-aware poolHasKind (implementation-level
+// confusion between the floor's OWN trigger, missingCoverageKinds, and
+// this projection's own read-only pool check, also rejected).
+func projectKindOfferKinds(visible []contextfabric.SubjectCandidate, fullPool map[string]contextfabric.SubjectCandidate, committedCount int) (before, after []contractsv1.ContextFabricSubjectKind) {
+	before = distinctOfferableKinds(visible)
+	if committedCount > 0 {
+		return before, before
+	}
+	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(before))
+	for _, kind := range before {
+		seen[kind] = true
+	}
+	after = append(after, before...)
+	for _, kind := range sortedKinds(structureOfferKinds) {
+		if seen[kind] {
+			continue
+		}
+		if !poolHasKind(fullPool, kind) {
+			continue
+		}
+		seen[kind] = true
+		after = append(after, kind)
+	}
+	return before, after
 }
 
 // candidateOfferTopN (CHAOS-4012) bounds candidateOfferMaterial's own
