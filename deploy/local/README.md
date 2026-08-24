@@ -301,21 +301,43 @@ container image tag docker.io/library/dev-health-acr:dev dev-health-acr:dev
 kiac load image dev-health-acr:dev --name acr-local
 #
 # acr-pilot's runtime Secret (acr-runtime-credentials/acr-model-credentials):
-# GENERATE fresh from `trial-data.sh dsn --env`'s in-cluster DNS hosts +
-# the LIVE credential the trial-data secret holds, at redeploy time --
-# the same credential-source-of-truth ruling `dsn` itself follows. NEVER
-# restore a Secret backup from a previous install (a real incident hit
-# live: the previous install's Secret carried BOTH a pre-migration host
-# (an apple/container VM gateway IP, itself a separate trap -- always use
-# the in-cluster Service DNS, e.g. trial-postgres.acr-trial-data.svc.
-# cluster.local, never a host IP that changes on every recreate) AND a
-# password that predated this recipe's own restore-postgres step, so it
-# silently no longer matched the live role's actual password -- surfaced
-# as "FATAL: password authentication failed", not as a connectivity
-# error, which is why it wasn't caught by DNS/TCP checks alone). Never
-# hand-edit a Secret's password to "whatever looks right" either --
-# derive it from the SAME `trial_secret`/`dsn --env` mechanism the rest
-# of this data plane already uses as its credential source of truth.
+# GENERATE fresh at redeploy time, NEVER restore a Secret backup from a
+# previous install (a real incident hit live: a restored backup carried
+# both a pre-migration host AND a password that predated this recipe's
+# own restore-postgres step, so it silently no longer matched the live
+# role's actual password -- surfaced as "FATAL: password authentication
+# failed", not a connectivity error, which is why DNS/TCP checks alone
+# didn't catch it).
+#
+# `deploy/local/trial-data.sh dsn --env` is NOT the source for this --
+# it emits the node's EXTERNAL access point (InternalIP + NodePorts,
+# e.g. 192.168.64.14:30500), meant for trial scripts running on the
+# HOST Mac outside the cluster. acr-pilot's pod runs INSIDE the
+# cluster, where the correct host is the in-cluster Service DNS name
+# on the store's own cluster-internal port (NOT the NodePort):
+#   <service>.<namespace>.svc.cluster.local:<port>
+#   trial-postgres.acr-trial-data.svc.cluster.local:5432
+#   trial-clickhouse.acr-trial-data.svc.cluster.local:9000
+#   trial-falkordb.acr-trial-data.svc.cluster.local:6379
+# (confirm the exact names/ports with `kubectl -n acr-trial-data get svc`
+# -- they come from templates/trial-data.yaml, not from this script.)
+#
+# The credential itself: read directly from the live `trial-postgres`
+# Secret in acr-trial-data (the SAME cluster-secret-is-source-of-truth
+# rule `dsn`'s own password lookup follows) -- never `trial_secret`
+# (that reads ops/.env, a completely different, host-side credential
+# store unrelated to what the trial data plane pods were actually
+# seeded with):
+kubectl -n acr-trial-data get secret trial-postgres \
+  -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d
+# Build each DSN as postgres://devhealth:<that password>@trial-postgres.
+# acr-trial-data.svc.cluster.local:5432/acr?sslmode=disable (clickhouse
+# analogous, user `ch`, same password -- see trial-data.sh's own Secret
+# comment for why postgres/clickhouse share one password), base64-encode
+# into acr-runtime-credentials' ACR_POSTGRES_DSN/ACR_POSTGRES_MIGRATION_DSN/
+# ACR_CLICKHOUSE_DSN keys, and `kubectl -n acr-pilot apply -f` the result.
+# Never hand-edit an EXISTING Secret's password to "whatever looks
+# right" -- always re-derive it from the live trial-postgres Secret above.
 # redeploy acr-pilot via its own owner's normal deploy path (stateless, no
 # PVC -- no data loss there, just needs a fresh rollout after the recreate)
 ```
