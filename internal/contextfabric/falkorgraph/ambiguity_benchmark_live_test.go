@@ -464,6 +464,16 @@ func benchmarkLookup(key string) (string, bool) {
 		// OPENAI_API_KEY (see its doc comment), so without this case a
 		// benchmark run against a real remote embedder 401s.
 		return value("ACR_TEST_EMBED_API_KEY")
+	case embedprovider.EnvAllowNoCredential:
+		// OPTIONAL passthrough, NOT a fixed policy value like
+		// EnvAllowInsecureBaseURL below (CHAOS-4192): whether this
+		// benchmark run's embedder genuinely needs no credential varies
+		// per invocation (a keyless local embedder vs. a real remote one
+		// pointed at via ACR_TEST_EMBED_BASE_URL/API_KEY above), so the
+		// operator declares it explicitly the same way they declare the
+		// key itself, rather than the harness silently exempting every
+		// run from the guard this ticket exists to add.
+		return value("ACR_TEST_EMBED_ALLOW_NO_CREDENTIAL")
 	case embedprovider.EnvTimeout:
 		// OPTIONAL (CHAOS-3849 round 2): unset falls through to
 		// embedprovider.DefaultTimeout (250ms), which is deliberately
@@ -650,6 +660,7 @@ var embedproviderEnvVars = []string{
 	embedprovider.EnvAllowInsecureBaseURL,
 	embedprovider.EnvProviderLocality,
 	embedprovider.EnvIncludeBodies,
+	embedprovider.EnvAllowNoCredential,
 }
 
 // benchmarkLookupEnvVarFor is the exact ACR_TEST_* variable name
@@ -682,6 +693,7 @@ var benchmarkLookupEnvVarFor = map[string]string{
 	embedprovider.EnvMaxTransportRetries: "ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES",
 	embedprovider.EnvProviderLocality:    "ACR_TEST_EMBED_PROVIDER_LOCALITY",
 	embedprovider.EnvIncludeBodies:       "ACR_TEST_EMBED_INCLUDE_BODIES",
+	embedprovider.EnvAllowNoCredential:   "ACR_TEST_EMBED_ALLOW_NO_CREDENTIAL",
 }
 
 // embedproviderImportPath is the package packages.Load resolves for

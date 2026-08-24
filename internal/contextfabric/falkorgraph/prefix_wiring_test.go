@@ -159,7 +159,8 @@ func TestConfiguredPrefixFamilyWrapsTransmissionOnly(t *testing.T) {
 	sourceEnv := map[string]string{
 		embedprovider.EnvBaseURL: "https://embed.example/v1", embedprovider.EnvProvider: "nomic",
 		embedprovider.EnvModel: "nomic-embed-text", embedprovider.EnvDimension: "768",
-		embedprovider.EnvPrefixFamily: "nomic",
+		embedprovider.EnvPrefixFamily:      "nomic",
+		embedprovider.EnvAllowNoCredential: "true", // no real transport, no credential to check (CHAOS-4192)
 	}
 	cfg, err := embedprovider.ConfigFromEnv(func(key string) (string, bool) { value, ok := sourceEnv[key]; return value, ok })
 	if err != nil {
@@ -248,6 +249,7 @@ func TestEmbedderFromEnvCapturesTheConcreteCapabilities(t *testing.T) {
 		embedprovider.EnvBaseURL: "https://embed.example/v1/", embedprovider.EnvProvider: "nomic",
 		embedprovider.EnvModel: "nomic-embed-text", embedprovider.EnvDimension: "768",
 		embedprovider.EnvMaxTextRunes: "2345", embedprovider.EnvPrefixFamily: "nomic",
+		embedprovider.EnvAllowNoCredential: "true", // no real transport, no credential to check (CHAOS-4192)
 	}
 	options, err := EmbedderFromEnv(func(key string) (string, bool) { value, ok := env[key]; return value, ok })
 	if err != nil {
@@ -279,6 +281,7 @@ func TestEmbedRetrievalIdentityTracksThePrefixFamily(t *testing.T) {
 	base := map[string]string{
 		embedprovider.EnvBaseURL: "https://embed.example/v1/", embedprovider.EnvProvider: "openai",
 		embedprovider.EnvModel: "text-embedding-3-large", embedprovider.EnvDimension: "3072",
+		embedprovider.EnvAllowNoCredential: "true", // no real transport, no credential to check (CHAOS-4192)
 	}
 	env := func(values map[string]string) func(string) (string, bool) {
 		return func(key string) (string, bool) { value, ok := values[key]; return value, ok }

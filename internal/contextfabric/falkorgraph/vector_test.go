@@ -510,6 +510,9 @@ func wrongModelEmbedder(t *testing.T, baseURL string) *embedprovider.Embedder {
 		Model: "text-embedding-nomic-embed-text-v1.5", Dimension: 8,
 		SimilarityFloor: 0.55, Timeout: 5 * time.Second,
 		MaxBatch: 8, MaxTextRunes: 2000, AllowInsecureBaseURL: true,
+		// No credential, matching this fixture's own "lmstudio" no-auth
+		// modeling -- explicit AllowNoCredential (CHAOS-4192).
+		AllowNoCredential: true,
 	})
 	if err != nil {
 		t.Fatalf("embedprovider.New: %v", err)

@@ -137,6 +137,12 @@ func fakeEmbedderEnv(overrides map[string]string) func(string) (string, bool) {
 		embedprovider.EnvProvider:  "openai",
 		embedprovider.EnvModel:     "text-embedding-3-large",
 		embedprovider.EnvDimension: "3072",
+		// These tests exercise policy/identity resolution against a mocked
+		// transport, never a real credential check -- explicit opt-in
+		// (CHAOS-4192) so ConfigFromEnv's construction-time credential
+		// guard doesn't gate unrelated fixtures. A test that specifically
+		// wants a real credential can still override EnvAPIKey.
+		embedprovider.EnvAllowNoCredential: "true",
 	}
 	for k, v := range overrides {
 		base[k] = v

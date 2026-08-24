@@ -398,7 +398,8 @@ func realNomicEmbedder(t *testing.T) *embedprovider.Embedder {
 	env := map[string]string{
 		embedprovider.EnvBaseURL: "https://embed.example/v1", embedprovider.EnvProvider: "nomic",
 		embedprovider.EnvModel: "nomic-embed-text", embedprovider.EnvDimension: "768",
-		embedprovider.EnvPrefixFamily: "nomic",
+		embedprovider.EnvPrefixFamily:      "nomic",
+		embedprovider.EnvAllowNoCredential: "true", // no real transport, no credential to check (CHAOS-4192)
 	}
 	cfg, err := embedprovider.ConfigFromEnv(func(key string) (string, bool) { v, ok := env[key]; return v, ok })
 	if err != nil {
@@ -423,6 +424,7 @@ func realNoneEmbedder(t *testing.T) *embedprovider.Embedder {
 	env := map[string]string{
 		embedprovider.EnvBaseURL: "https://embed.example/v1", embedprovider.EnvProvider: "openai",
 		embedprovider.EnvModel: "text-embedding-3-large", embedprovider.EnvDimension: "3072",
+		embedprovider.EnvAllowNoCredential: "true", // no real transport, no credential to check (CHAOS-4192)
 	}
 	cfg, err := embedprovider.ConfigFromEnv(func(key string) (string, bool) { v, ok := env[key]; return v, ok })
 	if err != nil {
