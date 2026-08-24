@@ -272,6 +272,28 @@ type OrgEpochResolver interface {
 	ResolveBuildEpoch(ctx context.Context, orgID string) (epoch int64, ok bool, err error)
 }
 
+// EpochResolverInvalidator (CHAOS-4208) lets the writer of a lifecycle
+// transition (projectionrun.Coordinator) clear an OrgEpochResolver's
+// per-org cached entry the INSTANT a transition commits, instead of
+// letting every reader wait out the resolver's own bounded lease
+// (pglifecycle.CachedResolver's own doc comment already promised this as
+// "a courtesy" via its Invalidate method, but nothing ever called it --
+// CHAOS-4208's root cause). Optional: Coordinator's own copy of the
+// lifecycle store (writes) and the falkorgraph adapter's OrgEpochResolver
+// (reads) are two separate objects over the same Postgres store in every
+// composition root; a nil EpochResolverInvalidator just means a
+// transition's effect on graph-key resolution is visible after the
+// resolver's lease expires rather than immediately -- bounded staleness,
+// never incorrectness, exactly the contract CachedResolver already
+// documents.
+type EpochResolverInvalidator interface {
+	// Invalidate drops orgID's cached epoch entry so the next resolve call
+	// re-reads the store. Matches pglifecycle.CachedResolver.Invalidate's
+	// signature exactly so that type satisfies this interface with no
+	// adapter.
+	Invalidate(orgID string)
+}
+
 // GraphKeyRole is the CHAOS-3898 §2.0 (v4.1 F2) role vocabulary a resolved
 // graph key is stamped with: divergence is defined as two DIFFERENT keys
 // observed for the SAME (org, epoch, role) -- not merely "two keys exist
@@ -369,6 +391,13 @@ type GraphLifecycleTelemetry interface {
 	// RecordBuildSourceProgress is cf_build_source_progress, per (org,
 	// epoch, source).
 	RecordBuildSourceProgress(ctx context.Context, orgID string, epoch int64, source string, mode BuildCompletionMode, rowsProjected int64)
+	// RecordEpochResolverInvalidation is cf_epoch_resolver_invalidation
+	// (CHAOS-4208): fired every time Coordinator notifies a wired
+	// EpochResolverInvalidator that a lifecycle transition just committed
+	// for orgID -- see that interface's own doc comment. transition names
+	// which commit triggered it (LifecycleTransitionBeginBuild or
+	// LifecycleTransitionFlip today).
+	RecordEpochResolverInvalidation(ctx context.Context, orgID string, transition LifecycleTransition)
 }
 
 // EpochGraphDeleter is the retire executor's graph-deletion port (design
@@ -417,6 +446,8 @@ func (NoopGraphLifecycleTelemetry) RecordLifecycleCASConflict(context.Context, s
 func (NoopGraphLifecycleTelemetry) RecordCheckpointEpochState(context.Context, string, int64, CheckpointEpochState, time.Duration) {
 }
 func (NoopGraphLifecycleTelemetry) RecordBuildSourceProgress(context.Context, string, int64, string, BuildCompletionMode, int64) {
+}
+func (NoopGraphLifecycleTelemetry) RecordEpochResolverInvalidation(context.Context, string, LifecycleTransition) {
 }
 
 var _ GraphLifecycleTelemetry = NoopGraphLifecycleTelemetry{}
@@ -497,6 +528,10 @@ func (t SlogGraphLifecycleTelemetry) RecordCheckpointEpochState(_ context.Contex
 func (t SlogGraphLifecycleTelemetry) RecordBuildSourceProgress(_ context.Context, orgID string, epoch int64, source string, mode BuildCompletionMode, rowsProjected int64) {
 	t.logger().Debug("context_fabric: build source progress",
 		"org_id", orgID, "epoch", epoch, "source", source, "completion_mode", string(mode), "rows_projected", rowsProjected)
+}
+
+func (t SlogGraphLifecycleTelemetry) RecordEpochResolverInvalidation(_ context.Context, orgID string, transition LifecycleTransition) {
+	t.logger().Info("context_fabric: epoch resolver cache invalidated", "org_id", orgID, "transition", string(transition))
 }
 
 var _ GraphLifecycleTelemetry = SlogGraphLifecycleTelemetry{}
