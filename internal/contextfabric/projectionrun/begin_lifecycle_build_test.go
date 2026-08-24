@@ -27,13 +27,15 @@ import (
 type fakeRefusalLifecycleStore struct {
 	beginBuildErr error
 	getErr        error
+	getRow        contextfabric.OrgGraphLifecycle
+	getFound      bool
 }
 
 func (f *fakeRefusalLifecycleStore) Get(context.Context, string) (contextfabric.OrgGraphLifecycle, bool, error) {
 	if f.getErr != nil {
 		return contextfabric.OrgGraphLifecycle{}, false, f.getErr
 	}
-	return contextfabric.OrgGraphLifecycle{}, false, nil
+	return f.getRow, f.getFound, nil
 }
 
 func (f *fakeRefusalLifecycleStore) BeginBuild(context.Context, string, []string, time.Time) (contextfabric.OrgGraphLifecycle, error) {
@@ -107,6 +109,8 @@ func TestBeginLifecycleBuild_PropagatesAFailedReReadAfterCASRefusal(t *testing.T
 func TestBeginLifecycleBuild_GraceRefusalWithSuccessfulReReadIsAHarmlessNoOp(t *testing.T) {
 	store := &fakeRefusalLifecycleStore{
 		beginBuildErr: contextfabric.ErrLifecycleTransitionRefused,
+		getFound:      true,
+		getRow:        contextfabric.OrgGraphLifecycle{ActiveEpoch: 1, Status: contextfabric.LifecycleStatusGrace},
 	}
 	coordinator := &Coordinator{
 		lifecycle:   store,
