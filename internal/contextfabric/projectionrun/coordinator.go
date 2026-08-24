@@ -409,6 +409,7 @@ func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
 		return fmt.Errorf("projectionrun: rollback: %w", err)
 	}
 	c.logger.WarnContext(ctx, "context_fabric: graph epoch rollback", "org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", rolled.ActiveEpoch)
+	c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionRollback)
 	if c.reuseInvalidator != nil {
 		if invalidateErr := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); invalidateErr != nil {
 			c.logger.WarnContext(ctx, "invalidate answer reuse after rollback failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
@@ -456,14 +457,23 @@ func (c *Coordinator) beginLifecycleBuild(ctx context.Context, orgID string) (op
 	// Refused. Re-read to report WHY, distinguishing "a build is already
 	// open" (routine, matches this call's own intent) from any other
 	// observed status (e.g. grace) that refuses BeginBuild for a reason
-	// that has nothing to do with a build already running.
+	// that has nothing to do with a build already running. A re-read
+	// FAILURE (a transient dependency error, context cancellation) must
+	// propagate as an error, never default to "serving" and report success
+	// -- CHAOS-4208 round-2: silently treating "I don't know the current
+	// state" as a benign, already-handled refusal let an operator's Rebuild
+	// call report nil and let automatic recovery clear its backoff as
+	// though nothing were wrong.
 	row, found, getErr := c.lifecycle.Get(ctx, orgID)
-	if getErr == nil && found && row.Status == contextfabric.LifecycleStatusBuilding {
+	if getErr != nil {
+		return false, fmt.Errorf("projectionrun: begin build-aside epoch: re-read lifecycle row after CAS refusal: %w", getErr)
+	}
+	if found && row.Status == contextfabric.LifecycleStatusBuilding {
 		c.logger.InfoContext(ctx, "context_fabric: build-aside epoch already open for this organization; not restarting", "org_id", orgID)
 		return false, nil
 	}
 	status := contextfabric.LifecycleStatusServing
-	if getErr == nil && found {
+	if found {
 		status = row.Status
 	}
 	c.logger.InfoContext(ctx, "context_fabric: cannot open a build-aside epoch right now; organization is not in a rebuildable state",

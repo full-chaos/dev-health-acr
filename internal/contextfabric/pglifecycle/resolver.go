@@ -92,6 +92,16 @@ type CachedResolver struct {
 
 	mu      sync.Mutex
 	entries map[string]cacheEntry
+	// generation is CHAOS-4208 round-2's per-org invalidation counter,
+	// bumped by Invalidate. refresh's own store reads happen OUTSIDE the
+	// mutex (they're the whole point of not serializing every org's I/O
+	// behind one lock), so a refresh already in flight when Invalidate
+	// fires can still be holding a pre-transition read when it goes to
+	// write its result back -- refresh captures generation before it
+	// reads, and only commits its result to entries if the generation is
+	// still what it captured, so a since-fired Invalidate can never be
+	// silently overwritten by a stale write racing behind it.
+	generation map[string]uint64
 }
 
 // CachedResolverOptions configures CachedResolver. Now defaults to
@@ -111,7 +121,7 @@ func NewCachedResolver(inner contextfabric.OrgEpochResolver, lease time.Duration
 	if now == nil {
 		now = time.Now
 	}
-	return &CachedResolver{inner: inner, lease: lease, now: now, entries: make(map[string]cacheEntry)}, nil
+	return &CachedResolver{inner: inner, lease: lease, now: now, entries: make(map[string]cacheEntry), generation: make(map[string]uint64)}, nil
 }
 
 var _ contextfabric.OrgEpochResolver = (*CachedResolver)(nil)
@@ -153,6 +163,10 @@ func (c *CachedResolver) lookup(orgID string) (cacheEntry, bool) {
 
 func (c *CachedResolver) refresh(ctx context.Context, orgID string) (cacheEntry, error) {
 	orgID = strings.TrimSpace(orgID)
+	c.mu.Lock()
+	startGeneration := c.generation[orgID]
+	c.mu.Unlock()
+
 	active, err := c.inner.ResolveActiveEpoch(ctx, orgID)
 	if err != nil {
 		return cacheEntry{}, err
@@ -162,22 +176,36 @@ func (c *CachedResolver) refresh(ctx context.Context, orgID string) (cacheEntry,
 		return cacheEntry{}, err
 	}
 	entry := cacheEntry{activeEpoch: active, buildEpoch: buildEpoch, buildOK: buildOK, expiresAt: c.now().Add(c.lease)}
+
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation[orgID] != startGeneration {
+		// Invalidate fired while this refresh's reads were in flight -- the
+		// reads above may already be stale relative to the transition that
+		// triggered it. Still correct to RETURN to this one caller (it's the
+		// same snapshot-read guarantee any uncached call would give), but it
+		// must not be cached: caching it would silently resurrect the exact
+		// pre-transition entry Invalidate just cleared.
+		return entry, nil
+	}
 	c.entries[orgID] = entry
-	c.mu.Unlock()
 	return entry, nil
 }
 
 // Invalidate drops orgID's cached entry immediately, so the NEXT resolve
 // call re-reads the store rather than waiting out the lease. Not required
 // for correctness (a stale cached pointer only ever serves a complete old
-// graph, design brief §3.3), but flip/rollback call this on their own
-// process's cache as a courtesy so a request immediately following a
-// transition this same process just performed sees it without waiting out
-// the lease.
+// graph, design brief §3.3), but flip/rollback/beginLifecycleBuild call
+// this on their own process's cache as a courtesy so a request immediately
+// following a transition this same process just performed sees it without
+// waiting out the lease. Also bumps orgID's generation counter so a
+// refresh already in flight when this fires cannot overwrite the
+// invalidation with a stale result once its own reads complete (see
+// refresh's own doc comment).
 func (c *CachedResolver) Invalidate(orgID string) {
 	orgID = strings.TrimSpace(orgID)
 	c.mu.Lock()
 	delete(c.entries, orgID)
+	c.generation[orgID]++
 	c.mu.Unlock()
 }

@@ -40,6 +40,27 @@ func (f *fakeEpochResolverInvalidator) calls() []string {
 	return append([]string(nil), f.invalidated...)
 }
 
+// fakeInvalidationTelemetry records only RecordEpochResolverInvalidation
+// calls -- the cf_epoch_resolver_invalidation signal CHAOS-4208 adds
+// alongside the Invalidate wiring itself.
+type fakeInvalidationTelemetry struct {
+	contextfabric.NoopGraphLifecycleTelemetry
+	mu          sync.Mutex
+	transitions []contextfabric.LifecycleTransition
+}
+
+func (f *fakeInvalidationTelemetry) RecordEpochResolverInvalidation(_ context.Context, _ string, transition contextfabric.LifecycleTransition) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.transitions = append(f.transitions, transition)
+}
+
+func (f *fakeInvalidationTelemetry) recorded() []contextfabric.LifecycleTransition {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]contextfabric.LifecycleTransition(nil), f.transitions...)
+}
+
 func TestCoordinator_InvalidatesEpochResolverOnBeginBuildAndFlip(t *testing.T) {
 	ctx := context.Background()
 	db := newProjectionRunTestDatabase(t, ctx)
@@ -50,19 +71,21 @@ func TestCoordinator_InvalidatesEpochResolverOnBeginBuildAndFlip(t *testing.T) {
 	backend := newFakeBackend()
 	sourceA := &lifecycleFakeSource{name: "source-a", pages: 1}
 	invalidator := &fakeEpochResolverInvalidator{}
+	telemetry := &fakeInvalidationTelemetry{}
 
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:  []string{"org-1"},
 		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: sourceA}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
 		Lifecycle: lifecycle, EpochCheckpoints: checkpoints.ForEpoch,
-		EpochResolverInvalidator: invalidator,
-		GraceWindow:              time.Hour, Concurrency: 4, Logger: discardLogger(),
+		EpochResolverInvalidator: invalidator, LifecycleTelemetry: telemetry,
+		GraceWindow: time.Hour, Concurrency: 4, Logger: discardLogger(),
 	})
 	require.NoError(t, err)
 
 	require.NoError(t, coordinator.Rebuild(ctx, "org-1"))
 	require.Equal(t, []string{"org-1"}, invalidator.calls(), "a successful BeginBuild must invalidate the epoch resolver's cache immediately")
+	require.Equal(t, []contextfabric.LifecycleTransition{contextfabric.LifecycleTransitionBeginBuild}, telemetry.recorded(), "the invalidation must be reported via cf_epoch_resolver_invalidation")
 
 	// Re-running Rebuild while a build is already open (BeginBuild refused,
 	// nothing NEW opened) must NOT invalidate again.
@@ -71,6 +94,48 @@ func TestCoordinator_InvalidatesEpochResolverOnBeginBuildAndFlip(t *testing.T) {
 
 	tickUntilStatus(t, ctx, coordinator, lifecycle, "org-1", contextfabric.LifecycleStatusGrace, 10)
 	require.Equal(t, []string{"org-1", "org-1"}, invalidator.calls(), "a successful Flip must also invalidate the epoch resolver's cache immediately")
+	require.Equal(t, []contextfabric.LifecycleTransition{contextfabric.LifecycleTransitionBeginBuild, contextfabric.LifecycleTransitionFlip}, telemetry.recorded())
+}
+
+// TestCoordinator_InvalidatesEpochResolverOnRollback pins CHAOS-4208
+// round-2 finding 2: Rollback changes ActiveEpoch exactly like Flip does,
+// so it must invalidate the epoch resolver's cache exactly like Flip does
+// -- the resolver's own Invalidate doc comment already promised "flip/
+// rollback", but only Flip and beginLifecycleBuild were actually wired in
+// round 1.
+func TestCoordinator_InvalidatesEpochResolverOnRollback(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionRunTestDatabase(t, ctx)
+	lifecycle, err := pglifecycle.NewStore(db)
+	require.NoError(t, err)
+	checkpoints, err := pgprojection.NewCheckpointStore(db)
+	require.NoError(t, err)
+	backend := newFakeBackend()
+	sourceA := &lifecycleFakeSource{name: "source-a", pages: 1}
+	invalidator := &fakeEpochResolverInvalidator{}
+	telemetry := &fakeInvalidationTelemetry{}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:  []string{"org-1"},
+		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: sourceA}},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Lifecycle: lifecycle, EpochCheckpoints: checkpoints.ForEpoch,
+		EpochResolverInvalidator: invalidator, LifecycleTelemetry: telemetry,
+		GraceWindow: time.Hour, Concurrency: 4, Logger: discardLogger(),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, coordinator.Rebuild(ctx, "org-1"))
+	tickUntilStatus(t, ctx, coordinator, lifecycle, "org-1", contextfabric.LifecycleStatusGrace, 10)
+	callsBeforeRollback := len(invalidator.calls())
+
+	require.NoError(t, coordinator.Rollback(ctx, "org-1"))
+
+	calls := invalidator.calls()
+	require.Len(t, calls, callsBeforeRollback+1, "Rollback must invalidate the epoch resolver's cache immediately, exactly like Flip does")
+	require.Equal(t, "org-1", calls[len(calls)-1])
+	recorded := telemetry.recorded()
+	require.Equal(t, contextfabric.LifecycleTransitionRollback, recorded[len(recorded)-1])
 }
 
 func TestCoordinator_GraceRefusalDoesNotClaimItOpenedAnEpoch(t *testing.T) {

@@ -92,6 +92,101 @@ func TestCachedResolver_InvalidateForcesImmediateRefresh(t *testing.T) {
 	require.Equal(t, 4, reader.readCount())
 }
 
+// blockingLifecycleReader lets a test suspend exactly ONE Get call --
+// letting it observe a state, signal that it has, and wait to be released
+// -- while every other call (including the very next one, from the SAME
+// refresh) returns immediately. This is what makes the round-2 TOCTOU
+// regression test below deterministic: it interleaves an in-flight
+// refresh's OWN two reads (ResolveActiveEpoch then ResolveBuildEpoch, both
+// inside CachedResolver.refresh) around an Invalidate call, rather than
+// hoping a real race wins often enough to be caught.
+type blockingLifecycleReader struct {
+	mu      sync.Mutex
+	row     contextfabric.OrgGraphLifecycle
+	found   bool
+	armed   bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (f *blockingLifecycleReader) arm(entered, release chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.armed, f.entered, f.release = true, entered, release
+}
+
+func (f *blockingLifecycleReader) set(row contextfabric.OrgGraphLifecycle, found bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.row, f.found = row, found
+}
+
+func (f *blockingLifecycleReader) Get(context.Context, string) (contextfabric.OrgGraphLifecycle, bool, error) {
+	f.mu.Lock()
+	row, found := f.row, f.found
+	shouldBlock := f.armed
+	f.armed = false
+	entered, release := f.entered, f.release
+	f.mu.Unlock()
+	if shouldBlock {
+		close(entered)
+		<-release
+	}
+	return row, found, nil
+}
+
+// TestCachedResolver_InvalidateDuringInFlightRefreshIsNotOverwritten pins
+// the round-2 TOCTOU fix (codex finding 3): CachedResolver.refresh reads
+// the store OUTSIDE its mutex (deliberately -- serializing every org's I/O
+// behind one lock would defeat the point of per-org caching), so a refresh
+// already in flight when Invalidate fires could, without the generation
+// check, still commit its now-stale read to the cache AFTER Invalidate
+// cleared it -- silently resurrecting exactly the pre-transition entry
+// Invalidate was called to get rid of.
+func TestCachedResolver_InvalidateDuringInFlightRefreshIsNotOverwritten(t *testing.T) {
+	reader := &blockingLifecycleReader{}
+	reader.set(contextfabric.OrgGraphLifecycle{}, false) // pre-transition: implicit serving at epoch 0
+	inner, err := pglifecycle.NewResolver(reader)
+	require.NoError(t, err)
+	resolver, err := pglifecycle.NewCachedResolver(inner, time.Minute, pglifecycle.CachedResolverOptions{Now: time.Now})
+	require.NoError(t, err)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	reader.arm(entered, release)
+
+	// A cache-miss resolve starts a refresh; its FIRST store read (for
+	// ResolveActiveEpoch) blocks after observing the pre-transition state.
+	resultCh := make(chan int64, 1)
+	go func() {
+		epoch, resolveErr := resolver.ResolveActiveEpoch(context.Background(), "org-1")
+		require.NoError(t, resolveErr)
+		resultCh <- epoch
+	}()
+	<-entered
+
+	// The transition commits (mirrors a real BeginBuild/Flip/Rollback) and
+	// the fix's invalidation fires -- WHILE the refresh above is still
+	// blocked holding its pre-transition read.
+	reader.set(contextfabric.OrgGraphLifecycle{ActiveEpoch: 1, Status: contextfabric.LifecycleStatusGrace}, true)
+	resolver.Invalidate("org-1")
+
+	// Let the in-flight refresh's reads complete (its second read, for
+	// ResolveBuildEpoch, now sees the POST-transition state -- but its
+	// FIRST read, already captured, is the stale pre-transition one).
+	close(release)
+	staleResult := <-resultCh
+	require.Equal(t, int64(0), staleResult, "sanity: the in-flight call itself still returns its own snapshot read, stale or not -- that part is fine")
+
+	// What must NOT have happened: that stale read getting cached. The
+	// VERY NEXT call must see the real, post-transition state -- if the
+	// generation check were missing, this would still return 0 (the
+	// resurrected stale entry) instead of re-reading the store.
+	fresh, err := resolver.ResolveActiveEpoch(context.Background(), "org-1")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), fresh, "a refresh racing behind Invalidate must not resurrect the pre-transition entry it was invalidating")
+}
+
 // TestCachedResolver_InvalidateClosesThePrimeThenBeginBuildRace reproduces
 // the exact CHAOS-4208 race at the resolver level: checkpointStoreDiverged
 // primes the cache (no build open yet) an instant before BeginBuild opens
