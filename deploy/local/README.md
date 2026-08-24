@@ -284,6 +284,38 @@ procs --json 'acr-projector'                                  # MUST be empty be
 # incident hit live during this exact recipe, root-caused via `deja
 # recall` on the "failed to dial ... context deadline exceeded" line.
 # re-verify embedding coverage / KNN before calling it done
+#
+# acr-pilot's image: build with DOCKER, not `kiac.sh build-image` (the
+# apple/container builder-shim has real bugs -- "changes out of order"
+# on context transfer and "unsupported offset" on a multi-stage COPY
+# --from, hit live during this exact recipe; deja found no prior fix,
+# do not fight the shim). The Dockerfile has MULTIPLE final stages
+# (acr-api, acr-mcp, ...) -- a bare `docker build` with no --target
+# defaults to the LAST one in the file (acr-mcp, missing acr-migrate/
+# acr-api/acr-projector entirely), a real incident this recipe also
+# hit live. Always pass --target explicitly:
+docker build --target acr-api -t dev-health-acr:dev .
+docker save dev-health-acr:dev -o /tmp/dev-health-acr-dev.tar
+container image load -i /tmp/dev-health-acr-dev.tar
+container image tag docker.io/library/dev-health-acr:dev dev-health-acr:dev
+kiac load image dev-health-acr:dev --name acr-local
+#
+# acr-pilot's runtime Secret (acr-runtime-credentials/acr-model-credentials):
+# GENERATE fresh from `trial-data.sh dsn --env`'s in-cluster DNS hosts +
+# the LIVE credential the trial-data secret holds, at redeploy time --
+# the same credential-source-of-truth ruling `dsn` itself follows. NEVER
+# restore a Secret backup from a previous install (a real incident hit
+# live: the previous install's Secret carried BOTH a pre-migration host
+# (an apple/container VM gateway IP, itself a separate trap -- always use
+# the in-cluster Service DNS, e.g. trial-postgres.acr-trial-data.svc.
+# cluster.local, never a host IP that changes on every recreate) AND a
+# password that predated this recipe's own restore-postgres step, so it
+# silently no longer matched the live role's actual password -- surfaced
+# as "FATAL: password authentication failed", not as a connectivity
+# error, which is why it wasn't caught by DNS/TCP checks alone). Never
+# hand-edit a Secret's password to "whatever looks right" either --
+# derive it from the SAME `trial_secret`/`dsn --env` mechanism the rest
+# of this data plane already uses as its credential source of truth.
 # redeploy acr-pilot via its own owner's normal deploy path (stateless, no
 # PVC -- no data loss there, just needs a fresh rollout after the recreate)
 ```
