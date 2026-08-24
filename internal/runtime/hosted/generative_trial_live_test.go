@@ -1628,6 +1628,25 @@ type trialProvenance struct {
 	// AnchorMembershipOffersEnabled's own "only one script populates this
 	// today" precedent immediately above.
 	ResponderModel string `json:"responder_model,omitempty"`
+	// DataPlane/DataPlanePGHost/DataPlaneCHHost/DataPlaneFalkorHost
+	// (CHAOS-4186 follow-up, schema v28) record which store backend this
+	// run actually hit -- compose|kiac|override, sourced verbatim from
+	// ACR_TEST_TRIAL_DATA_PLANE (scripts/trial/common.sh's own resolved
+	// value, never independently re-derived here), plus the three bare
+	// hosts (ACR_TEST_TRIAL_PG_HOST/CH_HOST/FALKOR_HOST -- NEVER a
+	// credential, and never parsed out of a DSN string; common.sh exports
+	// these as their own plain values for exactly this reason). Before
+	// this field existed, a kiac-cutover artifact carried zero host/DSN
+	// references at all -- which stack a run hit was inferred from
+	// operator memory, not recorded in the artifact itself. Empty
+	// (omitempty) for every run before this field existed and for every
+	// trial script other than TestChaos3742TwoTurnConfirmationReplay,
+	// matching ResponderModel's own "only one script populates this
+	// today" precedent immediately above.
+	DataPlane           string `json:"data_plane,omitempty"`
+	DataPlanePGHost     string `json:"data_plane_pg_host,omitempty"`
+	DataPlaneCHHost     string `json:"data_plane_ch_host,omitempty"`
+	DataPlaneFalkorHost string `json:"data_plane_falkor_host,omitempty"`
 }
 
 // trialCommitGateProvenance is the CHAOS-3857 sweep-cell config a report

@@ -228,7 +228,7 @@ trial_wire_common_env() {
   export ACR_TEST_TRIAL_CORPUS="$ACR_TRIAL_CORPUS"
   export ACR_TEST_TRIAL_ORG="$ACR_TRIAL_ORG"
 
-  local pg_host pg_port pg_user pg_password ch_dsn falkor_addr data_plane_label
+  local pg_host pg_port pg_user pg_password ch_dsn ch_host falkor_addr falkor_host data_plane_label
 
   if [[ "$_acr_trial_override_set" == "1" ]]; then
     # data_plane_label is deliberately NOT "$ACR_TRIAL_DATA_PLANE" here
@@ -243,7 +243,9 @@ trial_wire_common_env() {
     pg_host="$ACR_TRIAL_PG_HOST"; pg_port="$ACR_TRIAL_PG_PORT"
     pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
     ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@${ACR_TRIAL_CH_HOST}:${ACR_TRIAL_CH_PORT}/$(trial_secret CLICKHOUSE_DB)"
+    ch_host="$ACR_TRIAL_CH_HOST"
     falkor_addr="${ACR_TRIAL_FALKOR_HOST}:${ACR_TRIAL_FALKOR_PORT}"
+    falkor_host="$ACR_TRIAL_FALKOR_HOST"
   elif [[ "$ACR_TRIAL_DATA_PLANE" == "kiac" ]]; then
     data_plane_label="kiac"
     # deploy/local/trial-data.sh dsn --env resolves ALL THREE endpoints in
@@ -333,13 +335,17 @@ trial_wire_common_env() {
     pg_host="$_kiac_env_PG_HOST"; pg_port="$_kiac_env_PG_PORT"
     pg_user="$_kiac_env_PG_USER"; pg_password="$_kiac_env_PG_PASSWORD"
     ch_dsn="clickhouse://${_kiac_env_CH_USER}:${_kiac_env_CH_PASSWORD}@${_kiac_env_CH_HOST}:${_kiac_env_CH_PORT}/${_kiac_env_CH_DB}"
+    ch_host="$_kiac_env_CH_HOST"
     falkor_addr="${_kiac_env_FALKOR_HOST}:${_kiac_env_FALKOR_PORT}"
+    falkor_host="$_kiac_env_FALKOR_HOST"
   elif [[ "$ACR_TRIAL_DATA_PLANE" == "compose" ]]; then
     data_plane_label="compose"
     pg_host="127.0.0.1"; pg_port="5432"
     pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
     ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@127.0.0.1:9000/$(trial_secret CLICKHOUSE_DB)"
+    ch_host="127.0.0.1"
     falkor_addr="127.0.0.1:16379"
+    falkor_host="127.0.0.1"
   else
     echo "common.sh: ACR_TRIAL_DATA_PLANE must be 'compose' or 'kiac', got '$ACR_TRIAL_DATA_PLANE'" >&2
     exit 1
@@ -358,17 +364,24 @@ trial_wire_common_env() {
   export ACR_TEST_TRIAL_PG_PORT="$pg_port"
   export ACR_TEST_TRIAL_PG_USER="$pg_user"
   export ACR_TEST_TRIAL_PG_PASSWORD="$pg_password"
+  # CH_HOST/FALKOR_HOST (CHAOS-4186 data_plane provenance PR): bare hosts,
+  # same reasoning as PG_HOST above -- the producer records these directly
+  # rather than parsing a host back out of ACR_TEST_TRIAL_CLICKHOUSE_DSN/
+  # FALKOR_ADDR, which would reintroduce the exact DSN-string-parsing class
+  # this whole cutover just finished eliminating from the shell side.
+  export ACR_TEST_TRIAL_CH_HOST="$ch_host"
+  export ACR_TEST_TRIAL_FALKOR_HOST="$falkor_host"
   export ACR_TEST_TRIAL_EMBED_MODEL=text-embedding-3-large
   export ACR_TEST_TRIAL_EMBED_DIMENSION=3072
   export ACR_TEST_TRIAL_EMBED_API_KEY="$(trial_secret OPENAI_API_KEY)"
 
-  # Seeds the queued `data_plane` report-provenance field (schema tip+1,
-  # separate small PR): exported so a future producer can read it directly
-  # rather than re-inferring it from a host string, and printed at every
-  # launcher's own start so which stack a run hit is visible immediately.
-  # "override" (not a false "compose"/"kiac" claim) when the six-var escape
-  # hatch is in play -- see that branch's own comment on why coherence
-  # isn't provable here. Never prints a credential.
+  # Seeds the `data_plane` report-provenance field (schema v28, CHAOS-4186
+  # follow-up PR): exported so the producer reads it directly rather than
+  # re-inferring it from a host string, and printed at every launcher's own
+  # start so which stack a run hit is visible immediately. "override" (not
+  # a false "compose"/"kiac" claim) when the six-var escape hatch is in
+  # play -- see that branch's own comment on why coherence isn't provable
+  # there. Never prints a credential.
   export ACR_TEST_TRIAL_DATA_PLANE="$data_plane_label"
   echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port} ch=$(sed -E 's#.*@##' <<<"$ch_dsn") falkor=$falkor_addr" >&2
 }

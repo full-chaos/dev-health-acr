@@ -260,7 +260,18 @@ import (
 // rides. No merge arithmetic changes (Results concatenates verbatim);
 // mirrored here in the same change, same undeclared-field-dropped-on-decode
 // reason as every prior bump needed it for.
-const expectedSchemaVersion = "27"
+// "28" (CHAOS-4186 follow-up, team-lead ordered 2026-08-24): purely
+// additive provenance -- trialProvenance gains DataPlane/DataPlanePGHost/
+// DataPlaneCHHost/DataPlaneFalkorHost (compose|kiac|override + bare hosts,
+// never credentials), sourced verbatim from the producer's own
+// ACR_TEST_TRIAL_DATA_PLANE/PG_HOST/CH_HOST/FALKOR_HOST. No merge
+// arithmetic changes (Provenance rides through from the FIRST shard, same
+// as ResponderModel), but DataPlane gets the SAME cross-shard agreement
+// check ResponderModel has (see mergeReports): a mixed-plane launch across
+// shards must be refused, not silently merged under the first shard's
+// label. Mirrored here in the same change, same undeclared-field-dropped-
+// on-decode reason as every prior bump needed it for.
+const expectedSchemaVersion = "28"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -319,6 +330,17 @@ type trialProvenance struct {
 	// through from the FIRST shard, see mergeReports, and every shard of
 	// one run shares one responder model by construction).
 	ResponderModel string `json:"responder_model,omitempty"`
+	// DataPlane* (CHAOS-4186 follow-up, schema v28) mirrors trialProvenance's
+	// identically-named fields -- see the producer's own doc comment
+	// (generative_trial_live_test.go) for the provenance gap this closes.
+	// Purely additive passthrough; no merge arithmetic (Provenance rides
+	// through from the FIRST shard), but DataPlane DOES get a cross-shard
+	// agreement check in mergeReports below, same reasoning as
+	// ResponderModel's own check.
+	DataPlane           string `json:"data_plane,omitempty"`
+	DataPlanePGHost     string `json:"data_plane_pg_host,omitempty"`
+	DataPlaneCHHost     string `json:"data_plane_ch_host,omitempty"`
+	DataPlaneFalkorHost string `json:"data_plane_falkor_host,omitempty"`
 }
 
 type twoTurnCaseResult struct {
@@ -786,6 +808,15 @@ func validateShardSet(shards []twoTurnReport, paths []string) error {
 		// below.
 		case s.Provenance.ResponderModel != first.Provenance.ResponderModel:
 			return mismatchErr(paths[i], paths[0], "provenance.responder_model", s.Provenance.ResponderModel, first.Provenance.ResponderModel)
+		// DataPlane (CHAOS-4186 follow-up, schema v28): the SAME "launch-
+		// level, not shard-level" reasoning as ResponderModel immediately
+		// above -- one data plane serves a whole run. Shards disagreeing
+		// means two different launches (or an operator changing
+		// ACR_TRIAL_DATA_PLANE mid-run) are being merged into one, which
+		// would silently misattribute every other shard's results to the
+		// wrong store backend.
+		case s.Provenance.DataPlane != first.Provenance.DataPlane:
+			return mismatchErr(paths[i], paths[0], "provenance.data_plane", s.Provenance.DataPlane, first.Provenance.DataPlane)
 		// CHAOS-4100: the three sharding fields that describe the LAUNCH
 		// rather than the shard. Granularity, concurrency cap and
 		// provisioning mode are decided once for the whole fan-out, so

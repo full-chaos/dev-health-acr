@@ -336,3 +336,27 @@ func TestChaos4135_ResponderModelMustAgreeAcrossShards(t *testing.T) {
 		t.Errorf("error = %q, want it to name provenance.responder_model", err.Error())
 	}
 }
+
+// TestChaos4186_DataPlaneMustAgreeAcrossShards mirrors
+// TestChaos4135_ResponderModelMustAgreeAcrossShards' own pattern for the
+// SAME reason: DataPlane is a launch-level fact -- one store backend
+// (compose|kiac|override) serves a whole run -- so two shards disagreeing
+// about it means artifacts from two different launches (or an operator
+// changing ACR_TRIAL_DATA_PLANE mid-run) are being merged into one, which
+// mergeReports' own "Provenance: first.Provenance" (inheriting only the
+// FIRST shard's value) would otherwise silently misattribute.
+func TestChaos4186_DataPlaneMustAgreeAcrossShards(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.Provenance.DataPlane = "kiac"
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.Provenance.DataPlane = "compose"
+	dir, paths := writeShards(t, []twoTurnReport{a, b})
+	var stdout bytes.Buffer
+	err := run(filepath.Join(dir, "merged.json"), paths, &stdout)
+	if err == nil {
+		t.Fatal("merging shards that disagree about data_plane must be refused")
+	}
+	if !strings.Contains(err.Error(), "provenance.data_plane") {
+		t.Errorf("error = %q, want it to name provenance.data_plane", err.Error())
+	}
+}
