@@ -218,6 +218,32 @@ fixed here.
    epoch while still inside the grace window and unblocks a clean re-`rebuild`
    -- costs nothing (the org's own dataset is unaffected), but you have to
    know to do it rather than wait out the 24h.
+
+   **Ordering rule -- never `rollback` while a `serve` process is still
+   alive.** A live `serve` loop's coordinator re-checks every organization's
+   freshness on each poll tick (`ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL`,
+   15s by default) and will autonomously call `BeginBuild` on its own the
+   moment it observes a source-version mismatch (`internal/contextfabric/
+   projectionrun/coordinator.go`'s `runOrgLifecycle`/`tickFreshnessStats` --
+   this is the CHAOS-3916 "flag-off rebuild" mechanism working as designed,
+   not a bug). If you `rollback` while that process is still running, its
+   very next tick can reopen a build before your own following `rebuild`
+   command gets there -- your `rebuild` then loses a `lifecycle CAS conflict`
+   against a build you never intended to start by hand, with a target/last-
+   allocated epoch you didn't choose. Real incident during the CHAOS-4186
+   embed-credential fix: this raced in the ~76s between `rollback` and
+   manually killing the still-running `serve`, opening epoch 2 before the
+   deliberate `rebuild --org` call ran (harmless here -- same org, same
+   corrected env, no data lost -- but confusing to debug after the fact).
+   Correct order:
+   1. Kill every `serve`/`rebuild` process for this org first (scoped,
+      `procs --json 'acr-projector'` + cwd-verify each match) and confirm
+      none remain.
+   2. `rollback --org <id>`.
+   3. Launch `serve` with the full corrected env (FALKOR TLS pair +
+      `ACR_CONTEXT_FABRIC_EMBED_*` family) and let its own freshness tick
+      open the build, OR run `rebuild --org <id>` explicitly first -- either
+      is fine once nothing else is running, but never interleave the two.
 8. **CHAOS-4208 post-flip divergence loop -- FIXED (#252 c53042d0), this
    section is now HISTORY only**: a `serve` run against a freshly-seeded
    trial cluster used to be able to hit a reproducible infinite loop
