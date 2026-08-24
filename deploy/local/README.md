@@ -246,6 +246,8 @@ Recipe (run only when no lane is mid-run on kiac; coordinate first):
 ```bash
 deploy/local/kiac.sh down                                    # destroys acr-trial-data + acr-pilot data
 ACR_KIAC_CPUS=4 ACR_KIAC_CP_MEMORY=16G deploy/local/kiac.sh up
+export KUBECONFIG="$(deploy/local/kiac.sh kubeconfig)"        # kiac.sh up only LOGS this; every
+                                                               # trial-data.sh call below needs it set
 deploy/local/trial-data.sh apply && deploy/local/trial-data.sh wait
 deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ORIGINAL Aug-17 ts>.sql.gz
 deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ORIGINAL Aug-17 ts>.zip
