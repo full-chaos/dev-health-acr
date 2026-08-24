@@ -152,6 +152,38 @@ const (
 	// vectors closed to lexical, and invalidates answer reuse until the
 	// prescribed rebuild.
 	EnvIncludeBodies = "ACR_CONTEXT_FABRIC_EMBED_INCLUDE_BODIES"
+	// EnvAllowNoCredential is the explicit opt-in for a configured embedder
+	// (BaseURL set) with no credential at all (CHAOS-4192). Mirrors
+	// EnvAllowInsecureBaseURL's exact posture: false by default, an
+	// EXPLICIT declaration required to relax it, never inferred from the
+	// base URL's shape (loopback or otherwise -- see EnvProviderLocality's
+	// own doc comment on why URL heuristics are rejected throughout this
+	// package).
+	//
+	// CHAOS-4192: acr-projector ran a full rebuild against
+	// ACR_CONTEXT_FABRIC_EMBED_BASE_URL pointed at a real hosted endpoint
+	// with EnvAPIKey resolving BLANK (a shell/env-file substitution defect,
+	// not an intentional no-auth choice) -- Configured()/validate() had no
+	// opinion on that combination, so the embedder was constructed
+	// successfully and every projection batch's Embed() call failed with an
+	// unauthenticated-request error. vector_projection.go's per-batch
+	// failure handling correctly treats an Embed() failure as CLEAR the
+	// stale vector and continue (the right call for a genuinely transient
+	// failure, so one bad batch cannot stall projection forever) -- but a
+	// blank credential is not transient, so that per-batch design silently
+	// wiped every organization's graph vectors, one batch at a time, each
+	// one logging only a Warn easy to miss in a busy rebuild.
+	//
+	// A local no-auth embedder (LM Studio, Ollama, TEI on loopback) is a
+	// real, documented, supported deployment shape (see this package's own
+	// doc comment and docs/design/context-fabric-vector-retrieval.md) --
+	// requiring a credential unconditionally would break it. This flag is
+	// the explicit way an operator declares "this endpoint genuinely needs
+	// no credential", so a blank credential elsewhere is caught at startup
+	// (ConfigFromEnv/validate, before any batch runs and before any vector
+	// is ever cleared) rather than discovered mid-rebuild via scrolling
+	// per-batch logs.
+	EnvAllowNoCredential = "ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL"
 )
 
 // BodiesIncluded resolves the §3 body gate from the environment: the
@@ -224,6 +256,9 @@ type Config struct {
 	MaxTransportRetries int
 	// AllowInsecureBaseURL permits a plaintext http:// base URL.
 	AllowInsecureBaseURL bool
+	// AllowNoCredential is the explicit opt-in for a blank APIKey; see
+	// EnvAllowNoCredential (CHAOS-4192).
+	AllowNoCredential bool
 	// PrefixFamily selects the asymmetric task-prefix pair applied to text
 	// before it is embedded (CHAOS-3836). The zero value is treated as
 	// PrefixFamilyNone everywhere this is read (validate, New), so a
@@ -329,6 +364,20 @@ func (c Config) validate() error {
 	if !validPrefixFamily(c.resolvedPrefixFamily()) {
 		return prefixFamilyError(c.PrefixFamily)
 	}
+	// CHAOS-4192: a configured-looking embedder (BaseURL set) with a BLANK
+	// credential is caught HERE, at startup, before any batch ever runs --
+	// not discovered mid-rebuild via a per-batch "embedded:0, cleared:N"
+	// log easy to miss in a busy rebuild. See EnvAllowNoCredential's doc
+	// comment for the incident and why this is an explicit opt-in rather
+	// than inferred from AllowInsecureBaseURL/URL shape (a loopback server
+	// can still require a credential, and a non-loopback one can still be
+	// genuinely open).
+	if strings.TrimSpace(c.APIKey) == "" && !c.AllowNoCredential {
+		return fmt.Errorf(
+			"%s is configured but %s resolved empty -- either provide a credential or set %s=true to declare this endpoint genuinely needs none (e.g. a loopback LM Studio/Ollama/TEI server); a blank credential on a real endpoint fails every embed call, and this package's per-batch failure handling clears vectors rather than stalling (CHAOS-4192: this silently wiped a graph's vectors, one rebuild batch at a time, before this check existed)",
+			EnvBaseURL, EnvAPIKey, EnvAllowNoCredential,
+		)
+	}
 	return nil
 }
 
@@ -385,6 +434,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		MaxTextRunes:         maxTextRunes,
 		MaxTransportRetries:  retries,
 		AllowInsecureBaseURL: envBool(lookup, EnvAllowInsecureBaseURL, false),
+		AllowNoCredential:    envBool(lookup, EnvAllowNoCredential, false),
 		PrefixFamily:         PrefixFamily(envString(lookup, EnvPrefixFamily, string(PrefixFamilyNone))),
 	}
 	if err := cfg.validate(); err != nil {

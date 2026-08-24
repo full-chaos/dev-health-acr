@@ -310,6 +310,9 @@ func TestConfigFromEnvReadsThePrefixFamily(t *testing.T) {
 		EnvModel:                "probe-embed",
 		EnvDimension:            "8",
 		EnvAllowInsecureBaseURL: "true",
+		// No credential, matching this fixture's own "lmstudio" no-auth
+		// modeling -- explicit AllowNoCredential (CHAOS-4192).
+		EnvAllowNoCredential: "true",
 	}
 	lookupWith := func(overrides map[string]string) func(string) (string, bool) {
 		env := map[string]string{}

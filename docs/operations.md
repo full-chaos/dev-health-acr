@@ -161,6 +161,41 @@ matching FalkorDB's own no-auth default. Both `cmd/acr-projector` and
 `cmd/acr-api`'s hosted runtime composition construct a `falkorgraph.Adapter`
 from this same env contract; Helm's `contextFabric.falkor.*` values wire
 both the projector and `acr-api` Deployments the same way (CHAOS-3774).
+
+**Local Compose bring-up (CHAOS-4192): always pass `--env-file ops/.env`
+to every `docker compose` command that starts or recreates `acr-projector`
+or `acr-api`.** Without it, any `${VAR:-}`-style substitution in a local
+`compose.override.yml` (e.g. `ACR_CONTEXT_FABRIC_EMBED_API_KEY:
+${OPENAI_API_KEY:-}`) resolves to the DEFAULT (blank) instead of the real
+value `ops/.env` carries -- even though `ops/.env` itself has always had
+a real value, a shell that started `acr-projector` without `--env-file`
+substituted blank silently. The observed incident: a full graph rebuild
+ran to completion with the embedder CONFIGURED (base URL set) but the
+credential blank, and the only symptom was `embedded:0` on every
+projection batch -- every organization's existing vectors cleared,
+one batch at a time, with no error and no failed health check. This class
+is now also guarded in code (`internal/contextfabric/embedprovider`'s
+`ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL`, CHAOS-4192): a configured
+embedder with a blank credential now fails loudly at startup instead of
+silently degrading, but a correct `--env-file` is still what makes the
+credential resolve to the real value in the first place, and this class
+also affects `acr-api`'s `ACR_CONTEXT_FABRIC_MODEL_API_KEY` the same way
+(no code-level guard added there in this pass).
+
+If you maintain the workspace root's own `compose.override.yml` (untracked
+local config, outside every repo, so it carries no durable comment of its
+own): its `falkordb` service's volume must mount at the SAME path the
+image's `FALKORDB_DATA_PATH` writes to -- see `deploy/compose/acr.compose.yml`'s
+own `acr_falkordb_data` volume comment (CHAOS-4055) for the exact path and
+copy it verbatim, do not shorten or guess it. Mounting at any other path
+(a plausible-looking `/data`, for instance) is a **silent persistence
+no-op**: the vendored image's `run.sh` entrypoint never writes there, so
+`docker compose down`/recreate loses every organization's graph with no
+error at any point, discovered only when a later read comes back empty or
+a rebuild that "shouldn't have been necessary" turns out to be the only
+way to recover. This doc is the durable record of that requirement since
+the override file itself is not committed anywhere.
+
 Reads (`internal/contextfabric.GraphReader`,
 the investigation endpoint) are a completely independent enablement:
 `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` (`config.GraphReadsEnabledEnvVar`),

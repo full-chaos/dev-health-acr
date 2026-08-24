@@ -1,6 +1,7 @@
 package embedprovider
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -65,6 +66,10 @@ func TestMaxTextRunesFloorIsTheLargestCompleteTemplate(t *testing.T) {
 		Provider: "test", BaseURL: "https://embed.example/v1/", Model: "test-model",
 		Dimension: 768, SimilarityFloor: DefaultSimilarityFloor, Timeout: DefaultTimeout,
 		MaxBatch: DefaultMaxBatch, MaxTextRunes: MinimumMaxTextRunes,
+		// Not this test's concern (CHAOS-4192's credential check) -- opt
+		// out explicitly so a MaxTextRunes-floor regression is never
+		// masked by an unrelated validate() error.
+		AllowNoCredential: true,
 	}
 	if err := valid.validate(); err != nil {
 		t.Fatalf("a cap at the floor must validate, got %v", err)
@@ -77,5 +82,85 @@ func TestMaxTextRunesFloorIsTheLargestCompleteTemplate(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "max text runes") {
 		t.Fatalf("floor violation error = %q, want it to name max text runes", err)
+	}
+}
+
+// TestBlankCredentialFailsClosed pins CHAOS-4192's fail-loud guard through
+// the same entry point acr-projector/acr-api actually call
+// (ConfigFromEnv), not just Config.validate() in isolation: a configured
+// embedder (base URL set) with a blank credential and no explicit
+// AllowNoCredential opt-in must be a hard error at config-construction
+// time (composition aborts at startup, before any batch runs and before
+// any vector is ever cleared) -- never a silent no-op, and never
+// discoverable only via a per-batch "embedded:0, cleared:N" log. A real
+// credential, or an explicit AllowNoCredential=true (the documented LM
+// Studio/Ollama/TEI local no-auth shape), must both still construct
+// cleanly. An UNCONFIGURED deployment (base URL unset) must stay the
+// existing clean ErrNotConfigured no-op regardless of the credential/
+// AllowNoCredential state -- this guard must never turn "vector retrieval
+// deliberately off" into a startup failure.
+func TestBlankCredentialFailsClosed(t *testing.T) {
+	t.Parallel()
+	baseEnv := map[string]string{
+		EnvBaseURL:   "https://embed.example/v1/",
+		EnvProvider:  "test-provider",
+		EnvModel:     "test-model",
+		EnvDimension: "768",
+	}
+	withEnv := func(overrides map[string]string) map[string]string {
+		merged := make(map[string]string, len(baseEnv)+len(overrides))
+		for k, v := range baseEnv {
+			merged[k] = v
+		}
+		for k, v := range overrides {
+			merged[k] = v
+		}
+		return merged
+	}
+
+	cases := []struct {
+		name       string
+		env        map[string]string
+		wantErr    bool
+		wantErrLog string // substring the error must contain, when wantErr
+	}{
+		{
+			name:       "configured with blank credential and no opt-in fails closed",
+			env:        withEnv(nil),
+			wantErr:    true,
+			wantErrLog: EnvAllowNoCredential,
+		},
+		{
+			name: "configured with blank credential and explicit opt-in succeeds",
+			env:  withEnv(map[string]string{EnvAllowNoCredential: "true"}),
+		},
+		{
+			name: "configured with a real credential succeeds without the opt-in",
+			env:  withEnv(map[string]string{EnvAPIKey: "sk-real-credential"}),
+		},
+		{
+			name: "unconfigured (no base URL) stays a clean no-op regardless of credential state",
+			env:  map[string]string{EnvModel: "test-model", EnvDimension: "768"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ConfigFromEnv(lookupOf(tc.env))
+			switch {
+			case tc.wantErr:
+				if err == nil {
+					t.Fatal("ConfigFromEnv = nil error, want a fail-closed error")
+				}
+				if tc.wantErrLog != "" && !strings.Contains(err.Error(), tc.wantErrLog) {
+					t.Fatalf("ConfigFromEnv error = %q, want it to name %q", err, tc.wantErrLog)
+				}
+			case errors.Is(err, ErrNotConfigured):
+				// The unconfigured case: ErrNotConfigured itself IS the
+				// expected clean no-op signal, not a test failure.
+			case err != nil:
+				t.Fatalf("ConfigFromEnv error = %v, want a clean construction", err)
+			}
+		})
 	}
 }

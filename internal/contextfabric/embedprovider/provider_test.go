@@ -21,6 +21,11 @@ func testConfig(baseURL string) Config {
 		SimilarityFloor: DefaultSimilarityFloor, Timeout: 5 * time.Second,
 		MaxBatch: DefaultMaxBatch, MaxTextRunes: DefaultMaxTextRunes,
 		MaxTransportRetries: 0, AllowInsecureBaseURL: true,
+		// No credential, matching this fixture's own "lmstudio" no-auth
+		// modeling -- explicit AllowNoCredential (CHAOS-4192) declares that
+		// deliberately, rather than leaving it ambiguous with an
+		// operator's genuinely-blank-by-mistake credential.
+		AllowNoCredential: true,
 	}
 }
 

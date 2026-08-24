@@ -515,6 +515,7 @@ func TestEmbedRetrievalIdentityFromEnvTracksTheSemanticConfig(t *testing.T) {
 	base := map[string]string{
 		embedprovider.EnvBaseURL: "https://embed.example/v1/", embedprovider.EnvProvider: "openai",
 		embedprovider.EnvModel: "text-embedding-3-large", embedprovider.EnvDimension: "3072",
+		embedprovider.EnvAllowNoCredential: "true", // no real transport, no credential to check (CHAOS-4192)
 	}
 	got, err := EmbedRetrievalIdentityFromEnv(env(base))
 	if err != nil {

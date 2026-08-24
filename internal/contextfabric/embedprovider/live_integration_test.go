@@ -47,6 +47,12 @@ func liveEmbedder(t *testing.T) *Embedder {
 			return "live-test", true
 		case EnvAllowInsecureBaseURL:
 			return "true", true
+		case EnvAllowNoCredential:
+			// The development vehicle (LM Studio on loopback, per this
+			// file's own doc comment) genuinely needs no credential --
+			// explicit opt-in (CHAOS-4192), matching AllowInsecureBaseURL
+			// above.
+			return "true", true
 		case EnvTimeout:
 			// A cold model load was measured at 9.3 s against 10-17 ms warm,
 			// so the FIRST live call needs a probe-sized budget rather than
