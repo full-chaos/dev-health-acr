@@ -20,6 +20,16 @@
 # real SQL error" FAIL. Both confirmed during development, then reverted.
 set -euo pipefail
 
+# CHAOS-4186 fresh review cycle: ACR_TRIAL_DATA_PLANE now defaults to
+# "kiac" (chris's standing order). Pinned to "compose" for the WHOLE file,
+# not just one case: every check here tests psql_admin's own -h/-p wiring
+# against a fake psql, never the real kiac cluster, so none of them should
+# depend on live infra (a kiac cluster with KUBECONFIG set) being present
+# wherever this runs. Cases exercising the six-var escape hatch (2, 2b)
+# are unaffected -- that override branch takes priority over
+# ACR_TRIAL_DATA_PLANE regardless of its value.
+export ACR_TRIAL_DATA_PLANE=compose
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 launcher="$script_dir/run-two-turn-parallel.sh"
 tmp="$(mktemp -d)"
@@ -75,17 +85,10 @@ run_selftest() {
   echo $?
 }
 
-# 1. compose plane (no per-store override): psql_admin calls -h 127.0.0.1
-# -p 5432. CHAOS-4186 fresh review cycle: ACR_TRIAL_DATA_PLANE now
-# defaults to "kiac" (chris's standing order), so this case pins
-# ACR_TRIAL_DATA_PLANE=compose explicitly -- it is testing the psql_admin
-# wiring itself (does PG_HOST/PG_PORT reach its -h/-p flags unmodified),
-# not which plane the ambient default happens to be, and letting it run
-# against whatever plane is ambient-default would make this test's
-# result depend on live infrastructure (a kiac cluster) that may or may
-# not exist wherever it runs.
+# 1. compose plane (no per-store override, this file's pinned plane):
+# psql_admin calls -h 127.0.0.1 -p 5432.
 fake_psql "0"
-run_selftest env ACR_TRIAL_DATA_PLANE=compose >/dev/null
+run_selftest >/dev/null
 check "compose plane's default host/port reaches psql_admin" \
   "1" \
   "$(grep -c -- '-h 127.0.0.1 -p 5432' "$tmp/calls.log")"

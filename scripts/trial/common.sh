@@ -256,10 +256,19 @@ trial_wire_common_env() {
     # password. Each line is `printf %q`-quoted on the producer side, so
     # `eval` here is exactly as safe as a normal shell assignment; only
     # ACR_TEST_TRIAL_PG_*/CH_*/FALKOR_* names are ever assigned this way.
+    # stdout only, deliberately NOT `2>&1`: kubectl can put an incidental
+    # warning on stderr on an otherwise-successful call (e.g. a deprecation
+    # notice), and that text would land in $kiac_env_output and then get
+    # `eval`'d below -- round-3 review caught this live (a stray "Warning:"
+    # line made eval try to run it as a command). On failure only, the
+    # command is re-run once with stderr merged purely for the diagnostic
+    # message; the eval'd value itself never sees stderr.
     local kiac_env_output
-    if ! kiac_env_output="$(cd "$repo_root" && deploy/local/trial-data.sh dsn --env 2>&1)"; then
+    if ! kiac_env_output="$(cd "$repo_root" && deploy/local/trial-data.sh dsn --env 2>/dev/null)"; then
+      local kiac_env_diag
+      kiac_env_diag="$(cd "$repo_root" && deploy/local/trial-data.sh dsn --env 2>&1 >/dev/null)"
       echo "common.sh: ACR_TRIAL_DATA_PLANE=kiac but 'deploy/local/trial-data.sh dsn --env' failed -- is the kiac trial data plane applied and KUBECONFIG set? output:" >&2
-      echo "$kiac_env_output" >&2
+      echo "$kiac_env_diag" >&2
       exit 1
     fi
     # Prefixed _kiac_env_* names, deliberately NOT the ACR_TEST_TRIAL_*
@@ -273,7 +282,13 @@ trial_wire_common_env() {
     local _kiac_env_PG_HOST _kiac_env_PG_PORT _kiac_env_PG_USER _kiac_env_PG_PASSWORD _kiac_env_PG_DB
     local _kiac_env_CH_HOST _kiac_env_CH_PORT _kiac_env_CH_USER _kiac_env_CH_PASSWORD _kiac_env_CH_DB
     local _kiac_env_FALKOR_HOST _kiac_env_FALKOR_PORT
-    eval "${kiac_env_output//ACR_TEST_TRIAL_/_kiac_env_}"
+    # Line-anchored (sed `^`), not a bash `${var//pat/repl}` global
+    # substring replace: the blanket form also rewrites the pattern
+    # anywhere it appears, including inside a `printf %q`-quoted VALUE
+    # (e.g. a password that happens to contain the literal text
+    # "ACR_TEST_TRIAL_"), corrupting it before assignment. Anchoring to
+    # line-start only ever touches the KEY side of each `KEY=value` line.
+    eval "$(printf '%s\n' "$kiac_env_output" | sed -E 's/^ACR_TEST_TRIAL_/_kiac_env_/')"
     pg_host="$_kiac_env_PG_HOST"; pg_port="$_kiac_env_PG_PORT"
     pg_user="$_kiac_env_PG_USER"; pg_password="$_kiac_env_PG_PASSWORD"
     ch_dsn="clickhouse://${_kiac_env_CH_USER}:${_kiac_env_CH_PASSWORD}@${_kiac_env_CH_HOST}:${_kiac_env_CH_PORT}/${_kiac_env_CH_DB}"
