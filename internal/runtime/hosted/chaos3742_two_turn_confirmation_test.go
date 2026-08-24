@@ -1671,6 +1671,10 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 		// unconditional last-event-wins reader as the kind-pick fields above.
 		res.CandidateOfferCount = event.KindOfferCandidateOfferCount
 		res.OfferKind = event.KindOfferOfferKind
+		// CHAOS-4119, schema v27: the handle-offer graph-derived-source
+		// axis's own pair, same unconditional last-event-wins reader.
+		res.HandleOfferGraphDerivedCount = event.HandleOfferGraphDerivedCount
+		res.HandleOfferGraphDerivedRejectedCount = event.HandleOfferGraphDerivedRejectedCount
 	}
 	// CHAOS-4103: folded (severity-gated), NOT set unconditionally -- by the
 	// time this is called, an EARLIER call's override may already have been
@@ -1879,6 +1883,12 @@ type twoTurnTurn1Facts struct {
 	ExpectedKindAtOfferBoundaryBeforeRepair      bool
 	KindOfferDistinctKindCountBeforeRepair       int
 	KindOfferSuppressedByCardinalityBeforeRepair bool
+	// HandleOfferGraphDerivedCount/HandleOfferGraphDerivedRejectedCount
+	// (CHAOS-4119, schema v27) mirror the same kind_offer trace stage's
+	// handle-offer graph-derived-source axis pair, read off turn 1's own
+	// handleOfferMaterial call.
+	HandleOfferGraphDerivedCount         int
+	HandleOfferGraphDerivedRejectedCount int
 	// AnchorOptionsCount/HandleOptionsCount are turn 1's own
 	// StructureNeeds.AnchorOptions/HandleOptions counts, zero when turn 1
 	// carried no StructureNeeds at all (a window-only disclosure). They
@@ -1886,9 +1896,12 @@ type twoTurnTurn1Facts struct {
 	// (count==1 by construction) from a zero-claimant recall failure
 	// (count==0); for handle, a regex that matched nothing (count==0)
 	// from one that matched the WRONG claimant (count>0, just not the
-	// expected one).
-	AnchorOptionsCount int
-	HandleOptionsCount int
+	// expected one) -- OR, since CHAOS-4119 (schema v27), a pool-derived
+	// match with no text match at all. HandleOptionsCountBeforeGraphSource
+	// (below) carries the pre-CHAOS-4119 reading.
+	AnchorOptionsCount                  int
+	HandleOptionsCount                  int
+	HandleOptionsCountBeforeGraphSource int
 	// CensusRan/CensusComplete/CensusCount mirror twoTurnTraceCapture's own
 	// censusRan()/censusComplete()/censusCount() -- see censusComplete's own
 	// doc comment (codex review round 2, P2 fix) for why CensusComplete is
@@ -2043,6 +2056,9 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 		facts.OfferKind = event.KindOfferOfferKind
 		facts.KindOfferDistinctKindCountBeforeRepair = event.KindOfferDistinctKindCountBeforeRepair
 		facts.KindOfferSuppressedByCardinalityBeforeRepair = event.KindOfferSuppressedByCardinalityBeforeRepair
+		facts.HandleOfferGraphDerivedCount = event.HandleOfferGraphDerivedCount
+		facts.HandleOfferGraphDerivedRejectedCount = event.HandleOfferGraphDerivedRejectedCount
+		facts.HandleOptionsCountBeforeGraphSource = event.HandleOfferCountBeforeGraphSource
 	}
 	facts.TermSearchTruncated, facts.QuestionSearchTruncated = trace.passTruncation()
 	facts.ExpectedInPool = trace.poolContainsKind(tc.ExpectKind)
@@ -2087,6 +2103,8 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.Turn1KindOfferSuppressedByCardinalityBeforeRepair = facts.KindOfferSuppressedByCardinalityBeforeRepair
 	res.Turn1CandidateOfferCount = facts.CandidateOfferCount
 	res.Turn1OfferKind = facts.OfferKind
+	res.Turn1HandleOfferGraphDerivedCount = facts.HandleOfferGraphDerivedCount
+	res.Turn1HandleOfferGraphDerivedRejectedCount = facts.HandleOfferGraphDerivedRejectedCount
 	res.Turn1TermSearchTruncated = facts.TermSearchTruncated
 	res.Turn1QuestionSearchTruncated = facts.QuestionSearchTruncated
 	res.ExpectedInPool = facts.ExpectedInPool
@@ -2094,6 +2112,7 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.ExpectedKindAtOfferBoundaryBeforeRepair = facts.ExpectedKindAtOfferBoundaryBeforeRepair
 	res.AnchorOptionsCount = facts.AnchorOptionsCount
 	res.HandleOptionsCount = facts.HandleOptionsCount
+	res.HandleOptionsCountBeforeGraphSource = facts.HandleOptionsCountBeforeGraphSource
 	res.CensusRan = facts.CensusRan
 	res.CensusComplete = facts.CensusComplete
 	res.CensusCount = facts.CensusCount
@@ -3546,6 +3565,16 @@ type twoTurnCaseResult struct {
 	// is exactly "neither axis fired," not an absent capture.
 	CandidateOfferCount int    `json:"candidate_offer_count"`
 	OfferKind           string `json:"offer_kind"`
+	// HandleOfferGraphDerivedCount/HandleOfferGraphDerivedRejectedCount
+	// (CHAOS-4119, schema v27) mirror the SAME kind_offer stage's
+	// HandleOfferGraphDerivedCount/HandleOfferGraphDerivedRejectedCount
+	// (ResolutionTraceEvent) -- see handleOfferDiagnostics' own doc comment
+	// (chaos3900_structure_offers.go) for what each measures. Same
+	// no-omitempty reasoning as CandidateOfferCount/OfferKind above: 0 is
+	// exactly "the pool contributed/rejected nothing on this call," not an
+	// absent capture.
+	HandleOfferGraphDerivedCount         int `json:"handle_offer_graph_derived_count"`
+	HandleOfferGraphDerivedRejectedCount int `json:"handle_offer_graph_derived_rejected_count"`
 	// ArmInvalidStage/ArmInvalidErrorType pair with ArmInvalidReason, whose
 	// closed vocabulary names the error CLASS but not where it came from.
 	//
@@ -3669,6 +3698,12 @@ type twoTurnCaseResult struct {
 	// trace stage instead of this arm's own turn-2 call.
 	Turn1CandidateOfferCount int    `json:"turn1_candidate_offer_count"`
 	Turn1OfferKind           string `json:"turn1_offer_kind"`
+	// Turn1HandleOfferGraphDerivedCount/Turn1HandleOfferGraphDerivedRejectedCount
+	// (CHAOS-4119, schema v27) mirror HandleOfferGraphDerivedCount/
+	// HandleOfferGraphDerivedRejectedCount above, read off turn 1's own
+	// kind_offer trace stage instead of this arm's own turn-2 call.
+	Turn1HandleOfferGraphDerivedCount         int `json:"turn1_handle_offer_graph_derived_count"`
+	Turn1HandleOfferGraphDerivedRejectedCount int `json:"turn1_handle_offer_graph_derived_rejected_count"`
 	// Turn1TermSearchTruncated/Turn1QuestionSearchTruncated (the
 	// per-pass truncation breakdown) are turn 1's own per-term "search"
 	// pass and question-level "search_question" pass truncation signals,
@@ -3713,11 +3748,27 @@ type twoTurnCaseResult struct {
 	// StructureNeeds.AnchorOptions/HandleOptions counts (zero when turn 1
 	// carried no StructureNeeds). For anchor: count==1 is a designed
 	// single-candidate suppression, count==0 is a zero-claimant recall
-	// failure. For handle: count==0 is a regex that matched nothing,
-	// count>0 is a regex that matched something -- just possibly the
-	// wrong claimant.
+	// failure. For handle (CHAOS-4119, schema v27, MEANING change): before
+	// this ticket, count==0 meant "neither an explicit handle nor
+	// BindHandles' own question-text regex matched anything", and count>0
+	// meant one of those two matched -- just possibly the wrong claimant.
+	// HandleOptionsCount can now ALSO be non-zero purely from the
+	// graph-derived source (a candidate the resolution's own pool already
+	// found), with no explicit or question-text match at all --
+	// HandleOptionsCountBeforeGraphSource (below) carries the OLD reading,
+	// so a v26-comparable count is still recoverable from a v27 row.
 	AnchorOptionsCount int `json:"anchor_options_count"`
 	HandleOptionsCount int `json:"handle_options_count"`
+	// HandleOptionsCountBeforeGraphSource (CHAOS-4119, schema v27) is
+	// HandleOptionsCount's own PRE-graph-source twin: turn 1's
+	// handleOfferDiagnostics.CountBeforeGraphSource (explicit + BindHandles
+	// only, deduped, capped) -- exactly what HandleOptionsCount itself
+	// measured before this ticket. Diffing the two isolates how many of
+	// this row's handle options came from the graph-derived source alone.
+	// Same shape as ExpectedKindAtOfferBoundaryBeforeRepair above: single,
+	// turn-1-only, no omitempty (0 is a real "nothing from explicit/text"
+	// reading, not an absent capture).
+	HandleOptionsCountBeforeGraphSource int `json:"handle_options_count_before_graph_source"`
 	// CensusRan/CensusComplete/CensusCount are turn 1's own
 	// twoTurnTraceCapture.censusRan()/censusComplete()/censusCount() --
 	// whether CensusFunc was invoked at all during turn 1, whether EVERY
@@ -4370,6 +4421,41 @@ type twoTurnReport struct {
 	// see projectKindOfferKinds' own doc comment for the full mechanism
 	// and TestResolveSubjects_KindBoundaryRepairCausalFixture
 	// (chaos4183_kind_boundary_repair_test.go) for the causal proof.
+	//
+	// No merge arithmetic changes (Results concatenates verbatim); the
+	// mirror in cmd/acr-trial-merge-two-turn/main.go gained all of it in
+	// the same change, same "an undeclared field is dropped on decode"
+	// reason every prior bump needed it for.
+	//
+	// "27" (CHAOS-4119, team-lead ratified 2026-08-24): handleOfferMaterial
+	// (chaos3900_structure_offers.go) gains a THIRD handle source --
+	// poolCandidates, the SAME final candidate pool kindOfferMaterial/
+	// candidateOfferMaterial already read -- beside explicit and
+	// BindHandles' own question-text scan, closing the 25/25 handle
+	// offer_miss gap: a ticket key/PR#/CI-run# the resolution already found
+	// is now offered even when never literally typed in the question.
+	// Two changes, both requiring the bump.
+	//
+	// (a) MEANING change on an existing key: HandleOptionsCount (this
+	// struct, read off turn 1's own StructureNeeds.HandleOptions) can now
+	// include graph-derived entries -- a v26 row's handle_options_count>0
+	// meant "BindHandles or an explicit handle matched"; a v27 row's own
+	// >0 no longer implies either. HandleOptionsCountBeforeGraphSource
+	// (new, below) carries the pre-CHAOS-4119 reading (explicit+BindHandles
+	// only) so a v26-comparable count is still recoverable from a v27 row.
+	//
+	// (b) Purely additive: ResolutionTraceEvent gains
+	// HandleOfferCountBeforeGraphSource/HandleOfferGraphDerivedCount/
+	// HandleOfferGraphDerivedRejectedCount on the SAME unconditional
+	// kind_offer stage kind/candidate-offer diagnostics already ride (see
+	// handleOfferDiagnostics' own doc comment, chaos3900_structure_offers.go,
+	// for what each measures). twoTurnCaseResult gains
+	// HandleOptionsCountBeforeGraphSource (single, turn-1-only, same shape
+	// as AnchorOptionsCount/HandleOptionsCount themselves) and the bare +
+	// Turn1-prefixed HandleOfferGraphDerivedCount/
+	// HandleOfferGraphDerivedRejectedCount pairs (same shape as "20"'s
+	// KindOffer* trio -- this stage fires on every resolve call, turn 1 and
+	// each arm's own turn-2 call alike).
 	//
 	// No merge arithmetic changes (Results concatenates verbatim); the
 	// mirror in cmd/acr-trial-merge-two-turn/main.go gained all of it in
@@ -7558,7 +7644,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "26",
+		ReportSchemaVersion: "27",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,

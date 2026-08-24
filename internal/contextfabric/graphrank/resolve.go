@@ -819,6 +819,18 @@ type ResolutionTraceEvent struct {
 	KindOfferBoundaryKindsBeforeRepair           []string
 	KindOfferDistinctKindCountBeforeRepair       int
 	KindOfferSuppressedByCardinalityBeforeRepair bool
+	// HandleOfferCountBeforeGraphSource/HandleOfferGraphDerivedCount/
+	// HandleOfferGraphDerivedRejectedCount (CHAOS-4119, schema v27) ride
+	// the SAME unconditional "kind_offer" stage every other axis on this
+	// event already uses -- handleOfferMaterial, like
+	// kindOfferMaterial/candidateOfferMaterial, runs on every resolution.
+	// See handleOfferDiagnostics' own doc comment
+	// (chaos3900_structure_offers.go) for what each field measures; this is
+	// its trace-visible twin, mirrored through SlogResolutionTracer exactly
+	// like KindOfferBoundaryKinds/CandidateOfferCount above.
+	HandleOfferCountBeforeGraphSource    int
+	HandleOfferGraphDerivedCount         int
+	HandleOfferGraphDerivedRejectedCount int
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -2062,6 +2074,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// axis's own top-five ranking is completely untouched by this phase
 	// (sol design consult's own explicit scope boundary).
 	candidateOffer, candidateOfferDiag := candidateOfferMaterial(kindOfferCandidates, len(resolution.Committed))
+	// CHAOS-4119: handleOfferMaterial now ALSO reads kindOfferCandidates --
+	// the SAME final pool kindOfferMaterial/candidateOfferMaterial already
+	// read (design brief precedent: "derived from the SAME final candidate
+	// pool the resolution above committed to") -- so a ticket key/PR#/
+	// CI-run# the resolution already found can be offered even when it was
+	// never literally typed in the question. Computed here, before the
+	// tracer block below, so its own diagnostics can ride the SAME
+	// unconditional kind_offer event candidateOfferDiag already does.
+	handleOffer, handleOfferDiag := handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker, kindOfferCandidates)
 	// CHAOS-4012 v22: offerKind/candidateOfferCount ride the SAME
 	// unconditional "kind_offer" stage kind_offer's own fields already use
 	// (team-lead ruling: same-change telemetry) -- offerKind is "kind",
@@ -2144,13 +2165,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			KindOfferBoundaryKindsBeforeRepair:           distinctCandidateKinds(kindOfferCandidates),
 			KindOfferDistinctKindCountBeforeRepair:       beforeDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinalityBeforeRepair: beforeDiag.SuppressedByCardinality,
+			HandleOfferCountBeforeGraphSource:            handleOfferDiag.CountBeforeGraphSource,
+			HandleOfferGraphDerivedCount:                 handleOfferDiag.GraphDerivedCount,
+			HandleOfferGraphDerivedRejectedCount:         handleOfferDiag.GraphDerivedRejectedCount,
 		})
 	}
 	offerMaterial := combineStructureOfferMaterial(
 		kindOffer,
 		candidateOffer,
 		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled),
-		handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker),
+		handleOffer,
 	)
 	return resolution, offerMaterial, nil
 }

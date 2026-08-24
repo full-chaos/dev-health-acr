@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -1155,12 +1157,146 @@ func anchorOfferLabel(label string) string {
 	return label
 }
 
+// handleGraphExtractor is a closed-vocabulary canonical-ID parser for one
+// handle-eligible subject kind, paired with the grammar name
+// (handleGrammarEntry.name) ValidateHandleGrammar/HandleSourceColumn key
+// on -- see handleGraphExtractors' own doc comment for why extraction
+// cannot be a single generic parser shared across kinds.
+type handleGraphExtractor struct {
+	grammar string
+	extract func(canonicalID string) (string, bool)
+}
+
+// handleGraphExtractors (CHAOS-4119) is the closed 3-entry table pairing
+// each handle-eligible ContextFabricSubjectKind (handleGrammarRegistry's
+// own membership: work_item, pull_request, ci_pipeline_run) with how to
+// recover its grammar VALUE out of a SubjectCandidate's own
+// Subject.CanonicalID -- deliberately NOT a single generic parser:
+// work_item/ci_pipeline_run are members of identity.Registry's own
+// "<kind>.v2:" scheme (identity.Segments recovers [repo_id, ticket_key] /
+// [repo_id, run_id]), but pull_request PREDATES that migration and is not
+// registered there at all -- its own CanonicalID is the older, plain
+// "pull_request:<repo_id>:<number>" scheme (devhealthsource/tables.go's
+// queryPullRequests). A generic identity.Segments-only reader would
+// silently recover ZERO pull_request handles.
+var handleGraphExtractors = map[contractsv1.ContextFabricSubjectKind]handleGraphExtractor{
+	contractsv1.ContextFabricSubjectWorkItem:    {grammar: "work_item_ticket_key", extract: workItemHandleValue},
+	contractsv1.ContextFabricSubjectCIRun:       {grammar: "ci_run_id", extract: ciRunHandleValue},
+	contractsv1.ContextFabricSubjectPullRequest: {grammar: "pull_request_number", extract: pullRequestHandleValue},
+}
+
+// handleGraphValueMaxLength (codex xhigh review, CHAOS-4119 round 1, LOW
+// finding) bounds every value this file's extractors return, BEFORE
+// ValidateHandleGrammar ever sees it: a real ticket key/PR number/CI run id
+// is always a handful of characters, so a decoded segment anywhere near
+// this length can only be forged, corrupted, or malformed graph data --
+// never a legitimate value this offer axis should ever disclose. Guards
+// against a value that could pass a grammar pattern with no upper bound of
+// its own (ci_run_id's `^\d{4,}$`, pull_request_number's `^\d+$`) yet still
+// blow past ContextFabricHandleOption's own wire bounds (Label: 1-200,
+// handleOfferLabel's own fixed-prefix-plus-value construction) -- turning
+// what should be a graceful non-offer into an internal whole-result
+// validation failure downstream (structureOfferMaxOptions' own doc comment
+// names this exact "always-safe degradation" discipline).
+const handleGraphValueMaxLength = 64
+
+// workItemHandleValue/ciRunHandleValue recover their kind's grammar value
+// from identity.Registry's own "<kind>.v2:" scheme -- the LAST segment in
+// Registration.Columns order is always the natural key's own row-local
+// identifier (work_items.work_item_id / ci_pipeline_runs.run_id), matching
+// handleGrammarRegistry's sourceColumn for each. Both also require the
+// FIRST segment (repo_id) to be non-empty (codex xhigh review, CHAOS-4119
+// round 1, LOW finding): identity.Segments' own decode succeeds on an
+// empty segment same as any other, so a malformed wrapper like
+// "work_item.v2::CHAOS-9001" would otherwise still parse and offer --
+// this rejects that shape outright rather than trusting a structurally
+// well-formed but semantically empty natural-key component.
+func workItemHandleValue(canonicalID string) (string, bool) {
+	segments, ok := identity.Segments(identity.KindWorkItem, canonicalID)
+	if !ok || len(segments) != 2 || segments[0] == "" {
+		return "", false
+	}
+	// codex xhigh review (CHAOS-4119 round 1, MEDIUM finding): work_items.
+	// work_item_id is itself provider-prefixed ("linear:CHAOS-9001",
+	// grounded: 100% of live ids -- devhealthsource/embed_fields.go's own
+	// ticketKeyAlias doc comment) -- segments[1] alone is NOT the
+	// work_item_ticket_key grammar's own bare value. Apply the SAME
+	// first-colon-cut alias rule ticketKeyAlias uses (duplicated here, not
+	// imported -- graphrank has no devhealthsource dependency today, per
+	// the established per-package-duplicate convention
+	// structurepriorcuration.promotableKindValues' own doc comment names);
+	// workItemTicketKeyPredicate (devhealthsource/chaos3899_census_registry.go)
+	// is pinned as this SAME rule's exact SQL inverse, so this mirrors a
+	// relationship the producer side already treats as load-bearing. An id
+	// with NO colon derives no alias (ticketKeyAlias's own contract) --
+	// ok=false here too, never the still-prefixed raw value.
+	_, alias, found := strings.Cut(segments[1], ":")
+	if !found || alias == "" || len(alias) > handleGraphValueMaxLength {
+		return "", false
+	}
+	return alias, true
+}
+
+func ciRunHandleValue(canonicalID string) (string, bool) {
+	segments, ok := identity.Segments(identity.KindCIPipelineRun, canonicalID)
+	if !ok || len(segments) != 2 || segments[0] == "" || segments[1] == "" || len(segments[1]) > handleGraphValueMaxLength {
+		return "", false
+	}
+	return segments[1], true
+}
+
+// pullRequestHandleValue parses queryPullRequests' own pre-identity.Registry
+// CanonicalID scheme ("pull_request:<repo_id>:<number>",
+// devhealthsource/tables.go) -- see handleGraphExtractors' own doc comment
+// for why this cannot go through identity.Segments. Requires repo_id
+// (parts[1]) non-empty for the same malformed-wrapper reason
+// workItemHandleValue/ciRunHandleValue do (codex xhigh review, CHAOS-4119
+// round 1, LOW finding).
+func pullRequestHandleValue(canonicalID string) (string, bool) {
+	parts := strings.Split(canonicalID, ":")
+	if len(parts) != 3 || parts[0] != "pull_request" || parts[1] == "" || parts[2] == "" || len(parts[2]) > handleGraphValueMaxLength {
+		return "", false
+	}
+	return parts[2], true
+}
+
+// handleOfferDiagnostics (CHAOS-4119, schema v27, telemetry-only) reports
+// counts from handleOfferMaterial's own graph-derived pass, mirroring
+// kindOfferDiagnostics'/candidateOfferDiagnostics' own "trace WHY, without
+// re-deriving from the wire result" discipline.
+type handleOfferDiagnostics struct {
+	// CountBeforeGraphSource is len(HandleOptions) exactly as this function
+	// would have computed it before CHAOS-4119: explicit + BindHandles' own
+	// question-text matches only, deduped, capped -- the same value every
+	// pre-CHAOS-4119 artifact's HandleOptionsCount reported. Diffing this
+	// against the call's own final HandleOptions count (read separately,
+	// off turn 1's StructureNeeds -- see AnchorOptionsCount/
+	// HandleOptionsCount's own doc comment) isolates exactly how many
+	// options the graph-derived source contributed, net of cross-source
+	// dedup and the shared cap.
+	CountBeforeGraphSource int
+	// GraphDerivedCount is how many options in the FINAL, post-cap
+	// HandleOptions list came from the pool-derived source (post-dedup
+	// against explicit/BindHandles, post-cap) -- 0 whenever the pool held
+	// no handle-eligible candidate, every derived value was already offered
+	// via another source, or every derived value failed grammar validation.
+	GraphDerivedCount int
+	// GraphDerivedRejectedCount is how many pool candidates of a
+	// handle-eligible kind were found but SKIPPED because the value
+	// recovered from CanonicalID failed its own grammar's valuePattern --
+	// distinguishes "the pool held nothing offerable on this axis" from "a
+	// malformed/legacy canonical id blocked an otherwise-real candidate."
+	GraphDerivedRejectedCount int
+}
+
 // handleOfferMaterial builds the subject_handle disclosure (design brief
 // §2.1: "offered when a grammar-valid value arrived explicit_unattributed")
-// from BindHandles' own pure question-text scan. Every value BindHandles
-// finds here is, by construction, unattributed: composeStructureNeeds
-// (structure.go) is only ever composed on the subjectless terminal path,
-// so nothing has committed for a found handle to be attributed to.
+// from THREE sources, ranked in this order: explicit request handles,
+// BindHandles' own pure question-text scan, and (CHAOS-4119) the
+// resolution's own candidate pool. Every BindHandles/pool value is, by
+// construction, unattributed: composeStructureNeeds (structure.go) is only
+// ever composed on the subjectless terminal path, so nothing has committed
+// for a found handle to be attributed to.
 //
 // Mirrors anchorOfferMaterial's own three-case discipline for the
 // zero-candidates case: subject_handle is Missing whenever this function
@@ -1179,7 +1315,23 @@ func anchorOfferLabel(label string) string {
 // (the dependency was never wired) means NO explicit handle can ever
 // become an offer -- HandleGrammarChecker's own doc comment names this
 // the safe degradation, never a veto.
-func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextFabricRequestedHandle, checker contextfabric.HandleGrammarChecker) contextfabric.StructureOfferMaterial {
+//
+// poolCandidates (CHAOS-4119) is the SAME final candidate pool
+// kindOfferMaterial/candidateOfferMaterial already read at their own call
+// site (resolve.go's kindOfferCandidates) -- the fix for handleOfferMaterial's
+// own 25/25 offer_miss gap: BindHandles' pure text scan can never surface a
+// ticket key/PR#/CI-run# the resolution already found unless it was
+// literally typed in the question. Ranked AFTER explicit and BindHandles'
+// own question-text matches -- both of those are direct signals of what the
+// caller actually wrote; a pool-derived value is one step more inferred, so
+// it never displaces either. Every option minted from poolCandidates names
+// a subject the resolution has ALREADY resolved to exist, so (unlike an
+// explicit or question-text-scanned handle) no existence re-check is
+// needed here -- only ValidateHandleGrammar's own valuePattern check, which
+// exists for a DIFFERENT reason: to guarantee the offer is itself
+// redeemable (VerifyHandle's own redemption-time grammar check would
+// otherwise be able to reject a handle the engine itself offered).
+func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextFabricRequestedHandle, checker contextfabric.HandleGrammarChecker, poolCandidates []contextfabric.SubjectCandidate) (contextfabric.StructureOfferMaterial, handleOfferDiagnostics) {
 	var explicitOptions []contractsv1.ContextFabricHandleOption
 	if checker != nil {
 		explicitSeen := make(map[contractsv1.ContextFabricHandleOption]struct{}, len(explicitHandles))
@@ -1245,16 +1397,74 @@ func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextF
 		seen[opt] = struct{}{}
 		options = append(options, opt)
 	}
+	// CHAOS-4119: CountBeforeGraphSource is captured HERE -- explicit +
+	// BindHandles only, still uncapped/pre-graph -- exactly what this
+	// function returned before this ticket. Capped identically to the old
+	// behavior below (the shared structureOfferMaxOptions cap already
+	// applied to explicit+bound alone pre-CHAOS-4119, so a before-count
+	// that could itself exceed the cap must be capped too, or it would
+	// overstate what an old artifact ever actually reported).
+	var diag handleOfferDiagnostics
+	diag.CountBeforeGraphSource = len(options)
+	if diag.CountBeforeGraphSource > structureOfferMaxOptions {
+		diag.CountBeforeGraphSource = structureOfferMaxOptions
+	}
+	for _, candidate := range poolCandidates {
+		extractor, ok := handleGraphExtractors[candidate.Subject.Kind]
+		if !ok {
+			continue
+		}
+		value, ok := extractor.extract(candidate.Subject.CanonicalID)
+		if !ok {
+			continue
+		}
+		if !ValidateHandleGrammar(candidate.Subject.Kind, extractor.grammar, value) {
+			// A malformed/legacy canonical id, or (for pull_request) a
+			// same-shaped id from an unrelated source -- the value cannot
+			// round-trip through VerifyHandle's own redemption-time grammar
+			// check, so it is never offered (fail-closed, CHAOS-4119 design
+			// ruling).
+			diag.GraphDerivedRejectedCount++
+			continue
+		}
+		sourceColumn, ok := HandleSourceColumn(candidate.Subject.Kind, extractor.grammar)
+		if !ok {
+			// Unreachable: handleGraphExtractors' own grammar names are
+			// drawn from handleGrammarRegistry, the SAME registry
+			// HandleSourceColumn reads.
+			continue
+		}
+		opt := contractsv1.ContextFabricHandleOption{
+			Kind: candidate.Subject.Kind, PatternID: extractor.grammar, Value: value, SourceColumn: sourceColumn,
+			Label:       handleOfferLabel(candidate.Subject.Kind, value),
+			OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+		}
+		if _, exists := seen[opt]; exists {
+			continue
+		}
+		seen[opt] = struct{}{}
+		options = append(options, opt)
+		diag.GraphDerivedCount++
+	}
 	// Codex xhigh review (chaos-pivot-p1, round 2, finding 1): cap AFTER
-	// dedup, in BindHandles' own deterministic order, for the same
+	// dedup, in each source's own deterministic order, for the same
 	// always-safe-truncation reasoning as anchorOfferMaterial above.
+	// CHAOS-4119: graph-derived options are appended LAST, so a truncation
+	// here removes from the graph-derived tail first (up to all of it),
+	// never an explicit or BindHandles entry -- GraphDerivedCount is
+	// adjusted to match what actually survives onto the wire.
 	if len(options) > structureOfferMaxOptions {
+		dropped := len(options) - structureOfferMaxOptions
+		if dropped > diag.GraphDerivedCount {
+			dropped = diag.GraphDerivedCount
+		}
+		diag.GraphDerivedCount -= dropped
 		options = options[:structureOfferMaxOptions]
 	}
 	return contextfabric.StructureOfferMaterial{
 		Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectHandle},
 		HandleOptions: options,
-	}
+	}, diag
 }
 
 // handleOfferLabel renders a server-owned label for one handle offer --
