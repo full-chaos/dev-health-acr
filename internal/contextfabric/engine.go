@@ -15,6 +15,13 @@ type EngineOptions struct {
 	ServiceVersion string
 	Now            func() time.Time
 	NewResultID    func() string
+	// RegimeAOffersDisabled (CHAOS-4234) turns OFF the offers-only
+	// resolution the class-default window gate runs to compose kind/
+	// handle/candidate offers beside the window offer -- restoring
+	// CHAOS-4118's window-only disclosure. Zero value = ENABLED (the
+	// ruling's default); this exists as the reversibility lever only.
+	// See chaos4234_offers_only.go.
+	RegimeAOffersDisabled bool
 	// ReuseProjectionVersion (CHAOS-3782) is the CURRENT value a fresh
 	// investigation's Versions.ProjectionVersion would carry -- composition
 	// must wire it from the exact same configuration
@@ -374,6 +381,11 @@ type EngineTelemetry interface {
 	// composed on (structure.go's own scope note: never on the main
 	// synthesized-answer path).
 	RecordStructureNeedsDisclosed(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind)
+	// RecordGatedOfferResolution (CHAOS-4234) reports, once per
+	// class-default gated request, whether the offers-only resolution
+	// composed offers beside the window offer -- closed vocabulary
+	// GatedOfferResolutionOutcome (chaos4234_offers_only.go).
+	RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome)
 	// RecordStructureOfferCount (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_offer_count{member,source}) reports how many offers one
 	// member's StructureNeeds carried, split by OfferSource (engine|prior
@@ -457,6 +469,7 @@ type Engine struct {
 	candidateVerifier          CandidateVerifier
 	priorConsultant            PriorConsultant
 	priorHandleGrammarChecker  HandleGrammarChecker
+	regimeAOffersDisabled      bool
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -493,6 +506,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseRetrievalIdentity:  options.ReuseRetrievalIdentity,
 		reusePromptVersions:     options.ReusePromptVersions,
 		reuseVersionAuthorities: options.ReuseVersionAuthorities,
+		regimeAOffersDisabled:   options.RegimeAOffersDisabled,
 		serviceVersion:          options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
@@ -570,7 +584,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// class-table/binder default) cannot be known yet at this point --
 	// see the second gate, after Interpret, below.
 	if windowCanon.ExplicitUnconfirmed {
-		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding)
+		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{})
 	}
 
 	// CHAOS-3900 P1 (pivot-intent design brief §2.1): canonicalize
@@ -810,7 +824,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
 	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
-		return e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding)
+		// CHAOS-4234: the gate still fires HERE, before anything decisive,
+		// but it now composes kind/handle/candidate offers from an
+		// offers-only resolution whose commit-bearing outputs are discarded
+		// -- see chaos4234_offers_only.go for the ruling and the two
+		// safety layers.
+		gatedMaterial := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, binding, structureCanon, priorEntries)
+		return e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial)
 	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh

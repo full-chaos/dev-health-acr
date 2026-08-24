@@ -1233,6 +1233,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 	structureCanon *requestStructureCanonicalization,
 	origin WindowCanonicalizationOutcome,
 	binding ResolvedGraphBinding,
+	gatedMaterial StructureOfferMaterial,
 ) (InvestigationResult, error) {
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -1308,12 +1309,13 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// windowClarification is nil (AllowClarification=false declined every
 	// clarification, window included), mirroring composeWindowClarification's
 	// own nil-means-nothing-in-play convention.
+	// CHAOS-4234: gatedMaterial (the class-default gate's offers-only
+	// resolution; empty for every other origin) composes kind/handle/
+	// candidate offers BESIDE the window offer -- composeGatedStructureNeeds
+	// reduces to the pre-CHAOS-4234 window-only block when it is empty.
 	var structureNeeds *contractsv1.ContextFabricStructureNeeds
 	if windowClarification != nil {
-		structureNeeds = &contractsv1.ContextFabricStructureNeeds{
-			Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
-			WindowOptions: windowClarification.Options,
-		}
+		structureNeeds = composeGatedStructureNeeds(gatedMaterial, resultID, windowClarification.Options)
 	}
 
 	result := InvestigationResult{

@@ -24,6 +24,9 @@ expected_in_pool
 expected_kind
 expected_kind_at_offer_boundary
 expected_kind_at_offer_boundary_before_repair
+expected_subject_at_offer_boundary
+expected_subject_in_pool
+expected_subject_rank
 false_no_match
 handle_offer_graph_derived_count
 handle_offer_graph_derived_rejected_count
@@ -79,6 +82,7 @@ turn1_kind_offer_distinct_kind_count_before_repair
 turn1_kind_offer_explicit_hint_count
 turn1_kind_offer_suppressed_by_cardinality
 turn1_kind_offer_suppressed_by_cardinality_before_repair
+turn1_offer_composed_under_window_gate
 turn1_offer_kind
 turn1_question_search_truncated
 turn1_regime
@@ -88,4 +92,5 @@ turn1_term_search_truncated
 turn1_tied_statistical_top
 turn1_trace_events
 turn2_status
+turn2_window_receipt_attached
 wrong_commit

@@ -110,3 +110,8 @@ separate "receipt" record or schema. See `internal/contextfabric/ports.go`'s
 `InvestigationResultStore` doc comment for the organization-scoping binding
 precondition every implementation (Postgres, memory, or otherwise) must
 enforce.
+
+See also: [`context-fabric-regime-a-offers.md`](context-fabric-regime-a-offers.md)
+(CHAOS-4234) for what a turn-1 result carries when the class-default window
+gate fires -- kind/handle/candidate offers beside the window offer, with no
+committed material.

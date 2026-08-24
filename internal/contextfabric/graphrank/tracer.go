@@ -185,7 +185,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// (ResolutionTraceEvent) for what each key measures.
 			"handle_offer_count_before_graph_source", event.HandleOfferCountBeforeGraphSource,
 			"handle_offer_graph_derived_count", event.HandleOfferGraphDerivedCount,
-			"handle_offer_graph_derived_rejected_count", event.HandleOfferGraphDerivedRejectedCount)
+			"handle_offer_graph_derived_rejected_count", event.HandleOfferGraphDerivedRejectedCount,
+			"offered_under_window_gate", event.OfferedUnderWindowGate)
+	case "ranked_cut":
+		t.logger.DebugContext(ctx, "context fabric resolution trace: ranked cut",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"rank", event.Rank, "survived", event.Survived, "coverage_bypass", event.CoverageBypass)
 	case "confirmed_kind_scope":
 		// CHAOS-4154: the operator-visible half of the confirmed-kind
 		// truncation-scoping mechanism -- this event's own presence in a

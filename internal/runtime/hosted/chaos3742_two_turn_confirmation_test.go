@@ -1866,6 +1866,24 @@ type twoTurnTurn1Facts struct {
 	// this) from "already absent at the boundary" (upstream truncation
 	// already lost it -- candidate-list reads the SAME slice, so it cannot).
 	ExpectedKindAtOfferBoundary bool
+	// OfferComposedUnderWindowGate (CHAOS-4234, schema v28) mirrors the
+	// kind_offer trace event's OfferedUnderWindowGate: turn 1 ran the
+	// class-default gate's offers-only resolution, so any kind/handle/
+	// candidate offer on this turn was composed BESIDE the window offer.
+	OfferComposedUnderWindowGate bool
+	// ExpectedSubjectInPool/ExpectedSubjectRank/ExpectedSubjectAtOfferBoundary
+	// (CHAOS-4234, schema v28) are the SUBJECT-level twins of ExpectedInPool/
+	// ExpectedKindAtOfferBoundary: whether the oracle's expect_id itself (kind
+	// AND canonical id, not merely its kind) corroborated into the full
+	// merged pool, its 1-based rank in the LAST ranked_cut batch (0 when it
+	// never reached the cut), and whether it reached the offer builders'
+	// shared input (survived the cut, or bypassed it as a coverage-floor
+	// find). These close the split the kind-level fields could not make:
+	// a handle miss whose KIND is at the boundary can still be a target
+	// the cut dropped, or a target retrieval never found.
+	ExpectedSubjectInPool          bool
+	ExpectedSubjectRank            int
+	ExpectedSubjectAtOfferBoundary bool
 	// ExpectedKindAtOfferBoundaryBeforeRepair/
 	// KindOfferDistinctKindCountBeforeRepair/
 	// KindOfferSuppressedByCardinalityBeforeRepair (CHAOS-4183 phase 3, sol
@@ -2059,11 +2077,14 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 		facts.HandleOfferGraphDerivedCount = event.HandleOfferGraphDerivedCount
 		facts.HandleOfferGraphDerivedRejectedCount = event.HandleOfferGraphDerivedRejectedCount
 		facts.HandleOptionsCountBeforeGraphSource = event.HandleOfferCountBeforeGraphSource
+		facts.OfferComposedUnderWindowGate = event.OfferedUnderWindowGate
 	}
 	facts.TermSearchTruncated, facts.QuestionSearchTruncated = trace.passTruncation()
 	facts.ExpectedInPool = trace.poolContainsKind(tc.ExpectKind)
 	facts.ExpectedKindAtOfferBoundary = trace.boundaryContainsKind(tc.ExpectKind)
 	facts.ExpectedKindAtOfferBoundaryBeforeRepair = trace.boundaryContainsKindBeforeRepair(tc.ExpectKind)
+	facts.ExpectedSubjectInPool = trace.poolContainsSubject(tc.ExpectKind, tc.ExpectID)
+	facts.ExpectedSubjectRank, facts.ExpectedSubjectAtOfferBoundary = trace.rankedCutFor(tc.ExpectKind, tc.ExpectID)
 	facts.CensusRan = trace.censusRan()
 	facts.CensusComplete = trace.censusComplete()
 	facts.CensusCount = trace.censusCount()
@@ -2110,6 +2131,10 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.ExpectedInPool = facts.ExpectedInPool
 	res.ExpectedKindAtOfferBoundary = facts.ExpectedKindAtOfferBoundary
 	res.ExpectedKindAtOfferBoundaryBeforeRepair = facts.ExpectedKindAtOfferBoundaryBeforeRepair
+	res.Turn1OfferComposedUnderWindowGate = facts.OfferComposedUnderWindowGate
+	res.ExpectedSubjectInPool = facts.ExpectedSubjectInPool
+	res.ExpectedSubjectRank = facts.ExpectedSubjectRank
+	res.ExpectedSubjectAtOfferBoundary = facts.ExpectedSubjectAtOfferBoundary
 	res.AnchorOptionsCount = facts.AnchorOptionsCount
 	res.HandleOptionsCount = facts.HandleOptionsCount
 	res.HandleOptionsCountBeforeGraphSource = facts.HandleOptionsCountBeforeGraphSource
@@ -3767,6 +3792,28 @@ type twoTurnCaseResult struct {
 	// something already committed). See
 	// twoTurnTraceCapture.boundaryContainsKindBeforeRepair.
 	ExpectedKindAtOfferBoundaryBeforeRepair bool `json:"expected_kind_at_offer_boundary_before_repair"`
+	// Turn1OfferComposedUnderWindowGate (CHAOS-4234, schema v28) mirrors
+	// twoTurnTurn1Facts.OfferComposedUnderWindowGate -- see that field's
+	// own doc comment. No omitempty: a false on a regime-A row is the
+	// finding ("the gate composed nothing"), not an absence.
+	Turn1OfferComposedUnderWindowGate bool `json:"turn1_offer_composed_under_window_gate"`
+	// ExpectedSubjectInPool/ExpectedSubjectRank/ExpectedSubjectAtOfferBoundary
+	// (CHAOS-4234, schema v28) mirror twoTurnTurn1Facts' identically-named
+	// fields -- the subject-level twins of ExpectedInPool/
+	// ExpectedKindAtOfferBoundary. No omitempty on the bools, same reason as
+	// above; Rank 0 means "never reached the cut" and is a real reading.
+	ExpectedSubjectInPool          bool `json:"expected_subject_in_pool"`
+	ExpectedSubjectRank            int  `json:"expected_subject_rank"`
+	ExpectedSubjectAtOfferBoundary bool `json:"expected_subject_at_offer_boundary"`
+	// Turn2WindowReceiptAttached (CHAOS-4234, schema v28, positive arm only)
+	// records the harness semantics change this ticket made: on a regime-A
+	// case (turn 1 window-gated), the positive arm's turn 2 now carries the
+	// oracle's window receipt BESIDE the member's own receipt, so turn 2
+	// can clear both gates in one turn instead of re-gating on the window.
+	// The baseline pair (schema v27) sent ONE receipt per turn 2 -- so
+	// offer_miss aggregates stay engine-only comparable across the bump,
+	// while turn-2 aggregates carry this change as part of the lever.
+	Turn2WindowReceiptAttached bool `json:"turn2_window_receipt_attached"`
 	// AnchorOptionsCount/HandleOptionsCount are turn 1's own
 	// StructureNeeds.AnchorOptions/HandleOptions counts (zero when turn 1
 	// carried no StructureNeeds). For anchor: count==1 is a designed
@@ -4503,6 +4550,29 @@ type twoTurnReport struct {
 	// the same change, same "an undeclared field is dropped on decode"
 	// reason every prior bump needed it for.
 	//
+	// "28" (CHAOS-4234, team-lead ruled 2026-08-24): the class-default
+	// window gate now runs an offers-only resolution and composes kind/
+	// handle/candidate offers beside the window offer (regime A). Three
+	// changes, all requiring the bump. (a) MEANING change on existing keys
+	// for regime-A rows: kind_offer-stage fields (kind_offer_*,
+	// candidate_offer_count, handle_offer_*, expected_in_pool,
+	// expected_kind_at_offer_boundary*) and the decision-stage fields
+	// (turn1_search_truncated, turn1_tied_statistical_top, ...) are now
+	// POPULATED on a window-gated turn 1, where v27 always read them as
+	// their zero values because no resolution ran. (b) Purely additive:
+	// turn1_offer_composed_under_window_gate, expected_subject_in_pool,
+	// expected_subject_rank, expected_subject_at_offer_boundary,
+	// turn2_window_receipt_attached on twoTurnCaseResult;
+	// regime_a_offer_composed_count and regime_a_turn2_answered_count on
+	// this report (summed by the merger). (c) HARNESS semantics change:
+	// the positive arm's turn 2 on a regime-A case now carries the
+	// oracle's window receipt beside the member receipt, so turn-2
+	// aggregates (turn2_status, positive_applied_count,
+	// gate_reachable_count, regime_a_turn2_answered_count) are NOT
+	// comparable to a v27 run as engine-only numbers; offer_miss_count
+	// stays engine-only. The mirror in cmd/acr-trial-merge-two-turn/
+	// main.go gained all of it in the same change.
+	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
 	// stale key under a new meaning.
@@ -4670,6 +4740,16 @@ type twoTurnReport struct {
 	// ClassifyWindow/DefaultRelativeID refusal path -- so no exact-count
 	// bar, matching InferredKindHandleDecisiveCount's own >0-only shape).
 	WindowClassDefaultGatedCount int `json:"window_class_default_gated_count"`
+	// RegimeAOfferComposedCount (CHAOS-4234, schema v28) counts turn-1 rows
+	// whose window gate (regime A) composed kind/handle/candidate offers
+	// beside the window offer -- the engine-side lever's own reach, before
+	// any oracle match. RegimeATurn2AnsweredCount counts positive-arm rows
+	// on a regime-A case whose turn 2 ended complete or partial (both
+	// gates cleared in ONE turn, the case actually answered) -- the
+	// turn-count effect the ruling named. Informational, summed by the
+	// merger, no bar: the measurement pair decides.
+	RegimeAOfferComposedCount int `json:"regime_a_offer_composed_count"`
+	RegimeATurn2AnsweredCount int `json:"regime_a_turn2_answered_count"`
 	// InferredKindHandleDecisiveCount/InferredBaselineEquivalentCount/
 	// InferredKindInsensitivityAttestedCount/InferredUnjustifiedCount/
 	// InferredPairInvalidCount (CHAOS-4039 v4 contract, kind/handle members
@@ -6116,7 +6196,7 @@ func twoTurnRequest(index int, tc trialCase, requestIDSuffix string) contractsv1
 
 // runTwoTurnPositiveArm confirms the oracle-matching offer via receipt and
 // reports whether it converted.
-func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1 contractsv1.ContextFabricInvestigationResult, timeout time.Duration, trace *twoTurnTraceCapture) twoTurnCaseResult {
+func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, index int, tc trialCase, entry twoTurnOracleEntry, turn1 contractsv1.ContextFabricInvestigationResult, timeout time.Duration, trace *twoTurnTraceCapture, regimeAWindowBand string) twoTurnCaseResult {
 	res := twoTurnCaseResult{Index: index, Member: entry.Member, Arm: string(twoTurnArmPositive), Turn1Status: string(turn1.Status)}
 	twoTurnStampOutcome(&res, tc, nil)
 	if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
@@ -6129,6 +6209,10 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	}
 	req := twoTurnRequest(index, tc, "positive")
 	setTwoTurnReceipt(&req, entry.Member, contractsv1.ContextFabricBoundSubjectReceipt{ResultID: turn1.ResultID, ReceiptID: receiptID})
+	if windowReceipt, ok := twoTurnRegimeAWindowReceipt(turn1, entry.Member, regimeAWindowBand); ok {
+		req.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{windowReceipt}
+		res.Turn2WindowReceiptAttached = true
+	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// CHAOS-4086: reset immediately before the call so finalDecisionEvent
@@ -8098,6 +8182,9 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			continue
 		}
 		report.CasesRun++
+		if turn1Facts.Regime == twoTurnRegimeAWindowGated && turn1Facts.OfferComposedUnderWindowGate {
+			report.RegimeAOfferComposedCount++
+		}
 		// codex round-2 finding #1: StructureNeeds and WindowClarification
 		// are composed INDEPENDENTLY on the subjectless-terminal path
 		// (unresolved.go) -- window is never added to
@@ -8153,7 +8240,14 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 
 		modelCallCapture.reset()
 		positiveStarted := time.Now()
-		positive := runTwoTurnPositiveArm(t, ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture)
+		// CHAOS-4234: on a regime-A case the positive arm's turn 2 also
+		// redeems the oracle's window receipt -- see
+		// twoTurnCaseResult.Turn2WindowReceiptAttached's own doc comment.
+		regimeAWindowBand := ""
+		if turn1Facts.Regime == twoTurnRegimeAWindowGated {
+			regimeAWindowBand = windowBandByIndex[entry.Index]
+		}
+		positive := runTwoTurnPositiveArm(t, ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture, regimeAWindowBand)
 		twoTurnFoldSynthesisStatusOverride(&positive, turn1SynthesisOverride)
 		twoTurnStampTurn1Facts(&positive, turn1Facts)
 		positiveTiming = buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
@@ -8198,6 +8292,9 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// FalseNoMatch's own doc comment (twoTurnCaseResult).
 		if positive.FalseNoMatch {
 			report.FalseNoMatchCount++
+		}
+		if turn1Facts.Regime == twoTurnRegimeAWindowGated && twoTurnStatusAnswered(positive.Turn2Status) {
+			report.RegimeATurn2AnsweredCount++
 		}
 		report.Results = append(report.Results, positive)
 

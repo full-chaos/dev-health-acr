@@ -178,8 +178,15 @@ func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *tes
 	if interpreter.calls != 1 {
 		t.Fatalf("Interpret called %d times, want exactly 1: class-default gating needs the interpreted Shape and must not call it twice", interpreter.calls)
 	}
-	if graph.resolveCalls != 0 || graph.discoverCalls != 0 {
-		t.Fatalf("graph calls (resolve=%d, discover=%d), want 0/0: gated before subject resolution -- this proves the gate fires REGARDLESS of what resolution would have found, including a D0-control-shaped case whose subject would never resolve", graph.resolveCalls, graph.discoverCalls)
+	// CHAOS-4234: the gate now runs ONE offers-only resolve (its commit
+	// output discarded) and still stops before DiscoverContext -- the
+	// gate fires REGARDLESS of what that resolve found, including a
+	// D0-control-shaped case whose subject would never resolve.
+	if graph.resolveCalls != 1 || graph.discoverCalls != 0 {
+		t.Fatalf("graph calls (resolve=%d, discover=%d), want 1/0: exactly one offers-only resolve under the gate, nothing past it", graph.resolveCalls, graph.discoverCalls)
+	}
+	if !OffersOnlyResolution(graph.resolveCtxs[0]) {
+		t.Fatal("the gated ResolveSubjects call did not carry the offers-only mark -- the gate must never run a decisive resolve")
 	}
 	if result.Status != InvestigationClarificationRequired {
 		t.Fatalf("Status = %q, want clarification_required", result.Status)
@@ -203,7 +210,7 @@ func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *tes
 		t.Fatalf("StructureNeeds.Missing = %#v, want exactly [window]", result.StructureNeeds.Missing)
 	}
 	if len(result.StructureNeeds.KindOptions) != 0 || len(result.StructureNeeds.AnchorOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 {
-		t.Fatalf("StructureNeeds kind/anchor/handle options = %#v/%#v/%#v, want all empty: still structurally impossible at gate 2, unaffected by the window fix", result.StructureNeeds.KindOptions, result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions)
+		t.Fatalf("StructureNeeds kind/anchor/handle options = %#v/%#v/%#v, want all empty: this fake's offers-only resolve returned empty material, so the gate reduces to CHAOS-4118's window-only disclosure", result.StructureNeeds.KindOptions, result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions)
 	}
 	if !reflect.DeepEqual(result.StructureNeeds.WindowOptions, result.WindowClarification.Options) {
 		t.Fatalf("StructureNeeds.WindowOptions = %#v, want the identical option set as WindowClarification.Options = %#v", result.StructureNeeds.WindowOptions, result.WindowClarification.Options)
@@ -331,9 +338,12 @@ func TestWindowGate_ReuseRejectsOldDecisiveInferredWindowCandidate(t *testing.T)
 	candidate.EffectiveEvidenceWindow = &EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Provenance: WindowInferredDefault}
 
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	// CHAOS-4234: gate 2 now runs one offers-only resolve, so the graph
+	// double must tolerate exactly that call and nothing past it.
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
 	engine := mustReuseTestEngine(t, EngineDependencies{
 		Interpreter: interpreter,
-		Graph:       bindingOnlyGraphReader{t: t}, // fails the test if ResolveSubjects/DiscoverContext are reached
+		Graph:       graph,
 		Results:     &resultStoreStub{},
 		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
 			return candidate, true, nil
@@ -352,6 +362,9 @@ func TestWindowGate_ReuseRejectsOldDecisiveInferredWindowCandidate(t *testing.T)
 	}
 	if interpreter.calls != 1 {
 		t.Fatalf("Interpret called %d times, want exactly 1: the reuse miss must fall through to a genuinely fresh (gated) investigation", interpreter.calls)
+	}
+	if graph.resolveCalls != 1 || !OffersOnlyResolution(graph.resolveCtxs[0]) || graph.discoverCalls != 0 {
+		t.Fatalf("graph calls (resolve=%d, discover=%d), want exactly one offers-only resolve and no discovery: the gate holds after the rejected reuse", graph.resolveCalls, graph.discoverCalls)
 	}
 }
 
@@ -389,8 +402,14 @@ func TestWindowGate_ClassDefault_WithConfirmedStructure_EchoesAndPersists(t *tes
 	if result.Status != InvestigationClarificationRequired {
 		t.Fatalf("Status = %q, want clarification_required", result.Status)
 	}
-	if graph.resolveCalls != 0 {
-		t.Fatalf("graph.resolveCalls = %d, want 0: gated before subject resolution even with confirmed structure in play", graph.resolveCalls)
+	// CHAOS-4234: the confirmed kind reaches the gate's offers-only resolve
+	// (so the offers it composes are already kind-scoped), while the gate
+	// itself still holds.
+	if graph.resolveCalls != 1 || !OffersOnlyResolution(graph.resolveCtxs[0]) {
+		t.Fatalf("graph.resolveCalls = %d, want exactly 1 offers-only resolve under the gate", graph.resolveCalls)
+	}
+	if graph.lastConfirmedKind == nil || graph.lastConfirmedKind.Kind != SubjectPullRequest {
+		t.Fatalf("confirmed kind reaching the offers-only resolve = %#v, want pull_request", graph.lastConfirmedKind)
 	}
 	if len(result.ConfirmedStructure) != 1 {
 		t.Fatalf("len(result.ConfirmedStructure) = %d, want 1: the kind confirmation must survive the window gate's own terminal, not be silently dropped", len(result.ConfirmedStructure))

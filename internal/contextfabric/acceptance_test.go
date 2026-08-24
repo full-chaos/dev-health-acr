@@ -82,21 +82,34 @@ type acceptanceGraphReader struct {
 	// to an outcome without ever querying the graph.
 	resolveCalls  int
 	discoverCalls int
+	// material is what ResolveSubjects hands back as StructureOfferMaterial
+	// (CHAOS-4234: the gated path composes kind/handle/candidate offers
+	// from it). resolveCtxs/resolveInterpretations/lastConfirmedKind record
+	// every ResolveSubjects call's own inputs so a test can assert WHICH
+	// mode (offers-only or decisive) and which confirmed structure reached
+	// the graph, not merely that a call happened.
+	material               StructureOfferMaterial
+	resolveCtxs            []context.Context
+	resolveInterpretations []InterpretedQuestion
+	lastConfirmedKind      *ConfirmedExpectedKind
 }
 
 func (g *acceptanceGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
 	return ResolvedGraphBinding{GraphKey: "acceptance-fake-key", Epoch: 0}, nil
 }
 
-func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g *acceptanceGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, _ ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.resolveCalls++
 	g.lastRequest = request
+	g.resolveCtxs = append(g.resolveCtxs, ctx)
+	g.resolveInterpretations = append(g.resolveInterpretations, interpreted)
+	g.lastConfirmedKind = confirmedKind
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
 	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
 	if g.err != nil {
 		return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, g.err
 	}
-	return g.resolution, StructureOfferMaterial{}, nil, nil, nil
+	return g.resolution, g.material, nil, nil, nil
 }
 
 func (g *acceptanceGraphReader) DiscoverContext(_ context.Context, _ storage.Principal, _ GraphDiscoveryRequest) (GraphContext, error) {
