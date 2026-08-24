@@ -222,3 +222,38 @@ func TestResolveSubjects_KindOfferBoundaryKindsStaysUnfilteredWhenCommitted(t *t
 		t.Fatalf("KindOfferBoundaryKinds = %v, KindOfferBoundaryKindsBeforeRepair = %v, want identical on a committed resolution", event.KindOfferBoundaryKinds, event.KindOfferBoundaryKindsBeforeRepair)
 	}
 }
+
+// TestResolveSubjects_KindOfferBoundaryKindsStaysNilWhenEmpty is codex
+// CHAOS-4183 phase-3 review round 2, finding 1 (LOW): an earlier version of
+// the resolve.go call site unconditionally seeded KindOfferBoundaryKinds
+// with append([]string{}, ...), so a genuinely empty pre-repair reading
+// (distinctCandidateKinds returns nil for an empty kindOfferCandidates, per
+// its own doc comment) came out as a non-nil, zero-length []string whenever
+// nothing was repaired -- observable downstream as JSON `[]` where the
+// pre-phase-3 field, and KindOfferBoundaryKindsBeforeRepair today, both
+// always serialize `null`. This pins nil, not merely len==0.
+func TestResolveSubjects_KindOfferBoundaryKindsStaysNilWhenEmpty(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"outage": {}}}
+	tracer := &captureResolutionTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+
+	request := testRequest()
+	_, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("outage"), deps, nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+
+	kindOfferEvents := tracer.eventsForStage("kind_offer")
+	if len(kindOfferEvents) != 1 {
+		t.Fatalf("kind_offer trace events = %d, want exactly 1", len(kindOfferEvents))
+	}
+	event := kindOfferEvents[0]
+	if event.KindOfferBoundaryKinds != nil {
+		t.Fatalf("KindOfferBoundaryKinds = %#v, want nil (not merely empty) -- an empty pool must serialize the SAME null distinctCandidateKinds itself would, not a stray []string{}", event.KindOfferBoundaryKinds)
+	}
+	if event.KindOfferBoundaryKindsBeforeRepair != nil {
+		t.Fatalf("KindOfferBoundaryKindsBeforeRepair = %#v, want nil", event.KindOfferBoundaryKindsBeforeRepair)
+	}
+}

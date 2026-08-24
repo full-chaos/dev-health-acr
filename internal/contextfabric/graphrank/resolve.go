@@ -2084,6 +2084,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// stage fires every time a tracer is wired, corpus-wide. See
 	// ResolutionTraceEvent's own "kind_offer" field doc comment.
 	if deps.ResolutionTracer != nil {
+		// boundaryKindsPostRepair (CHAOS-4183 phase 3): see
+		// KindOfferBoundaryKinds' own doc comment for the full mechanism.
+		// codex CHAOS-4183 phase-3 review round 2, finding 1 (LOW): an
+		// earlier version unconditionally seeded this with append([]string{},
+		// ...), so an empty pre-repair reading (distinctCandidateKinds
+		// returns nil for an empty kindOfferCandidates) became a non-nil
+		// []string{} whenever nothing was repaired -- observable as JSON
+		// `[]` where the pre-phase-3 field always serialized `null`. Fixed:
+		// only allocate/append when the repaired tail is genuinely
+		// non-empty; otherwise this is distinctCandidateKinds' own return
+		// value verbatim, nil included.
+		boundaryKindsPostRepair := distinctCandidateKinds(kindOfferCandidates)
+		if repairedTail := subjectKindStrings(afterKinds[len(beforeKinds):]); len(repairedTail) > 0 {
+			boundaryKindsPostRepair = append(append([]string{}, boundaryKindsPostRepair...), repairedTail...)
+		}
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "kind_offer",
 			KindOfferExplicitHintCount:       kindOfferDiag.ExplicitHintCount,
@@ -2125,10 +2140,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// subset is exactly the offerable portion of the unfiltered
 			// list). Committed or nothing-absent: this reduces to the
 			// unfiltered list verbatim, byte-identical to pre-phase-3.
-			KindOfferBoundaryKinds: append(
-				append([]string{}, distinctCandidateKinds(kindOfferCandidates)...),
-				subjectKindStrings(afterKinds[len(beforeKinds):])...,
-			),
+			KindOfferBoundaryKinds:                       boundaryKindsPostRepair,
 			KindOfferBoundaryKindsBeforeRepair:           distinctCandidateKinds(kindOfferCandidates),
 			KindOfferDistinctKindCountBeforeRepair:       beforeDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinalityBeforeRepair: beforeDiag.SuppressedByCardinality,
