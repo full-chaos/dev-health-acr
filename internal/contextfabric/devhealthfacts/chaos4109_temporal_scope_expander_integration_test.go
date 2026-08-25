@@ -213,6 +213,27 @@ func TestScopeExpanderRange_WindowSelectsByOverlapNotContainment(t *testing.T) {
 			end:       t3.Add(14 * 24 * time.Hour),
 			wantAdmit: true,
 		},
+		// The two boundary cases below (codex xhigh review LOW, confirmed
+		// real) pin the predicate's exact edges rather than just its
+		// interior: `observed_at <= window_end AND (valid_to IS NULL OR
+		// valid_to > window_start)` treats valid_to as EXCLUSIVE (a window
+		// starting exactly when membership ended does not overlap it) but
+		// observed_at as INCLUSIVE against window_end (a window ending
+		// exactly when membership began DOES overlap it) -- an intentional
+		// asymmetry, not a typo, matching falkorgraph/temporal.go's
+		// identical predicate.
+		{
+			name:      "window starts exactly at the first A interval's valid_to",
+			start:     t2,
+			end:       t2.Add(5 * 24 * time.Hour),
+			wantAdmit: false,
+		},
+		{
+			name:      "window ends exactly at the second A interval's observed_at",
+			start:     t2.Add(5 * 24 * time.Hour),
+			end:       t3,
+			wantAdmit: true,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

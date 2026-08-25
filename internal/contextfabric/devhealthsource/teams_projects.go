@@ -85,7 +85,20 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // (no interval suffix) and would collide with, rather than coexist beside,
 // a newly-derived closed interval for the same pair under incremental
 // catch-up.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v5"
+// v6 (CHAOS-4109 fast-follow, codex xhigh review HIGH finding, confirmed
+// real): the interval rule membershipIntervalsSubquery derives changed --
+// a duplicate ADD (immediately preceded by another ADD, no REMOVE between)
+// no longer mints its own edge at all; it collapses into the FIRST add's
+// interval (team-lead ruling 2026-08-25). An organization already
+// projected under v5 that has any such sequence is still holding the OLD
+// v5 shape: a spurious second edge, keyed by the duplicate touch's own
+// RelationshipID, that this fix's code no longer emits and the checkpoint
+// guard has no other reason to remove -- it only rebuilds on a version
+// mismatch, and incremental catch-up under a stale v5 marker never
+// revisits an already-committed interval. Same deliberate-rebuild
+// discipline as v2-v5: a full rebuild is what retracts the now-invalid
+// duplicate edge everywhere it was already projected.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v6"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
