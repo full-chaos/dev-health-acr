@@ -859,8 +859,8 @@ type twoTurnTraceCapture struct {
 	// (it carries no window receipt to redeem, so that correction path is
 	// unreachable there) but was stated as a general fact about the method,
 	// which it is not. Reading the LAST value is what makes this correct
-	// regardless -- the same "last wins" discipline finalDecisionEvent
-	// already needs for a stalled resolution's re-decision.
+	// regardless -- the same "last wins" discipline finalDecisionEvents
+	// already needs, per subject, for a stalled resolution's re-decision.
 	windowCanonicalization contextfabric.WindowCanonicalizationOutcome
 }
 
@@ -1015,26 +1015,63 @@ func (c *twoTurnTraceCapture) evidenceCensusCommitted(committed []contractsv1.Co
 	return false
 }
 
-// finalDecisionEvent returns the LAST captured "decision"-stage event
-// (zero value, ok=false if none) -- CHAOS-4039's own
-// twoTurnInferredClassification input (its Outcome is the engine-
-// deterministic half of baseline_equivalent). "Last" because a stalled
-// resolution can emit a decision event
-// TWICE (the initial stalled attempt, then a census-enriched re-decision
-// -- TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate, graphrank);
-// only the final one describes what the caller actually received.
-func (c *twoTurnTraceCapture) finalDecisionEvent() (event graphrank.ResolutionTraceEvent, ok bool) {
+// finalDecisionEvents returns, for THIS call's own captured trace stream,
+// the LAST "decision"-stage event PER DISTINCT SUBJECT KEY (Kind+
+// CanonicalID), in first-seen order -- CHAOS-4039's own
+// twoTurnInferredClassification input.
+//
+// "Last per subject" generalizes the pre-CHAOS-4096 "last event, period"
+// rule (finalDecisionEvent, singular) to a world where a resolution can now
+// emit MORE than one decision event: a genuinely multi-subject commit (the
+// pre_committed_exact_hint loop, resolution.go) or the caller-hint short
+// circuit (resolve.go) both emit one event PER committed subject, and those
+// are DIFFERENT subjects, not a re-decision of the same one -- collapsing
+// them to "the last event" as before would silently drop every committed
+// subject but one.
+//
+// codex R1 (Low, confirmed): the stalled-then-re-decided case this rule
+// already existed for (TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate,
+// graphrank) does NOT collapse under this key scheme, and this comment
+// previously claimed it did -- the FIRST (stalled) event is an ambiguous/
+// no_commit outcome, which never carries a Subject at all (resolution.go's
+// switch), so it lands under the zero-value key while the SECOND
+// (census-enriched) event carries the real committed Subject and lands
+// under a DIFFERENT key. Both survive in the returned slice. That is still
+// CORRECT, not a regression: every existing reader either takes the LAST
+// element (twoTurnStampDecision, twoTurnCaptureTurn1Facts, twoTurnLegOutcome
+// -- always the census-enriched, actually-served decision) or unions only
+// the "committed"-outcome events' own Subjects (twoTurnUnionCommittedSubjects
+// -- the stalled event contributes nothing, Outcome!="committed"), so the
+// non-collapse is invisible to every consumer. TWO subjectless events in a
+// row (e.g. ambiguous then no_commit, neither ever committing) DO still
+// collapse to the last one, sharing the same zero-value key -- that
+// remains the pre-CHAOS-4096 behavior unchanged.
+//
+// Empty (never nil-vs-empty distinguished; callers already treat both that
+// way) when this leg captured no decision-stage event at all.
+func (c *twoTurnTraceCapture) finalDecisionEvents() []graphrank.ResolutionTraceEvent {
+	order := make([]string, 0, 4)
+	byKey := make(map[string]graphrank.ResolutionTraceEvent, 4)
 	for _, e := range c.events {
-		if e.Stage == "decision" {
-			event, ok = e, true
+		if e.Stage != "decision" {
+			continue
 		}
+		key := string(e.Subject.Kind) + "|" + e.Subject.CanonicalID
+		if _, seen := byKey[key]; !seen {
+			order = append(order, key)
+		}
+		byKey[key] = e
 	}
-	return event, ok
+	events := make([]graphrank.ResolutionTraceEvent, 0, len(order))
+	for _, key := range order {
+		events = append(events, byKey[key])
+	}
+	return events
 }
 
 // snapshot (CHAOS-4135) returns a COPY of every event captured for the call
 // most recently made against this tracer -- the full stream
-// finalDecisionEvent/kindCoverageFloorEvent/passTruncation each already read
+// finalDecisionEvents/kindCoverageFloorEvent/passTruncation each already read
 // a narrow projection of, now preserved whole. A copy, not the live slice:
 // callers stash this onto a twoTurnCaseResult that outlives the next
 // reset()/append() this same *twoTurnTraceCapture will do for the NEXT call
@@ -1071,12 +1108,12 @@ func (c *twoTurnTraceCapture) snapshot() []graphrank.ResolutionTraceEvent {
 }
 
 // kindCoverageFloorEvent returns the LAST captured "kind_coverage_floor"
-// event (CHAOS-4086/CHAOS-4038), the same last-wins rule finalDecisionEvent
-// applies and for the same reason: ResolveSubjects can resolve twice (the
+// event (CHAOS-4086/CHAOS-4038), the same last-wins-per-key rule
+// finalDecisionEvents applies and for the same reason: ResolveSubjects can resolve twice (the
 // evidence-census re-resolve), and the run that produced the served answer is
 // the later one.
 //
-// A SEPARATE reader from finalDecisionEvent because it is a separate stage --
+// A SEPARATE reader from finalDecisionEvents because it is a separate stage --
 // see ResolutionTraceEvent's own doc comment for why the floor's state is
 // deliberately not carried on the decision event.
 func (c *twoTurnTraceCapture) kindCoverageFloorEvent() (event graphrank.ResolutionTraceEvent, ok bool) {
@@ -1091,7 +1128,7 @@ func (c *twoTurnTraceCapture) kindCoverageFloorEvent() (event graphrank.Resoluti
 // confirmedKindRescueEvent (CHAOS-4038 v18) is kindCoverageFloorEvent's own
 // twin for the confirmed_kind_rescue stage (CHAOS-4132) -- same last-event-
 // wins rule, same rationale (a separate stage from the decision event, read
-// by a dedicated function rather than folded into finalDecisionEvent).
+// by a dedicated function rather than folded into finalDecisionEvents).
 func (c *twoTurnTraceCapture) confirmedKindRescueEvent() (event graphrank.ResolutionTraceEvent, ok bool) {
 	for _, e := range c.events {
 		if e.Stage == "confirmed_kind_rescue" {
@@ -1370,8 +1407,8 @@ func twoTurnCommittedWrong(committed []contractsv1.ContextFabricSubjectRef, tc t
 //     stalled resolution can emit TWO decision events, the initial stalled
 //     attempt then a census-enriched re-decision --
 //     TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate, graphrank
-//     -- only the LAST one describes what the caller actually received,
-//     twoTurnTraceCapture.finalDecisionEvent) match, AND
+//     -- only the LAST one (per subject) describes what the caller
+//     actually received, twoTurnTraceCapture.finalDecisionEvents) match, AND
 //  2. the paired calls' own committed-subject SETS
 //     (twoTurnCommittedSubjectsEquivalent: Kind+CanonicalID only, Label
 //     dropped as presentation text -- this section's own former
@@ -1445,15 +1482,21 @@ func twoTurnCommittedSubjectsEquivalent(a, b []contractsv1.ContextFabricSubjectR
 // production code) -- it is exactly the sampling noise a decision-layer
 // comparison is supposed to be immune to, per v5's OWN stated intent.
 //
-// A single-element slice when Outcome=="committed" (graphrank's own commit
-// switch, resolution.go, never produces more than one committed subject
-// today), nil otherwise -- twoTurnCommittedSubjectsEquivalent treats
+// A single-element slice when Outcome=="committed" for exactly ONE decision
+// event, nil otherwise -- twoTurnCommittedSubjectsEquivalent treats
 // nil/empty identically to any other empty set. decision.Subject.Label is
 // UNSCRUBBED here (this is a local, in-process comparison value, never
 // serialized -- unlike twoTurnTraceCapture.snapshot(), which strips it
 // before anything reaches the persisted artifact) but
 // twoTurnCommittedSubjectKeys drops Label regardless, so it never reaches
 // the comparison either way.
+//
+// CHAOS-4096: graphrank's own commit switch (resolution.go) and the
+// caller-hint short circuit (resolve.go) can now both emit MORE than one
+// decision event per leg for a genuinely multi-subject commit -- see
+// twoTurnUnionCommittedSubjects below, which is what a caller iterating
+// finalDecisionEvents' own plural result must use instead of calling this
+// function once per event and keeping only the last.
 func twoTurnDecisionCommittedSubjects(decision graphrank.ResolutionTraceEvent) []contractsv1.ContextFabricSubjectRef {
 	if decision.Outcome != "committed" {
 		return nil
@@ -1530,6 +1573,66 @@ func twoTurnCommitAffirmationState(decision graphrank.ResolutionTraceEvent, resu
 	return "retracted"
 }
 
+// twoTurnUnionCommittedSubjects (CHAOS-4096) unions the committed subjects
+// across EVERY decision-stage event a leg captured (finalDecisionEvents'
+// own plural result) -- the generalization twoTurnDecisionCommittedSubjects'
+// single-event form needs now that a multi-subject commit or the
+// caller-hint short circuit can emit more than one decision event per leg.
+// By construction (the resolution.go switch fires exactly ONE case: either
+// N committed events sharing Outcome=="committed", or one ambiguous event,
+// or one no_commit event) this is never a MIX of committed and
+// non-committed events for the same leg, so a plain per-event union is
+// exactly the committed-subject SET twoTurnCommittedSubjectsEquivalent
+// already expects.
+func twoTurnUnionCommittedSubjects(events []graphrank.ResolutionTraceEvent) []contractsv1.ContextFabricSubjectRef {
+	var union []contractsv1.ContextFabricSubjectRef
+	for _, event := range events {
+		union = append(union, twoTurnDecisionCommittedSubjects(event)...)
+	}
+	return union
+}
+
+// twoTurnLegOutcome (CHAOS-4096) returns the shared decision-stage Outcome
+// across a leg's own finalDecisionEvents() -- "" for an empty leg (no
+// decision event captured at all, matching finalDecisionEvent's old
+// ok==false case). Every element shares the SAME Outcome by construction
+// (see twoTurnUnionCommittedSubjects' own doc comment), so the last one is
+// representative.
+func twoTurnLegOutcome(events []graphrank.ResolutionTraceEvent) string {
+	if len(events) == 0 {
+		return ""
+	}
+	return events[len(events)-1].Outcome
+}
+
+// twoTurnCommitAffirmationSeverity orders twoTurnCommitAffirmationState's
+// own closed vocabulary from least to most alarming, so
+// twoTurnLegCommitAffirmation can reduce several per-subject states to the
+// single most severe one without inventing a new vocabulary item.
+var twoTurnCommitAffirmationSeverity = map[string]int{"": 0, "exempt": 1, "affirmed": 2, "retracted": 3}
+
+// twoTurnLegCommitAffirmation (CHAOS-4096) reduces a leg's own per-subject
+// commit-affirmation states (one twoTurnCommitAffirmationState call per
+// finalDecisionEvents() entry) to the single most severe one --
+// retracted > affirmed > exempt > "". HintedCommitAffirmation/
+// BaselineCommitAffirmation stay single STRINGS (see their own doc comment)
+// rather than widening to a slice -- that keeps the trial-report JSON
+// schema unchanged (no ReportSchemaVersion bump) -- so a multi-subject
+// commit's worst-case affirmation is what the row reports: a retraction on
+// ANY subject is exactly the correctness signal CHAOS-4085's gate exists to
+// surface, and staying silent about it because a DIFFERENT subject in the
+// same commit was merely affirmed would be a false-clean row.
+func twoTurnLegCommitAffirmation(events []graphrank.ResolutionTraceEvent, result contractsv1.ContextFabricInvestigationResult) string {
+	best := ""
+	for _, event := range events {
+		state := twoTurnCommitAffirmationState(event, result)
+		if twoTurnCommitAffirmationSeverity[state] > twoTurnCommitAffirmationSeverity[best] {
+			best = state
+		}
+	}
+	return best
+}
+
 // twoTurnInferredClassification computes CHAOS-4039's 3-way partition for a
 // DECISIVE (CommittedCount>0) kind/handle inferred-tier commit: hinted/
 // baselineCommitted are the paired calls' own DECISION-LAYER committed-
@@ -1539,7 +1642,8 @@ func twoTurnCommitAffirmationState(decision graphrank.ResolutionTraceEvent, resu
 // CHAOS-4085's post-synthesis affirmation gate can retract from
 // independently per leg; see twoTurnDecisionCommittedSubjects' own doc
 // comment for the full mechanism), hinted/baselineOutcome their own final
-// decision-stage trace Outcome (twoTurnTraceCapture.finalDecisionEvent),
+// decision-stage trace Outcome (twoTurnTraceCapture.finalDecisionEvents,
+// reduced via twoTurnLegOutcome),
 // and kindAttested is whether the all-kinds census itself certified this
 // exact commit (runTwoTurnInferredTierArm's own kindInsensitivityResult/
 // evidenceCensusCommitted check). Extracted from the classification switch
@@ -1640,7 +1744,13 @@ func twoTurnStampDecision(res *twoTurnCaseResult, trace *twoTurnTraceCapture) {
 	// the same "single site, not five" reasoning SynthesisStatusOverrideUncommittedCount's
 	// own doc comment already applies to counting.
 	res.TraceEvents = trace.snapshot()
-	if event, ok := trace.finalDecisionEvent(); ok {
+	// CHAOS-4096: CommitGate/TiedStatisticalTop/SearchTruncated are
+	// RESOLUTION-wide, not per-subject -- every decision event a single
+	// resolution now emits (one per committed subject, on a multi-subject
+	// commit) carries the identical value for all three, so the last
+	// captured event is exactly as representative as it always was.
+	if events := trace.finalDecisionEvents(); len(events) > 0 {
+		event := events[len(events)-1]
 		res.CommitGate = event.CommitGate
 		res.TiedStatisticalTop = event.TiedStatisticalTop
 		res.SearchTruncated = event.SearchTruncated
@@ -2050,7 +2160,11 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 	if trace == nil {
 		return facts
 	}
-	if event, ok := trace.finalDecisionEvent(); ok {
+	// CHAOS-4096: same resolution-wide-not-per-subject reasoning as
+	// twoTurnStampDecision's own identical fields -- the last captured
+	// event stays fully representative.
+	if events := trace.finalDecisionEvents(); len(events) > 0 {
+		event := events[len(events)-1]
 		facts.CommitGate = event.CommitGate
 		facts.TiedStatisticalTop = event.TiedStatisticalTop
 		facts.SearchTruncated = event.SearchTruncated
@@ -5737,6 +5851,148 @@ func TestTwoTurnCommitAffirmationState(t *testing.T) {
 	}
 }
 
+// TestTwoTurnFinalDecisionEventsMultiSubjectCommit (CHAOS-4096) pins the
+// generalization finalDecisionEvents needs now that a single resolution can
+// emit MORE than one "decision" event: one per DIFFERENT subject (a
+// multi-subject commit) must all survive, and the real stalled-then-
+// re-decided shape (a SUBJECTLESS first event, a real-Subject second one --
+// finalDecisionEvents' own doc comment on why this does NOT collapse, and
+// why every existing consumer is unaffected regardless) must produce both
+// events with the last one representative.
+func TestTwoTurnFinalDecisionEventsMultiSubjectCommit(t *testing.T) {
+	t.Parallel()
+	subjectA := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-1"}
+	subjectB := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-2"}
+
+	t.Run("different subjects all survive", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "decision", Outcome: "committed", Subject: subjectA, CommitGate: "pre_committed_exact_hint"},
+			{Stage: "decision", Outcome: "committed", Subject: subjectB, CommitGate: "pre_committed_exact_hint"},
+		}}
+		got := trace.finalDecisionEvents()
+		if len(got) != 2 {
+			t.Fatalf("finalDecisionEvents() = %+v, want 2 events (one per distinct subject)", got)
+		}
+		if got[0].Subject != subjectA || got[1].Subject != subjectB {
+			t.Fatalf("finalDecisionEvents() = %+v, want [subjectA, subjectB] in first-seen order", got)
+		}
+	})
+
+	t.Run("real stalled-then-census-enriched shape: both events survive, last is representative", func(t *testing.T) {
+		// codex R1 (Low, confirmed): the REAL production shape
+		// (TestResolveSubjects_EvidenceCensusCommitsAStalledCandidate,
+		// graphrank) has a SUBJECTLESS first event -- resolution.go's
+		// ambiguous/no_commit cases never set Subject -- so it does NOT
+		// share a key with the second, real-Subject committed event. Both
+		// survive here; what matters is that every existing consumer reads
+		// the LAST element (or unions only "committed"-outcome events),
+		// which still correctly picks the census-enriched decision either
+		// way -- see finalDecisionEvents' own doc comment.
+		stalled := graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "ambiguous"}
+		censusEnriched := graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "committed", Subject: subjectA, CommitGate: "evidence_census"}
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{stalled, censusEnriched}}
+		got := trace.finalDecisionEvents()
+		if len(got) != 2 || !reflect.DeepEqual(got[0], stalled) || !reflect.DeepEqual(got[1], censusEnriched) {
+			t.Fatalf("finalDecisionEvents() = %+v, want [stalled, censusEnriched] -- different keys, both retained", got)
+		}
+		if got := twoTurnLegOutcome(trace.finalDecisionEvents()); got != "committed" {
+			t.Errorf(`twoTurnLegOutcome() = %q, want "committed" (the last element, the actually-served decision)`, got)
+		}
+		if got := twoTurnUnionCommittedSubjects(trace.finalDecisionEvents()); len(got) != 1 || got[0] != subjectA {
+			t.Errorf("twoTurnUnionCommittedSubjects() = %+v, want [subjectA] (the subjectless stalled event contributes nothing)", got)
+		}
+	})
+
+	t.Run("two subjectless events in a row still collapse to the last", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{events: []graphrank.ResolutionTraceEvent{
+			{Stage: "decision", Outcome: "ambiguous"},
+			{Stage: "decision", Outcome: "no_commit"},
+		}}
+		got := trace.finalDecisionEvents()
+		if len(got) != 1 || got[0].Outcome != "no_commit" {
+			t.Fatalf("finalDecisionEvents() = %+v, want exactly one event (the last, no_commit) -- both share the zero-value subject key", got)
+		}
+	})
+
+	t.Run("no decision event captured returns empty", func(t *testing.T) {
+		trace := &twoTurnTraceCapture{}
+		if got := trace.finalDecisionEvents(); len(got) != 0 {
+			t.Fatalf("finalDecisionEvents() = %+v, want empty", got)
+		}
+	})
+}
+
+// TestTwoTurnUnionCommittedSubjects (CHAOS-4096) pins the plural
+// generalization of twoTurnDecisionCommittedSubjects: the union of every
+// committed event's own Subject, in event order, empty for a leg with no
+// committed event.
+func TestTwoTurnUnionCommittedSubjects(t *testing.T) {
+	t.Parallel()
+	subjectA := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-1"}
+	subjectB := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-2"}
+
+	got := twoTurnUnionCommittedSubjects([]graphrank.ResolutionTraceEvent{
+		{Stage: "decision", Outcome: "committed", Subject: subjectA},
+		{Stage: "decision", Outcome: "committed", Subject: subjectB},
+	})
+	if len(got) != 2 || got[0] != subjectA || got[1] != subjectB {
+		t.Fatalf("twoTurnUnionCommittedSubjects = %+v, want [subjectA, subjectB]", got)
+	}
+
+	if got := twoTurnUnionCommittedSubjects([]graphrank.ResolutionTraceEvent{{Stage: "decision", Outcome: "ambiguous"}}); got != nil {
+		t.Fatalf("twoTurnUnionCommittedSubjects(ambiguous only) = %+v, want nil", got)
+	}
+	if got := twoTurnUnionCommittedSubjects(nil); got != nil {
+		t.Fatalf("twoTurnUnionCommittedSubjects(nil) = %+v, want nil", got)
+	}
+}
+
+// TestTwoTurnLegOutcome (CHAOS-4096) pins the empty-leg/representative-last
+// contract twoTurnLegOutcome replaces bare Outcome field reads with.
+func TestTwoTurnLegOutcome(t *testing.T) {
+	t.Parallel()
+	if got := twoTurnLegOutcome(nil); got != "" {
+		t.Errorf(`twoTurnLegOutcome(nil) = %q, want ""`, got)
+	}
+	events := []graphrank.ResolutionTraceEvent{
+		{Stage: "decision", Outcome: "committed", Subject: contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "a"}},
+		{Stage: "decision", Outcome: "committed", Subject: contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "b"}},
+	}
+	if got := twoTurnLegOutcome(events); got != "committed" {
+		t.Errorf(`twoTurnLegOutcome(multi-subject committed) = %q, want "committed"`, got)
+	}
+}
+
+// TestTwoTurnLegCommitAffirmation (CHAOS-4096) pins the severity reduction:
+// retracted outranks affirmed outranks exempt outranks "", so a
+// multi-subject commit's single reported affirmation state is never quieter
+// than its worst individual subject.
+func TestTwoTurnLegCommitAffirmation(t *testing.T) {
+	t.Parallel()
+	subjectA := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-1"}
+	subjectB := contractsv1.ContextFabricSubjectRef{Kind: "work_item", CanonicalID: "work_item:linear:CHAOS-2"}
+	exemptEvent := graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "committed", Subject: subjectA, CommitBasis: string(contextfabric.CommitBasisCallerCanonicalID)}
+	affirmedResult := contractsv1.ContextFabricInvestigationResult{SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []contractsv1.ContextFabricSubjectRef{subjectB}}}
+	affirmedEvent := graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "committed", Subject: subjectB, CommitBasis: string(contextfabric.CommitBasisStatistical)}
+	retractedEvent := graphrank.ResolutionTraceEvent{Stage: "decision", Outcome: "committed", Subject: subjectA, CommitBasis: string(contextfabric.CommitBasisStatistical)}
+
+	if got := twoTurnLegCommitAffirmation(nil, contractsv1.ContextFabricInvestigationResult{}); got != "" {
+		t.Errorf(`twoTurnLegCommitAffirmation(nil) = %q, want ""`, got)
+	}
+	if got := twoTurnLegCommitAffirmation([]graphrank.ResolutionTraceEvent{exemptEvent}, contractsv1.ContextFabricInvestigationResult{}); got != "exempt" {
+		t.Errorf(`twoTurnLegCommitAffirmation(exempt alone) = %q, want "exempt"`, got)
+	}
+	if got := twoTurnLegCommitAffirmation([]graphrank.ResolutionTraceEvent{exemptEvent, affirmedEvent}, affirmedResult); got != "affirmed" {
+		t.Errorf(`twoTurnLegCommitAffirmation(exempt+affirmed) = %q, want "affirmed" (affirmed outranks exempt)`, got)
+	}
+	// retractedEvent's own subjectA is ABSENT from affirmedResult's Committed
+	// (only subjectB is there), so it reads "retracted" -- mixed with
+	// affirmedEvent (subjectB, present), the worse verdict must win.
+	if got := twoTurnLegCommitAffirmation([]graphrank.ResolutionTraceEvent{affirmedEvent, retractedEvent}, affirmedResult); got != "retracted" {
+		t.Errorf(`twoTurnLegCommitAffirmation(affirmed+retracted) = %q, want "retracted" (worst case wins)`, got)
+	}
+}
+
 // TestTwoTurnCaseResultIsAnomalous (CHAOS-4135) pins every bar
 // twoTurnCaseResultIsAnomalous mirrors against the final gate loop
 // (TestChaos3742TwoTurnConfirmationReplay) -- one true case per zero-
@@ -6218,7 +6474,7 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	// CHAOS-4086: reset immediately before the call so finalDecisionEvent
+	// CHAOS-4086: reset immediately before the call so finalDecisionEvents
 	// below can only ever see THIS call's events. The capture is shared
 	// across arms (one tracer is installed on the investigator for the
 	// whole run), so without the reset a quiet arm would inherit the
@@ -6559,7 +6815,7 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	}
 
 	var baseline contractsv1.ContextFabricInvestigationResult
-	var baselineDecision graphrank.ResolutionTraceEvent
+	var baselineDecisions []graphrank.ResolutionTraceEvent
 	if !isWindow {
 		if trace != nil {
 			trace.reset()
@@ -6607,8 +6863,8 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 		}
 		if trace != nil {
 			// Captured BEFORE the hinted call's own reset below -- the
-			// baseline's decision event would otherwise be lost.
-			baselineDecision, _ = trace.finalDecisionEvent()
+			// baseline's decision event(s) would otherwise be lost.
+			baselineDecisions = trace.finalDecisionEvents()
 			// CHAOS-4135: same "before the reset" urgency, for the SAME
 			// reason -- staged unconditionally, redacted later by
 			// twoTurnCaseResultIsAnomalous if this pairing turns out
@@ -6689,9 +6945,9 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 		res.FalseNoMatch = true
 	}
 
-	var hintedDecision graphrank.ResolutionTraceEvent
+	var hintedDecisions []graphrank.ResolutionTraceEvent
 	if !isWindow {
-		hintedDecision, _ = trace.finalDecisionEvent()
+		hintedDecisions = trace.finalDecisionEvents()
 		// CHAOS-4139: per-leg affirmation visibility -- what CHAOS-4085's
 		// post-synthesis gate did to EACH leg's own commit, independent of
 		// whether the pairing below is valid for classification at all.
@@ -6702,8 +6958,13 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 		// gated on res.CommittedCount, a RESULT-layer/hinted-only field --
 		// see the classification gate below for why that would be exactly
 		// the bug this ticket exists to fix, one line up).
-		res.HintedCommitAffirmation = twoTurnCommitAffirmationState(hintedDecision, result)
-		res.BaselineCommitAffirmation = twoTurnCommitAffirmationState(baselineDecision, baseline)
+		//
+		// CHAOS-4096: reduced across every subject this leg's decision
+		// trace committed (twoTurnLegCommitAffirmation's own doc comment) --
+		// a multi-subject commit's worst-case affirmation, never just
+		// whichever subject's event happened to be captured last.
+		res.HintedCommitAffirmation = twoTurnLegCommitAffirmation(hintedDecisions, result)
+		res.BaselineCommitAffirmation = twoTurnLegCommitAffirmation(baselineDecisions, baseline)
 	}
 	// codex xhigh review round 1 (MEDIUM, confirmed): this used to read
 	// `res.CommittedCount > 0` -- len(result.SubjectResolution.Committed),
@@ -6717,7 +6978,7 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	// itself: team-lead's ruling ("classify regardless of post-synthesis
 	// affirmation divergence") applies to both. Decision-layer outcome on
 	// EITHER leg is now what makes a pairing worth classifying.
-	if !isWindow && (hintedDecision.Outcome == "committed" || baselineDecision.Outcome == "committed") {
+	if !isWindow && (twoTurnLegOutcome(hintedDecisions) == "committed" || twoTurnLegOutcome(baselineDecisions) == "committed") {
 		// windowConfirmedAsBand (codex adversarial review, 2026-08-21,
 		// round 2, HIGH -- confirmed against window.go's own
 		// composeWindowClarification/relativeWindowBounds): safety net for
@@ -6782,8 +7043,8 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 			res.PairInvalid = true
 		} else {
 			res.InferredClassification = twoTurnInferredClassification(
-				twoTurnDecisionCommittedSubjects(hintedDecision), twoTurnDecisionCommittedSubjects(baselineDecision),
-				hintedDecision.Outcome, baselineDecision.Outcome,
+				twoTurnUnionCommittedSubjects(hintedDecisions), twoTurnUnionCommittedSubjects(baselineDecisions),
+				twoTurnLegOutcome(hintedDecisions), twoTurnLegOutcome(baselineDecisions),
 				twoTurnKindAttested(trace, result.SubjectResolution.Committed))
 			if res.InferredClassification == "unjustified" {
 				// CHAOS-4062 shadow-insensitivity trace probe: observability

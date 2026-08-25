@@ -472,8 +472,13 @@ type ResolutionTracer interface {
 // resolution" invariant readers of this trace (production and this
 // ticket's own test helpers alike) rely on.
 type discardableDecisionTracer struct {
-	real              ResolutionTracer
-	captured          *ResolutionTraceEvent
+	real ResolutionTracer
+	// captured (CHAOS-4096: widened from *ResolutionTraceEvent to a slice)
+	// holds back EVERY "decision"-stage event the wrapped call produces,
+	// not just one -- the wrapped call can now emit one per committed
+	// subject (a multi-subject commit), and a single-slot capture would
+	// silently drop every one but the last when keep() replays it.
+	captured          []ResolutionTraceEvent
 	capturedRankedCut []ResolutionTraceEvent
 }
 
@@ -500,8 +505,7 @@ func (o offersOnlyDecisionTracer) Trace(event ResolutionTraceEvent) {
 func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
 	switch event.Stage {
 	case "decision":
-		captured := event
-		d.captured = &captured
+		d.captured = append(d.captured, event)
 		return
 	case "ranked_cut":
 		// CHAOS-4234: a scoped pass's own ranked_cut batch is discarded
@@ -515,8 +519,10 @@ func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
 	}
 }
 
-// keep forwards the held-back "decision" event (if any) to the real
-// tracer -- call ONLY when the caller is retaining this call's resolution.
+// keep forwards every held-back "decision" event (if any -- CHAOS-4096: one
+// per committed subject on a multi-subject commit, not just one) to the
+// real tracer -- call ONLY when the caller is retaining this call's
+// resolution.
 func (d *discardableDecisionTracer) keep() {
 	if d.real == nil {
 		return
@@ -524,8 +530,8 @@ func (d *discardableDecisionTracer) keep() {
 	for _, event := range d.capturedRankedCut {
 		d.real.Trace(event)
 	}
-	if d.captured != nil {
-		d.real.Trace(*d.captured)
+	for _, event := range d.captured {
+		d.real.Trace(event)
 	}
 }
 
@@ -1408,6 +1414,63 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		exactResolution, exactBases, exactDigests := FinalizeExactResolutionWithBasis(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates)
 		commitBases.ResetTo(exactBases)
 		commitDigests.ResetTo(exactDigests)
+		// CHAOS-4096: this short circuit never reaches
+		// ResolveFromMergedCandidatesWithGateAndBasis -- the ONLY other
+		// place a "decision" event fires -- so without this it committed
+		// entirely invisibly to the trace, however many subjects it
+		// resolved. One event per committed subject, same field shape and
+		// same Stage/Outcome vocabulary that path uses; CommitGate names
+		// THIS gate specifically (CommitGateCallerHintShortCircuit, the
+		// SAME literal FinalizeExactResolutionWithBasis already stamped
+		// onto the CommitDecisionDigest above). WinningMechanism is read
+		// off the SAME candidatesBySubject entry the hint loop built (every
+		// entry there carries MatchExact, caller-sourced or receipt-derived
+		// alike -- see that loop's own comment). SearchTruncated/
+		// AliasLookupComplete/TiedStatisticalTop stay their honest zero
+		// value: no search ran and no identity trust gate fired on this
+		// path, exactly as FinalizeExactResolutionWithBasis's own comment
+		// already documents for the digest it stamps. SearchCandidateLimit
+		// mirrors ResolveFromMergedCandidatesWithGateAndBasis's own decision
+		// event (that field's own doc comment): the candidate-count bound
+		// this call actually applied, Options.MaxSubjectCandidates, the SAME
+		// value FinalizeExactResolutionWithBasis was called with two lines
+		// up. PopulationBasis is "none": this exit never ranks or truncates
+		// a searched candidate pool at all (FinalizeExactResolutionWithBasis
+		// only reorders/truncates the ALREADY-KNOWN exact-hint set by class)
+		// -- there is no ranked population for a statistical commit here to
+		// name, the same "no claim to make" reasoning ResolutionTraceEvent.
+		// PopulationBasis's own doc comment gives for a non-statistical
+		// commit or no commit at all.
+		//
+		// CHAOS-4234 (codex R1 finding, confirmed): OfferedUnderWindowGate
+		// mirrors offersOnlyDecisionTracer's own tag (this file, above) --
+		// this short circuit bypasses that wrapper entirely (it emits
+		// straight to deps.ResolutionTracer, never through firstPassTracer),
+		// so under the offers-only pass (contextfabric.OffersOnlyResolution)
+		// this event would otherwise read as an untagged real commit to any
+		// consumer that has not also cross-referenced which mode produced
+		// it -- exactly the hazard that wrapper exists to prevent on the
+		// ordinary path. The engine's own discard of this call's resolution
+		// under the gate (chaos4234_offers_only.go's own "layer 1") stays
+		// the load-bearing safety property regardless; this tag is the
+		// trace-side twin of it.
+		if deps.ResolutionTracer != nil {
+			for _, subject := range exactResolution.Committed {
+				winningMechanism := ""
+				if candidate, ok := candidatesBySubject[SubjectKey(subject)]; ok && len(candidate.MatchMechanisms) > 0 {
+					winningMechanism = string(candidate.MatchMechanisms[0])
+				}
+				deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "decision", Subject: subject,
+					Outcome: "committed", WinningMechanism: winningMechanism,
+					CommitGate:             CommitGateCallerHintShortCircuit,
+					CommitBasis:            string(exactBases.For(subject)),
+					SearchCandidateLimit:   request.Options.MaxSubjectCandidates,
+					PopulationBasis:        "none",
+					OfferedUnderWindowGate: offersOnly,
+				})
+			}
+		}
 		return exactResolution, contextfabric.StructureOfferMaterial{}, nil
 	}
 	// observationParentKey maps an observation (document/episode) subject
@@ -1955,7 +2018,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// (chaos4234_offers_only.go's gatedOfferMaterial), so an
 	// "Outcome=committed" reading here never reaches anywhere decisive.
 	// Without the tag a reader of the two-turn harness's own
-	// finalDecisionEvent() (Turn1CommitGate/Outcome) cannot tell this
+	// finalDecisionEvents() (Turn1CommitGate/Outcome) cannot tell this
 	// pass's own would-be commit apart from a real one. ranked_cut events
 	// from this SAME call are left untouched -- they drive the offer
 	// builders' own input under offers-only mode too, so they stay

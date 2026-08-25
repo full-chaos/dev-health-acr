@@ -1275,46 +1275,55 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		resolution.ClarificationPrompt = ClarificationPrompt(ordered)
 	}
 	if tracer != nil {
-		// ONE unified decision event per resolution (not per commit-gate
-		// branch): "do NOT gold-plate" -- the branch that fired is already
-		// fully explained by the corroboration-stage events above (base vs
-		// final confidence per candidate) plus this outcome, without
-		// needing five near-identical trace call sites.
+		// ONE decision event PER COMMITTED SUBJECT (CHAOS-4096: cardinality
+		// is per-subject, not per-resolution) -- "do NOT gold-plate" still
+		// holds within one subject's own event (the branch that fired is
+		// already fully explained by the corroboration-stage events above
+		// plus this outcome, without needing five near-identical trace call
+		// sites per subject), it just no longer collapses a genuinely
+		// multi-subject commit (the pre_committed_exact_hint loop above can
+		// append more than one candidate arriving already
+		// State==Committed/Confidence==1) down to a single event that named
+		// only resolution.Committed[0] and silently said nothing about the
+		// rest.
 		switch {
-		case len(resolution.Committed) == 1:
-			committedKey := SubjectKey(resolution.Committed[0])
-			winningMechanism := ""
-			for index := range candidates {
-				if SubjectKey(candidates[index].Subject) != committedKey {
-					continue
+		case len(resolution.Committed) >= 1:
+			for _, subject := range resolution.Committed {
+				committedKey := SubjectKey(subject)
+				winningMechanism := ""
+				for index := range candidates {
+					if SubjectKey(candidates[index].Subject) != committedKey {
+						continue
+					}
+					if len(candidates[index].MatchMechanisms) > 0 {
+						winningMechanism = string(candidates[index].MatchMechanisms[0])
+					}
+					break
 				}
-				if len(candidates[index].MatchMechanisms) > 0 {
-					winningMechanism = string(candidates[index].MatchMechanisms[0])
-				}
-				break
+				// Whether the identity gate specifically was WHY this
+				// committed (as opposed to an ordinary exact/lexical/vector
+				// commit) is answered by correlating this event's Subject
+				// with the SAME subject's own "identity_gate" event
+				// (emitted from NodeCandidate, the real gate inputs) -- not
+				// reconstructed here (team-lead ruling, 2026-08-17,
+				// guardrail 6).
+				tracer.Trace(ResolutionTraceEvent{
+					RequestID: requestID, Stage: "decision", Subject: subject,
+					Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: commitGate,
+					AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
+					SearchTruncated: searchTruncated,
+					// CHAOS-4085: read back from the SAME set the engine
+					// consumes, never re-derived here -- a trace that disagreed
+					// with the basis the gate actually used would be worse than
+					// no trace at all.
+					CommitBasis:        string(bases.For(subject)),
+					TiedStatisticalTop: tiedStatisticalTop,
+					// CHAOS-4117: SearchCandidateLimit's own doc comment.
+					SearchCandidateLimit: max,
+					// CHAOS-4154: populationBasis's own doc comment above.
+					PopulationBasis: populationBasis,
+				})
 			}
-			// Whether the identity gate specifically was WHY this
-			// committed (as opposed to an ordinary exact/lexical/vector
-			// commit) is answered by correlating this event's Subject with
-			// the SAME subject's own "identity_gate" event (emitted from
-			// NodeCandidate, the real gate inputs) -- not reconstructed
-			// here (team-lead ruling, 2026-08-17, guardrail 6).
-			tracer.Trace(ResolutionTraceEvent{
-				RequestID: requestID, Stage: "decision", Subject: resolution.Committed[0],
-				Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: commitGate,
-				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
-				SearchTruncated: searchTruncated,
-				// CHAOS-4085: read back from the SAME set the engine
-				// consumes, never re-derived here -- a trace that disagreed
-				// with the basis the gate actually used would be worse than
-				// no trace at all.
-				CommitBasis:        string(bases.For(resolution.Committed[0])),
-				TiedStatisticalTop: tiedStatisticalTop,
-				// CHAOS-4117: SearchCandidateLimit's own doc comment.
-				SearchCandidateLimit: max,
-				// CHAOS-4154: populationBasis's own doc comment above.
-				PopulationBasis: populationBasis,
-			})
 		case len(resolution.Committed) == 0 && ambiguous:
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Outcome: "ambiguous",
@@ -1617,17 +1626,23 @@ func FinalizeExactResolution(candidatesBySubject map[string]contextfabric.Subjec
 // Codex xhigh review round 3, HIGH: the previous version stamped every
 // retained subject CommitBasisCallerCanonicalID, which collapsed exactly
 // the distinction this function's own truncation rule exists to preserve.
+// CommitGateCallerHintShortCircuit names resolve.go's own caller-hint short
+// circuit commit path -- "write site 1 of 3" in CHAOS-4085's own numbering
+// -- package-level (not a local const inside FinalizeExactResolutionWithBasis)
+// so CHAOS-4096's decision-event emission at that same short-circuit's call
+// site (resolve.go) can stamp the IDENTICAL gate name onto the trace that
+// this function already stamps onto the CommitDecisionDigest, rather than a
+// second literal that could drift from it.
+const CommitGateCallerHintShortCircuit = "caller_hint_short_circuit"
+
 func FinalizeExactResolutionWithBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, callerSourced map[string]bool, max int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	resolution := FinalizeExactResolution(candidatesBySubject, callerSourced, max)
 	bases := make(contextfabric.CommitBasisSet, len(resolution.Committed))
-	// digests (CHAOS-4087): recorded in lockstep with bases below.
-	// commitGateCallerHintShortCircuit names THIS function's own commit
-	// path -- resolve.go's own caller-hint short circuit, "write site 1 of
-	// 3" in CHAOS-4085's own numbering (see resolve.go's call site). No
+	// digests (CHAOS-4087): recorded in lockstep with bases below. No
 	// search runs and no identity trust gate is consulted here, so
 	// SearchTruncated/AliasLookupComplete are their honest zero value
 	// (inapplicable to this gate), never evaluated-and-passed.
-	const commitGateCallerHintShortCircuit = "caller_hint_short_circuit"
+	const commitGateCallerHintShortCircuit = CommitGateCallerHintShortCircuit
 	digests := make(contextfabric.CommitDecisionDigestSet, len(resolution.Committed))
 	for _, subject := range resolution.Committed {
 		if callerSourced[SubjectKey(subject)] {
