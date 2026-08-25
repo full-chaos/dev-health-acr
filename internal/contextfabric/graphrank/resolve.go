@@ -793,6 +793,18 @@ type ResolutionTraceEvent struct {
 	// KindOfferCandidateOfferCount by hand to answer that one question.
 	KindOfferCandidateOfferCount int
 	KindOfferOfferKind           string
+	// KindOfferCandidateOfferLabelsNormalizedCount (stage=="kind_offer"
+	// ONLY, CHAOS-4210) is the number of THIS call's CandidateOptions whose
+	// Label candidateOfferMaterial had to bound-to-fit the v1 wire contract
+	// ([1,200] runes, ContextFabricCandidateOption.Validate()) -- 0 the
+	// overwhelming common case (a real title already fits). A candidate's
+	// Subject.Label is a real, legitimate title (queryWorkItems' own empty
+	// fallback already keeps it non-empty; nothing upstream bounds its
+	// length), so an ordinary long title reaching this axis is exactly the
+	// decision branch ext65 corpus case index 6 exposed: without this
+	// counter, a normalized label is indistinguishable from an unmodified
+	// one anywhere in the run's own artifacts (ledger #253 / CHAOS-4210).
+	KindOfferCandidateOfferLabelsNormalizedCount int
 	// KindOfferBoundaryKinds (stage=="kind_offer" ONLY, CHAOS-4012 v22,
 	// team-lead ruling 2026-08-23) is call-boundary-scoped, unlike the
 	// existing trace-wide ExpectedInPool (poolContainsKind reads the
@@ -2241,12 +2253,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		}
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "kind_offer",
-			KindOfferExplicitHintCount:       kindOfferDiag.ExplicitHintCount,
-			KindOfferDistinctKindCount:       kindOfferDiag.DistinctKindCount,
-			KindOfferSuppressedByCardinality: kindOfferDiag.SuppressedByCardinality,
-			KindOfferCandidateOfferCount:     candidateOfferDiag.CandidateOfferCount,
-			KindOfferOfferKind:               offerKind,
-			OfferedUnderWindowGate:           offersOnly,
+			KindOfferExplicitHintCount:                   kindOfferDiag.ExplicitHintCount,
+			KindOfferDistinctKindCount:                   kindOfferDiag.DistinctKindCount,
+			KindOfferSuppressedByCardinality:             kindOfferDiag.SuppressedByCardinality,
+			KindOfferCandidateOfferCount:                 candidateOfferDiag.CandidateOfferCount,
+			KindOfferOfferKind:                           offerKind,
+			KindOfferCandidateOfferLabelsNormalizedCount: candidateOfferDiag.LabelsNormalizedCount,
+			OfferedUnderWindowGate:                       offersOnly,
 			// CHAOS-4012 v22 (team-lead ruling, re-smoke follow-up): computed
 			// only when a tracer is actually wired -- this is telemetry-only,
 			// never consulted by kindOfferMaterial/candidateOfferMaterial

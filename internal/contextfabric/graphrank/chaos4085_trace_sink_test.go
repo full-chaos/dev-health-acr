@@ -129,7 +129,12 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 		KindOfferSuppressedByCardinality: true,
 		KindOfferCandidateOfferCount:     5,
 		KindOfferOfferKind:               "candidate",
-		KindOfferBoundaryKinds:           []string{"work_item", "repository"},
+		// CHAOS-4210: deliberately non-zero and distinct from
+		// KindOfferCandidateOfferCount, so the assertion below proves the
+		// sink carries THIS field's own number, not a coincidental
+		// zero-value or candidate_offer_count match.
+		KindOfferCandidateOfferLabelsNormalizedCount: 2,
+		KindOfferBoundaryKinds:                       []string{"work_item", "repository"},
 		// CHAOS-4183 phase 3: the pre-repair twins, deliberately DIFFERENT
 		// from the post-repair values above (one fewer boundary kind, a
 		// different distinct count, suppressed flipped) -- proves the sink
@@ -161,6 +166,12 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 	}
 	if got := record["offer_kind"]; got != "candidate" {
 		t.Fatalf("offer_kind = %v, want %q", got, "candidate")
+	}
+	// CHAOS-4210: candidate_offer_labels_normalized_count must reach the
+	// PRODUCTION sink too -- same file-doc-comment obligation as every
+	// field above.
+	if got, ok := record["candidate_offer_labels_normalized_count"].(float64); !ok || got != 2 {
+		t.Fatalf("candidate_offer_labels_normalized_count = %v, want 2", record["candidate_offer_labels_normalized_count"])
 	}
 	// CHAOS-4012 v22 (re-smoke follow-up): boundary_kinds is the
 	// call-boundary-scoped pair's own field -- must reach the sink as the

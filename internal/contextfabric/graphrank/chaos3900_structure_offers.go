@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -300,6 +301,13 @@ type candidateOfferDiagnostics struct {
 	// "telemetry offer_kind + candidate_offer_count on the kind_offer
 	// stage").
 	OfferKind string
+	// LabelsNormalizedCount (CHAOS-4210) is how many of this call's
+	// CandidateOptions needed candidateOfferLabel to bound their Label to
+	// the v1 wire contract -- see
+	// ResolutionTraceEvent.KindOfferCandidateOfferLabelsNormalizedCount's
+	// own doc comment for why this must be counted, not just silently
+	// applied.
+	LabelsNormalizedCount int
 }
 
 // unionCandidatesForOffer (CHAOS-4038 finding 1 / CHAOS-4012 codex xhigh R2
@@ -379,11 +387,16 @@ func candidateOfferMaterial(candidates []contextfabric.SubjectCandidate, committ
 		limit = len(candidates)
 	}
 	options := make([]contractsv1.ContextFabricCandidateOption, 0, limit)
+	normalizedCount := 0
 	for _, candidate := range candidates[:limit] {
+		label, normalized := candidateOfferLabel(candidate.Subject.Label)
+		if normalized {
+			normalizedCount++
+		}
 		options = append(options, contractsv1.ContextFabricCandidateOption{
 			Kind:        candidate.Subject.Kind,
 			CanonicalID: candidate.Subject.CanonicalID,
-			Label:       candidateOfferLabel(candidate.Subject.Label),
+			Label:       label,
 			OfferSource: contractsv1.ContextFabricStructureOfferEngine,
 		})
 	}
@@ -391,17 +404,41 @@ func candidateOfferMaterial(candidates []contextfabric.SubjectCandidate, committ
 			Missing:          []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate},
 			CandidateOptions: options,
 		}, candidateOfferDiagnostics{
-			CandidateOfferCount: len(options),
-			OfferKind:           "candidate",
+			CandidateOfferCount:   len(options),
+			OfferKind:             "candidate",
+			LabelsNormalizedCount: normalizedCount,
 		}
 }
+
+// candidateOfferLabelMaxRunes mirrors ContextFabricCandidateOption's own
+// wire bound (validate_context_fabric_structure.go: Label in [1,200]
+// runes) -- CHAOS-4012 owns that contract, so this producer bounds ITS
+// OWN output to it rather than the contract widening to fit an unbounded
+// caller (CHAOS-4210, ext65 corpus case index 6: a real work item title
+// over 200 runes turned a single long-titled candidate into a whole
+// investigation-result validation failure, "candidate option option_id
+// or label violates v1 bounds").
+const candidateOfferLabelMaxRunes = 200
 
 // candidateOfferLabel renders a CandidateOption's display label from the
 // candidate's own Subject.Label -- the SAME "show the entity's own name"
 // discipline anchorOfferLabel already uses (not new disclosure: the SAME
 // label a SubjectCandidate already shows in resolution.Candidates).
-func candidateOfferLabel(label string) string {
-	return label
+// Unlike anchorOfferLabel, this bounds its output: Subject.Label is a
+// real title with no upstream length guard (queryWorkItems' own doc
+// comment covers only the EMPTY case, falling back to the work item id --
+// never the long case), so a title that legitimately exceeds the v1 wire
+// bound is truncated here rather than reaching the contract as an
+// unbounded pass-through. Reports normalized (bool) so the caller can
+// count it (see candidateOfferDiagnostics.LabelsNormalizedCount) --
+// diagnosability from the run's own artifacts, per AGENTS.md's
+// same-change telemetry rule.
+func candidateOfferLabel(label string) (string, bool) {
+	if utf8.RuneCountInString(label) <= candidateOfferLabelMaxRunes {
+		return label, false
+	}
+	runes := []rune(label)
+	return string(runes[:candidateOfferLabelMaxRunes]), true
 }
 
 // distinctCandidateKinds (CHAOS-4012 v22, telemetry-only) returns the
