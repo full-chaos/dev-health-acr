@@ -18,7 +18,7 @@ import (
 // mirrored faithfully by the Go worker port, gitlab_work_items_rows.go:228
 // /:375): a LINEAR work item carries projects.id verbatim, but a GITLAB work
 // item carries projects.project_key (a rename-safe project_full_path, e.g.
-// "full.chaos/dev-health-ops") -- never projects.id. queryWorkItemProjects'
+// "full.chaos/dev-health-ops") -- never projects.id. querySubjectProjectMemberships'
 // pre-fix INNER JOIN (p.id = w.project_id) and the census project anchor
 // predicate (built from canonicalIDValue's raw projects.id extraction) both
 // only ever tried the id arm, so every gitlab work item joined to NO
@@ -89,6 +89,7 @@ func seedChaos4108DualArmFixture(t *testing.T, ctx context.Context, direct inter
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
+	createProjectMembershipPresenceView(t, ctx, direct)
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -105,26 +106,33 @@ func seedChaos4108DualArmFixture(t *testing.T, ctx context.Context, direct inter
 		chaos4108GitLabRepoID, chaos4108OrgID, chaos4108GitLabRepoSlug, "gitlab", at)
 	// project_id holds the PROJECT_KEY value, never projects.id -- the exact
 	// shape gitlab_work_items_rows.go's normalizeGitLabIssueWorkItem/
-	// normalizeGitLabMergeRequestWorkItem write.
-	mustSeed("gitlab work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		chaos4108GitLabWorkItemID, chaos4108GitLabRepoID, chaos4108OrgID, "GitLab issue", "open", "", "", chaos4108GitLabProjectKey, at)
+	// normalizeGitLabMergeRequestWorkItem write. provider=gitlab is now
+	// explicit (CHAOS-4193): project_membership_presence's work_item_column
+	// arm refuses gitlab rows outright (`w.provider != 'gitlab'`, Context
+	// Fabric ruling 2026-08-24 09:55 -- "GitLab's own 'project' concept IS
+	// this schema's repo_id"), so this row is deliberately no longer a
+	// BELONGS_TO_PROJECT source at all -- see
+	// TestQueryWorkItemProjectsGitLabColumnArmIsRetired below.
+	mustSeed("gitlab work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		chaos4108GitLabWorkItemID, chaos4108GitLabRepoID, chaos4108OrgID, "GitLab issue", "open", "", "", "gitlab", chaos4108GitLabProjectKey, at)
 
 	// The Linear project/work item: project_id holds projects.id verbatim --
 	// the id arm, unaffected by this fix, seeded to prove it still resolves.
 	mustSeed("linear project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		chaos4108LinearProjectID, chaos4108OrgID, "Chaos Draw", "", "linear", "backlog", "https://linear.app/fullchaos/project/chaos-draw", uint8(1), at)
-	mustSeed("linear work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"linear:CHAOS-9001", zeroRepositoryUUID, chaos4108OrgID, "Linear issue", "open", "", "", chaos4108LinearProjectID, at)
+	mustSeed("linear work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"linear:CHAOS-9001", zeroRepositoryUUID, chaos4108OrgID, "Linear issue", "open", "", "", "linear", chaos4108LinearProjectID, at)
 }
 
-// TestQueryWorkItemProjectsResolvesTheProjectKeyArm is the producer-side
-// half of CHAOS-4108's regression: a gitlab work item, seeded exactly as the
-// real gitlab producer writes it (project_id = project_key, never
-// projects.id), must join its project (via the widened predicate's
-// project_key arm) AND still carry its own real repository -- both endpoints
-// of the activity-proxy chain the original defect severed. The Linear work
-// item in the SAME batch must resolve via the untouched id arm, proving the
-// widening added a match rather than picking one arm at the other's expense.
+// TestQueryWorkItemProjectsResolvesTheProjectKeyArm is CHAOS-4108's Linear
+// half, still live post-CHAOS-4193: a Linear work item resolves its project
+// via the id arm of the dual id/project_key widening
+// (querySubjectProjectMemberships, teams_projects_edges.go), reading
+// through project_membership_presence's work_item_column arm rather than
+// work_items.project_id directly, but with the SAME join semantics on the
+// project side. The gitlab half of this fixture is asserted separately by
+// TestGitLabColumnArmProducesNoProjectEdgeAnymore below -- CHAOS-4193
+// retired it, so this test no longer proves it.
 func TestQueryWorkItemProjectsResolvesTheProjectKeyArm(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
@@ -146,19 +154,6 @@ func TestQueryWorkItemProjectsResolvesTheProjectKeyArm(t *testing.T) {
 		t.Fatalf("batch failed contract validation: %v", err)
 	}
 
-	// Built via identity.Derive itself (the SAME codec both the producer and
-	// this assertion must agree with), not hand-typed literals: a raw ':'
-	// inside a segment value (chaos4108GitLabProjectID, chaos4108GitLabWorkItemID) is always
-	// escaped to "%3A" first (JoinSegments), so a literal-string expectation
-	// would silently mismatch the real encoded id.
-	wantGitLabWorkItemCanonicalID, _, err := identity.Derive(identity.KindWorkItem, []string{chaos4108GitLabRepoID, chaos4108GitLabWorkItemID}, nil)
-	if err != nil {
-		t.Fatalf("identity.Derive(work_item, gitlab): %v", err)
-	}
-	wantGitLabProjectCanonicalID, _, err := identity.Derive(identity.KindProject, []string{"gitlab", chaos4108GitLabProjectID}, nil)
-	if err != nil {
-		t.Fatalf("identity.Derive(project, gitlab): %v", err)
-	}
 	wantLinearWorkItemCanonicalID, _, err := identity.Derive(identity.KindWorkItem, []string{zeroRepositoryUUID, "linear:CHAOS-9001"}, nil)
 	if err != nil {
 		t.Fatalf("identity.Derive(work_item, linear): %v", err)
@@ -168,32 +163,65 @@ func TestQueryWorkItemProjectsResolvesTheProjectKeyArm(t *testing.T) {
 		t.Fatalf("identity.Derive(project, linear): %v", err)
 	}
 
-	foundGitLabEdge, foundLinearEdge := false, false
+	foundLinearEdge := false
 	for _, relationship := range batch.Relationships {
 		if relationship.Type != contractsv1.ContextFabricRelationshipBelongsToProject {
 			continue
 		}
-		switch relationship.From.CanonicalID {
-		case wantGitLabWorkItemCanonicalID:
-			foundGitLabEdge = true
-			if relationship.To.CanonicalID != wantGitLabProjectCanonicalID {
-				t.Fatalf("gitlab work item's BELONGS_TO_PROJECT target = %q, want %q (the SAME canonical id queryProjects mints for this project, resolved via the project_key arm)", relationship.To.CanonicalID, wantGitLabProjectCanonicalID)
-			}
-			if len(relationship.Authorization.RepositorySlugs) != 1 || relationship.Authorization.RepositorySlugs[0] != chaos4108GitLabRepoSlug {
-				t.Fatalf("gitlab work item's BELONGS_TO_PROJECT authorization = %+v, want exactly [%q] -- it must still carry its own real repository", relationship.Authorization.RepositorySlugs, chaos4108GitLabRepoSlug)
-			}
-		case wantLinearWorkItemCanonicalID:
+		if relationship.From.CanonicalID == wantLinearWorkItemCanonicalID {
 			foundLinearEdge = true
 			if relationship.To.CanonicalID != wantLinearProjectCanonicalID {
 				t.Fatalf("linear work item's BELONGS_TO_PROJECT target = %q, want %q (the id arm, unaffected by this fix)", relationship.To.CanonicalID, wantLinearProjectCanonicalID)
 			}
 		}
 	}
-	if !foundGitLabEdge {
-		t.Fatalf("expected a BELONGS_TO_PROJECT edge for the gitlab work item (the project_key arm this fix adds): relationships=%+v", batch.Relationships)
-	}
 	if !foundLinearEdge {
 		t.Fatalf("expected a BELONGS_TO_PROJECT edge for the linear work item (the id arm, must remain unaffected): relationships=%+v", batch.Relationships)
+	}
+}
+
+// TestGitLabColumnArmProducesNoProjectEdgeAnymore is CHAOS-4193's own
+// regression against the SAME chaos4108GitLabWorkItemID fixture
+// TestQueryWorkItemProjectsResolvesTheProjectKeyArm used to prove a gitlab
+// BELONGS_TO_PROJECT edge FOR (CHAOS-4108). Context Fabric ruling
+// 2026-08-24 09:55 retired that path on purpose:
+// project_membership_presence's work_item_column arm refuses every gitlab
+// row outright ("GitLab's own 'project' concept IS this schema's repo_id"),
+// and gitlab is not among the {github, jira, linear} systems CHAOS-4193/4194
+// register a transition producer for either -- so a gitlab work item's
+// project membership is, as of this version, entirely unobservable through
+// this producer. That is a real, ruled capability gap (recorded in this
+// producer's TeamsProjectsSourceVersion v4 doc comment), not a bug this
+// test papers over: it exists so a FUTURE change that accidentally makes a
+// gitlab edge reappear (e.g. a careless widening of the view's WHERE
+// clause) fails loudly, the same "observe every guard failing" discipline
+// AGENTS.md's four verification rules require.
+func TestGitLabColumnArmProducesNoProjectEdgeAnymore(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	seedChaos4108DualArmFixture(t, ctx, direct, at)
+
+	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: chaos4108OrgID, Source: devhealthsource.TeamsProjectsSourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available (the Linear edge still projects)")
+	}
+
+	wantGitLabWorkItemCanonicalID, _, err := identity.Derive(identity.KindWorkItem, []string{chaos4108GitLabRepoID, chaos4108GitLabWorkItemID}, nil)
+	if err != nil {
+		t.Fatalf("identity.Derive(work_item, gitlab): %v", err)
+	}
+	for _, relationship := range batch.Relationships {
+		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.From.CanonicalID == wantGitLabWorkItemCanonicalID {
+			t.Fatalf("found a BELONGS_TO_PROJECT edge for the gitlab work item, want none -- CHAOS-4193/ruling 2026-08-24 09:55 retired this path: %+v", relationship)
+		}
 	}
 }
 

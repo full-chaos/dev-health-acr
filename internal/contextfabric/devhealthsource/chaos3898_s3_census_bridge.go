@@ -150,7 +150,7 @@ func bridgePullRequestSatisfier(satisfierNaturalKey string) (string, bool, error
 // discriminator (design brief v5 §1.2's "anchor" row; 3896 brief v6 §1.4)
 // -- names a raw source id that resolves to MORE THAN ONE provider within
 // orgID: the SAME "ambiguous -> omit + ledger" defect
-// queryWorkItemProjects/queryProjectTeams already guard at PROJECTION time
+// querySubjectProjectMemberships/queryProjectTeams already guard at PROJECTION time
 // via key_resolution_count (count() OVER (PARTITION BY id)), checked here
 // live, at BIND time, before a census predicate is ever built from it.
 //

@@ -23,7 +23,7 @@ func EntityTableNamesForTest() []string {
 // matching seed row and expectation fails loudly instead of going silently
 // unasserted.
 func TeamsProjectsTableNamesForTest() []string {
-	tables := teamsProjectsTables(nil)
+	tables := teamsProjectsTables(nil, nil)
 	names := make([]string, len(tables))
 	for i, table := range tables {
 		names[i] = table.name

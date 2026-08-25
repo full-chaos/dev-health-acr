@@ -43,7 +43,28 @@ var sourceSchemaTables = []string{
 	"work_graph_deployment_incident_edges",
 	// CHAOS-3802's producers read these four; assertTeamsProjectsSchemaParity
 	// runs against the same fixture rather than a second testcontainer.
+	// CHAOS-4193: project_membership_transitions is the TABLE the
+	// project_membership_presence VIEW reads (createProjectMembershipPresenceView
+	// creates the view itself -- DDL() only ever renders CREATE TABLE).
 	"teams", "projects", "work_item_team_attributions", "team_project_ownership",
+	"project_membership_transitions",
+}
+
+// createProjectMembershipPresenceView creates project_membership_presence
+// (devhealthschema.ProjectMembershipPresenceViewDDL, verbatim ops migration
+// 077) against direct. productionSchemaDDL()/DDL() cannot render it --
+// DDL() only ever renders a plain CREATE TABLE from a column list, and this
+// object is a CREATE OR REPLACE VIEW with CTEs/arrayJoin/UNION ALL -- so
+// every integration fixture that queries through the view creates it via
+// this helper, AFTER project_membership_transitions and work_items exist
+// (the view's FROM clauses reference both).
+func createProjectMembershipPresenceView(t *testing.T, ctx context.Context, direct interface {
+	Exec(ctx context.Context, query string, args ...any) error
+}) {
+	t.Helper()
+	if err := direct.Exec(ctx, devhealthschema.ProjectMembershipPresenceViewDDL); err != nil {
+		t.Fatalf("create project_membership_presence view: %v", err)
+	}
 }
 
 // TestLiveSchemaParityAcrossEveryProducer seeds one real ClickHouse
@@ -58,7 +79,12 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 	const orgID = "10000000-0000-4000-8000-000000000001"
 	const repoID = "20000000-0000-4000-8000-000000000002"
 	const repoSlug = "acme/parity-service"
-	const projectID = "PROJ-PARITY"
+	// CHAOS-4193: shaped as a real GitHub Projects V2 id
+	// (ghprojv2:<org>#<n>, Context Fabric ruling 2026-08-24 09:50) because
+	// project_membership_presence's work_item_column arm refuses any OTHER
+	// shape for provider=github (`startsWith(w.project_id, 'ghprojv2:')`) --
+	// unlike every other provider, which the arm accepts unprefixed.
+	const projectID = "ghprojv2:acme#1"
 	const teamID = "TEAM-PARITY"
 
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
@@ -67,6 +93,7 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
+	createProjectMembershipPresenceView(t, ctx, direct)
 
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
@@ -81,12 +108,15 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 	mustSeed("repos", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
 		repoID, orgID, repoSlug, "github", at)
 	// The parent carries an EMPTY project_id and the child a real one, so
-	// queryWorkItemProjects' `project_id != ''` filter is exercised in both
-	// directions by the same fixture (CHAOS-3802).
-	mustSeed("work_items parent", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"WI-PARENT", repoID, orgID, "Parent work item", "open", "", "", "", at)
-	mustSeed("work_items child", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"WI-CHILD", repoID, orgID, "Child work item", "open", "", "WI-PARENT", projectID, at)
+	// project_membership_presence's work_item_column arm `project_id != ''`
+	// filter is exercised in both directions by the same fixture
+	// (CHAOS-3802). provider=github on the child is what the view's
+	// github-specific ghprojv2: prefix carve-out (CHAOS-4193) actually
+	// tests: an empty/other-provider row would skip that branch entirely.
+	mustSeed("work_items parent", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"WI-PARENT", repoID, orgID, "Parent work item", "open", "", "", "github", "", at)
+	mustSeed("work_items child", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"WI-CHILD", repoID, orgID, "Child work item", "open", "", "WI-PARENT", "github", projectID, at)
 	mustSeed("git_pull_requests", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
 		repoID, orgID, uint32(4242), "Parity PR", "open", at)
 	mustSeed("deployments", `INSERT INTO deployments (repo_id, org_id, deployment_id, status, environment, deployed_at, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -243,13 +273,21 @@ func assertTeamsProjectsSchemaParity(t *testing.T, ctx context.Context, query co
 		t.Fatal("expected a teams/projects batch to be available")
 	}
 
+	// Built via identity.Derive itself, not a hand-typed literal: projectID
+	// ("ghprojv2:acme#1", CHAOS-4193) contains a raw ':', which
+	// EncodeSegment escapes to "%3A" -- a literal "project.v2:github:" +
+	// projectID string would silently mismatch the real encoded id.
+	projectCanonicalID, omitted, err := identity.Derive(identity.KindProject, []string{"github", projectID}, nil)
+	if err != nil || omitted {
+		t.Fatalf("identity.Derive(project): omitted=%v err=%v", omitted, err)
+	}
 	wantCanonicalID := map[string]string{
 		// devhealthschema:not-a-production-replica this maps each table to the canonical ID its row is
 		// expected to project to. Keyed BY table on purpose, and it mirrors no
 		// column type, engine or sort key -- it is an assertion about output.
 		"teams":                       "team:" + teamID,
-		"projects":                    "project.v2:github:" + projectID,
-		"work_items_projects":         "relationship:work_item_project:" + repoID + ":WI-CHILD:github:" + projectID,
+		"projects":                    projectCanonicalID,
+		"project_membership_presence": "relationship:work_item_project:" + repoID + ":WI-CHILD:github:" + projectID,
 		"work_item_team_attributions": "relationship:work_item_team:" + repoID + ":WI-CHILD:" + teamID,
 		"team_project_ownership":      "relationship:project_team:github:" + projectID + ":" + teamID + ":native",
 	}

@@ -296,6 +296,29 @@ var ProductionColumns = map[string][]Column{
 		{Name: "project_keys", Type: "Array(String)"},
 		{Name: "is_active", Type: "UInt8"},
 	},
+	// project_membership_transitions is ops migration 077 (CHAOS-4193/4194).
+	// The FULL declared column set, not a reader-scoped subset: acr's own
+	// producer never queries this table directly (it reads through the
+	// project_membership_presence VIEW, ProjectMembershipPresenceViewDDL
+	// below), but the view's CTEs reference every column here except actor/
+	// source_id/last_synced, so an integration fixture that omitted any of
+	// them would fail to even CREATE the view it exists to seed.
+	"project_membership_transitions": {
+		{Name: "org_id", Type: "String"},
+		{Name: "source_id", Type: "Nullable(UUID)"},
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "subject_kind", Type: "LowCardinality(String)"},
+		{Name: "subject_id", Type: "String"},
+		{Name: "provider", Type: "LowCardinality(String)"},
+		{Name: "from_project_id", Type: "String"},
+		{Name: "to_project_id", Type: "String"},
+		{Name: "from_project_key", Type: "String"},
+		{Name: "to_project_key", Type: "String"},
+		{Name: "actor", Type: "String"},
+		{Name: "occurred_at", Type: "DateTime64(3)"},
+		{Name: "last_synced", Type: "DateTime64(3)"},
+		{Name: "event_id", Type: "String"},
+	},
 	"projects": {
 		{Name: "id", Type: "String"},
 		{Name: "org_id", Type: "String"},
@@ -331,11 +354,22 @@ var ProductionColumns = map[string][]Column{
 	"work_items": {
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
+		// CHAOS-4193: project_membership_presence's work_item_column arm
+		// selects w.provider (009_raw_work_items.sql declares it at
+		// production position 3, directly after work_item_id); never read
+		// by acr before this producer joined through the view.
+		{Name: "provider", Type: "String"},
 		{Name: "title", Type: "String"},
 		// CHAOS-3833: type is production position 6 (title is 4; unread
 		// description at 5 omitted), before status (7).
 		{Name: "type", Type: "String"},
 		{Name: "status", Type: "String"},
+		// CHAOS-4193: project_membership_presence's work_item_column arm
+		// selects w.project_key too -- production position 9, directly
+		// before project_id (10). Distinct from projects.project_key (the
+		// dual-arm join target); this is the WORK ITEM row's own carried
+		// copy of it.
+		{Name: "project_key", Type: "String"},
 		// CHAOS-3802: queryWorkItemProjects selects project_id and joins it
 		// to projects (CHAOS-4108: on projects.id OR projects.project_key,
 		// not id alone). Position 10 in production, i.e. before created_at.
@@ -387,6 +421,7 @@ var EngineFull = map[string]string{
 	"git_pull_requests":                       "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number) SETTINGS index_granularity = 8192",
 	"investment_metrics_daily":                "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, team_id, investment_area, project_stream) SETTINGS allow_nullable_key = 1, index_granularity = 8192",
 	"operational_incidents":                   "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"project_membership_transitions":          "ReplacingMergeTree(last_synced) ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id) SETTINGS index_granularity = 8192",
 	"projects":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id) SETTINGS index_granularity = 8192",
 	"operational_service_repository_mappings": "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"recommendations_daily":                   "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(window_end) ORDER BY (org_id, team_id, rule_id, window_end) SETTINGS index_granularity = 8192",
@@ -459,3 +494,82 @@ func withNullableKeySetting(engineFull string) string {
 	}
 	return engineFull + " SETTINGS allow_nullable_key = 1"
 }
+
+// ProjectMembershipPresenceViewDDL is the verbatim CREATE OR REPLACE VIEW
+// statement from ops migration 077
+// (dev-health-ops/src/dev_health_ops/migrations/clickhouse/077_project_membership_transitions.sql),
+// copied byte-for-byte (comments stripped; the executable SQL is
+// unchanged) rather than derived, because DDL() only ever renders a plain
+// CREATE TABLE from a column list and this object's CTEs/arrayJoin/UNION
+// ALL shape has no such mechanical rendering -- ops's own migration file
+// is the only source of truth for it. A future edit to 077's view body
+// must update this constant too, or the view devhealthsource's
+// integration tests build against will silently disagree with what
+// production actually runs.
+const ProjectMembershipPresenceViewDDL = `CREATE OR REPLACE VIEW project_membership_presence AS
+WITH touched AS (
+    SELECT
+        org_id,
+        subject_kind,
+        repo_id,
+        subject_id,
+        provider,
+        occurred_at,
+        event_id,
+        to_project_id,
+        arrayJoin(arrayFilter(
+            pair -> pair.1 != '',
+            if(from_project_id = to_project_id,
+               [(to_project_id, to_project_key)],
+               [(to_project_id, to_project_key), (from_project_id, from_project_key)])
+        )) AS touch
+    FROM project_membership_transitions FINAL
+),
+latest_membership AS (
+    SELECT
+        org_id,
+        subject_kind,
+        repo_id,
+        subject_id,
+        touch.1 AS project_id,
+        argMax(touch.2, (occurred_at, event_id)) AS project_key,
+        argMax(provider, (occurred_at, event_id)) AS provider,
+        argMax(to_project_id, (occurred_at, event_id)) AS latest_to_project_id,
+        max(occurred_at) AS observed_at
+    FROM touched
+    GROUP BY org_id, subject_kind, repo_id, subject_id, project_id
+),
+subjects_with_history AS (
+    SELECT DISTINCT org_id, subject_kind, repo_id, subject_id
+    FROM project_membership_transitions FINAL
+)
+SELECT
+    org_id,
+    subject_kind,
+    repo_id,
+    subject_id,
+    provider,
+    project_id,
+    project_key,
+    observed_at,
+    'transition' AS source
+FROM latest_membership
+WHERE latest_to_project_id = project_id
+UNION ALL
+SELECT
+    w.org_id AS org_id,
+    'work_item' AS subject_kind,
+    w.repo_id AS repo_id,
+    w.work_item_id AS subject_id,
+    w.provider AS provider,
+    w.project_id AS project_id,
+    w.project_key AS project_key,
+    w.updated_at AS observed_at,
+    'work_item_column' AS source
+FROM work_items AS w FINAL
+WHERE w.project_id != ''
+    AND w.provider != 'gitlab'
+    AND (w.provider != 'github' OR startsWith(w.project_id, 'ghprojv2:'))
+    AND (w.org_id, 'work_item', w.repo_id, w.work_item_id) NOT IN (
+        SELECT org_id, subject_kind, repo_id, subject_id FROM subjects_with_history
+    )`

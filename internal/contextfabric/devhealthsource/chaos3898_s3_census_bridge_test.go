@@ -224,7 +224,7 @@ func TestAnchorCollision_OnlyProjectKindIsChecked(t *testing.T) {
 
 // TestAnchorCollision_DetectsAmbiguousProviderID pins the collision case
 // itself: key_resolution_count > 1 (two providers sharing the same raw
-// projects.id, the SAME shape queryWorkItemProjects' own omission guard
+// projects.id, the SAME shape querySubjectProjectMemberships' own omission guard
 // checks at projection time) must report collision=true.
 func TestAnchorCollision_DetectsAmbiguousProviderID(t *testing.T) {
 	t.Parallel()
@@ -239,7 +239,7 @@ func TestAnchorCollision_DetectsAmbiguousProviderID(t *testing.T) {
 }
 
 // TestAnchorCollision_UniqueProviderIDNoCollision is the ordinary,
-// live-verified-zero-collisions case (queryWorkItemProjects' own doc
+// live-verified-zero-collisions case (querySubjectProjectMemberships' own doc
 // comment: "zero such collisions across every organization checked").
 func TestAnchorCollision_UniqueProviderIDNoCollision(t *testing.T) {
 	t.Parallel()

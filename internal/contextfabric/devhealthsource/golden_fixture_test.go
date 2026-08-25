@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -18,6 +19,7 @@ const goldenProjectionBatchPath = "../../../contracts/examples/v1/context_fabric
 // matches.
 var goldenRelationshipPrefixes = []string{
 	"relationship:work_item_project:",
+	"relationship:pull_request_project:",
 	"relationship:work_item_team:",
 	"relationship:project_team:",
 }
@@ -36,8 +38,8 @@ var goldenRelationshipPrefixes = []string{
 func TestGoldenProjectionBatchMatchesProducerOutput(t *testing.T) {
 	t.Parallel()
 	produced := goldenRelationshipsFromProducer(t)
-	if len(produced) < 3 {
-		t.Fatalf("expected all three CHAOS-3802 edge types in the generated set, got %d", len(produced))
+	if len(produced) < 4 {
+		t.Fatalf("expected all four CHAOS-3802/CHAOS-4193 edge shapes in the generated set, got %d", len(produced))
 	}
 	kinds := map[contractsv1.ContextFabricRelationshipType]bool{}
 	for _, relationship := range produced {
@@ -49,6 +51,19 @@ func TestGoldenProjectionBatchMatchesProducerOutput(t *testing.T) {
 	} {
 		if !kinds[want] {
 			t.Fatalf("generated set is missing %q -- the fixture cannot document an edge type no producer emitted", want)
+		}
+	}
+	prefixes := map[string]bool{}
+	for _, relationship := range produced {
+		for _, prefix := range goldenRelationshipPrefixes {
+			if strings.HasPrefix(relationship.RelationshipID, prefix) {
+				prefixes[prefix] = true
+			}
+		}
+	}
+	for _, want := range goldenRelationshipPrefixes {
+		if !prefixes[want] {
+			t.Fatalf("generated set is missing every %q edge -- the fixture cannot document a shape no producer emitted", want)
 		}
 	}
 

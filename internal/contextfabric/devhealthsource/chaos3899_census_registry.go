@@ -114,7 +114,7 @@ func canonicalIDValue(anchorKind contextfabric.SubjectKind, canonicalID string) 
 // extracts. Unchanged.
 //
 // For SubjectProject it widens to BOTH arms of the SAME deliberate dual
-// project-id space queryWorkItemProjects' own union-based join fix
+// project-id space querySubjectProjectMemberships' own union-based join fix
 // (CHAOS-4108, teams_projects_edges.go) addresses on the producer side: a
 // gitlab work_item's project_id column holds projects.project_key (its
 // rename-safe project_full_path), never projects.id -- so an anchor
@@ -163,7 +163,7 @@ func canonicalIDValue(anchorKind contextfabric.SubjectKind, canonicalID string) 
 // still collide against the OTHER space. All three are really one problem:
 // id and project_key are not two independently-safe namespaces, they are
 // ONE namespace once both are compared against the SAME column
-// (work_items.project_id). The fix mirrors queryWorkItemProjects' own
+// (work_items.project_id). The fix mirrors querySubjectProjectMemberships' own
 // producer-side structure exactly (teams_projects_edges.go): UNION ALL each
 // project's id AND (if non-empty) its project_key into one flat set of
 // (provider, id, join_key) rows, DISTINCT (so a project whose id equals its
@@ -340,7 +340,7 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		// live-verified: CensusCount for kind work_item on a gitlab
 		// project anchor read 0 before this fix. projectAnchorPredicate
 		// below widens the anchor to try both arms, mirroring
-		// queryWorkItemProjects' own OR predicate fix -- so project_id
+		// querySubjectProjectMemberships' own OR predicate fix -- so project_id
 		// remains the sole work_item anchor column for Slice A, but the
 		// predicate built from it no longer silently proves absence.
 		kind: contextfabric.SubjectWorkItem, table: "work_items", alias: "w",

@@ -325,6 +325,68 @@ A signal-terminated loop with a real immunity proof is legitimate and should
 NOT be converted for uniformity; that is churn, not rigor. What is not
 negotiable is that the proof exists and is stated.
 
+## 8d. CHAOS-4193: presence read swap (supersedes §1.2's work_items.project_id source)
+
+`querySubjectProjectMemberships` (formerly `queryWorkItemProjects`,
+`teams_projects_edges.go`) no longer reads `work_items.project_id`
+directly. It reads the `project_membership_presence` VIEW ops migration 077
+declares (`dev-health-ops/src/dev_health_ops/migrations/clickhouse/
+077_project_membership_transitions.sql`; mirrored verbatim in acr at
+`devhealthschema.ProjectMembershipPresenceViewDDL`), and additionally
+projects `pull_request -> project` edges the old column-only source could
+never see at all — GitHub Projects V2 puts issues and pull requests on the
+same board, so a PR's board membership was previously invisible to the
+graph. `TeamsProjectsSourceVersion` bumped v3->v4 for this (a full rebuild,
+not an incremental catch-up under a stale marker).
+
+```mermaid
+flowchart LR
+    A["Provider board event<br/>(GitHub Projects V2 / Jira / Linear)"] --> B["ops producer<br/>(ensureProjectsRow, dev-health-ops)"]
+    B --> C[("project_membership_transitions<br/>CH table, append-only, ReplacingMergeTree")]
+    C --> D[("project_membership_presence<br/>CH VIEW, per (org, subject_kind,<br/>repo_id, subject_id, project_id)")]
+    E[("work_items.project_id<br/>(github/jira/linear column, gitlab excluded)")] --> D
+    D --> F["querySubjectProjectMemberships<br/>(acr, teams_projects_edges.go)"]
+    F --> G["BELONGS_TO_PROJECT edge<br/>work_item / pull_request &rarr; project"]
+    F -.source=transition.-> H["ValidFrom = row's observed_at<br/>ValidTo = nil (presence is active-only)"]
+    F -.source=work_item_column.-> I["no validity interval<br/>(canonical_structured, presence only)"]
+```
+
+Key facts this producer relies on, all decided by Context Fabric rulings on
+2026-08-24 (`.remember/context-fabric/cf-rulings.md`):
+
+- **source ∈ {transition, work_item_column}** (09:55 ruling) discriminates
+  the edge's validity: a `transition` row is the LATEST observed touch on
+  that (subject, project) pair and, by the view's own filter, can never
+  have a later closing row — so `ValidFrom` is the row's `observed_at` and
+  `ValidTo` is always `nil`. A `work_item_column` row is a plain canonical
+  column passthrough, presence only, no interval — the exact shape
+  `work_items.project_id` always had.
+- **Presence is keyed per (subject, project)**, not per subject (11:40
+  ruling) — a subject can hold several active memberships at once (a PR on
+  two boards), and each becomes its own edge. This producer does not
+  collapse anything the view hands it; ops's own view SQL is what makes a
+  removal from one board survive on another.
+- **`gitlab` is deliberately excluded** from the column arm ("GitLab's own
+  'project' concept IS this schema's `repo_id`", 09:55 ruling) and has no
+  registered transition producer either — a gitlab work item's project
+  membership is, as of v4, unobservable through this producer at all. See
+  `TestGitLabColumnArmProducesNoProjectEdgeAnymore`
+  (`chaos4108_join_arm_integration_test.go`), which used to prove the
+  opposite under CHAOS-4108 and now proves the retirement.
+- **`pull_request` stays grandfathered out of `identity.Registry`.** The
+  edge's `pull_request` endpoint uses the legacy
+  `pull_request:<repo_id>:<number>` canonical id every other PR
+  entity/edge producer already uses (`tables.go:295,897`), never
+  `identity.Derive` — see `querySubjectProjectMemberships`'s own doc
+  comment for why deriving a `pull_request.v2:...` id here would produce a
+  dangling edge.
+- **(provider, project_id) resolution to `projects`** uses a LEFT (not
+  INNER) join against the same dual id/`project_key` widening CHAOS-4108
+  established, now scoped by `provider`, so an unresolved or ambiguous
+  match is counted (`unresolved_project_entity` /
+  `ambiguous_project_entity`, logged once per batch) rather than silently
+  dropped before the scan ever sees it.
+
 ## 9. What this issue does NOT do
 
 - **No new fact providers, no new `FactKind`.** `project` gets **zero**
