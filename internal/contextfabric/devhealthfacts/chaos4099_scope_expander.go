@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -89,7 +90,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 
 	switch request.Policy {
 	case contextfabric.FactScopePolicyProjectWorkItemRepository:
-		repos, counts, err := e.projectRepositories(ctx, orgID, request.Origins, limit)
+		repos, counts, err := e.projectRepositories(ctx, orgID, request.Origins, limit, request.TimeContext)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -103,7 +104,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		// repository set), authorize it, and query pull requests ONLY from
 		// repositories that survived authorization -- content from a
 		// dropped repository is never read, let alone returned.
-		repos, repoCounts, err := e.projectRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout)
+		repos, repoCounts, err := e.projectRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout, request.TimeContext)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -112,6 +113,11 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 			return contextfabric.FactScopeExpansionResult{Counts: contextfabric.FactScopeExpansionCounts{
 				CandidateCount: repoCounts.CandidateCount, AuthorizationDroppedCount: dropped,
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
+				// CHAOS-4109 (codex xhigh review R1, MEDIUM, confirmed
+				// real): the intermediate repository hop can itself carry
+				// interval-miss/unbounded-fallback signal on a historical
+				// axis -- see the identical fix's own comment below.
+				TemporalDroppedCount: repoCounts.TemporalDroppedCount, UnboundedValidityCount: repoCounts.UnboundedValidityCount, MalformedTouchCount: repoCounts.MalformedTouchCount,
 			}}, nil
 		}
 		targets, targetBasis, targetSource, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit)
@@ -120,6 +126,18 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		}
 		prCounts.AuthorizationDroppedCount += dropped
 		prCounts.MissingNextHopCount += repoCounts.MissingNextHopCount
+		// CHAOS-4109 (codex xhigh review R1, MEDIUM, confirmed real): the
+		// intermediate repository hop's OWN TemporalDroppedCount/
+		// UnboundedValidityCount (from projectRepositoriesAsOf on a
+		// historical axis) were being discarded here -- a historical
+		// pull_request/review request could answer correctly while
+		// telemetry falsely reported zero interval misses and zero
+		// current-column fallbacks, exactly the class of gap the
+		// Truncated fix immediately below already closed for a different
+		// field.
+		prCounts.TemporalDroppedCount += repoCounts.TemporalDroppedCount
+		prCounts.UnboundedValidityCount += repoCounts.UnboundedValidityCount
+		prCounts.MalformedTouchCount += repoCounts.MalformedTouchCount
 		// codex xhigh review round 1 (confirmed real, MEDIUM): the
 		// INTERMEDIATE repository set can itself be truncated at
 		// maxFactScopeRepositoryFanout, which repoCounts.Truncated already
@@ -131,7 +149,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, Counts: prCounts}, nil
 
 	case contextfabric.FactScopePolicyProjectWorkItemPullRequestReview:
-		repos, repoCounts, err := e.projectRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout)
+		repos, repoCounts, err := e.projectRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout, request.TimeContext)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -140,6 +158,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 			return contextfabric.FactScopeExpansionResult{Counts: contextfabric.FactScopeExpansionCounts{
 				CandidateCount: repoCounts.CandidateCount, AuthorizationDroppedCount: dropped,
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
+				TemporalDroppedCount: repoCounts.TemporalDroppedCount, UnboundedValidityCount: repoCounts.UnboundedValidityCount, MalformedTouchCount: repoCounts.MalformedTouchCount,
 			}}, nil
 		}
 		targets, targetBasis, targetSource, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit)
@@ -150,6 +169,9 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		reviewCounts.MissingNextHopCount += repoCounts.MissingNextHopCount
 		// See the identical fix's own comment in the pull_request case
 		// above.
+		reviewCounts.TemporalDroppedCount += repoCounts.TemporalDroppedCount
+		reviewCounts.UnboundedValidityCount += repoCounts.UnboundedValidityCount
+		reviewCounts.MalformedTouchCount += repoCounts.MalformedTouchCount
 		reviewCounts.Truncated = reviewCounts.Truncated || repoCounts.Truncated
 		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, Counts: reviewCounts}, nil
 
@@ -258,7 +280,41 @@ type repositoryCandidate struct {
 // CandidateCount/MissingNextHopCount/Truncated counts. Authorization is the
 // caller's job (authorizeRepositories/splitRepositoriesByAuthorization) --
 // this function never reads request.Principal.
-func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, origins []contextfabric.SubjectRef, limit int) ([]repositoryCandidate, contextfabric.FactScopeExpansionCounts, error) {
+//
+// CHAOS-4109: on TemporalCurrent (the zero TimeContext included), this runs
+// the ORIGINAL, byte-identical statement below -- no risk of regressing the
+// well-exercised current-axis path. On TemporalValidTime/TemporalRange, it
+// delegates to projectRepositoriesAsOf, which binds the SAME chain's first
+// hop to the requested instant/window using
+// project_membership_transitions' full touch history (mirroring
+// devhealthsource/teams_projects_edges.go's membershipIntervalsSubquery --
+// duplicated rather than shared across the package boundary, this file's
+// own established convention, see this function's file-level doc comment).
+func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, origins []contextfabric.SubjectRef, limit int, timeContext contextfabric.TimeContext) ([]repositoryCandidate, contextfabric.FactScopeExpansionCounts, error) {
+	// EXPLICIT axis switch, not an if/else fallthrough (codex xhigh review
+	// R1, MEDIUM, confirmed real): an if/else that only special-cases
+	// ValidTime/Range and falls through to the current-column query for
+	// "anything else" would silently answer TemporalObservedTime -- or any
+	// future axis this package has never heard of -- with TODAY's
+	// membership, exactly the false-historical-answer failure CHAOS-3781's
+	// H6 refusal and this ticket's own axis gate exist to prevent. The
+	// resolver already blocks ObservedTime from reaching here through the
+	// normal engine path (fact_scope.go's resolveRequirement), but this
+	// exported method is also this package's own contract boundary, and a
+	// boundary must not depend on every caller already having checked.
+	//
+	// The empty axis is treated as TemporalCurrent, not rejected: every
+	// pre-CHAOS-4109 caller (this package's own existing tests included)
+	// builds a request with no TimeContext at all, which is the Go zero
+	// value (Axis == "") -- rejecting it would be a breaking change to a
+	// contract nothing about this ticket touches.
+	switch timeContext.Axis {
+	case "", contractsv1.ContextFabricTemporalCurrent:
+	case contractsv1.ContextFabricTemporalValidTime, contractsv1.ContextFabricTemporalRange:
+		return e.projectRepositoriesAsOf(ctx, orgID, origins, limit, timeContext)
+	default:
+		return nil, contextfabric.FactScopeExpansionCounts{}, fmt.Errorf("devhealthfacts: projectRepositories does not support axis %q", timeContext.Axis)
+	}
 	projectIDs := decodeProjectOriginIDs(origins)
 	if len(projectIDs) == 0 {
 		// Every origin failed to decode as a project.v2 id -- an invariant
@@ -373,6 +429,285 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	// check would have nothing left to catch it, because the overflow
 	// row would already be gone.
 	return candidates, counts, nil
+}
+
+// asOfWindow resolves the half-open [start, end) a historical traversal
+// must bind to from the interpreted TimeContext -- a point-in-time AsOf is
+// the degenerate window [AsOf, AsOf], the same "one shape, one place"
+// reduction falkorgraph/temporal.go's own predicate comment documents for
+// graph reads. Re-validates the axis and its required bounds rather than
+// trusting the caller: fact_scope.go's resolver already checked both before
+// reaching here, but this function is a second, independent boundary (the
+// same reasoning ExpandFactScope's own target-kind re-check gives for not
+// trusting an upstream invariant blindly).
+func asOfWindow(timeContext contextfabric.TimeContext) (start, end time.Time, err error) {
+	switch timeContext.Axis {
+	case contractsv1.ContextFabricTemporalValidTime:
+		if timeContext.AsOf == nil {
+			return time.Time{}, time.Time{}, errors.New("devhealthfacts: valid_time scope expansion requires AsOf")
+		}
+		return *timeContext.AsOf, *timeContext.AsOf, nil
+	case contractsv1.ContextFabricTemporalRange:
+		if timeContext.Start == nil || timeContext.End == nil {
+			return time.Time{}, time.Time{}, errors.New("devhealthfacts: range scope expansion requires Start and End")
+		}
+		return *timeContext.Start, *timeContext.End, nil
+	default:
+		return time.Time{}, time.Time{}, fmt.Errorf("devhealthfacts: projectRepositoriesAsOf does not support axis %q", timeContext.Axis)
+	}
+}
+
+// membershipTouchesAsOfSQL renders the work_item-scoped touch/interval
+// derivation project_membership_transitions' full history supports
+// (CHAOS-4109). MIRRORS devhealthsource/teams_projects_edges.go's
+// membershipIntervalsSubquery exactly (same touch polarization, same
+// leadInFrame window, same ROWS BETWEEN frame -- see that constant's own
+// doc comment for why the frame clause is load-bearing) -- duplicated
+// rather than shared across the package boundary, per this file's own
+// established convention (this function's own doc comment; see
+// projectRepositories' ambiguity-guard citation of the identical producer
+// pattern). Narrowed to subject_kind = 'work_item' (the only subject kind
+// this expansion chain ever traverses) and to the columns this caller
+// needs (repo_id, provider, project_id, observed_at, valid_to) -- no
+// subject_id in the output, since a distinct-REPOSITORY answer never needs
+// to distinguish which work item on that repository carried the touch.
+// is_malformed is projected THROUGH, not filtered out here (CHAOS-4109
+// codex xhigh review R1, MEDIUM, confirmed real): every caller of this
+// subquery must decide for itself whether to exclude a malformed row from
+// its ANSWER (always) and whether to COUNT it for telemetry (only
+// historicalDropCount does, today -- see its own doc comment). Filtering
+// malformed rows out at this shared subquery, as an earlier version did,
+// meant no caller could ever see them again to report a
+// MalformedTouchCount, and the scope-expansion telemetry silently dropped
+// exactly the same signal devhealthsource's own presenceTelemetryLedger
+// already surfaces for the producer path.
+const membershipTouchesAsOfSQL = `(
+  SELECT repo_id, provider, project_id, occurred_at AS observed_at,
+    if(rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
+    (rn < touch_count AND next_is_add = 1) AS is_malformed
+  FROM (
+    SELECT *,
+      row_number() OVER w AS rn,
+      count() OVER (PARTITION BY repo_id, subject_id, provider, project_id) AS touch_count,
+      leadInFrame(occurred_at, 1, occurred_at) OVER w AS next_occurred_at,
+      leadInFrame(is_add, 1, is_add) OVER w AS next_is_add
+    FROM (
+      SELECT repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
+      FROM project_membership_transitions FINAL
+      WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND to_project_id != '' AND to_project_id != from_project_id
+      UNION ALL
+      SELECT repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
+      FROM project_membership_transitions FINAL
+      WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND from_project_id != '' AND from_project_id != to_project_id
+    )
+    WINDOW w AS (PARTITION BY repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+  )
+  WHERE is_add = 1
+)`
+
+// projectRepositoriesAsOf binds projectRepositories' first hop to
+// asOfWindow(timeContext) instead of reading work_items.project_id
+// unconditionally, using project_membership_transitions' full touch
+// history the same way devhealthsource's producer derives edge validity
+// intervals (membershipTouchesAsOfSQL above).
+//
+// TWO ARMS, mirroring project_membership_presence's own column-arm/
+// transition-arm split (ops migration 077):
+//
+//   - a work item WITH transition history is answered from that history:
+//     admitted only if its interval overlaps the requested window --
+//     `observed_at <= window_end AND (valid_to IS NULL OR valid_to >
+//     window_start)`, the identical half-open overlap predicate
+//     falkorgraph/temporal.go's temporalFilter.predicate applies to graph
+//     reads (one rule, two read sites).
+//   - a work item with NO transition history has no historical precision
+//     at all -- its only signal is the plain current-value column
+//     (work_items.project_id) -- so it is admitted UNCONDITIONALLY,
+//     regardless of the requested window, the same "unbounded means valid
+//     at every time" approximation falkorgraph.hasUnboundedValidity
+//     already applies to an edge with no validity bound. Every repository
+//     reached ONLY through this arm increments UnboundedValidityCount, so
+//     a caller can see how much of a historical answer rests on this
+//     approximation rather than a genuine as-of resolution (a repository
+//     reached through BOTH arms is not counted here -- it also has a
+//     genuine as-of resolution, so the approximation added nothing that
+//     resolution did not already justify).
+//
+// TemporalDroppedCount is populated by a second, small aggregate query
+// (historicalDropCount) rather than folded into this one: it answers a
+// different question -- how many repositories this project's history
+// reaches at SOME point but not during the requested window -- and
+// answering it inline would have meant carrying an unfiltered copy of the
+// interval arm through the same UNION this function already uses for a
+// filtered one.
+func (e *ScopeExpander) projectRepositoriesAsOf(ctx context.Context, orgID string, origins []contextfabric.SubjectRef, limit int, timeContext contextfabric.TimeContext) ([]repositoryCandidate, contextfabric.FactScopeExpansionCounts, error) {
+	projectIDs := decodeProjectOriginIDs(origins)
+	if len(projectIDs) == 0 {
+		return nil, contextfabric.FactScopeExpansionCounts{}, nil
+	}
+	windowStart, windowEnd, err := asOfWindow(timeContext)
+	if err != nil {
+		return nil, contextfabric.FactScopeExpansionCounts{}, err
+	}
+	limitPlusOne := limit + 1
+	statement := `SELECT repo_id_str, repo_slug, max(via_history) AS via_history
+FROM (
+  SELECT toString(iv.repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, 1 AS via_history
+  FROM ` + membershipTouchesAsOfSQL + ` AS iv
+  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
+  LEFT JOIN repos AS r FINAL ON r.id = iv.repo_id AND r.org_id = {org_id:String}
+  WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+    AND NOT iv.is_malformed
+    AND iv.observed_at <= {window_end:DateTime64(6,'UTC')}
+    AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})
+  UNION ALL
+  SELECT toString(w.repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, 0 AS via_history
+  FROM work_items AS w FINAL
+  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
+  LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+  WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+    AND (w.repo_id, w.work_item_id) NOT IN (
+      SELECT repo_id, subject_id FROM project_membership_transitions FINAL WHERE org_id = {org_id:String} AND subject_kind = 'work_item'
+    )
+)
+GROUP BY repo_id_str, repo_slug
+ORDER BY repo_id_str
+LIMIT ` + strconv.Itoa(limitPlusOne)
+	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+		{Name: "org_id", Value: orgID},
+		{Name: "project_ids", Value: projectIDs},
+		{Name: "window_start", Value: windowStart},
+		{Name: "window_end", Value: windowEnd},
+	})
+	if err != nil {
+		return nil, contextfabric.FactScopeExpansionCounts{}, err
+	}
+	defer rows.Close()
+
+	var candidates []repositoryCandidate
+	counts := contextfabric.FactScopeExpansionCounts{}
+	for rows.Next() {
+		var repoID, repoSlug string
+		var viaHistory uint8
+		if err := rows.Scan(&repoID, &repoSlug, &viaHistory); err != nil {
+			return nil, contextfabric.FactScopeExpansionCounts{}, err
+		}
+		switch {
+		case repoID == zeroRepositoryID:
+			counts.MissingNextHopCount++
+		case repoSlug == "":
+			counts.MissingNextHopCount++
+		default:
+			counts.CandidateCount++
+			candidates = append(candidates, repositoryCandidate{repoID: repoID, repoSlug: repoSlug})
+			if viaHistory == 0 {
+				counts.UnboundedValidityCount++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, contextfabric.FactScopeExpansionCounts{}, err
+	}
+	totalRows := counts.CandidateCount + counts.MissingNextHopCount
+	counts.Truncated = totalRows >= limitPlusOne
+	dropped, malformed, err := e.historicalDropCount(ctx, orgID, projectIDs, windowStart, windowEnd)
+	if err != nil {
+		return nil, contextfabric.FactScopeExpansionCounts{}, err
+	}
+	counts.TemporalDroppedCount = dropped
+	counts.MalformedTouchCount = malformed
+	return candidates, counts, nil
+}
+
+// resolvedProjectsSQL is the widened project-id/project-key join arm
+// CHAOS-4108 proved live, in the shape projectRepositoriesAsOf/
+// historicalDropCount need (id, provider, key_resolution_count) --
+// deliberately the SAME computation as projectRepositories' own inline
+// join above and devhealthsource's resolvedProjectsSubquery, duplicated a
+// third time rather than shared, per this file's established convention.
+const resolvedProjectsSQL = `(
+  SELECT provider, id, join_key, count() OVER (PARTITION BY provider, join_key) AS key_resolution_count
+  FROM (
+    SELECT DISTINCT provider, id, join_key FROM (
+      SELECT provider, id, id AS join_key FROM projects FINAL WHERE org_id = {org_id:String}
+      UNION ALL
+      SELECT provider, id, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
+    )
+  )
+  LIMIT 1 BY provider, join_key
+)`
+
+// historicalDropCount answers two decision-basis questions in one aggregate
+// query (CHAOS-4109 telemetry requirement):
+//
+//   - TemporalDroppedCount ("interval-miss"): how many DISTINCT
+//     repositories does this project's transition history reach at SOME
+//     point that the requested window then excludes. uniqExactIf keeps
+//     this a single query rather than two round trips: ever_matched is the
+//     interval arm with NO window predicate, window_matched is the same
+//     set restricted to rows that DO overlap the window, and the
+//     difference is exactly the repositories whose history-derived
+//     membership existed but not during this question's window.
+//   - MalformedTouchCount (codex xhigh review R1, MEDIUM, confirmed real):
+//     how many touches membershipTouchesAsOfSQL flagged is_malformed (two
+//     ADD touches with no intervening REMOVE -- see that constant's own
+//     doc comment). The main answer query excludes malformed rows from
+//     what it admits (`AND NOT iv.is_malformed`), and until this fix
+//     nothing counted them either: a malformed touch could silently drop
+//     an interval from the answer with zero telemetry signal that
+//     anything was skipped, unlike devhealthsource's own producer-side
+//     presenceTelemetryLedger, which has always counted this. Counted
+//     here (NOT excluded) rather than in the ever_matched/window_matched
+//     pair, which both explicitly exclude malformed rows via
+//     `NOT is_malformed` so a malformed touch cannot inflate either.
+func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, projectIDs []string, windowStart, windowEnd time.Time) (dropped, malformed int, err error) {
+	// The repos JOIN + zero-UUID/empty-slug exclusion (codex xhigh review
+	// R1, LOW, confirmed real) mirrors the main query's own MissingNextHopCount
+	// classification exactly: without it, a repo-less-by-design work item
+	// (the zero-UUID sentinel) or an orphaned repo_id with no matching
+	// repos row counts as "ever matched" here even though the main query
+	// never treats it as a real repository candidate at all -- so a
+	// history-touched but never-a-real-repository row was double-counted
+	// as BOTH MissingNextHopCount (main query) AND TemporalDroppedCount
+	// (this one), though no repository target was actually excluded by
+	// the requested window.
+	statement := `SELECT uniqExactIf(repo_id_str, NOT is_malformed) AS ever_matched,
+  uniqExactIf(repo_id_str, in_window AND NOT is_malformed) AS window_matched,
+  countIf(is_malformed) AS malformed_touches
+FROM (
+  SELECT toString(iv.repo_id) AS repo_id_str, iv.is_malformed AS is_malformed,
+    (iv.observed_at <= {window_end:DateTime64(6,'UTC')} AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})) AS in_window
+  FROM ` + membershipTouchesAsOfSQL + ` AS iv
+  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
+  LEFT JOIN repos AS r FINAL ON r.id = iv.repo_id AND r.org_id = {org_id:String}
+  WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+    AND toString(iv.repo_id) != {zero_repository_id:String} AND ifNull(r.repo, '') != ''
+)`
+	rows, queryErr := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+		{Name: "org_id", Value: orgID},
+		{Name: "project_ids", Value: projectIDs},
+		{Name: "window_start", Value: windowStart},
+		{Name: "window_end", Value: windowEnd},
+		{Name: "zero_repository_id", Value: zeroRepositoryID},
+	})
+	if queryErr != nil {
+		return 0, 0, queryErr
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, 0, err
+		}
+		return 0, 0, nil
+	}
+	var everMatched, windowMatched, malformedTouches uint64
+	if err := rows.Scan(&everMatched, &windowMatched, &malformedTouches); err != nil {
+		return 0, 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	return int(everMatched - windowMatched), int(malformedTouches), nil
 }
 
 // decodeProjectOriginIDs recovers the raw projects.id value for every

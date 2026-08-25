@@ -119,21 +119,21 @@ func workItemTeamAttributionDerivation(source string) (contractsv1.ContextFabric
 //     shape this producer always had for work_items.project_id, now
 //     passed through the view's column arm unchanged) -- presence only,
 //     no validity interval, exactly as before this migration.
-//   - 'transition' is derived from an observed provider reassignment
-//     event (project_membership_transitions). ValidFrom is the row's own
-//     observed_at: by the view's OWN construction (its `WHERE
-//     latest_to_project_id = project_id` filter on the transition arm),
-//     every row this producer ever sees here is the LATEST touch on that
-//     (subject, project) pair and it ADDED the membership -- there is by
-//     definition no later closing row, or the view would not have
-//     returned it as present. ValidTo is therefore always nil (open),
-//     which is the same "state both directions explicitly, open unless
-//     proven closed" discipline ownershipValidity (below) applies to
-//     project->team ownership; it is stated as a fact of the view's own
-//     filter, not re-derived by a second query against
-//     project_membership_transitions, because that would just recompute
-//     what the view already proved and risk disagreeing with it under
-//     replication lag between the two reads.
+//   - 'transition' is derived from project_membership_transitions'
+//     FULL touch history for the (subject, project) pair, not merely its
+//     latest touch (CHAOS-4109; see intervalDerivationCTE's own doc
+//     comment for the interval rule). A subject that was added, removed
+//     and re-added to the SAME project now projects MULTIPLE edges, one
+//     per interval it actually held membership -- a closed one for the
+//     earlier stretch, an open one for the current stretch if it is a
+//     member again. Each interval is its OWN relationship candidate with
+//     its own RelationshipID (see relationshipID below): a single
+//     "earliest add to latest state" window, the shape
+//     ownershipValidity (below) uses for the sibling project->team edge,
+//     would be WRONG here -- it would claim the subject belonged to the
+//     project throughout the gap it was actually removed, which is
+//     exactly the false historical answer CHAOS-3781's H6 refusal
+//     existed to prevent one edge at a time.
 //
 // pull_request subjects use the LEGACY "pull_request:<repo_id>:<number>"
 // canonical id (tables.go:295,897; chaos4099_scope_expander.go:425) --
@@ -164,17 +164,25 @@ func workItemTeamAttributionDerivation(source string) (contractsv1.ContextFabric
 // "more than one match" are both visible to the scan and both counted by
 // telemetry.recordUnresolved/recordAmbiguous -- see presenceTelemetryLedger
 // (teams_projects.go).
-func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
-	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-		return querySubjectProjectMemberships(ctx, client, orgID, cursor, limit, telemetry)
-	}
-}
-
-func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger) ([]candidate, bool, error) {
-	const rowKey = "concat(m.subject_kind, ':', toString(m.repo_id), ':', m.subject_id, ':', m.provider, ':', m.project_id)"
-	statement := `SELECT m.subject_kind, toString(m.repo_id), m.subject_id, ifNull(r.repo, ''), m.observed_at, m.source, m.provider, m.project_id, p.id, p.key_resolution_count
-FROM project_membership_presence AS m
-LEFT JOIN (
+// resolvedProjectsSubquery is the widened project-id/project-key join arm
+// CHAOS-4108 proved live (id space AND project_key space, scoped by
+// provider), factored out as a Go constant so both UNION arms of
+// querySubjectProjectMemberships' statement can each embed it -- codex
+// xhigh review R2's fan-out guard (compute key_resolution_count as a
+// window function BEFORE LIMIT 1 BY collapses the group, never after) is
+// stated ONCE here rather than twice, so the two arms cannot silently
+// drift out of agreement on how ambiguity is counted.
+//
+// A plain parenthesized derived table, NOT a `WITH ... AS (...)` CTE:
+// runtimeclickhouse's validateReadOnlyStatement requires a read-only
+// statement's FIRST TOKEN to be literally "SELECT" (ErrUnsafeStatement
+// otherwise), which a top-level WITH clause is not, however deeply nested
+// the SELECT beneath it. Embedded twice (once per UNION arm) rather than
+// named once, matching this package's own established convention for
+// SQL text that must be identical in two call sites (chaos4099_scope_
+// expander.go's projectRepositories doc comment: "mirrors that
+// computation exactly", inline, not shared via a function).
+const resolvedProjectsSubquery = `(
   SELECT provider, id, join_key, count() OVER (PARTITION BY provider, join_key) AS key_resolution_count
   FROM (
     SELECT DISTINCT provider, id, join_key FROM (
@@ -183,32 +191,163 @@ LEFT JOIN (
       SELECT provider, id, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
     )
   )
-  -- codex xhigh review R2: without this, an AMBIGUOUS join_key (>1 project
-  -- sharing it) fans the LEFT JOIN below out to key_resolution_count rows
-  -- for the SAME m row -- one real presence row scanned N times, each
-  -- correctly reporting key_resolution_count>1 but each ALSO incrementing
-  -- presenceTelemetryLedger.ambiguousRows once, overcounting the very
-  -- fan-out metric the R1 fix exists to report accurately.
-  -- key_resolution_count is a window function, computed over every row
-  -- BEFORE this LIMIT BY trims the group, so the count it carries on the
-  -- one surviving row is still the TRUE ambiguity size -- only the
-  -- (provider, join_key) group is deduplicated to one representative row,
-  -- exactly the invariant p ON p.provider = m.provider AND p.join_key =
-  -- m.project_id needs to stay a 1:1 (or 1:0) join.
   LIMIT 1 BY provider, join_key
-) AS p ON p.provider = m.provider AND p.join_key = m.project_id
-LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
-WHERE m.org_id = {org_id:String}` + sincePredicate(cursor, "m.observed_at", rowKey) + orderBy("m.observed_at", rowKey)
+)`
+
+// membershipIntervalsCTE derives EVERY membership interval a (subject,
+// project) pair ever held from project_membership_transitions' full touch
+// history (CHAOS-4109) -- not merely the latest one
+// project_membership_presence's transition arm reports.
+//
+// THE INTERVAL RULE. Unpivot each transition row into up to two polarized
+// touches of a project: to_project_id is an ADD (is_add=1), and
+// from_project_id -- when it differs from to_project_id -- is a REMOVE
+// (is_add=0). A row where from_project_id = to_project_id (a provider
+// re-asserting a membership it already holds, typically a project KEY
+// change with the id unchanged) is EXCLUDED from both arms: it touches no
+// boundary, by the same reasoning project_membership_presence's own
+// "(P, P) contributes ONE touch, the joined side, not two" comment gives
+// for presence -- a re-assertion can only occur while already a member
+// (nothing else asserts P->P), so treating it as a fresh ADD would move a
+// real interval's start later than the subject actually joined, and
+// nothing about it closes anything.
+//
+// Ordered per (org_id, subject_kind, repo_id, subject_id, provider,
+// project_id) by (occurred_at, event_id) -- the transitions table's own
+// ORDER BY suffix, so ties break identically to the source of truth. Each
+// ADD row looks at its own immediate NEXT touch via leadInFrame (a proper
+// window function, unlike neighbor(), which is block-order-dependent and
+// explicitly unsafe for this):
+//
+//   - no next touch at all (rn = touch_count): the subject is a member of
+//     this project TODAY. Open interval, ValidTo absent.
+//   - next touch is a REMOVE (next_is_add = 0): the two together bound one
+//     CLOSED interval, [this ADD's occurred_at, that REMOVE's occurred_at).
+//   - next touch is ANOTHER ADD (next_is_add = 1): two adds with no
+//     intervening remove, which the data model does not produce under
+//     normal operation (a genuine re-add is always preceded by a move-out
+//     REMOVE touch, per the sink's own "(\"\", \"\") is refused" and
+//     "removal MUST name the board it left" rules on the source table).
+//     Flagged is_malformed rather than guessed: the caller counts it as a
+//     producer-side data-quality anomaly and skips it, never fabricating
+//     an interval boundary the source data does not actually assert.
+//
+// A subject's FIRST tracked touch of a project being a REMOVE (no earlier
+// ADD in this history at all) naturally emits NOTHING for that touch --
+// is_add=1 is the only row kind this subquery ever turns into an interval,
+// so a leading REMOVE is simply never selected. That is deliberate: it
+// means "this membership existed before transition tracking began", and
+// its true start is genuinely unknown -- fabricating one would be worse
+// than the gap.
+//
+// A plain parenthesized derived table, not a `WITH` CTE -- see
+// resolvedProjectsSubquery's own doc comment for why (ErrUnsafeStatement).
+//
+// event_id is projected through (codex xhigh review R1, HIGH, confirmed
+// real): project_membership_transitions' own ORDER BY is (..., occurred_at,
+// event_id), because two DISTINCT reassignment events CAN legally share an
+// occurred_at down to this column's DateTime64(3) millisecond precision
+// (a bulk re-sync, or two rapid moves landing in the same millisecond).
+// ValidFrom alone (an interval's own occurred_at) is therefore NOT always a
+// unique key for a (subject, project) pair's intervals -- two intervals
+// opened in the same millisecond would mint the SAME RelationshipID (one
+// silently overwriting the other via the graph write's MERGE-on-id
+// semantics) and the SAME keyset-pagination cursor position (one row
+// silently skipped). event_id is this table's own tiebreaker for exactly
+// this case, so querySubjectProjectMemberships' own RelationshipID suffix
+// and rowSortKey both include it too, below.
+const membershipIntervalsSubquery = `(
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id,
+    'transition' AS source,
+    if(rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
+    (rn < touch_count AND next_is_add = 1) AS is_malformed
+  FROM (
+    SELECT *,
+      row_number() OVER w AS rn,
+      count() OVER (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id) AS touch_count,
+      leadInFrame(occurred_at, 1, occurred_at) OVER w AS next_occurred_at,
+      leadInFrame(is_add, 1, is_add) OVER w AS next_is_add
+    FROM (
+      SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
+      FROM project_membership_transitions FINAL
+      WHERE org_id = {org_id:String} AND to_project_id != '' AND to_project_id != from_project_id
+      UNION ALL
+      SELECT org_id, subject_kind, repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
+      FROM project_membership_transitions FINAL
+      WHERE org_id = {org_id:String} AND from_project_id != '' AND from_project_id != to_project_id
+    )
+    -- The explicit ROWS BETWEEN frame is load-bearing, not decorative: an
+    -- ORDER BY'd window with no frame clause defaults to RANGE BETWEEN
+    -- UNBOUNDED PRECEDING AND CURRENT ROW, which never extends past the
+    -- current row -- leadInFrame(..., 1, ...) then finds nothing inside the
+    -- frame for EVERY row, including the first, and silently returns its
+    -- own default (the current row's own value) rather than the next
+    -- row's. Live-verified against ClickHouse 24.8: without this clause,
+    -- every ADD row reported itself as its own "next touch", which made
+    -- next_is_add equal is_add for every row and misclassified every
+    -- well-formed closed interval as malformed.
+    WINDOW w AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+  )
+  WHERE is_add = 1
+)`
+
+func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return querySubjectProjectMemberships(ctx, client, orgID, cursor, limit, telemetry)
+	}
+}
+
+func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger) ([]candidate, bool, error) {
+	// event_id is part of the row key (codex xhigh review R1, HIGH,
+	// confirmed real -- see membershipIntervalsSubquery's own doc comment):
+	// two transition-arm intervals for the SAME (subject, project) pair CAN
+	// legally share an observed_at down to the millisecond, and without
+	// event_id in the tiebreaker, both the RelationshipID (below) and the
+	// keyset-pagination cursor would collide on it.
+	const rowKey = "concat(subject_kind, ':', repo_id_str, ':', subject_id, ':', provider, ':', project_id, ':', event_id)"
+	// toDateTime64(0, 3, 'UTC') matches project_membership_transitions.
+	// occurred_at's own declared scale (DateTime64(3)) -- the NULL branch of
+	// transition arm's `valid_to` (membershipIntervalsSubquery) is derived
+	// from that column via leadInFrame, so the ifNull default must share its
+	// scale for the two UNION arms to agree on one column type.
+	statement := `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed
+FROM (
+  SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
+    m.observed_at AS observed_at, m.event_id AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
+    isNotNull(m.valid_to) AS valid_to_present, ifNull(m.valid_to, toDateTime64(0, 3, 'UTC')) AS valid_to_value, m.is_malformed AS is_malformed
+  FROM ` + membershipIntervalsSubquery + ` AS m
+  LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
+  LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
+  UNION ALL
+  SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
+    m.observed_at AS observed_at, '' AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
+    0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed
+  FROM project_membership_presence AS m
+  LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
+  LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
+  WHERE m.org_id = {org_id:String} AND m.source = 'work_item_column'
+)
+WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var subjectKind, repoID, subjectID, repoSlug, source, provider, projectID, resolvedProjectID string
-		var observedAt time.Time
+		var subjectKind, repoID, subjectID, repoSlug, eventID, source, provider, projectID, resolvedProjectID string
+		var observedAt, validToValue time.Time
 		var keyResolutionCount uint64
-		if err := r.Scan(&subjectKind, &repoID, &subjectID, &repoSlug, &observedAt, &source, &provider, &projectID, &resolvedProjectID, &keyResolutionCount); err != nil {
+		var validToPresent, isMalformed uint8
+		if err := r.Scan(&subjectKind, &repoID, &subjectID, &repoSlug, &observedAt, &eventID, &source, &provider, &projectID, &resolvedProjectID, &keyResolutionCount, &validToPresent, &validToValue, &isMalformed); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
-		rowSortKey := subjectKind + ":" + repoID + ":" + subjectID + ":" + provider + ":" + projectID
+		rowSortKey := subjectKind + ":" + repoID + ":" + subjectID + ":" + provider + ":" + projectID + ":" + eventID
 		telemetry.recordRead(source, subjectKind)
+		if isMalformed != 0 {
+			// See membershipIntervalsCTE's own doc comment: two ADD touches
+			// with no intervening REMOVE. A producer-side data-quality
+			// anomaly, never guessed into an interval boundary the source
+			// data does not assert -- omitted and counted, the same
+			// discipline the unresolved/ambiguous branches below apply.
+			telemetry.recordMalformedTouch(provider, projectID)
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		switch {
 		case keyResolutionCount == 0:
 			telemetry.recordUnresolved(provider, projectID)
@@ -289,17 +428,43 @@ WHERE m.org_id = {org_id:String}` + sincePredicate(cursor, "m.observed_at", rowK
 			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown subject_kind %q", subjectKind)}
 		}
 
-		// source is a closed vocabulary too (the view's own literal 'source'
-		// column: {transition, work_item_column}) -- codex xhigh review R1:
-		// an unconditional if-transition-else-column-semantics fall-through
-		// would silently misclassify a future/drifted source value as
-		// work_item_column (no interval) rather than rejecting it, the same
-		// class of silent misroute the subject_kind switch above already
-		// fails closed against.
-		var validFrom *time.Time
+		// source is a closed vocabulary too ({transition, work_item_column})
+		// -- codex xhigh review R1: an unconditional
+		// if-transition-else-column-semantics fall-through would silently
+		// misclassify a future/drifted source value as work_item_column (no
+		// interval) rather than rejecting it, the same class of silent
+		// misroute the subject_kind switch above already fails closed
+		// against.
+		//
+		// relationshipIDIntervalSuffix (CHAOS-4109) makes a transition-arm
+		// RelationshipID unique PER INTERVAL, not merely per (subject,
+		// project): membershipIntervalsSubquery can now hand this scan
+		// several rows sharing every other key and differing only in
+		// ValidFrom (an earlier closed stretch, a later open one), and
+		// ContextFabricProjectionBatch.Validate rejects a batch carrying two
+		// candidates with the same RelationshipID outright. ValidFrom is
+		// immutable once written (a later REMOVE only ever fills in this
+		// SAME interval's ValidTo via the graph write's own MERGE-on-id
+		// semantics; it never moves where the interval started), so the
+		// suffix is stable across rebuilds for the identical interval and
+		// distinct for a genuinely different one. work_item_column rows
+		// never carry a ValidFrom and keep the bare id unchanged.
+		//
+		// eventID is appended too (codex xhigh review R1, HIGH, confirmed
+		// real): observedAt alone is not always unique across intervals for
+		// the SAME (subject, project) pair -- project_membership_transitions'
+		// own DateTime64(3) millisecond precision means two distinct ADD
+		// events CAN share a timestamp, which would otherwise mint the SAME
+		// RelationshipID for two different intervals (one silently
+		// clobbering the other via the graph write's MERGE-on-id). event_id
+		// is that table's own tiebreaker for exactly this case.
+		var validFrom, validTo *time.Time
+		var relationshipIDIntervalSuffix string
 		switch source {
 		case "transition":
 			validFrom = requiredTime(observedAt)
+			validTo = optionalTime(validToPresent, validToValue)
+			relationshipIDIntervalSuffix = ":" + observedAt.Format(time.RFC3339Nano) + ":" + eventID
 		case "work_item_column":
 			// No interval: a plain canonical-column passthrough, presence only.
 		default:
@@ -307,7 +472,7 @@ WHERE m.org_id = {org_id:String}` + sincePredicate(cursor, "m.observed_at", rowK
 		}
 
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID:  relationshipIDPrefix + repoID + ":" + subjectID + ":" + provider + ":" + projectID,
+			RelationshipID:  relationshipIDPrefix + repoID + ":" + subjectID + ":" + provider + ":" + projectID + relationshipIDIntervalSuffix,
 			Type:            contractsv1.ContextFabricRelationshipBelongsToProject,
 			From:            fromSubject,
 			To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID, Label: projectID},
@@ -318,6 +483,7 @@ WHERE m.org_id = {org_id:String}` + sincePredicate(cursor, "m.observed_at", rowK
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 			ValidFrom:       validFrom,
+			ValidTo:         validTo,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})

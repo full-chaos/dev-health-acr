@@ -62,8 +62,13 @@ func TestSubjectOnMultipleProjectsEmitsOneEdgePerProject(t *testing.T) {
 	}})
 
 	batch := teamsProjectsBatch(t, client)
-	edgeA := relationshipByID(t, batch, "relationship:pull_request_project:repo-1:532:github:board-a")
-	edgeB := relationshipByID(t, batch, "relationship:pull_request_project:repo-1:532:github:board-b")
+	// CHAOS-4109: a transition-sourced edge's RelationshipID now carries a
+	// ValidFrom (here, `at`) suffix so multiple intervals for the same
+	// (subject, project) pair can coexist -- see relationshipIDIntervalSuffix's
+	// own doc comment, teams_projects_edges.go.
+	suffix := ":" + at.Format(time.RFC3339Nano) + ":"
+	edgeA := relationshipByID(t, batch, "relationship:pull_request_project:repo-1:532:github:board-a"+suffix)
+	edgeB := relationshipByID(t, batch, "relationship:pull_request_project:repo-1:532:github:board-b"+suffix)
 	if edgeA.From.CanonicalID != edgeB.From.CanonicalID {
 		t.Fatalf("both edges must share the SAME pull_request From endpoint (one subject, two memberships), got %q vs %q", edgeA.From.CanonicalID, edgeB.From.CanonicalID)
 	}
@@ -131,7 +136,7 @@ func TestTransitionSourceEdgeOpensAValidFromWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("identity.Derive: %v", err)
 	}
-	edge := relationshipByID(t, batch, "relationship:work_item_project:repo-1:gh:acme/repo#7:github:proj-1")
+	edge := relationshipByID(t, batch, "relationship:work_item_project:repo-1:gh:acme/repo#7:github:proj-1:"+at.Format(time.RFC3339Nano)+":")
 	if edge.From.CanonicalID != workItemID {
 		t.Fatalf("edge From = %q, want %q", edge.From.CanonicalID, workItemID)
 	}
@@ -183,7 +188,7 @@ func TestPullRequestSubjectUsesLegacyCanonicalID(t *testing.T) {
 		presenceRow("pull_request", "repo-9", "532", "acme/repo", at, "transition", "github", "board-1", "board-1", 1),
 	}})
 	batch := teamsProjectsBatch(t, client)
-	edge := relationshipByID(t, batch, "relationship:pull_request_project:repo-9:532:github:board-1")
+	edge := relationshipByID(t, batch, "relationship:pull_request_project:repo-9:532:github:board-1:"+at.Format(time.RFC3339Nano)+":")
 	if edge.From.Kind != contractsv1.ContextFabricSubjectPullRequest {
 		t.Fatalf("From.Kind = %q, want pull_request", edge.From.Kind)
 	}
@@ -250,7 +255,7 @@ func TestPullRequestProjectEdgeResolvesToAnExistingPullRequestNode(t *testing.T)
 	}
 
 	edgeBatch := teamsProjectsBatch(t, client)
-	edge := relationshipByID(t, edgeBatch, "relationship:pull_request_project:repo-9:532:github:board-1")
+	edge := relationshipByID(t, edgeBatch, "relationship:pull_request_project:repo-9:532:github:board-1:"+at.Format(time.RFC3339Nano)+":")
 
 	if edge.From.CanonicalID != prEntity.Subject.CanonicalID {
 		t.Fatalf("edge From.CanonicalID = %q, pull_request entity CanonicalID = %q -- these MUST be byte-identical or the edge dangles (CHAOS-4108's own defect class, reached on the other endpoint)", edge.From.CanonicalID, prEntity.Subject.CanonicalID)

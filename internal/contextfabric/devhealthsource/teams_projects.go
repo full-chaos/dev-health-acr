@@ -70,7 +70,22 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // repo_id"). Incrementally advancing under the stale v3 marker would leave
 // every already-projected organization holding edges neither shape fully
 // describes; a full rebuild is what makes every edge unambiguously v4-shaped.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v4"
+//
+// v5 (CHAOS-4109): querySubjectProjectMemberships' transition arm now reads
+// project_membership_transitions' FULL touch history directly
+// (membershipIntervalsCTE, teams_projects_edges.go) instead of
+// project_membership_presence's transition arm, which reported only the
+// LATEST touch. A transition-sourced edge's RelationshipID now carries a
+// ValidFrom suffix so multiple intervals for the same (subject, project)
+// pair coexist as distinct graph edges, and a subject with an
+// add-remove-re-add history now projects a CLOSED historical edge alongside
+// its current OPEN one, where v4 projected only the open one. Same
+// deliberate-rebuild discipline as v2/v3/v4: an already-projected
+// organization's transition-sourced edges carry the OLD bare RelationshipID
+// (no interval suffix) and would collide with, rather than coexist beside,
+// a newly-derived closed interval for the same pair under incremental
+// catch-up.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v5"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -300,6 +315,15 @@ type presenceTelemetryLedger struct {
 	unresolvedRows int                 // total ROWS dropped for an unresolved key (can exceed len(unresolved))
 	ambiguous      map[string]struct{} // distinct "provider\x00project_id" with >1 projects matches
 	ambiguousRows  int                 // total ROWS dropped for an ambiguous key (can exceed len(ambiguous))
+	// malformedTouch/malformedTouchRows (CHAOS-4109) count
+	// membershipIntervalsCTE's is_malformed rows -- two ADD touches of the
+	// same (subject, project) pair with no intervening REMOVE, which the
+	// source data model should never produce (see that CTE's own doc
+	// comment). Same distinct-key/row-count split as unresolved/ambiguous
+	// above, for the same reason: one bad touch sequence can recur across
+	// many re-syncs of the same pair.
+	malformedTouch     map[string]struct{} // distinct "provider\x00project_id" with a malformed touch sequence
+	malformedTouchRows int                 // total ROWS skipped for a malformed touch sequence
 }
 
 func (l *presenceTelemetryLedger) recordRead(source, subjectKind string) {
@@ -338,6 +362,19 @@ func (l *presenceTelemetryLedger) recordAmbiguous(provider, projectID string) {
 	}
 	l.ambiguous[provider+"\x00"+projectID] = struct{}{}
 	l.ambiguousRows++
+}
+
+func (l *presenceTelemetryLedger) recordMalformedTouch(provider, projectID string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.malformedTouch == nil {
+		l.malformedTouch = map[string]struct{}{}
+	}
+	l.malformedTouch[provider+"\x00"+projectID] = struct{}{}
+	l.malformedTouchRows++
 }
 
 // presenceReadCount reports how many rows this run read for one (source,
@@ -395,6 +432,24 @@ func (l *presenceTelemetryLedger) ambiguousRowCount() int {
 	return l.ambiguousRows
 }
 
+func (l *presenceTelemetryLedger) malformedTouchCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.malformedTouch)
+}
+
+func (l *presenceTelemetryLedger) malformedTouchRowCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.malformedTouchRows
+}
+
 // presenceLedgerFor mirrors ledgerFor exactly, for the presence telemetry
 // ledger instead of the ownership-omission one.
 func (s *TeamsProjectsSource) presenceLedgerFor(orgID string, fromScratch bool) *presenceTelemetryLedger {
@@ -430,19 +485,30 @@ func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string
 		"presence_rows_work_item_column_pull_request", ledger.presenceReadCount("work_item_column", "pull_request"))
 	unresolved, unresolvedRows := ledger.unresolvedCount(), ledger.unresolvedRowCount()
 	ambiguous, ambiguousRows := ledger.ambiguousCount(), ledger.ambiguousRowCount()
-	if unresolved == 0 && ambiguous == 0 {
-		return
+	if unresolved > 0 || ambiguous > 0 {
+		// Both the distinct-key count and the row count are logged (codex
+		// xhigh review R1, Medium): the key count is what an operator
+		// investigates (how many DIFFERENT bad ids), the row count is the
+		// blast radius (one bad id can drop one row or thousands) -- the
+		// key count alone cannot tell those apart.
+		logger.WarnContext(ctx, "devhealthsource dropped project membership edges for an unresolved (provider, project_id)",
+			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+			"reason", "(provider, project_id) did not resolve to exactly one projects row",
+			"unresolved_project_entity", unresolved, "unresolved_project_entity_rows", unresolvedRows,
+			"ambiguous_project_entity", ambiguous, "ambiguous_project_entity_rows", ambiguousRows)
 	}
-	// Both the distinct-key count and the row count are logged (codex xhigh
-	// review R1, Medium): the key count is what an operator investigates
-	// (how many DIFFERENT bad ids), the row count is the blast radius (one
-	// bad id can drop one row or thousands) -- the key count alone cannot
-	// tell those apart.
-	logger.WarnContext(ctx, "devhealthsource dropped project membership edges for an unresolved (provider, project_id)",
-		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
-		"reason", "(provider, project_id) did not resolve to exactly one projects row",
-		"unresolved_project_entity", unresolved, "unresolved_project_entity_rows", unresolvedRows,
-		"ambiguous_project_entity", ambiguous, "ambiguous_project_entity_rows", ambiguousRows)
+	// CHAOS-4109: malformed touch sequences are a DIFFERENT failure mode
+	// from unresolved/ambiguous above (a project-identity join miss) --
+	// this one is a data-quality anomaly in project_membership_transitions'
+	// own touch history (two ADDs with no intervening REMOVE, see
+	// membershipIntervalsCTE) -- so it gets its own line rather than
+	// folding into the warning above and reading as the same cause.
+	if malformed, malformedRows := ledger.malformedTouchCount(), ledger.malformedTouchRowCount(); malformed > 0 {
+		logger.WarnContext(ctx, "devhealthsource skipped a malformed project membership touch sequence",
+			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+			"reason", "two ADD touches of the same (subject, project) pair with no intervening REMOVE",
+			"malformed_touch_entity", malformed, "malformed_touch_entity_rows", malformedRows)
+	}
 }
 
 // NewTeamsProjectsSource returns a TeamsProjectsSource. enabled mirrors

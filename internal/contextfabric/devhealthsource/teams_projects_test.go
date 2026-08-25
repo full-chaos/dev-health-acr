@@ -318,18 +318,35 @@ func TestTeamsProjectsFullSnapshotClaimsCompleteEnumeration(t *testing.T) {
 	}
 }
 
-// presenceRow mirrors querySubjectProjectMemberships' SELECT list exactly
-// (teams_projects_edges.go): m.subject_kind, toString(m.repo_id),
-// m.subject_id, ifNull(r.repo, ”), m.observed_at, m.source, m.provider,
-// m.project_id, p.id, p.key_resolution_count. resolvedProjectID is p.id --
-// the JOINED project row's own id, which equals projectID (m.project_id)
-// for the id arm but differs from it for the project_key arm (CHAOS-4108);
-// pass them separately so a fixture can exercise either. keyResolutionCount
-// 0 models an unresolved (provider, project_id) (CHAOS-4193's LEFT JOIN
-// miss), 1 a clean resolution, >1 an ambiguity -- see
-// TestPresenceRowsMustResolveToExactlyOneProject.
+// presenceRow mirrors querySubjectProjectMemberships' unified SELECT list
+// exactly (teams_projects_edges.go): subject_kind, repo_id_str, subject_id,
+// repo_slug, observed_at, event_id, source, provider, project_id,
+// resolved_project_id, key_resolution_count, valid_to_present,
+// valid_to_value, is_malformed. event_id is always "" here -- no fixture in
+// this package needs to distinguish two intervals sharing an observed_at
+// (CHAOS-4109 codex xhigh review R1's collision finding is proven against
+// real ClickHouse instead, chaos4109_temporal_validity_integration_test.go,
+// since a canned row cannot exercise the leadInFrame tiebreak either).
+// resolvedProjectID is p.id -- the JOINED project row's own id, which
+// equals projectID (m.project_id) for the id arm but differs from it for
+// the project_key arm (CHAOS-4108); pass them separately so a fixture can
+// exercise either. keyResolutionCount 0 models an unresolved (provider,
+// project_id) (CHAOS-4193's LEFT JOIN miss), 1 a clean resolution, >1 an
+// ambiguity -- see TestPresenceRowsMustResolveToExactlyOneProject.
+//
+// This helper always emits an OPEN interval (valid_to_present=false) and
+// no touch anomaly (is_malformed=false) -- the shape every row of this
+// package's producer-registry tests (both the presence view's
+// work_item_column arm, which never carries an interval, and a single,
+// still-current transition-arm membership) has always needed. A CLOSED
+// interval is a distinct row shape a real add-remove-re-add sequence can
+// only produce through the real leadInFrame window function
+// (membershipIntervalsCTE) a canned row cannot fake meaningfully -- see
+// TestTransitionHistoryProjectsClosedAndOpenIntervals
+// (chaos4109_temporal_validity_integration_test.go), which proves it
+// against real ClickHouse instead.
 func presenceRow(subjectKind, repoID, subjectID, repoSlug string, observedAt time.Time, source, provider, projectID, resolvedProjectID string, keyResolutionCount uint64) []any {
-	return []any{subjectKind, repoID, subjectID, repoSlug, observedAt, source, provider, projectID, resolvedProjectID, keyResolutionCount}
+	return []any{subjectKind, repoID, subjectID, repoSlug, observedAt, "", source, provider, projectID, resolvedProjectID, keyResolutionCount, uint8(0), time.Unix(0, 0).UTC(), uint8(0)}
 }
 
 func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug string, computedAt time.Time) []any {

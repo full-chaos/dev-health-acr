@@ -364,6 +364,17 @@ type FactScopeExpansionEvent struct {
 	Policy FactScopePolicy
 	// Basis is the epistemic standing of the path. See FactScopeBasis.
 	Basis FactScopeBasis
+	// Axis is the interpreted temporal axis this decision was made for
+	// (CHAOS-4109). Carried on every event, not just historical ones, so a
+	// telemetry reader can tell "as-of resolution applied" (Axis != current
+	// and Outcome != policy_unavailable) apart from an ordinary current-axis
+	// decision, and can tell an observed_time refusal (still gated, see
+	// resolveRequirement) apart from any other policy_unavailable cause --
+	// without this field, both possibilities were indistinguishable from the
+	// stored event alone (the "Telemetry same-change" standing order's own
+	// diagnosability bar: from the run's own artifacts, never by re-reading
+	// source or re-running with instrumentation added after the fact).
+	Axis TemporalAxis
 	// Outcome is the closed verdict.
 	Outcome FactScopeExpansionOutcome
 	// OriginCount is how many root subjects of OriginKind expansion was
@@ -383,6 +394,31 @@ type FactScopeExpansionEvent struct {
 	TemporalDroppedCount      int
 	MissingNextHopCount       int
 	TargetKindMismatchCount   int
+	// MalformedTouchCount (CHAOS-4109, codex xhigh review R1, MEDIUM,
+	// confirmed real) is how many project_membership_transitions touches
+	// the expander's own historical traversal flagged as malformed (two
+	// ADD touches of the same subject/project pair with no intervening
+	// REMOVE -- see devhealthsource's membershipIntervalsSubquery and
+	// devhealthfacts' membershipTouchesAsOfSQL, which both derive this the
+	// same way). A malformed touch is silently excluded from the answer
+	// (never guessed into an interval boundary); this count is the ONLY
+	// signal that anything was excluded for that reason rather than
+	// genuinely absent. Zero on the current axis, where nothing consults
+	// transition history at all.
+	MalformedTouchCount int
+	// UnboundedValidityCount (CHAOS-4109) is how many admitted targets on a
+	// historical axis were matched with NO validity interval to check --
+	// project_membership_transitions carries no history for that subject, so
+	// the traversal fell back to the plain current-column read
+	// (work_items.project_id) and admitted it unconditionally, the same
+	// "unbounded means valid at every time" approximation
+	// falkorgraph.hasUnboundedValidity already applies to graph reads. Zero
+	// on the current axis, where this is simply how every target has always
+	// been matched. Nonzero on a historical axis names exactly how much of
+	// the answer rests on that approximation rather than a genuine as-of
+	// resolution -- the "fell back to current" signal CHAOS-4109's telemetry
+	// requirement asks for.
+	UnboundedValidityCount int
 	// TargetKindMismatchCount is how many targets the expander DROPPED
 	// itself for being the wrong kind. An expander must not both count a
 	// target here and return it: the resolver runs its own defensive filter
@@ -975,6 +1011,15 @@ type FactScopeExpansionRequest struct {
 	Origins         []SubjectRef
 	Policy          FactScopePolicy
 	TargetKind      SubjectKind
+	// TimeContext (CHAOS-4109) is the interpreted question's own time
+	// context, unmodified. On the current axis this is informational only --
+	// every ratified policy's traversal has always meant "now" and stays
+	// that way. On TemporalValidTime/TemporalRange, an expander MUST bind
+	// its traversal to TimeContext.AsOf or [TimeContext.Start,
+	// TimeContext.End) rather than reading the plain current-value column
+	// unconditionally -- see ScopeExpander.projectRepositories, which is the
+	// one implementation that exists today.
+	TimeContext TimeContext
 	// Limit bounds admitted targets. The implementation must read up to
 	// Limit+1 rows and return all of them: the resolver detects truncation
 	// from the OVERFLOW row and enforces the cap itself (ruling invariant 8).
@@ -1041,7 +1086,15 @@ type FactScopeExpansionCounts struct {
 	TemporalDroppedCount      int
 	MissingNextHopCount       int
 	TargetKindMismatchCount   int
-	Truncated                 bool
+	// UnboundedValidityCount mirrors FactScopeExpansionEvent's own field --
+	// see its doc comment. An expander sets it independently of
+	// AdmittedCount/CandidateCount; the resolver only ever copies it onto
+	// the event.
+	UnboundedValidityCount int
+	// MalformedTouchCount mirrors FactScopeExpansionEvent's own field --
+	// see its doc comment.
+	MalformedTouchCount int
+	Truncated           bool
 }
 
 // maxFactScopeTargets bounds how many derived subjects one requirement may
@@ -1082,8 +1135,12 @@ type factScopeResolveInput struct {
 	// Requirements is the requested fact families, with their own subject
 	// overrides.
 	Requirements []factPlanRequirement
-	// Axis is the interpreted temporal axis. v1 expands on `current` ONLY.
-	Axis TemporalAxis
+	// TimeContext is the interpreted question's time context (CHAOS-4109).
+	// Expansion on TemporalCurrent has always been unconditional; expansion
+	// on TemporalValidTime/TemporalRange is gated per-policy in
+	// resolveRequirement, and TemporalObservedTime stays gated closed for
+	// every policy (see that switch's own comment).
+	TimeContext TimeContext
 }
 
 // newFactScopeResolveInput narrows a fact request down to what scope
@@ -1099,7 +1156,7 @@ func newFactScopeResolveInput(request CanonicalFactRequest) factScopeResolveInpu
 	return factScopeResolveInput{
 		Roots:        investigationScopeSubjects(request),
 		Requirements: requirements,
-		Axis:         request.Question.TimeContext.Axis,
+		TimeContext:  request.Question.TimeContext,
 	}
 }
 
@@ -1142,7 +1199,7 @@ func (r *FactReadScopeResolver) Resolve(
 			// are stage 2's explicit case, gated on the same policy switch.
 			continue
 		}
-		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.Axis)
+		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext)
 	}
 	sortFactScopeDerivations(scope.Derivations)
 	return scope
@@ -1156,7 +1213,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 	scope *FactReadScope,
 	kind FactKind,
 	roots []SubjectRef,
-	axis TemporalAxis,
+	timeContext TimeContext,
 ) {
 	byOriginKind := map[SubjectKind][]SubjectRef{}
 	for _, root := range roots {
@@ -1189,6 +1246,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			TargetKind:      rule.TargetKind,
 			Policy:          rule.Policy,
 			Basis:           rule.Basis,
+			Axis:            timeContext.Axis,
 			OriginCount:     len(origins),
 			FailureClass:    FactScopeFailureNone,
 		}
@@ -1197,7 +1255,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 		// expand, and every one lands on the SAME outcome -- the system did
 		// not look -- rather than on a quietly different story per cause.
 		// The cause is recoverable from the event's Policy field and the
-		// axis, which telemetry already carries.
+		// Axis field, which telemetry now carries on every event.
 		switch {
 		case rule.Policy == FactScopePolicyNone:
 			// No policy defined for this pair. Team origins, today.
@@ -1205,21 +1263,44 @@ func (r *FactReadScopeResolver) resolveRequirement(
 		case !rule.Enabled:
 			// Stage 1, and any future policy shipped dark.
 			event.Outcome = FactScopePolicyUnavailable
-		case axis != contractsv1.ContextFabricTemporalCurrent:
-			// v1 IS CURRENT-AXIS ONLY, and this is a hard gate rather than a
-			// best-effort. The work_item->project edge carries ObservedAt
-			// but no ValidFrom/ValidTo, so there is no sound way to ask
-			// "which repositories did this project touch as of last March" --
-			// the traversal would silently answer with TODAY's membership
-			// and label it historical. Refusing and disclosing is the only
-			// honest option until projection validity lands for that edge.
+		case timeContext.Axis == contractsv1.ContextFabricTemporalObservedTime:
+			// OBSERVED TIME STAYS GATED (CHAOS-4109 scope boundary), even
+			// though ValidTime/Range open below. project_membership_transitions
+			// gives a sound VALID-time history (occurred_at is when the
+			// membership itself changed), but no independent OBSERVATION
+			// log -- there is no record of when THIS SYSTEM first learned
+			// of a reassignment separately from when it happened. The
+			// generic graph read (falkorgraph/temporal.go) accepts that gap
+			// and approximates observed-time with the valid-time window,
+			// but it can also attach TemporalLabel's own degradation
+			// disclosure to the answer; this resolver has no equivalent
+			// label to attach the substitution to, so it stays
+			// conservative and refuses rather than silently reusing the
+			// valid-time answer under the wrong axis's name.
+			event.Outcome = FactScopePolicyUnavailable
+		case timeContext.Axis == contractsv1.ContextFabricTemporalValidTime && timeContext.AsOf == nil,
+			timeContext.Axis == contractsv1.ContextFabricTemporalRange && (timeContext.Start == nil || timeContext.End == nil):
+			// Axis validation upstream (temporal.go's resolveTimeContext)
+			// already requires these bounds before an interpretation
+			// reaches here; this is a defensive fail-closed rung, not the
+			// primary enforcement point -- a scope resolver must never
+			// trust that an upstream invariant held.
 			event.Outcome = FactScopePolicyUnavailable
 		case r.expander == nil:
 			// An enabled policy with nothing to execute it. Fails closed for
 			// the same reason as every rung above.
 			event.Outcome = FactScopePolicyUnavailable
 		default:
-			r.expand(ctx, principal, scope, &event, origins, rule, derivationIndex)
+			// CHAOS-4109: TemporalCurrent, TemporalValidTime and
+			// TemporalRange all reach here now. The work_item/pull_request
+			// -> project edge carries real ValidFrom/ValidTo intervals
+			// derived from project_membership_transitions
+			// (devhealthsource/teams_projects_edges.go), and
+			// ScopeExpander.projectRepositories binds its traversal to
+			// TimeContext on a historical axis rather than reading the
+			// plain current-value column unconditionally -- see that
+			// function's own doc comment for the interval rule.
+			r.expand(ctx, principal, scope, &event, origins, rule, timeContext, derivationIndex)
 		}
 
 		scope.Events = append(scope.Events, event)
@@ -1278,6 +1359,7 @@ func (r *FactReadScopeResolver) expand(
 	event *FactScopeExpansionEvent,
 	origins []SubjectRef,
 	rule factScopePolicyRule,
+	timeContext TimeContext,
 	derivationIndex map[string]int,
 ) {
 	result, err := r.expander.ExpandFactScope(ctx, FactScopeExpansionRequest{
@@ -1286,6 +1368,7 @@ func (r *FactReadScopeResolver) expand(
 		Origins:         origins,
 		Policy:          rule.Policy,
 		TargetKind:      rule.TargetKind,
+		TimeContext:     timeContext,
 		Limit:           rule.limitOrDefault(),
 	})
 	event.CandidateCount = result.Counts.CandidateCount
@@ -1293,6 +1376,8 @@ func (r *FactReadScopeResolver) expand(
 	event.TemporalDroppedCount = result.Counts.TemporalDroppedCount
 	event.MissingNextHopCount = result.Counts.MissingNextHopCount
 	event.TargetKindMismatchCount = result.Counts.TargetKindMismatchCount
+	event.UnboundedValidityCount = result.Counts.UnboundedValidityCount
+	event.MalformedTouchCount = result.Counts.MalformedTouchCount
 	event.Truncated = result.Counts.Truncated
 	// AttributionSourceCounts and any Basis mix are NOT copied here (codex
 	// xhigh review round 1, confirmed real, MEDIUM x2): both are derived
