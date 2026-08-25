@@ -136,6 +136,22 @@ type Config struct {
 	// composition goes through ConfigFromEnv, which applies
 	// DefaultEmbedFailureEscalateAfter.
 	EmbedFailureEscalateAfter int
+	// ConfirmedKindVectorCensusMaxComparisons (CHAOS-4155 Phase 1,
+	// ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS) is
+	// the SOLE enable+budget knob for the shadow kind-scoped vector
+	// completeness census (chaos4155_confirmed_kind_vector_census.go).
+	// Zero (the default -- deliberately NOT applied by ConfigFromEnv the
+	// way EmbedFailureMaxRetries above gets a nonzero default; this is a
+	// brand-new, unvalidated-at-scale mechanism that must stay off until
+	// explicitly turned on for a measurement run) disables the shadow arm
+	// entirely: confirmedKindVectorCensus returns
+	// ConfirmedKindVectorScopeNotAttempted immediately, zero queries, zero
+	// cost, byte-identical to the arm not existing. A positive value caps
+	// population*queryCount per resolution -- see that function's own doc
+	// comment for why exceeding it is a correctness-safe refusal
+	// (ConfirmedKindVectorScopeOverBudget), never a partial/sampled
+	// attempt.
+	ConfirmedKindVectorCensusMaxComparisons int64
 	// RawSignalObserver (CHAOS-3858, measurement-only) is optional
 	// (nil-safe), set directly by the composition root the same way
 	// Telemetry is -- a Go interface value, never env-derived, and
@@ -704,6 +720,12 @@ const (
 	EnvEmbedFailureMaxRetries    = "ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_MAX_RETRIES"
 	EnvEmbedFailureRetryBackoff  = "ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_RETRY_BACKOFF"
 	EnvEmbedFailureEscalateAfter = "ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_ESCALATE_AFTER"
+	// EnvConfirmedKindVectorCensusMaxComparisons configures
+	// Config.ConfirmedKindVectorCensusMaxComparisons -- see that field's
+	// own doc comment. Deliberately NOT prefixed FALKOR_ like the knobs
+	// above: this is a graphrank-visible ResolveDeps behavior, not an
+	// adapter-internal connection/pooling setting.
+	EnvConfirmedKindVectorCensusMaxComparisons = "ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS"
 )
 
 // Configured reports whether ACR_CONTEXT_FABRIC_FALKOR_ADDR is set at all, so
@@ -762,20 +784,29 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// CHAOS-4155 Phase 1: fallback 0, NEVER a nonzero default -- see
+	// Config.ConfirmedKindVectorCensusMaxComparisons's own doc comment for
+	// why this knob must stay off until an operator explicitly sets it,
+	// unlike EmbedFailureMaxRetries/EmbedFailureEscalateAfter above.
+	confirmedKindVectorCensusMaxComparisons, err := envInt64(lookup, EnvConfirmedKindVectorCensusMaxComparisons, 0)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		Addr:                      envString(lookup, EnvAddr, ""),
-		Password:                  password,
-		TLS:                       envBool(lookup, EnvTLS, true),
-		GraphPrefix:               envString(lookup, EnvGraphPrefix, "acr-cf"),
-		RequestTimeout:            timeout,
-		MaxAttempts:               maxAttempts,
-		MaxResults:                maxResults,
-		PoolSize:                  poolSize,
-		AllowInsecure:             envBool(lookup, EnvAllowInsecure, false),
-		IncludeEmbedBodies:        includeBodies,
-		EmbedFailureMaxRetries:    embedFailureMaxRetries,
-		EmbedFailureRetryBackoff:  embedFailureRetryBackoff,
-		EmbedFailureEscalateAfter: embedFailureEscalateAfter,
+		Addr:                                    envString(lookup, EnvAddr, ""),
+		Password:                                password,
+		TLS:                                     envBool(lookup, EnvTLS, true),
+		GraphPrefix:                             envString(lookup, EnvGraphPrefix, "acr-cf"),
+		RequestTimeout:                          timeout,
+		MaxAttempts:                             maxAttempts,
+		MaxResults:                              maxResults,
+		PoolSize:                                poolSize,
+		AllowInsecure:                           envBool(lookup, EnvAllowInsecure, false),
+		IncludeEmbedBodies:                      includeBodies,
+		EmbedFailureMaxRetries:                  embedFailureMaxRetries,
+		EmbedFailureRetryBackoff:                embedFailureRetryBackoff,
+		EmbedFailureEscalateAfter:               embedFailureEscalateAfter,
+		ConfirmedKindVectorCensusMaxComparisons: confirmedKindVectorCensusMaxComparisons,
 	}, nil
 }
 
@@ -802,6 +833,18 @@ func envInt(lookup func(string) (string, bool), key string, fallback int) (int, 
 		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, errors.New(key + " must be an integer")
+	}
+	return parsed, nil
+}
+
+func envInt64(lookup func(string) (string, bool), key string, fallback int64) (int64, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	if err != nil {
 		return 0, errors.New(key + " must be an integer")
 	}

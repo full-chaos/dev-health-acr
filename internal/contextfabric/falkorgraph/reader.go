@@ -128,6 +128,13 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// for why the confirmed-kind truncation-scoping mechanism needs
 		// this rather than any per-call signal.
 		VectorMechanismConfigured: a.embedder != nil,
+		// CHAOS-4155 Phase 1: SHADOW-only kind-scoped vector completeness
+		// census -- see graphrank.ResolveDeps.ConfirmedKindVectorCensus's
+		// own doc comment. Bound to the SAME key/orgID every other closure
+		// in this deps struct already closes over.
+		ConfirmedKindVectorCensus: func(ctx context.Context, kind contextfabric.SubjectKind, terms []string) graphrank.ConfirmedKindVectorCensusOutcome {
+			return a.confirmedKindVectorCensus(ctx, key, principal.OrgID, kind, terms)
+		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject, allowExactMatch,
 				func(ctx context.Context, uuid string) ([]graphrank.CandidateEdge, error) {

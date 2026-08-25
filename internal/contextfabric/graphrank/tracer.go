@@ -226,10 +226,28 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// since an incomplete snapshot is never handed to the gate). Counts
 		// and closed-vocabulary strings only -- no kind name, no term, no
 		// candidate identity.
+		// CHAOS-4155 Phase 1 (codex R1, High, confirmed): the shadow vector
+		// census's own outcome MUST reach production logs on this same
+		// event, or Phase 2's live-measurement request has nothing to
+		// read -- telemetry that never reaches its documented consumer is
+		// the same as no telemetry at all. Fields are zero-valued
+		// (state=="") whenever the shadow arm was never invoked, matching
+		// ConfirmedKindScopeState's own "absent means not attempted"
+		// convention.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: confirmed kind scope",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"state", event.ConfirmedKindScopeState,
-			"candidate_count", event.ConfirmedKindScopeCandidateCount)
+			"candidate_count", event.ConfirmedKindScopeCandidateCount,
+			"vector_census_state", event.ConfirmedKindVectorScopeState,
+			"vector_census_population_count", event.ConfirmedKindVectorScopePopulationCount,
+			"vector_census_enumerated_count", event.ConfirmedKindVectorScopeEnumeratedCount,
+			"vector_census_malformed_count", event.ConfirmedKindVectorScopeMalformedCount,
+			"vector_census_query_count", event.ConfirmedKindVectorScopeQueryCount,
+			"vector_census_queries_scored", event.ConfirmedKindVectorScopeQueriesScored,
+			"vector_census_comparison_count", event.ConfirmedKindVectorScopeComparisonCount,
+			"vector_census_rival_count_above_tau", event.ConfirmedKindVectorScopeRivalCountAboveTau,
+			"vector_census_snapshot_stable", event.ConfirmedKindVectorScopeSnapshotStable,
+			"vector_census_duration_ms", event.ConfirmedKindVectorScopeDurationMS)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,

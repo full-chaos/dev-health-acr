@@ -290,7 +290,7 @@ func TestBuildConfirmedKindScopedSnapshot_TruncatedOrDegradedBlocksCompleteness(
 	t.Run("truncated", func(t *testing.T) {
 		t.Parallel()
 		backend := &fakeGraphBackend{enableSearchKind: true, searchKindTruncated: true}
-		_, _, _, _, _, state, _, _, err := buildConfirmedKindScopedSnapshot(
+		_, _, _, _, _, state, _, _, _, err := buildConfirmedKindScopedSnapshot(
 			context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), backend.deps(),
 			terms, nil, false, kind, 10)
 		if err != nil {
@@ -306,7 +306,7 @@ func TestBuildConfirmedKindScopedSnapshot_TruncatedOrDegradedBlocksCompleteness(
 	t.Run("degraded", func(t *testing.T) {
 		t.Parallel()
 		backend := &fakeGraphBackend{enableSearchKind: true, searchKindDegraded: true}
-		_, _, _, _, _, state, _, _, err := buildConfirmedKindScopedSnapshot(
+		_, _, _, _, _, state, _, _, _, err := buildConfirmedKindScopedSnapshot(
 			context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), backend.deps(),
 			terms, nil, false, kind, 10)
 		if err != nil {
@@ -322,7 +322,7 @@ func TestBuildConfirmedKindScopedSnapshot_TruncatedOrDegradedBlocksCompleteness(
 	t.Run("backend error propagates, never silently downgraded", func(t *testing.T) {
 		t.Parallel()
 		backend := &fakeGraphBackend{enableSearchKind: true, searchKindErr: errors.New("transient backend failure")}
-		_, _, _, _, _, _, _, _, err := buildConfirmedKindScopedSnapshot(
+		_, _, _, _, _, _, _, _, _, err := buildConfirmedKindScopedSnapshot(
 			context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), backend.deps(),
 			terms, nil, false, kind, 10)
 		if err == nil {
@@ -479,7 +479,7 @@ func TestBuildConfirmedKindScopedSnapshot_IdentityCensusIsConfidenceQualityOnly(
 	aliasClaimantsByTerm := map[string][]CandidateNode{term: {claimant}}
 
 	vectorOff := newBackend(false)
-	pool, _, _, _, _, state, _, _, err := buildConfirmedKindScopedSnapshot(
+	pool, _, _, _, _, state, _, _, _, err := buildConfirmedKindScopedSnapshot(
 		context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), vectorOff.deps(),
 		[]string{term}, aliasClaimantsByTerm, true, kind, 10)
 	if err != nil {
@@ -493,7 +493,7 @@ func TestBuildConfirmedKindScopedSnapshot_IdentityCensusIsConfidenceQualityOnly(
 	}
 
 	vectorOn := newBackend(true)
-	_, _, _, _, _, state, _, _, err = buildConfirmedKindScopedSnapshot(
+	_, _, _, _, _, state, _, _, _, err = buildConfirmedKindScopedSnapshot(
 		context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), vectorOn.deps(),
 		[]string{term}, aliasClaimantsByTerm, true, kind, 10)
 	if err != nil {
@@ -537,7 +537,7 @@ func TestBuildConfirmedKindScopedSnapshot_IdentityMapsAreScopedNotShared(t *test
 	callerIdentityTerms := identityMatchTerms{
 		"unrelated-subject-a": {{class: identityKeyClassLabel, term: "unrelated-term"}},
 	}
-	_, _, _, scopedIdentity, scopedIdentityTerms, state, _, _, err := buildConfirmedKindScopedSnapshot(
+	_, _, _, scopedIdentity, scopedIdentityTerms, state, _, _, _, err := buildConfirmedKindScopedSnapshot(
 		context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), backend.deps(),
 		[]string{term}, nil, false, kind, 10)
 	if err != nil {

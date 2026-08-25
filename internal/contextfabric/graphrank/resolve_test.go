@@ -90,6 +90,25 @@ type fakeGraphBackend struct {
 	// ResolveDeps.VectorMechanismConfigured == false, exactly the pre-ticket
 	// wiring (this field did not exist before CHAOS-4154).
 	vectorMechanismConfigured bool
+
+	// CHAOS-4155 ConfirmedKindVectorCensus fixture. enableConfirmedKindVectorCensus
+	// defaults to false, so every pre-existing test in this file -- which
+	// never sets it -- gets ResolveDeps.ConfirmedKindVectorCensus == nil,
+	// exactly the pre-ticket wiring, mirroring enableSearchKind's own
+	// convention above. confirmedKindVectorCensusResult is returned
+	// verbatim on every call; confirmedKindVectorCensusCalls records every
+	// (kind, terms) call, in call order.
+	enableConfirmedKindVectorCensus bool
+	confirmedKindVectorCensusResult ConfirmedKindVectorCensusOutcome
+	confirmedKindVectorCensusCalls  []confirmedKindVectorCensusCall
+}
+
+// confirmedKindVectorCensusCall records one
+// ResolveDeps.ConfirmedKindVectorCensus(kind, terms) call -- see
+// fakeGraphBackend.confirmedKindVectorCensusCalls.
+type confirmedKindVectorCensusCall struct {
+	kind  contextfabric.SubjectKind
+	terms []string
 }
 
 // searchKindCall records one ResolveDeps.SearchKind(term, kind, ...) call --
@@ -159,6 +178,12 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 				return nil, false, false, f.searchKindErr
 			}
 			return f.searchKindResults[term][kind], f.searchKindTruncated, f.searchKindDegraded, nil
+		}
+	}
+	if f.enableConfirmedKindVectorCensus {
+		deps.ConfirmedKindVectorCensus = func(ctx context.Context, kind contextfabric.SubjectKind, terms []string) ConfirmedKindVectorCensusOutcome {
+			f.confirmedKindVectorCensusCalls = append(f.confirmedKindVectorCensusCalls, confirmedKindVectorCensusCall{kind: kind, terms: terms})
+			return f.confirmedKindVectorCensusResult
 		}
 	}
 	return deps
