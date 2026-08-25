@@ -165,6 +165,45 @@ func TestProjectionIsValidAndCopiesJudgmentVerbatim(t *testing.T) {
 	}
 }
 
+// TestProjectionCopiesPriorSubjectReceiptDispositionsVerbatim is
+// CHAOS-3478/CHAOS-3813's own projection proof (codex round-1 finding): the
+// canonical result can carry a fully correct disposition echo while the
+// bounded MCP/API answer surface -- the DEFAULT surface most callers
+// read -- silently dropped it, reproducing the exact silent-drop bug this
+// field exists to close, one layer out. This proves Project() copies the
+// field verbatim, joining ConfirmedStructure's own never-dropped
+// discipline (see PriorSubjectReceiptDispositions' own doc comment).
+func TestProjectionCopiesPriorSubjectReceiptDispositionsVerbatim(t *testing.T) {
+	result := richResult()
+	result.SubjectResolution.PriorSubjectReceiptDispositions = []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_prior_00000001", ReceiptID: "receipt_abc123456789", Disposition: contractsv1.ContextFabricPriorSubjectReceiptSkippedNoMatch},
+	}
+	projection := Project(result, Budget{})
+
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("projection failed contract validation: %v", err)
+	}
+	if !reflect.DeepEqual(projection.PriorSubjectReceiptDispositions, result.SubjectResolution.PriorSubjectReceiptDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v (verbatim copy)", projection.PriorSubjectReceiptDispositions, result.SubjectResolution.PriorSubjectReceiptDispositions)
+	}
+}
+
+// TestProjectionOmitsPriorSubjectReceiptDispositionsWhenAbsent proves the
+// nil-means-nothing convention survives projection too: a result that
+// never carried the field must project to nil, not an empty-but-present
+// array.
+func TestProjectionOmitsPriorSubjectReceiptDispositionsWhenAbsent(t *testing.T) {
+	result := richResult() // no PriorSubjectReceiptDispositions
+	projection := Project(result, Budget{})
+
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("projection failed contract validation: %v", err)
+	}
+	if projection.PriorSubjectReceiptDispositions != nil {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want nil when the canonical result carried none", projection.PriorSubjectReceiptDispositions)
+	}
+}
+
 // TestRetainedDriversKeepCanonicalStandingAndCategory proves the projection
 // never re-judges. A projection that promoted a contributing driver to
 // principal would change the answer while looking like a summary.

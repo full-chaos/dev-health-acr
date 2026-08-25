@@ -701,7 +701,8 @@ func TestEngineResolvesPriorSubjectReceiptIntoSubjectHint(t *testing.T) {
 	request.Question = "What about it now?"
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}}
 
-	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
 	if len(store.gotIDs) != 1 || store.gotIDs[0] != "result_prior_1" {
@@ -724,6 +725,15 @@ func TestEngineResolvesPriorSubjectReceiptIntoSubjectHint(t *testing.T) {
 	// The receipt survived graph resolution, so nothing was skipped.
 	if len(telemetry.priorSubjectReceiptsSkipped) != 0 {
 		t.Fatalf("telemetry = %#v, want no skip recorded when the receipt resolved successfully", telemetry.priorSubjectReceiptsSkipped)
+	}
+	// CHAOS-3478/CHAOS-3813: the wire echo must disclose "applied" for a
+	// receipt that actually survived end to end, not just omit it as
+	// silently fine.
+	wantDispositions := []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_prior_1", ReceiptID: "receipt_abc12345", Disposition: contractsv1.ContextFabricPriorSubjectReceiptApplied},
+	}
+	if !reflect.DeepEqual(result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v", result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions)
 	}
 }
 
@@ -846,7 +856,8 @@ func TestEngineSkipsUnresolvablePriorSubjectReceiptWithoutFailing(t *testing.T) 
 	request := validInvestigationRequest()
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_missing", ReceiptID: "receipt_missing1"}}
 
-	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
 		t.Fatalf("Investigate() error = %v, want an unresolvable receipt to degrade safely, not fail", err)
 	}
 	if len(graph.resolveRequests) != 1 || len(graph.resolveRequests[0].RequestedScope.SubjectHints) != 0 {
@@ -860,6 +871,16 @@ func TestEngineSkipsUnresolvablePriorSubjectReceiptWithoutFailing(t *testing.T) 
 	// resolvePriorSubjectHints' own doc comment for the three-reason split.
 	if want := []priorSubjectReceiptSkipReasonRecord{{reason: "unloadable", count: 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
+	}
+	// CHAOS-3478/CHAOS-3813: this is the exact ticket-3813 scenario -- "a
+	// client re-asks with a chosen candidate, ACR silently ignores the
+	// choice" -- proven closed: the wire response now names the receipt
+	// and why it was skipped, not just a server-side telemetry count.
+	wantDispositions := []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_missing", ReceiptID: "receipt_missing1", Disposition: contractsv1.ContextFabricPriorSubjectReceiptSkippedUnloadable},
+	}
+	if !reflect.DeepEqual(result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v", result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions)
 	}
 }
 
@@ -904,7 +925,8 @@ func TestEngineStripsPriorSubjectReceiptFromADifferentGraphEpoch(t *testing.T) {
 	request := validInvestigationRequest()
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}}
 
-	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
 		t.Fatalf("Investigate() error = %v, want a graph-epoch-mismatched receipt to degrade safely, not fail", err)
 	}
 	// The taint gate must strip the receipt BEFORE any hint is built --
@@ -917,6 +939,12 @@ func TestEngineStripsPriorSubjectReceiptFromADifferentGraphEpoch(t *testing.T) {
 	}
 	if want := []priorSubjectReceiptSkipReasonRecord{{reason: "stale_graph_epoch", count: 1, epochDelta: -7}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
+	}
+	wantDispositions := []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_prior_1", ReceiptID: "receipt_abc12345", Disposition: contractsv1.ContextFabricPriorSubjectReceiptSkippedStaleGraphEpoch},
+	}
+	if !reflect.DeepEqual(result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v", result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions)
 	}
 }
 
@@ -976,6 +1004,15 @@ func TestEngineDoesNotLeakOrErrorWhenPriorSubjectReceiptFailsGraphAuthorization(
 	if want := []priorSubjectReceiptSkipReasonRecord{{reason: "failed_reauth", count: 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
 	}
+	// CHAOS-3478/CHAOS-3813: the wire echo must distinguish "we tried to
+	// re-verify this and it failed" from every pre-graph skip reason, not
+	// collapse everything into one undifferentiated "skipped".
+	wantDispositions := []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_prior_1", ReceiptID: "receipt_abc12345", Disposition: contractsv1.ContextFabricPriorSubjectReceiptSkippedFailedReauth},
+	}
+	if !reflect.DeepEqual(result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v", result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions)
+	}
 }
 
 // TestEngineClassifiesPriorSubjectReceiptWithNoMatchingCandidateAsNoMatch
@@ -1012,7 +1049,8 @@ func TestEngineClassifiesPriorSubjectReceiptWithNoMatchingCandidateAsNoMatch(t *
 	// that result never issued.
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_wrong00"}}
 
-	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
 	if len(graph.resolveRequests) != 1 || len(graph.resolveRequests[0].RequestedScope.SubjectHints) != 0 {
@@ -1020,6 +1058,15 @@ func TestEngineClassifiesPriorSubjectReceiptWithNoMatchingCandidateAsNoMatch(t *
 	}
 	if want := []priorSubjectReceiptSkipReasonRecord{{reason: "no_match", count: 1}}; !reflect.DeepEqual(telemetry.priorSubjectReceiptSkipReasons, want) {
 		t.Fatalf("priorSubjectReceiptSkipReasons = %#v, want %#v", telemetry.priorSubjectReceiptSkipReasons, want)
+	}
+	// CHAOS-3478/CHAOS-3813: a receipt naming a candidate the referenced
+	// result never actually offered must be disclosed as such, by its own
+	// closed reason, never silently merged into the investigation's answer.
+	wantDispositions := []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_prior_1", ReceiptID: "receipt_wrong00", Disposition: contractsv1.ContextFabricPriorSubjectReceiptSkippedNoMatch},
+	}
+	if !reflect.DeepEqual(result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v", result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions)
 	}
 }
 
@@ -1217,6 +1264,68 @@ func TestEngineCapsCombinedSubjectHintsAtContractBound(t *testing.T) {
 	}
 	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
 		t.Fatalf("telemetry = %#v, want the capped-out receipt hint counted as a skip", telemetry.priorSubjectReceiptsSkipped)
+	}
+}
+
+// TestEngineDoesNotReportABudgetTruncatedReceiptAsAppliedOnACoincidentalMatch
+// is a codex CHAOS-3813 round-1 finding (Medium, fixed): the previous
+// version of composePriorSubjectReceiptDispositions classified a receipt
+// solely by whether its subject appeared ANYWHERE in the final
+// SubjectResolution, so a receipt whose own derived hint was dropped by
+// the maxSubjectHints budget (same fixture shape as
+// TestEngineCapsCombinedSubjectHintsAtContractBound above) could still be
+// reported "applied" if some OTHER hint happened to resolve the identical
+// subject -- exactly this test's fixture, where one of the 50 explicit
+// caller hints already names the prior receipt's own subject and the
+// stubbed graph resolves it. The receipt's own hint never reached
+// GraphReader; the disposition must say so.
+func TestEngineDoesNotReportABudgetTruncatedReceiptAsAppliedOnACoincidentalMatch(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_prior_1": priorResult}}
+	graph := &capturingGraphReader{
+		// The stubbed graph resolves project_ask_dev regardless of which
+		// hint asked for it -- standing in for "one of the caller's own
+		// 50 explicit hints already named this subject and it resolved",
+		// NOT the prior receipt's own (truncated) hint.
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	request := validInvestigationRequest()
+	hints := make([]SubjectHint, 0, 50)
+	for i := 0; i < 50; i++ {
+		hints = append(hints, SubjectHint{Kind: SubjectProject, ID: fmt.Sprintf("project_caller_%d", i), Label: fmt.Sprintf("Caller Project %d", i), Source: "workbench"})
+	}
+	request.RequestedScope.SubjectHints = hints
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}}
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	wantDispositions := []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_prior_1", ReceiptID: "receipt_abc12345", Disposition: contractsv1.ContextFabricPriorSubjectReceiptSkippedFailedReauth},
+	}
+	if !reflect.DeepEqual(result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v (the receipt's own hint was budget-truncated and must not read as applied on the strength of an unrelated hint)", result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions)
+	}
+	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
+		t.Fatalf("telemetry = %#v, want the budget-truncated receipt counted as a skip", telemetry.priorSubjectReceiptsSkipped)
 	}
 }
 

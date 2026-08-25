@@ -128,6 +128,20 @@ func TestAnswerProjectionVocabulariesMatchTheCanonicalOnes(t *testing.T) {
 			canonical:  schemaEnumAt(t, common, "$defs", "SourceObservation", "properties", "state"),
 			acceptedBy: func(v string) bool { return validSourceState(ContextFabricSourceState(v)) },
 		},
+		{
+			// CHAOS-3813 codex round-1 finding (Low): the projection and
+			// common schemas each define their own PriorSubjectReceiptDisposition
+			// $def (context_fabric_answer_projection.v1 is deliberately
+			// self-contained, per this test's own doc comment above) --
+			// this case closes the same drift risk every other vocabulary
+			// here is already checked against.
+			name:      "prior_subject_receipt_disposition",
+			projected: schemaEnumAt(t, projection, "$defs", "PriorSubjectReceiptDisposition"),
+			canonical: schemaEnumAt(t, common, "$defs", "PriorSubjectReceiptDisposition"),
+			acceptedBy: func(v string) bool {
+				return ValidContextFabricPriorSubjectReceiptDisposition(ContextFabricPriorSubjectReceiptDisposition(v))
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -409,10 +423,20 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	// CHAOS-4012: CandidateOption joins the intersection deliberately --
 	// StructureNeeds gained candidate_options, the SAME "copied verbatim
 	// from common.v1" reasoning as every other structure-frame shape above.
+	//
+	// CHAOS-3478/CHAOS-3813: PriorSubjectReceiptDisposition/
+	// PriorSubjectReceiptDispositionEntry join the intersection
+	// deliberately -- the projection gained prior_subject_receipt_dispositions,
+	// copied verbatim from common.v1's SubjectResolution.PriorSubjectReceiptDispositions
+	// (codex round-1 finding: without this, the default answer surface
+	// silently reproduced the exact CHAOS-3813 drop the field exists to
+	// close).
 	expected := []string{
 		"AcceptedGrammar", "AnchorOption", "BoundSubjectReceipt", "CandidateOption",
 		"ConfirmedStructureEntry",
-		"EffectiveEvidenceWindow", "HandleOption", "KindOption", "RelativeWindowID",
+		"EffectiveEvidenceWindow", "HandleOption", "KindOption",
+		"PriorSubjectReceiptDisposition", "PriorSubjectReceiptDispositionEntry",
+		"RelativeWindowID",
 		"RequestedEvidenceWindow", "ScalarValue", "StructureDisposition", "StructureNeedKind",
 		"StructureNeeds", "StructureOfferSource", "StructureProvenance", "StructureSource",
 		"SubjectKind", "SubjectRef", "TemporalLabel", "TimeContext", "VersionSet",

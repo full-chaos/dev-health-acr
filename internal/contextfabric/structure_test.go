@@ -910,6 +910,95 @@ func TestCHAOS3927P4_SaveTimeSupersessionConflict_EchoesEveryLostMember(t *testi
 	}
 }
 
+// TestCHAOS3478_SaveTimeSupersessionConflict_PreservesPriorSubjectReceiptDispositions
+// is codex round-2's own finding (Medium): the Save-time structure
+// supersession race helper (structureSupersessionVetoResult ->
+// structureVetoResult) is reachable AFTER prior-subject-receipt resolution
+// has already run (the decisive Save attempt at engine.go carries
+// result.SubjectResolution.PriorSubjectReceiptDispositions by the time it
+// races) -- before this fix, the race terminal built a fresh
+// SubjectResolution with no dispositions threaded through at all, silently
+// dropping them on a request that carried BOTH a structure receipt (to
+// trigger the race) and a prior-subject receipt (to prove disclosure
+// survives it).
+func TestCHAOS3478_SaveTimeSupersessionConflict_PreservesPriorSubjectReceiptDispositions(t *testing.T) {
+	t.Parallel()
+
+	priorKindResult := validInvestigationResult()
+	priorKindResult.ResultID = "result_prior_structure_3478"
+	priorKindResult.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{
+			{ReceiptID: "kindr_confirm34780", OptionID: "opt_pr", Label: "a pull request", Kind: SubjectPullRequest, OfferSource: "engine"},
+		},
+	}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorSubjectResult := validInvestigationResult()
+	priorSubjectResult.ResultID = "result_prior_subject_3478"
+	priorSubjectResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_racedispo0001", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	store := &supersessionRacingResultStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{
+			priorKindResult.ResultID:    priorKindResult,
+			priorSubjectResult.ResultID: priorSubjectResult,
+		}},
+	}
+
+	freshResult := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		// The graph commits `project` so the prior-subject receipt
+		// resolves (applied), not just survives the race unresolved.
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+	})
+
+	request := validInvestigationRequest()
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: priorKindResult.ResultID, ReceiptID: "kindr_confirm34780"}}
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: priorSubjectResult.ResultID, ReceiptID: "receipt_racedispo0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want no error (the conflict must convert to a veto terminal, not surface as a raw error)", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("result.Status = %q, want %q (the supersession race still holds)", result.Status, InvestigationNoMatch)
+	}
+	wantDispositions := []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: priorSubjectResult.ResultID, ReceiptID: "receipt_racedispo0001", Disposition: contractsv1.ContextFabricPriorSubjectReceiptApplied},
+	}
+	if !reflect.DeepEqual(result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v -- the race terminal must not silently drop disclosure the decisive attempt already had", result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions)
+	}
+	// codex round-3 nit: make the race conversion itself explicit, not just
+	// its downstream effect -- Save was actually attempted twice (the
+	// decisive round that lost the race, then the veto retry that won),
+	// and the structure echo carries the expected_kind member the race
+	// contested, disposition vetoed_stale.
+	if store.saveCalls != 2 {
+		t.Fatalf("store.saveCalls = %d, want 2 (the decisive Save that lost the race, then the veto retry)", store.saveCalls)
+	}
+	if len(result.ConfirmedStructure) != 1 || result.ConfirmedStructure[0].Member != "expected_kind" || result.ConfirmedStructure[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedStale {
+		t.Fatalf("result.ConfirmedStructure = %+v, want one vetoed_stale entry for expected_kind", result.ConfirmedStructure)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
 // anchorReceiptTestSetup builds a prior result carrying one AnchorOption
 // offer and a request naming its receipt -- mirrors handleReceiptTestSetup
 // below, shared fixture for the three TestCHAOS3900_AnchorReceiptReverification*

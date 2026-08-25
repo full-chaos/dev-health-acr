@@ -1706,6 +1706,13 @@
             "$ref": "#/$defs/CommitDecisionDigest"
           },
           "maxItems": 250
+        },
+        "prior_subject_receipt_dispositions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PriorSubjectReceiptDispositionEntry"
+          },
+          "maxItems": 20
         }
       },
       "required": [
@@ -1746,6 +1753,42 @@
       },
       "required": [
         "subject"
+      ]
+    },
+    "PriorSubjectReceiptDisposition": {
+      "description": "CHAOS-3478/CHAOS-3813: closed vocabulary for what happened to one PriorSubjectReceipts entry -- unlike StructureDisposition, a skip here never vetoes the investigation (a plural, best-effort conversational hint list degrades per-item by design), it is disclosed instead.",
+      "type": "string",
+      "enum": [
+        "applied",
+        "skipped_unloadable",
+        "skipped_no_match",
+        "skipped_stale_graph_epoch",
+        "skipped_failed_reauth"
+      ]
+    },
+    "PriorSubjectReceiptDispositionEntry": {
+      "description": "CHAOS-3478/CHAOS-3813: the wire-visible disposition for one PriorSubjectReceipts entry the caller sent -- one entry per carried receipt, including skipped ones.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prior_result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "disposition": {
+          "$ref": "#/$defs/PriorSubjectReceiptDisposition"
+        }
+      },
+      "required": [
+        "prior_result_id",
+        "receipt_id",
+        "disposition"
       ]
     },
     "Cohort": {

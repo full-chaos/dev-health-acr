@@ -80,6 +80,10 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/StructureSource":      "#/$defs/context_fabric_common.v1/$defs/StructureSource",
 	"#/$defs/StructureProvenance":  "#/$defs/context_fabric_common.v1/$defs/StructureProvenance",
 	"#/$defs/StructureDisposition": "#/$defs/context_fabric_common.v1/$defs/StructureDisposition",
+	// CHAOS-3478/CHAOS-3813: SubjectResolution's own new locally-$ref'd
+	// disposition pair (prior_subject_receipt_dispositions).
+	"#/$defs/PriorSubjectReceiptDisposition":      "#/$defs/context_fabric_common.v1/$defs/PriorSubjectReceiptDisposition",
+	"#/$defs/PriorSubjectReceiptDispositionEntry": "#/$defs/context_fabric_common.v1/$defs/PriorSubjectReceiptDispositionEntry",
 	// CHAOS-3900 W2: InvestigationOptions.window_confirmation_mode's own
 	// local ref, embedded here too even though the response schema never
 	// reaches InvestigationOptions itself -- the WHOLE common.v1 document
@@ -158,6 +162,10 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/StructureProvenance":     "#/$defs/context_fabric_answer_projection.v1/$defs/StructureProvenance",
 	"#/$defs/StructureDisposition":    "#/$defs/context_fabric_answer_projection.v1/$defs/StructureDisposition",
 	"#/$defs/ConfirmedStructureEntry": "#/$defs/context_fabric_answer_projection.v1/$defs/ConfirmedStructureEntry",
+	// CHAOS-3478/CHAOS-3813: the projection's own new locally-$ref'd
+	// disposition pair (prior_subject_receipt_dispositions).
+	"#/$defs/PriorSubjectReceiptDisposition":      "#/$defs/context_fabric_answer_projection.v1/$defs/PriorSubjectReceiptDisposition",
+	"#/$defs/PriorSubjectReceiptDispositionEntry": "#/$defs/context_fabric_answer_projection.v1/$defs/PriorSubjectReceiptDispositionEntry",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

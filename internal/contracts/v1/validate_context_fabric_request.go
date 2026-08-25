@@ -134,6 +134,20 @@ func (r ContextFabricBoundSubjectReceipt) Validate() error {
 	return nil
 }
 
+// Validate (CHAOS-3478/CHAOS-3813) bounds one wire-visible prior-subject
+// receipt disposition entry -- PriorResultID/ReceiptID share
+// ContextFabricBoundSubjectReceipt's own bounds (this echoes a receipt the
+// caller sent, in the same shape) plus a closed Disposition.
+func (e ContextFabricPriorSubjectReceiptEntry) Validate() error {
+	if !stringLengthBetween(e.PriorResultID, 8, 256) || !stringLengthBetween(e.ReceiptID, 8, 256) {
+		return fmt.Errorf("prior subject receipt disposition entry violates v1 bounds")
+	}
+	if !ValidContextFabricPriorSubjectReceiptDisposition(e.Disposition) {
+		return fmt.Errorf("prior subject receipt disposition entry has an invalid disposition")
+	}
+	return nil
+}
+
 func (s ContextFabricRequestedScope) Validate() error {
 	if len(s.RepositorySlugs) > 200 || len(s.ProjectIDs) > 200 || len(s.TeamIDs) > 200 || len(s.SubjectHints) > 50 {
 		return fmt.Errorf("scope exceeds v1 bounds")

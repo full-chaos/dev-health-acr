@@ -1075,7 +1075,7 @@ func appendUniqueWarning(warnings []string, sentence string) []string {
 	return append(warnings, sentence)
 }
 
-func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, staleEntry *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding) (InvestigationResult, error) {
+func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, staleEntry *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry) (InvestigationResult, error) {
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))
 	}
@@ -1100,15 +1100,23 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	}
 	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
 	result := InvestigationResult{
-		SchemaVersion:      InvestigationResultSchemaV1,
-		ResultID:           e.newResultID(),
-		RequestID:          request.RequestID,
-		GeneratedAt:        e.now().UTC(),
-		Status:             InvestigationNoMatch,
-		Question:           request.Question,
-		Reused:             false,
-		Interpretation:     resolvedInterpretation,
-		SubjectResolution:  SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		SchemaVersion:  InvestigationResultSchemaV1,
+		ResultID:       e.newResultID(),
+		RequestID:      request.RequestID,
+		GeneratedAt:    e.now().UTC(),
+		Status:         InvestigationNoMatch,
+		Question:       request.Question,
+		Reused:         false,
+		Interpretation: resolvedInterpretation,
+		// CHAOS-3478/CHAOS-3813 (codex round-1 finding): priorSubjectReceiptDispositions
+		// is nil for the pre-Interpret veto (windowVetoNone/windowCanon.Veto
+		// -- resolvePriorSubjectHints has not run yet at that call site) and
+		// composed against a zero-value resolution for the post-Interpret
+		// axis-conflict veto (windowVetoAxisConflict -- this veto returns
+		// before ResolveSubjects ever runs, so any matched hint reads
+		// skipped_failed_reauth, the same "not re-verified this call"
+		// convention every other never-resolved terminal uses).
+		SubjectResolution:  SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, PriorSubjectReceiptDispositions: priorSubjectReceiptDispositions},
 		DirectJudgment:     "",
 		CurrentState:       "",
 		StrongestPressures: []string{},
@@ -1234,6 +1242,13 @@ func (e *Engine) windowConfirmationRequiredResult(
 	origin WindowCanonicalizationOutcome,
 	binding ResolvedGraphBinding,
 	gatedMaterial StructureOfferMaterial,
+	// priorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813): the caller's
+	// own composePriorSubjectReceiptDispositions output, or nil when this
+	// gate fires before resolvePriorSubjectHints has run at all (gate 1 --
+	// see that call site's own comment). Attached to subjectResolution
+	// below unconditionally so a caller's PriorSubjectReceipts are
+	// disclosed on this terminal too, not only on a decisive answer.
+	priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry,
 ) (InvestigationResult, error) {
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -1293,6 +1308,12 @@ func (e *Engine) windowConfirmationRequiredResult(
 		windowClarification = nil
 		origin = WindowCanonicalizationGatedRefusedNoClarification
 	}
+	// CHAOS-3478/CHAOS-3813: disclosed on BOTH branches above, unlike
+	// ClarificationPrompt/windowClarification -- a caller's PriorSubjectReceipts
+	// disposition is not "clarification-shaped data" the AllowClarification=false
+	// rule strips (that rule is about what this terminal OFFERS the caller
+	// going forward, not about disclosing what the caller's own receipts did).
+	subjectResolution.PriorSubjectReceiptDispositions = priorSubjectReceiptDispositions
 
 	// CHAOS-4118: this terminal returns BEFORE ResolveSubjects has run (this
 	// function's own doc comment above), so no kind/anchor/handle candidate
@@ -1419,7 +1440,10 @@ func (e *Engine) windowConfirmationRequiredResult(
 				var superseded *ErrStructureOfferSuperseded
 				if errors.As(err, &superseded) {
 					recordWindowSupersessionRaceTelemetry(ctx, e.telemetry, principal, superseded)
-					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding)
+					// CHAOS-3478 (codex round-2 finding): result.SubjectResolution
+					// already carries this call's own priorSubjectReceiptDispositions
+					// parameter -- the race terminal must not silently drop it.
+					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions)
 				}
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))

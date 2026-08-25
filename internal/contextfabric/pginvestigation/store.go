@@ -553,6 +553,17 @@ func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseS
 	if result.StructureNeeds != nil || len(result.ConfirmedStructure) > 0 {
 		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
 	}
+	// CHAOS-3478 (codex round-2 finding, High): same rule, same reason,
+	// extended to the peer disclosure this ticket adds. A result carrying
+	// non-empty PriorSubjectReceiptDispositions is REQUEST-SCOPED --
+	// "applied"/"skipped_*" describes what THIS request's own receipts
+	// did, not a property of the answer a completely different request
+	// (different or no receipts) could legitimately inherit. Serving it
+	// as a reuse source would leak one caller's receipt-resolution
+	// disclosure into an unrelated caller's response verbatim.
+	if len(result.SubjectResolution.PriorSubjectReceiptDispositions) > 0 {
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
+	}
 	// Codex round-2 finding #4: a punctuation-only (or otherwise
 	// entirely-stripped) question canonicalizes to the empty string, so
 	// every such question would share ONE hash. Never let this row
@@ -901,6 +912,20 @@ LIMIT 1`,
 	// turning into a hard failure nobody can migrate away from.
 	if err := contextfabric.ValidateStoredResult(result); err != nil {
 		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
+	}
+	// CHAOS-3813 codex round-1 finding (Medium): reuseKeyColumns' own
+	// write-side guard (above, this file) stops FUTURE saves from
+	// populating reuse columns for a disposition-bearing result, but a
+	// reuse column is a property of the ROW, not of this payload check --
+	// it cannot retroactively protect an existing row saved before that
+	// guard existed, or one written by any path that skips it. Same
+	// "never trust a stored row blind, even one this package itself
+	// wrote" defense in depth as rejectExplicitNullDegradedReasons above:
+	// reject on the READ side too, so a PriorSubjectReceiptDispositions
+	// disclosure computed for one caller's own receipts can never be
+	// served verbatim as a reuse hit to an unrelated caller.
+	if len(result.SubjectResolution.PriorSubjectReceiptDispositions) > 0 {
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 	return result, true, "", nil
 }

@@ -606,6 +606,52 @@ type ContextFabricBoundSubjectReceipt struct {
 	ReceiptID string `json:"receipt_id"`
 }
 
+// ContextFabricPriorSubjectReceiptDisposition is the closed vocabulary for
+// what happened to one PriorSubjectReceipts entry (CHAOS-3478/CHAOS-3813:
+// "a veto the caller cannot see is the silent drop reborn" -- the SAME
+// design brief §2.1 rule ContextFabricStructureDisposition already applies
+// to structure receipts, extended to the plural, best-effort prior-subject
+// list). Unlike structure receipts, a skipped prior-subject receipt does
+// NOT veto the investigation (resolvePriorSubjectHints' own doc comment:
+// "skipped, never trusted outright, and never treated as an error" is
+// deliberate conversational degradation for a plural hint list, not an
+// oversight) -- this vocabulary discloses that outcome instead of hiding
+// it, mirroring the reasons EngineTelemetry.RecordPriorSubjectReceiptSkipReason
+// already reports server-side.
+type ContextFabricPriorSubjectReceiptDisposition string
+
+const (
+	ContextFabricPriorSubjectReceiptApplied                ContextFabricPriorSubjectReceiptDisposition = "applied"
+	ContextFabricPriorSubjectReceiptSkippedUnloadable      ContextFabricPriorSubjectReceiptDisposition = "skipped_unloadable"
+	ContextFabricPriorSubjectReceiptSkippedNoMatch         ContextFabricPriorSubjectReceiptDisposition = "skipped_no_match"
+	ContextFabricPriorSubjectReceiptSkippedStaleGraphEpoch ContextFabricPriorSubjectReceiptDisposition = "skipped_stale_graph_epoch"
+	ContextFabricPriorSubjectReceiptSkippedFailedReauth    ContextFabricPriorSubjectReceiptDisposition = "skipped_failed_reauth"
+)
+
+func ValidContextFabricPriorSubjectReceiptDisposition(value ContextFabricPriorSubjectReceiptDisposition) bool {
+	switch value {
+	case ContextFabricPriorSubjectReceiptApplied, ContextFabricPriorSubjectReceiptSkippedUnloadable,
+		ContextFabricPriorSubjectReceiptSkippedNoMatch, ContextFabricPriorSubjectReceiptSkippedStaleGraphEpoch,
+		ContextFabricPriorSubjectReceiptSkippedFailedReauth:
+		return true
+	default:
+		return false
+	}
+}
+
+// ContextFabricPriorSubjectReceiptEntry is the wire-visible disposition for
+// ONE PriorSubjectReceipts entry the caller sent -- one entry per carried
+// receipt, INCLUDING skipped ones (CHAOS-3478/CHAOS-3813), same
+// "echo every carried item" rule ContextFabricConfirmedStructureEntry
+// already follows for structure receipts. PriorResultID/ReceiptID echo the
+// caller's own ContextFabricBoundSubjectReceipt so a reader can match this
+// entry back to the request without re-sending it.
+type ContextFabricPriorSubjectReceiptEntry struct {
+	PriorResultID string                                      `json:"prior_result_id"`
+	ReceiptID     string                                      `json:"receipt_id"`
+	Disposition   ContextFabricPriorSubjectReceiptDisposition `json:"disposition"`
+}
+
 type ContextFabricRequestedScope struct {
 	RepositorySlugs []string                   `json:"repository_slugs,omitempty"`
 	ProjectIDs      []string                   `json:"project_ids,omitempty"`
@@ -800,6 +846,17 @@ type ContextFabricSubjectResolution struct {
 	Candidates          []ContextFabricSubjectCandidate `json:"candidates"`
 	Committed           []ContextFabricSubjectRef       `json:"committed"`
 	ClarificationPrompt string                          `json:"clarification_prompt,omitempty"`
+	// PriorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813) is the
+	// wire-visible fate of every PriorSubjectReceipts entry THIS request
+	// carried -- additive-optional: nil means "the request carried none, or
+	// this call returned before receipt resolution could run" (an earlier
+	// window/structure veto short-circuits before resolvePriorSubjectHints
+	// -- see that function's own doc comment), never "every receipt
+	// applied". Once present it carries exactly one entry per carried
+	// receipt, in the caller's own order, including skipped ones -- closing
+	// the gap where a well-formed but unresolvable receipt was silently
+	// dropped with no wire signal (CHAOS-3813).
+	PriorSubjectReceiptDispositions []ContextFabricPriorSubjectReceiptEntry `json:"prior_subject_receipt_dispositions,omitempty"`
 	// RetrievalDegraded reports that a retrieval MECHANISM was unavailable
 	// for this resolution -- CHAOS-3778's vector step timed out, errored, or
 	// was fenced off -- so the candidate set may be narrower than a healthy
