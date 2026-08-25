@@ -205,10 +205,13 @@ type ResolveDeps struct {
 	// pass already found (mergeSearchResults' own last-processed-loses-ties
 	// convention).
 	//
-	// Scoped to kindCoverageFloorKinds only (never repository/project/team):
-	// those three already get a COMPLETE, exact-term identity-universe read
-	// via AliasLookup above, which a supplemental generic lexical query
-	// would duplicate, not extend. A backend with no kind-scoped query path
+	// Scoped to kindCoverageFloorKinds -- CHAOS-4271: all seven offerable
+	// kinds, including repository/project/team. A kind AliasLookup above
+	// already matched is already present in pool by the time this runs, so
+	// applyKindCoverageFloor's own pool-presence check (missingCoverageKinds)
+	// skips it without ever reaching this call -- only a kind still absent
+	// (whether AliasLookup ran, matched nothing, or does not exist for this
+	// backend) reaches SearchKind. A backend with no kind-scoped query path
 	// can safely leave this nil.
 	SearchKind func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
 	// VectorMechanismConfigured (CHAOS-4154) reports whether this deployment
@@ -1834,16 +1837,19 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	var coverageCandidates []contextfabric.SubjectCandidate
 	var coverageFloorDegraded bool
 	if confirmedKind == nil {
-		// aliasLookupTrustworthy (codex CHAOS-4038 review round 1, finding 3):
-		// the SAME two facts that already gate aliasIdentityComplete's own
-		// meaning -- deps.AliasLookup actually ran for this resolution AND
-		// reported complete=true. False (nil AliasLookup, or a historical/
-		// row-budget/existence-check incompleteness) means repository/
-		// project/team got NO complete identity-universe read this call, so
-		// the coverage floor must widen to cover them too -- see
-		// effectiveCoverageFloorKinds' own doc comment.
-		aliasLookupTrustworthy := deps.AliasLookup != nil && aliasIdentityComplete
-		added, coverageTraversalDegraded, coverageAuthzDropped, coverageTruncated, coverageDegraded, coverageMissingKinds, coverageMissingKindsList, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, aliasLookupTrustworthy)
+		// CHAOS-4271: this call used to pass an aliasLookupTrustworthy flag
+		// (deps.AliasLookup != nil && aliasIdentityComplete) that excluded
+		// repository/project/team from the floor's own kind set whenever
+		// AliasLookup's identity-universe READ was complete -- conflating
+		// "the read was exhaustive" with "this resolution's terms matched a
+		// row in it". AliasLookup's claimants are already merged into pool
+		// above (this function's own AliasLookup block, before this floor
+		// runs), so applyKindCoverageFloor's pool-presence check
+		// (missingCoverageKinds) already detects a real match for free --
+		// the separate flag only ever EXCLUDED a genuinely-missing kind from
+		// rescue. See kindCoverageFloorKinds' own doc comment
+		// (chaos4038_kind_coverage.go) for the full accounting.
+		added, coverageTraversalDegraded, coverageAuthzDropped, coverageTruncated, coverageDegraded, coverageMissingKinds, coverageMissingKindsList, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms)
 		if coverageErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, coverageErr
 		}

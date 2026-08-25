@@ -372,7 +372,7 @@ func TestResolveSubjects_ConfirmedKindScope_UntruncatedResolutionUnchanged(t *te
 // SearchKind backend available, this ticket's mechanism must never even be
 // attempted (no "confirmed_kind_scope" trace event) and the ordinary
 // ambiguous outcome must stand. Uses SubjectProject (an
-// isAliasLookupScopedKind, effectiveCoverageFloorKinds member) precisely so
+// isAliasLookupScopedKind, kindCoverageFloorKinds member) precisely so
 // the PRE-EXISTING CHAOS-4038 coverage floor's own, legitimate,
 // confirmedKind==nil-gated SearchKind calls are exercised too -- proving
 // this ticket's mechanism adds ZERO calls on top of that already-existing

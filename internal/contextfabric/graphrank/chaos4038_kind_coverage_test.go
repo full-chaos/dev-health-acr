@@ -10,31 +10,31 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// TestKindCoverageFloorKinds_ExcludesAliasLookupScopedKinds pins the CHAOS-4038
-// scoping rule: repository/project/team (isAliasLookupScopedKind) must never
-// appear in kindCoverageFloorKinds -- those three already get a COMPLETE,
-// exact-term identity-universe read via AliasLookup, and a supplemental
-// generic lexical query would duplicate, not extend, that path.
-func TestKindCoverageFloorKinds_ExcludesAliasLookupScopedKinds(t *testing.T) {
+// TestKindCoverageFloorKinds_IncludesAliasLookupScopedKinds is the CHAOS-4271
+// fix: repository/project/team (isAliasLookupScopedKind) are now part of
+// kindCoverageFloorKinds, exactly like the four census kinds -- a completed
+// AliasLookup read no longer excludes them from the floor's own kind set;
+// whether AliasLookup already found one is decided by pool presence
+// (missingCoverageKinds), the same mechanism the census kinds always used.
+func TestKindCoverageFloorKinds_IncludesAliasLookupScopedKinds(t *testing.T) {
 	t.Parallel()
 	for _, scoped := range []contextfabric.SubjectKind{
 		contextfabric.SubjectRepository, contextfabric.SubjectProject, contextfabric.SubjectTeam,
 	} {
-		if kindCoverageFloorKinds[scoped] {
-			t.Errorf("kindCoverageFloorKinds[%q] = true, want false -- alias-lookup-scoped kinds must be excluded", scoped)
+		if !kindCoverageFloorKinds[scoped] {
+			t.Errorf("kindCoverageFloorKinds[%q] = false, want true -- alias-lookup-scoped kinds must be included (CHAOS-4271)", scoped)
 		}
 	}
 }
 
-// TestKindCoverageFloorKinds_MatchesStructureOfferKindsMinusAliasLookupScoped
-// proves kindCoverageFloorKinds is EXACTLY structureOfferKinds minus the
-// alias-lookup-scoped subset -- never a second, independently drifting list.
-func TestKindCoverageFloorKinds_MatchesStructureOfferKindsMinusAliasLookupScoped(t *testing.T) {
+// TestKindCoverageFloorKinds_MatchesStructureOfferKindsExactly proves
+// kindCoverageFloorKinds is EXACTLY structureOfferKinds -- never a second,
+// independently drifting list.
+func TestKindCoverageFloorKinds_MatchesStructureOfferKindsExactly(t *testing.T) {
 	t.Parallel()
 	for kind := range structureOfferKinds {
-		want := !isAliasLookupScopedKind(kind)
-		if got := kindCoverageFloorKinds[kind]; got != want {
-			t.Errorf("kindCoverageFloorKinds[%q] = %v, want %v", kind, got, want)
+		if !kindCoverageFloorKinds[kind] {
+			t.Errorf("kindCoverageFloorKinds[%q] = false, want true", kind)
 		}
 	}
 	for kind := range kindCoverageFloorKinds {
@@ -61,10 +61,10 @@ func TestMissingCoverageKinds_EmptyPoolReturnsEveryFloorKindInOrder(t *testing.T
 }
 
 // TestMissingCoverageKinds_PresentKindDropsOut proves a kind already
-// represented in the pool is excluded from the missing set, and a kind
-// outside the floorKinds argument entirely (e.g. an alias-lookup-scoped kind
-// when the caller passed the BASE kindCoverageOrder) never appears
-// regardless of pool contents.
+// represented in the pool is excluded from the missing set -- the SAME check
+// now governs alias-lookup-scoped kinds too (CHAOS-4271): a repository the
+// pool already has (from AliasLookup or any other pass) never re-triggers a
+// coverage query, exactly like a census kind.
 func TestMissingCoverageKinds_PresentKindDropsOut(t *testing.T) {
 	t.Parallel()
 	pool := map[string]contextfabric.SubjectCandidate{
@@ -75,56 +75,9 @@ func TestMissingCoverageKinds_PresentKindDropsOut(t *testing.T) {
 		if kind == contextfabric.SubjectWorkItem {
 			t.Fatalf("missingCoverageKinds(pool with work_item) = %#v, want work_item excluded", got)
 		}
-		if kind == contextfabric.SubjectRepository || kind == contextfabric.SubjectProject || kind == contextfabric.SubjectTeam {
-			t.Fatalf("missingCoverageKinds() = %#v, want no alias-lookup-scoped kind present when called with the BASE kindCoverageOrder", got)
-		}
 	}
 	if len(got) != len(kindCoverageFloorKinds)-1 {
 		t.Fatalf("missingCoverageKinds(pool with work_item) = %#v, want exactly one fewer than the full floor set", got)
-	}
-}
-
-// TestEffectiveCoverageFloorKinds_TrustworthyAliasLookupExcludesItsThreeKinds
-// pins the aliasLookupTrustworthy=true case: repository/project/team are
-// excluded, exactly kindCoverageOrder -- AliasLookup already covers them
-// completely for this resolution, so a supplemental generic lexical query
-// would duplicate, not extend, that path.
-func TestEffectiveCoverageFloorKinds_TrustworthyAliasLookupExcludesItsThreeKinds(t *testing.T) {
-	t.Parallel()
-	got := effectiveCoverageFloorKinds(true)
-	if len(got) != len(kindCoverageOrder) {
-		t.Fatalf("effectiveCoverageFloorKinds(true) = %#v, want exactly kindCoverageOrder", got)
-	}
-	for _, scoped := range []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectProject, contextfabric.SubjectTeam} {
-		for _, kind := range got {
-			if kind == scoped {
-				t.Fatalf("effectiveCoverageFloorKinds(true) = %#v, want %q excluded", got, scoped)
-			}
-		}
-	}
-}
-
-// TestEffectiveCoverageFloorKinds_UntrustworthyAliasLookupIncludesItsThreeKinds
-// is codex CHAOS-4038 review finding 3's own regression: aliasLookupTrustworthy=false
-// (nil AliasLookup, or one that ran but could not prove completeness) must
-// widen the floor to ALSO cover repository/project/team -- nothing else in
-// the resolution covers them in that case.
-func TestEffectiveCoverageFloorKinds_UntrustworthyAliasLookupIncludesItsThreeKinds(t *testing.T) {
-	t.Parallel()
-	got := effectiveCoverageFloorKinds(false)
-	if len(got) != len(kindCoverageOrder)+3 {
-		t.Fatalf("effectiveCoverageFloorKinds(false) = %#v, want kindCoverageOrder plus exactly 3 alias-lookup-scoped kinds", got)
-	}
-	for _, scoped := range []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectProject, contextfabric.SubjectTeam} {
-		found := false
-		for _, kind := range got {
-			if kind == scoped {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("effectiveCoverageFloorKinds(false) = %#v, want %q included", got, scoped)
-		}
 	}
 }
 
@@ -165,23 +118,27 @@ func TestResolveSubjects_SearchKindNilIsSkippedSilently(t *testing.T) {
 // TestResolveSubjects_SearchKindSkippedWhenPoolAlreadyCoversAllFloorKinds
 // proves the floor never spends a call when every kindCoverageFloorKinds
 // member is already represented -- purely additive, never redundant I/O.
+// CHAOS-4271: repository/project/team are now part of the floor's own kind
+// set too, so this fixture covers all seven -- repository via a genuine
+// AliasLookup claimant (unlike the "complete but unmatched" regression
+// above), the remaining six (including project/team) via ordinary Search --
+// proving the fix adds no extra I/O when a kind is already covered by ANY
+// pass, not just AliasLookup.
 func TestResolveSubjects_SearchKindSkippedWhenPoolAlreadyCoversAllFloorKinds(t *testing.T) {
 	t.Parallel()
 	backend := &fakeGraphBackend{
-		enableSearchKind: true,
-		// AliasLookup complete=true: effectiveCoverageFloorKinds(true) is
-		// exactly kindCoverageOrder (the 4 census kinds) -- repository/
-		// project/team are AliasLookup's own scope for this test, not the
-		// coverage floor's, so the pool below only needs to cover the 4.
+		enableSearchKind:     true,
 		enableAliasLookup:    true,
 		aliasLookupComplete:  true,
-		aliasLookupClaimants: map[string][]CandidateNode{},
+		aliasLookupClaimants: map[string][]CandidateNode{"outage": {candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.9, "*")}},
 		searchResults: map[string][]CandidateNode{
 			"outage": {
 				candidateNode(contextfabric.SubjectWorkItem, "wi_1", "Outage work item", 0.9, "*"),
 				candidateNode(contextfabric.SubjectPullRequest, "pr_1", "Outage PR", 0.9, "*"),
 				candidateNode(contractsv1.ContextFabricSubjectCIRun, "ci_1", "Outage CI run", 0.9, "*"),
 				candidateNode(contractsv1.ContextFabricSubjectPullRequestReview, "prr_1", "Outage PR review", 0.9, "*"),
+				candidateNode(contextfabric.SubjectProject, "proj_1", "Outage project", 0.9, "*"),
+				candidateNode(contextfabric.SubjectTeam, "team_1", "Outage team", 0.9, "*"),
 			},
 		},
 	}
@@ -309,34 +266,95 @@ func TestResolveSubjects_SearchKindNeverExceedsMaxTermsPerKind(t *testing.T) {
 	}
 }
 
-// TestResolveSubjects_SearchKindSkipsAliasLookupScopedKindsWhenAliasLookupComplete
-// proves the floor never calls SearchKind for repository/project/team when
-// THIS resolution's own AliasLookup ran and reported complete=true -- those
-// three already got a complete identity-universe read, so a supplemental
-// generic lexical query would be pure duplication.
-func TestResolveSubjects_SearchKindSkipsAliasLookupScopedKindsWhenAliasLookupComplete(t *testing.T) {
+// TestResolveSubjects_SearchKindRescuesAliasLookupScopedKindWhenAliasLookupCompleteButUnmatched
+// is the CHAOS-4271 regression: AliasLookup ran and reported complete=true
+// (the identity-universe SOURCE READ was not budget-truncated) but matched
+// NOTHING for this resolution's terms (aliasLookupClaimants is empty) --
+// "read complete" is not "target found". Before the fix, complete=true alone
+// excluded repository/project/team from the floor's own missing-kind check,
+// so a genuinely absent repository had no rescue path at all even though the
+// SAME lexical SearchKind mechanism that rescues work_item/pull_request/
+// ci_run/pull_request_review in this exact situation could have found it.
+func TestResolveSubjects_SearchKindRescuesAliasLookupScopedKindWhenAliasLookupCompleteButUnmatched(t *testing.T) {
 	t.Parallel()
+	repoCandidate := candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.6, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind:     true,
 		enableAliasLookup:    true,
 		aliasLookupComplete:  true,
 		aliasLookupClaimants: map[string][]CandidateNode{},
 		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"alpha": {contextfabric.SubjectRepository: {repoCandidate}},
+		},
+	}
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	found := false
+	for _, call := range backend.searchKindCalls {
+		if call.kind == contextfabric.SubjectRepository {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("searchKindCalls = %#v, want repository queried -- AliasLookup completed but matched nothing, so the floor must still try", backend.searchKindCalls)
+	}
+	foundRepo := false
+	for _, c := range resolution.Candidates {
+		if c.Subject.Kind == contextfabric.SubjectRepository && c.Subject.CanonicalID == "repo_1" {
+			foundRepo = true
+		}
+	}
+	if !foundRepo {
+		t.Fatalf("resolution.Candidates = %#v, want the SearchKind-rescued repository candidate present", resolution.Candidates)
+	}
+}
+
+// TestResolveSubjects_SearchKindRescuesOnlyTheAliasLookupScopedKindsAliasLookupMissed
+// is the CHAOS-4271 codex round-1 follow-up (partial-match case): AliasLookup
+// completes and matches ONE of the three alias-lookup-scoped kinds (project)
+// but not the other two (repository, team) -- proves the rescue is decided
+// per-kind by pool presence, not by one resolution-wide flag. The matched
+// kind must NEVER reach SearchKind (would be pure duplication); the two
+// unmatched kinds must.
+func TestResolveSubjects_SearchKindRescuesOnlyTheAliasLookupScopedKindsAliasLookupMissed(t *testing.T) {
+	t.Parallel()
+	projectCandidate := candidateNode(contextfabric.SubjectProject, "proj_1", "Widgets", 0.6, "*")
+	backend := &fakeGraphBackend{
+		enableSearchKind:     true,
+		enableAliasLookup:    true,
+		aliasLookupComplete:  true,
+		aliasLookupClaimants: map[string][]CandidateNode{"alpha": {projectCandidate}},
+		searchResults:        map[string][]CandidateNode{"alpha": {}},
 	}
 	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), nil, nil); err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 	for _, call := range backend.searchKindCalls {
-		if call.kind == contextfabric.SubjectRepository || call.kind == contextfabric.SubjectProject || call.kind == contextfabric.SubjectTeam {
-			t.Fatalf("searchKindCalls = %#v, want no alias-lookup-scoped kind queried when AliasLookup reported complete=true", backend.searchKindCalls)
+		if call.kind == contextfabric.SubjectProject {
+			t.Fatalf("searchKindCalls = %#v, want project never queried -- AliasLookup already matched it", backend.searchKindCalls)
+		}
+	}
+	for _, scoped := range []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam} {
+		found := false
+		for _, call := range backend.searchKindCalls {
+			if call.kind == scoped {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("searchKindCalls = %#v, want %q queried -- AliasLookup did not match it", backend.searchKindCalls, scoped)
 		}
 	}
 }
 
 // TestResolveSubjects_SearchKindCoversAliasLookupScopedKindsWhenAliasLookupNil
-// is codex CHAOS-4038 review finding 3's own regression: a backend with no
-// AliasLookup at all leaves repository/project/team with NO coverage from
-// any other pass, so the floor must widen to query them too.
+// proves a backend with no AliasLookup at all still gets repository/project/
+// team covered by the floor (CHAOS-4271: they are unconditionally part of
+// kindCoverageFloorKinds now) -- nothing else in the resolution covers them
+// in this case.
 func TestResolveSubjects_SearchKindCoversAliasLookupScopedKindsWhenAliasLookupNil(t *testing.T) {
 	t.Parallel()
 	backend := &fakeGraphBackend{
@@ -360,10 +378,10 @@ func TestResolveSubjects_SearchKindCoversAliasLookupScopedKindsWhenAliasLookupNi
 }
 
 // TestResolveSubjects_SearchKindCoversAliasLookupScopedKindsWhenAliasLookupIncomplete
-// is the SAME regression as the nil case, for an AliasLookup that ran but
-// could not prove completeness (a historical read, an exceeded row budget,
-// a source-table existence-check failure) -- complete=false leaves
-// repository/project/team just as uncovered as a nil AliasLookup would.
+// is the SAME proof as the nil case, for an AliasLookup that ran but could
+// not prove completeness (a historical read, an exceeded row budget, a
+// source-table existence-check failure) and found no claimants -- the floor
+// covers repository/project/team regardless (CHAOS-4271).
 func TestResolveSubjects_SearchKindCoversAliasLookupScopedKindsWhenAliasLookupIncomplete(t *testing.T) {
 	t.Parallel()
 	backend := &fakeGraphBackend{
