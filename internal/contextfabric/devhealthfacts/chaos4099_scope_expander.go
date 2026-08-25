@@ -117,7 +117,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				// real): the intermediate repository hop can itself carry
 				// interval-miss/unbounded-fallback signal on a historical
 				// axis -- see the identical fix's own comment below.
-				TemporalDroppedCount: repoCounts.TemporalDroppedCount, UnboundedValidityCount: repoCounts.UnboundedValidityCount, MalformedTouchCount: repoCounts.MalformedTouchCount,
+				TemporalDroppedCount: repoCounts.TemporalDroppedCount, UnboundedValidityCount: repoCounts.UnboundedValidityCount, MalformedTouchCount: repoCounts.MalformedTouchCount, DuplicateAddCount: repoCounts.DuplicateAddCount,
 			}}, nil
 		}
 		targets, targetBasis, targetSource, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit)
@@ -138,6 +138,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		prCounts.TemporalDroppedCount += repoCounts.TemporalDroppedCount
 		prCounts.UnboundedValidityCount += repoCounts.UnboundedValidityCount
 		prCounts.MalformedTouchCount += repoCounts.MalformedTouchCount
+		prCounts.DuplicateAddCount += repoCounts.DuplicateAddCount
 		// codex xhigh review round 1 (confirmed real, MEDIUM): the
 		// INTERMEDIATE repository set can itself be truncated at
 		// maxFactScopeRepositoryFanout, which repoCounts.Truncated already
@@ -158,7 +159,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 			return contextfabric.FactScopeExpansionResult{Counts: contextfabric.FactScopeExpansionCounts{
 				CandidateCount: repoCounts.CandidateCount, AuthorizationDroppedCount: dropped,
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
-				TemporalDroppedCount: repoCounts.TemporalDroppedCount, UnboundedValidityCount: repoCounts.UnboundedValidityCount, MalformedTouchCount: repoCounts.MalformedTouchCount,
+				TemporalDroppedCount: repoCounts.TemporalDroppedCount, UnboundedValidityCount: repoCounts.UnboundedValidityCount, MalformedTouchCount: repoCounts.MalformedTouchCount, DuplicateAddCount: repoCounts.DuplicateAddCount,
 			}}, nil
 		}
 		targets, targetBasis, targetSource, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit)
@@ -172,6 +173,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		reviewCounts.TemporalDroppedCount += repoCounts.TemporalDroppedCount
 		reviewCounts.UnboundedValidityCount += repoCounts.UnboundedValidityCount
 		reviewCounts.MalformedTouchCount += repoCounts.MalformedTouchCount
+		reviewCounts.DuplicateAddCount += repoCounts.DuplicateAddCount
 		reviewCounts.Truncated = reviewCounts.Truncated || repoCounts.Truncated
 		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, Counts: reviewCounts}, nil
 
@@ -481,28 +483,71 @@ func asOfWindow(timeContext contextfabric.TimeContext) (start, end time.Time, er
 // MalformedTouchCount, and the scope-expansion telemetry silently dropped
 // exactly the same signal devhealthsource's own presenceTelemetryLedger
 // already surfaces for the producer path.
+// membershipTouchesAsOfSQL mirrors devhealthsource/teams_projects_edges.go's
+// membershipIntervalsSubquery exactly -- same two-stage classify-then-close
+// window-function state machine, same interval rule (CHAOS-4109, team-lead
+// ruling 2026-08-25): a duplicate ADD (immediately preceded by another ADD,
+// no REMOVE between) is a continuation of the already-open interval, not a
+// new one, and is excluded from `closed`'s row set before recomputing
+// row_number/touch_count/leadInFrame there; a dangling REMOVE (no prior ADD
+// to close) is the one case still flagged is_malformed. See that
+// subquery's own doc comment for the full rule and the CTE-column-naming
+// trap (`dup_flag`/`dangling_flag`, never reusing this query's own output
+// alias names `is_duplicate_add`/`is_malformed`, which silently duplicated
+// rows across UNION ALL branches when tried).
+//
+// Narrowed from the producer's shape to what THIS caller needs: no
+// event_id (no RelationshipID minted here), no subject_id (a distinct-
+// REPOSITORY answer never needs to know which work item on it carried the
+// touch). is_duplicate_add is projected through for MalformedTouchCount's
+// own telemetry sibling, DuplicateAddCount -- duplicate rows carry no
+// interval of their own (valid_to is always NULL) and callers must
+// exclude them from admission the same way they already exclude
+// is_malformed rows, but still count them.
 const membershipTouchesAsOfSQL = `(
+  WITH touches AS (
+    SELECT repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
+    FROM project_membership_transitions FINAL
+    WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND to_project_id != '' AND to_project_id != from_project_id
+    UNION ALL
+    SELECT repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
+    FROM project_membership_transitions FINAL
+    WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND from_project_id != '' AND from_project_id != to_project_id
+  ),
+  classified AS (
+    SELECT repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+      (is_add = 1 AND lagInFrame(is_add, 1, 2) OVER w = 1) AS dup_flag,
+      (is_add = 0 AND lagInFrame(is_add, 1, 2) OVER w != 1) AS dangling_flag
+    FROM touches
+    WINDOW w AS (PARTITION BY repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+  ),
+  closed AS (
+    SELECT repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+      row_number() OVER w2 AS rn,
+      count() OVER (PARTITION BY repo_id, subject_id, provider, project_id) AS touch_count,
+      leadInFrame(occurred_at, 1, occurred_at) OVER w2 AS next_occurred_at,
+      leadInFrame(is_add, 1, is_add) OVER w2 AS next_is_add
+    FROM classified
+    WHERE NOT dup_flag
+    WINDOW w2 AS (PARTITION BY repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+  )
   SELECT repo_id, provider, project_id, occurred_at AS observed_at,
     if(rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
-    (rn < touch_count AND next_is_add = 1) AS is_malformed
-  FROM (
-    SELECT *,
-      row_number() OVER w AS rn,
-      count() OVER (PARTITION BY repo_id, subject_id, provider, project_id) AS touch_count,
-      leadInFrame(occurred_at, 1, occurred_at) OVER w AS next_occurred_at,
-      leadInFrame(is_add, 1, is_add) OVER w AS next_is_add
-    FROM (
-      SELECT repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
-      FROM project_membership_transitions FINAL
-      WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND to_project_id != '' AND to_project_id != from_project_id
-      UNION ALL
-      SELECT repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
-      FROM project_membership_transitions FINAL
-      WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND from_project_id != '' AND from_project_id != to_project_id
-    )
-    WINDOW w AS (PARTITION BY repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
-  )
+    0 AS is_malformed, 0 AS is_duplicate_add
+  FROM closed
   WHERE is_add = 1
+  UNION ALL
+  SELECT repo_id, provider, project_id, occurred_at AS observed_at,
+    NULL AS valid_to,
+    1 AS is_malformed, 0 AS is_duplicate_add
+  FROM classified
+  WHERE dangling_flag
+  UNION ALL
+  SELECT repo_id, provider, project_id, occurred_at AS observed_at,
+    NULL AS valid_to,
+    0 AS is_malformed, 1 AS is_duplicate_add
+  FROM classified
+  WHERE dup_flag
 )`
 
 // projectRepositoriesAsOf binds projectRepositories' first hop to
@@ -557,7 +602,7 @@ FROM (
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
   LEFT JOIN repos AS r FINAL ON r.id = iv.repo_id AND r.org_id = {org_id:String}
   WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
-    AND NOT iv.is_malformed
+    AND NOT iv.is_malformed AND NOT iv.is_duplicate_add
     AND iv.observed_at <= {window_end:DateTime64(6,'UTC')}
     AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})
   UNION ALL
@@ -610,12 +655,13 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	}
 	totalRows := counts.CandidateCount + counts.MissingNextHopCount
 	counts.Truncated = totalRows >= limitPlusOne
-	dropped, malformed, err := e.historicalDropCount(ctx, orgID, projectIDs, windowStart, windowEnd)
+	dropped, malformed, duplicateAdd, err := e.historicalDropCount(ctx, orgID, projectIDs, windowStart, windowEnd)
 	if err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	counts.TemporalDroppedCount = dropped
 	counts.MalformedTouchCount = malformed
+	counts.DuplicateAddCount = duplicateAdd
 	return candidates, counts, nil
 }
 
@@ -660,7 +706,7 @@ const resolvedProjectsSQL = `(
 //     here (NOT excluded) rather than in the ever_matched/window_matched
 //     pair, which both explicitly exclude malformed rows via
 //     `NOT is_malformed` so a malformed touch cannot inflate either.
-func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, projectIDs []string, windowStart, windowEnd time.Time) (dropped, malformed int, err error) {
+func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, projectIDs []string, windowStart, windowEnd time.Time) (dropped, malformed, duplicateAdd int, err error) {
 	// The repos JOIN + zero-UUID/empty-slug exclusion (codex xhigh review
 	// R1, LOW, confirmed real) mirrors the main query's own MissingNextHopCount
 	// classification exactly: without it, a repo-less-by-design work item
@@ -671,11 +717,20 @@ func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, p
 	// as BOTH MissingNextHopCount (main query) AND TemporalDroppedCount
 	// (this one), though no repository target was actually excluded by
 	// the requested window.
-	statement := `SELECT uniqExactIf(repo_id_str, NOT is_malformed) AS ever_matched,
-  uniqExactIf(repo_id_str, in_window AND NOT is_malformed) AS window_matched,
-  countIf(is_malformed) AS malformed_touches
+	//
+	// ever_matched/window_matched both exclude is_duplicate_add rows too
+	// (CHAOS-4109, team-lead ruling 2026-08-25), the same way they already
+	// excluded is_malformed: a duplicate ADD's own row carries valid_to=
+	// NULL, the same shape as a genuinely open interval, and admitting it
+	// here would let a redundant touch masquerade as independent evidence
+	// of a match/miss the ORIGINAL (first-add) interval already decides on
+	// its own.
+	statement := `SELECT uniqExactIf(repo_id_str, NOT is_malformed AND NOT is_duplicate_add) AS ever_matched,
+  uniqExactIf(repo_id_str, in_window AND NOT is_malformed AND NOT is_duplicate_add) AS window_matched,
+  countIf(is_malformed) AS malformed_touches,
+  countIf(is_duplicate_add) AS duplicate_add_touches
 FROM (
-  SELECT toString(iv.repo_id) AS repo_id_str, iv.is_malformed AS is_malformed,
+  SELECT toString(iv.repo_id) AS repo_id_str, iv.is_malformed AS is_malformed, iv.is_duplicate_add AS is_duplicate_add,
     (iv.observed_at <= {window_end:DateTime64(6,'UTC')} AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})) AS in_window
   FROM ` + membershipTouchesAsOfSQL + ` AS iv
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
@@ -691,23 +746,23 @@ FROM (
 		{Name: "zero_repository_id", Value: zeroRepositoryID},
 	})
 	if queryErr != nil {
-		return 0, 0, queryErr
+		return 0, 0, 0, queryErr
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
-	var everMatched, windowMatched, malformedTouches uint64
-	if err := rows.Scan(&everMatched, &windowMatched, &malformedTouches); err != nil {
-		return 0, 0, err
+	var everMatched, windowMatched, malformedTouches, duplicateAddTouches uint64
+	if err := rows.Scan(&everMatched, &windowMatched, &malformedTouches, &duplicateAddTouches); err != nil {
+		return 0, 0, 0, err
 	}
 	if err := rows.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	return int(everMatched - windowMatched), int(malformedTouches), nil
+	return int(everMatched - windowMatched), int(malformedTouches), int(duplicateAddTouches), nil
 }
 
 // decodeProjectOriginIDs recovers the raw projects.id value for every

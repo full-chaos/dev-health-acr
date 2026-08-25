@@ -316,14 +316,25 @@ type presenceTelemetryLedger struct {
 	ambiguous      map[string]struct{} // distinct "provider\x00project_id" with >1 projects matches
 	ambiguousRows  int                 // total ROWS dropped for an ambiguous key (can exceed len(ambiguous))
 	// malformedTouch/malformedTouchRows (CHAOS-4109) count
-	// membershipIntervalsCTE's is_malformed rows -- two ADD touches of the
-	// same (subject, project) pair with no intervening REMOVE, which the
-	// source data model should never produce (see that CTE's own doc
-	// comment). Same distinct-key/row-count split as unresolved/ambiguous
-	// above, for the same reason: one bad touch sequence can recur across
-	// many re-syncs of the same pair.
-	malformedTouch     map[string]struct{} // distinct "provider\x00project_id" with a malformed touch sequence
-	malformedTouchRows int                 // total ROWS skipped for a malformed touch sequence
+	// membershipIntervalsSubquery's is_malformed rows -- a REMOVE touch with
+	// no prior ADD to close (either the very first tracked touch of a
+	// (subject, project) pair, or a second REMOVE with nothing reopened in
+	// between; see that subquery's own doc comment). Same distinct-key/
+	// row-count split as unresolved/ambiguous above, for the same reason:
+	// one bad touch sequence can recur across many re-syncs of the same
+	// pair.
+	malformedTouch     map[string]struct{} // distinct "provider\x00project_id" with a dangling-REMOVE touch
+	malformedTouchRows int                 // total ROWS skipped for a dangling-REMOVE touch
+	// duplicateAdd/duplicateAddRows (CHAOS-4109, team-lead ruling
+	// 2026-08-25) count membershipIntervalsSubquery's is_duplicate_add rows
+	// -- an ADD touch immediately preceded by another ADD, no REMOVE
+	// between. NOT malformed: #1896's discard-and-replay path and an
+	// ordinary re-sync of an unchanged board membership both legitimately
+	// produce this for a subject that never left, so it is a continuation
+	// of the already-open interval (attribution keeps working, unlike a
+	// malformed touch) -- but still counted, never silently absorbed.
+	duplicateAdd     map[string]struct{} // distinct "provider\x00project_id" with a duplicate-ADD touch
+	duplicateAddRows int                 // total ROWS collapsed for a duplicate-ADD touch
 }
 
 func (l *presenceTelemetryLedger) recordRead(source, subjectKind string) {
@@ -375,6 +386,19 @@ func (l *presenceTelemetryLedger) recordMalformedTouch(provider, projectID strin
 	}
 	l.malformedTouch[provider+"\x00"+projectID] = struct{}{}
 	l.malformedTouchRows++
+}
+
+func (l *presenceTelemetryLedger) recordDuplicateAdd(provider, projectID string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.duplicateAdd == nil {
+		l.duplicateAdd = map[string]struct{}{}
+	}
+	l.duplicateAdd[provider+"\x00"+projectID] = struct{}{}
+	l.duplicateAddRows++
 }
 
 // presenceReadCount reports how many rows this run read for one (source,
@@ -450,6 +474,24 @@ func (l *presenceTelemetryLedger) malformedTouchRowCount() int {
 	return l.malformedTouchRows
 }
 
+func (l *presenceTelemetryLedger) duplicateAddCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.duplicateAdd)
+}
+
+func (l *presenceTelemetryLedger) duplicateAddRowCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.duplicateAddRows
+}
+
 // presenceLedgerFor mirrors ledgerFor exactly, for the presence telemetry
 // ledger instead of the ownership-omission one.
 func (s *TeamsProjectsSource) presenceLedgerFor(orgID string, fromScratch bool) *presenceTelemetryLedger {
@@ -500,14 +542,24 @@ func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string
 	// CHAOS-4109: malformed touch sequences are a DIFFERENT failure mode
 	// from unresolved/ambiguous above (a project-identity join miss) --
 	// this one is a data-quality anomaly in project_membership_transitions'
-	// own touch history (two ADDs with no intervening REMOVE, see
-	// membershipIntervalsCTE) -- so it gets its own line rather than
+	// own touch history (a REMOVE with no prior ADD to close, see
+	// membershipIntervalsSubquery) -- so it gets its own line rather than
 	// folding into the warning above and reading as the same cause.
 	if malformed, malformedRows := ledger.malformedTouchCount(), ledger.malformedTouchRowCount(); malformed > 0 {
 		logger.WarnContext(ctx, "devhealthsource skipped a malformed project membership touch sequence",
 			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
-			"reason", "two ADD touches of the same (subject, project) pair with no intervening REMOVE",
+			"reason", "a REMOVE touch with no prior ADD to close (no open interval, nothing reopened)",
 			"malformed_touch_entity", malformed, "malformed_touch_entity_rows", malformedRows)
+	}
+	// CHAOS-4109 (team-lead ruling 2026-08-25): a duplicate ADD is NOT the
+	// malformed case above -- it is a legitimate continuation this producer
+	// keeps attributing through -- so it gets its own INFO line (not WARN:
+	// nothing is missing or wrong, this is diagnostic volume only).
+	if duplicate, duplicateRows := ledger.duplicateAddCount(), ledger.duplicateAddRowCount(); duplicate > 0 {
+		logger.InfoContext(ctx, "devhealthsource collapsed a duplicate project membership ADD touch",
+			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+			"reason", "an ADD touch immediately preceded by another ADD, no intervening REMOVE -- treated as a continuation of the already-open interval",
+			"duplicate_add_entity", duplicate, "duplicate_add_entity_rows", duplicateRows)
 	}
 }
 

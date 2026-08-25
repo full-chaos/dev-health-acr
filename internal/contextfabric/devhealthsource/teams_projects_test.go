@@ -335,18 +335,20 @@ func TestTeamsProjectsFullSnapshotClaimsCompleteEnumeration(t *testing.T) {
 // ambiguity -- see TestPresenceRowsMustResolveToExactlyOneProject.
 //
 // This helper always emits an OPEN interval (valid_to_present=false) and
-// no touch anomaly (is_malformed=false) -- the shape every row of this
-// package's producer-registry tests (both the presence view's
-// work_item_column arm, which never carries an interval, and a single,
-// still-current transition-arm membership) has always needed. A CLOSED
-// interval is a distinct row shape a real add-remove-re-add sequence can
-// only produce through the real leadInFrame window function
-// (membershipIntervalsCTE) a canned row cannot fake meaningfully -- see
-// TestTransitionHistoryProjectsClosedAndOpenIntervals
-// (chaos4109_temporal_validity_integration_test.go), which proves it
+// no touch anomaly (is_malformed=false, is_duplicate_add=false) -- the
+// shape every row of this package's producer-registry tests (both the
+// presence view's work_item_column arm, which never carries an interval,
+// and a single, still-current transition-arm membership) has always
+// needed. A CLOSED interval, a dangling-REMOVE anomaly, or a duplicate-ADD
+// continuation are distinct row shapes a real add-remove-re-add sequence
+// can only produce through the real window-function state machine
+// (membershipIntervalsSubquery) a canned row cannot fake meaningfully --
+// see TestTransitionHistoryProjectsClosedAndOpenIntervals and
+// TestDuplicateAddIsAContinuationNotMalformed
+// (chaos4109_temporal_validity_integration_test.go), which prove those
 // against real ClickHouse instead.
 func presenceRow(subjectKind, repoID, subjectID, repoSlug string, observedAt time.Time, source, provider, projectID, resolvedProjectID string, keyResolutionCount uint64) []any {
-	return []any{subjectKind, repoID, subjectID, repoSlug, observedAt, "", source, provider, projectID, resolvedProjectID, keyResolutionCount, uint8(0), time.Unix(0, 0).UTC(), uint8(0)}
+	return []any{subjectKind, repoID, subjectID, repoSlug, observedAt, "", source, provider, projectID, resolvedProjectID, keyResolutionCount, uint8(0), time.Unix(0, 0).UTC(), uint8(0), uint8(0)}
 }
 
 func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug string, computedAt time.Time) []any {
