@@ -255,3 +255,65 @@ func TestChaos4085_ProductionTraceEmitsKindCoverageFloorDiagnostics(t *testing.T
 		t.Fatalf("missing_kinds_list = %v, want [work_item]", record["missing_kinds_list"])
 	}
 }
+
+// TestChaos4085_ProductionTraceEmitsConfirmedKindScopeAndVectorCensusDiagnostics
+// is codex R2's own Low finding regression (CHAOS-4155 Phase 1): the
+// confirmed_kind_scope stage -- both CHAOS-4154's own state/candidate_count
+// fields and CHAOS-4155's own vector_census_* shadow-census fields -- had NO
+// sink-level test, exactly the CommitBasis/TiedStatisticalTop gap this
+// file's own doc comment exists to prevent. This pins every key an operator
+// would grep for reaching the PRODUCTION SlogResolutionTracer sink.
+func TestChaos4085_ProductionTraceEmitsConfirmedKindScopeAndVectorCensusDiagnostics(t *testing.T) {
+	record := captureTraceJSON(t, ResolutionTraceEvent{
+		RequestID: "request_sink_0006", Stage: "confirmed_kind_scope",
+		ConfirmedKindScopeState:                    "complete",
+		ConfirmedKindScopeCandidateCount:           3,
+		ConfirmedKindVectorScopeState:              "complete",
+		ConfirmedKindVectorScopePopulationCount:    10,
+		ConfirmedKindVectorScopeEnumeratedCount:    10,
+		ConfirmedKindVectorScopeMalformedCount:     0,
+		ConfirmedKindVectorScopeQueryCount:         2,
+		ConfirmedKindVectorScopeQueriesScored:      2,
+		ConfirmedKindVectorScopeComparisonCount:    20,
+		ConfirmedKindVectorScopeRivalCountAboveTau: 4,
+		ConfirmedKindVectorScopeSnapshotStable:     true,
+		ConfirmedKindVectorScopeDurationMS:         7,
+	})
+
+	if got, ok := record["state"].(string); !ok || got != "complete" {
+		t.Fatalf("state = %v, want complete", record["state"])
+	}
+	if got, ok := record["candidate_count"].(float64); !ok || got != 3 {
+		t.Fatalf("candidate_count = %v, want 3", record["candidate_count"])
+	}
+	if got, ok := record["vector_census_state"].(string); !ok || got != "complete" {
+		t.Fatalf("vector_census_state = %v, want complete", record["vector_census_state"])
+	}
+	if got, ok := record["vector_census_population_count"].(float64); !ok || got != 10 {
+		t.Fatalf("vector_census_population_count = %v, want 10", record["vector_census_population_count"])
+	}
+	if got, ok := record["vector_census_enumerated_count"].(float64); !ok || got != 10 {
+		t.Fatalf("vector_census_enumerated_count = %v, want 10", record["vector_census_enumerated_count"])
+	}
+	if got, ok := record["vector_census_malformed_count"].(float64); !ok || got != 0 {
+		t.Fatalf("vector_census_malformed_count = %v, want 0", record["vector_census_malformed_count"])
+	}
+	if got, ok := record["vector_census_query_count"].(float64); !ok || got != 2 {
+		t.Fatalf("vector_census_query_count = %v, want 2", record["vector_census_query_count"])
+	}
+	if got, ok := record["vector_census_queries_scored"].(float64); !ok || got != 2 {
+		t.Fatalf("vector_census_queries_scored = %v, want 2", record["vector_census_queries_scored"])
+	}
+	if got, ok := record["vector_census_comparison_count"].(float64); !ok || got != 20 {
+		t.Fatalf("vector_census_comparison_count = %v, want 20", record["vector_census_comparison_count"])
+	}
+	if got, ok := record["vector_census_rival_count_above_tau"].(float64); !ok || got != 4 {
+		t.Fatalf("vector_census_rival_count_above_tau = %v, want 4", record["vector_census_rival_count_above_tau"])
+	}
+	if got, ok := record["vector_census_snapshot_stable"].(bool); !ok || !got {
+		t.Fatalf("vector_census_snapshot_stable = %v, want true", record["vector_census_snapshot_stable"])
+	}
+	if got, ok := record["vector_census_duration_ms"].(float64); !ok || got != 7 {
+		t.Fatalf("vector_census_duration_ms = %v, want 7", record["vector_census_duration_ms"])
+	}
+}

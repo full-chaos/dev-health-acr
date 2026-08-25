@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -100,6 +101,20 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 		for i, f := range vectors[0] {
 			queryVector[i] = float64(f)
 		}
+		// codex R2 (Medium, confirmed): an embedder returning a zero-length
+		// or non-finite (NaN/Inf) vector previously fell through to
+		// trueCosineSimilarity's own dimension/zero-norm guard, which is
+		// the right defense for a merely UNUSUAL vector but silently
+		// reports 0 similarity for a genuinely BROKEN one -- indistinguishable
+		// from "this term legitimately has no rivals" in the resulting
+		// telemetry. Treated as the same embed-provider failure as the
+		// err/empty-slice case above: this census's completeness claim
+		// requires every term to have been scored against a trustworthy
+		// vector, not silently zeroed out.
+		if !finiteVector(queryVector) {
+			embedFailed = true
+			continue
+		}
 		queriesScored++
 		for _, candidate := range corpus {
 			if trueCosineSimilarity(queryVector, candidate.Vector) > a.similarityFloor {
@@ -158,11 +173,44 @@ func (a *Adapter) chaos4155WatermarkSnapshot(ctx context.Context, key, orgID str
 	for _, r := range rows {
 		source := propStringValue(r["source"])
 		if source == "" {
-			continue
+			// codex R2 (Medium, confirmed): source is part of a watermark
+			// node's own MERGE identity key (projection.go's write path),
+			// so a row with no source can only be a malformed/corrupted
+			// node -- never a legitimate "not yet synced" state. Silently
+			// dropping it here (as the earlier version did) let two
+			// snapshots that both happen to drop the SAME malformed row
+			// compare equal, hiding a data-integrity problem behind a
+			// false Complete/Stable reading. This file's own top-of-file
+			// doc comment already states the contract for a malformed
+			// row elsewhere (fetchKindEmbedderFenceCorpus): abort, never
+			// skip-and-reconcile.
+			return nil, fmt.Errorf("confirmed-kind vector census watermark snapshot: malformed row with empty source for org %s", orgID)
 		}
 		snapshot[source] = propStringValue(r["backend_watermark"])
 	}
 	return snapshot, nil
+}
+
+// finiteVector reports whether v is non-empty and every element is a
+// finite float64 (no NaN, no +/-Inf). A zero-length or non-finite embedder
+// output is a broken vector, not merely an unusual one:
+// trueCosineSimilarity's own dimension-mismatch/zero-norm guard already
+// defends the DECISION this census makes (nothing here ever reads
+// RivalCountAboveTau to decide State), but a NaN or Inf component would
+// propagate through that guard silently -- NaN comparisons are always
+// false in Go, so a poisoned query vector would score zero rivals against
+// every corpus vector without ever tripping the >tau check, indistinguishable
+// telemetry-wise from "this term genuinely has no rivals".
+func finiteVector(v []float64) bool {
+	if len(v) == 0 {
+		return false
+	}
+	for _, f := range v {
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // watermarkSnapshotsEqual reports whether before and after name the SAME
@@ -173,6 +221,23 @@ func (a *Adapter) chaos4155WatermarkSnapshot(ctx context.Context, key, orgID str
 // stable -- after["github"] is the zero value "", which happened to equal
 // before["github"]'s own "" watermark. Checking key PRESENCE with the
 // comma-ok form in both directions closes that gap.
+//
+// codex R2 (Medium, orchestrator-waived for Phase 1, ruling
+// 2026-08-25 12:44): this is still a two-point-in-time VALUE comparison,
+// not a transactional read -- it cannot see a source's watermark move
+// w1 -> w2 -> w1 (a write landing and then being followed by another write
+// that happens to restore the exact prior value) between the before and
+// after reads. That sequence reads as SnapshotStable=true/State=Complete
+// even though a projection write genuinely occurred mid-census and the
+// corpus may have changed. Closing this needs a monotonic generation
+// fence on the watermark schema (projection.go's write path, shared far
+// beyond this shadow arm) -- a backend schema change out of scope for
+// Phase 1. Accepted because this arm is SHADOW-ONLY and proven inert to
+// any commit decision (this file's own doc comment; codex R2's own
+// verdict), and Phase 2's measurement design consumes aggregates over
+// multiple replicates, so one ABA-masked Complete cannot by itself flip a
+// measurement conclusion. Follow-up: generation-fence hardening tracked
+// as a separate Linear issue related to CHAOS-4155.
 func watermarkSnapshotsEqual(before, after map[string]string) bool {
 	if len(before) != len(after) {
 		return false

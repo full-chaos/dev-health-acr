@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -330,5 +331,57 @@ func TestConfirmedKindVectorCensus_DependencyErrorNeverPropagatesOnlyFailedState
 	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q", got, graphrank.ConfirmedKindVectorScopeFailed)
+	}
+}
+
+// TestConfirmedKindVectorCensus_MalformedWatermarkRowFailsClosed is codex
+// R2's own Medium finding regression: a watermark row with an empty source
+// used to be silently dropped from the snapshot map instead of aborting the
+// census, which let two snapshots that both happen to drop the SAME
+// malformed row compare as stable/equal -- hiding a data-integrity problem
+// behind a false Complete reading. source is part of a watermark node's own
+// MERGE identity key (projection.go), so an empty one can only mean a
+// corrupted row, never a legitimate state.
+func TestConfirmedKindVectorCensus_MalformedWatermarkRowFailsClosed(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      1,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
+		watermarkBefore: []row{chaos4155WatermarkRow("", "wm-1")}, // malformed: empty source
+		watermarkAfter:  []row{chaos4155WatermarkRow("", "wm-1")},
+	}
+	adapter := chaos4155Adapter(t, fake, 1000)
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
+		t.Fatalf("outcome = %+v, want State=%q -- a malformed (empty-source) watermark row must abort the census, never be silently dropped into a false-stable comparison", got, graphrank.ConfirmedKindVectorScopeFailed)
+	}
+}
+
+// TestConfirmedKindVectorCensus_NonFiniteQueryVectorFailsClosed is codex
+// R2's own Medium finding regression: a NaN or Inf component in the
+// embedder's query vector used to fall through to trueCosineSimilarity's
+// zero-norm/dimension guard, which silently returns similarity 0 rather
+// than surfacing the broken vector -- NaN comparisons are always false in
+// Go, so a poisoned query vector would score zero rivals against every
+// corpus vector, indistinguishable telemetry-wise from "no rivals" and
+// letting the term count toward completeness despite never being
+// meaningfully scored.
+func TestConfirmedKindVectorCensus_NonFiniteQueryVectorFailsClosed(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      1,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
+		watermarkBefore: []row{chaos4155WatermarkRow("github", "wm-1")},
+		watermarkAfter:  []row{chaos4155WatermarkRow("github", "wm-1")},
+	}
+	embedder := &stubEmbedder{vector: []float32{float32(math.NaN()), 0, 0, 0}}
+	adapter := vectorAdapter(t, fake.toFakeConn(), embedder, 0.5)
+	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
+		t.Fatalf("outcome = %+v, want State=%q -- a non-finite query vector must abort the census, never silently score as zero rivals", got, graphrank.ConfirmedKindVectorScopeFailed)
+	}
+	if got.QueriesScored != 0 {
+		t.Fatalf("outcome.QueriesScored = %d, want 0 -- a poisoned vector must not count as a scored term", got.QueriesScored)
 	}
 }
