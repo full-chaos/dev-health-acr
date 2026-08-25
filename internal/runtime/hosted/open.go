@@ -683,7 +683,11 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// EngineDependencies field uses.
 	var offerPhraser contextfabric.OfferPhraser
 	if phrasingRuntime, ok := deploymentDefaultRuntime.(contextfabric.OfferPhrasingModelRuntime); ok && !isNilRuntime(phrasingRuntime) {
-		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink}
+		// Logger wired from the SAME request.options.Logger every other
+		// component in this file uses (codex R2 review finding: omitting
+		// it left RuntimeOfferPhraser's sink-failure WARN falling back to
+		// slog.Default() instead of the service's configured logger).
+		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink, Logger: request.options.Logger}
 	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
 	// -- the same typed-nil-interface trap open()'s own conversion guards

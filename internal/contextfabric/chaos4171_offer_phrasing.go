@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -177,9 +178,16 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 		if logger == nil {
 			logger = slog.Default()
 		}
+		// Codex R2 review finding (chaos4171pr2-codex-r2): sinkErr.Error()
+		// is NEVER logged -- a Postgres-backed ModelReceiptSink's error can
+		// carry driver/server/schema detail (this repo's own sanitization
+		// middleware, modelprovider's sanitizeProviderErrorBody, only
+		// covers the MODEL provider's HTTP transport, not the storage
+		// layer), so only the fixed failure class and correlation ids are
+		// logged -- never the error's own free-text Error() string.
 		logger.WarnContext(ctx, "context fabric offer phrasing receipt sink failed",
 			"org_id", principal.OrgID, "request_id", input.RequestID,
-			"operation", string(receipt.Operation), "error", sinkErr.Error())
+			"operation", string(receipt.Operation))
 		return StructureOfferPhrasingResult{Outcome: OfferPhrasingFellBackStructural}
 	}
 	return StructureOfferPhrasingResult{Outcome: outcome, Phrasings: phrasings}
@@ -242,7 +250,13 @@ func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft Structu
 		}
 		seen[entry.OptionID] = struct{}{}
 		text := strings.TrimSpace(entry.Phrasing)
-		if text == "" || len(text) > phrasingMaxLabelLength {
+		// Rune count, not byte length (codex R2 review finding): the
+		// contract's own bound (optionalStringBetween, internal/contracts/v1/
+		// validation_helpers.go) counts runes via utf8.RuneCountInString --
+		// a byte-length check here would reject valid non-ASCII phrasing
+		// text the wire bound itself would accept, falling back to
+		// structural for no real violation.
+		if text == "" || utf8.RuneCountInString(text) > phrasingMaxLabelLength {
 			return OfferPhrasingFellBackStructural, nil
 		}
 		phrasings[entry.OptionID] = text

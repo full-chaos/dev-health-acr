@@ -82,6 +82,28 @@ func TestClassifyOfferPhrasingDraft_OversizedEntryFallsBackStructural(t *testing
 	}
 }
 
+// TestClassifyOfferPhrasingDraft_BoundsByRuneNotByte is RED-FIRST evidence
+// for a codex review finding (chaos4171pr2-codex-r2): the bound must count
+// runes, matching the contract's own optionalStringBetween
+// (utf8.RuneCountInString), not bytes -- a multi-byte-rune string whose
+// BYTE length exceeds the bound but whose RUNE count does not must still
+// be accepted.
+func TestClassifyOfferPhrasingDraft_BoundsByRuneNotByte(t *testing.T) {
+	t.Parallel()
+	input := StructureOfferPhrasingInput{Options: offerOptions()}
+	// Each "é" is 2 bytes, 1 rune: 150 runes = 300 bytes, over the byte
+	// bound but under the rune bound.
+	text := strings.Repeat("é", 150)
+	draft := StructureOfferPhrasingDraft{Phrasings: []StructureOfferPhrasingEntry{{OptionID: "opt_pr", Phrasing: text}}}
+	outcome, phrasings := classifyOfferPhrasingDraft(input, draft, nil)
+	if outcome != OfferPhrasingGenerated {
+		t.Fatalf("outcome = %q, want %q (150 runes is within the %d-rune bound despite exceeding it in bytes)", outcome, OfferPhrasingGenerated, phrasingMaxLabelLength)
+	}
+	if phrasings["opt_pr"] != text {
+		t.Fatalf("phrasings = %#v", phrasings)
+	}
+}
+
 func TestClassifyOfferPhrasingDraft_EmptyTextFallsBackStructural(t *testing.T) {
 	t.Parallel()
 	input := StructureOfferPhrasingInput{Options: offerOptions()}
