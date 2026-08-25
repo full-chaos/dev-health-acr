@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -235,6 +237,103 @@ func TestCandidateOfferMaterial_LabelAndOfferSource(t *testing.T) {
 	}
 	if opt.OfferSource != contractsv1.ContextFabricStructureOfferEngine {
 		t.Errorf("opt.OfferSource = %q, want engine", opt.OfferSource)
+	}
+}
+
+// TestCandidateOfferMaterial_LabelOverV1BoundIsBoundedAtTheProducer
+// (CHAOS-4210, ext65 corpus case index 6) pins the fix for the exact
+// pre-existing turn-1 validation error the ledger recorded:
+// "candidate option option_id or label violates v1 bounds"
+// (validate_context_fabric_structure.go's ContextFabricCandidateOption.
+// Validate(), Label bounded to [1,200] runes). tables.go's queryWorkItems
+// already guards Subject.Label against EMPTY (falls back to the work item
+// id) but never against a real title exceeding 200 runes -- an ordinary,
+// legitimate long title, not malformed data. candidateOfferLabel passed
+// Subject.Label through verbatim, so any candidate whose title is long
+// enough reaches composeStructureNeeds with a Label the wire contract
+// rejects outright, turning a single long-titled candidate into a whole
+// investigation-result validation failure. The receipt_id/option_id this
+// test supplies are synthetically well-formed (real values are minted
+// later, by composeStructureNeeds in the parent package) so only the
+// Label bound is under test.
+func TestCandidateOfferMaterial_LabelOverV1BoundIsBoundedAtTheProducer(t *testing.T) {
+	t.Parallel()
+	longTitle := strings.Repeat("a", 250)
+	candidates := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "wi_1", Label: longTitle}},
+	}
+	material, diag := candidateOfferMaterial(candidates, 0)
+	if len(material.CandidateOptions) != 1 {
+		t.Fatalf("len(material.CandidateOptions) = %d, want 1", len(material.CandidateOptions))
+	}
+	if diag.LabelsNormalizedCount != 1 {
+		t.Errorf("diag.LabelsNormalizedCount = %d, want 1 -- the run's own artifacts must show this label was normalized", diag.LabelsNormalizedCount)
+	}
+	opt := material.CandidateOptions[0]
+	opt.ReceiptID = contractsv1.ContextFabricCandidateOptionReceiptPrefix + strings.Repeat("a", 24)
+	opt.OptionID = "opt_" + strings.Repeat("a", 16)
+	if err := opt.Validate(); err != nil {
+		t.Fatalf("opt.Validate() = %v, want nil -- the producer must bound Label to the wire contract, not the caller", err)
+	}
+	if got := utf8.RuneCountInString(opt.Label); got > 200 {
+		t.Errorf("len(opt.Label) = %d runes, want <= 200 (v1 bound)", got)
+	}
+	if opt.Label != longTitle[:200] {
+		t.Errorf("opt.Label = %q, want the first 200 runes of the original title verbatim", opt.Label)
+	}
+}
+
+// TestCandidateOfferMaterial_LabelOverV1BoundMultibyteIsTruncatedOnRuneBoundary
+// pins truncation correctness for a title whose runes are NOT one byte
+// each -- codex xhigh review (CHAOS-4210 round 1): the all-ASCII case above
+// cannot distinguish rune-safe truncation from a byte-slice cut that would
+// split a multibyte rune and corrupt the label (or panic on re-encoding).
+func TestCandidateOfferMaterial_LabelOverV1BoundMultibyteIsTruncatedOnRuneBoundary(t *testing.T) {
+	t.Parallel()
+	longTitle := strings.Repeat("é", 250)
+	candidates := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "wi_1", Label: longTitle}},
+	}
+	material, diag := candidateOfferMaterial(candidates, 0)
+	if len(material.CandidateOptions) != 1 {
+		t.Fatalf("len(material.CandidateOptions) = %d, want 1", len(material.CandidateOptions))
+	}
+	if diag.LabelsNormalizedCount != 1 {
+		t.Errorf("diag.LabelsNormalizedCount = %d, want 1", diag.LabelsNormalizedCount)
+	}
+	opt := material.CandidateOptions[0]
+	opt.ReceiptID = contractsv1.ContextFabricCandidateOptionReceiptPrefix + strings.Repeat("a", 24)
+	opt.OptionID = "opt_" + strings.Repeat("a", 16)
+	if err := opt.Validate(); err != nil {
+		t.Fatalf("opt.Validate() = %v, want nil", err)
+	}
+	if !utf8.ValidString(opt.Label) {
+		t.Fatalf("opt.Label is not valid UTF-8 -- truncation split a multibyte rune")
+	}
+	if got := utf8.RuneCountInString(opt.Label); got != 200 {
+		t.Errorf("utf8.RuneCountInString(opt.Label) = %d, want exactly 200", got)
+	}
+	if opt.Label != strings.Repeat("é", 200) {
+		t.Errorf("opt.Label = %q, want the first 200 runes verbatim, not a byte-boundary cut", opt.Label)
+	}
+}
+
+// TestCandidateOfferMaterial_LabelAtOrUnderV1BoundIsUnchanged pins the
+// companion invariant: bounding must not clip a title that already fits --
+// exactly 200 runes (the bound itself) and a short ordinary title both
+// survive verbatim.
+func TestCandidateOfferMaterial_LabelAtOrUnderV1BoundIsUnchanged(t *testing.T) {
+	t.Parallel()
+	exactTitle := strings.Repeat("b", 200)
+	candidates := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "wi_1", Label: exactTitle}},
+	}
+	material, diag := candidateOfferMaterial(candidates, 0)
+	if len(material.CandidateOptions) != 1 || material.CandidateOptions[0].Label != exactTitle {
+		t.Fatalf("material.CandidateOptions[0].Label = %q, want the exact-200-rune title unchanged", material.CandidateOptions[0].Label)
+	}
+	if diag.LabelsNormalizedCount != 0 {
+		t.Errorf("diag.LabelsNormalizedCount = %d, want 0 -- a title already at the bound must not be counted as normalized", diag.LabelsNormalizedCount)
 	}
 }
 

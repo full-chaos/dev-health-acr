@@ -183,6 +183,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
 			"candidate_offer_count", event.KindOfferCandidateOfferCount,
 			"offer_kind", event.KindOfferOfferKind,
+			// CHAOS-4210: how many of candidate_offer_count's own options
+			// needed their Label bounded to the v1 wire contract -- see
+			// KindOfferCandidateOfferLabelsNormalizedCount's own doc comment
+			// (ResolutionTraceEvent) for why this must be diagnosable from
+			// the run's own artifacts, not just applied silently.
+			"candidate_offer_labels_normalized_count", event.KindOfferCandidateOfferLabelsNormalizedCount,
 			"boundary_kinds", event.KindOfferBoundaryKinds,
 			"boundary_kinds_before_repair", event.KindOfferBoundaryKindsBeforeRepair,
 			"distinct_kind_count_before_repair", event.KindOfferDistinctKindCountBeforeRepair,
