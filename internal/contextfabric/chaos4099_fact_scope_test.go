@@ -996,6 +996,18 @@ type recordingScopeExpander struct {
 	// (from `kept`, not from every target this double returns) without a
 	// real ClickHouse-backed expander.
 	targetAttributionSource map[string]string
+	// targetBasisByPolicy is targetBasis's own per-policy variant (CHAOS-4101
+	// codex xhigh review round 2): the real expander only ever populates
+	// TargetBasis from the TEAM policies' own per-target attribution logic --
+	// a project-policy call NEVER carries one. targetBasis alone cannot
+	// simulate that asymmetry, because it applies identically to every call
+	// this double answers regardless of which policy asked; a test proving
+	// the resolver handles two DIFFERENT origin kinds reaching the identical
+	// target with DIFFERENT bases needs the override scoped to one policy,
+	// exactly like production. When set, ONLY a request whose Policy matches
+	// gets targetBasisByPolicy's map; targetBasis (unscoped) still applies to
+	// every call for tests that do not need this distinction.
+	targetBasisByPolicy map[FactScopePolicy]map[string]FactScopeBasis
 }
 
 func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request FactScopeExpansionRequest) (FactScopeExpansionResult, error) {
@@ -1012,7 +1024,11 @@ func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request Fact
 			targets = nil
 		}
 	}
-	return FactScopeExpansionResult{Targets: targets, Counts: e.counts, TargetBasis: e.targetBasis, TargetAttributionSource: e.targetAttributionSource}, nil
+	targetBasis := e.targetBasis
+	if scoped, ok := e.targetBasisByPolicy[request.Policy]; ok {
+		targetBasis = scoped
+	}
+	return FactScopeExpansionResult{Targets: targets, Counts: e.counts, TargetBasis: targetBasis, TargetAttributionSource: e.targetAttributionSource}, nil
 }
 
 // disableAllProjectPolicies installs a narrow table with the SAME three
@@ -1742,6 +1758,75 @@ func TestChaos4101_TeamSubjectAdmitsRealFactsAcrossAllThreeCapabilities(t *testi
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the disclosed result must be servable: %v", err)
+	}
+}
+
+// TestChaos4101_ADuplicateAcrossOriginKindsUpgradesToTheWeakerBasis is the
+// direct regression for codex xhigh review round 2's second confirmed
+// MEDIUM: a project origin and a team origin can both reach the SAME
+// repository within one requirement (FactMetrics admits both
+// project_work_item_repository_v1 and team_primary_attribution_repository_v1
+// against SubjectRepository). Origin kinds are walked sorted, so `project`
+// runs before `team` -- before this fix, the project traversal's admission
+// (rule.Basis, activity_proxy, no per-target override) won the cross-origin
+// dedup and the team traversal's own heuristic-sourced finding
+// (attributed_primary_team) was silently discarded when it hit the SAME
+// target as a duplicate. The reader would then see the STRONGER of the two
+// claims for a target that a heuristic team attribution, not just activity,
+// actually reached -- exactly the overstatement
+// FactScopeBasisAttributedPrimaryTeam exists to prevent.
+func TestChaos4101_ADuplicateAcrossOriginKindsUpgradesToTheWeakerBasis(t *testing.T) {
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {
+			SubjectProject: {
+				Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 10,
+			},
+			SubjectTeam: {
+				Policy: FactScopePolicyTeamPrimaryAttributionRepository, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 10,
+			},
+		},
+	}
+
+	sharedRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:shared-repo"}
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result:     FactProviderResult{State: SourceAvailable},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+		ScopeExpander: &recordingScopeExpander{
+			// Call order matches originKinds' sorted walk: "project" < "team",
+			// so perCall[0] is the project traversal and perCall[1] is the
+			// team traversal -- both reaching the SAME repository.
+			perCall: [][]SubjectRef{{sharedRepo}, {sharedRepo}},
+			// Scoped to the TEAM policy only (targetBasis alone cannot
+			// isolate this -- see its own doc comment): the project call's
+			// result carries no override and falls through to rule.Basis
+			// (activity_proxy), matching what the real project-chain
+			// expander does today.
+			targetBasisByPolicy: map[FactScopePolicy]map[string]FactScopeBasis{
+				FactScopePolicyTeamPrimaryAttributionRepository: {
+					canonicalFactSubjectKey(sharedRepo): FactScopeBasisAttributedPrimaryTeam,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeProject, scopeTeam}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(bundle.Scope.Derivations) != 1 {
+		t.Fatalf("derivations = %+v, want exactly one: the team traversal reached NOTHING new, only a duplicate of the project one", bundle.Scope.Derivations)
+	}
+	if got := bundle.Scope.Derivations[0].Basis; got != FactScopeBasisAttributedPrimaryTeam {
+		t.Fatalf("derivation basis = %q, want attributed_primary_team: the team traversal's own heuristic finding on this duplicate target must not be silently dropped in favor of the project traversal's cleaner activity_proxy claim", got)
 	}
 }
 

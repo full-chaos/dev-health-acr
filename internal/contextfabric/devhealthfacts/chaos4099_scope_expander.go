@@ -747,9 +747,23 @@ func (e *ScopeExpander) teamRepositories(ctx context.Context, orgID string, orig
 		return nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
 	limitPlusOne := limit + 1
+	// The join carries repo_id, not just work_item_id (codex xhigh review
+	// round 2, confirmed real, MEDIUM): work_items' declared sort key is
+	// (org_id, repo_id, work_item_id) -- devhealthschema.go's
+	// "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id,
+	// work_item_id)", and devhealthsource's own census registry documents
+	// work_item_id as NOT the table's natural key on its own: a bare
+	// work_item_id is cross-repo-collidable. work_item_team_attributions
+	// carries its OWN repo_id column (insert_work_item_team_attributions,
+	// ops/storage/clickhouse.py), written from the SAME work item the
+	// attribution was computed for, so joining on work_item_id alone could
+	// match a work_items row from a DIFFERENT repository that happens to
+	// reuse the same bare id -- attributing the wrong repository to the
+	// team, or (worse) attributing an unauthorized repository the team was
+	// never connected to.
 	statement := `SELECT toString(w.repo_id), ifNull(r.repo, ''), argMin(toString(a.source), ` + teamAttributionSourceRankSQL + `) AS best_source
 FROM work_item_team_attributions AS a FINAL
-INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
+INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.repo_id = a.repo_id AND w.org_id = a.org_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND a.team_id IN {team_ids:Array(String)}
 GROUP BY toString(w.repo_id), ifNull(r.repo, '')

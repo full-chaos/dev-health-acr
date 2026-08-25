@@ -181,6 +181,36 @@ const (
 	FactScopeBasisAttributedPrimaryTeam FactScopeBasis = "attributed_primary_team"
 )
 
+// factScopeBasisRank orders FactScopeBasis from the strongest claim to the
+// most cautious one, matching the three constants' own doc comments (direct
+// asserts the relationship; activity_proxy asserts activity, not ownership;
+// attributed_primary_team stacks a second, independent inference on top of
+// activity_proxy). Anything unrecognised ranks at the bottom (most cautious)
+// for the same fail-toward-caution reason teamAttributionSourceRankSQL's own
+// doc comment gives for an unrecognised source.
+var factScopeBasisRank = map[FactScopeBasis]int{
+	FactScopeBasisDirect:                0,
+	FactScopeBasisActivityProxy:         1,
+	FactScopeBasisAttributedPrimaryTeam: 2,
+}
+
+// factScopeBasisWeaker reports whether candidate is a MORE cautious claim
+// than current -- used when two different origin kinds reach the identical
+// target within one requirement, so the weaker of the two bases wins rather
+// than whichever origin kind happened to run first (codex xhigh review
+// round 2, confirmed real, MEDIUM).
+func factScopeBasisWeaker(candidate, current FactScopeBasis) bool {
+	candidateRank, ok := factScopeBasisRank[candidate]
+	if !ok {
+		candidateRank = len(factScopeBasisRank)
+	}
+	currentRank, ok := factScopeBasisRank[current]
+	if !ok {
+		currentRank = len(factScopeBasisRank)
+	}
+	return candidateRank > currentRank
+}
+
 // FactScopeExpansionOutcome is what the resolver decided for one
 // (requirement, origin kind, policy) triple.
 //
@@ -1138,6 +1168,12 @@ func (r *FactReadScopeResolver) resolveRequirement(
 	}
 	sort.Slice(originKinds, func(i, j int) bool { return originKinds[i] < originKinds[j] })
 
+	// derivationIndex tracks, for THIS requirement kind only, which index in
+	// scope.Derivations already carries each admitted target's provenance --
+	// freshly built per resolveRequirement call, so it never reaches across
+	// requirement kinds (codex xhigh review round 2, confirmed real, MEDIUM:
+	// see expand's own use of it below).
+	derivationIndex := map[string]int{}
 	for _, originKind := range originKinds {
 		rule, eligible := lookupFactScopePolicy(kind, originKind)
 		if !eligible {
@@ -1183,7 +1219,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			// the same reason as every rung above.
 			event.Outcome = FactScopePolicyUnavailable
 		default:
-			r.expand(ctx, principal, scope, &event, origins, rule)
+			r.expand(ctx, principal, scope, &event, origins, rule, derivationIndex)
 		}
 
 		scope.Events = append(scope.Events, event)
@@ -1242,6 +1278,7 @@ func (r *FactReadScopeResolver) expand(
 	event *FactScopeExpansionEvent,
 	origins []SubjectRef,
 	rule factScopePolicyRule,
+	derivationIndex map[string]int,
 ) {
 	result, err := r.expander.ExpandFactScope(ctx, FactScopeExpansionRequest{
 		Principal:       principal,
@@ -1394,6 +1431,30 @@ func (r *FactReadScopeResolver) expand(
 		}
 		key := canonicalFactSubjectKey(target)
 		if _, duplicate := seen[key]; duplicate {
+			// A target already admitted by an EARLIER origin kind in this
+			// same requirement (codex xhigh review round 2, confirmed real,
+			// MEDIUM): before this fix, this origin's own per-target basis
+			// was simply discarded, so a target that both a project chain
+			// (activity_proxy) and a team chain reached could silently keep
+			// the project chain's basis even when the team chain's own
+			// traversal found only a heuristic-sourced attribution --
+			// exactly the overstatement FactScopeBasisAttributedPrimaryTeam
+			// exists to disclose. The already-recorded Derivation is
+			// upgraded to the WEAKER (more cautious) of the two bases, the
+			// same "worst outcome wins" discipline this file already
+			// applies to gaps. AttributionSourceCounts is deliberately left
+			// alone here: it counts sources for targets admitted BY THIS
+			// EVENT (the R1 fix above), and a duplicate was not admitted by
+			// this event.
+			if idx, tracked := derivationIndex[key]; tracked {
+				basis := rule.Basis
+				if override, ok := result.TargetBasis[key]; ok {
+					basis = override
+				}
+				if factScopeBasisWeaker(basis, scope.Derivations[idx].Basis) {
+					scope.Derivations[idx].Basis = basis
+				}
+			}
 			continue
 		}
 		seen[key] = struct{}{}
@@ -1449,6 +1510,11 @@ func (r *FactReadScopeResolver) expand(
 			Policy: rule.Policy,
 			Basis:  basis,
 		})
+		// Recorded so a LATER origin kind's own dedup pass (above) can
+		// upgrade this entry's Basis in place instead of discarding what it
+		// found, rather than pointing at a stale index once Derivations
+		// grows further.
+		derivationIndex[key] = len(scope.Derivations) - 1
 	}
 	// event.Basis is a MIX SUMMARY (see FactScopeExpansionEvent.Basis's own
 	// doc comment and AttributionSourceCounts' doc comment): it starts as

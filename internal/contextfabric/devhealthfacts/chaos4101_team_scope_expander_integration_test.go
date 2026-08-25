@@ -64,12 +64,20 @@ func seedChaos4101TeamFixture(t *testing.T, ctx context.Context, direct interfac
 		mustSeed("work item "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, repoID, chaos4099OrgID, "issue "+id, "open", "", "", "", at)
 	}
-	// attribution's OWN repo_id column value is deliberately NOT trusted by
-	// teamRepositories' SQL (it joins work_items for repo_id instead --
-	// devhealthsource's queryWorkItemTeams gives the CHAOS-3785 reason: this
-	// column is mostly the zero UUID and would be meaningless to scope on).
-	// Passed here anyway, matching each row's real repo, purely so this
-	// fixture reads honestly rather than relying on that column being inert.
+	// attribution's OWN repo_id column IS part of teamRepositories' join
+	// (codex xhigh review round 2, confirmed real, MEDIUM): work_items'
+	// declared sort key is (org_id, repo_id, work_item_id), so a bare
+	// work_item_id is cross-repo-collidable (two different repositories can
+	// each have their own issue "42"), and joining on work_item_id alone
+	// let an attribution for ONE repo's work item admit a DIFFERENT repo
+	// that merely happens to reuse the same bare id -- see
+	// TestScopeExpander_TeamToRepository_CrossRepoWorkItemIDCollisionExcludesTheWrongRepo
+	// below for the direct reproduction. compute_work_item_team_attributions
+	// (ops/metrics/compute_work_items.py) writes this column from the SAME
+	// WorkItem.repo_id that lands in work_items.repo_id for that row -- zero
+	// UUID for a Linear-sourced item on BOTH sides, a real id on BOTH sides
+	// otherwise -- so joining on it is a correct identity match, not a
+	// scoping filter on a mostly-empty column.
 	attribution := func(label, workItemID, repoID, source string) {
 		mustSeed(label, `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			chaos4099OrgID, repoID, workItemID, chaos4101TeamID, source, uint8(1), "high", at)
@@ -294,5 +302,62 @@ func TestScopeExpander_TeamToPullRequestReview_InheritsRepositoryBasisAndDropsUn
 	}
 	if result.Counts.AuthorizationDroppedCount != 1 {
 		t.Fatalf("AuthorizationDroppedCount = %d, want 1 (repo B, dropped before its reviews were ever queried)", result.Counts.AuthorizationDroppedCount)
+	}
+}
+
+// TestScopeExpander_TeamToRepository_CrossRepoWorkItemIDCollisionExcludesTheWrongRepo
+// is the direct reproduction for codex xhigh review round 2's first
+// confirmed MEDIUM: work_items' declared sort key is (org_id, repo_id,
+// work_item_id) -- work_item_id alone is NOT the table's natural key, and a
+// bare id is cross-repo-collidable (two different repositories, e.g. two
+// different GitHub repos, can each have their own issue "42"). Before this
+// fix, teamRepositories' join matched work_items to
+// work_item_team_attributions on work_item_id alone, so an attribution
+// naming repo A's issue could ALSO match an unrelated repo's own,
+// differently-attributed (or entirely unattributed) issue sharing the same
+// bare id -- admitting a repository into the team's scope that no
+// attribution row ever actually named.
+func TestScopeExpander_TeamToRepository_CrossRepoWorkItemIDCollisionExcludesTheWrongRepo(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedChaos4101TeamFixture(t, ctx, direct, at)
+
+	const collidingRepoID = "a3398fbc-1945-3717-05d8-eb78866b4e92"
+	const collidingRepoSlug = "acme/repo-c-unrelated"
+	mustSeed := func(label, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", label, err)
+		}
+	}
+	mustSeed("repo C", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		collidingRepoID, chaos4099OrgID, collidingRepoSlug, "github", at)
+	// SAME bare work_item_id ("collide-42") as repo A's native_team-attributed
+	// work item below, but belonging to a DIFFERENT repository and carrying
+	// NO team attribution row of its own.
+	mustSeed("repo A colliding work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"collide-42", chaos4101RepoAID, chaos4099OrgID, "issue collide-42 in repo A", "open", "", "", "", at)
+	mustSeed("repo C colliding work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"collide-42", collidingRepoID, chaos4099OrgID, "issue collide-42 in repo C", "open", "", "", "", at)
+	mustSeed("repo A colliding attribution", `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		chaos4099OrgID, chaos4101RepoAID, "collide-42", chaos4101TeamID, "native_team", uint8(1), "high", at)
+
+	expander := devhealthfacts.NewScopeExpander(query)
+	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+		Principal:       storage.Principal{OrgID: chaos4099OrgID, RepositoryScopes: []string{"*"}},
+		RequirementKind: contextfabric.FactMetrics,
+		Origins:         []contextfabric.SubjectRef{chaos4101TeamSubject()},
+		Policy:          contextfabric.FactScopePolicyTeamPrimaryAttributionRepository,
+		TargetKind:      contextfabric.SubjectRepository,
+		Limit:           20,
+	})
+	if err != nil {
+		t.Fatalf("ExpandFactScope: %v", err)
+	}
+	for _, target := range result.Targets {
+		if target.CanonicalID == "repository:"+collidingRepoID {
+			t.Fatalf("targets = %+v, repo C was admitted despite carrying no team attribution of its own -- its ONLY connection to the team is sharing a bare work_item_id with repo A's real attribution", result.Targets)
+		}
 	}
 }
