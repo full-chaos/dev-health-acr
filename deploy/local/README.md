@@ -444,19 +444,34 @@ kiac load image dev-health-acr:dev --name acr-local
 # (no bare `| base64 -d` with no destination):
 PG_PASSWORD=$(kubectl -n acr-trial-data get secret trial-postgres \
   -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
-# Build each DSN as postgres://devhealth:$PG_PASSWORD@trial-postgres.
-# acr-trial-data.svc.cluster.local:5432/acr?sslmode=disable (clickhouse
-# analogous, user `ch`, same password -- see trial-data.sh's own Secret
-# comment for why postgres/clickhouse share one password). Generate the
-# Secret manifest directly from the variable (`kubectl create secret
-# generic ... --from-literal=ACR_POSTGRES_DSN="postgres://devhealth:
-# $PG_PASSWORD@..." --dry-run=client -o yaml | kubectl apply -f -`) rather
-# than writing the DSN to an intermediate file or printing it to compose
-# one by hand -- the goal throughout is that the password is never
-# rendered to a terminal or a file you'd have to remember to delete.
-# Never hand-edit an EXISTING Secret's password to "whatever looks
-# right" -- always re-derive it from the live trial-postgres Secret above.
+#
+# This trial deployment's own values override points BOTH
+# credentials.runtime.existingSecret AND credentials.migration.existingSecret
+# at the SAME Secret, `acr-runtime-credentials` (confirm with `helm -n
+# acr-pilot get values acr-pilot | grep -A6 credentials:`) -- unlike the
+# chart's out-of-box default (deploy/helm/acr/values-development.yaml),
+# which uses a separate `acr-migration-credentials` Secret for the
+# migration DSN. Don't assume one or the other; always check the live
+# values first. That Secret also carries ACR_EVIDENCE_ID_ACTIVE_KID and
+# ACR_EVIDENCE_ID_KEYS (unrelated to postgres/clickhouse, don't touch or
+# regenerate those) -- `kubectl patch` with `stringData`, not a full
+# `create --dry-run | apply` replace, so only the three DSN keys below
+# change and everything else in the Secret is left alone:
+kubectl -n acr-pilot patch secret acr-runtime-credentials --type merge -p "$(cat <<JSON
+{"stringData":{
+  "ACR_POSTGRES_DSN":"postgres://devhealth:${PG_PASSWORD}@trial-postgres.acr-trial-data.svc.cluster.local:5432/acr?sslmode=disable",
+  "ACR_POSTGRES_MIGRATION_DSN":"postgres://devhealth:${PG_PASSWORD}@trial-postgres.acr-trial-data.svc.cluster.local:5432/acr?sslmode=disable",
+  "ACR_CLICKHOUSE_DSN":"clickhouse://ch:${PG_PASSWORD}@trial-clickhouse.acr-trial-data.svc.cluster.local:9000/default"
+}}
+JSON
+)"
 unset PG_PASSWORD
+# (clickhouse uses user `ch`, same password -- see trial-data.sh's own
+# Secret comment for why postgres/clickhouse share one password). Never
+# hand-edit an EXISTING Secret's password to "whatever looks right" --
+# always re-derive it from the live trial-postgres Secret above. After
+# patching, `kubectl -n acr-pilot rollout restart deploy/acr-pilot` --
+# a Secret patch alone does not restart pods to pick up the new env.
 # redeploy acr-pilot via its own owner's normal deploy path (stateless, no
 # PVC -- no data loss there, just needs a fresh rollout after the recreate)
 ```
