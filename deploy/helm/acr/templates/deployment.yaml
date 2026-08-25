@@ -183,6 +183,8 @@ spec:
               value: {{ .Values.contextFabric.model.model | quote }}
             - name: ACR_CONTEXT_FABRIC_MODEL_FALLBACK
               value: {{ .Values.contextFabric.model.fallbackModel | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_PHRASING
+              value: {{ .Values.contextFabric.model.phrasingModel | quote }}
             - name: ACR_CONTEXT_FABRIC_MODEL_TIMEOUT
               value: {{ .Values.contextFabric.model.timeout | quote }}
             - name: ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS

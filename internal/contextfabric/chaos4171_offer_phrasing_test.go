@@ -268,6 +268,28 @@ func TestRuntimeOfferPhraser_CallErrorRecordsReceiptAndFallsBack(t *testing.T) {
 	}
 }
 
+// TestRuntimeOfferPhraser_SinkFailurePreservesAMoreSpecificOutcome is
+// RED-FIRST evidence for a codex review finding (chaos4171pr2-codex-r3): a
+// simultaneous model-call failure AND receipt-sink failure must still
+// report OfferPhrasingCallFailed, not be silently relabelled as the
+// generic OfferPhrasingFellBackStructural -- losing that distinction would
+// hide a genuine provider outage from telemetry during exactly the outage
+// an operator most needs to see it.
+func TestRuntimeOfferPhraser_SinkFailurePreservesAMoreSpecificOutcome(t *testing.T) {
+	t.Parallel()
+	sink := &fakeReceiptSink{err: errors.New("store unavailable")}
+	receipt := validModelReceiptFixture(ModelOperationPhraseOffers)
+	receipt.Outcome = "provider_error"
+	phraser := RuntimeOfferPhraser{
+		Runtime: fakeOfferPhrasingModelRuntime{receipt: receipt, err: errors.New("provider unavailable")},
+		Sink:    sink,
+	}
+	result := phraser.Phrase(context.Background(), storage.Principal{OrgID: "org_1"}, StructureOfferPhrasingInput{Options: offerOptions()})
+	if result.Outcome != OfferPhrasingCallFailed {
+		t.Fatalf("Outcome = %q, want %q (the call failure is the more specific, more important fact)", result.Outcome, OfferPhrasingCallFailed)
+	}
+}
+
 func TestRuntimeOfferPhraser_SinkFailureFallsBackStructural(t *testing.T) {
 	t.Parallel()
 	sink := &fakeReceiptSink{err: errors.New("store unavailable")}

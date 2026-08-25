@@ -300,6 +300,11 @@ contextFabric:
     baseURL: ""
     model: ""
     fallbackModel: ""
+    # CHAOS-4171 PR2: optional distinct model for the SECOND bounded
+    # offer-phrasing call (internal/contextfabric/chaos4171_offer_phrasing.go).
+    # Empty means phrasing shares `model` above -- an operator opts into a
+    # smaller/cheaper model explicitly.
+    phrasingModel: ""
     timeout: "45s"
     maxAttempts: "2"
     maxTransportRetries: "2"

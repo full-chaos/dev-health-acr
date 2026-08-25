@@ -166,14 +166,11 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 	// success or failure.
 	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {
 		// A sink failure is audit-trail loss, not a phrasing-quality
-		// signal -- it never upgrades a successful phrasing to a
-		// fabricated failure and never downgrades a real one. Falling
-		// back to structural is the safe default whenever the attempt
-		// could not be durably recorded. The logger call below is the
-		// ONLY place this specific failure mode is distinguishable from
-		// an ordinary guard/shape rejection -- the closed
-		// OfferPhrasingOutcome vocabulary intentionally has no fifth
-		// value for it (see that type's own doc comment).
+		// signal. The logger call below is the ONLY place this specific
+		// failure mode is distinguishable from an ordinary guard/shape
+		// rejection -- the closed OfferPhrasingOutcome vocabulary
+		// intentionally has no fifth value for it (see that type's own
+		// doc comment).
 		logger := r.Logger
 		if logger == nil {
 			logger = slog.Default()
@@ -188,7 +185,19 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 		logger.WarnContext(ctx, "context fabric offer phrasing receipt sink failed",
 			"org_id", principal.OrgID, "request_id", input.RequestID,
 			"operation", string(receipt.Operation))
-		return StructureOfferPhrasingResult{Outcome: OfferPhrasingFellBackStructural}
+		// Codex R3 review finding (chaos4171pr2-codex-r3): a sink failure
+		// must never OVERWRITE an already-classified outcome that already
+		// means "nothing was applied" (call_failed, rejected_by_guard,
+		// fell_back_structural) -- doing so silently relabelled a genuine
+		// provider failure as a generic structural fallback, hiding it
+		// from telemetry during a simultaneous model+sink outage. Only
+		// OfferPhrasingGenerated is downgraded here: applying a phrasing
+		// this process could not durably record is the one case that
+		// actually needs the sink's own success to be trustworthy.
+		if outcome == OfferPhrasingGenerated {
+			return StructureOfferPhrasingResult{Outcome: OfferPhrasingFellBackStructural}
+		}
+		return StructureOfferPhrasingResult{Outcome: outcome}
 	}
 	return StructureOfferPhrasingResult{Outcome: outcome, Phrasings: phrasings}
 }

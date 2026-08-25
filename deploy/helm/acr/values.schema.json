@@ -74,6 +74,7 @@
             "baseURL": { "type": "string" },
             "model": { "type": "string" },
             "fallbackModel": { "type": "string" },
+            "phrasingModel": { "type": "string" },
             "timeout": { "type": "string" },
             "maxAttempts": { "type": "string" },
             "maxTransportRetries": { "type": "string" },
