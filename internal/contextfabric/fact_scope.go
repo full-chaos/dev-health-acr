@@ -1419,16 +1419,13 @@ func (r *FactReadScopeResolver) expand(
 	}
 	kept := make([]SubjectRef, 0, len(admitted))
 	for _, target := range admitted {
-		if len(existing)+len(kept) >= rule.limitOrDefault() {
-			event.Truncated = true
-			// Never downgrade a mismatch verdict: both are degrading, but
-			// target_kind_mismatch names a wiring error an operator must fix
-			// and expanded_partial names a bound working as designed.
-			if event.Outcome != FactScopeTargetKindMismatch {
-				event.Outcome = FactScopeExpandedPartial
-			}
-			break
-		}
+		// DUPLICATE CHECK BEFORE THE CAP CHECK (codex xhigh review round 3,
+		// confirmed real, MEDIUM): a duplicate never consumes a cap slot --
+		// it was already counted in `existing` -- so checking the cap first
+		// could `break` the whole loop on an EARLIER admission filling the
+		// cap and never reach a LATER duplicate target that still owed a
+		// basis upgrade. Checking duplicate status first means the upgrade
+		// always runs regardless of where the cap happens to bind.
 		key := canonicalFactSubjectKey(target)
 		if _, duplicate := seen[key]; duplicate {
 			// A target already admitted by an EARLIER origin kind in this
@@ -1456,6 +1453,16 @@ func (r *FactReadScopeResolver) expand(
 				}
 			}
 			continue
+		}
+		if len(existing)+len(kept) >= rule.limitOrDefault() {
+			event.Truncated = true
+			// Never downgrade a mismatch verdict: both are degrading, but
+			// target_kind_mismatch names a wiring error an operator must fix
+			// and expanded_partial names a bound working as designed.
+			if event.Outcome != FactScopeTargetKindMismatch {
+				event.Outcome = FactScopeExpandedPartial
+			}
+			break
 		}
 		seen[key] = struct{}{}
 		kept = append(kept, target)

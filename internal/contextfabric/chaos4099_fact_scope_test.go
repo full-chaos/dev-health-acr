@@ -1830,6 +1830,68 @@ func TestChaos4101_ADuplicateAcrossOriginKindsUpgradesToTheWeakerBasis(t *testin
 	}
 }
 
+// TestChaos4101_TheWeakerBasisUpgradeAppliesEvenWhenThePriorOriginFilledTheCap
+// is the direct regression for codex xhigh review round 3's confirmed
+// MEDIUM: the requirement-level cap check ran BEFORE the duplicate check in
+// the R2 fix above, so when an EARLIER origin's own admissions already
+// filled the cap (Limit=1 here: the project traversal alone reaches it),
+// the per-target loop's very first cap check broke out of the loop before
+// ever reaching a LATER duplicate target that still owed a basis upgrade --
+// silently reproducing the exact defect R2 fixed, just gated on cap
+// exhaustion instead of walk order. A duplicate never consumes a cap slot
+// (it was already counted in `existing`), so the duplicate check must run
+// BEFORE the cap check, not after.
+func TestChaos4101_TheWeakerBasisUpgradeAppliesEvenWhenThePriorOriginFilledTheCap(t *testing.T) {
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {
+			SubjectProject: {
+				Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 1,
+			},
+			SubjectTeam: {
+				Policy: FactScopePolicyTeamPrimaryAttributionRepository, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 1,
+			},
+		},
+	}
+
+	sharedRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:shared-repo"}
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result:     FactProviderResult{State: SourceAvailable},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+		ScopeExpander: &recordingScopeExpander{
+			// Project's call (perCall[0]) admits sharedRepo and fills the
+			// Limit=1 cap by itself; team's call (perCall[1]) returns the
+			// SAME target as its only candidate -- a pure duplicate that
+			// must never be evaluated against the cap at all.
+			perCall: [][]SubjectRef{{sharedRepo}, {sharedRepo}},
+			targetBasisByPolicy: map[FactScopePolicy]map[string]FactScopeBasis{
+				FactScopePolicyTeamPrimaryAttributionRepository: {
+					canonicalFactSubjectKey(sharedRepo): FactScopeBasisAttributedPrimaryTeam,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeProject, scopeTeam}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(bundle.Scope.Derivations) != 1 {
+		t.Fatalf("derivations = %+v, want exactly one: the cap (1) was already filled by the project traversal, and the team traversal reached nothing new", bundle.Scope.Derivations)
+	}
+	if got := bundle.Scope.Derivations[0].Basis; got != FactScopeBasisAttributedPrimaryTeam {
+		t.Fatalf("derivation basis = %q, want attributed_primary_team: the cap being already full must not stop the duplicate's own weaker-basis upgrade from applying", got)
+	}
+}
+
 // TestChaos4099_BothDisclosuresCanFireOnOneAnswer pins that the two
 // disclosures are independent. One investigation can easily expand metrics
 // through the proxy while reviews hit a disabled policy, and a reader told
