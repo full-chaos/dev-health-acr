@@ -1,7 +1,10 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,6 +225,87 @@ func TestGitLabColumnArmProducesNoProjectEdgeAnymore(t *testing.T) {
 		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.From.CanonicalID == wantGitLabWorkItemCanonicalID {
 			t.Fatalf("found a BELONGS_TO_PROJECT edge for the gitlab work item, want none -- CHAOS-4193/ruling 2026-08-24 09:55 retired this path: %+v", relationship)
 		}
+	}
+}
+
+// chaos4193AmbiguousFanoutOrgID is this test's own organization -- distinct
+// from every sibling integration test's org id (this file's own convention,
+// chaos4108OrgID's doc comment), so its ambiguous project pair cannot be
+// joined against another test's presence rows in a shared-container run.
+const chaos4193AmbiguousFanoutOrgID = "org-4193-ambiguous-fanout"
+
+// chaos4193AmbiguousFanoutSharedKey is deliberately BOTH one project's raw
+// id AND a second, different project's project_key, within the SAME
+// provider -- the exact "join_key resolves to more than one project" shape
+// key_resolution_count exists to detect (querySubjectProjectMemberships,
+// teams_projects_edges.go).
+const chaos4193AmbiguousFanoutSharedKey = "ambiguous-shared-key"
+const chaos4193AmbiguousFanoutProjectA = chaos4193AmbiguousFanoutSharedKey
+const chaos4193AmbiguousFanoutProjectB = "org-4193-ambiguous-fanout:linear:other-project"
+const chaos4193AmbiguousFanoutWorkItemID = "linear:CHAOS-4193-FANOUT"
+
+// TestAmbiguousProjectKeyIsCountedOncePerPresenceRow is codex xhigh review
+// R2's Medium finding, fixed: the projects-side subquery's LEFT JOIN used
+// to fan out to key_resolution_count rows for a SINGLE ambiguous presence
+// row (one real dropped row scanned N times), each scan independently
+// incrementing presenceTelemetryLedger.ambiguousRows -- overcounting the
+// very fan-out metric TestUnresolvedFanOutIsCountedByRowNotJustByDistinctKey
+// (chaos4193_presence_read_swap_test.go, R1's fix) exists to report
+// accurately. `LIMIT 1 BY provider, join_key` deduplicates the join's build
+// side to one representative row per ambiguous group while
+// key_resolution_count (a window function, computed before that LIMIT BY
+// trims anything) still carries the group's true size -- proven here only
+// against a REAL ClickHouse, because chaos4193_presence_read_swap_test.go's
+// fake client cannot execute the window function or the multi-row join this
+// defect and its fix both depend on (R2's own citation: the fake fixture's
+// keyResolutionCount=2 field is supplied directly, never produced by an
+// actual multi-result join).
+func TestAmbiguousProjectKeyIsCountedOncePerPresenceRow(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL(sourceSchemaTables...) {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	createProjectMembershipPresenceView(t, ctx, direct)
+	mustSeed := func(label, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", label, err)
+		}
+	}
+	// Project A's raw id IS project B's project_key -- one join_key value,
+	// two distinct projects, same provider (key_resolution_count's
+	// PARTITION BY provider, join_key requires both to match for ambiguity).
+	mustSeed("project A", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		chaos4193AmbiguousFanoutProjectA, chaos4193AmbiguousFanoutOrgID, "Project A", "", "linear", "backlog", "", uint8(1), at)
+	mustSeed("project B sharing A's raw id as its own project_key", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		chaos4193AmbiguousFanoutProjectB, chaos4193AmbiguousFanoutOrgID, "Project B", chaos4193AmbiguousFanoutSharedKey, "linear", "backlog", "", uint8(1), at)
+	// ONE work item, ONE presence row (the view's work_item_column arm --
+	// provider=linear passes its provider guard unconditionally), whose
+	// project_id is the ambiguous shared key. Pre-fix this single row
+	// scanned twice (once per colliding project); post-fix, once.
+	mustSeed("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		chaos4193AmbiguousFanoutWorkItemID, zeroRepositoryUUID, chaos4193AmbiguousFanoutOrgID, "Fanout issue", "open", "", "", "linear", chaos4193AmbiguousFanoutSharedKey, at)
+
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	if _, _, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: chaos4193AmbiguousFanoutOrgID, Source: devhealthsource.TeamsProjectsSourceName}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+
+	output := logged.String()
+	if !strings.Contains(output, "ambiguous_project_entity=1") {
+		t.Fatalf("want ambiguous_project_entity=1 (one distinct ambiguous key), got:\n%s", output)
+	}
+	if !strings.Contains(output, "ambiguous_project_entity_rows=1") {
+		t.Fatalf("want ambiguous_project_entity_rows=1 (the ONE real presence row, not fanned out to 2 by the ambiguous join) -- codex R2's fan-out finding regressed if this reads 2, got:\n%s", output)
 	}
 }
 

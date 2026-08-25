@@ -131,6 +131,19 @@ LEFT JOIN (
       SELECT provider, id, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
     )
   )
+  -- codex xhigh review R2: without this, an AMBIGUOUS join_key (>1 project
+  -- sharing it) fans the LEFT JOIN below out to key_resolution_count rows
+  -- for the SAME m row -- one real presence row scanned N times, each
+  -- correctly reporting key_resolution_count>1 but each ALSO incrementing
+  -- presenceTelemetryLedger.ambiguousRows once, overcounting the very
+  -- fan-out metric the R1 fix exists to report accurately.
+  -- key_resolution_count is a window function, computed over every row
+  -- BEFORE this LIMIT BY trims the group, so the count it carries on the
+  -- one surviving row is still the TRUE ambiguity size -- only the
+  -- (provider, join_key) group is deduplicated to one representative row,
+  -- exactly the invariant p ON p.provider = m.provider AND p.join_key =
+  -- m.project_id needs to stay a 1:1 (or 1:0) join.
+  LIMIT 1 BY provider, join_key
 ) AS p ON p.provider = m.provider AND p.join_key = m.project_id
 LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 WHERE m.org_id = {org_id:String}` + sincePredicate(cursor, "m.observed_at", rowKey) + orderBy("m.observed_at", rowKey)
@@ -184,9 +197,18 @@ WHERE m.org_id = {org_id:String}` + sincePredicate(cursor, "m.observed_at", rowK
 			// repo_id is repo-less BY DESIGN and must not read as an orphan.
 			authorization = workItemAuthorization(repoID, repoSlug)
 		case "pull_request":
-			number, parseErr := strconv.ParseInt(subjectID, 10, 64)
+			// git_pull_requests.number is UInt32 (tables.go's CHAOS-3789
+			// scan-then-convert note; chaos3899_census_registry.go's
+			// pullRequestNumberPredicate is the sibling handle-registry
+			// parse of the same column, same bound) -- codex xhigh review
+			// R2: subjectID here comes from the view's unconstrained
+			// String source column (schema.go), so parsing into an int64
+			// would silently accept a negative or oversized value no real
+			// PR entity can carry, producing a canonical id that matches
+			// no node in the graph.
+			number, parseErr := strconv.ParseUint(subjectID, 10, 32)
 			if parseErr != nil {
-				return nil, fmt.Errorf("devhealthsource: presence view pull_request subject_id %q is not a decimal PR number: %w", subjectID, parseErr)
+				return nil, fmt.Errorf("devhealthsource: presence view pull_request subject_id %q is not a valid UInt32 PR number: %w", subjectID, parseErr)
 			}
 			// Legacy pull_request canonical id scheme -- see this
 			// function's own doc comment on why identity.Derive is
