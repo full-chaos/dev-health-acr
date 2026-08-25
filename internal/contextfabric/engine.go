@@ -196,6 +196,16 @@ type EngineDependencies struct {
 	// never a redemption-time weakening: HandleVerifier's own fail-closed
 	// reverify still gates every handr_ receipt regardless of OfferSource).
 	PriorHandleGrammarChecker HandleGrammarChecker
+	// OfferPhraser (CHAOS-4171 PR2) is optional. When set, Engine runs a
+	// SECOND bounded model call after composeStructureNeeds/
+	// composeGatedStructureNeeds compose a request's structural offer set,
+	// rewriting each option's presentation-facing Phrasing under a
+	// closed-vocabulary guard -- see applyOfferPhrasing's own doc comment
+	// (chaos4171_offer_phrasing.go) for the exact hook sites and the
+	// fail-open contract. Leaving this nil means no phrasing is ever
+	// attempted, exactly as if the feature did not exist: every option's
+	// Label stands alone, byte-identical to before this ticket.
+	OfferPhraser OfferPhraser
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -441,6 +451,21 @@ type EngineTelemetry interface {
 	// called at most once per Investigate call's prior consult (the read is
 	// shared between both DP4(a) sites -- see Investigate's own call site).
 	RecordPriorDegradation(ctx context.Context, principal storage.Principal, state PriorDegradationState)
+	// RecordOfferPhrasing (CHAOS-4171 PR2) reports ONE applyOfferPhrasing
+	// attempt's classified outcome -- generated / rejected_by_guard /
+	// fell_back_structural / call_failed, the ratified telemetry names
+	// (2026-08-24 22:05 PDT ruling comment). Declared on THIS interface
+	// rather than an optional side interface, for the same reason
+	// RecordSynthesisStatusOverride's own comment above states: an
+	// outcome-affecting branch whose telemetry can go missing by omission
+	// is the CHAOS-4089 failure mode itself. Called ONLY when phrasing was
+	// actually attempted (e.offerPhraser non-nil and the composed
+	// StructureNeeds carried at least one phraseable option) -- never for
+	// a request with nothing to phrase or no phraser configured, the same
+	// "nothing to do is not an outcome" convention this file's other
+	// gated telemetry (e.g. RecordGatedOfferResolution's own callers)
+	// already follows.
+	RecordOfferPhrasing(ctx context.Context, principal storage.Principal, outcome OfferPhrasingOutcome)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -469,6 +494,7 @@ type Engine struct {
 	candidateVerifier          CandidateVerifier
 	priorConsultant            PriorConsultant
 	priorHandleGrammarChecker  HandleGrammarChecker
+	offerPhraser               OfferPhraser
 	regimeAOffersDisabled      bool
 	serviceVersion             string
 	now                        func() time.Time
@@ -502,6 +528,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		candidateVerifier:          dependencies.CandidateVerifier,
 		priorConsultant:            dependencies.PriorConsultant,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
+		offerPhraser:               dependencies.OfferPhraser,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:  options.ReuseRetrievalIdentity,
 		reusePromptVersions:     options.ReusePromptVersions,

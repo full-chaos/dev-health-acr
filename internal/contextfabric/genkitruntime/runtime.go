@@ -281,6 +281,21 @@ const (
 	// caller-visible behavior changes beyond reuse eligibility.
 	DefaultSchemaVersion    = "context-fabric-model-output.v2"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
+	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
+	// bounded model call's own prompt, versioned independently of
+	// InterpretationPromptVersion/SynthesisPromptVersion above because it
+	// is a genuinely separate call with its own input shape (an offer
+	// set, never the question or any evidence) and its own output shape
+	// (a phrasing per option_id). Prompt changes are behavior changes
+	// (standing rule): bump this on every text change to phrasingSystemPrompt.
+	//
+	// Unlike the interpretation/synthesis prompt versions, this one is
+	// NOT part of contextfabric.ReuseKey -- offer phrasing only ever runs
+	// on a non-decisive (clarification-bearing) terminal, and every path
+	// that composes StructureNeeds already bypasses answer reuse before
+	// this call happens (see composeStructureNeeds's own callers), so
+	// there is no reuse-eligible row this version could ever need to key.
+	DefaultPhrasingPromptVersion = "context-fabric-offer-phrasing.v1"
 )
 
 type Config struct {
@@ -299,12 +314,26 @@ type Config struct {
 	ModelVersion                string
 	InterpretationPromptVersion string
 	SynthesisPromptVersion      string
-	SchemaVersion               string
-	EvaluatorVersion            string
-	Timeout                     time.Duration
-	MaxAttempts                 int
-	MaxInputBytes               int
-	Fallback                    contextfabric.ModelRuntime
+	// PhrasingModel (CHAOS-4171 PR2) is the bare model id the offer-
+	// phrasing call uses -- independently configurable from Model so a
+	// deployment can route phrasing to a smaller/cheaper model (the
+	// ratified design's "env-configurable smaller model"). Defaults to
+	// Model when empty: the second call runs on the SAME model as
+	// interpretation unless an operator opts into a distinct one.
+	// PhrasingModelRef is its namespaced Genkit action-name counterpart
+	// (see ModelRef's own doc comment), defaulting to ModelRef when
+	// PhrasingModel is also unset, or to the plain PhrasingModel value
+	// otherwise.
+	PhrasingModel         string
+	PhrasingModelRef      string
+	PhrasingModelVersion  string
+	PhrasingPromptVersion string
+	SchemaVersion         string
+	EvaluatorVersion      string
+	Timeout               time.Duration
+	MaxAttempts           int
+	MaxInputBytes         int
+	Fallback              contextfabric.ModelRuntime
 	// Logger receives the ACR-owned decision-event log line CHAOS-3889 emits
 	// once per model call (see logInterpretDecision/logSynthesizeDecision).
 	// Defaults to slog.Default() when nil, matching every other
@@ -326,6 +355,9 @@ type Runtime struct {
 type generator interface {
 	Interpret(context.Context, generationRequest) (interpretationOutput, contextfabric.ModelUsage, error)
 	Synthesize(context.Context, generationRequest) (synthesisOutput, contextfabric.ModelUsage, error)
+	// Phrase (CHAOS-4171 PR2) is the offer-phrasing call's own generation
+	// boundary, mirroring Interpret/Synthesize exactly.
+	Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error)
 }
 
 type generationRequest struct {
@@ -366,6 +398,22 @@ func (g sdkGenerator) Synthesize(ctx context.Context, request generationRequest)
 	}
 	if output == nil {
 		return synthesisOutput{}, contextfabric.ModelUsage{}, errors.New("genkit returned no synthesis output")
+	}
+	return *output, modelUsage(response), nil
+}
+
+func (g sdkGenerator) Phrase(ctx context.Context, request generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	output, response, err := genkit.GenerateData[phrasingOutput](ctx, g.genkit,
+		ai.WithModelName(request.Model),
+		ai.WithSystem(request.System),
+		ai.WithPrompt("%s", request.Prompt),
+		ai.WithCustomConstrainedOutput(),
+	)
+	if err != nil {
+		return phrasingOutput{}, contextfabric.ModelUsage{}, err
+	}
+	if output == nil {
+		return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("genkit returned no offer phrasing output")
 	}
 	return *output, modelUsage(response), nil
 }
@@ -411,6 +459,31 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	}
 	if strings.TrimSpace(config.SynthesisPromptVersion) == "" {
 		config.SynthesisPromptVersion = DefaultSynthesisPromptVersion
+	}
+	// CHAOS-4171 PR2: PhrasingModel defaults to the primary Model -- the
+	// SAME "unset means share the interpretation model" default the
+	// ratified design calls for. PhrasingModelRef/PhrasingModelVersion
+	// then default off the (possibly just-defaulted) PhrasingModel,
+	// mirroring ModelRef/ModelVersion's own defaulting immediately above.
+	if strings.TrimSpace(config.PhrasingModel) == "" {
+		config.PhrasingModel = config.Model
+	}
+	if strings.TrimSpace(config.PhrasingModelRef) == "" {
+		if config.PhrasingModel == config.Model {
+			config.PhrasingModelRef = config.ModelRef
+		} else {
+			config.PhrasingModelRef = config.PhrasingModel
+		}
+	}
+	if strings.TrimSpace(config.PhrasingModelVersion) == "" {
+		if config.PhrasingModel == config.Model {
+			config.PhrasingModelVersion = config.ModelVersion
+		} else {
+			config.PhrasingModelVersion = config.PhrasingModel
+		}
+	}
+	if strings.TrimSpace(config.PhrasingPromptVersion) == "" {
+		config.PhrasingPromptVersion = DefaultPhrasingPromptVersion
 	}
 	if strings.TrimSpace(config.SchemaVersion) == "" {
 		config.SchemaVersion = DefaultSchemaVersion
@@ -689,6 +762,69 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
 	receipt.Outcome = "success"
 	grounding = groundingCountsFrom(draft)
+	return draft, receipt, nil
+}
+
+// PhraseStructureOffers (CHAOS-4171 PR2) implements
+// contextfabric.OfferPhrasingModelRuntime -- the raw, mechanical model-call
+// boundary for the SECOND bounded model call, mirroring InterpretQuestion's
+// own shape but with none of its fallback-chain or domain-validation
+// machinery: offer phrasing has no fallback model (ratified design: a
+// failure degrades to structural, never to a second model), and the
+// closed-vocabulary guard that decides whether this raw output is usable
+// lives one layer up, in contextfabric.RuntimeOfferPhraser -- this method
+// hands back exactly what the model said, unguarded, plus a receipt that
+// always reflects the ATTEMPT (success/failure), never the guard's later
+// verdict on the content.
+func (r *Runtime) PhraseStructureOffers(ctx context.Context, principal storage.Principal, input contextfabric.StructureOfferPhrasingInput) (contextfabric.StructureOfferPhrasingDraft, contextfabric.ModelExecutionReceipt, error) {
+	if strings.TrimSpace(principal.OrgID) == "" {
+		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
+	}
+	if len(input.Options) == 0 {
+		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("offer phrasing requires at least one offered option")
+	}
+	payload := phrasingInput{Options: make([]phrasingOption, 0, len(input.Options))}
+	for _, opt := range input.Options {
+		payload.Options = append(payload.Options, phrasingOption{OptionID: opt.OptionID, Member: string(opt.Member), Kind: string(opt.Kind), Label: opt.Label})
+	}
+	encoded, err := boundedJSON(payload, r.config.MaxInputBytes)
+	if err != nil {
+		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, err
+	}
+	started := r.now().UTC()
+	var output phrasingOutput
+	var usage contextfabric.ModelUsage
+	attempts, generationErr := r.withRetry(ctx, func(callCtx context.Context) error {
+		var err error
+		output, usage, err = r.generator.Phrase(callCtx, generationRequest{
+			Model: r.config.PhrasingModelRef, System: phrasingSystemPrompt, Prompt: string(encoded),
+		})
+		return err
+	})
+	completed := r.now().UTC()
+	var classifiedErr error
+	if generationErr != nil {
+		classifiedErr = classifyModelError(generationErr)
+	}
+	receipt := r.receipt(contextfabric.ModelOperationPhraseOffers, r.config.PhrasingPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
+	receipt.Model = r.config.PhrasingModel
+	receipt.ModelVersion = r.config.PhrasingModelVersion
+	// RequestID correlates this receipt back to the investigation that
+	// triggered it, the same audit purpose InterpretQuestion's own
+	// receipt.RequestID stamping serves -- stamped unconditionally, on
+	// every return path below, mirroring InterpretQuestion's own
+	// "survives every return path" comment.
+	receipt.RequestID = input.RequestID
+	if generationErr != nil {
+		return contextfabric.StructureOfferPhrasingDraft{}, receipt, classifiedErr
+	}
+	outputBytes, _ := json.Marshal(output)
+	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
+	receipt.Outcome = "success"
+	draft := contextfabric.StructureOfferPhrasingDraft{Phrasings: make([]contextfabric.StructureOfferPhrasingEntry, 0, len(output.Phrasings))}
+	for _, entry := range output.Phrasings {
+		draft.Phrasings = append(draft.Phrasings, contextfabric.StructureOfferPhrasingEntry{OptionID: entry.OptionID, Phrasing: entry.Phrasing})
+	}
 	return draft, receipt, nil
 }
 
@@ -1218,6 +1354,35 @@ type synthesisOutput struct {
 	Warnings            []string                    `json:"warnings"`
 }
 
+// phrasingOption is one offered option's own model-facing input row
+// (CHAOS-4171 PR2) -- deliberately narrow: option_id, member, kind, and the
+// structural Label composeStructureNeeds already minted. No evidence, no
+// subject resolution, no canonical IDs beyond what Label already discloses
+// -- "input is the offer set only" (ratified design).
+type phrasingOption struct {
+	OptionID string `json:"option_id"`
+	Member   string `json:"member"`
+	Kind     string `json:"kind"`
+	Label    string `json:"label"`
+}
+
+type phrasingInput struct {
+	Options []phrasingOption `json:"options"`
+}
+
+// phrasingEntryOutput is the model's own phrasing for ONE option_id.
+// Unguarded at this layer -- see contextfabric.classifyOfferPhrasingDraft
+// for the closed-vocabulary membership/uniqueness/bound check that runs on
+// this raw output one layer up.
+type phrasingEntryOutput struct {
+	OptionID string `json:"option_id"`
+	Phrasing string `json:"phrasing"`
+}
+
+type phrasingOutput struct {
+	Phrasings []phrasingEntryOutput `json:"phrasings"`
+}
+
 func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 	draft := contextfabric.SynthesisDraft{
 		Status:         contextfabric.InvestigationStatus(strings.TrimSpace(o.Status)),
@@ -1298,3 +1463,4 @@ func mergeCoverage(groups ...contextfabric.Coverage) contextfabric.Coverage {
 }
 
 var _ contextfabric.ModelRuntime = (*Runtime)(nil)
+var _ contextfabric.OfferPhrasingModelRuntime = (*Runtime)(nil)

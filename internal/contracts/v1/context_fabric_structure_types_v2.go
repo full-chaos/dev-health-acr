@@ -56,6 +56,16 @@ type ContextFabricAnchorOptionV2 struct {
 	OfferSource     ContextFabricStructureOfferSource `json:"offer_source"`
 	PriorVersionID  string                            `json:"prior_version_id,omitempty"`
 	PriorEntryID    string                            `json:"prior_entry_id,omitempty"`
+	// Phrasing (CHAOS-4171 PR2) -- see ContextFabricAnchorOption.Phrasing's
+	// own doc comment; identical contract. ToV1Wire copies it through like
+	// every other field, even though nothing constructs a non-empty value
+	// here today (applyOfferPhrasing runs on the wire ContextFabricAnchorOption
+	// AFTER ToV1Wire converts, not on this engine-internal type) -- this
+	// type's own JSON Schema (AnchorOptionV2, the v2 result's anchor_options
+	// $ref) must still declare the property, or a v2 result carrying a
+	// phrased anchor option fails its own schema's additionalProperties
+	// check.
+	Phrasing string `json:"phrasing,omitempty"`
 }
 
 // Validate checks ContextFabricAnchorOptionV2 against the SAME wire-shape
@@ -85,6 +95,9 @@ func (o ContextFabricAnchorOptionV2) Validate() error {
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
 		return fmt.Errorf("anchor option v2 prior_version_id or prior_entry_id violates v1 bounds")
 	}
+	if !optionalStringBetween(o.Phrasing, 1, ContextFabricStructureOfferPhrasingMaxLength) {
+		return fmt.Errorf("anchor option v2 phrasing violates v1 bounds")
+	}
 	return nil
 }
 
@@ -103,5 +116,6 @@ func (o ContextFabricAnchorOptionV2) ToV1Wire() ContextFabricAnchorOption {
 		OfferSource:     o.OfferSource,
 		PriorVersionID:  o.PriorVersionID,
 		PriorEntryID:    o.PriorEntryID,
+		Phrasing:        o.Phrasing,
 	}
 }

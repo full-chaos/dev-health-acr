@@ -207,6 +207,14 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// CHAOS-4012: CandidateOption.Label gets the SAME conservative
 	// treatment as every other StructureNeeds offer label above.
 	"structured.structure_needs.candidate_options[].label",
+	// CHAOS-4171 PR2: Phrasing is GENUINE model output (the second bounded
+	// offer-phrasing call, chaos4171_offer_phrasing.go) -- unlike Label,
+	// which is only conservatively classified untrusted, Phrasing actually
+	// IS untrusted content by construction, on all four option types.
+	"structured.structure_needs.kind_options[].phrasing",
+	"structured.structure_needs.anchor_options[].phrasing",
+	"structured.structure_needs.handle_options[].phrasing",
+	"structured.structure_needs.candidate_options[].phrasing",
 	"structured.confirmed_structure[].applied_value",
 	"structured.window_clarification.options[].label",
 	"full_result",
@@ -311,6 +319,17 @@ var MCPInvestigationResultUntrustedFields = []string{
 	// server-rendered today, but classified untrusted rather than
 	// widening the leaf-name-based "label" trust pattern globally.
 	"structured.structure_needs.candidate_options[].label",
+	// CHAOS-4171 PR2: Phrasing is GENUINE model output (the second bounded
+	// offer-phrasing call, chaos4171_offer_phrasing.go) -- unlike Label
+	// above, which is only conservatively classified untrusted, Phrasing
+	// actually IS untrusted content by construction, on all four option
+	// types (AnchorOptionV2 shares the same wire path as v1 AnchorOption,
+	// see ContextFabricAnchorOptionV2's own doc comment -- no separate
+	// path needed).
+	"structured.structure_needs.kind_options[].phrasing",
+	"structured.structure_needs.anchor_options[].phrasing",
+	"structured.structure_needs.handle_options[].phrasing",
+	"structured.structure_needs.candidate_options[].phrasing",
 	// ConfirmedStructureEntry.AppliedValue is DESIGNED to be "the typed
 	// id/enum actually applied ... closed vocabulary or registry id,
 	// never free text" (pivot-intent design brief section 2.1), but

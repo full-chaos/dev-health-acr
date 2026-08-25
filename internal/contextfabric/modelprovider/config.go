@@ -79,6 +79,15 @@ const (
 	// empty by default because a fallback is a second billable call, so an
 	// operator opts into it explicitly rather than inheriting it.
 	EnvFallbackModel = "ACR_CONTEXT_FABRIC_MODEL_FALLBACK"
+	// EnvPhrasingModel (CHAOS-4171 PR2) names the model the SECOND bounded
+	// model call (offer phrasing, internal/contextfabric/
+	// chaos4171_offer_phrasing.go) uses -- independent of EnvFallbackModel
+	// above, which names a STRONGER retry model for interpretation/
+	// synthesis. Empty (the default) means phrasing runs on the SAME
+	// model as EnvModel: an operator opts into a distinct, typically
+	// smaller/cheaper model explicitly, matching the ratified design's
+	// "env-configurable smaller model, default interpretation model".
+	EnvPhrasingModel = "ACR_CONTEXT_FABRIC_MODEL_PHRASING"
 	EnvAPIKey        = "ACR_CONTEXT_FABRIC_MODEL_API_KEY"
 	EnvTimeout       = "ACR_CONTEXT_FABRIC_MODEL_TIMEOUT"
 	EnvMaxAttempts   = "ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS"
@@ -119,6 +128,9 @@ type Config struct {
 	// FallbackModel is an optional second model on the same provider; see
 	// EnvFallbackModel.
 	FallbackModel string
+	// PhrasingModel is an optional distinct model for the offer-phrasing
+	// call; see EnvPhrasingModel.
+	PhrasingModel string
 	// APIKey is the bearer credential. It is optional only when BaseURL is
 	// set (a local BYO server may not authenticate at all); reaching a
 	// hosted provider on the default base URL always requires it.
@@ -175,6 +187,14 @@ func (c Config) validate() error {
 			// same model though only one was ever set explicitly.
 			return fmt.Errorf("%s (%q) must name a different model than %s (%q) -- if you are migrating off the pre-CHAOS-3855 gpt-5-nano+gpt-5.6-luna-fallback recommendation, unset %s (gpt-5.6-luna is now the default primary with no fallback)",
 				EnvFallbackModel, c.FallbackModel, EnvModel, c.Model, EnvFallbackModel)
+		}
+	}
+	if c.PhrasingModel != "" {
+		if len(c.PhrasingModel) > maximumProviderOrModelLength {
+			return fmt.Errorf("%s must be at most %d bytes", EnvPhrasingModel, maximumProviderOrModelLength)
+		}
+		if err := validateModelID(EnvPhrasingModel, c.PhrasingModel); err != nil {
+			return err
 		}
 	}
 	if err := c.validateBaseURL(); err != nil {
@@ -259,7 +279,7 @@ func validateModelID(name, value string) error {
 // process environment.
 func Configured(lookup func(string) (string, bool)) bool {
 	for _, key := range []string{
-		EnvProvider, EnvBaseURL, EnvModel, EnvFallbackModel,
+		EnvProvider, EnvBaseURL, EnvModel, EnvFallbackModel, EnvPhrasingModel,
 		EnvAPIKey, EnvAPIKey + "_FILE",
 		EnvTimeout, EnvMaxAttempts, EnvMaxTransportRetries, EnvAllowInsecureBaseURL,
 	} {
@@ -283,6 +303,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		BaseURL:       envString(lookup, EnvBaseURL, ""),
 		Model:         envString(lookup, EnvModel, DefaultModel),
 		FallbackModel: envString(lookup, EnvFallbackModel, ""),
+		PhrasingModel: envString(lookup, EnvPhrasingModel, ""),
 		APIKey:        apiKey,
 	}
 	if cfg.Timeout, err = envDuration(lookup, EnvTimeout, DefaultTimeout); err != nil {

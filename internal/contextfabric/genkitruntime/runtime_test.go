@@ -23,8 +23,10 @@ import (
 type generatorStub struct {
 	interpretation interpretationOutput
 	synthesis      synthesisOutput
+	phrasing       phrasingOutput
 	interpretErr   error
 	synthesisErr   error
+	phrasingErr    error
 	requests       []generationRequest
 	wait           bool
 }
@@ -45,6 +47,15 @@ func (g *generatorStub) Synthesize(ctx context.Context, request generationReques
 		return synthesisOutput{}, contextfabric.ModelUsage{}, ctx.Err()
 	}
 	return g.synthesis, contextfabric.ModelUsage{InputTokens: 20, OutputTokens: 8, TotalTokens: 28}, g.synthesisErr
+}
+
+func (g *generatorStub) Phrase(ctx context.Context, request generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	g.requests = append(g.requests, request)
+	if g.wait {
+		<-ctx.Done()
+		return phrasingOutput{}, contextfabric.ModelUsage{}, ctx.Err()
+	}
+	return g.phrasing, contextfabric.ModelUsage{InputTokens: 6, OutputTokens: 2, TotalTokens: 8}, g.phrasingErr
 }
 
 type fallbackRuntime struct {
@@ -226,6 +237,10 @@ func (g *echoingGenerator) Interpret(_ context.Context, request generationReques
 
 func (g *echoingGenerator) Synthesize(context.Context, generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
 	return synthesisOutput{}, contextfabric.ModelUsage{}, errors.New("echoingGenerator.Synthesize is unused")
+}
+
+func (g *echoingGenerator) Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("echoingGenerator.Phrase is unused")
 }
 
 func echoJudgment(prompt string) string {
@@ -676,6 +691,9 @@ func mustRuntime(t *testing.T, generator generator, override Config) *Runtime {
 	}
 	if override.Logger != nil {
 		config.Logger = override.Logger
+	}
+	if override.PhrasingModel != "" {
+		config.PhrasingModel = override.PhrasingModel
 	}
 	runtime, err := newWithGenerator(config, generator)
 	if err != nil {

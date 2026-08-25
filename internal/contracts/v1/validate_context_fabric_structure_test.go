@@ -2,6 +2,7 @@ package v1
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -21,6 +22,9 @@ func TestContextFabricKindOption_Validate(t *testing.T) {
 		{"invalid kind", func(o *ContextFabricKindOption) { o.Kind = "bogus" }, true},
 		{"invalid offer_source", func(o *ContextFabricKindOption) { o.OfferSource = "bogus" }, true},
 		{"empty label", func(o *ContextFabricKindOption) { o.Label = "" }, true},
+		{"absent phrasing is valid", func(o *ContextFabricKindOption) { o.Phrasing = "" }, false},
+		{"present phrasing is valid", func(o *ContextFabricKindOption) { o.Phrasing = "which pull request?" }, false},
+		{"oversized phrasing", func(o *ContextFabricKindOption) { o.Phrasing = strings.Repeat("a", 201) }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,6 +61,9 @@ func TestContextFabricAnchorOption_Validate(t *testing.T) {
 		// fixture accidentally shipped as "valid" (24 chars, non-hex).
 		{"non-hex matched_term_hash", func(o *ContextFabricAnchorOption) { o.MatchedTermHash = "matchedtermhash000000012" }, true},
 		{"uppercase-hex matched_term_hash", func(o *ContextFabricAnchorOption) { o.MatchedTermHash = "AA11BB22CC33DD44EE55FF66" }, true},
+		{"absent phrasing is valid", func(o *ContextFabricAnchorOption) { o.Phrasing = "" }, false},
+		{"present phrasing is valid", func(o *ContextFabricAnchorOption) { o.Phrasing = "the ask-dev repo" }, false},
+		{"oversized phrasing", func(o *ContextFabricAnchorOption) { o.Phrasing = strings.Repeat("a", 201) }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,6 +92,42 @@ func TestContextFabricHandleOption_Validate(t *testing.T) {
 		{"missing namespace prefix", func(o *ContextFabricHandleOption) { o.ReceiptID = "ancr_confirm00001" }, true},
 		{"empty pattern_id", func(o *ContextFabricHandleOption) { o.PatternID = "" }, true},
 		{"empty source_column", func(o *ContextFabricHandleOption) { o.SourceColumn = "" }, true},
+		{"absent phrasing is valid", func(o *ContextFabricHandleOption) { o.Phrasing = "" }, false},
+		{"present phrasing is valid", func(o *ContextFabricHandleOption) { o.Phrasing = "PR number 123" }, false},
+		{"oversized phrasing", func(o *ContextFabricHandleOption) { o.Phrasing = strings.Repeat("a", 201) }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := base
+			tc.mutate(&opt)
+			if err := opt.Validate(); (err != nil) != tc.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestContextFabricCandidateOption_Validate(t *testing.T) {
+	t.Parallel()
+	base := ContextFabricCandidateOption{
+		ReceiptID: "candr_confirm00001", OptionID: "opt_wu1", Label: "WU-42 fix the flaky test",
+		Kind: ContextFabricSubjectWorkItem, CanonicalID: "work_item_wu_42",
+		OfferSource: ContextFabricStructureOfferEngine,
+	}
+	cases := []struct {
+		name    string
+		mutate  func(*ContextFabricCandidateOption)
+		wantErr bool
+	}{
+		{"well formed", func(o *ContextFabricCandidateOption) {}, false},
+		{"missing namespace prefix", func(o *ContextFabricCandidateOption) { o.ReceiptID = "ancr_confirm00001" }, true},
+		{"invalid kind", func(o *ContextFabricCandidateOption) { o.Kind = "bogus" }, true},
+		{"invalid offer_source", func(o *ContextFabricCandidateOption) { o.OfferSource = "bogus" }, true},
+		{"empty label", func(o *ContextFabricCandidateOption) { o.Label = "" }, true},
+		{"empty canonical_id", func(o *ContextFabricCandidateOption) { o.CanonicalID = "" }, true},
+		{"absent phrasing is valid", func(o *ContextFabricCandidateOption) { o.Phrasing = "" }, false},
+		{"present phrasing is valid", func(o *ContextFabricCandidateOption) { o.Phrasing = "did you mean WU-42?" }, false},
+		{"oversized phrasing", func(o *ContextFabricCandidateOption) { o.Phrasing = strings.Repeat("a", 201) }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

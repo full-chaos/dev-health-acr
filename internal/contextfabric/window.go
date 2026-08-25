@@ -1315,7 +1315,11 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// reduces to the pre-CHAOS-4234 window-only block when it is empty.
 	var structureNeeds *contractsv1.ContextFabricStructureNeeds
 	if windowClarification != nil {
-		structureNeeds = composeGatedStructureNeeds(gatedMaterial, resultID, windowClarification.Options)
+		// CHAOS-4171 PR2: applyOfferPhrasing runs the SAME hook
+		// unresolved.go's terminalResult uses, so CHAOS-4234's regime-A
+		// gated offers get phrasing too -- see its own doc comment
+		// (chaos4171_offer_phrasing.go).
+		structureNeeds = e.applyOfferPhrasing(ctx, principal, request.RequestID, composeGatedStructureNeeds(gatedMaterial, resultID, windowClarification.Options))
 	}
 	// CHAOS-4234 (codex round-1 finding, confirmed): gatedMaterial's
 	// AnchorOptions can carry membership-verify (V2) offers -- the SAME

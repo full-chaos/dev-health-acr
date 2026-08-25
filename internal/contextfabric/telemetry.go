@@ -264,6 +264,14 @@ func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, princip
 	t.logger.InfoContext(ctx, "context fabric prior consultation degraded", args...)
 }
 
+// RecordOfferPhrasing implements EngineTelemetry (CHAOS-4171 PR2). outcome
+// is the closed OfferPhrasingOutcome enum -- content-safe by construction,
+// never the phrasing text itself or a structural Label.
+func (t SlogEngineTelemetry) RecordOfferPhrasing(ctx context.Context, principal storage.Principal, outcome OfferPhrasingOutcome) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric offer phrasing outcome", args...)
+}
+
 // RecordFactScopeExpansion implements EngineTelemetry (CHAOS-4099) -- the
 // ONE operator-visible record of whether a fact family could be reached from
 // the subjects an investigation resolved.

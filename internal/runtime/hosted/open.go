@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -670,6 +671,24 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
+	// CHAOS-4171 PR2: offer phrasing is wired off deploymentDefaultRuntime
+	// (never the per-org-resolved modelRuntime above) -- it is a
+	// deployment-level singleton, not per-organization BYO config, and a
+	// type assertion against modelruntimeresolver.Resolver's own
+	// ModelRuntime-only surface would always fail. A deployment whose
+	// runtime is nil (no model provider configured) or does not
+	// implement contextfabric.OfferPhrasingModelRuntime (e.g. a test-only
+	// ModelRuntimeOverride) simply leaves offerPhraser nil below -- the
+	// same "optional dependency absent" degradation every other
+	// EngineDependencies field uses.
+	var offerPhraser contextfabric.OfferPhraser
+	if phrasingRuntime, ok := deploymentDefaultRuntime.(contextfabric.OfferPhrasingModelRuntime); ok && !isNilRuntime(phrasingRuntime) {
+		// Logger wired from the SAME request.options.Logger every other
+		// component in this file uses (codex R2 review finding: omitting
+		// it left RuntimeOfferPhraser's sink-failure WARN falling back to
+		// slog.Default() instead of the service's configured logger).
+		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink, Logger: request.options.Logger}
+	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
 	// -- the same typed-nil-interface trap open()'s own conversion guards
 	// against (see its doc comment) applies here too: assigning a nil
@@ -774,6 +793,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// -- see priorConsultant's own construction comment above.
 		PriorConsultant:           priorConsultant,
 		PriorHandleGrammarChecker: priorHandleGrammarChecker,
+		// CHAOS-4171 PR2: nil unless deploymentDefaultRuntime implements
+		// contextfabric.OfferPhrasingModelRuntime -- see offerPhraser's
+		// own construction comment above.
+		OfferPhraser: offerPhraser,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
 		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions
@@ -946,6 +969,29 @@ const contextFabricProjectionVersion = devhealthsource.ClickHouseSourceVersion +
 // chain and matching on chain MEMBERSHIP (see
 // ReuseKey.ModelIdentities' doc comment) fixes that without needing to
 // predict ahead of a model call which of the two will answer.
+// isNilRuntime reports whether runtime is a TYPED nil -- a non-nil
+// interface value wrapping a nil concrete pointer (codex review finding:
+// the classic typed-nil trap this file's own doc comments warn about
+// elsewhere, here on the RECEIVING side of a type assertion rather than
+// before an interface assignment). deploymentDefaultRuntime may come from
+// request.options.ModelRuntimeOverride, a test-only field a caller could
+// set to a typed-nil *genkitruntime.Runtime; without this check, the
+// subsequent contextfabric.OfferPhrasingModelRuntime type assertion would
+// succeed (the method set is present even on a nil receiver), and
+// genkitruntime.(*Runtime).PhraseStructureOffers would panic on its first
+// field read the moment it was actually called. Only Ptr/Interface/Map/
+// Slice/Chan/Func kinds support IsNil(); every other kind (a struct or
+// non-pointer implementation) cannot be a typed nil, so it reports false.
+func isNilRuntime(runtime any) bool {
+	value := reflect.ValueOf(runtime)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func contextFabricReuseModelIdentities(lookup func(string) (string, bool)) []string {
 	if !modelprovider.Configured(lookup) {
 		return nil
