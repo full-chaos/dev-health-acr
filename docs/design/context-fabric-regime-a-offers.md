@@ -77,14 +77,14 @@ discard is the load-bearing safety layer; the ctx mark
 
 | Where | Field | Meaning |
 | --- | --- | --- |
-| `EngineTelemetry.RecordGatedOfferResolution` | `composed` / `empty` / `failed` / `disabled` / `refused` | once per class-default gated request |
+| `EngineTelemetry.RecordGatedOfferResolution` | `composed` / `empty` / `failed` / `disabled` / `refused` / `not_projected` | once per class-default gated request; `not_projected` (codex round-2 finding #2) distinguishes a never-projected org from a genuinely empty pool, same as `subjectlessTerminalReasons`' `graph_not_projected` does for the decisive path |
 | `kind_offer` trace event | `OfferedUnderWindowGate` | this resolution ran in offers-only mode |
 | `ranked_cut` trace stage (`resolution.go`) | `Subject`, `Rank`, `Survived` | one event per candidate, in rank order, before the `MaxSubjectCandidates` cut; `Rank==1` opens a batch, readers keep the last batch |
 | `ranked_cut` companion (`resolve.go`) | `CoverageBypass=true`, `Rank 0` | a coverage-floor find the cut dropped but `unionCandidatesForOffer` still hands to the offer builders |
-| two-turn report row (schema v28) | `turn1_offer_composed_under_window_gate`, `expected_subject_in_pool`, `expected_subject_rank`, `expected_subject_at_offer_boundary`, `turn2_window_receipt_attached` | subject-level twins of `expected_in_pool` / `expected_kind_at_offer_boundary`; harness semantics flag |
-| two-turn report (schema v28) | `regime_a_offer_composed_count`, `regime_a_turn2_answered_count` | summed by `cmd/acr-trial-merge-two-turn`, no bar |
+| two-turn report row (schema v29) | `turn1_offer_composed_under_window_gate`, `expected_subject_in_pool`, `expected_subject_rank`, `expected_subject_at_offer_boundary`, `turn2_window_receipt_attached` | subject-level twins of `expected_in_pool` / `expected_kind_at_offer_boundary`; harness semantics flag |
+| two-turn report (schema v29) | `regime_a_offer_composed_count`, `regime_a_turn2_answered_count` | summed by `cmd/acr-trial-merge-two-turn`, no bar |
 
-Harness semantics change (schema v28): on a regime-A case the positive
+Harness semantics change (schema v29): on a regime-A case the positive
 arm's turn 2 carries the oracle's window receipt beside the member receipt.
 `offer_miss_count` stays an engine-only aggregate across the bump; turn-2
 aggregates carry the harness change as part of the lever.

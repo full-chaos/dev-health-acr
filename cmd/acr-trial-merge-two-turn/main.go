@@ -549,7 +549,7 @@ type twoTurnCaseResult struct {
 	// PRE-repair twin, mirroring twoTurnCaseResult's identically-named
 	// field byte-for-byte.
 	ExpectedKindAtOfferBoundaryBeforeRepair bool `json:"expected_kind_at_offer_boundary_before_repair"`
-	// CHAOS-4234 (schema v28): mirrored byte-for-byte from the producer's
+	// CHAOS-4234 (schema v29): mirrored byte-for-byte from the producer's
 	// twoTurnCaseResult (no omitempty on the bools -- a false is a reading).
 	Turn1OfferComposedUnderWindowGate bool `json:"turn1_offer_composed_under_window_gate"`
 	ExpectedSubjectInPool             bool `json:"expected_subject_in_pool"`
@@ -641,7 +641,7 @@ type twoTurnReport struct {
 	WindowGatedCount                        int `json:"window_gated_count"`
 	WindowClassDefaultGatedCount            int `json:"window_class_default_gated_count"`
 	// RegimeAOfferComposedCount/RegimeATurn2AnsweredCount (CHAOS-4234,
-	// schema v28) mirror twoTurnReport's identically-named fields --
+	// schema v29) mirror twoTurnReport's identically-named fields --
 	// informational, summed across shards, no gate.
 	RegimeAOfferComposedCount              int `json:"regime_a_offer_composed_count"`
 	RegimeATurn2AnsweredCount              int `json:"regime_a_turn2_answered_count"`

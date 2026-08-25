@@ -102,7 +102,15 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// CHAOS-4154: which candidate population a statistical commit
 			// was decided over -- a closed vocabulary, see
 			// ResolutionTraceEvent.PopulationBasis's own doc comment.
-			"population_basis", event.PopulationBasis)
+			"population_basis", event.PopulationBasis,
+			// CHAOS-4234 (codex round-2 finding #1): offersOnlyDecisionTracer
+			// tags every decision event from the offers-only pass with
+			// OfferedUnderWindowGate=true before it reaches this sink --
+			// without logging it here, a production log line could show
+			// "outcome=committed" with no indication the resolution behind
+			// it was discarded unconditionally (see
+			// offersOnlyDecisionTracer's own doc comment, resolve.go).
+			"offered_under_window_gate", event.OfferedUnderWindowGate)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put

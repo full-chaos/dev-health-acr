@@ -99,6 +99,18 @@ const (
 	// the gate composes a refused no_match terminal with nothing to offer
 	// and the pass is never run.
 	GatedOfferResolutionRefused GatedOfferResolutionOutcome = "refused"
+	// GatedOfferResolutionNotProjected (codex round-2 finding #2): the
+	// pass returned ErrGraphNotProjected -- this organization's graph does
+	// not exist yet, distinct from a genuinely empty projected pool. The
+	// gated terminal still degrades to window-only disclosure exactly as
+	// GatedOfferResolutionEmpty does (same as the decisive path's own
+	// ErrGraphNotProjected handling, engine.go), but a reader must be able
+	// to tell "nothing to offer" apart from "no graph to search" without
+	// transcript archaeology -- the same distinction
+	// subjectlessTerminalReasons' "graph_not_projected" value already
+	// makes for the decisive path (see TestEngineInvestigate_
+	// NeverProjectedOrgDegradesToCleanTerminal, chaos4077_never_projected_org_test.go).
+	GatedOfferResolutionNotProjected GatedOfferResolutionOutcome = "not_projected"
 )
 
 // gatedOfferMaterial runs the offers-only resolution for a class-default
@@ -123,6 +135,10 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 	_, material, _, _, err := e.graph.ResolveSubjects(WithOffersOnlyResolution(ctx), principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
 	if err != nil && !errors.Is(err, ErrGraphNotProjected) {
 		record(GatedOfferResolutionFailed)
+		return StructureOfferMaterial{}
+	}
+	if errors.Is(err, ErrGraphNotProjected) {
+		record(GatedOfferResolutionNotProjected)
 		return StructureOfferMaterial{}
 	}
 	material = e.consultPriorStructureOffers(ctx, principal, priorEntries, material)

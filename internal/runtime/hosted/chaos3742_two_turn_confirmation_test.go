@@ -1866,13 +1866,13 @@ type twoTurnTurn1Facts struct {
 	// this) from "already absent at the boundary" (upstream truncation
 	// already lost it -- candidate-list reads the SAME slice, so it cannot).
 	ExpectedKindAtOfferBoundary bool
-	// OfferComposedUnderWindowGate (CHAOS-4234, schema v28) mirrors the
+	// OfferComposedUnderWindowGate (CHAOS-4234, schema v29) mirrors the
 	// kind_offer trace event's OfferedUnderWindowGate: turn 1 ran the
 	// class-default gate's offers-only resolution, so any kind/handle/
 	// candidate offer on this turn was composed BESIDE the window offer.
 	OfferComposedUnderWindowGate bool
 	// ExpectedSubjectInPool/ExpectedSubjectRank/ExpectedSubjectAtOfferBoundary
-	// (CHAOS-4234, schema v28) are the SUBJECT-level twins of ExpectedInPool/
+	// (CHAOS-4234, schema v29) are the SUBJECT-level twins of ExpectedInPool/
 	// ExpectedKindAtOfferBoundary: whether the oracle's expect_id itself (kind
 	// AND canonical id, not merely its kind) corroborated into the full
 	// merged pool, its 1-based rank in the LAST ranked_cut batch (0 when it
@@ -3792,20 +3792,20 @@ type twoTurnCaseResult struct {
 	// something already committed). See
 	// twoTurnTraceCapture.boundaryContainsKindBeforeRepair.
 	ExpectedKindAtOfferBoundaryBeforeRepair bool `json:"expected_kind_at_offer_boundary_before_repair"`
-	// Turn1OfferComposedUnderWindowGate (CHAOS-4234, schema v28) mirrors
+	// Turn1OfferComposedUnderWindowGate (CHAOS-4234, schema v29) mirrors
 	// twoTurnTurn1Facts.OfferComposedUnderWindowGate -- see that field's
 	// own doc comment. No omitempty: a false on a regime-A row is the
 	// finding ("the gate composed nothing"), not an absence.
 	Turn1OfferComposedUnderWindowGate bool `json:"turn1_offer_composed_under_window_gate"`
 	// ExpectedSubjectInPool/ExpectedSubjectRank/ExpectedSubjectAtOfferBoundary
-	// (CHAOS-4234, schema v28) mirror twoTurnTurn1Facts' identically-named
+	// (CHAOS-4234, schema v29) mirror twoTurnTurn1Facts' identically-named
 	// fields -- the subject-level twins of ExpectedInPool/
 	// ExpectedKindAtOfferBoundary. No omitempty on the bools, same reason as
 	// above; Rank 0 means "never reached the cut" and is a real reading.
 	ExpectedSubjectInPool          bool `json:"expected_subject_in_pool"`
 	ExpectedSubjectRank            int  `json:"expected_subject_rank"`
 	ExpectedSubjectAtOfferBoundary bool `json:"expected_subject_at_offer_boundary"`
-	// Turn2WindowReceiptAttached (CHAOS-4234, schema v28, positive arm only)
+	// Turn2WindowReceiptAttached (CHAOS-4234, schema v29, positive arm only)
 	// records the harness semantics change this ticket made: on a regime-A
 	// case (turn 1 window-gated), the positive arm's turn 2 now carries the
 	// oracle's window receipt BESIDE the member's own receipt, so turn 2
@@ -4743,7 +4743,7 @@ type twoTurnReport struct {
 	// ClassifyWindow/DefaultRelativeID refusal path -- so no exact-count
 	// bar, matching InferredKindHandleDecisiveCount's own >0-only shape).
 	WindowClassDefaultGatedCount int `json:"window_class_default_gated_count"`
-	// RegimeAOfferComposedCount (CHAOS-4234, schema v28) counts turn-1 rows
+	// RegimeAOfferComposedCount (CHAOS-4234, schema v29) counts turn-1 rows
 	// whose window gate (regime A) composed kind/handle/candidate offers
 	// beside the window offer -- the engine-side lever's own reach, before
 	// any oracle match. RegimeATurn2AnsweredCount counts positive-arm rows

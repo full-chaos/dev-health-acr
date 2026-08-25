@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -118,6 +119,12 @@ func TestCHAOS4234_ClassDefaultGate_ComposesKindAndHandleOffersBesideTheWindowOf
 	if !reflect.DeepEqual(telemetry.structureNeedsDisclosed, wantMissing) {
 		t.Fatalf("structureNeedsDisclosed = %#v, want %#v", telemetry.structureNeedsDisclosed, wantMissing)
 	}
+	// codex round-2 finding #3: a regression removing
+	// RecordGatedOfferResolution's call must fail a test, not just the
+	// structure-disclosure assertions above.
+	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionComposed}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
+		t.Fatalf("gatedOfferResolutions = %#v, want %#v", telemetry.gatedOfferResolutions, want)
+	}
 }
 
 func TestCHAOS4234_ClassDefaultGate_OffersOnlyResolveErrorFailsOpenToWindowOnly(t *testing.T) {
@@ -126,7 +133,8 @@ func TestCHAOS4234_ClassDefaultGate_OffersOnlyResolveErrorFailsOpenToWindowOnly(
 	graph := chaos4234GatedGraph()
 	graph.err = errors.New("falkor unavailable")
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
-	engine := buildWindowGateEngine(t, interpreter, graph, store)
+	telemetry := &recordingTelemetry{}
+	engine := buildWindowGateEngineWithTelemetry(t, interpreter, graph, store, telemetry)
 
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
 	if err != nil {
@@ -143,6 +151,42 @@ func TestCHAOS4234_ClassDefaultGate_OffersOnlyResolveErrorFailsOpenToWindowOnly(
 	}
 	if len(result.StructureNeeds.KindOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 {
 		t.Fatalf("kind/handle options = %#v/%#v, want none when the offers-only read failed", result.StructureNeeds.KindOptions, result.StructureNeeds.HandleOptions)
+	}
+	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionFailed}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
+		t.Fatalf("gatedOfferResolutions = %#v, want %#v", telemetry.gatedOfferResolutions, want)
+	}
+}
+
+// TestCHAOS4234_ClassDefaultGate_NeverProjectedOrgIsDistinctFromEmpty is
+// codex round-2 finding #2, confirmed and fixed: ErrGraphNotProjected used
+// to fall through to StructureNeedsWouldDisclose's false branch and record
+// GatedOfferResolutionEmpty, conflating "no graph exists yet" with "the
+// graph exists and genuinely has nothing to offer" -- the same distinction
+// subjectlessTerminalReasons' "graph_not_projected" value already makes
+// for the decisive path (chaos4077_never_projected_org_test.go). Both
+// degrade to the SAME window-only terminal; only the telemetry outcome
+// must differ.
+func TestCHAOS4234_ClassDefaultGate_NeverProjectedOrgIsDistinctFromEmpty(t *testing.T) {
+	t.Parallel()
+	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	graph := chaos4234GatedGraph()
+	graph.err = fmt.Errorf("query context graph: %w", ErrGraphNotProjected)
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	telemetry := &recordingTelemetry{}
+	engine := buildWindowGateEngineWithTelemetry(t, interpreter, graph, store, telemetry)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want the window-only disclosure: a never-projected org must never block the gated terminal", err)
+	}
+	if result.Status != InvestigationClarificationRequired || result.StructureNeeds == nil {
+		t.Fatalf("Status/StructureNeeds = %q/%#v, want clarification_required with a window-only disclosure", result.Status, result.StructureNeeds)
+	}
+	if len(result.StructureNeeds.Missing) != 1 || result.StructureNeeds.Missing[0] != contractsv1.ContextFabricStructureNeedWindow {
+		t.Fatalf("StructureNeeds.Missing = %#v, want exactly [window]", result.StructureNeeds.Missing)
+	}
+	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionNotProjected}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
+		t.Fatalf("gatedOfferResolutions = %#v, want %#v -- a never-projected org must be distinguishable from an ordinary empty pool", telemetry.gatedOfferResolutions, want)
 	}
 }
 
