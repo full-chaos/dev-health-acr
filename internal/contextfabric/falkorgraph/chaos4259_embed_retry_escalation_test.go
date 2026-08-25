@@ -176,6 +176,55 @@ func TestEmbedProjectionBatchEscalationResetsOnSuccessfulBatch(t *testing.T) {
 	}
 }
 
+// failingClearFake is a fakeConn whose clearNodeVectors-shaped query
+// (UNWIND $targets AS t ... SET n....) always fails, while every other
+// query (index status probes, etc.) succeeds normally -- used to prove
+// codex R1 finding 3: the embed-failure streak must still increment even
+// when the SUBSEQUENT clear also fails, not only on the happy path where
+// clearNodeVectors itself succeeds.
+func failingClearFake() *fakeConn {
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, cypher string, _ map[string]interface{}, _ bool) ([]row, error) {
+		if strings.HasPrefix(cypher, "UNWIND $targets AS t") {
+			return nil, errors.New("simulated clear failure")
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	return fake
+}
+
+// TestEmbedProjectionBatchEscalatesEvenWhenTheClearAlsoFails pins codex R1
+// finding 3: reportEmbedFailure must fire (and the org's consecutive
+// streak must still count toward escalation) on every batch whose EMBED
+// call failed, REGARDLESS of whether the subsequent clearNodeVectors call
+// also fails and short-circuits embedProjectionBatch with an error. Before
+// this fix, reportEmbedFailure sat after a successful clear, so a
+// sustained embed outage that also happened to fail every clear (e.g. a
+// FalkorDB outage overlapping an embedder outage) would never reach the
+// escalation threshold.
+func TestEmbedProjectionBatchEscalatesEvenWhenTheClearAlsoFails(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	embedder := &stubEmbedder{vector: make([]float32, 4), err: embedprovider.ErrModelIdentityMismatch}
+	const escalateAfter = 3
+	adapter := vectorAdapterWithRetryConfig(t, failingClearFake(), embedder, telemetry, 0, 0, escalateAfter)
+
+	for i := 1; i <= escalateAfter; i++ {
+		err := adapter.embedProjectionBatch(context.Background(), "k", realProjectSubjectBatch("org-1"))
+		if err == nil {
+			t.Fatalf("call %d: embedProjectionBatch must propagate the clear failure (existing behavior, unchanged)", i)
+		}
+	}
+	if len(telemetry.embedFailureEscalations) != 1 {
+		t.Fatalf("len(embedFailureEscalations) = %d, want 1 -- the streak must reach the threshold even though every clear also failed", len(telemetry.embedFailureEscalations))
+	}
+	if telemetry.embedFailureEscalations[0].consecutiveFailures != escalateAfter {
+		t.Fatalf("escalation consecutiveFailures = %d, want %d", telemetry.embedFailureEscalations[0].consecutiveFailures, escalateAfter)
+	}
+}
+
 // TestEmbedProjectionBatchEscalationIsPerOrganization pins that the
 // consecutive-failure counter is scoped PER ORGANIZATION: a sustained
 // failure streak for one org must never contaminate another org's count on

@@ -197,8 +197,13 @@ consecutive failing batches for one organization now escalates to an
 ERROR-level `RecordVectorProjectionEmbedFailuresEscalated` signal, distinct
 from the routine per-batch WARN a single cleared batch already emits --
 so an outage like the one above is loud well before an operator would
-otherwise notice only by scrolling WARN lines. All three default to
-byte-identical pre-CHAOS-4259 behavior when left unset.
+otherwise notice only by scrolling WARN lines. All three are ACTIVE by
+default in every real deployment (`ConfigFromEnv` applies the `2`/`200ms`/`5`
+defaults above whenever the corresponding env var is unset) -- unset does
+NOT mean disabled. Only a `Config` literal built directly, bypassing
+`ConfigFromEnv` entirely (the shape most existing unit tests use), gets the
+zero value and stays byte-identical to pre-CHAOS-4259 behavior (no retry,
+no escalation); no shipped composition root does this.
 
 If you maintain the workspace root's own `compose.override.yml` (untracked
 local config, outside every repo, so it carries no durable comment of its

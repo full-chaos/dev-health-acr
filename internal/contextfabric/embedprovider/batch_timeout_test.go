@@ -17,10 +17,13 @@ import (
 //
 // The server here always takes 150ms to respond. Timeout is set well below
 // that (50ms, read-path budget) and BatchTimeout well above it (1s,
-// write-path budget). A single-text call must still fail closed under the
-// short read-side Timeout (proving the two knobs are genuinely
-// independent, not one collapsing into the other); a multi-text call must
-// SUCCEED under the longer BatchTimeout.
+// write-path budget). A call NOT marked WithBatchCall must fail closed
+// under the short read-side Timeout regardless of how many texts it
+// carries (proving the timeout is chosen by the explicit marker, never by
+// len(texts) -- codex R1 finding 1 removed a len(texts)>1 heuristic that
+// silently reused the read-side Timeout for a legitimate SINGLE-target
+// write batch); a call marked WithBatchCall must succeed under the longer
+// BatchTimeout, again regardless of text count.
 func TestBatchCallsUseTheDedicatedBatchTimeoutNotTheReadSideTimeout(t *testing.T) {
 	t.Parallel()
 	server := embeddingsServer(t, func(inputs []string) (int, any) {
@@ -40,16 +43,36 @@ func TestBatchCallsUseTheDedicatedBatchTimeoutNotTheReadSideTimeout(t *testing.T
 		t.Fatalf("New: %v", err)
 	}
 
-	t.Run("single-text (read-path shape) still bounded by the short Timeout", func(t *testing.T) {
+	t.Run("unmarked single-text call still bounded by the short Timeout", func(t *testing.T) {
 		t.Parallel()
 		if _, err := embedder.Embed(context.Background(), []string{"one query"}); err == nil {
-			t.Fatal("a single-text call slower than Timeout must fail closed -- if it succeeded, BatchTimeout leaked into the read path")
+			t.Fatal("an unmarked call slower than Timeout must fail closed -- if it succeeded, BatchTimeout leaked into the read path")
 		}
 	})
 
-	t.Run("multi-text (write-path shape) succeeds under the longer BatchTimeout", func(t *testing.T) {
+	t.Run("unmarked multi-text call is STILL bounded by the short Timeout -- no inference from count", func(t *testing.T) {
 		t.Parallel()
-		vectors, err := embedder.Embed(context.Background(), []string{"doc one", "doc two", "doc three"})
+		if _, err := embedder.Embed(context.Background(), []string{"doc one", "doc two", "doc three"}); err == nil {
+			t.Fatal("an unmarked multi-text call must NOT get BatchTimeout by inferring from len(texts) -- only WithBatchCall may grant it")
+		}
+	})
+
+	t.Run("marked SINGLE-text call (a real one-target write batch) succeeds under BatchTimeout", func(t *testing.T) {
+		t.Parallel()
+		ctx := WithBatchCall(context.Background())
+		vectors, err := embedder.Embed(ctx, []string{"the one target in this batch"})
+		if err != nil {
+			t.Fatalf("codex R1 finding 1: a single-target WithBatchCall-marked call must succeed under BatchTimeout, got: %v", err)
+		}
+		if len(vectors) != 1 {
+			t.Fatalf("got %d vectors, want 1", len(vectors))
+		}
+	})
+
+	t.Run("marked multi-text call succeeds under the longer BatchTimeout", func(t *testing.T) {
+		t.Parallel()
+		ctx := WithBatchCall(context.Background())
+		vectors, err := embedder.Embed(ctx, []string{"doc one", "doc two", "doc three"})
 		if err != nil {
 			t.Fatalf("a batch slower than the read-side Timeout but faster than BatchTimeout must succeed, got: %v", err)
 		}

@@ -140,6 +140,41 @@ func (e *Embedder) PrefixTagComponent() string {
 	return e.config.PrefixTagComponent()
 }
 
+// batchCallContextKey marks a context as originating from the projection
+// (write) path, so embedChunk applies Config.BatchTimeout to it.
+type batchCallContextKey struct{}
+
+// WithBatchCall marks ctx as a projection/write-path Embed call (CHAOS-3828 /
+// CHAOS-4259 codex R1 finding 1), so embedChunk applies Config.BatchTimeout
+// to every chunk issued under it -- regardless of how many texts end up in
+// any one chunk.
+//
+// This is deliberately an EXPLICIT signal from the caller, not inferred from
+// len(texts): a projection batch legitimately can carry exactly ONE
+// embeddable target (a batch with a single real node to embed is a common,
+// valid shape, not a read-path call in disguise), and a heuristic that
+// picked BatchTimeout only when len(texts) > 1 silently bound that
+// single-target write to the much shorter read-side Timeout instead --
+// reproducing the exact CHAOS-3828 failure mode for the one-target case.
+//
+// Call this ONCE, at the top of the projection/write-path call site, before
+// the first Embed call for that batch (including any retry) --
+// falkorgraph.Adapter.embedWithBoundedRetry is the one caller in this
+// repository that does. Every read-path caller (a single query embedding)
+// MUST leave ctx unmarked, unconditionally: this package cannot verify from
+// the inside that a caller marked (or failed to mark) correctly, so the
+// contract is enforced by convention at the two call sites, not by this
+// package.
+func WithBatchCall(ctx context.Context) context.Context {
+	return context.WithValue(ctx, batchCallContextKey{}, true)
+}
+
+// isBatchCall reports whether ctx was marked by WithBatchCall.
+func isBatchCall(ctx context.Context) bool {
+	marked, _ := ctx.Value(batchCallContextKey{}).(bool)
+	return marked
+}
+
 // Embed returns one vector per input text, in input order.
 //
 // Batching: texts are split into chunks of at most Config.MaxBatch and issued
@@ -148,12 +183,13 @@ func (e *Embedder) PrefixTagComponent() string {
 // requests queue inside it anyway while multiplying the chance of tripping a
 // per-request timeout.
 //
-// Timeout: a single-text chunk (every read-path caller in this repository)
-// runs under Config.Timeout; a multi-text chunk (the projection/write path)
-// runs under Config.BatchTimeout instead (CHAOS-3828) -- reusing the
-// read-side budget for a MaxBatch-sized request timed it out on every call
-// against anything but a very fast warm local model. See BatchTimeout's own
-// doc comment.
+// Timeout: a chunk issued under a ctx marked by WithBatchCall (the
+// projection/write path) runs under Config.BatchTimeout; every other chunk
+// (every read-path caller in this repository, a single query text) runs
+// under Config.Timeout (CHAOS-3828, CHAOS-4259) -- reusing the read-side
+// budget for a MaxBatch-sized request timed it out on every call against
+// anything but a very fast warm local model. See BatchTimeout's and
+// WithBatchCall's own doc comments.
 //
 // Order: the response is reordered by each Embedding's own Index field rather
 // than trusting the order the server returned. An OpenAI-compatible server is
@@ -197,7 +233,7 @@ func (e *Embedder) embedChunk(ctx context.Context, texts []string) ([][]float32,
 		inputs = append(inputs, TruncateRunes(text, e.config.MaxTextRunes))
 	}
 	timeout := e.config.Timeout
-	if len(texts) > 1 {
+	if isBatchCall(ctx) {
 		timeout = e.config.BatchTimeout
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)

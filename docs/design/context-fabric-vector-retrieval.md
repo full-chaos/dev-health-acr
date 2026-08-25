@@ -290,7 +290,8 @@ constant in code:
 | `ACR_CONTEXT_FABRIC_EMBED_DIMENSION` | — | Must match the index. |
 | `ACR_CONTEXT_FABRIC_EMBED_API_KEY` / `_FILE` | empty | LM Studio needs none; the shape accommodates one for a hosted embedder. |
 | `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` | 0.55 | τ, §4.2. |
-| `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | 250ms | §6.2. |
+| `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | 250ms | Read-path (single-text) calls. §6.2. |
+| `ACR_CONTEXT_FABRIC_EMBED_BATCH_TIMEOUT` | 5s | Write/projection-path calls, independent of the read-path timeout above (CHAOS-3828). |
 | `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL` | false | Required for a loopback `http://` endpoint. |
 
 Unset base URL ⇒ the feature is off and the lexical path is unchanged. Same

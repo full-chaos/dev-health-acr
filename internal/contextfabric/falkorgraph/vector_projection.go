@@ -362,6 +362,15 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		// So the vector is CLEARED instead. A node with no vector degrades
 		// honestly to lexical retrieval; a node with a stale vector lies.
 		a.recordVectorDegraded(ctx, batch.OrgID)
+		// CHAOS-4259 codex R1 finding 3: report the embed failure itself
+		// (increment the org's consecutive-failure streak, escalate if the
+		// threshold is crossed) BEFORE attempting the clear, not after it
+		// succeeds. The embed call already failed regardless of whether the
+		// clear below also fails -- a genuine, sustained embed outage that
+		// happens to ALSO hit clear failures every time must still reach the
+		// escalation threshold, not silently never count because clearErr
+		// short-circuits with `return err` first.
+		a.reportEmbedFailure(ctx, batch.OrgID, err)
 		// Finding 1: the id-only-skipped set is invalidated the same as
 		// everything else in this batch -- clear it alongside targets rather
 		// than leaving whatever those rows carried from a prior batch.
@@ -374,7 +383,6 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		// the same routine, already-reported-via-skipped.IDOnly event as
 		// every other commit path in this function.
 		a.recordVectorProjection(ctx, batch.OrgID, 0, len(targets), skipped)
-		a.reportEmbedFailure(ctx, batch.OrgID, err)
 		return nil
 	}
 	// The Embed call itself succeeded (possibly after a bounded retry): the
@@ -437,7 +445,16 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 // Returns the LAST error observed if every attempt fails (or the first,
 // persistent one) -- exactly the error embedProjectionBatch's existing
 // clear-and-degrade branch already handles unchanged.
+//
+// The ctx handed to every Embed call here is marked with
+// embedprovider.WithBatchCall (codex R1 finding 1): embedChunk must apply
+// Config.BatchTimeout to this call regardless of how many texts it happens
+// to carry -- a projection batch with exactly ONE embeddable target is a
+// legitimate, common shape (not a read-path call), and inferring the
+// timeout from len(texts) alone silently bounded that single-target write
+// by the much shorter read-side Timeout instead.
 func (a *Adapter) embedWithBoundedRetry(ctx context.Context, texts []string) ([][]float32, error) {
+	ctx = embedprovider.WithBatchCall(ctx)
 	vectors, err := a.embedder.Embed(ctx, texts)
 	if err == nil {
 		return vectors, nil
@@ -467,6 +484,26 @@ func (a *Adapter) embedWithBoundedRetry(ctx context.Context, texts []string) ([]
 // (CHAOS-4147 item 3 / CHAOS-4259). A zero/negative EmbedFailureEscalateAfter
 // (the Config zero value) disables escalation: the streak is still tracked
 // (harmless), but the threshold check never passes.
+//
+// KNOWN, ACCEPTED LIMITATION (codex R1 finding 4): the streak value passed
+// to telemetry is read under embedFailureMu, so it is always the exact
+// count AT THE MOMENT this failure incremented it -- never a stale re-read.
+// What is NOT guaranteed is the ORDER telemetry calls are OBSERVED in if
+// two batches for the SAME organization race concurrently on this Adapter
+// (one failing past the threshold, another concurrently succeeding and
+// resetting via resetEmbedFailureStreak): the mutex only serializes the map
+// mutation, not the RecordVectorProjectionEmbedFailuresEscalated call that
+// follows it outside the lock, so a reset's effect could be observed by an
+// operator before an already-in-flight escalation for a higher count is.
+// Holding embedFailureMu across the telemetry call would fix the ordering
+// but means blocking every OTHER organization's embed-failure reporting on
+// this shared Adapter for however long a caller-supplied GraphTelemetry
+// implementation takes -- Telemetry is a pluggable interface this package
+// does not control, so that trade is worse than the cosmetic reordering it
+// would close. Not a concern in production: projectionrun.Coordinator
+// single-flights each organization, so two batches for the same org never
+// run concurrently on a real deployment; this only matters for a caller
+// that constructs its own concurrent Adapter usage directly.
 func (a *Adapter) reportEmbedFailure(ctx context.Context, orgID string, err error) {
 	a.embedFailureMu.Lock()
 	if a.consecutiveEmbedBatchFailures == nil {

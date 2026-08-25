@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -114,6 +115,34 @@ func TestIsTransientEmbedErrorDeadlineExceededIsTransient(t *testing.T) {
 	}
 	if !IsTransientEmbedError(embedErr) {
 		t.Fatalf("a call timeout must classify as TRANSIENT, got persistent for: %v", embedErr)
+	}
+}
+
+// TestIsTransientEmbedErrorMalformedTwoHundredResponseIsPersistent pins
+// codex R1 finding 2: a 2xx response whose body is NOT valid JSON was
+// received (unlike the transport-failure default branch, which covers a
+// request that never got a response at all) -- a server returning
+// unparseable JSON for a given request shape is very likely to keep doing
+// so, so this must NOT fall into the "no response received, assume network
+// blip" transient default.
+func TestIsTransientEmbedErrorMalformedTwoHundredResponseIsPersistent(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{not valid json"))
+	}))
+	t.Cleanup(server.Close)
+	embedder, err := New(testConfig(server.URL))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, embedErr := embedder.Embed(context.Background(), []string{"a"})
+	if embedErr == nil {
+		t.Fatal("a malformed 2xx JSON body must surface as an error")
+	}
+	if IsTransientEmbedError(embedErr) {
+		t.Fatalf("a malformed 2xx response body must classify as PERSISTENT (a response WAS received, just unparseable), got transient for: %v", embedErr)
 	}
 }
 
