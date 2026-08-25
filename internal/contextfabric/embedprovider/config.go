@@ -274,10 +274,12 @@ type Config struct {
 	// BatchTimeout bounds one WRITE/PROJECTION-path embeddings call (up to
 	// MaxBatch texts). Kept separate from Timeout so a batch sized for the
 	// write path is not silently bounded by a budget sized for the read
-	// path's single-text hot path (CHAOS-3828). embedChunk applies this
-	// whenever a chunk carries more than one text; every read-path caller
-	// in this repository embeds exactly one text per call, so this never
-	// affects the read path.
+	// path's single-text hot path (CHAOS-3828). embedChunk applies this to
+	// any chunk issued under a ctx marked by WithBatchCall (CHAOS-4259
+	// codex R1 finding 1), never by inferring from text count -- a
+	// single-target write batch still needs it. Every read-path caller in
+	// this repository leaves ctx unmarked, so this never affects the read
+	// path.
 	BatchTimeout time.Duration
 	// ExpectResponseModel is the model id the server is expected to report in
 	// its response, when that legitimately differs from Model. Empty means

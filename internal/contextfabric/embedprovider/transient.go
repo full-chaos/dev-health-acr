@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/openai/openai-go"
@@ -35,18 +36,20 @@ import (
 // caller can now escalate a SUSTAINED run of these past a WARN (see
 // GraphTelemetry.RecordVectorProjectionEmbedFailuresEscalated).
 //
-// ALSO PERSISTENT (codex R1 finding 2): a malformed 2xx response body. The
-// openai-go SDK reads a 2xx body and JSON-decodes it into the response
-// struct BEFORE this package ever sees an error
+// ALSO PERSISTENT (codex R1 finding 2, extended by codex R2): a malformed
+// 2xx response body. The openai-go SDK reads a 2xx body and JSON-decodes it
+// into the response struct BEFORE this package ever sees an error
 // (requestconfig.executeRequest, wrapped by embedChunk as "embed request
 // failed: %w") -- a response WAS received here, unlike the transport-layer
 // case above, so classifying it the same way as "no response at all" was
 // simply wrong: a server that returns unparseable JSON for a given request
 // shape is very likely to keep doing so, not recover on the next attempt a
-// couple hundred milliseconds later. Detected via errors.As against the
-// standard library's own decode-error types (*json.SyntaxError,
-// *json.UnmarshalTypeError) rather than by matching this package's own
-// wrapping text, so it survives a future rewording of that %w message.
+// couple hundred milliseconds later. Detected via errors.As/errors.Is
+// against the standard library's own decode-error types and sentinels
+// (*json.SyntaxError, *json.UnmarshalTypeError, io.EOF for a fully empty
+// 2xx body, io.ErrUnexpectedEOF for a truncated one) rather than by
+// matching this package's own wrapping text, so it survives a future
+// rewording of that %w message.
 //
 // context.Canceled is deliberately excluded from both buckets by being
 // treated as PERSISTENT (no retry): a caller cancellation is a shutdown or
@@ -67,6 +70,9 @@ func IsTransientEmbedError(err error) bool {
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return false
 	}
 	var apiErr *openai.Error

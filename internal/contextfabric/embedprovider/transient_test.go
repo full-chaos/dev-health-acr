@@ -146,6 +146,47 @@ func TestIsTransientEmbedErrorMalformedTwoHundredResponseIsPersistent(t *testing
 	}
 }
 
+// TestIsTransientEmbedErrorEmptyOrTruncatedTwoHundredResponseIsPersistent
+// pins codex R2 finding 1: json.Decode surfaces a fully empty 2xx body as
+// io.EOF and a truncated one as io.ErrUnexpectedEOF, neither of which is a
+// *json.SyntaxError or *json.UnmarshalTypeError -- so before this fix both
+// fell through the malformed-2xx-body classifier (codex R1 finding 2) into
+// the "no response received, assume network blip" transient default, even
+// though a response WAS received (same reasoning as the malformed-JSON
+// case above).
+func TestIsTransientEmbedErrorEmptyOrTruncatedTwoHundredResponseIsPersistent(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "fully empty 2xx body (io.EOF)", body: ""},
+		{name: "truncated 2xx body (io.ErrUnexpectedEOF)", body: `{"data":[{"embedding":[0.1,`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(server.Close)
+			embedder, err := New(testConfig(server.URL))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, embedErr := embedder.Embed(context.Background(), []string{"a"})
+			if embedErr == nil {
+				t.Fatal("an empty or truncated 2xx body must surface as an error")
+			}
+			if IsTransientEmbedError(embedErr) {
+				t.Fatalf("must classify as PERSISTENT (a response WAS received, just empty/truncated), got transient for: %v", embedErr)
+			}
+		})
+	}
+}
+
 // TestIsTransientEmbedErrorConnectionFailureIsTransient pins that a
 // transport-layer failure that never reached the server (nothing listening
 // on the port) classifies as transient: no *openai.Error exists to inspect
