@@ -239,12 +239,19 @@ type ResolveDeps struct {
 	// full design and why this is deliberately NOT the mechanism that lets
 	// VectorMechanismConfigured==true stop forcing plan_incomplete) is an
 	// optional exact, count-closed, kind-scoped vector completeness
-	// census. nil (every composition root unless a deployment has set
-	// ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS to a
-	// positive value) is a no-op, zero cost,
-	// ConfirmedKindVectorScopeNotAttempted -- the safe default for any
-	// backend that does not implement this, matching every other optional
-	// ResolveDeps hook's nil convention.
+	// census. nil is a safe default for any backend that does not
+	// implement this, matching every other optional ResolveDeps hook's
+	// nil convention -- attemptConfirmedKindVectorCensus (this file's own
+	// call site) reports ConfirmedKindVectorScopeNotAttempted immediately
+	// when it is nil. falkorgraph's own production implementation is
+	// ALWAYS wired non-nil (codex R1 review, Medium, confirmed: an
+	// earlier version of this comment implied the hook itself stays nil
+	// absent the env var, which is not what reader.go does) -- it is the
+	// FUNCTION BODY that degenerates to a zero-backend-call
+	// ConfirmedKindVectorScopeNotAttempted whenever
+	// ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS is
+	// unset or no embedder is configured -- so "zero cost" here means no
+	// query/embed calls, not a literally-skipped Go function call.
 	//
 	// Deliberately NO error return: a shadow-arm failure must never fail
 	// the resolution it is only observing -- unlike SearchKind, whose

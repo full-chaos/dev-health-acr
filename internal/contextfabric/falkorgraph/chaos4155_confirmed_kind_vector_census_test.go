@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -273,6 +274,46 @@ func TestConfirmedKindVectorCensus_NewSourceAppearingIsDrift(t *testing.T) {
 	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
 	if got.State != graphrank.ConfirmedKindVectorScopeDrift {
 		t.Fatalf("outcome = %+v, want State=%q", got, graphrank.ConfirmedKindVectorScopeDrift)
+	}
+}
+
+// TestConfirmedKindVectorCensus_TermEmbedFailureFailsClosedNeverComplete is
+// codex R1's own High finding regression: a single term's embed failure
+// used to be silently skipped, and the census still reported Complete
+// whenever the watermark snapshot was stable -- understating what was
+// actually censused (QueriesScored < QueryCount reading as State=complete).
+// A genuine embed-provider failure must abort the whole census to Failed,
+// never claim completeness over fewer terms than it was asked to cover.
+func TestConfirmedKindVectorCensus_TermEmbedFailureFailsClosedNeverComplete(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      1,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
+		watermarkBefore: []row{chaos4155WatermarkRow("github", "wm-1")},
+		watermarkAfter:  []row{chaos4155WatermarkRow("github", "wm-1")},
+	}
+	adapter := vectorAdapter(t, fake.toFakeConn(), &stubEmbedder{err: errors.New("embed provider unavailable")}, 0.5)
+	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
+		t.Fatalf("outcome = %+v, want State=%q -- a term embed failure must never read as Complete", got, graphrank.ConfirmedKindVectorScopeFailed)
+	}
+	if got.QueriesScored != 0 {
+		t.Fatalf("outcome.QueriesScored = %d, want 0", got.QueriesScored)
+	}
+}
+
+// TestWatermarkSnapshotsEqual_EqualCardinalitySourceSwapIsNotEqual is codex
+// R1's own Medium finding regression: an earlier version only checked
+// map length plus a one-way after[source]!=watermark scan, which read a
+// source being REPLACED by a different one of equal cardinality and equal
+// zero-value watermark as stable. Presence must be checked explicitly.
+func TestWatermarkSnapshotsEqual_EqualCardinalitySourceSwapIsNotEqual(t *testing.T) {
+	t.Parallel()
+	before := map[string]string{"github": ""}
+	after := map[string]string{"jira": ""}
+	if watermarkSnapshotsEqual(before, after) {
+		t.Fatalf("watermarkSnapshotsEqual(%#v, %#v) = true, want false -- github disappearing while jira appears is drift, not equal-length coincidence", before, after)
 	}
 }
 

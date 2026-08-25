@@ -22,16 +22,6 @@ import (
 // aborts the census (ConfirmedKindVectorScopeMalformed), it is never
 // skipped-and-reconciled the way the measurement-only oracle treats one.
 
-// confirmedKindVectorCensusMaxTermQueries bounds how many of the caller's
-// own terms this census embeds per call -- a defensive cap independent of
-// the comparison budget, so a resolution with an unusually large term list
-// cannot multiply embed-provider calls unboundedly even before the
-// population*queryCount budget check runs. terms beyond this bound are
-// simply not queried; QueryCount reports what was ACTUALLY embedded, never
-// len(terms), so this is visible in telemetry rather than a silent
-// narrowing.
-const confirmedKindVectorCensusMaxTermQueries = 8
-
 // confirmedKindVectorCensus implements
 // graphrank.ResolveDeps.ConfirmedKindVectorCensus. See that field's own doc
 // comment for the "never returns an error" contract: every failure mode is
@@ -42,11 +32,7 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 	if a.config.ConfirmedKindVectorCensusMaxComparisons <= 0 || a.embedder == nil {
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeNotAttempted}
 	}
-	queryTerms := terms
-	if len(queryTerms) > confirmedKindVectorCensusMaxTermQueries {
-		queryTerms = queryTerms[:confirmedKindVectorCensusMaxTermQueries]
-	}
-	if len(queryTerms) == 0 {
+	if len(terms) == 0 {
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeNotAttempted}
 	}
 
@@ -62,11 +48,18 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeFailed, DurationMS: a.now().Sub(started).Milliseconds()}
 	}
 
-	comparisonCount := populationCount * int64(len(queryTerms))
+	// codex R1 (High, confirmed): no separate term-count cap -- a
+	// resolution's own SubjectTerms feed this census's completeness claim
+	// (sol's "every interpreted term"), so silently dropping terms beyond
+	// a fixed bound would let Complete fire without actually covering
+	// every term. The comparison budget below is the ONLY admission
+	// control, exactly matching sol's own "no calibration, just a
+	// correctness-safe refusal" design.
+	comparisonCount := populationCount * int64(len(terms))
 	if comparisonCount > a.config.ConfirmedKindVectorCensusMaxComparisons {
 		return graphrank.ConfirmedKindVectorCensusOutcome{
 			State: graphrank.ConfirmedKindVectorScopeOverBudget, PopulationCount: populationCount,
-			QueryCount: len(queryTerms), ComparisonCount: comparisonCount,
+			QueryCount: len(terms), ComparisonCount: comparisonCount,
 			DurationMS: a.now().Sub(started).Milliseconds(),
 		}
 	}
@@ -84,17 +77,23 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 	}
 
 	var queriesScored int
+	var embedFailed bool
 	var rivalCount int64
-	for _, term := range queryTerms {
+	for _, term := range terms {
 		vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(vectorQueryText(term))})
 		if embedErr != nil || len(vectors) == 0 {
-			// A single term's embed failure does not abort the whole
-			// census -- it is scored as one fewer QueriesScored, exactly
-			// like a term ordinary vector search silently found nothing
-			// for. The comparison budget already reserved room for it,
-			// so ComparisonCount below intentionally overstates by this
-			// term's share when this happens (visible via
-			// QueriesScored < QueryCount, never hidden).
+			// codex R1 (High, confirmed): a skipped term used to fall
+			// through to Complete whenever the watermark snapshot was
+			// stable, silently understating what was actually censused
+			// (QueriesScored < QueryCount reading as Complete). An
+			// embed-provider failure is a genuine dependency error for
+			// THIS census's own completeness claim -- unlike ordinary
+			// vector search, which treats "found nothing" as a normal
+			// outcome, this census cannot complete its proof without
+			// scoring every term against the full corpus. embedFailed
+			// aborts to Failed below rather than letting the loop's
+			// otherwise-successful terms masquerade as full coverage.
+			embedFailed = true
 			continue
 		}
 		queryVector := make([]float64, len(vectors[0]))
@@ -108,12 +107,20 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 			}
 		}
 	}
+	if embedFailed {
+		return graphrank.ConfirmedKindVectorCensusOutcome{
+			State: graphrank.ConfirmedKindVectorScopeFailed, PopulationCount: populationCount,
+			EnumeratedCount: enumeratedCount, QueryCount: len(terms), QueriesScored: queriesScored,
+			ComparisonCount: int64(queriesScored) * enumeratedCount, RivalCountAboveTau: rivalCount,
+			DurationMS: a.now().Sub(started).Milliseconds(),
+		}
+	}
 
 	after, err := a.chaos4155WatermarkSnapshot(ctx, key, orgID)
 	if err != nil {
 		return graphrank.ConfirmedKindVectorCensusOutcome{
 			State: graphrank.ConfirmedKindVectorScopeFailed, PopulationCount: populationCount,
-			EnumeratedCount: enumeratedCount, QueryCount: len(queryTerms), QueriesScored: queriesScored,
+			EnumeratedCount: enumeratedCount, QueryCount: len(terms), QueriesScored: queriesScored,
 			ComparisonCount: int64(queriesScored) * enumeratedCount, RivalCountAboveTau: rivalCount,
 			DurationMS: a.now().Sub(started).Milliseconds(),
 		}
@@ -121,7 +128,7 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 	stable := watermarkSnapshotsEqual(before, after)
 	outcome := graphrank.ConfirmedKindVectorCensusOutcome{
 		PopulationCount: populationCount, EnumeratedCount: enumeratedCount,
-		QueryCount: len(queryTerms), QueriesScored: queriesScored,
+		QueryCount: len(terms), QueriesScored: queriesScored,
 		ComparisonCount: int64(queriesScored) * enumeratedCount, RivalCountAboveTau: rivalCount,
 		SnapshotStable: stable, DurationMS: a.now().Sub(started).Milliseconds(),
 	}
@@ -158,12 +165,21 @@ func (a *Adapter) chaos4155WatermarkSnapshot(ctx context.Context, key, orgID str
 	return snapshot, nil
 }
 
+// watermarkSnapshotsEqual reports whether before and after name the SAME
+// set of sources with the SAME values. codex R1 (Medium, confirmed): an
+// earlier version only checked len(before)==len(after) plus a one-way
+// after[source]!=watermark scan, which reads a source being REPLACED by a
+// different one of equal cardinality (e.g. {github:""} -> {jira:""}) as
+// stable -- after["github"] is the zero value "", which happened to equal
+// before["github"]'s own "" watermark. Checking key PRESENCE with the
+// comma-ok form in both directions closes that gap.
 func watermarkSnapshotsEqual(before, after map[string]string) bool {
 	if len(before) != len(after) {
 		return false
 	}
 	for source, watermark := range before {
-		if after[source] != watermark {
+		value, ok := after[source]
+		if !ok || value != watermark {
 			return false
 		}
 	}
