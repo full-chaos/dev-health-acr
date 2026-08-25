@@ -207,6 +207,19 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 	}
 }
 
+// TestChaos4085_ProductionTraceEmitsAnchorOfferDiagnostics is the
+// sink-level pin for CHAOS-4210's own "anchor_offer" stage -- same
+// file-doc-comment obligation as every field above.
+func TestChaos4085_ProductionTraceEmitsAnchorOfferDiagnostics(t *testing.T) {
+	record := captureTraceJSON(t, ResolutionTraceEvent{
+		RequestID: "request_sink_0005", Stage: "anchor_offer",
+		AnchorOfferLabelsNormalizedCount: 1,
+	})
+	if got, ok := record["labels_normalized_count"].(float64); !ok || got != 1 {
+		t.Fatalf("labels_normalized_count = %v, want 1", record["labels_normalized_count"])
+	}
+}
+
 // TestChaos4085_ProductionTraceEmitsKindCoverageFloorDiagnostics is the
 // sink-level pin for CHAOS-4038's kind_coverage_floor stage -- same
 // file-doc-comment obligation as every field above. This stage had NO
