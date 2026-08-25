@@ -4450,6 +4450,24 @@ type twoTurnReport struct {
 	// the same change, same "an undeclared field is dropped on decode"
 	// reason every prior bump needed it for.
 	//
+	// "28" (CHAOS-4186 follow-up, team-lead ordered 2026-08-24): purely
+	// additive provenance -- trialProvenance (generative_trial_live_test.go)
+	// gains DataPlane/DataPlanePGHost/DataPlaneCHHost/DataPlaneFalkorHost,
+	// recording which store backend (compose|kiac|override) and which
+	// hosts (never credentials) this run actually hit, sourced verbatim
+	// from ACR_TEST_TRIAL_DATA_PLANE/PG_HOST/CH_HOST/FALKOR_HOST (the
+	// values scripts/trial/common.sh already resolves and exports). Closes
+	// the gap the kiac cutover left: a kiac-run artifact carried zero
+	// host/DSN references before this, so which stack a run hit was
+	// inferred from operator memory, never recorded in the artifact
+	// itself. No merge arithmetic changes (Provenance rides through from
+	// the FIRST shard, same as ResponderModel -- see mergeReports' own
+	// data_plane mismatch check, added in the same PR, for why a mixed-
+	// plane launch across shards is refused rather than silently merged
+	// under the first shard's label); mirrored in
+	// cmd/acr-trial-merge-two-turn/main.go in the same change, same
+	// undeclared-field-dropped-on-decode reason as every prior bump
+	// needed it for.
 	// "27" (CHAOS-4119, team-lead ratified 2026-08-24): handleOfferMaterial
 	// (chaos3900_structure_offers.go) gains a THIRD handle source --
 	// poolCandidates, the SAME final candidate pool kindOfferMaterial/
@@ -7667,12 +7685,20 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "27",
+		ReportSchemaVersion: "28",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 			AnchorMembershipOffersEnabled: cfg.AnchorMembershipOffersEnabled,
 			ResponderModel:                responderModel,
+			// DataPlane* (CHAOS-4186 follow-up, schema v28): read directly
+			// from the env vars scripts/trial/common.sh already resolved
+			// and exported for this exact purpose -- never re-derived,
+			// never a credential (PG/CH/Falkor HOSTS only).
+			DataPlane:           os.Getenv("ACR_TEST_TRIAL_DATA_PLANE"),
+			DataPlanePGHost:     os.Getenv("ACR_TEST_TRIAL_PG_HOST"),
+			DataPlaneCHHost:     os.Getenv("ACR_TEST_TRIAL_CH_HOST"),
+			DataPlaneFalkorHost: os.Getenv("ACR_TEST_TRIAL_FALKOR_HOST"),
 			// ResolvedActiveEpoch/GraphLifecycleEnabled (CHAOS-4100, the
 			// 2026-08-23 graph-rebuild incident): the SECOND trial script to
 			// populate these -- see their own doc comment (generative_trial_live_test.go)

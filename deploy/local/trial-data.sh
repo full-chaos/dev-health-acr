@@ -204,6 +204,21 @@ cmd_dsn() {
     printf 'ACR_TEST_TRIAL_CH_DB=%s\n' "default"
     printf 'ACR_TEST_TRIAL_FALKOR_HOST=%s\n' "$ip"
     printf 'ACR_TEST_TRIAL_FALKOR_PORT=%s\n' "$FALKOR_NODEPORT"
+    # ACR_CONTEXT_FABRIC_FALKOR_TLS / ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE
+    # (CHAOS-4186 follow-up, real incident during the VM resize): NOT
+    # ACR_TEST_TRIAL_*-prefixed -- these are acr-projector's own raw config
+    # var names (internal/contextfabric/falkorgraph/config.go), emitted
+    # here verbatim so any consumer pointed at the kiac plane's FalkorDB
+    # inherits the correct values without having to know them by heart.
+    # The trial FalkorDB pod always serves plaintext RESP, never TLS, so
+    # these are static, not derived. Without them, acr-projector's client
+    # defaults to TLS=true (its own safe-by-default posture) and sends a
+    # TLS ClientHello against the plaintext port, which never gets a
+    # ServerHello back and hangs until ACR_CONTEXT_FABRIC_FALKOR_REQUEST_
+    # TIMEOUT (default 30s) on every single tick -- indistinguishable at
+    # first glance from a genuine connectivity or performance problem.
+    printf 'ACR_CONTEXT_FABRIC_FALKOR_TLS=%s\n' "false"
+    printf 'ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=%s\n' "true"
     return
   fi
 

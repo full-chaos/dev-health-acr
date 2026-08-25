@@ -33,6 +33,38 @@ The kubeconfig is isolated under `.tmp/kiac/<cluster>/kubeconfig`; the user's
 StorageClass and metrics-server, which satisfies the helm chart's PVC needs
 (e.g. the optional `contextFabric.falkordb` workload) with no extra addons.
 
+**Recovering from a host-wide container stop** (e.g. `container system
+stop`/`start`, reloading the apple/container builder config, or a host
+reboot -- any of these halts EVERY node VM on the Mac, this cluster
+included): this is a stop, not a delete -- the VM rootfs/PVCs survive.
+Recover with the native verb, not `kiac.sh up` (which provisions a cluster,
+not resumes one) and not a raw `container start <name>` (it won't heal the
+k3s-side state):
+```bash
+kiac resume cluster --name <cluster> --wait 5m
+```
+Two things to check afterward, every time:
+- **The node's IP can change** -- vmnet reassigns addresses on VM boot.
+  Check `container list -a` for the live IP and compare against the
+  kubeconfig's own `server:` line (`grep server .tmp/kiac/<cluster>/
+  kubeconfig`) -- don't reach for `trial-data.sh dsn --env` just to check
+  an IP: it also prints the live PG/CH passwords to stdout as a side
+  effect, which this check doesn't need.
+- **`kiac resume` does NOT reliably rewrite the kubeconfig's server IP** --
+  if `kubectl` times out with `dial tcp <old-ip>:6443` after a resume that
+  reported success, hand-edit `.tmp/kiac/<cluster>/kubeconfig`'s `server:`
+  line to the current IP (back the file up first). Confirmed live during
+  the CHAOS-4186 embed-credential fix: `resume` reported success and a
+  healthy API-reachability check, but the node had moved 192.168.64.14 ->
+  192.168.64.3 and the kubeconfig still pointed at .14. Fix upstream is a
+  kiac issue, not something to work around here permanently -- this is the
+  known state as of kiac v0.5.1.
+Pods themselves generally survive with 1-2 restarts and their PVC data
+intact; anything with a hardcoded node IP in its OWN launch env (e.g. a
+bare `go run ./cmd/acr-projector serve` per the resize recipe below) will
+NOT auto-heal on an IP change and needs a scoped kill + relaunch with the
+corrected IP.
+
 ## Image path (no registry, no Docker)
 
 ```bash
@@ -179,7 +211,45 @@ fixed here.
    graph) `ACR_CONTEXT_FABRIC_EMBED_*` pointed at a working embed credential --
    an unconfigured or blank-key embedder is either skipped cleanly (unset) or
    refused at startup (configured-but-blank, CHAOS-4192 guard); never silently
-   degrades.
+   degrades in the sense of erroring, but "skipped cleanly" LOOKS identical to a
+   healthy run in the logs -- zero ERROR lines, structural projection completes
+   normally, `embedded:0` on every batch is the only tell. Real incident hit
+   live during the CHAOS-4186 VM resize: a bare `go run ./cmd/acr-projector
+   serve/rebuild` on the kiac plane carried the FALKOR/PG/CH/lifecycle vars but
+   NONE of the embed family, so the embedder was never constructed at all --
+   35,989 structural nodes built with 0 errors and 0 embeddings.
+
+   The `ACR_CONTEXT_FABRIC_EMBED_*` family (7 vars) is NOT in `ops/.env` --
+   that file only has `OPENAI_API_KEY`. The compose plane gets the mapping
+   from `compose.override.yml` **at the workspace root, one level above this
+   `acr` checkout -- a file that lives OUTSIDE this repository** (not tracked
+   here, not covered by this repo's git history, and its line numbers will
+   drift independently of this README): `docker compose --env-file ops/.env
+   up` substitutes `${OPENAI_API_KEY:-}` into `ACR_CONTEXT_FABRIC_EMBED_API_KEY`
+   there. A bare `go run` launch on the kiac plane is NOT docker compose, so
+   no substitution happens -- you must set the whole family yourself, sourcing
+   the key from `ops/.env`'s `OPENAI_API_KEY`:
+   ```
+   ACR_CONTEXT_FABRIC_EMBED_BASE_URL=https://api.openai.com/v1
+   ACR_CONTEXT_FABRIC_EMBED_PROVIDER=openai
+   ACR_CONTEXT_FABRIC_EMBED_MODEL=text-embedding-3-large
+   ACR_CONTEXT_FABRIC_EMBED_DIMENSION=3072
+   ACR_CONTEXT_FABRIC_EMBED_API_KEY=<value of OPENAI_API_KEY from ops/.env>
+   ACR_CONTEXT_FABRIC_EMBED_TIMEOUT=45s
+   ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES=5
+   ```
+   Keep this list in sync with the workspace root's `compose.override.yml`
+   (that file, not ops/.env, is the source of truth for these 7 names and
+   their known-working values) -- if it drifts, fix here to match there, not
+   the other way around. Don't cite line numbers for it (they live in a
+   different, untracked file and will go stale); find them live instead:
+   `grep -n ACR_CONTEXT_FABRIC_EMBED_ <workspace-root>/compose.override.yml`.
+   If a rebuild/serve run ever completes with `embedded:0` on every batch and
+   no ERROR lines, this is the first thing to check -- confirm all 7 names are
+   present on the launched process WITHOUT printing any value:
+   `ps eww -p <pid> | tr ' ' '\n' | grep -oE '^ACR_CONTEXT_FABRIC_EMBED_[A-Z_]+=' | sed 's/=$//'`
+   (the bare `grep ACR_CONTEXT_FABRIC_EMBED_` form prints the full
+   `NAME=value` line, including the API key -- never use it here).
 7. **A rebuild opens a 24h-graced epoch** (default
    `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_GRACE_WINDOW`) -- running `rebuild`
    again (e.g. because the first attempt lacked embed credentials) hits
@@ -188,6 +258,48 @@ fixed here.
    epoch while still inside the grace window and unblocks a clean re-`rebuild`
    -- costs nothing (the org's own dataset is unaffected), but you have to
    know to do it rather than wait out the 24h.
+
+   **Ordering rule -- never `rollback` while a `serve` process is still
+   alive.** A live `serve` loop's per-tick freshness check
+   (`runOrgLifecycle`/`tickFreshnessStats` in `internal/contextfabric/
+   projectionrun/coordinator.go`) only records a `rebuild_required` COUNTER
+   on a source-version mismatch -- it does NOT call `BeginBuild` by itself,
+   so it is not a path that can reopen a build on its own. The real path
+   that can is `checkpointStoreDiverged` + `recoverFromDivergenceLifecycle`
+   (the CHAOS-3882 automatic divergence-recovery mechanism, same file): each
+   tick checks whether the durable checkpoint's `BackendWatermark` is
+   non-empty (something was durably projected here before) while the graph
+   backend's own watermark for the CURRENT active epoch comes back absent --
+   not a comparison of the two values, a presence/absence check. When the
+   backend sentinel is confirmed missing like that, it treats this as a live
+   incident and opens a fresh build-aside epoch via `beginLifecycleBuild` --
+   entirely automatically, by design, working as intended (CHAOS-3882's
+   whole point is never serving resolution against a silently stale/empty
+   graph). `rollback` changes the active epoch out from under a still-running
+   `serve` process while its in-progress checkpoint still carries a
+   BackendWatermark from the OLD epoch, and the new active epoch's backend
+   watermark comes back absent -- exactly the condition this mechanism exists
+   to catch. So the very next tick after
+   your `rollback` can open a NEW build before your own following `rebuild`
+   command gets there -- your `rebuild` then loses a `lifecycle CAS conflict`
+   against a build you never intended to start by hand, with a target/last-
+   allocated epoch you didn't choose. Real incident during the CHAOS-4186
+   embed-credential fix: this raced in the ~76s between `rollback` and
+   manually killing the still-running `serve`, opening epoch 2 before the
+   deliberate `rebuild --org` call ran (harmless here -- same org, same
+   corrected env, no data lost -- but confusing to debug after the fact, and
+   worth ruling out explicitly rather than assuming a second actor). Correct
+   order:
+   1. Kill every `serve`/`rebuild` process for this org first (scoped,
+      `procs --json 'acr-projector'` + cwd-verify each match) and confirm
+      none remain.
+   2. `rollback --org <id>`.
+   3. With nothing else running, `rebuild --org <id>` explicitly, THEN
+      launch `serve` with the full corrected env (FALKOR TLS pair +
+      `ACR_CONTEXT_FABRIC_EMBED_*` family). Don't rely on a `serve` process
+      to open the build for you -- the only path that does so is the
+      divergence-recovery incident path above, not something to trigger on
+      purpose.
 8. **CHAOS-4208 post-flip divergence loop -- FIXED (#252 c53042d0), this
    section is now HISTORY only**: a `serve` run against a freshly-seeded
    trial cluster used to be able to hit a reproducible infinite loop
@@ -241,6 +353,20 @@ volume object `container` could reattach -- so the ONLY way to change
 CPU/memory is `kiac.sh down` + `kiac.sh up`, which provisions a fresh
 `rootfs.ext4` and **destroys all PVC-backed data on the node**.
 
+**Step 0, before any of the below: kill every process holding connections to
+the OLD cluster.** The recreated VM reuses the same NodePort IP:port pairs
+(container networking assigns them fresh, but kiac's fixed NodePorts mean a
+leftover `acr-projector serve`/`rebuild` from an earlier session can end up
+pointed at the NEW cluster's endpoints without anyone restarting it -- CHAOS-
+4186 hit this live: a 7-hour-old orphaned `acr-projector serve` from an
+unrelated earlier investigation raced the fresh rebuild's epoch lifecycle
+over the SAME org, producing a `checkpoint held for replay`/`failure_class:
+canceled` tick-cancellation storm indistinguishable at first glance from a
+genuine infra problem). Pre-flight before `rebuild`/`serve`:
+`procs --json 'acr-projector'` must return empty (besides the one you are
+about to launch). Kill anything it finds via the scoped-kill discipline
+(confirm ownership via cwd first) before proceeding.
+
 Recipe (run only when no lane is mid-run on kiac; coordinate first):
 
 ```bash
@@ -253,10 +379,99 @@ deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ORIGINAL Aug-1
 deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ORIGINAL Aug-17 ts>.zip
 # apply acr DB migrations up to the ratified schema version (NOT the dump's
 # own version -- the dump predates several migrations)
+procs --json 'acr-projector'                                  # MUST be empty before the next step -- see
+                                                                # Step 0 above; kill any survivor first
 # rebuild the falkordb graph via acr-projector (CHAOS-3898 build-aside-and-
 # swap: rollback if a stale epoch exists, rebuild to completion, THEN serve
-# -- CHAOS-4208 is fixed upstream now, so no special unblock recipe needed)
+# -- CHAOS-4208 is fixed upstream now, so no special unblock recipe needed).
+# `deploy/local/trial-data.sh dsn --env` includes
+# ACR_CONTEXT_FABRIC_FALKOR_TLS=false and
+# ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true -- BOTH required together
+# (TLS=false alone is refused by acr-projector's own config validation,
+# ALLOW_INSECURE=true alone does nothing since it only permits skipping
+# cert verification when TLS IS used). Without them acr-projector
+# defaults to TLS=true, sends a TLS ClientHello at the trial FalkorDB's
+# plaintext port, and every projection tick hangs until
+# ACR_CONTEXT_FABRIC_FALKOR_REQUEST_TIMEOUT (default 30s) -- a real
+# incident hit live during this exact recipe, root-caused via `deja
+# recall` on the "failed to dial ... context deadline exceeded" line.
 # re-verify embedding coverage / KNN before calling it done
+#
+# acr-pilot's image: build with DOCKER, not `kiac.sh build-image` (the
+# apple/container builder-shim has real bugs -- "changes out of order"
+# on context transfer and "unsupported offset" on a multi-stage COPY
+# --from, hit live during this exact recipe; deja found no prior fix,
+# do not fight the shim). The Dockerfile has MULTIPLE final stages
+# (acr-api, acr-mcp, ...) -- a bare `docker build` with no --target
+# defaults to the LAST one in the file (acr-mcp, missing acr-migrate/
+# acr-api/acr-projector entirely), a real incident this recipe also
+# hit live. Always pass --target explicitly:
+docker build --target acr-api -t dev-health-acr:dev .
+docker save dev-health-acr:dev -o /tmp/dev-health-acr-dev.tar
+container image load -i /tmp/dev-health-acr-dev.tar
+container image tag docker.io/library/dev-health-acr:dev dev-health-acr:dev
+kiac load image dev-health-acr:dev --name acr-local
+#
+# acr-pilot's runtime Secret (acr-runtime-credentials/acr-model-credentials):
+# GENERATE fresh at redeploy time, NEVER restore a Secret backup from a
+# previous install (a real incident hit live: a restored backup carried
+# both a pre-migration host AND a password that predated this recipe's
+# own restore-postgres step, so it silently no longer matched the live
+# role's actual password -- surfaced as "FATAL: password authentication
+# failed", not a connectivity error, which is why DNS/TCP checks alone
+# didn't catch it).
+#
+# `deploy/local/trial-data.sh dsn --env` is NOT the source for this --
+# it emits the node's EXTERNAL access point (InternalIP + NodePorts,
+# e.g. 192.168.64.14:30500), meant for trial scripts running on the
+# HOST Mac outside the cluster. acr-pilot's pod runs INSIDE the
+# cluster, where the correct host is the in-cluster Service DNS name
+# on the store's own cluster-internal port (NOT the NodePort):
+#   <service>.<namespace>.svc.cluster.local:<port>
+#   trial-postgres.acr-trial-data.svc.cluster.local:5432
+#   trial-clickhouse.acr-trial-data.svc.cluster.local:9000
+#   trial-falkordb.acr-trial-data.svc.cluster.local:6379
+# (confirm the exact names/ports with `kubectl -n acr-trial-data get svc`
+# -- they come from templates/trial-data.yaml, not from this script.)
+#
+# The credential itself: read directly from the live `trial-postgres`
+# Secret in acr-trial-data (the SAME cluster-secret-is-source-of-truth
+# rule `dsn`'s own password lookup follows) -- never `trial_secret`
+# (that reads ops/.env, a completely different, host-side credential
+# store unrelated to what the trial data plane pods were actually
+# seeded with):
+# Capture into a shell variable -- never let the raw password reach stdout
+# (no bare `| base64 -d` with no destination):
+PG_PASSWORD=$(kubectl -n acr-trial-data get secret trial-postgres \
+  -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
+#
+# This trial deployment's own values override points BOTH
+# credentials.runtime.existingSecret AND credentials.migration.existingSecret
+# at the SAME Secret, `acr-runtime-credentials` (confirm with `helm -n
+# acr-pilot get values acr-pilot | grep -A6 credentials:`) -- unlike the
+# chart's out-of-box default (deploy/helm/acr/values-development.yaml),
+# which uses a separate `acr-migration-credentials` Secret for the
+# migration DSN. Don't assume one or the other; always check the live
+# values first. That Secret also carries ACR_EVIDENCE_ID_ACTIVE_KID and
+# ACR_EVIDENCE_ID_KEYS (unrelated to postgres/clickhouse, don't touch or
+# regenerate those) -- `kubectl patch` with `stringData`, not a full
+# `create --dry-run | apply` replace, so only the three DSN keys below
+# change and everything else in the Secret is left alone:
+kubectl -n acr-pilot patch secret acr-runtime-credentials --type merge -p "$(cat <<JSON
+{"stringData":{
+  "ACR_POSTGRES_DSN":"postgres://devhealth:${PG_PASSWORD}@trial-postgres.acr-trial-data.svc.cluster.local:5432/acr?sslmode=disable",
+  "ACR_POSTGRES_MIGRATION_DSN":"postgres://devhealth:${PG_PASSWORD}@trial-postgres.acr-trial-data.svc.cluster.local:5432/acr?sslmode=disable",
+  "ACR_CLICKHOUSE_DSN":"clickhouse://ch:${PG_PASSWORD}@trial-clickhouse.acr-trial-data.svc.cluster.local:9000/default"
+}}
+JSON
+)"
+unset PG_PASSWORD
+# (clickhouse uses user `ch`, same password -- see trial-data.sh's own
+# Secret comment for why postgres/clickhouse share one password). Never
+# hand-edit an EXISTING Secret's password to "whatever looks right" --
+# always re-derive it from the live trial-postgres Secret above. After
+# patching, `kubectl -n acr-pilot rollout restart deploy/acr-pilot` --
+# a Secret patch alone does not restart pods to pick up the new env.
 # redeploy acr-pilot via its own owner's normal deploy path (stateless, no
 # PVC -- no data loss there, just needs a fresh rollout after the recreate)
 ```
