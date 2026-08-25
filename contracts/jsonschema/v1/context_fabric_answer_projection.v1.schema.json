@@ -1403,6 +1403,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "phrasing": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "required": [
@@ -1460,6 +1465,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "phrasing": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "required": [
@@ -1513,6 +1523,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "phrasing": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "required": [
@@ -1575,6 +1590,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "phrasing": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "required": [

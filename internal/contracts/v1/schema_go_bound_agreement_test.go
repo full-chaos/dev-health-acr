@@ -713,6 +713,13 @@ func schemaOnlyBoundReason(path string) string {
 		strings.Contains(path, "TimeContext"):
 		return "request-side shape: bounded by the request contract, not by result validation"
 	case strings.Contains(path, "SubjectRef") || strings.Contains(path, "label") ||
+		// CHAOS-4171 PR2: phrasing is the SAME situation as label on the
+		// same four option types (KindOption/AnchorOption/AnchorOptionV2/
+		// CandidateOption/HandleOption) -- a nested, optional string whose
+		// own Validate() enforces optionalStringBetween(o.Phrasing, 1,
+		// ContextFabricStructureOfferPhrasingMaxLength), structurally
+		// identical to how label's own bound is enforced, just optional.
+		strings.Contains(path, "phrasing") ||
 		strings.Contains(path, "Coverage.properties.sources.items") ||
 		strings.Contains(path, "SourceObservation") || strings.Contains(path, "RelationshipEdge") ||
 		strings.Contains(path, "FactRequirement.properties.parameters.propertyNames"):

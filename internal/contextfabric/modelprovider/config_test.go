@@ -117,12 +117,40 @@ func TestConfigFromEnv_appliesProviderShapedDefaults(t *testing.T) {
 	if cfg.FallbackModel != "" {
 		t.Fatalf("fallback model = %q, want empty (a fallback is a second billable call and must be opted into)", cfg.FallbackModel)
 	}
+	if cfg.PhrasingModel != "" {
+		t.Fatalf("phrasing model = %q, want empty (unset means phrasing shares the primary model)", cfg.PhrasingModel)
+	}
 	if cfg.Timeout != DefaultTimeout || cfg.MaxAttempts != DefaultMaxAttempts || cfg.MaxTransportRetries != DefaultMaxTransportRetries {
 		t.Fatalf("bounds = %v/%d/%d, want %v/%d/%d", cfg.Timeout, cfg.MaxAttempts, cfg.MaxTransportRetries,
 			DefaultTimeout, DefaultMaxAttempts, DefaultMaxTransportRetries)
 	}
 	if cfg.AllowInsecureBaseURL {
 		t.Fatal("insecure base URLs are permitted by default")
+	}
+}
+
+// TestConfigFromEnv_readsAnExplicitPhrasingModel is RED-FIRST evidence for
+// the "env-configurable smaller model, default interpretation model"
+// ratified design (CHAOS-4171 PR2): an operator who sets
+// ACR_CONTEXT_FABRIC_MODEL_PHRASING gets that exact model, distinct from
+// the primary Model.
+func TestConfigFromEnv_readsAnExplicitPhrasingModel(t *testing.T) {
+	lookup := lookupFrom(map[string]string{EnvAPIKey: "sk-test", EnvPhrasingModel: "gpt-5-nano"})
+	cfg, err := ConfigFromEnv(lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PhrasingModel != "gpt-5-nano" {
+		t.Fatalf("phrasing model = %q, want %q", cfg.PhrasingModel, "gpt-5-nano")
+	}
+	if cfg.Model != DefaultModel {
+		t.Fatalf("model = %q, want the unaffected default %q", cfg.Model, DefaultModel)
+	}
+}
+
+func TestConfigured_treatsPhrasingModelAloneAsOptingIn(t *testing.T) {
+	if !Configured(lookupFrom(map[string]string{EnvPhrasingModel: "gpt-5-nano"})) {
+		t.Fatal("Configured() = false, want true: setting only ACR_CONTEXT_FABRIC_MODEL_PHRASING is an explicit opt-in")
 	}
 }
 
@@ -219,6 +247,10 @@ func TestConfigFromEnv_rejectsInvalidConfigurations(t *testing.T) {
 		"fallback identical to the primary model": {
 			values: map[string]string{EnvAPIKey: "sk-test", EnvFallbackModel: DefaultModel},
 			want:   "different model",
+		},
+		"phrasing model with an empty path segment": {
+			values: map[string]string{EnvAPIKey: "sk-test", EnvPhrasingModel: "/gpt-5-nano"},
+			want:   "empty path segment",
 		},
 		"timeout outside the supported band": {
 			values: map[string]string{EnvAPIKey: "sk-test", EnvTimeout: "10m"},

@@ -48,7 +48,12 @@ func New(ctx context.Context, cfg Config) (contextfabric.ModelRuntime, error) {
 		}
 		fallback = fallbackRuntime
 	}
-	primary, err := genkitruntime.New(runtimeConfig(instance, cfg, cfg.Model, fallback))
+	// CHAOS-4171 PR2: the phrasing model (empty PhrasingModel defaults
+	// inside genkitruntime.New to the primary Model) is wired ONLY onto
+	// the primary runtime -- offer phrasing has no fallback chain of its
+	// own (ratified design: a failure degrades to structural, never to a
+	// second model), so the fallback runtime built above never needs it.
+	primary, err := genkitruntime.New(runtimeConfigWithPhrasing(instance, cfg, cfg.Model, fallback))
 	if err != nil {
 		return nil, fmt.Errorf("initialize model runtime: %w", err)
 	}
@@ -69,6 +74,19 @@ func runtimeConfig(instance *genkit.Genkit, cfg Config, model string, fallback c
 		MaxAttempts: cfg.MaxAttempts,
 		Fallback:    fallback,
 	}
+}
+
+// runtimeConfigWithPhrasing extends runtimeConfig with the offer-phrasing
+// model fields (CHAOS-4171 PR2) -- a separate function rather than folding
+// PhrasingModel into runtimeConfig itself, because the fallback runtime
+// (built via the plain runtimeConfig above) must never carry it.
+func runtimeConfigWithPhrasing(instance *genkit.Genkit, cfg Config, model string, fallback contextfabric.ModelRuntime) genkitruntime.Config {
+	config := runtimeConfig(instance, cfg, model, fallback)
+	if cfg.PhrasingModel != "" {
+		config.PhrasingModel = cfg.PhrasingModel
+		config.PhrasingModelRef = api.NewName(cfg.Provider, cfg.PhrasingModel)
+	}
+	return config
 }
 
 // newClientOptions builds the OpenAI-compatible client options.

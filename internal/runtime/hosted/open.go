@@ -670,6 +670,20 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
+	// CHAOS-4171 PR2: offer phrasing is wired off deploymentDefaultRuntime
+	// (never the per-org-resolved modelRuntime above) -- it is a
+	// deployment-level singleton, not per-organization BYO config, and a
+	// type assertion against modelruntimeresolver.Resolver's own
+	// ModelRuntime-only surface would always fail. A deployment whose
+	// runtime is nil (no model provider configured) or does not
+	// implement contextfabric.OfferPhrasingModelRuntime (e.g. a test-only
+	// ModelRuntimeOverride) simply leaves offerPhraser nil below -- the
+	// same "optional dependency absent" degradation every other
+	// EngineDependencies field uses.
+	var offerPhraser contextfabric.OfferPhraser
+	if phrasingRuntime, ok := deploymentDefaultRuntime.(contextfabric.OfferPhrasingModelRuntime); ok {
+		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink}
+	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
 	// -- the same typed-nil-interface trap open()'s own conversion guards
 	// against (see its doc comment) applies here too: assigning a nil
@@ -774,6 +788,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// -- see priorConsultant's own construction comment above.
 		PriorConsultant:           priorConsultant,
 		PriorHandleGrammarChecker: priorHandleGrammarChecker,
+		// CHAOS-4171 PR2: nil unless deploymentDefaultRuntime implements
+		// contextfabric.OfferPhrasingModelRuntime -- see offerPhraser's
+		// own construction comment above.
+		OfferPhraser: offerPhraser,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
 		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions

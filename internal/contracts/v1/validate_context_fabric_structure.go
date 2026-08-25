@@ -98,6 +98,9 @@ func (o ContextFabricKindOption) Validate() error {
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
 		return fmt.Errorf("kind option prior_version_id or prior_entry_id violates v1 bounds")
 	}
+	if !optionalStringBetween(o.Phrasing, 1, ContextFabricStructureOfferPhrasingMaxLength) {
+		return fmt.Errorf("kind option phrasing violates v1 bounds")
+	}
 	return nil
 }
 
@@ -123,6 +126,9 @@ func (o ContextFabricAnchorOption) Validate() error {
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
 		return fmt.Errorf("anchor option prior_version_id or prior_entry_id violates v1 bounds")
 	}
+	if !optionalStringBetween(o.Phrasing, 1, ContextFabricStructureOfferPhrasingMaxLength) {
+		return fmt.Errorf("anchor option phrasing violates v1 bounds")
+	}
 	return nil
 }
 
@@ -144,6 +150,9 @@ func (o ContextFabricHandleOption) Validate() error {
 	}
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
 		return fmt.Errorf("handle option prior_version_id or prior_entry_id violates v1 bounds")
+	}
+	if !optionalStringBetween(o.Phrasing, 1, ContextFabricStructureOfferPhrasingMaxLength) {
+		return fmt.Errorf("handle option phrasing violates v1 bounds")
 	}
 	return nil
 }
@@ -167,6 +176,9 @@ func (o ContextFabricCandidateOption) Validate() error {
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
 		return fmt.Errorf("candidate option prior_version_id or prior_entry_id violates v1 bounds")
 	}
+	if !optionalStringBetween(o.Phrasing, 1, ContextFabricStructureOfferPhrasingMaxLength) {
+		return fmt.Errorf("candidate option phrasing violates v1 bounds")
+	}
 	return nil
 }
 
@@ -187,6 +199,16 @@ func (g ContextFabricAcceptedGrammar) Validate() error {
 // contextFabricWindowClarificationMaxOptions's own generous, non-tight
 // ceiling reasoning.
 const contextFabricStructureNeedsMaxOptions = 20
+
+// ContextFabricStructureOfferPhrasingMaxLength (CHAOS-4171 PR2) is the v1
+// wire bound every offer option's own optional Phrasing field carries.
+// Exported so genkitruntime's phrasing prompt and
+// internal/contextfabric's closed-vocabulary guard state the IDENTICAL
+// number this package enforces, rather than an independently-maintained
+// copy that could silently drift from it -- the exact defect class
+// contextFabricFactKindList/interpretationSystemPrompt's own interpolation
+// discipline exists to prevent (genkitruntime/prompts.go).
+const ContextFabricStructureOfferPhrasingMaxLength = 200
 
 func (n ContextFabricStructureNeeds) Validate() error {
 	if len(n.Missing) == 0 || len(n.Missing) > ContextFabricStructureNeedKindCount {

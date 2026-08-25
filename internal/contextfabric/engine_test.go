@@ -332,6 +332,9 @@ type recordingTelemetry struct {
 	// list-not-count discipline.
 	priorConsulted    []priorConsultedRecord
 	priorDegradations []PriorDegradationState
+	// offerPhrasingOutcomes (CHAOS-4171 PR2) mirrors the SAME
+	// list-not-count discipline.
+	offerPhrasingOutcomes []OfferPhrasingOutcome
 }
 
 type priorConsultedRecord struct {
@@ -437,6 +440,10 @@ func (r *recordingTelemetry) RecordPriorConsulted(_ context.Context, _ storage.P
 
 func (r *recordingTelemetry) RecordPriorDegradation(_ context.Context, _ storage.Principal, state PriorDegradationState) {
 	r.priorDegradations = append(r.priorDegradations, state)
+}
+
+func (r *recordingTelemetry) RecordOfferPhrasing(_ context.Context, _ storage.Principal, outcome OfferPhrasingOutcome) {
+	r.offerPhrasingOutcomes = append(r.offerPhrasingOutcomes, outcome)
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {

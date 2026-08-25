@@ -125,6 +125,18 @@ type ContextFabricKindOption struct {
 	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
 	PriorVersionID string                            `json:"prior_version_id,omitempty"`
 	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+	// Phrasing (CHAOS-4171 PR2) is an OPTIONAL model-generated rewrite of
+	// Label, produced by a second bounded model call that runs AFTER
+	// composeStructureNeeds mints this option (internal/contextfabric's
+	// applyOfferPhrasing) -- never by the interpretation or synthesis
+	// call, and never present when no phrasing model is configured, the
+	// call failed or timed out, or the closed-vocabulary guard rejected
+	// the response (fail-open to Label, never to the model). A consumer
+	// SHOULD prefer Phrasing for display when non-empty and MUST always
+	// have Label to fall back to -- Label is never removed or altered by
+	// phrasing. Empty/absent carries no meaning beyond "no phrasing was
+	// applied to this option."
+	Phrasing string `json:"phrasing,omitempty"`
 }
 
 // ContextFabricAnchorOption offers one unique-claimant anchor candidate,
@@ -165,6 +177,9 @@ type ContextFabricAnchorOption struct {
 	OfferSource     ContextFabricStructureOfferSource `json:"offer_source"`
 	PriorVersionID  string                            `json:"prior_version_id,omitempty"`
 	PriorEntryID    string                            `json:"prior_entry_id,omitempty"`
+	// Phrasing (CHAOS-4171 PR2) -- see ContextFabricKindOption.Phrasing's
+	// doc comment; identical contract, applied per option type.
+	Phrasing string `json:"phrasing,omitempty"`
 }
 
 // ContextFabricHandleOption offers one grammar-valid handle candidate,
@@ -185,6 +200,9 @@ type ContextFabricHandleOption struct {
 	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
 	PriorVersionID string                            `json:"prior_version_id,omitempty"`
 	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+	// Phrasing (CHAOS-4171 PR2) -- see ContextFabricKindOption.Phrasing's
+	// doc comment; identical contract, applied per option type.
+	Phrasing string `json:"phrasing,omitempty"`
 }
 
 // ContextFabricCandidateOptionReceiptPrefix is the closed namespace prefix
@@ -217,6 +235,9 @@ type ContextFabricCandidateOption struct {
 	OfferSource    ContextFabricStructureOfferSource `json:"offer_source"`
 	PriorVersionID string                            `json:"prior_version_id,omitempty"`
 	PriorEntryID   string                            `json:"prior_entry_id,omitempty"`
+	// Phrasing (CHAOS-4171 PR2) -- see ContextFabricKindOption.Phrasing's
+	// doc comment; identical contract, applied per option type.
+	Phrasing string `json:"phrasing,omitempty"`
 }
 
 // ContextFabricAcceptedGrammar discloses one grammar the engine accepts for

@@ -82,6 +82,12 @@ type ModelOperation string
 const (
 	ModelOperationInterpret  ModelOperation = "interpret"
 	ModelOperationSynthesize ModelOperation = "synthesize"
+	// ModelOperationPhraseOffers (CHAOS-4171 PR2) is the SECOND bounded
+	// model call's own receipt operation -- always a call distinct from,
+	// and running strictly after, ModelOperationInterpret produced the
+	// interpretation composeStructureNeeds built its offers from. See
+	// chaos4171_offer_phrasing.go.
+	ModelOperationPhraseOffers ModelOperation = "phrase_offers"
 )
 
 type ModelUsage struct {
@@ -131,7 +137,7 @@ type ModelExecutionReceipt struct {
 }
 
 func (r ModelExecutionReceipt) Validate() error {
-	if r.Operation != ModelOperationInterpret && r.Operation != ModelOperationSynthesize {
+	if r.Operation != ModelOperationInterpret && r.Operation != ModelOperationSynthesize && r.Operation != ModelOperationPhraseOffers {
 		return fmt.Errorf("model receipt operation is invalid")
 	}
 	for name, value := range map[string]string{

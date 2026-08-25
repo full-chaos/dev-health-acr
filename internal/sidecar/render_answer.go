@@ -278,21 +278,21 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 				}
 			}
 			for _, opt := range needs.KindOptions {
-				line := fmt.Sprintf("- Kind option `%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+				line := fmt.Sprintf("- Kind option `%s` (receipt `%s`): %s%s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label), phrasingSuffix(opt.Phrasing))
 				if !b.writeLine(line) {
 					return b.finishWithTruncation()
 				}
 			}
 			for _, opt := range needs.AnchorOptions {
-				line := fmt.Sprintf("- Anchor option `%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+				line := fmt.Sprintf("- Anchor option `%s` (receipt `%s`): %s%s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label), phrasingSuffix(opt.Phrasing))
 				if !b.writeLine(line) {
 					return b.finishWithTruncation()
 				}
 			}
 			for _, opt := range needs.HandleOptions {
-				line := fmt.Sprintf("- Handle option `%s`/`%s` (receipt `%s`): %s = %s (source %s)",
+				line := fmt.Sprintf("- Handle option `%s`/`%s` (receipt `%s`): %s = %s (source %s)%s",
 					safeInline(string(opt.Kind)), safeInline(opt.PatternID), safeInline(opt.ReceiptID),
-					untrustedInline(opt.Label), untrustedInline(opt.Value), untrustedInline(opt.SourceColumn))
+					untrustedInline(opt.Label), untrustedInline(opt.Value), untrustedInline(opt.SourceColumn), phrasingSuffix(opt.Phrasing))
 				if !b.writeLine(line) {
 					return b.finishWithTruncation()
 				}
@@ -304,7 +304,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 			// field shape minus MatchedTermHash), never a
 			// MatchedTermHash line since this member has none.
 			for _, opt := range needs.CandidateOptions {
-				line := fmt.Sprintf("- Candidate option `%s`/`%s` (receipt `%s`): %s", safeInline(string(opt.Kind)), safeInline(opt.CanonicalID), safeInline(opt.ReceiptID), untrustedInline(opt.Label))
+				line := fmt.Sprintf("- Candidate option `%s`/`%s` (receipt `%s`): %s%s", safeInline(string(opt.Kind)), safeInline(opt.CanonicalID), safeInline(opt.ReceiptID), untrustedInline(opt.Label), phrasingSuffix(opt.Phrasing))
 				if !b.writeLine(line) {
 					return b.finishWithTruncation()
 				}
@@ -488,6 +488,19 @@ func windowBoundsText(w *contractsv1.ContextFabricEffectiveEvidenceWindow) strin
 		return "unstated window"
 	}
 	return w.Start.UTC().Format(time.RFC3339) + " to " + w.End.UTC().Format(time.RFC3339)
+}
+
+// phrasingSuffix (CHAOS-4171 PR2) renders an option's optional Phrasing
+// alongside its structural Label, when phrasing was applied -- empty when
+// it was not (fail-open to structure never removes the Label line above,
+// this only ever ADDS to it). Phrasing is genuine model output, wrapped in
+// the SAME untrustedInline discipline as every other model- or
+// source-derived value on this line.
+func phrasingSuffix(phrasing string) string {
+	if phrasing == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (phrasing: %s)", untrustedInline(phrasing))
 }
 
 // describeTimeContext renders the instants of one time context. The axis
