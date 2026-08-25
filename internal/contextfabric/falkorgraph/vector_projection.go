@@ -349,7 +349,7 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 	for _, target := range targets {
 		texts = append(texts, a.documentPrefixed(target.text))
 	}
-	vectors, err := a.embedder.Embed(ctx, texts)
+	vectors, err := a.embedWithBoundedRetry(ctx, texts)
 	if err != nil || len(vectors) != len(targets) {
 		// Codex round-1 F3: the batch has ALREADY written new search_text to
 		// these nodes and the watermark is about to advance. Leaving the OLD
@@ -362,6 +362,15 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		// So the vector is CLEARED instead. A node with no vector degrades
 		// honestly to lexical retrieval; a node with a stale vector lies.
 		a.recordVectorDegraded(ctx, batch.OrgID)
+		// CHAOS-4259 codex R1 finding 3: report the embed failure itself
+		// (increment the org's consecutive-failure streak, escalate if the
+		// threshold is crossed) BEFORE attempting the clear, not after it
+		// succeeds. The embed call already failed regardless of whether the
+		// clear below also fails -- a genuine, sustained embed outage that
+		// happens to ALSO hit clear failures every time must still reach the
+		// escalation threshold, not silently never count because clearErr
+		// short-circuits with `return err` first.
+		a.reportEmbedFailure(ctx, batch.OrgID, err)
 		// Finding 1: the id-only-skipped set is invalidated the same as
 		// everything else in this batch -- clear it alongside targets rather
 		// than leaving whatever those rows carried from a prior batch.
@@ -376,6 +385,12 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		a.recordVectorProjection(ctx, batch.OrgID, 0, len(targets), skipped)
 		return nil
 	}
+	// The Embed call itself succeeded (possibly after a bounded retry): the
+	// embed mechanism is healthy, so this organization's consecutive-failure
+	// streak resets here, before the per-target write loop below -- a
+	// FalkorDB write failure in that loop is a different subsystem and must
+	// not carry this organization's embed-health streak forward.
+	a.resetEmbedFailureStreak(batch.OrgID)
 	for index, target := range targets {
 		if err := a.writeNodeVector(ctx, key, batch.OrgID, target, vectors[index], identity); err != nil {
 			// Same reasoning, mid-batch: targets before this one carry fresh
@@ -413,6 +428,104 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 	// finding closes.
 	a.recordVectorProjection(ctx, batch.OrgID, len(targets), 0, skipped)
 	return nil
+}
+
+// embedWithBoundedRetry issues one Embed call and, if it fails, retries up to
+// Config.EmbedFailureMaxRetries times -- waiting Config.EmbedFailureRetryBackoff
+// between attempts -- but ONLY while the failure classifies TRANSIENT
+// (embedprovider.IsTransientEmbedError). A PERSISTENT failure returns
+// immediately on the attempt that produced it, with zero retries spent: an
+// identical request gets an identical answer from an auth/shape/identity
+// problem, so retrying only delays every projection tick during an outage of
+// that kind without changing the outcome (CHAOS-4147 item 3 / CHAOS-4259).
+// The zero value of EmbedFailureMaxRetries (a Config built directly, e.g. by
+// most existing tests) makes this a single call with no retry, byte-identical
+// to pre-CHAOS-4259 behavior.
+//
+// Returns the LAST error observed if every attempt fails (or the first,
+// persistent one) -- exactly the error embedProjectionBatch's existing
+// clear-and-degrade branch already handles unchanged.
+//
+// The ctx handed to every Embed call here is marked with
+// embedprovider.WithBatchCall (codex R1 finding 1): embedChunk must apply
+// Config.BatchTimeout to this call regardless of how many texts it happens
+// to carry -- a projection batch with exactly ONE embeddable target is a
+// legitimate, common shape (not a read-path call), and inferring the
+// timeout from len(texts) alone silently bounded that single-target write
+// by the much shorter read-side Timeout instead.
+func (a *Adapter) embedWithBoundedRetry(ctx context.Context, texts []string) ([][]float32, error) {
+	ctx = embedprovider.WithBatchCall(ctx)
+	vectors, err := a.embedder.Embed(ctx, texts)
+	if err == nil {
+		return vectors, nil
+	}
+	for attempt := 0; attempt < a.config.EmbedFailureMaxRetries; attempt++ {
+		if !embedprovider.IsTransientEmbedError(err) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(a.config.EmbedFailureRetryBackoff):
+		}
+		vectors, err = a.embedder.Embed(ctx, texts)
+		if err == nil {
+			return vectors, nil
+		}
+	}
+	return nil, err
+}
+
+// reportEmbedFailure increments this organization's consecutive embed-batch
+// failure streak and, once it reaches Config.EmbedFailureEscalateAfter,
+// fires the louder RecordVectorProjectionEmbedFailuresEscalated signal --
+// on every failing batch from the threshold onward, not just once at the
+// crossing, so the signal stays live for the duration of a sustained outage
+// (CHAOS-4147 item 3 / CHAOS-4259). A zero/negative EmbedFailureEscalateAfter
+// (the Config zero value) disables escalation: the streak is still tracked
+// (harmless), but the threshold check never passes.
+//
+// KNOWN, ACCEPTED LIMITATION (codex R1 finding 4): the streak value passed
+// to telemetry is read under embedFailureMu, so it is always the exact
+// count AT THE MOMENT this failure incremented it -- never a stale re-read.
+// What is NOT guaranteed is the ORDER telemetry calls are OBSERVED in if
+// two batches for the SAME organization race concurrently on this Adapter
+// (one failing past the threshold, another concurrently succeeding and
+// resetting via resetEmbedFailureStreak): the mutex only serializes the map
+// mutation, not the RecordVectorProjectionEmbedFailuresEscalated call that
+// follows it outside the lock, so a reset's effect could be observed by an
+// operator before an already-in-flight escalation for a higher count is.
+// Holding embedFailureMu across the telemetry call would fix the ordering
+// but means blocking every OTHER organization's embed-failure reporting on
+// this shared Adapter for however long a caller-supplied GraphTelemetry
+// implementation takes -- Telemetry is a pluggable interface this package
+// does not control, so that trade is worse than the cosmetic reordering it
+// would close. Not a concern in production: projectionrun.Coordinator
+// single-flights each organization, so two batches for the same org never
+// run concurrently on a real deployment; this only matters for a caller
+// that constructs its own concurrent Adapter usage directly.
+func (a *Adapter) reportEmbedFailure(ctx context.Context, orgID string, err error) {
+	a.embedFailureMu.Lock()
+	if a.consecutiveEmbedBatchFailures == nil {
+		a.consecutiveEmbedBatchFailures = make(map[string]int)
+	}
+	a.consecutiveEmbedBatchFailures[orgID]++
+	streak := a.consecutiveEmbedBatchFailures[orgID]
+	a.embedFailureMu.Unlock()
+
+	if a.config.EmbedFailureEscalateAfter > 0 && streak >= a.config.EmbedFailureEscalateAfter {
+		a.recordVectorProjectionEmbedFailuresEscalated(ctx, orgID, streak, embedprovider.IsTransientEmbedError(err))
+	}
+}
+
+// resetEmbedFailureStreak clears this organization's consecutive
+// embed-batch failure streak after a batch whose Embed call succeeded --
+// see embedProjectionBatch's call site for why this fires on Embed success
+// alone, independent of the per-target write loop that follows it.
+func (a *Adapter) resetEmbedFailureStreak(orgID string) {
+	a.embedFailureMu.Lock()
+	delete(a.consecutiveEmbedBatchFailures, orgID)
+	a.embedFailureMu.Unlock()
 }
 
 // clearNodeVectors removes the embedding and its identity properties from

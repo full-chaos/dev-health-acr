@@ -18,7 +18,7 @@ const testDimension = 8
 func testConfig(baseURL string) Config {
 	return Config{
 		Provider: "lmstudio", BaseURL: baseURL, Model: "probe-embed", Dimension: testDimension,
-		SimilarityFloor: DefaultSimilarityFloor, Timeout: 5 * time.Second,
+		SimilarityFloor: DefaultSimilarityFloor, Timeout: 5 * time.Second, BatchTimeout: 5 * time.Second,
 		MaxBatch: DefaultMaxBatch, MaxTextRunes: DefaultMaxTextRunes,
 		MaxTransportRetries: 0, AllowInsecureBaseURL: true,
 		// No credential, matching this fixture's own "lmstudio" no-auth

@@ -98,6 +98,18 @@ type Adapter struct {
 	// cover on its own. See stampResolvedKey's doc comment.
 	observedKeysMu sync.Mutex
 	observedKeys   map[string]string
+
+	// embedFailureMu/consecutiveEmbedBatchFailures (CHAOS-4259) track, PER
+	// ORGANIZATION, how many projection batches in a row failed to embed
+	// (after any bounded transient retry -- see embedProjectionBatch). A
+	// mutex-protected map because one Adapter instance is shared across
+	// every organization's coordinator, not just the single-flight-per-org
+	// caller within one organization. Reset to 0 on the next successful
+	// batch; read/incremented to decide when
+	// RecordVectorProjectionEmbedFailuresEscalated fires (see Config's
+	// EmbedFailureEscalateAfter doc comment).
+	embedFailureMu                sync.Mutex
+	consecutiveEmbedBatchFailures map[string]int
 }
 
 // EmbedderOptions carries the optional vector-retrieval dependencies

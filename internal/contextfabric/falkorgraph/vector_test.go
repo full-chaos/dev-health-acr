@@ -23,11 +23,16 @@ type stubEmbedder struct {
 	vector []float32
 	err    error
 	calls  int
+	// failFirstN, when > 0, makes Embed return err for exactly the first
+	// failFirstN calls and succeed on every call after (CHAOS-4259: proves
+	// a bounded retry-then-succeed path). Zero (the default) keeps the
+	// pre-existing behavior: err, if set, fails EVERY call.
+	failFirstN int
 }
 
 func (s *stubEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	s.calls++
-	if s.err != nil {
+	if s.err != nil && (s.failFirstN == 0 || s.calls <= s.failFirstN) {
 		return nil, s.err
 	}
 	out := make([][]float32, len(texts))
@@ -508,7 +513,7 @@ func wrongModelEmbedder(t *testing.T, baseURL string) *embedprovider.Embedder {
 		Provider: "lmstudio", BaseURL: baseURL,
 		// We ASK for one model; the server serves another.
 		Model: "text-embedding-nomic-embed-text-v1.5", Dimension: 8,
-		SimilarityFloor: 0.55, Timeout: 5 * time.Second,
+		SimilarityFloor: 0.55, Timeout: 5 * time.Second, BatchTimeout: 5 * time.Second,
 		MaxBatch: 8, MaxTextRunes: 2000, AllowInsecureBaseURL: true,
 		// No credential, matching this fixture's own "lmstudio" no-auth
 		// modeling -- explicit AllowNoCredential (CHAOS-4192).
@@ -1157,6 +1162,21 @@ type recordingTelemetry struct {
 	edgesFilteredAuthz            int
 	edgesFilteredTemporalWindow   int
 	edgesFilteredSelfLoop         int
+
+	// embedFailureEscalations records every
+	// RecordVectorProjectionEmbedFailuresEscalated call verbatim
+	// (CHAOS-4259) -- a slice, so a test can assert exactly when escalation
+	// started firing and with what consecutive-failure count, not merely
+	// that it fired at all.
+	embedFailureEscalations []embedFailureEscalationRecord
+}
+
+// embedFailureEscalationRecord is one recorded
+// RecordVectorProjectionEmbedFailuresEscalated call's arguments.
+type embedFailureEscalationRecord struct {
+	orgID               string
+	consecutiveFailures int
+	transient           bool
 }
 
 // vectorFenceRecord is one recorded RecordVectorFence call's arguments.
@@ -1198,6 +1218,9 @@ func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string,
 	r.skippedKind += skippedKind
 	r.skippedIDOnly += skippedIDOnly
 }
+func (r *recordingTelemetry) RecordVectorProjectionEmbedFailuresEscalated(_ context.Context, orgID string, consecutiveFailures int, transient bool) {
+	r.embedFailureEscalations = append(r.embedFailureEscalations, embedFailureEscalationRecord{orgID: orgID, consecutiveFailures: consecutiveFailures, transient: transient})
+}
 func (r *recordingTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key string, policyEfRuntime, indexEfRuntime int) {
 	r.efRuntimeMismatches = append(r.efRuntimeMismatches, efRuntimeMismatchRecord{key, policyEfRuntime, indexEfRuntime})
 }
@@ -1229,6 +1252,25 @@ func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfa
 	adapter, err := newWithAPI(Config{
 		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second,
 		MaxAttempts: 1, MaxResults: 25, PoolSize: 1, AllowInsecure: true, Telemetry: telemetry,
+	}, fake)
+	if err != nil {
+		t.Fatalf("newWithAPI: %v", err)
+	}
+	adapter.attachEmbedder(EmbedderOptions{Embedder: embedder, SimilarityFloor: 0.55})
+	return adapter
+}
+
+// vectorAdapterWithRetryConfig is vectorAdapterWithTelemetry plus explicit
+// CHAOS-4259 embed-failure retry/escalation knobs (the zero value of which
+// disables both -- see Config's own field doc comments), for tests that
+// exercise embedProjectionBatch's retry-before-clear and
+// escalate-after-N-consecutive-failures behavior.
+func vectorAdapterWithRetryConfig(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry, maxRetries int, backoff time.Duration, escalateAfter int) *Adapter {
+	t.Helper()
+	adapter, err := newWithAPI(Config{
+		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second,
+		MaxAttempts: 1, MaxResults: 25, PoolSize: 1, AllowInsecure: true, Telemetry: telemetry,
+		EmbedFailureMaxRetries: maxRetries, EmbedFailureRetryBackoff: backoff, EmbedFailureEscalateAfter: escalateAfter,
 	}, fake)
 	if err != nil {
 		t.Fatalf("newWithAPI: %v", err)

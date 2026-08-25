@@ -182,6 +182,29 @@ credential resolve to the real value in the first place, and this class
 also affects `acr-api`'s `ACR_CONTEXT_FABRIC_MODEL_API_KEY` the same way
 (no code-level guard added there in this pass).
 
+**CHAOS-4147 item 3 / CHAOS-4259: a TRANSIENT embed failure (a network
+blip, a rate limit, one bad tick) no longer clears vectors on the first
+try.** `embedProjectionBatch` bounds a short retry
+(`ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_MAX_RETRIES`, default `2`, with
+`ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_RETRY_BACKOFF` between attempts,
+default `200ms`) before falling back to the existing clear-and-degrade
+behavior -- unchanged for a PERSISTENT failure (an auth/4xx error, or this
+package's own response-shape/dimension/model-identity checks), which is
+never retried, because an identical request gets an identical answer.
+Separately, a SUSTAINED run of
+`ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_ESCALATE_AFTER` (default `5`)
+consecutive failing batches for one organization now escalates to an
+ERROR-level `RecordVectorProjectionEmbedFailuresEscalated` signal, distinct
+from the routine per-batch WARN a single cleared batch already emits --
+so an outage like the one above is loud well before an operator would
+otherwise notice only by scrolling WARN lines. All three are ACTIVE by
+default in every real deployment (`ConfigFromEnv` applies the `2`/`200ms`/`5`
+defaults above whenever the corresponding env var is unset) -- unset does
+NOT mean disabled. Only a `Config` literal built directly, bypassing
+`ConfigFromEnv` entirely (the shape most existing unit tests use), gets the
+zero value and stays byte-identical to pre-CHAOS-4259 behavior (no retry,
+no escalation); no shipped composition root does this.
+
 If you maintain the workspace root's own `compose.override.yml` (untracked
 local config, outside every repo, so it carries no durable comment of its
 own): its `falkordb` service's volume must mount at the SAME path the
@@ -585,7 +608,8 @@ byte-for-byte what it was before.
 | `ACR_CONTEXT_FABRIC_EMBED_API_KEY` / `_FILE` | *(empty)* | Bearer credential. A loopback embedder (LM Studio/Ollama/TEI) genuinely needs none; the shape accommodates one so a hosted embedder is a configuration change only. **CHAOS-4192: a blank value here now fails startup loudly** when `ACR_CONTEXT_FABRIC_EMBED_BASE_URL` is set, unless `ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL` (below) is also set — see the incident note above. |
 | `ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL` | `false` | CHAOS-4192: explicit opt-in declaring this endpoint genuinely needs no credential (the loopback LM Studio/Ollama/TEI shape). Without it, a configured base URL with a blank `ACR_CONTEXT_FABRIC_EMBED_API_KEY` fails startup instead of silently constructing a broken embedder — **never inferred from the base URL's shape**, matching `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL`'s posture. |
 | `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` | `0.55` | Absolute cosine similarity below which a neighbour is **dropped, not scored**. See the hazard note below. |
-| `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | `250ms` | Bounds one embeddings call. |
+| `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | `250ms` | Bounds one READ-path embeddings call (a single query text). |
+| `ACR_CONTEXT_FABRIC_EMBED_BATCH_TIMEOUT` | `5s` | CHAOS-3828: bounds one WRITE/PROJECTION-path embeddings call (up to `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` texts), independently of the read-side timeout above. Before this existed, the projection path reused the 250ms read-side default for a 64-text request — timing out on every call against anything but a very fast warm local model, and clearing every batch's vectors as a result (indistinguishable from a genuine embedder outage). |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` | `64` | Texts per request at projection time. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. **Semantic, immutable-per-corpus** (CHAOS-3833): the value is a component of the composition tag, so changing it fails every stored vector closed and requires the paired rebuild. Validation floor is 2,000 — the largest complete per-kind template — so the lexical and vector arms always index byte-identical text for templated kinds; a lower value fails startup loudly. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES` | `0` | The SDK's own in-client retry loop. |

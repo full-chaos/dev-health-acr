@@ -483,6 +483,13 @@ func benchmarkLookup(key string) (string, bool) {
 		// against one needs this raised (production runs it at 45s) or every
 		// embed call fails with "context deadline exceeded".
 		return value("ACR_TEST_EMBED_TIMEOUT")
+	case embedprovider.EnvBatchTimeout:
+		// OPTIONAL (CHAOS-3828/CHAOS-4259): unset falls through to
+		// embedprovider.DefaultBatchTimeout (5s), the write-side budget for
+		// a MaxBatch-sized request. This harness issues read-shaped (single-
+		// text) calls, so this only matters for a run that deliberately
+		// exercises the batch/projection call shape.
+		return value("ACR_TEST_EMBED_BATCH_TIMEOUT")
 	case embedprovider.EnvMaxTransportRetries:
 		// OPTIONAL (CHAOS-3849 round 2): unset falls through to
 		// embedprovider.DefaultMaxTransportRetries (0), sensible only for a
@@ -652,6 +659,7 @@ var embedproviderEnvVars = []string{
 	embedprovider.EnvAPIKey,
 	embedprovider.EnvSimilarityFloor,
 	embedprovider.EnvTimeout,
+	embedprovider.EnvBatchTimeout,
 	embedprovider.EnvMaxBatch,
 	embedprovider.EnvMaxTextRunes,
 	embedprovider.EnvPrefixFamily,
@@ -686,6 +694,7 @@ var benchmarkLookupEnvVarFor = map[string]string{
 	embedprovider.EnvAPIKey:              "ACR_TEST_EMBED_API_KEY",
 	embedprovider.EnvSimilarityFloor:     "ACR_TEST_EMBED_SIMILARITY_FLOOR",
 	embedprovider.EnvTimeout:             "ACR_TEST_EMBED_TIMEOUT",
+	embedprovider.EnvBatchTimeout:        "ACR_TEST_EMBED_BATCH_TIMEOUT",
 	embedprovider.EnvMaxBatch:            "ACR_TEST_EMBED_MAX_BATCH",
 	embedprovider.EnvMaxTextRunes:        "ACR_TEST_EMBED_MAX_TEXT_RUNES",
 	embedprovider.EnvPrefixFamily:        "ACR_TEST_EMBED_PREFIX_FAMILY",

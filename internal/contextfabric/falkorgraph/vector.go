@@ -822,6 +822,17 @@ func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embe
 	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared, skipped.Kind, skipped.IDOnly)
 }
 
+// recordVectorProjectionEmbedFailuresEscalated reports a sustained,
+// consecutive run of embed-batch failures for one organization to
+// telemetry (CHAOS-4147 item 3 / CHAOS-4259) -- nil-safe, same convention
+// as every sibling recordX method.
+func (a *Adapter) recordVectorProjectionEmbedFailuresEscalated(ctx context.Context, orgID string, consecutiveFailures int, transient bool) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	a.config.Telemetry.RecordVectorProjectionEmbedFailuresEscalated(ctx, orgID, consecutiveFailures, transient)
+}
+
 // recordVectorIndexEfRuntimeMismatch reports an existing vector index's
 // efRuntime disagreeing with the calibrated policy to telemetry (codex
 // round-9 P2 wiring fix -- see ensureVectorIndex's doc comment and
