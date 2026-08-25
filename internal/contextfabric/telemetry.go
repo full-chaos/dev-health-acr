@@ -301,12 +301,26 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"target_kind", string(event.TargetKind),
 		"policy", string(event.Policy),
 		"basis", string(event.Basis),
+		// axis (CHAOS-4109) is the decision-basis signal for as-of scope
+		// expansion: Axis != current with a non-policy_unavailable Outcome
+		// means "as-of resolution applied"; Axis != current WITH
+		// policy_unavailable means the observed_time gate (still closed --
+		// see resolveRequirement's own comment); temporal_dropped_count > 0
+		// on a historical axis names an "interval-miss" (a candidate the
+		// current-value column would have matched, excluded because no
+		// interval covered the requested window); unbounded_validity_count
+		// > 0 names a "fell back to current" admission (no transition
+		// history existed for that candidate at all, so it was admitted
+		// unconditionally rather than through a genuine as-of resolution).
+		"axis", string(event.Axis),
 		"outcome", string(event.Outcome),
 		"origin_count", event.OriginCount,
 		"candidate_count", event.CandidateCount,
 		"admitted_count", event.AdmittedCount,
 		"authorization_dropped_count", event.AuthorizationDroppedCount,
 		"temporal_dropped_count", event.TemporalDroppedCount,
+		"unbounded_validity_count", event.UnboundedValidityCount,
+		"malformed_touch_count", event.MalformedTouchCount,
 		"missing_next_hop_count", event.MissingNextHopCount,
 		"target_kind_mismatch_count", event.TargetKindMismatchCount,
 		"truncated", event.Truncated,

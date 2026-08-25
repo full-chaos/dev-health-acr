@@ -341,19 +341,35 @@ func TestChaos4099_EachTeamPolicyIsNamedOnItsOwnRequirement(t *testing.T) {
 	}
 }
 
-// TestChaos4099_NonCurrentAxisIsRefusedNotSilentlyAnsweredAsCurrent pins the
-// v1 current-axis-only gate, and pins it as a HARD refusal.
+// TestChaos4099_ObservedTimeAxisIsRefusedNotSilentlyAnsweredAsCurrent pins
+// what remains of the v1 axis gate after CHAOS-4109: TemporalObservedTime
+// stays a HARD refusal, and so does a TemporalValidTime/TemporalRange
+// request that is missing its own required bounds (a defensive rung, not
+// the primary boundary -- see resolveRequirement's own comment).
 //
-// The failure it forbids is the subtle one: the work_item->project edge
-// carries ObservedAt but no ValidFrom/ValidTo, so a traversal run for an
-// as-of question would silently answer with TODAY's project membership and
-// let the answer carry a historical temporal label. That is a wrong answer
-// presented as a right one, which is strictly worse than the disclosed gap.
+// Renamed from TestChaos4099_NonCurrentAxisIsRefusedNotSilentlyAnsweredAsCurrent
+// (CHAOS-4109): that name is no longer true. TemporalValidTime and
+// TemporalRange are NOT refused any more -- the work_item/pull_request ->
+// project edge now carries real ValidFrom/ValidTo intervals derived from
+// project_membership_transitions' full touch history
+// (devhealthsource/teams_projects_edges.go), so the traversal a historical
+// question needs no longer has to silently answer with TODAY's membership.
+// See TestChaos4109_ValidTimeAndRangeAxesReachTheExpanderWithBounds below
+// for the case this test used to (wrongly) cover: both bounded axes now
+// expand.
+//
+// The failure THIS test still forbids: TemporalObservedTime has no
+// independent observation log for a project reassignment (occurred_at is a
+// VALID-time fact, not a record of when this system first learned of the
+// change -- see resolveRequirement's own comment on that rung), so a
+// traversal run for an observed-time question would still have to silently
+// answer from the valid-time window under the wrong axis's name. Refusing
+// and disclosing stays the only honest option there.
 //
 // The rule table is temporarily enabled here because stage 1 ships every
 // policy dark, and a test that could not tell the axis gate from the
 // disabled gate would assert nothing about the axis at all.
-func TestChaos4099_NonCurrentAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *testing.T) {
+func TestChaos4099_ObservedTimeAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *testing.T) {
 	restore := factScopePolicies
 	t.Cleanup(func() { factScopePolicies = restore })
 	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
@@ -365,30 +381,40 @@ func TestChaos4099_NonCurrentAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *testin
 		}},
 	}
 	expander := &recordingScopeExpander{targets: []SubjectRef{scopeRepo}}
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
-	for _, axis := range []TemporalAxis{
-		contractsv1.ContextFabricTemporalValidTime,
-		contractsv1.ContextFabricTemporalObservedTime,
-		contractsv1.ContextFabricTemporalRange,
-	} {
+	refusalCases := []struct {
+		name        string
+		timeContext TimeContext
+	}{
+		{"observed_time, bounded", TimeContext{Axis: contractsv1.ContextFabricTemporalObservedTime, AsOf: &asOf}},
+		{"observed_time, unbounded", TimeContext{Axis: contractsv1.ContextFabricTemporalObservedTime}},
+		{"valid_time, missing AsOf", TimeContext{Axis: contractsv1.ContextFabricTemporalValidTime}},
+		{"range, missing Start and End", TimeContext{Axis: contractsv1.ContextFabricTemporalRange}},
+		{"range, missing End", TimeContext{Axis: contractsv1.ContextFabricTemporalRange, Start: &asOf}},
+	}
+	for _, c := range refusalCases {
 		scope := NewFactReadScopeResolver(expander).Resolve(
 			context.Background(), storage.Principal{OrgID: "org_1"},
-			newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, axis)),
+			newFactScopeResolveInput(scopeTimeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, c.timeContext)),
 			scopeCapabilities(),
 		)
 		if len(scope.Events) != 1 || scope.Events[0].Outcome != FactScopePolicyUnavailable {
-			t.Fatalf("axis %q: events = %+v, want a single policy_unavailable", axis, scope.Events)
+			t.Fatalf("%s: events = %+v, want a single policy_unavailable", c.name, scope.Events)
+		}
+		if scope.Events[0].Axis != c.timeContext.Axis {
+			t.Fatalf("%s: event Axis = %q, want %q -- telemetry must name the axis even on refusal", c.name, scope.Events[0].Axis, c.timeContext.Axis)
 		}
 		if len(scope.DerivedSubjects) != 0 {
-			t.Fatalf("axis %q admitted derived subjects: %+v", axis, scope.DerivedSubjects)
+			t.Fatalf("%s admitted derived subjects: %+v", c.name, scope.DerivedSubjects)
 		}
 	}
 	if expander.calls != 0 {
-		t.Fatalf("expander ran %d time(s) on a non-current axis -- the gate must refuse BEFORE traversing", expander.calls)
+		t.Fatalf("expander ran %d time(s) on a refused axis/bounds combination -- the gate must refuse BEFORE traversing", expander.calls)
 	}
 
 	// Control: the SAME table on the current axis does expand, proving the
-	// refusals above are attributable to the axis and nothing else.
+	// refusals above are attributable to the axis/bounds and nothing else.
 	scope := NewFactReadScopeResolver(expander).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
@@ -396,6 +422,68 @@ func TestChaos4099_NonCurrentAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *testin
 	)
 	if len(scope.Events) != 1 || scope.Events[0].Outcome != FactScopeExpanded {
 		t.Fatalf("current axis: events = %+v, want expanded", scope.Events)
+	}
+}
+
+// scopeTimeRequest is scopeRequest's CHAOS-4109 sibling: scopeRequest can
+// only express an axis, never AsOf/Start/End, which is exactly what the
+// TemporalValidTime/TemporalRange cases below need to set.
+func scopeTimeRequest(subjects []SubjectRef, requirements []FactRequirement, timeContext TimeContext) CanonicalFactRequest {
+	return CanonicalFactRequest{
+		Question:     InterpretedQuestion{TimeContext: timeContext},
+		Subjects:     subjects,
+		Requirements: requirements,
+	}
+}
+
+// TestChaos4109_ValidTimeAndRangeAxesReachTheExpanderWithBounds is the
+// positive half TestChaos4099_ObservedTimeAxisIsRefusedNotSilentlyAnsweredAsCurrent
+// used to (wrongly) refuse: a BOUNDED TemporalValidTime or TemporalRange
+// request must reach the expander -- not be gated to policy_unavailable --
+// and the resolver must thread the exact TimeContext through
+// FactScopeExpansionRequest unmodified, since ScopeExpander.projectRepositoriesAsOf
+// is the thing that actually binds the traversal to it.
+func TestChaos4109_ValidTimeAndRangeAxesReachTheExpanderWithBounds(t *testing.T) {
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {SubjectProject: {
+			Policy:     FactScopePolicyProjectWorkItemRepository,
+			TargetKind: SubjectRepository,
+			Basis:      FactScopeBasisActivityProxy,
+			Enabled:    true,
+		}},
+	}
+	asOf := time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name        string
+		timeContext TimeContext
+	}{
+		{"valid_time", TimeContext{Axis: contractsv1.ContextFabricTemporalValidTime, AsOf: &asOf}},
+		{"range", TimeContext{Axis: contractsv1.ContextFabricTemporalRange, Start: &start, End: &end}},
+	}
+	for _, c := range cases {
+		expander := &recordingScopeExpander{targets: []SubjectRef{scopeRepo}}
+		scope := NewFactReadScopeResolver(expander).Resolve(
+			context.Background(), storage.Principal{OrgID: "org_1"},
+			newFactScopeResolveInput(scopeTimeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, c.timeContext)),
+			scopeCapabilities(),
+		)
+		if expander.calls != 1 {
+			t.Fatalf("%s: expander calls = %d, want 1 -- a bounded historical axis must reach the traversal", c.name, expander.calls)
+		}
+		if expander.requests[0].TimeContext != c.timeContext {
+			t.Fatalf("%s: request TimeContext = %+v, want %+v unmodified", c.name, expander.requests[0].TimeContext, c.timeContext)
+		}
+		if len(scope.Events) != 1 || scope.Events[0].Outcome != FactScopeExpanded {
+			t.Fatalf("%s: events = %+v, want expanded", c.name, scope.Events)
+		}
+		if scope.Events[0].Axis != c.timeContext.Axis {
+			t.Fatalf("%s: event Axis = %q, want %q", c.name, scope.Events[0].Axis, c.timeContext.Axis)
+		}
 	}
 }
 
@@ -1301,11 +1389,11 @@ func TestChaos4099_ExpansionTelemetryLeaksNoIdentityAndSplitsLevelByDegradation(
 	allowed := map[string]struct{}{}
 	for _, key := range []string{
 		"time", "level", "msg", "org_id", "requirement_kind", "origin_kind", "target_kind",
-		"policy", "basis", "outcome", "origin_count", "candidate_count", "admitted_count",
-		"authorization_dropped_count", "temporal_dropped_count", "missing_next_hop_count",
+		"policy", "basis", "axis", "outcome", "origin_count", "candidate_count", "admitted_count",
+		"authorization_dropped_count", "temporal_dropped_count", "unbounded_validity_count", "malformed_touch_count", "missing_next_hop_count",
 		"target_kind_mismatch_count", "truncated", "failure_class",
 		"attribution_source_counts",
-	} {
+	} { // "axis"/"unbounded_validity_count"/"malformed_touch_count": CHAOS-4109
 		allowed[key] = struct{}{}
 	}
 	for outcome, wantLevel := range map[FactScopeExpansionOutcome]string{
@@ -1351,10 +1439,13 @@ func TestChaos4099_EveryEventFieldReachesTheSink(t *testing.T) {
 	fieldToKey := map[string]string{
 		"RequirementKind": "requirement_kind", "OriginKind": "origin_kind",
 		"TargetKind": "target_kind", "Policy": "policy", "Basis": "basis",
+		"Axis":    "axis", // CHAOS-4109
 		"Outcome": "outcome", "OriginCount": "origin_count",
 		"CandidateCount": "candidate_count", "AdmittedCount": "admitted_count",
 		"AuthorizationDroppedCount": "authorization_dropped_count",
 		"TemporalDroppedCount":      "temporal_dropped_count",
+		"UnboundedValidityCount":    "unbounded_validity_count", // CHAOS-4109
+		"MalformedTouchCount":       "malformed_touch_count",    // CHAOS-4109
 		"MissingNextHopCount":       "missing_next_hop_count",
 		"TargetKindMismatchCount":   "target_kind_mismatch_count",
 		"Truncated":                 "truncated", "FailureClass": "failure_class",
