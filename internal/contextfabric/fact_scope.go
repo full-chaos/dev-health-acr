@@ -395,17 +395,26 @@ type FactScopeExpansionEvent struct {
 	MissingNextHopCount       int
 	TargetKindMismatchCount   int
 	// MalformedTouchCount (CHAOS-4109, codex xhigh review R1, MEDIUM,
-	// confirmed real) is how many project_membership_transitions touches
-	// the expander's own historical traversal flagged as malformed (two
-	// ADD touches of the same subject/project pair with no intervening
-	// REMOVE -- see devhealthsource's membershipIntervalsSubquery and
-	// devhealthfacts' membershipTouchesAsOfSQL, which both derive this the
-	// same way). A malformed touch is silently excluded from the answer
+	// confirmed real; interval rule revised by team-lead 2026-08-25) is
+	// how many project_membership_transitions touches the expander's own
+	// historical traversal flagged as malformed: a REMOVE touch with no
+	// prior ADD to close -- see devhealthsource's membershipIntervalsSubquery
+	// and devhealthfacts' membershipTouchesAsOfSQL, which both derive this
+	// the same way. A malformed touch is silently excluded from the answer
 	// (never guessed into an interval boundary); this count is the ONLY
 	// signal that anything was excluded for that reason rather than
 	// genuinely absent. Zero on the current axis, where nothing consults
 	// transition history at all.
 	MalformedTouchCount int
+	// DuplicateAddCount (CHAOS-4109, team-lead ruling 2026-08-25) is how
+	// many ADD touches the traversal collapsed as a continuation of an
+	// already-open interval -- an ADD immediately preceded by another ADD,
+	// no REMOVE between. NOT malformed: it is a legitimate replay/re-sync
+	// of a membership that never actually left, so attribution continues
+	// unaffected through the original (first-add) interval; this count is
+	// diagnostic volume only, never a sign anything is missing from the
+	// answer. Zero on the current axis, same as MalformedTouchCount.
+	DuplicateAddCount int
 	// UnboundedValidityCount (CHAOS-4109) is how many admitted targets on a
 	// historical axis were matched with NO validity interval to check --
 	// project_membership_transitions carries no history for that subject, so
@@ -1091,9 +1100,10 @@ type FactScopeExpansionCounts struct {
 	// AdmittedCount/CandidateCount; the resolver only ever copies it onto
 	// the event.
 	UnboundedValidityCount int
-	// MalformedTouchCount mirrors FactScopeExpansionEvent's own field --
-	// see its doc comment.
+	// MalformedTouchCount and DuplicateAddCount mirror
+	// FactScopeExpansionEvent's own fields -- see their doc comments.
 	MalformedTouchCount int
+	DuplicateAddCount   int
 	Truncated           bool
 }
 
@@ -1378,6 +1388,7 @@ func (r *FactReadScopeResolver) expand(
 	event.TargetKindMismatchCount = result.Counts.TargetKindMismatchCount
 	event.UnboundedValidityCount = result.Counts.UnboundedValidityCount
 	event.MalformedTouchCount = result.Counts.MalformedTouchCount
+	event.DuplicateAddCount = result.Counts.DuplicateAddCount
 	event.Truncated = result.Counts.Truncated
 	// AttributionSourceCounts and any Basis mix are NOT copied here (codex
 	// xhigh review round 1, confirmed real, MEDIUM x2): both are derived

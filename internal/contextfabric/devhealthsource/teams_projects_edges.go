@@ -194,54 +194,78 @@ const resolvedProjectsSubquery = `(
   LIMIT 1 BY provider, join_key
 )`
 
-// membershipIntervalsCTE derives EVERY membership interval a (subject,
-// project) pair ever held from project_membership_transitions' full touch
-// history (CHAOS-4109) -- not merely the latest one
+// membershipIntervalsSubquery derives EVERY membership interval a
+// (subject, project) pair ever held from project_membership_transitions'
+// full touch history (CHAOS-4109) -- not merely the latest one
 // project_membership_presence's transition arm reports.
 //
-// THE INTERVAL RULE. Unpivot each transition row into up to two polarized
-// touches of a project: to_project_id is an ADD (is_add=1), and
-// from_project_id -- when it differs from to_project_id -- is a REMOVE
-// (is_add=0). A row where from_project_id = to_project_id (a provider
-// re-asserting a membership it already holds, typically a project KEY
-// change with the id unchanged) is EXCLUDED from both arms: it touches no
-// boundary, by the same reasoning project_membership_presence's own
-// "(P, P) contributes ONE touch, the joined side, not two" comment gives
-// for presence -- a re-assertion can only occur while already a member
-// (nothing else asserts P->P), so treating it as a fresh ADD would move a
-// real interval's start later than the subject actually joined, and
-// nothing about it closes anything.
+// THE INTERVAL RULE (revised per team-lead ruling 2026-08-25, superseding
+// this subquery's own first version). Unpivot each transition row into up
+// to two polarized touches of a project: to_project_id is an ADD
+// (is_add=1), and from_project_id -- when it differs from to_project_id --
+// is a REMOVE (is_add=0). A row where from_project_id = to_project_id (a
+// provider re-asserting a membership it already holds, typically a
+// project KEY change with the id unchanged) is EXCLUDED from both arms: it
+// touches no boundary, by the same reasoning project_membership_presence's
+// own "(P, P) contributes ONE touch, the joined side, not two" comment
+// gives for presence.
 //
 // Ordered per (org_id, subject_kind, repo_id, subject_id, provider,
 // project_id) by (occurred_at, event_id) -- the transitions table's own
 // ORDER BY suffix, so ties break identically to the source of truth. Each
-// ADD row looks at its own immediate NEXT touch via leadInFrame (a proper
-// window function, unlike neighbor(), which is block-order-dependent and
-// explicitly unsafe for this):
+// touch is classified against its own immediate predecessor via
+// lagInFrame (a proper window function; neighbor() is block-order-
+// dependent and explicitly unsafe here):
 //
-//   - no next touch at all (rn = touch_count): the subject is a member of
-//     this project TODAY. Open interval, ValidTo absent.
-//   - next touch is a REMOVE (next_is_add = 0): the two together bound one
-//     CLOSED interval, [this ADD's occurred_at, that REMOVE's occurred_at).
-//   - next touch is ANOTHER ADD (next_is_add = 1): two adds with no
-//     intervening remove, which the data model does not produce under
-//     normal operation (a genuine re-add is always preceded by a move-out
-//     REMOVE touch, per the sink's own "(\"\", \"\") is refused" and
-//     "removal MUST name the board it left" rules on the source table).
-//     Flagged is_malformed rather than guessed: the caller counts it as a
-//     producer-side data-quality anomaly and skips it, never fabricating
-//     an interval boundary the source data does not actually assert.
+//   - an ADD immediately preceded by another ADD (no REMOVE between) is a
+//     DUPLICATE_ADD, not malformed: #1896's discard-and-replay path and an
+//     ordinary re-sync of an unchanged board membership both legitimately
+//     emit a second ADD for a subject that never left. It is a
+//     CONTINUATION of the already-open interval, not a new one -- ValidFrom
+//     stays the FIRST ADD's timestamp, no interval boundary is created for
+//     it, and the traversal keeps attributing through the original
+//     interval unchanged. Counted (never silently dropped), never
+//     fabricated into a boundary the source data does not assert.
+//   - a REMOVE immediately preceded by anything OTHER than an ADD (no
+//     ADD at all before it in this history, or another REMOVE) is a
+//     DANGLING REMOVE: it closes nothing, because nothing is open. THIS is
+//     the one case still reserved for "malformed": skipped (it can never
+//     become an interval boundary) and counted, never silently absorbed.
+//     A subject's very first tracked touch of a project being a REMOVE
+//     falls in this case too -- "this membership existed before transition
+//     tracking began", whose true start is genuinely unknown.
+//   - a REMOVE immediately preceded by an ADD is the ordinary case: it
+//     closes that ADD's interval at this REMOVE's own timestamp.
 //
-// A subject's FIRST tracked touch of a project being a REMOVE (no earlier
-// ADD in this history at all) naturally emits NOTHING for that touch --
-// is_add=1 is the only row kind this subquery ever turns into an interval,
-// so a leading REMOVE is simply never selected. That is deliberate: it
-// means "this membership existed before transition tracking began", and
-// its true start is genuinely unknown -- fabricating one would be worse
-// than the gap.
+// IMPLEMENTATION: a two-stage window-function pass, because a single
+// leadInFrame(x, 1) cannot skip an arbitrary-length run of duplicate ADDs
+// to find the touch that actually closes an interval. Stage one
+// (`classified`) computes dup_flag/dangling_flag from each touch's
+// immediate predecessor over the FULL unfiltered touch set. Stage two
+// (`closed`) re-runs row_number/count/leadInFrame over the touch set with
+// duplicate ADDs REMOVED (`WHERE NOT dup_flag`) -- in that filtered set, by
+// construction, no is_add=1 row can ever have another is_add=1 row as its
+// immediate successor (that case was exactly what dup_flag removed), so
+// the "next touch is ANOTHER ADD" case this subquery's first version had
+// to guard against is now structurally impossible rather than merely
+// checked for.
 //
-// A plain parenthesized derived table, not a `WITH` CTE -- see
-// resolvedProjectsSubquery's own doc comment for why (ErrUnsafeStatement).
+// CODEX/CLICKHOUSE TRAP (live-verified against ClickHouse 24.8, worth
+// recording): the two CTE-local classification columns are named
+// `dup_flag`/`dangling_flag`, NOT `is_duplicate_add`/`is_malformed` --
+// those exact names are also the OUTER query's own output aliases below.
+// Reusing them for the CTE-internal columns silently duplicated every row
+// across UNION ALL branches (each branch's literal `0 AS is_malformed`/
+// `1 AS is_duplicate_add` collided with the identically-named upstream
+// window-function column still carried through `SELECT *`-shaped CTEs),
+// even though each branch's own WHERE clause, queried in isolation,
+// filtered correctly. Reproduced and fixed by hand against a real
+// ClickHouse container before this shape was ever run through Go.
+//
+// A plain parenthesized derived table, not a top-level `WITH` -- see
+// resolvedProjectsSubquery's own doc comment for why (ErrUnsafeStatement
+// only checks the OUTERMOST statement's first token, so a `WITH` clause
+// nested inside this parenthesized subquery, as used below, is fine).
 //
 // event_id is projected through (codex xhigh review R1, HIGH, confirmed
 // real): project_membership_transitions' own ORDER BY is (..., occurred_at,
@@ -257,38 +281,60 @@ const resolvedProjectsSubquery = `(
 // this case, so querySubjectProjectMemberships' own RelationshipID suffix
 // and rowSortKey both include it too, below.
 const membershipIntervalsSubquery = `(
+  WITH touches AS (
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
+    FROM project_membership_transitions FINAL
+    WHERE org_id = {org_id:String} AND to_project_id != '' AND to_project_id != from_project_id
+    UNION ALL
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
+    FROM project_membership_transitions FINAL
+    WHERE org_id = {org_id:String} AND from_project_id != '' AND from_project_id != to_project_id
+  ),
+  classified AS (
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+      (is_add = 1 AND lagInFrame(is_add, 1, 2) OVER w = 1) AS dup_flag,
+      (is_add = 0 AND lagInFrame(is_add, 1, 2) OVER w != 1) AS dangling_flag
+    FROM touches
+    -- lagInFrame's own default (the third argument, 2 -- an impossible
+    -- value for is_add's {0,1} domain) marks "no previous touch at all"
+    -- distinctly from an actual REMOVE (0), so the very first touch of a
+    -- (subject, project) pair is correctly classified: an ADD is never
+    -- flagged duplicate (nothing preceded it) and a REMOVE is always
+    -- flagged dangling (nothing preceded it either). See
+    -- resolvedProjectsSubquery's own ROWS BETWEEN note -- the identical
+    -- explicit frame is load-bearing here for the same reason.
+    WINDOW w AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+  ),
+  closed AS (
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+      row_number() OVER w2 AS rn,
+      count() OVER (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id) AS touch_count,
+      leadInFrame(occurred_at, 1, occurred_at) OVER w2 AS next_occurred_at,
+      leadInFrame(is_add, 1, is_add) OVER w2 AS next_is_add
+    FROM classified
+    WHERE NOT dup_flag
+    WINDOW w2 AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+  )
   SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id,
     'transition' AS source,
     if(rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
-    (rn < touch_count AND next_is_add = 1) AS is_malformed
-  FROM (
-    SELECT *,
-      row_number() OVER w AS rn,
-      count() OVER (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id) AS touch_count,
-      leadInFrame(occurred_at, 1, occurred_at) OVER w AS next_occurred_at,
-      leadInFrame(is_add, 1, is_add) OVER w AS next_is_add
-    FROM (
-      SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
-      FROM project_membership_transitions FINAL
-      WHERE org_id = {org_id:String} AND to_project_id != '' AND to_project_id != from_project_id
-      UNION ALL
-      SELECT org_id, subject_kind, repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
-      FROM project_membership_transitions FINAL
-      WHERE org_id = {org_id:String} AND from_project_id != '' AND from_project_id != to_project_id
-    )
-    -- The explicit ROWS BETWEEN frame is load-bearing, not decorative: an
-    -- ORDER BY'd window with no frame clause defaults to RANGE BETWEEN
-    -- UNBOUNDED PRECEDING AND CURRENT ROW, which never extends past the
-    -- current row -- leadInFrame(..., 1, ...) then finds nothing inside the
-    -- frame for EVERY row, including the first, and silently returns its
-    -- own default (the current row's own value) rather than the next
-    -- row's. Live-verified against ClickHouse 24.8: without this clause,
-    -- every ADD row reported itself as its own "next touch", which made
-    -- next_is_add equal is_add for every row and misclassified every
-    -- well-formed closed interval as malformed.
-    WINDOW w AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
-  )
+    0 AS is_malformed, 0 AS is_duplicate_add
+  FROM closed
   WHERE is_add = 1
+  UNION ALL
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id,
+    'transition' AS source,
+    NULL AS valid_to,
+    1 AS is_malformed, 0 AS is_duplicate_add
+  FROM classified
+  WHERE dangling_flag
+  UNION ALL
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id,
+    'transition' AS source,
+    NULL AS valid_to,
+    0 AS is_malformed, 1 AS is_duplicate_add
+  FROM classified
+  WHERE dup_flag
 )`
 
 func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
@@ -310,18 +356,18 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 	// transition arm's `valid_to` (membershipIntervalsSubquery) is derived
 	// from that column via leadInFrame, so the ifNull default must share its
 	// scale for the two UNION arms to agree on one column type.
-	statement := `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed
+	statement := `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed, is_duplicate_add
 FROM (
   SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
     m.observed_at AS observed_at, m.event_id AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
-    isNotNull(m.valid_to) AS valid_to_present, ifNull(m.valid_to, toDateTime64(0, 3, 'UTC')) AS valid_to_value, m.is_malformed AS is_malformed
+    isNotNull(m.valid_to) AS valid_to_present, ifNull(m.valid_to, toDateTime64(0, 3, 'UTC')) AS valid_to_value, m.is_malformed AS is_malformed, m.is_duplicate_add AS is_duplicate_add
   FROM ` + membershipIntervalsSubquery + ` AS m
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   UNION ALL
   SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
     m.observed_at AS observed_at, '' AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
-    0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed
+    0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed, 0 AS is_duplicate_add
   FROM project_membership_presence AS m
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
@@ -332,19 +378,36 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 		var subjectKind, repoID, subjectID, repoSlug, eventID, source, provider, projectID, resolvedProjectID string
 		var observedAt, validToValue time.Time
 		var keyResolutionCount uint64
-		var validToPresent, isMalformed uint8
-		if err := r.Scan(&subjectKind, &repoID, &subjectID, &repoSlug, &observedAt, &eventID, &source, &provider, &projectID, &resolvedProjectID, &keyResolutionCount, &validToPresent, &validToValue, &isMalformed); err != nil {
+		var validToPresent, isMalformed, isDuplicateAdd uint8
+		if err := r.Scan(&subjectKind, &repoID, &subjectID, &repoSlug, &observedAt, &eventID, &source, &provider, &projectID, &resolvedProjectID, &keyResolutionCount, &validToPresent, &validToValue, &isMalformed, &isDuplicateAdd); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
 		rowSortKey := subjectKind + ":" + repoID + ":" + subjectID + ":" + provider + ":" + projectID + ":" + eventID
 		telemetry.recordRead(source, subjectKind)
+		if isDuplicateAdd != 0 {
+			// See membershipIntervalsSubquery's own doc comment: an ADD
+			// immediately preceded by another ADD, no REMOVE between --
+			// #1896's discard-and-replay path and an ordinary re-sync both
+			// legitimately produce this for a subject that never left.
+			// Counted, but NOT treated as malformed and NOT dropped from
+			// attribution: the interval this touch belongs to is already
+			// emitted by the FIRST add in the run (this row's own
+			// occurred_at is strictly later than that interval's
+			// ValidFrom), so attribution continues unchanged -- this row
+			// itself just has no boundary of its own to contribute.
+			telemetry.recordDuplicateAdd(provider, projectID)
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		if isMalformed != 0 {
-			// See membershipIntervalsCTE's own doc comment: two ADD touches
-			// with no intervening REMOVE. A producer-side data-quality
-			// anomaly, never guessed into an interval boundary the source
-			// data does not assert -- omitted and counted, the same
-			// discipline the unresolved/ambiguous branches below apply.
+			// See membershipIntervalsSubquery's own doc comment: a REMOVE
+			// with no prior ADD to close (either the very first tracked
+			// touch of this pair, or a second REMOVE with nothing reopened
+			// in between). Unlike a duplicate ADD, this closes nothing and
+			// starts nothing -- a producer-side data-quality anomaly,
+			// never guessed into an interval boundary the source data does
+			// not assert -- omitted and counted, the same discipline the
+			// unresolved/ambiguous branches below apply.
 			telemetry.recordMalformedTouch(provider, projectID)
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}

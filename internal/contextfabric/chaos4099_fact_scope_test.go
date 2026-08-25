@@ -1390,10 +1390,10 @@ func TestChaos4099_ExpansionTelemetryLeaksNoIdentityAndSplitsLevelByDegradation(
 	for _, key := range []string{
 		"time", "level", "msg", "org_id", "requirement_kind", "origin_kind", "target_kind",
 		"policy", "basis", "axis", "outcome", "origin_count", "candidate_count", "admitted_count",
-		"authorization_dropped_count", "temporal_dropped_count", "unbounded_validity_count", "malformed_touch_count", "missing_next_hop_count",
+		"authorization_dropped_count", "temporal_dropped_count", "unbounded_validity_count", "malformed_touch_count", "duplicate_add_count", "missing_next_hop_count",
 		"target_kind_mismatch_count", "truncated", "failure_class",
 		"attribution_source_counts",
-	} { // "axis"/"unbounded_validity_count"/"malformed_touch_count": CHAOS-4109
+	} { // "axis"/"unbounded_validity_count"/"malformed_touch_count"/"duplicate_add_count": CHAOS-4109
 		allowed[key] = struct{}{}
 	}
 	for outcome, wantLevel := range map[FactScopeExpansionOutcome]string{
@@ -1446,6 +1446,7 @@ func TestChaos4099_EveryEventFieldReachesTheSink(t *testing.T) {
 		"TemporalDroppedCount":      "temporal_dropped_count",
 		"UnboundedValidityCount":    "unbounded_validity_count", // CHAOS-4109
 		"MalformedTouchCount":       "malformed_touch_count",    // CHAOS-4109
+		"DuplicateAddCount":         "duplicate_add_count",      // CHAOS-4109
 		"MissingNextHopCount":       "missing_next_hop_count",
 		"TargetKindMismatchCount":   "target_kind_mismatch_count",
 		"Truncated":                 "truncated", "FailureClass": "failure_class",

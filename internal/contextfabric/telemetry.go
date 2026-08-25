@@ -329,6 +329,7 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"temporal_dropped_count", event.TemporalDroppedCount,
 		"unbounded_validity_count", event.UnboundedValidityCount,
 		"malformed_touch_count", event.MalformedTouchCount,
+		"duplicate_add_count", event.DuplicateAddCount,
 		"missing_next_hop_count", event.MissingNextHopCount,
 		"target_kind_mismatch_count", event.TargetKindMismatchCount,
 		"truncated", event.Truncated,

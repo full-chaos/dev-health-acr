@@ -1,7 +1,10 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,5 +274,253 @@ func TestSameTimestampIntervalsGetDistinctRelationshipIDs(t *testing.T) {
 	}
 	if seenValidTo[true] != 1 || seenValidTo[false] != 1 {
 		t.Fatalf("want exactly one open (ValidTo=nil) and one closed interval among the two, got %+v", toC)
+	}
+}
+
+// TestDuplicateAddIsAContinuationNotMalformed pins the team-lead ruling of
+// 2026-08-25: a work item ADDED to a project, then ADDED again with no
+// intervening REMOVE, is a legitimate continuation of the SAME open
+// interval -- #1896's discard-and-replay path and an ordinary re-sync of
+// an unchanged board membership both produce this for a subject that never
+// left. It must NOT be treated as malformed (this ticket's FIRST version
+// of this rule dropped it, wrongly): ValidFrom stays the first ADD's
+// timestamp, no second interval is created, and the subject keeps
+// attributing to the project through the ORIGINAL interval.
+//
+// THREE consecutive ADD touches (codex xhigh review LOW, confirmed real:
+// two ADDs alone cannot distinguish a single-lookahead fix from the
+// filter-before-recompute one this PR actually ships -- membershipIntervalsSubquery's
+// own doc comment explains why an arbitrary-length run needs the dup rows
+// filtered OUT of `closed` entirely, not merely skipped one step ahead).
+// Also asserts the INFO-level duplicate_add telemetry line, the read-side
+// half of the same proof TestDanglingRemoveIsCountedNotSilentlyDropped
+// already gives for malformed touches.
+func TestDuplicateAddIsAContinuationNotMalformed(t *testing.T) {
+	ctx := context.Background()
+	const workItemID = "linear:CHAOS-9103"
+	const projectID = "40000000-0000-4000-8000-00000000000e"
+	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range productionSchemaDDL() {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	createProjectMembershipPresenceView(t, ctx, direct)
+	mustSeed := func(label, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", label, err)
+		}
+	}
+	mustSeed("repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		chaos4109RepoID, chaos4109OrgID, chaos4109RepoSlug, "linear", t1)
+	mustSeed("project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectID, chaos4109OrgID, "Project E", "", "linear", "backlog", "", uint8(1), t1)
+	mustSeed("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		workItemID, chaos4109RepoID, chaos4109OrgID, "Duplicate-add issue", "open", "", "", "linear", projectID, t3)
+	// THREE ADD touches in a row, no REMOVE between any of them -- proves
+	// the filter-out-then-recompute algorithm handles a run, not just one
+	// repeated touch.
+	mustSeed("transition: add (1)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
+		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, t1, t1, "ev-dup-1")
+	mustSeed("transition: add (2, duplicate)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
+		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, t2, t2, "ev-dup-2")
+	mustSeed("transition: add (3, duplicate)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
+		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, t3, t3, "ev-dup-3")
+
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: chaos4109OrgID, Source: devhealthsource.TeamsProjectsSourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+
+	projectCID := mustProjectCanonicalID(t, "linear", projectID)
+	var toProject []contractsv1.ContextFabricRelationshipProjection
+	for _, relationship := range batch.Relationships {
+		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.To.CanonicalID == projectCID {
+			toProject = append(toProject, relationship)
+		}
+	}
+	if len(toProject) != 1 {
+		t.Fatalf("edges to the project = %d, want exactly 1 -- a run of duplicate ADDs must NOT mint a second interval each, and attribution must still continue through the original one: %+v", len(toProject), toProject)
+	}
+	edge := toProject[0]
+	if edge.ValidFrom == nil || !edge.ValidFrom.Equal(t1) {
+		t.Fatalf("ValidFrom = %v, want %v (the FIRST add, not either duplicate)", edge.ValidFrom, t1)
+	}
+	if edge.ValidTo != nil {
+		t.Fatalf("ValidTo = %v, want nil -- the item is still a member; a duplicate ADD must never appear to CLOSE anything", edge.ValidTo)
+	}
+	output := logged.String()
+	assertLogHasKV(t, output, "duplicate_add_entity", "1")
+	assertLogHasKV(t, output, "duplicate_add_entity_rows", "2")
+}
+
+// TestDuplicateAddThenRemoveClosesFromTheOriginalInterval is the sibling
+// case codex xhigh review's LOW finding asked for: a duplicate ADD is not
+// always the LAST touch in the sequence. ADD, ADD (duplicate), then REMOVE
+// must still close the ORIGINAL (first-add) interval at the REMOVE's own
+// timestamp -- proving the `closed` CTE's row_number/touch_count/
+// leadInFrame recompute (after dup rows are filtered OUT of its input)
+// correctly treats the duplicate as if it were never there at all, rather
+// than as an extra row that shifts the REMOVE's lookback by one.
+func TestDuplicateAddThenRemoveClosesFromTheOriginalInterval(t *testing.T) {
+	ctx := context.Background()
+	const workItemID = "linear:CHAOS-9105"
+	const projectID = "40000000-0000-4000-8000-000000000011"
+	const otherProjectID = "40000000-0000-4000-8000-000000000012"
+	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range productionSchemaDDL() {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	createProjectMembershipPresenceView(t, ctx, direct)
+	mustSeed := func(label, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", label, err)
+		}
+	}
+	mustSeed("repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		chaos4109RepoID, chaos4109OrgID, chaos4109RepoSlug, "linear", t1)
+	mustSeed("project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectID, chaos4109OrgID, "Project F", "", "linear", "backlog", "", uint8(1), t1)
+	mustSeed("other project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		otherProjectID, chaos4109OrgID, "Project G", "", "linear", "backlog", "", uint8(1), t1)
+	mustSeed("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		workItemID, chaos4109RepoID, chaos4109OrgID, "Duplicate-then-remove issue", "open", "", "", "linear", otherProjectID, t3)
+	mustSeed("transition: add (1)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
+		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, t1, t1, "ev-dupclose-1")
+	mustSeed("transition: add (2, duplicate)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
+		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, t2, t2, "ev-dupclose-2")
+	mustSeed("transition: move to other project", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', ?, ?, '', '', '', ?, ?, ?)`,
+		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, otherProjectID, t3, t3, "ev-dupclose-3")
+
+	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: chaos4109OrgID, Source: devhealthsource.TeamsProjectsSourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+
+	projectCID := mustProjectCanonicalID(t, "linear", projectID)
+	var toProject []contractsv1.ContextFabricRelationshipProjection
+	for _, relationship := range batch.Relationships {
+		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.To.CanonicalID == projectCID {
+			toProject = append(toProject, relationship)
+		}
+	}
+	if len(toProject) != 1 {
+		t.Fatalf("edges to the project = %d, want exactly 1 -- the duplicate ADD contributes nothing of its own: %+v", len(toProject), toProject)
+	}
+	edge := toProject[0]
+	if edge.ValidFrom == nil || !edge.ValidFrom.Equal(t1) {
+		t.Fatalf("ValidFrom = %v, want %v (the FIRST add, not the duplicate)", edge.ValidFrom, t1)
+	}
+	if edge.ValidTo == nil || !edge.ValidTo.Equal(t3) {
+		t.Fatalf("ValidTo = %v, want %v (the REMOVE's own timestamp) -- the duplicate ADD must not shift where the interval closes", edge.ValidTo, t3)
+	}
+}
+
+// TestDanglingRemoveIsCountedNotSilentlyDropped is the sibling proof for
+// the ONE case still reserved as malformed (team-lead ruling 2026-08-25):
+// a REMOVE touch with no prior ADD to close. This subject's first tracked
+// touch of the project is a REMOVE (project_membership_transitions never
+// saw the add -- e.g. membership predates transition tracking). The
+// producer must never fabricate an interval for it (no ValidFrom is
+// knowable), but it must ALSO be visible in telemetry, not merely absent
+// -- "attempted nothing" and "found nothing" read identically from the
+// batch alone, so the log line is what tells the two apart.
+func TestDanglingRemoveIsCountedNotSilentlyDropped(t *testing.T) {
+	ctx := context.Background()
+	const workItemID = "linear:CHAOS-9104"
+	const projectID = "40000000-0000-4000-8000-00000000000f"
+	const otherProjectID = "40000000-0000-4000-8000-000000000010"
+	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range productionSchemaDDL() {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	createProjectMembershipPresenceView(t, ctx, direct)
+	mustSeed := func(label, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", label, err)
+		}
+	}
+	mustSeed("repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		chaos4109RepoID, chaos4109OrgID, chaos4109RepoSlug, "linear", t1)
+	mustSeed("project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		otherProjectID, chaos4109OrgID, "Project G", "", "linear", "backlog", "", uint8(1), t1)
+	mustSeed("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		workItemID, chaos4109RepoID, chaos4109OrgID, "Dangling-remove issue", "open", "", "", "linear", otherProjectID, t1)
+	// The ONLY tracked touch of `projectID` for this subject is a REMOVE
+	// (moving to otherProjectID) -- no ADD ever recorded.
+	mustSeed("transition: dangling remove", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', ?, ?, '', '', '', ?, ?, ?)`,
+		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, otherProjectID, t1, t1, "ev-dangle-1")
+
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: chaos4109OrgID, Source: devhealthsource.TeamsProjectsSourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available (the otherProjectID ADD, from the same row, still projects)")
+	}
+
+	projectCID := mustProjectCanonicalID(t, "linear", projectID)
+	for _, relationship := range batch.Relationships {
+		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.To.CanonicalID == projectCID {
+			t.Fatalf("a dangling REMOVE must never fabricate an edge to the project it removed from: %+v", relationship)
+		}
+	}
+	output := logged.String()
+	assertLogHasKV(t, output, "malformed_touch_entity", "1")
+	if strings.Contains(output, "duplicate_add_entity=") {
+		t.Fatalf("a dangling remove must never also be counted as a duplicate add:\n%s", output)
+	}
+}
+
+// assertLogHasKV checks for a slog TextHandler "key=value" attribute pair,
+// bounded on its right by a space (another attribute follows) or the
+// record's trailing newline (codex xhigh review R2, LOW, confirmed real:
+// an unbounded strings.Contains(output, key+"="+value) would also match
+// key=10, key=11, key=100... whenever value is a numeric prefix of the
+// actual logged number).
+func assertLogHasKV(t *testing.T, output, key, value string) {
+	t.Helper()
+	pair := key + "=" + value
+	if !strings.Contains(output, pair+" ") && !strings.Contains(output, pair+"\n") {
+		t.Fatalf("want %s in log output (bounded, not just as a substring), got:\n%s", pair, output)
 	}
 }

@@ -137,6 +137,115 @@ func TestScopeExpanderAsOf_AttributesTheRepositoryToWhicheverProjectHeldItAtEach
 	}
 }
 
+// TestScopeExpanderRange_WindowSelectsByOverlapNotContainment is the
+// window->interval selection-rule test team-lead asked for explicitly
+// (2026-08-25 ruling): a TemporalRange query admits a repository whenever
+// its requested [Start, End) window OVERLAPS a validity interval at all --
+// `observed_at <= window_end AND (valid_to IS NULL OR valid_to >
+// window_start)`, projectRepositoriesAsOf's own doc comment above and the
+// identical predicate falkorgraph/temporal.go applies to graph reads -- NOT
+// containment (the window need not sit entirely inside one continuous
+// membership stretch). Reuses chaos4109ScopeSeed's add(A)->move(A,B)->
+// move(B,A) history: first A interval [t1,t2), a REMOVE->ADD gap on
+// project B [t2,t3), second A interval [t3,unbounded).
+//
+// Three branches, each its own red-first proof (a window/interval rule
+// with only a positive case cannot tell overlap apart from "matches
+// anything with history at all"):
+//   - window starts inside the first A interval and ENDS inside the gap:
+//     must still admit, via the first interval's partial overlap.
+//   - window sits entirely inside the gap, touching neither A interval:
+//     must NOT admit -- the negative case that rules out
+//     "any history exists" as an accidental substitute for overlap.
+//   - window starts inside the gap and ENDS inside the second, unbounded A
+//     interval: must still admit, via the second interval's partial
+//     overlap (valid_to IS NULL is not a barrier to a window that starts
+//     before the interval opens).
+func TestScopeExpanderRange_WindowSelectsByOverlapNotContainment(t *testing.T) {
+	ctx := context.Background()
+	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4109ScopeSeed(t, ctx, direct, t1, t2, t3)
+
+	expander := devhealthfacts.NewScopeExpander(query)
+	wantRepo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + chaos4109ScopeRepoID, Label: chaos4109ScopeRepoSlug}
+
+	expandRange := func(t *testing.T, start, end time.Time) contextfabric.FactScopeExpansionResult {
+		t.Helper()
+		result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+			Principal:       storage.Principal{OrgID: chaos4109ScopeOrgID, RepositoryScopes: []string{"*"}},
+			RequirementKind: contextfabric.FactMetrics,
+			Origins:         []contextfabric.SubjectRef{chaos4109ScopeProjectSubject(t, chaos4109ScopeProjectAID)},
+			Policy:          contextfabric.FactScopePolicyProjectWorkItemRepository,
+			TargetKind:      contextfabric.SubjectRepository,
+			TimeContext:     contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+			Limit:           20,
+		})
+		if err != nil {
+			t.Fatalf("ExpandFactScope(start=%s, end=%s): %v", start, end, err)
+		}
+		return result
+	}
+
+	cases := []struct {
+		name      string
+		start     time.Time
+		end       time.Time
+		wantAdmit bool
+	}{
+		{
+			name:      "window starts in the first A interval, ends in the gap",
+			start:     t1.Add(14 * 24 * time.Hour),
+			end:       t2.Add(14 * 24 * time.Hour),
+			wantAdmit: true,
+		},
+		{
+			name:      "window sits entirely inside the gap",
+			start:     t2.Add(9 * 24 * time.Hour),
+			end:       t2.Add(19 * 24 * time.Hour),
+			wantAdmit: false,
+		},
+		{
+			name:      "window starts in the gap, ends in the second A interval",
+			start:     t2.Add(19 * 24 * time.Hour),
+			end:       t3.Add(14 * 24 * time.Hour),
+			wantAdmit: true,
+		},
+		// The two boundary cases below (codex xhigh review LOW, confirmed
+		// real) pin the predicate's exact edges rather than just its
+		// interior: `observed_at <= window_end AND (valid_to IS NULL OR
+		// valid_to > window_start)` treats valid_to as EXCLUSIVE (a window
+		// starting exactly when membership ended does not overlap it) but
+		// observed_at as INCLUSIVE against window_end (a window ending
+		// exactly when membership began DOES overlap it) -- an intentional
+		// asymmetry, not a typo, matching falkorgraph/temporal.go's
+		// identical predicate.
+		{
+			name:      "window starts exactly at the first A interval's valid_to",
+			start:     t2,
+			end:       t2.Add(5 * 24 * time.Hour),
+			wantAdmit: false,
+		},
+		{
+			name:      "window ends exactly at the second A interval's observed_at",
+			start:     t2.Add(5 * 24 * time.Hour),
+			end:       t3,
+			wantAdmit: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result := expandRange(t, c.start, c.end)
+			admitted := len(result.Targets) == 1 && result.Targets[0] == wantRepo
+			if admitted != c.wantAdmit {
+				t.Fatalf("start=%s end=%s: targets = %+v, want admitted=%v", c.start, c.end, result.Targets, c.wantAdmit)
+			}
+		})
+	}
+}
+
 // TestScopeExpanderAsOf_CurrentAxisStaysWorkItemColumnOnlyForNoHistorySubjects
 // proves the fallback arm (UnboundedValidityCount's own trigger): a work
 // item with NO transition history is admitted on a historical axis purely
@@ -349,19 +458,23 @@ func TestScopeExpanderAsOf_ZeroUUIDHistoryNeverInflatesTemporalDropped(t *testin
 	}
 }
 
-// TestScopeExpanderAsOf_MalformedTouchIsCountedNotSilent is codex xhigh
-// review R1's MEDIUM finding on the CHAOS-4109 PR, fixed: a malformed
-// touch sequence (two ADD touches of the same work_item/project pair with
-// no intervening REMOVE) was silently excluded from the as-of answer with
-// NO telemetry signal that anything was skipped -- unlike
-// devhealthsource's own producer-side presenceTelemetryLedger, which has
-// always counted this class of anomaly.
-func TestScopeExpanderAsOf_MalformedTouchIsCountedNotSilent(t *testing.T) {
+// TestScopeExpanderAsOf_DuplicateAddIsCountedAndKeepsAttributing is codex
+// xhigh review R1's MEDIUM finding on the CHAOS-4109 PR (renamed and
+// re-scoped per team-lead ruling 2026-08-25: a repeated ADD touch with no
+// intervening REMOVE is NOT malformed -- #1896's discard-and-replay path
+// and an ordinary re-sync of an unchanged board membership both
+// legitimately produce it for a subject that never left). The original
+// finding stands under the new name: this signal was previously invisible
+// with NO telemetry counter at all -- unlike devhealthsource's own
+// producer-side presenceTelemetryLedger, which counts it. The interval
+// this touch belongs to must still resolve, attributed through the FIRST
+// ADD, not the duplicate.
+func TestScopeExpanderAsOf_DuplicateAddIsCountedAndKeepsAttributing(t *testing.T) {
 	ctx := context.Background()
-	const orgID = "org-4109-malformed-touch"
+	const orgID = "org-4109-duplicate-add-touch"
 	const projectAID = "70000000-0000-4000-8000-000000000c"
 	const repoID = "80000000-0000-4000-8000-000000000003"
-	const repoSlug = "acme/malformed"
+	const repoSlug = "acme/duplicate-add"
 	const workItemID = "linear:CHAOS-9304"
 
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -385,14 +498,14 @@ func TestScopeExpanderAsOf_MalformedTouchIsCountedNotSilent(t *testing.T) {
 	mustExec("repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
 		repoID, orgID, repoSlug, "linear", t1)
 	mustExec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		workItemID, repoID, orgID, "Malformed history", "open", "", "", "linear", projectAID, t2)
+		workItemID, repoID, orgID, "Duplicate-add history", "open", "", "", "linear", projectAID, t2)
 	// TWO ADD touches of the same (work_item, project A) pair, no REMOVE in
-	// between -- the malformed sequence membershipTouchesAsOfSQL flags via
-	// is_malformed.
+	// between -- the continuation membershipTouchesAsOfSQL flags via
+	// is_duplicate_add.
 	mustExec("transition add A (1)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
-		orgID, repoID, workItemID, projectAID, t1, t1, "ev-mf-1")
-	mustExec("transition add A (2, malformed)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
-		orgID, repoID, workItemID, projectAID, t2, t2, "ev-mf-2")
+		orgID, repoID, workItemID, projectAID, t1, t1, "ev-dup-1")
+	mustExec("transition add A (2, duplicate)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
+		orgID, repoID, workItemID, projectAID, t2, t2, "ev-dup-2")
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -407,20 +520,84 @@ func TestScopeExpanderAsOf_MalformedTouchIsCountedNotSilent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandFactScope: %v", err)
 	}
-	// The EARLIER ADD (ev-mf-1) is malformed and dropped -- it is
-	// immediately followed by another ADD with nothing intervening. The
-	// LATER ADD (ev-mf-2) is NOT malformed: as the last touch of this
-	// (subject, project) pair it has no "next touch" to conflict with, so
-	// it stands as a genuine (if redundant) open membership -- correctly
-	// admitted, since the work item really is on project A as of asOf.
-	// The finding this test pins is that the FIRST touch's exclusion
-	// leaves a telemetry trace, not that malformed touches suppress every
-	// admission derived from the same pair.
+	// The interval is admitted exactly once, attributed through the FIRST
+	// ADD (ev-dup-1): the duplicate (ev-dup-2) collapses into it rather
+	// than minting a second, independent match.
 	want := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoID, Label: repoSlug}
 	if len(result.Targets) != 1 || result.Targets[0] != want {
-		t.Fatalf("targets = %+v, want exactly [%+v] (the later, non-malformed ADD)", result.Targets, want)
+		t.Fatalf("targets = %+v, want exactly [%+v] (one match, attributed through the original interval)", result.Targets, want)
+	}
+	if result.Counts.DuplicateAddCount == 0 {
+		t.Fatal("DuplicateAddCount = 0, want > 0 -- the duplicate ADD touch was collapsed with no telemetry signal that it happened")
+	}
+	if result.Counts.MalformedTouchCount != 0 {
+		t.Fatalf("MalformedTouchCount = %d, want 0 -- a duplicate ADD is a legitimate continuation, not malformed", result.Counts.MalformedTouchCount)
+	}
+}
+
+// TestScopeExpanderAsOf_DanglingRemoveIsCountedNotSilentlyDropped is the
+// scope-expander sibling of devhealthsource's identically-named producer
+// test: the ONE case still reserved as malformed (team-lead ruling
+// 2026-08-25) is a REMOVE touch with no prior ADD to close. The work item
+// never resolves to the removed-from project (nothing to fabricate a
+// ValidFrom from), but the anomaly must still be visible in telemetry.
+func TestScopeExpanderAsOf_DanglingRemoveIsCountedNotSilentlyDropped(t *testing.T) {
+	ctx := context.Background()
+	const orgID = "org-4109-dangling-remove-touch"
+	const projectAID = "70000000-0000-4000-8000-000000000d"
+	const projectBID = "70000000-0000-4000-8000-000000000011"
+	const workItemID = "linear:CHAOS-9305"
+
+	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	mustExec := func(label, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", label, err)
+		}
+	}
+	mustExec("project A", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectAID, orgID, "Project A", "", "linear", "backlog", "", uint8(1), t1)
+	mustExec("project B", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectBID, orgID, "Project B", "", "linear", "backlog", "", uint8(1), t1)
+	mustExec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		workItemID, chaos4109ScopeRepoID, orgID, "Dangling-remove history", "open", "", "", "linear", projectBID, t1)
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		chaos4109ScopeRepoID, orgID, chaos4109ScopeRepoSlug, "linear", t1); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	// The ONLY tracked touch of projectAID for this subject is a REMOVE
+	// (moving to projectBID) -- no ADD ever recorded.
+	mustExec("transition: dangling remove", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', ?, ?, '', '', '', ?, ?, ?)`,
+		orgID, chaos4109ScopeRepoID, workItemID, projectAID, projectBID, t1, t1, "ev-dangle-1")
+
+	expander := devhealthfacts.NewScopeExpander(query)
+	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+		Principal:       storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}},
+		RequirementKind: contextfabric.FactMetrics,
+		Origins:         []contextfabric.SubjectRef{chaos4109ScopeProjectSubject(t, projectAID)},
+		Policy:          contextfabric.FactScopePolicyProjectWorkItemRepository,
+		TargetKind:      contextfabric.SubjectRepository,
+		TimeContext:     contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf},
+		Limit:           20,
+	})
+	if err != nil {
+		t.Fatalf("ExpandFactScope: %v", err)
+	}
+	if len(result.Targets) != 0 {
+		t.Fatalf("targets = %+v, want none -- a dangling REMOVE must never fabricate a match to the project it removed from", result.Targets)
 	}
 	if result.Counts.MalformedTouchCount == 0 {
-		t.Fatal("MalformedTouchCount = 0, want > 0 -- the earlier malformed touch was silently excluded with no telemetry signal that anything was skipped")
+		t.Fatal("MalformedTouchCount = 0, want > 0 -- the dangling remove was excluded with no telemetry signal that anything was skipped")
+	}
+	if result.Counts.DuplicateAddCount != 0 {
+		t.Fatalf("DuplicateAddCount = %d, want 0 -- a dangling remove must never also be counted as a duplicate add", result.Counts.DuplicateAddCount)
 	}
 }
