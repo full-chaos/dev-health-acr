@@ -1070,6 +1070,28 @@ type ResolutionTraceEvent struct {
 	// kind_insensitivity_attested classification on "narrowed" for exactly
 	// that reason.
 	ShadowKindInsensitivityMode string
+	// ShadowHandleInsensitivityEvaluated/ShadowHandleInsensitivityOutcome
+	// (evidence_round stage ONLY, CHAOS-4081, team-lead ruling path (a),
+	// 2026-08-25) mirror Attestation.HandleInsensitivityEvaluated/
+	// HandleInsensitivityOutcome: whether a CONFIRMED explicit
+	// subject_handle hint (request.SubjectHandles, never a question-text
+	// scan) was probed via kindInsensitivityProof scoped to its own kind
+	// alone, and the verdict when it was -- "commit_sound" |
+	// "no_match_sound" | "kind_sensitive_outcome", empty when unevaluated
+	// (Outcome==false).
+	//
+	// UNLIKE ShadowKindInsensitivity* above, this is NEVER an attestation
+	// about the round's own real decisive Outcome -- the round's decisive
+	// `handle` discriminator is BindHandles(question) alone, entirely
+	// independent of the confirmed hint this field describes (see
+	// ShadowEvidenceRoundInput.ConfirmedHandle's own doc comment). A
+	// consumer that reads Evaluated==true, Outcome=="commit_sound" as proof
+	// the ACTUAL commit was insensitive to the hint is making exactly the
+	// claim CHAOS-4081 says this instrument cannot yet make -- this field
+	// exists so that gap is OBSERVABLE, not so it can be silently promoted
+	// to an attestation.
+	ShadowHandleInsensitivityEvaluated bool
+	ShadowHandleInsensitivityOutcome   string
 	// CensusKind/CensusComplete/CensusCount/CensusReadAtUnix/CensusProtocol/
 	// CensusClosureMismatch/CensusStatementCount/CensusRowsRead/
 	// CensusHandleApplied/CensusAnchorApplied (evidence_probe stage ONLY,
@@ -2732,6 +2754,28 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 	if confirmedAnchor != nil {
 		confirmedAnchorInput = &AnchorBinding{Kind: confirmedAnchor.Kind, CanonicalID: confirmedAnchor.CanonicalID}
 	}
+	// CHAOS-4081 (team-lead ruling, path (a)): request.SubjectHandles is the
+	// caller's own EXPLICIT (non-receipt) subject_handle hint -- validated
+	// the SAME way handleOfferMaterial validates it
+	// (deps.HandleGrammarChecker, chaos3900_structure_offers.go), and
+	// threaded in for ATTESTATION/TRACE ONLY -- see
+	// ShadowEvidenceRoundInput.ConfirmedHandle's own doc comment for why
+	// this can NEVER widen the round's own decisive `handle` discriminator
+	// (BindHandles(request.Question) alone, computed independently of this
+	// value). nil (no HandleGrammarChecker wired, or no valid entry) is the
+	// safe default -- byte-identical to every caller before this ticket.
+	// The first grammar-valid entry only, mirroring the round's own
+	// single-discriminator-D shape (`handle *BoundHandle`, never a slice).
+	var confirmedHandleInput *BoundHandle
+	if deps.HandleGrammarChecker != nil {
+		for _, h := range request.SubjectHandles {
+			if _, ok := deps.HandleGrammarChecker(h.Kind, h.PatternID, h.Value); ok {
+				bound := BoundHandle{Kind: h.Kind, Grammar: h.PatternID, Value: h.Value}
+				confirmedHandleInput = &bound
+				break
+			}
+		}
+	}
 	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
 		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
 		PooledKinds: censusKinds, CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
@@ -2739,6 +2783,7 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
 		ConfirmedAnchor:           confirmedAnchorInput,
+		ConfirmedHandle:           confirmedHandleInput,
 		// Mutually exclusive with a non-empty PreNarrowingExplicitKinds:
 		// classifyExplicitKindNarrowing returns a non-nil narrowed set
 		// ONLY for explicitKindNarrowingApplied, and these two modes are
