@@ -4550,7 +4550,7 @@ type twoTurnReport struct {
 	// the same change, same "an undeclared field is dropped on decode"
 	// reason every prior bump needed it for.
 	//
-	// "28" (CHAOS-4234, team-lead ruled 2026-08-24): the class-default
+	// "29" (CHAOS-4234, team-lead ruled 2026-08-24): the class-default
 	// window gate now runs an offers-only resolution and composes kind/
 	// handle/candidate offers beside the window offer (regime A). Three
 	// changes, all requiring the bump. (a) MEANING change on existing keys
@@ -4571,7 +4571,10 @@ type twoTurnReport struct {
 	// gate_reachable_count, regime_a_turn2_answered_count) are NOT
 	// comparable to a v27 run as engine-only numbers; offer_miss_count
 	// stays engine-only. The mirror in cmd/acr-trial-merge-two-turn/
-	// main.go gained all of it in the same change.
+	// main.go gained all of it in the same change. (Schema v28, landed on
+	// main between this branch's first draft and merge, is CHAOS-4186's
+	// unrelated DataPlane provenance bump above -- this change re-numbers
+	// to v29 to stay lockstep, not v28.)
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -7769,7 +7772,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "28",
+		ReportSchemaVersion: "29",
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
