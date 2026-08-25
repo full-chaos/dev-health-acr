@@ -107,6 +107,22 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 	if !stringLengthBetween(r.ClarificationPrompt, 0, 2000) || strings.TrimSpace(r.ClarificationPrompt) != r.ClarificationPrompt {
 		return fmt.Errorf("clarification prompt violates v1 bounds")
 	}
+	// PriorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813) is
+	// additive-optional exactly like CommitDecisionDigests above: nil is
+	// valid and the ONLY way to omit it. Once present, bounded to the same
+	// 20-receipt cap validateStructureReceiptField already enforces on the
+	// request side (a response can never echo more than the request could
+	// have carried) and each entry must itself be well-formed.
+	if r.PriorSubjectReceiptDispositions != nil {
+		if len(r.PriorSubjectReceiptDispositions) > 20 {
+			return fmt.Errorf("prior subject receipt dispositions exceed v1 bounds")
+		}
+		for _, entry := range r.PriorSubjectReceiptDispositions {
+			if err := entry.Validate(); err != nil {
+				return fmt.Errorf("prior subject receipt dispositions: %w", err)
+			}
+		}
+	}
 	return nil
 }
 

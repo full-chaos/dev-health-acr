@@ -1761,3 +1761,62 @@ func TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse(t *testing.T)
 		}
 	})
 }
+
+// TestCHAOS3478_PriorSubjectReceiptsBypassReuse is codex round-1 finding 2
+// (High): ReuseKey carries no PriorSubjectReceipts dimension, so a stored
+// row cannot distinguish "generated with this exact receipt honored" from
+// "generated some other way entirely". Before this fix, tryReuse ran
+// before resolvePriorSubjectHints and was gated ONLY on
+// structureCanon.Confirmed being empty -- a request naming a real,
+// resolvable prior-subject receipt could still be served a cached answer
+// that never saw the receipt at all. This mirrors CHAOS-3900 P1's own
+// confirmed-structure bypass (DP11) for the same reason, extended to the
+// peer field it never covered.
+func TestCHAOS3478_PriorSubjectReceiptsBypassReuse(t *testing.T) {
+	t.Parallel()
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	_, candidate := reusableCandidate()
+	freshResult := validInvestigationResult()
+	// The reuse gate would return a HIT unconditionally -- if the bypass
+	// stopped firing, this test could not tell "reuse ran and correctly
+	// missed" apart from "reuse never ran, bypass held": a hit here proves
+	// the bypass is the ONLY thing standing between this request and the
+	// stale candidate.
+	reuseGateCalls := 0
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			reuseGateCalls++
+			return candidate, true, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_00000001", ReceiptID: "receipt_abc12345678"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if reuseGateCalls != 0 {
+		t.Fatalf("ReuseGate was called %d times, want 0: a request carrying PriorSubjectReceipts must bypass the reuse lookup entirely, never even ask it", reuseGateCalls)
+	}
+	if result.Reused {
+		t.Fatal("result.Reused = true, want false: a request naming a prior-subject receipt must never be served a cached answer that never saw the receipt")
+	}
+	if result.ResultID != freshTestResultID {
+		t.Errorf("result.ResultID = %q, want the fresh result %q", result.ResultID, freshTestResultID)
+	}
+}

@@ -226,7 +226,11 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-4171 PR2: 139 -> 143 -- the new optional Phrasing field on
 		// KindOption/AnchorOption/HandleOption/CandidateOption contributed
 		// four new string leaves.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 143},
+		// CHAOS-3478/CHAOS-3813: 143 -> 146 -- PriorSubjectReceiptDispositionEntry
+		// contributed three new string leaves (prior_result_id, receipt_id,
+		// disposition), added to the projection per codex round-1 finding
+		// (the default answer surface was silently dropping the disclosure).
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 146},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -235,7 +239,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-4171 PR2: 225 -> 229 -- the same four new Phrasing leaves
 		// as the answer_projection surface above (AnchorOptionV2 shares
 		// the wire path with v1 AnchorOption, so it adds no new path).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 229},
+		// CHAOS-3478/CHAOS-3813: 229 -> 232 -- SubjectResolution.PriorSubjectReceiptDispositions'
+		// own three new string leaves (prior_result_id, receipt_id, disposition).
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 232},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

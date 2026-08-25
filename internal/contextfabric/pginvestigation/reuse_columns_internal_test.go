@@ -208,3 +208,42 @@ func TestReuseColumnsFor_ConfirmedStructureBearingResultNeverPopulatesReuseColum
 		t.Fatalf("reuseColumnsFor(ConfirmedStructure-bearing result) left reuse columns populated -- want all-NULL/nil")
 	}
 }
+
+// TestReuseColumnsFor_PriorSubjectReceiptDispositionsBearingResultNeverPopulatesReuseColumns
+// is CHAOS-3478's own extension of the SAME source-ineligibility rule
+// (codex round-2 finding, High): PriorSubjectReceiptDispositions is
+// REQUEST-SCOPED disclosure -- "applied"/"skipped_*" describes what THIS
+// request's own receipts did, not a property of the answer a completely
+// different request (different or no receipts) could legitimately
+// inherit. Without this, a result saved after resolving one caller's
+// receipt could later be served verbatim, disposition and all, to an
+// unrelated caller's request.
+func TestReuseColumnsFor_PriorSubjectReceiptDispositionsBearingResultNeverPopulatesReuseColumns(t *testing.T) {
+	t.Parallel()
+	store := newNoDialStore(t, WithAnswerReuse(time.Hour))
+
+	result := contextfabric.InvestigationResult{
+		Question: "What is the status of Ask Dev?",
+		Versions: contextfabric.VersionSet{
+			ContractVersion:   "contract-v1",
+			ProjectionVersion: "projection-v1",
+			ModelIdentity:     "test/model-v1",
+		},
+		SubjectResolution: contractsv1.ContextFabricSubjectResolution{
+			Candidates: []contractsv1.ContextFabricSubjectCandidate{},
+			Committed:  []contractsv1.ContextFabricSubjectRef{},
+			PriorSubjectReceiptDispositions: []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+				{PriorResultID: "result_prior_00000001", ReceiptID: "receipt_abc12345678", Disposition: contractsv1.ContextFabricPriorSubjectReceiptApplied},
+			},
+		},
+	}
+	snapshot := contextfabric.SourceWatermarkSnapshot{"source-a": "watermark-1"}
+	epoch := int64(3)
+
+	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch := store.reuseColumnsFor(result, snapshot, &epoch)
+
+	if questionHash.Valid || contractVersion.Valid || projectionVersion.Valid || modelIdentity.Valid || sourceWatermarks != nil || invalidationEpoch.Valid {
+		t.Fatalf("reuseColumnsFor(PriorSubjectReceiptDispositions-bearing result) = (%+v, %+v, %+v, %+v, %v, %+v), want all-NULL/nil -- a receipt-disclosure-bearing result must never become a reuse source",
+			questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch)
+	}
+}

@@ -129,6 +129,16 @@ func (p ContextFabricAnswerProjection) Validate() error {
 		}
 		seenConfirmedMembers[entry.Member] = struct{}{}
 	}
+	// CHAOS-3478/CHAOS-3813: same bound as
+	// ContextFabricSubjectResolution.Validate's own block for this field.
+	if len(p.PriorSubjectReceiptDispositions) > 20 {
+		return fmt.Errorf("prior_subject_receipt_dispositions exceeds v1 bounds")
+	}
+	for i, entry := range p.PriorSubjectReceiptDispositions {
+		if err := entry.Validate(); err != nil {
+			return fmt.Errorf("prior_subject_receipt_dispositions[%d]: %w", i, err)
+		}
+	}
 	return nil
 }
 

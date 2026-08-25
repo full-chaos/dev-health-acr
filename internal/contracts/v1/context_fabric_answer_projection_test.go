@@ -409,10 +409,20 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	// CHAOS-4012: CandidateOption joins the intersection deliberately --
 	// StructureNeeds gained candidate_options, the SAME "copied verbatim
 	// from common.v1" reasoning as every other structure-frame shape above.
+	//
+	// CHAOS-3478/CHAOS-3813: PriorSubjectReceiptDisposition/
+	// PriorSubjectReceiptDispositionEntry join the intersection
+	// deliberately -- the projection gained prior_subject_receipt_dispositions,
+	// copied verbatim from common.v1's SubjectResolution.PriorSubjectReceiptDispositions
+	// (codex round-1 finding: without this, the default answer surface
+	// silently reproduced the exact CHAOS-3813 drop the field exists to
+	// close).
 	expected := []string{
 		"AcceptedGrammar", "AnchorOption", "BoundSubjectReceipt", "CandidateOption",
 		"ConfirmedStructureEntry",
-		"EffectiveEvidenceWindow", "HandleOption", "KindOption", "RelativeWindowID",
+		"EffectiveEvidenceWindow", "HandleOption", "KindOption",
+		"PriorSubjectReceiptDisposition", "PriorSubjectReceiptDispositionEntry",
+		"RelativeWindowID",
 		"RequestedEvidenceWindow", "ScalarValue", "StructureDisposition", "StructureNeedKind",
 		"StructureNeeds", "StructureOfferSource", "StructureProvenance", "StructureSource",
 		"SubjectKind", "SubjectRef", "TemporalLabel", "TimeContext", "VersionSet",

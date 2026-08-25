@@ -1312,56 +1312,57 @@
           ]
         },
         "AnchorOptionV2": {
-          "additionalProperties": false,
           "description": "CHAOS-4042 (sol-max ruling): one server-offered anchor candidate under MEMBERSHIP-VERIFY semantics -- the claimant set is NOT required to be unique. Redemption re-verifies that (kind, canonical_id) remains a member of the term's complete claimant set at the pinned ResolvedGraphBinding epoch, matched by (matched_term_hash, kind, canonical_id) together, never id or hash alone. Wire shape is identical to v1 AnchorOption; only the meaning differs, which is why this is a distinct, permanently-separate contract rather than a v1 revision. Only ever carried on a result whose schema_version is context_fabric_investigation_result.v2 -- a v1 result (context_fabric_investigation_result.v1) uses AnchorOption and stays unique-claimant permanently.",
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "canonical_id": {
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
               "maxLength": 256,
+              "pattern": "^ancr_"
+            },
+            "option_id": {
+              "type": "string",
               "minLength": 1,
-              "type": "string"
+              "maxLength": 256
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
             },
             "kind": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
             },
-            "label": {
-              "maxLength": 200,
+            "canonical_id": {
+              "type": "string",
               "minLength": 1,
-              "type": "string"
+              "maxLength": 256
             },
             "matched_term_hash": {
-              "maxLength": 24,
+              "type": "string",
               "minLength": 24,
-              "pattern": "^[0-9a-f]{24}$",
-              "type": "string"
+              "maxLength": 24,
+              "pattern": "^[0-9a-f]{24}$"
             },
             "offer_source": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSource"
             },
-            "option_id": {
-              "maxLength": 256,
+            "prior_version_id": {
+              "type": "string",
               "minLength": 1,
-              "type": "string"
+              "maxLength": 256
             },
             "prior_entry_id": {
-              "maxLength": 256,
+              "type": "string",
               "minLength": 1,
-              "type": "string"
+              "maxLength": 256
             },
             "phrasing": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200
-            },
-            "prior_version_id": {
-              "maxLength": 256,
-              "minLength": 1,
-              "type": "string"
-            },
-            "receipt_id": {
-              "maxLength": 256,
-              "minLength": 8,
-              "pattern": "^ancr_",
-              "type": "string"
             }
           },
           "required": [
@@ -1372,8 +1373,7 @@
             "canonical_id",
             "matched_term_hash",
             "offer_source"
-          ],
-          "type": "object"
+          ]
         },
         "HandleOption": {
           "description": "CHAOS-3900 P1: one server-offered grammar-valid handle candidate, minted onto a stored result so a later turn can confirm it via handr_ receipt redemption. pattern_id names the closed handle-grammar registry pattern -- never regex text on the wire.",
@@ -1528,65 +1528,65 @@
           ]
         },
         "StructureNeedsV2": {
-          "additionalProperties": false,
           "description": "CHAOS-4042: the disclosure block carried on a context_fabric_investigation_result.v2 result -- identical to StructureNeeds except anchor_options items are AnchorOptionV2 (membership-verify semantics) rather than AnchorOption (unique-claimant). kind_options/handle_options/window_options/accepted_grammars are unchanged from v1.",
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "accepted_grammars": {
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/AcceptedGrammar"
-              },
-              "maxItems": 20,
-              "type": "array"
-            },
-            "anchor_options": {
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/AnchorOptionV2"
-              },
-              "maxItems": 20,
-              "type": "array"
-            },
-            "candidate_options": {
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/CandidateOption"
-              },
-              "maxItems": 20,
-              "type": "array"
-            },
-            "handle_options": {
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/HandleOption"
-              },
-              "maxItems": 20,
-              "type": "array"
-            },
-            "kind_options": {
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/KindOption"
-              },
-              "maxItems": 20,
-              "type": "array"
-            },
             "missing": {
+              "type": "array",
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
               },
-              "maxItems": 5,
               "minItems": 1,
-              "type": "array",
+              "maxItems": 5,
               "uniqueItems": true
             },
+            "kind_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/KindOption"
+              },
+              "maxItems": 20
+            },
+            "anchor_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/AnchorOptionV2"
+              },
+              "maxItems": 20
+            },
+            "handle_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/HandleOption"
+              },
+              "maxItems": 20
+            },
             "window_options": {
+              "type": "array",
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/WindowOption"
               },
-              "maxItems": 20,
-              "type": "array"
+              "maxItems": 20
+            },
+            "accepted_grammars": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/AcceptedGrammar"
+              },
+              "maxItems": 20
+            },
+            "candidate_options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/CandidateOption"
+              },
+              "maxItems": 20
             }
           },
           "required": [
             "missing"
-          ],
-          "type": "object"
+          ]
         },
         "StructureSource": {
           "description": "CHAOS-3900 P1: closed vocabulary for how a ConfirmedStructureEntry's value entered (design brief section 2.1's echo).",
@@ -2014,6 +2014,13 @@
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/CommitDecisionDigest"
               },
               "maxItems": 250
+            },
+            "prior_subject_receipt_dispositions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/PriorSubjectReceiptDispositionEntry"
+              },
+              "maxItems": 20
             }
           },
           "required": [
@@ -2054,6 +2061,42 @@
           },
           "required": [
             "subject"
+          ]
+        },
+        "PriorSubjectReceiptDisposition": {
+          "description": "CHAOS-3478/CHAOS-3813: closed vocabulary for what happened to one PriorSubjectReceipts entry -- unlike StructureDisposition, a skip here never vetoes the investigation (a plural, best-effort conversational hint list degrades per-item by design), it is disclosed instead.",
+          "type": "string",
+          "enum": [
+            "applied",
+            "skipped_unloadable",
+            "skipped_no_match",
+            "skipped_stale_graph_epoch",
+            "skipped_failed_reauth"
+          ]
+        },
+        "PriorSubjectReceiptDispositionEntry": {
+          "description": "CHAOS-3478/CHAOS-3813: the wire-visible disposition for one PriorSubjectReceipts entry the caller sent -- one entry per carried receipt, including skipped ones.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prior_result_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            },
+            "receipt_id": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            },
+            "disposition": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/PriorSubjectReceiptDisposition"
+            }
+          },
+          "required": [
+            "prior_result_id",
+            "receipt_id",
+            "disposition"
           ]
         },
         "Cohort": {

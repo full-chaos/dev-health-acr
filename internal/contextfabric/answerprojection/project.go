@@ -176,6 +176,13 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		WindowClarification:     result.WindowClarification,
 		StructureNeeds:          result.StructureNeeds,
 		ConfirmedStructure:      append([]contractsv1.ContextFabricConfirmedStructureEntry(nil), result.ConfirmedStructure...),
+		// PriorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813) joins the
+		// SAME never-dropped discipline as ConfirmedStructure immediately
+		// above -- see PriorSubjectReceiptDispositions' own doc comment
+		// (context_fabric_answer_projection.go) for why omitting it here
+		// would leave the default answer surface reproducing the exact
+		// silent drop this field exists to close.
+		PriorSubjectReceiptDispositions: append([]contractsv1.ContextFabricPriorSubjectReceiptEntry(nil), result.SubjectResolution.PriorSubjectReceiptDispositions...),
 	}
 	projection.ProjectionBudget = contractsv1.ContextFabricProjectionBudget{
 		DriversOmitted:         driversOmitted,

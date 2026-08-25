@@ -145,6 +145,16 @@ type ContextFabricAnswerProjection struct {
 	// the design brief's own never-truncated pin.
 	StructureNeeds     *ContextFabricStructureNeeds           `json:"structure_needs,omitempty"`
 	ConfirmedStructure []ContextFabricConfirmedStructureEntry `json:"confirmed_structure,omitempty"`
+	// PriorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813) mirrors the
+	// canonical result's SubjectResolution.PriorSubjectReceiptDispositions
+	// verbatim, joining ConfirmedStructure's own never-dropped discipline
+	// immediately above -- the MCP investigate_question response is the
+	// bounded consumer surface this whole disclosure mechanism exists to
+	// reach (codex round-1 finding: a projection that omitted it left the
+	// DEFAULT answer surface silently reproducing the exact CHAOS-3813
+	// drop this field exists to close, even though the canonical result
+	// carried the disclosure correctly).
+	PriorSubjectReceiptDispositions []ContextFabricPriorSubjectReceiptEntry `json:"prior_subject_receipt_dispositions,omitempty"`
 }
 
 // ContextFabricProjectedClarification carries the ambiguity a caller must

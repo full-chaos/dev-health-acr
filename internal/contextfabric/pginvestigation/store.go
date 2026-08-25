@@ -553,6 +553,17 @@ func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseS
 	if result.StructureNeeds != nil || len(result.ConfirmedStructure) > 0 {
 		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
 	}
+	// CHAOS-3478 (codex round-2 finding, High): same rule, same reason,
+	// extended to the peer disclosure this ticket adds. A result carrying
+	// non-empty PriorSubjectReceiptDispositions is REQUEST-SCOPED --
+	// "applied"/"skipped_*" describes what THIS request's own receipts
+	// did, not a property of the answer a completely different request
+	// (different or no receipts) could legitimately inherit. Serving it
+	// as a reuse source would leak one caller's receipt-resolution
+	// disclosure into an unrelated caller's response verbatim.
+	if len(result.SubjectResolution.PriorSubjectReceiptDispositions) > 0 {
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
+	}
 	// Codex round-2 finding #4: a punctuation-only (or otherwise
 	// entirely-stripped) question canonicalizes to the empty string, so
 	// every such question would share ONE hash. Never let this row
