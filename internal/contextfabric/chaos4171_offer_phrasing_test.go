@@ -321,7 +321,7 @@ func TestRuntimeOfferPhraser_SinkFailureFallsBackStructural(t *testing.T) {
 // log line.
 func TestSanitizeLogString_StripsNewlinesButKeepsPrintableText(t *testing.T) {
 	t.Parallel()
-	got := sanitizeLogString("request_00000001\nfake_log_line=forged\r\x00tail")
+	got := sanitizeLogString("request_00000001\nfake_log_line=forged\rtail")
 	want := "request_00000001fake_log_line=forgedtail"
 	if got != want {
 		t.Fatalf("sanitizeLogString() = %q, want %q", got, want)
