@@ -809,6 +809,12 @@ func (r *Runtime) PhraseStructureOffers(ctx context.Context, principal storage.P
 	receipt := r.receipt(contextfabric.ModelOperationPhraseOffers, r.config.PhrasingPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
 	receipt.Model = r.config.PhrasingModel
 	receipt.ModelVersion = r.config.PhrasingModelVersion
+	// RequestID correlates this receipt back to the investigation that
+	// triggered it, the same audit purpose InterpretQuestion's own
+	// receipt.RequestID stamping serves -- stamped unconditionally, on
+	// every return path below, mirroring InterpretQuestion's own
+	// "survives every return path" comment.
+	receipt.RequestID = input.RequestID
 	if generationErr != nil {
 		return contextfabric.StructureOfferPhrasingDraft{}, receipt, classifiedErr
 	}

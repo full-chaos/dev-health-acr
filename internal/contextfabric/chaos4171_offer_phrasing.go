@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -28,6 +29,11 @@ type StructureOfferPhrasingOption struct {
 // Interpret saw.
 type StructureOfferPhrasingInput struct {
 	Options []StructureOfferPhrasingOption
+	// RequestID correlates the durable ModelExecutionReceipt row back to
+	// the investigation that triggered this phrasing attempt -- the SAME
+	// audit purpose InterpretQuestion's own receipt.RequestID stamping
+	// serves (model_runtime.go), never sent to the model itself.
+	RequestID string
 }
 
 // StructureOfferPhrasingEntry is one raw, UNGUARDED phrasing the model
@@ -132,6 +138,17 @@ const phrasingMaxLabelLength = contractsv1.ContextFabricStructureOfferPhrasingMa
 type RuntimeOfferPhraser struct {
 	Runtime OfferPhrasingModelRuntime
 	Sink    ModelReceiptSink
+	// Logger receives a WARN line ONLY when the receipt sink itself fails
+	// (codex review finding: a sink failure and unusable model output
+	// both collapse into the SAME OfferPhrasingFellBackStructural outcome
+	// on the closed telemetry vocabulary, which is correct for behavior
+	// but leaves the two indistinguishable without a side channel).
+	// Defaults to slog.Default() when nil, matching every other
+	// nil-logger-falls-back-to-Default convention in this codebase.
+	// Content-safe by construction: org id, request id, and the receipt's
+	// own closed Operation/Outcome fields only, never phrasing text or a
+	// structural Label.
+	Logger *slog.Logger
 }
 
 func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Principal, input StructureOfferPhrasingInput) StructureOfferPhrasingResult {
@@ -151,7 +168,18 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 		// signal -- it never upgrades a successful phrasing to a
 		// fabricated failure and never downgrades a real one. Falling
 		// back to structural is the safe default whenever the attempt
-		// could not be durably recorded.
+		// could not be durably recorded. The logger call below is the
+		// ONLY place this specific failure mode is distinguishable from
+		// an ordinary guard/shape rejection -- the closed
+		// OfferPhrasingOutcome vocabulary intentionally has no fifth
+		// value for it (see that type's own doc comment).
+		logger := r.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.WarnContext(ctx, "context fabric offer phrasing receipt sink failed",
+			"org_id", principal.OrgID, "request_id", input.RequestID,
+			"operation", string(receipt.Operation), "error", sinkErr.Error())
 		return StructureOfferPhrasingResult{Outcome: OfferPhrasingFellBackStructural}
 	}
 	return StructureOfferPhrasingResult{Outcome: outcome, Phrasings: phrasings}
@@ -171,6 +199,18 @@ func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft Structu
 	if len(draft.Phrasings) == 0 {
 		return OfferPhrasingFellBackStructural, nil
 	}
+	// A well-behaved response carries at most one entry per offered
+	// option, so anything past that count is ALREADY proof of a
+	// duplicate or an unknown option_id (pigeonhole) -- reject it here,
+	// BEFORE sizing any map to the raw, attacker-influenced response
+	// length below. Without this, an adversarial or malformed provider
+	// response with an enormous entry count would force disproportionate
+	// allocation (make(map[...], len(draft.Phrasings))) on every call,
+	// even though the loop below would eventually reject it anyway
+	// (codex review finding).
+	if len(draft.Phrasings) > len(input.Options) {
+		return OfferPhrasingRejectedByGuard, nil
+	}
 	offered := make(map[string]struct{}, len(input.Options))
 	for _, opt := range input.Options {
 		offered[opt.OptionID] = struct{}{}
@@ -178,10 +218,15 @@ func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft Structu
 	seen := make(map[string]struct{}, len(draft.Phrasings))
 	phrasings := make(map[string]string, len(draft.Phrasings))
 	for _, entry := range draft.Phrasings {
-		text := strings.TrimSpace(entry.Phrasing)
-		if text == "" || len(text) > phrasingMaxLabelLength {
-			return OfferPhrasingFellBackStructural, nil
-		}
+		// Membership and uniqueness are checked BEFORE the text-shape
+		// bound (codex review finding): an entry that is BOTH malformed
+		// AND names an unknown/duplicate option_id must still classify as
+		// OfferPhrasingRejectedByGuard, not OfferPhrasingFellBackStructural
+		// -- the guard violation is the more specific, and more
+		// diagnostically important, fact about that entry. Either
+		// classification already applies nothing (both outcomes carry a
+		// nil map), so this ordering changes only the reported reason,
+		// never the safety property.
 		if _, ok := offered[entry.OptionID]; !ok {
 			// An option_id the model invented, or one belonging to a
 			// DIFFERENT investigation's offer set entirely -- exactly the
@@ -196,6 +241,10 @@ func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft Structu
 			return OfferPhrasingRejectedByGuard, nil
 		}
 		seen[entry.OptionID] = struct{}{}
+		text := strings.TrimSpace(entry.Phrasing)
+		if text == "" || len(text) > phrasingMaxLabelLength {
+			return OfferPhrasingFellBackStructural, nil
+		}
 		phrasings[entry.OptionID] = text
 	}
 	return OfferPhrasingGenerated, phrasings
@@ -218,7 +267,7 @@ func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft Structu
 // Engine dependency's convention that "nothing to do" is not an outcome.
 // e.offerPhraser == nil (no phrasing model configured) degrades
 // identically -- Investigate stays byte-identical to before this ticket.
-func (e *Engine) applyOfferPhrasing(ctx context.Context, principal storage.Principal, needs *contractsv1.ContextFabricStructureNeeds) *contractsv1.ContextFabricStructureNeeds {
+func (e *Engine) applyOfferPhrasing(ctx context.Context, principal storage.Principal, requestID string, needs *contractsv1.ContextFabricStructureNeeds) *contractsv1.ContextFabricStructureNeeds {
 	if needs == nil || e.offerPhraser == nil {
 		return needs
 	}
@@ -226,7 +275,7 @@ func (e *Engine) applyOfferPhrasing(ctx context.Context, principal storage.Princ
 	if len(options) == 0 {
 		return needs
 	}
-	result := e.offerPhraser.Phrase(ctx, principal, StructureOfferPhrasingInput{Options: options})
+	result := e.offerPhraser.Phrase(ctx, principal, StructureOfferPhrasingInput{Options: options, RequestID: requestID})
 	if e.telemetry != nil {
 		e.telemetry.RecordOfferPhrasing(ctx, principal, result.Outcome)
 	}

@@ -15,7 +15,41 @@ func validPhrasingInput() contextfabric.StructureOfferPhrasingInput {
 		Options: []contextfabric.StructureOfferPhrasingOption{
 			{OptionID: "opt_pr", Member: "expected_kind", Kind: "pull_request", Label: "a pull request"},
 		},
+		RequestID: "request_00000001",
 	}
+}
+
+// TestRuntimePhraseStructureOffersStampsRequestID is RED-FIRST evidence for
+// a codex review finding (chaos4171pr2-codex-r1): the receipt must carry
+// input.RequestID, the same audit-correlation purpose InterpretQuestion's
+// own receipt.RequestID stamping serves, on EVERY return path -- success
+// and failure alike.
+func TestRuntimePhraseStructureOffersStampsRequestID(t *testing.T) {
+	t.Parallel()
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		gen := &generatorStub{phrasing: phrasingOutput{Phrasings: []phrasingEntryOutput{{OptionID: "opt_pr", Phrasing: "an open pull request"}}}}
+		runtime := mustRuntime(t, gen, Config{})
+		_, receipt, err := runtime.PhraseStructureOffers(context.Background(), storage.Principal{OrgID: "org_1"}, validPhrasingInput())
+		if err != nil {
+			t.Fatalf("PhraseStructureOffers() error = %v", err)
+		}
+		if receipt.RequestID != "request_00000001" {
+			t.Fatalf("receipt.RequestID = %q, want %q", receipt.RequestID, "request_00000001")
+		}
+	})
+	t.Run("failure", func(t *testing.T) {
+		t.Parallel()
+		gen := &generatorStub{phrasingErr: errors.New("provider unavailable")}
+		runtime := mustRuntime(t, gen, Config{})
+		_, receipt, err := runtime.PhraseStructureOffers(context.Background(), storage.Principal{OrgID: "org_1"}, validPhrasingInput())
+		if err == nil {
+			t.Fatal("PhraseStructureOffers() error = nil, want the classified generation error")
+		}
+		if receipt.RequestID != "request_00000001" {
+			t.Fatalf("receipt.RequestID = %q, want %q", receipt.RequestID, "request_00000001")
+		}
+	})
 }
 
 func TestRuntimePhraseStructureOffersRejectsMissingOrgID(t *testing.T) {

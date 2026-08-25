@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -681,7 +682,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// same "optional dependency absent" degradation every other
 	// EngineDependencies field uses.
 	var offerPhraser contextfabric.OfferPhraser
-	if phrasingRuntime, ok := deploymentDefaultRuntime.(contextfabric.OfferPhrasingModelRuntime); ok {
+	if phrasingRuntime, ok := deploymentDefaultRuntime.(contextfabric.OfferPhrasingModelRuntime); ok && !isNilRuntime(phrasingRuntime) {
 		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink}
 	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
@@ -964,6 +965,29 @@ const contextFabricProjectionVersion = devhealthsource.ClickHouseSourceVersion +
 // chain and matching on chain MEMBERSHIP (see
 // ReuseKey.ModelIdentities' doc comment) fixes that without needing to
 // predict ahead of a model call which of the two will answer.
+// isNilRuntime reports whether runtime is a TYPED nil -- a non-nil
+// interface value wrapping a nil concrete pointer (codex review finding:
+// the classic typed-nil trap this file's own doc comments warn about
+// elsewhere, here on the RECEIVING side of a type assertion rather than
+// before an interface assignment). deploymentDefaultRuntime may come from
+// request.options.ModelRuntimeOverride, a test-only field a caller could
+// set to a typed-nil *genkitruntime.Runtime; without this check, the
+// subsequent contextfabric.OfferPhrasingModelRuntime type assertion would
+// succeed (the method set is present even on a nil receiver), and
+// genkitruntime.(*Runtime).PhraseStructureOffers would panic on its first
+// field read the moment it was actually called. Only Ptr/Interface/Map/
+// Slice/Chan/Func kinds support IsNil(); every other kind (a struct or
+// non-pointer implementation) cannot be a typed nil, so it reports false.
+func isNilRuntime(runtime any) bool {
+	value := reflect.ValueOf(runtime)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func contextFabricReuseModelIdentities(lookup func(string) (string, bool)) []string {
 	if !modelprovider.Configured(lookup) {
 		return nil

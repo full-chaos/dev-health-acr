@@ -354,7 +354,7 @@ func (e *Engine) terminalResult(
 		// its own closed-vocabulary guard -- see its own doc comment
 		// (chaos4171_offer_phrasing.go) for why this is the shared hook
 		// with window.go's own composeGatedStructureNeeds call site.
-		StructureNeeds:      e.applyOfferPhrasing(ctx, principal, composeStructureNeeds(structureMaterial, resultID)),
+		StructureNeeds:      e.applyOfferPhrasing(ctx, principal, request.RequestID, composeStructureNeeds(structureMaterial, resultID)),
 		Versions:            e.terminalVersions(),
 		DeterministicAnswer: answer,
 		Warnings:            terminalWarnings,

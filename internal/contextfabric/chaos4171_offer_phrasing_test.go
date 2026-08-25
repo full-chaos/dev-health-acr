@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -136,6 +137,50 @@ func TestClassifyOfferPhrasingDraft_DuplicateOptionIDRejectedByGuard(t *testing.
 	}
 }
 
+// TestClassifyOfferPhrasingDraft_MalformedTextOnUnknownOptionIsStillRejectedByGuard
+// is RED-FIRST evidence for a codex review finding (chaos4171pr2-codex-r1):
+// an entry that is BOTH malformed (empty/oversized text) AND names an
+// unknown option_id must classify as OfferPhrasingRejectedByGuard, not
+// OfferPhrasingFellBackStructural -- the guard violation is the more
+// specific fact. Both outcomes already apply nothing, so this only pins
+// which reason is reported, not the safety property.
+func TestClassifyOfferPhrasingDraft_MalformedTextOnUnknownOptionIsStillRejectedByGuard(t *testing.T) {
+	t.Parallel()
+	input := StructureOfferPhrasingInput{Options: offerOptions()}
+	draft := StructureOfferPhrasingDraft{Phrasings: []StructureOfferPhrasingEntry{
+		{OptionID: "opt_invented", Phrasing: ""},
+	}}
+	outcome, phrasings := classifyOfferPhrasingDraft(input, draft, nil)
+	if outcome != OfferPhrasingRejectedByGuard {
+		t.Fatalf("outcome = %q, want %q (membership must be checked before the text-shape bound)", outcome, OfferPhrasingRejectedByGuard)
+	}
+	if phrasings != nil {
+		t.Fatalf("phrasings = %#v, want nil", phrasings)
+	}
+}
+
+// TestClassifyOfferPhrasingDraft_MoreEntriesThanOfferedOptionsRejectedByGuard
+// is RED-FIRST evidence for a codex review finding: a response carrying
+// more entries than there are offered options is, by pigeonhole, already
+// proof of a duplicate or unknown option_id -- rejected BEFORE any map is
+// sized to the raw (potentially adversarial) response length.
+func TestClassifyOfferPhrasingDraft_MoreEntriesThanOfferedOptionsRejectedByGuard(t *testing.T) {
+	t.Parallel()
+	input := StructureOfferPhrasingInput{Options: offerOptions()} // 2 options
+	draft := StructureOfferPhrasingDraft{Phrasings: []StructureOfferPhrasingEntry{
+		{OptionID: "opt_pr", Phrasing: "an open pull request"},
+		{OptionID: "opt_wi", Phrasing: "a tracked work item"},
+		{OptionID: "opt_wi", Phrasing: "a third entry"},
+	}}
+	outcome, phrasings := classifyOfferPhrasingDraft(input, draft, nil)
+	if outcome != OfferPhrasingRejectedByGuard {
+		t.Fatalf("outcome = %q, want %q", outcome, OfferPhrasingRejectedByGuard)
+	}
+	if phrasings != nil {
+		t.Fatalf("phrasings = %#v, want nil", phrasings)
+	}
+}
+
 // --- RuntimeOfferPhraser wiring ---
 
 type fakeOfferPhrasingModelRuntime struct {
@@ -218,6 +263,45 @@ func TestRuntimeOfferPhraser_SinkFailureFallsBackStructural(t *testing.T) {
 	}
 }
 
+// TestRuntimeOfferPhraser_SinkFailureLogsDistinctlyFromAnOrdinaryFallback
+// is RED-FIRST evidence for a codex review finding (chaos4171pr2-codex-r1):
+// a sink failure and unusable model output both collapse into the SAME
+// OfferPhrasingFellBackStructural outcome on the closed telemetry
+// vocabulary, so the logger call is the ONLY place an operator can tell
+// "the model call worked but we lost the receipt" apart from "the model's
+// own output was unusable".
+func TestRuntimeOfferPhraser_SinkFailureLogsDistinctlyFromAnOrdinaryFallback(t *testing.T) {
+	t.Parallel()
+	var records []slog.Record
+	logger := slog.New(recordingHandler{records: &records})
+	sink := &fakeReceiptSink{err: errors.New("store unavailable")}
+	draft := StructureOfferPhrasingDraft{Phrasings: []StructureOfferPhrasingEntry{{OptionID: "opt_pr", Phrasing: "an open pull request"}}}
+	phraser := RuntimeOfferPhraser{
+		Runtime: fakeOfferPhrasingModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationPhraseOffers)},
+		Sink:    sink,
+		Logger:  logger,
+	}
+	phraser.Phrase(context.Background(), storage.Principal{OrgID: "org_1"}, StructureOfferPhrasingInput{Options: offerOptions(), RequestID: "request_00000001"})
+	if len(records) != 1 || records[0].Level != slog.LevelWarn {
+		t.Fatalf("records = %#v, want exactly one WARN record", records)
+	}
+	if records[0].Message != "context fabric offer phrasing receipt sink failed" {
+		t.Fatalf("message = %q", records[0].Message)
+	}
+}
+
+type recordingHandler struct {
+	records *[]slog.Record
+}
+
+func (h recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h recordingHandler) Handle(_ context.Context, record slog.Record) error {
+	*h.records = append(*h.records, record)
+	return nil
+}
+func (h recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h recordingHandler) WithGroup(string) slog.Handler      { return h }
+
 // --- applyOfferPhrasing: the Engine-level hook ---
 
 type fakeOfferPhraser struct {
@@ -234,7 +318,7 @@ func TestApplyOfferPhrasing_NilNeedsPassesThrough(t *testing.T) {
 	t.Parallel()
 	phraser := &fakeOfferPhraser{result: StructureOfferPhrasingResult{Outcome: OfferPhrasingGenerated}}
 	e := &Engine{offerPhraser: phraser}
-	if got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, nil); got != nil {
+	if got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", nil); got != nil {
 		t.Fatalf("applyOfferPhrasing(nil) = %+v, want nil", got)
 	}
 	if len(phraser.calls) != 0 {
@@ -253,7 +337,7 @@ func TestApplyOfferPhrasing_NoPhraserConfiguredLeavesNeedsUnchanged(t *testing.T
 		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
 		KindOptions: []contractsv1.ContextFabricKindOption{{OptionID: "opt_pr", Label: "a pull request", Kind: contractsv1.ContextFabricSubjectPullRequest, OfferSource: contractsv1.ContextFabricStructureOfferEngine, ReceiptID: "kindr_x"}},
 	}
-	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, needs)
+	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
 	if got != needs {
 		t.Fatalf("applyOfferPhrasing() returned a different pointer with no phraser configured")
 	}
@@ -273,7 +357,7 @@ func TestApplyOfferPhrasing_WindowOnlyNeedsSkipsThePhraserEntirely(t *testing.T)
 			{Label: "last 7 days", RelativeID: "last_7_days", ReceiptID: "winr_x", OptionID: "opt_win"},
 		},
 	}
-	e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, needs)
+	e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
 	if len(phraser.calls) != 0 {
 		t.Fatalf("phraser called %d times for a window-only disclosure, want 0", len(phraser.calls))
 	}
@@ -314,7 +398,7 @@ func TestApplyOfferPhrasing_GeneratedOutcomeAppliesPhrasingAcrossOptionTypes(t *
 			{Label: "all time", RelativeID: contractsv1.ContextFabricRelativeWindowAllTime, ReceiptID: "winr_confirm0001", OptionID: "opt_win"},
 		},
 	}
-	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, needs)
+	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
 	if got.KindOptions[0].Phrasing != "which kind of work?" {
 		t.Errorf("KindOptions[0].Phrasing = %q", got.KindOptions[0].Phrasing)
 	}
@@ -353,7 +437,7 @@ func TestApplyOfferPhrasing_RejectedByGuardLeavesStructuralLabelsUnchanged(t *te
 		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
 		KindOptions: []contractsv1.ContextFabricKindOption{{OptionID: "opt_kind", Label: "a work item", Kind: contractsv1.ContextFabricSubjectWorkItem, OfferSource: contractsv1.ContextFabricStructureOfferEngine, ReceiptID: "kindr_confirm001"}},
 	}
-	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, needs)
+	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
 	if got.KindOptions[0].Phrasing != "" {
 		t.Fatalf("KindOptions[0].Phrasing = %q, want empty on guard rejection", got.KindOptions[0].Phrasing)
 	}
