@@ -270,10 +270,13 @@ func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, princip
 //
 // Content-safe by construction, exactly like every method beside it: an org
 // id, six closed vocabularies (two contract subject/fact kinds, the policy
-// name, the basis, the outcome and the failure class), seven counts and one
-// boolean. Nothing here is high-cardinality, nothing identifies a subject,
-// and no model output reaches it; a reader who needs to know WHICH project
-// correlates by request_id with the resolution trace.
+// name, the basis, the outcome and the failure class), seven counts, one
+// boolean, and (CHAOS-4101) one closed-vocabulary count map keyed by
+// work_item_team_attributions' own source enum -- native_team through
+// manual_fallback, never a team/repository identity. Nothing here is
+// high-cardinality, nothing identifies a subject, and no model output
+// reaches it; a reader who needs to know WHICH project correlates by
+// request_id with the resolution trace.
 //
 // EVERY FIELD IS LOGGED, unconditionally, including the zero-valued counts.
 // That is the CHAOS-4085 lesson applied directly: the fields existed on the
@@ -308,6 +311,13 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"target_kind_mismatch_count", event.TargetKindMismatchCount,
 		"truncated", event.Truncated,
 		"failure_class", string(event.FailureClass),
+		// AttributionSourceCounts (CHAOS-4101): closed-vocabulary source
+		// breakdown for a team-origin expansion, nil for every project-origin
+		// one. Logged unconditionally, nil included, for the SAME reason
+		// every zero count above is: "the filter dropped nothing" and
+		// "nobody ever counted" must stay distinguishable in a log
+		// aggregator.
+		"attribution_source_counts", event.AttributionSourceCounts,
 	}, requestIDLogAttrs(ctx)...)
 	if factScopeGapDegrades(event.Outcome) {
 		t.logger.WarnContext(ctx, "context fabric fact scope expansion left a gap", args...)

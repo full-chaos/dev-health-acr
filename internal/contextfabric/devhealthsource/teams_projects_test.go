@@ -402,27 +402,72 @@ func TestWorkItemProjectEdgeUsesTheCanonicalStructuredColumn(t *testing.T) {
 // source enum spanning native through manual_fallback/inferred; presenting a
 // manual_fallback attribution as observed canonical structure would be a lie
 // a consumer cannot detect. The enums must ride along so it can.
+//
+// This test previously ALSO asserted EpistemicStatus == source_asserted
+// unconditionally for both edges -- which was true only because
+// queryWorkItemTeams hardcoded that value for every row regardless of its
+// actual source (CHAOS-4101). project_team (team_project_ownership) is
+// unaffected by that fix and keeps its own unconditional assertion here;
+// work_item_team's per-source split moved to
+// TestWorkItemTeamAttributionEpistemicStatusVariesBySource below, which is
+// the test that would have failed against the pre-fix code.
 func TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	for _, id := range []string{
-		"relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos",
-		"relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
-	} {
-		edge := relationshipByID(t, batch, id)
-		if edge.Derivation == contractsv1.ContextFabricDerivationCanonicalStructured {
-			t.Fatalf("%s: an Ops-computed attribution must not be labelled canonical_structured", id)
-		}
-		if edge.EpistemicStatus != contractsv1.ContextFabricEpistemicSourceAsserted {
-			t.Fatalf("%s: epistemic status = %q, want source_asserted", id, edge.EpistemicStatus)
-		}
-		if edge.Properties["attribution_source"].String == nil {
-			t.Fatalf("%s: the attribution's own source enum must ride along, got %+v", id, edge.Properties)
-		}
+	id := "relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native"
+	edge := relationshipByID(t, batch, id)
+	if edge.Derivation == contractsv1.ContextFabricDerivationCanonicalStructured {
+		t.Fatalf("%s: an Ops-computed attribution must not be labelled canonical_structured", id)
 	}
-	confidence := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos").Properties["attribution_confidence"]
+	if edge.EpistemicStatus != contractsv1.ContextFabricEpistemicSourceAsserted {
+		t.Fatalf("%s: epistemic status = %q, want source_asserted", id, edge.EpistemicStatus)
+	}
+	work := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
+	if work.Properties["attribution_source"].String == nil {
+		t.Fatalf("work-item attribution: the attribution's own source enum must ride along, got %+v", work.Properties)
+	}
+	confidence := work.Properties["attribution_confidence"]
 	if confidence.String == nil || *confidence.String != "medium" {
 		t.Fatalf("work-item attribution confidence = %+v, want medium", confidence)
+	}
+}
+
+// TestWorkItemTeamAttributionEpistemicStatusVariesBySource is CHAOS-4101's
+// red test for the bug its scope pass found: queryWorkItemTeams hardcoded
+// Derivation=rule_inferred + EpistemicStatus=source_asserted on EVERY
+// work_item_team_attributions row, regardless of the row's real `source`
+// column -- so a repo_ownership/project_ownership/assignee_membership/
+// issue_project/linked_issue/manual_fallback row (a Python team_autoimport
+// heuristic guess, CHAOS-4198 still unported) read exactly as trustworthy on
+// the graph as a native_team row (a provider-asserted fact, Linear only).
+//
+// liveShapedEdgeClient's own fixture already carries both shapes: a
+// native_team row (linear:CHAOS-3802 -> CHAOS) and a project_ownership row
+// (gl:42 -> gl:full.chaos). Removing workItemTeamAttributionDerivation's
+// source == attributionSourceNativeTeam branch (i.e. reverting to the old
+// unconditional SourceAsserted) flips the project_ownership assertion below
+// to fail -- that is the guard this test exists to prove is load-bearing.
+func TestWorkItemTeamAttributionEpistemicStatusVariesBySource(t *testing.T) {
+	t.Parallel()
+	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
+
+	native := relationshipByID(t, batch, "relationship:work_item_team:"+zeroRepositoryUUID+":linear:CHAOS-3802:CHAOS")
+	if native.Derivation != contractsv1.ContextFabricDerivationRuleInferred {
+		t.Fatalf("native_team derivation = %q, want rule_inferred (this edge is always Ops' own resolver output)", native.Derivation)
+	}
+	if native.EpistemicStatus != contractsv1.ContextFabricEpistemicSourceAsserted {
+		t.Fatalf("native_team epistemic status = %q, want source_asserted: the provider itself asserted this team membership", native.EpistemicStatus)
+	}
+
+	heuristic := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
+	if heuristic.Derivation != contractsv1.ContextFabricDerivationRuleInferred {
+		t.Fatalf("project_ownership derivation = %q, want rule_inferred", heuristic.Derivation)
+	}
+	if heuristic.EpistemicStatus != contractsv1.ContextFabricEpistemicInferred {
+		t.Fatalf("project_ownership epistemic status = %q, want inferred: no provider asserted this, a Python team_autoimport heuristic did", heuristic.EpistemicStatus)
+	}
+	if heuristic.EpistemicStatus == contractsv1.ContextFabricEpistemicSourceAsserted {
+		t.Fatalf("project_ownership must not be indistinguishable from native_team's epistemic status -- that is exactly CHAOS-4101's overstatement")
 	}
 }
 
