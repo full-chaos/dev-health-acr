@@ -1063,7 +1063,22 @@ func VerifyAnchorClaimantMembership(ctx context.Context, principal storage.Princ
 // even a claimant COUNT) for that term would leak the existence of an
 // entity the principal cannot otherwise read, so that term's ENTIRE
 // candidate group is suppressed, not truncated.
-func anchorOfferMaterial(rawClaimantsByTerm, authorizedClaimantsByTerm map[string][]IdentityMatch, complete bool, membershipOffersEnabled bool) contextfabric.StructureOfferMaterial {
+// anchorOfferDiagnostics (CHAOS-4210, telemetry) mirrors
+// candidateOfferDiagnostics' own shape and reason: a caller traces WHY (or
+// whether) a label needed bounding, without re-deriving it from the wire
+// result.
+type anchorOfferDiagnostics struct {
+	// LabelsNormalizedCount is how many of this call's AnchorOptions needed
+	// anchorOfferLabel to bound their Label to the v1 wire contract -- see
+	// candidateOfferDiagnostics.LabelsNormalizedCount's own doc comment
+	// (CHAOS-4210) for why this must be counted, not just silently applied.
+	// Summed across BOTH the v1 (this function's own loop) and v2
+	// (anchorOfferMaterialV2) option-minting paths -- whichever one this
+	// call actually took.
+	LabelsNormalizedCount int
+}
+
+func anchorOfferMaterial(rawClaimantsByTerm, authorizedClaimantsByTerm map[string][]IdentityMatch, complete bool, membershipOffersEnabled bool) (contextfabric.StructureOfferMaterial, anchorOfferDiagnostics) {
 	// CHAOS-4042 auth-gap closure (codex xhigh review finding, round 2):
 	// a term where authorization hid ANY claimant must never contribute to
 	// candidacy at all -- not just the v2 ambiguous scan, but v1's own
@@ -1104,7 +1119,7 @@ func anchorOfferMaterial(rawClaimantsByTerm, authorizedClaimantsByTerm map[strin
 
 	candidates := anchorTermCandidates(fullyVisible, complete)
 	if len(candidates) == 1 {
-		return contextfabric.StructureOfferMaterial{}
+		return contextfabric.StructureOfferMaterial{}, anchorOfferDiagnostics{}
 	}
 	keys := make([]anchorCandidateKey, 0, len(candidates))
 	for k := range candidates {
@@ -1123,10 +1138,15 @@ func anchorOfferMaterial(rawClaimantsByTerm, authorizedClaimantsByTerm map[strin
 		keys = keys[:structureOfferMaxOptions]
 	}
 	options := make([]contractsv1.ContextFabricAnchorOption, 0, len(keys))
+	normalizedCount := 0
 	for _, k := range keys {
 		info := candidates[k]
+		label, normalized := anchorOfferLabel(info.label)
+		if normalized {
+			normalizedCount++
+		}
 		options = append(options, contractsv1.ContextFabricAnchorOption{
-			Kind: k.kind, CanonicalID: k.id, Label: anchorOfferLabel(info.label),
+			Kind: k.kind, CanonicalID: k.id, Label: label,
 			MatchedTermHash: HashAliasTerm(info.term),
 			OfferSource:     contractsv1.ContextFabricStructureOfferEngine,
 		})
@@ -1134,7 +1154,7 @@ func anchorOfferMaterial(rawClaimantsByTerm, authorizedClaimantsByTerm map[strin
 	return contextfabric.StructureOfferMaterial{
 		Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
 		AnchorOptions: options,
-	}
+	}, anchorOfferDiagnostics{LabelsNormalizedCount: normalizedCount}
 }
 
 // anchorOfferMaterialV2 mints one ContextFabricAnchorOptionV2 per (term,
@@ -1145,7 +1165,7 @@ func anchorOfferMaterial(rawClaimantsByTerm, authorizedClaimantsByTerm map[strin
 // canonical_id), matching anchorTermCandidates' own iteration discipline so
 // output never depends on map order. Capped at structureOfferMaxOptions
 // AFTER sorting, same reasoning as the v1 cap above.
-func anchorOfferMaterialV2(visible map[string][]IdentityMatch) contextfabric.StructureOfferMaterial {
+func anchorOfferMaterialV2(visible map[string][]IdentityMatch) (contextfabric.StructureOfferMaterial, anchorOfferDiagnostics) {
 	terms := make([]string, 0, len(visible))
 	for term := range visible {
 		terms = append(terms, term)
@@ -1153,6 +1173,7 @@ func anchorOfferMaterialV2(visible map[string][]IdentityMatch) contextfabric.Str
 	sort.Strings(terms)
 
 	var options []contractsv1.ContextFabricAnchorOption
+	normalizedCount := 0
 	for _, term := range terms {
 		claimants := append([]IdentityMatch(nil), visible[term]...)
 		sort.Slice(claimants, func(i, j int) bool {
@@ -1163,9 +1184,13 @@ func anchorOfferMaterialV2(visible map[string][]IdentityMatch) contextfabric.Str
 		})
 		termHash := HashAliasTerm(term)
 		for _, claimant := range claimants {
+			label, normalized := anchorOfferLabel(claimant.Row.Label)
+			if normalized {
+				normalizedCount++
+			}
 			options = append(options, contractsv1.ContextFabricAnchorOptionV2{
 				Kind: claimant.Row.Kind, CanonicalID: claimant.Row.CanonicalID,
-				Label: anchorOfferLabel(claimant.Row.Label), MatchedTermHash: termHash,
+				Label: label, MatchedTermHash: termHash,
 				OfferSource: contractsv1.ContextFabricStructureOfferEngine,
 			}.ToV1Wire())
 			if len(options) == structureOfferMaxOptions {
@@ -1173,7 +1198,7 @@ func anchorOfferMaterialV2(visible map[string][]IdentityMatch) contextfabric.Str
 					Missing:                []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
 					AnchorOptions:          options,
 					AnchorOptionsRequireV2: true,
-				}
+				}, anchorOfferDiagnostics{LabelsNormalizedCount: normalizedCount}
 			}
 		}
 	}
@@ -1181,17 +1206,34 @@ func anchorOfferMaterialV2(visible map[string][]IdentityMatch) contextfabric.Str
 		Missing:                []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
 		AnchorOptions:          options,
 		AnchorOptionsRequireV2: true,
-	}
+	}, anchorOfferDiagnostics{LabelsNormalizedCount: normalizedCount}
 }
+
+// anchorOfferLabelMaxRunes mirrors candidateOfferLabelMaxRunes' own reason:
+// ContextFabricAnchorOption's wire bound (validate_context_fabric_structure.go:
+// Label in [1,200] runes) -- CHAOS-4012 owns that contract. CHAOS-4210
+// bounded the candidate axis's identical unbounded-pass-through defect;
+// this closes the SAME defect class on the anchor axis (both V1 and V2
+// option shapes share one Label bound).
+const anchorOfferLabelMaxRunes = 200
 
 // anchorOfferLabel renders an AnchorOption's display label from the
 // candidate's own identity-universe Label -- the SAME display text a
 // SubjectCandidate would already show for this row (not new disclosure;
 // unlike kindOfferLabel's fixed-sentence discipline, an anchor's whole
 // purpose is disambiguating BETWEEN named entities, so the offer must show
-// the entity's own name, not a generic sentence).
-func anchorOfferLabel(label string) string {
-	return label
+// the entity's own name, not a generic sentence). Bounds its output the
+// SAME way candidateOfferLabel does (CHAOS-4210): the identity-universe
+// Label is a real display name with no upstream length guard, so a name
+// that legitimately exceeds the v1 wire bound is truncated here rather
+// than reaching the contract as an unbounded pass-through. Reports
+// normalized (bool) so the caller can count it.
+func anchorOfferLabel(label string) (string, bool) {
+	if utf8.RuneCountInString(label) <= anchorOfferLabelMaxRunes {
+		return label, false
+	}
+	runes := []rune(label)
+	return string(runes[:anchorOfferLabelMaxRunes]), true
 }
 
 // handleGraphExtractor is a closed-vocabulary canonical-ID parser for one

@@ -1158,6 +1158,21 @@ type ResolutionTraceEvent struct {
 	// snapshot is never handed to the gate as a decision population).
 	ConfirmedKindScopeState          string
 	ConfirmedKindScopeCandidateCount int
+	// AnchorOfferLabelsNormalizedCount (stage=="anchor_offer" ONLY,
+	// CHAOS-4210) is the number of THIS call's AnchorOptions (either the V1
+	// or V2 shape -- anchorOfferMaterial dispatches to exactly one) whose
+	// Label anchorOfferLabel had to bound-to-fit the v1 wire contract
+	// ([1,200] runes, ContextFabricAnchorOption.Validate()) -- 0 the
+	// overwhelming common case. Mirrors
+	// KindOfferCandidateOfferLabelsNormalizedCount's own doc comment (same
+	// defect class, the anchor axis's own identity-universe Label instead
+	// of the candidate axis's Subject.Label): a real display name has no
+	// upstream length guard, so this is the SAME decision branch that must
+	// be diagnosable from the run's own artifacts, not silently applied.
+	// Rides its OWN "anchor_offer" stage (not "kind_offer") because
+	// anchorOfferMaterial is called and traced independently in resolve.go,
+	// not alongside kind/candidate/handle's shared call site.
+	AnchorOfferLabelsNormalizedCount int
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -2303,10 +2318,20 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			HandleOfferGraphDerivedRejectedCount:         handleOfferDiag.GraphDerivedRejectedCount,
 		})
 	}
+	anchorOffer, anchorOfferDiag := anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled)
+	// CHAOS-4210: unconditional, mirroring kind_offer's own "fires every
+	// time a tracer is wired" discipline -- anchorOfferMaterial runs on
+	// every resolution, not gated behind a "still missing" precondition.
+	if deps.ResolutionTracer != nil {
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "anchor_offer",
+			AnchorOfferLabelsNormalizedCount: anchorOfferDiag.LabelsNormalizedCount,
+		})
+	}
 	offerMaterial := combineStructureOfferMaterial(
 		kindOffer,
 		candidateOffer,
-		anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled),
+		anchorOffer,
 		handleOffer,
 	)
 	return resolution, offerMaterial, nil

@@ -1320,7 +1320,7 @@ func TestAnchorOfferMaterial_UniqueClaimantOffersNothing(t *testing.T) {
 	claimants := map[string][]IdentityMatch{
 		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
 	}
-	material := anchorOfferMaterial(claimants, claimants, true, false)
+	material, _ := anchorOfferMaterial(claimants, claimants, true, false)
 	if len(material.Missing) != 0 || len(material.AnchorOptions) != 0 {
 		t.Errorf("material = %+v, want empty: a unique claimant is already decisive, nothing to elicit", material)
 	}
@@ -1332,7 +1332,7 @@ func TestAnchorOfferMaterial_DisagreementOffersOnePerCandidate(t *testing.T) {
 		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
 		"widget-svc":     {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB")},
 	}
-	material := anchorOfferMaterial(claimants, claimants, true, false)
+	material, _ := anchorOfferMaterial(claimants, claimants, true, false)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
 		t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
 	}
@@ -1352,11 +1352,142 @@ func TestAnchorOfferMaterial_DisagreementOffersOnePerCandidate(t *testing.T) {
 	}
 }
 
+// TestAnchorOfferMaterial_LabelOverV1BoundIsBoundedAtTheProducer (CHAOS-4210
+// follow-up) pins the anchor-axis twin of
+// TestCandidateOfferMaterial_LabelOverV1BoundIsBoundedAtTheProducer: the
+// identity-universe Label anchorOfferMaterial disagreement offers is a real
+// display name with no upstream length guard, and ContextFabricAnchorOption's
+// v1 wire contract bounds Label to [1,200] runes
+// (validate_context_fabric_structure.go's Validate(), "anchor option
+// option_id or label violates v1 bounds"). The receipt_id/option_id this
+// test supplies are synthetically well-formed (real values are minted
+// later, by composeStructureNeeds in the parent package) so only the Label
+// bound is under test.
+func TestAnchorOfferMaterial_LabelOverV1BoundIsBoundedAtTheProducer(t *testing.T) {
+	t.Parallel()
+	longLabel := strings.Repeat("a", 250)
+	claimants := map[string][]IdentityMatch{
+		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", longLabel)},
+		"widget-svc":     {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB")},
+	}
+	material, diag := anchorOfferMaterial(claimants, claimants, true, false)
+	if len(material.AnchorOptions) != 2 {
+		t.Fatalf("len(material.AnchorOptions) = %d, want 2", len(material.AnchorOptions))
+	}
+	if diag.LabelsNormalizedCount != 1 {
+		t.Errorf("diag.LabelsNormalizedCount = %d, want 1 -- the run's own artifacts must show this label was normalized", diag.LabelsNormalizedCount)
+	}
+	for _, opt := range material.AnchorOptions {
+		if opt.CanonicalID != "repoA" {
+			continue
+		}
+		opt.ReceiptID = contractsv1.ContextFabricAnchorOptionReceiptPrefix + strings.Repeat("a", 24)
+		opt.OptionID = "opt_" + strings.Repeat("a", 16)
+		if err := opt.Validate(); err != nil {
+			t.Fatalf("opt.Validate() = %v, want nil -- the producer must bound Label to the wire contract, not the caller", err)
+		}
+		if got := utf8.RuneCountInString(opt.Label); got > 200 {
+			t.Errorf("len(opt.Label) = %d runes, want <= 200 (v1 bound)", got)
+		}
+		if opt.Label != longLabel[:200] {
+			t.Errorf("opt.Label = %q, want the first 200 runes of the original label verbatim", opt.Label)
+		}
+	}
+}
+
+// TestAnchorOfferMaterial_LabelOverV1BoundMultibyteIsTruncatedOnRuneBoundary
+// mirrors the candidate axis's own multibyte regression test: an all-ASCII
+// case cannot distinguish rune-safe truncation from a byte-slice cut that
+// would split a multibyte rune.
+func TestAnchorOfferMaterial_LabelOverV1BoundMultibyteIsTruncatedOnRuneBoundary(t *testing.T) {
+	t.Parallel()
+	longLabel := strings.Repeat("é", 250)
+	claimants := map[string][]IdentityMatch{
+		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", longLabel)},
+		"widget-svc":     {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB")},
+	}
+	material, diag := anchorOfferMaterial(claimants, claimants, true, false)
+	if diag.LabelsNormalizedCount != 1 {
+		t.Errorf("diag.LabelsNormalizedCount = %d, want 1", diag.LabelsNormalizedCount)
+	}
+	for _, opt := range material.AnchorOptions {
+		if opt.CanonicalID != "repoA" {
+			continue
+		}
+		if !utf8.ValidString(opt.Label) {
+			t.Fatalf("opt.Label is not valid UTF-8 -- truncation split a multibyte rune")
+		}
+		if got := utf8.RuneCountInString(opt.Label); got != 200 {
+			t.Errorf("utf8.RuneCountInString(opt.Label) = %d, want exactly 200", got)
+		}
+		if opt.Label != strings.Repeat("é", 200) {
+			t.Errorf("opt.Label = %q, want the first 200 runes verbatim, not a byte-boundary cut", opt.Label)
+		}
+	}
+}
+
+// TestAnchorOfferMaterial_LabelAtOrUnderV1BoundIsUnchanged pins the
+// companion invariant: bounding must not clip a label that already fits.
+func TestAnchorOfferMaterial_LabelAtOrUnderV1BoundIsUnchanged(t *testing.T) {
+	t.Parallel()
+	exactLabel := strings.Repeat("b", 200)
+	claimants := map[string][]IdentityMatch{
+		"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", exactLabel)},
+		"widget-svc":     {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB")},
+	}
+	material, diag := anchorOfferMaterial(claimants, claimants, true, false)
+	if diag.LabelsNormalizedCount != 0 {
+		t.Errorf("diag.LabelsNormalizedCount = %d, want 0 -- a label already at the bound must not be counted as normalized", diag.LabelsNormalizedCount)
+	}
+	found := false
+	for _, opt := range material.AnchorOptions {
+		if opt.CanonicalID == "repoA" {
+			found = true
+			if opt.Label != exactLabel {
+				t.Errorf("opt.Label = %q, want the exact-200-rune label unchanged", opt.Label)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("repoA option not found in material.AnchorOptions")
+	}
+}
+
+// TestAnchorOfferMaterialV2_LabelOverV1BoundIsBoundedAtTheProducer pins the
+// SAME bound on the v2 (ambiguous-claimant, membership-verify) option shape
+// -- a separate accumulation path from the v1 loop above, sharing only
+// anchorOfferLabel itself.
+func TestAnchorOfferMaterialV2_LabelOverV1BoundIsBoundedAtTheProducer(t *testing.T) {
+	t.Parallel()
+	longLabel := strings.Repeat("a", 250)
+	claimants := map[string][]IdentityMatch{
+		"widget": {
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", longLabel),
+			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
+		},
+	}
+	material, diag := anchorOfferMaterial(claimants, claimants, true, true)
+	if len(material.AnchorOptions) != 2 || !material.AnchorOptionsRequireV2 {
+		t.Fatalf("material = %+v, want 2 v2 AnchorOptions", material)
+	}
+	if diag.LabelsNormalizedCount != 1 {
+		t.Errorf("diag.LabelsNormalizedCount = %d, want 1", diag.LabelsNormalizedCount)
+	}
+	for _, opt := range material.AnchorOptions {
+		if opt.CanonicalID != "repoA" {
+			continue
+		}
+		if got := utf8.RuneCountInString(opt.Label); got > 200 {
+			t.Errorf("len(opt.Label) = %d runes, want <= 200 (v1 bound)", got)
+		}
+	}
+}
+
 func TestAnchorOfferMaterial_NoCandidatesStillMissingWithEmptyOptions(t *testing.T) {
 	t.Parallel()
 
 	t.Run("zero claimants", func(t *testing.T) {
-		material := anchorOfferMaterial(map[string][]IdentityMatch{}, map[string][]IdentityMatch{}, true, false)
+		material, _ := anchorOfferMaterial(map[string][]IdentityMatch{}, map[string][]IdentityMatch{}, true, false)
 		if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
 			t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
 		}
@@ -1368,7 +1499,7 @@ func TestAnchorOfferMaterial_NoCandidatesStillMissingWithEmptyOptions(t *testing
 		claimants := map[string][]IdentityMatch{
 			"widget-service": {identityMatch(contractsv1.ContextFabricSubjectRepository, "repoA", "repoA")},
 		}
-		material := anchorOfferMaterial(claimants, claimants, false, false)
+		material, _ := anchorOfferMaterial(claimants, claimants, false, false)
 		if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectAnchor {
 			t.Fatalf("material.Missing = %v, want [subject_anchor]", material.Missing)
 		}
@@ -1394,7 +1525,7 @@ func TestAnchorOfferMaterial_MoreThanMaxCandidatesIsCapped(t *testing.T) {
 		id := fmt.Sprintf("repo-%02d", i)
 		claimants[term] = []IdentityMatch{identityMatch(contractsv1.ContextFabricSubjectRepository, id, id)}
 	}
-	material := anchorOfferMaterial(claimants, claimants, true, false)
+	material, _ := anchorOfferMaterial(claimants, claimants, true, false)
 	if len(material.AnchorOptions) != structureOfferMaxOptions {
 		t.Fatalf("len(material.AnchorOptions) = %d, want %d (capped)", len(material.AnchorOptions), structureOfferMaxOptions)
 	}
@@ -1427,7 +1558,7 @@ func TestAnchorOfferMaterial_DarkByDefault(t *testing.T) {
 			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
 		},
 	}
-	material := anchorOfferMaterial(claimants, claimants, true, false)
+	material, _ := anchorOfferMaterial(claimants, claimants, true, false)
 	if material.AnchorOptionsRequireV2 {
 		t.Error("material.AnchorOptionsRequireV2 = true with membershipOffersEnabled=false; the v2 path must be completely inert when the gate is off")
 	}
@@ -1472,7 +1603,7 @@ func TestAnchorOfferMaterial_HiddenRivalOnOtherwiseUniqueTermNeverLooksUnique(t 
 
 	t.Run("v1 path (gate off): repoA is never offered as a false-unique candidate", func(t *testing.T) {
 		t.Parallel()
-		material := anchorOfferMaterial(raw, authorized, true, false)
+		material, _ := anchorOfferMaterial(raw, authorized, true, false)
 		for _, opt := range material.AnchorOptions {
 			if opt.CanonicalID == "repoA" {
 				t.Errorf("material.AnchorOptions = %+v, must NOT offer repoA as unique -- it has a hidden rival (repoHidden) on the same term", material.AnchorOptions)
@@ -1488,7 +1619,7 @@ func TestAnchorOfferMaterial_HiddenRivalOnOtherwiseUniqueTermNeverLooksUnique(t 
 	})
 	t.Run("v2 path (gate on): repoA's term is excluded from the ambiguous scan too", func(t *testing.T) {
 		t.Parallel()
-		material := anchorOfferMaterial(raw, authorized, true, true)
+		material, _ := anchorOfferMaterial(raw, authorized, true, true)
 		for _, opt := range material.AnchorOptions {
 			if opt.CanonicalID == "repoA" {
 				t.Errorf("material.AnchorOptions = %+v, must NOT offer repoA -- its term has a hidden rival, not just an authorized ambiguity", material.AnchorOptions)
@@ -1511,7 +1642,7 @@ func TestAnchorOfferMaterial_AmbiguousTermOffersV2PerClaimant(t *testing.T) {
 			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
 		},
 	}
-	material := anchorOfferMaterial(claimants, claimants, true, true)
+	material, _ := anchorOfferMaterial(claimants, claimants, true, true)
 	if !material.AnchorOptionsRequireV2 {
 		t.Error("material.AnchorOptionsRequireV2 = false, want true for an ambiguous term")
 	}
@@ -1554,7 +1685,7 @@ func TestAnchorOfferMaterial_MixedVisibilitySuppressesWholeGroup(t *testing.T) {
 			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
 		},
 	}
-	material := anchorOfferMaterial(raw, authorized, true, true)
+	material, _ := anchorOfferMaterial(raw, authorized, true, true)
 	if material.AnchorOptionsRequireV2 {
 		t.Error("material.AnchorOptionsRequireV2 = true, want false: the only ambiguous term is mixed-visibility and must be suppressed entirely")
 	}
@@ -1578,7 +1709,7 @@ func TestAnchorOfferMaterial_AmbiguousTermCappedAtMaxOptions(t *testing.T) {
 		matches = append(matches, identityMatch(contractsv1.ContextFabricSubjectRepository, id, id))
 	}
 	claimants := map[string][]IdentityMatch{"widget-service": matches}
-	material := anchorOfferMaterial(claimants, claimants, true, true)
+	material, _ := anchorOfferMaterial(claimants, claimants, true, true)
 	if !material.AnchorOptionsRequireV2 {
 		t.Error("material.AnchorOptionsRequireV2 = false, want true")
 	}
@@ -1611,7 +1742,7 @@ func TestAnchorOfferMaterial_DecisiveCandidateIgnoredWhenAmbiguousTermExists(t *
 			identityMatch(contractsv1.ContextFabricSubjectRepository, "repoB", "repoB"),
 		},
 	}
-	material := anchorOfferMaterial(claimants, claimants, true, true)
+	material, _ := anchorOfferMaterial(claimants, claimants, true, true)
 	if !material.AnchorOptionsRequireV2 {
 		t.Error("material.AnchorOptionsRequireV2 = false, want true")
 	}

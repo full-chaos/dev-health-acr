@@ -201,6 +201,15 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"handle_offer_graph_derived_count", event.HandleOfferGraphDerivedCount,
 			"handle_offer_graph_derived_rejected_count", event.HandleOfferGraphDerivedRejectedCount,
 			"offered_under_window_gate", event.OfferedUnderWindowGate)
+	case "anchor_offer":
+		// CHAOS-4210: unconditional, mirroring kind_offer's own "fires on
+		// EVERY resolution" discipline -- see
+		// AnchorOfferLabelsNormalizedCount's own doc comment
+		// (ResolutionTraceEvent) for why this must be diagnosable from the
+		// run's own artifacts, not just applied silently.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: anchor offer",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"labels_normalized_count", event.AnchorOfferLabelsNormalizedCount)
 	case "ranked_cut":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: ranked cut",
 			"request_id", event.RequestID, "stage", event.Stage,
