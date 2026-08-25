@@ -424,10 +424,10 @@ flowchart TD
         BIX3 -- "no" --> B4["collectEmbedTargets(batch)"]
         B4 --> B4z{"zero embed targets?"}
         B4z -- "yes" --> B6z["clearNodeVectors(id-only only)<br/>cleared=0, commits"]
-        B4z -- "no" --> B7["embedder.Embed(texts)"]
-        B7 --> B8{"Embed() error, or<br/>vector count mismatch?<br/>(TRANSIENT failure design:<br/>one bad batch must not stall<br/>projection forever)"}
-        B8 -- "yes" --> B9["clearNodeVectors(targets)<br/>recordVectorDegraded + Warn log<br/>(embedded:0, cleared:N) -- commits"]
-        B8 -- "no" --> B10["writeNodeVector per target<br/>stamps embedder identity + composition tag<br/>commits"]
+        B4z -- "no" --> B7["embedWithBoundedRetry(texts)<br/>(CHAOS-4259: a TRANSIENT error --<br/>timeout/429/5xx/connection failure --<br/>gets a short bounded retry with backoff first;<br/>a PERSISTENT error is never retried)"]
+        B7 --> B8{"still failing after retry,<br/>or vector count mismatch?<br/>(one bad batch must not stall<br/>projection forever)"}
+        B8 -- "yes" --> B9["clearNodeVectors(targets)<br/>recordVectorDegraded + Warn log<br/>(embedded:0, cleared:N) -- commits<br/>reportEmbedFailure: org's consecutive-failure<br/>streak escalates to an ERROR-level signal<br/>after N in a row (CHAOS-4259)"]
+        B8 -- "no" --> B10r["resetEmbedFailureStreak(orgID)"] --> B10["writeNodeVector per target<br/>stamps embedder identity + composition tag<br/>commits"]
     end
 
     B10 --> C1

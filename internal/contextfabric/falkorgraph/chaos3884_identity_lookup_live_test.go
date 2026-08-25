@@ -97,6 +97,8 @@ func (f *fakeIdentityTelemetry) RecordObservationTraversalDegraded(context.Conte
 func (f *fakeIdentityTelemetry) RecordVectorRetrievalDegraded(context.Context, string)              {}
 func (f *fakeIdentityTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)            {}
 func (f *fakeIdentityTelemetry) RecordVectorProjection(context.Context, string, int, int, int, int) {}
+func (f *fakeIdentityTelemetry) RecordVectorProjectionEmbedFailuresEscalated(context.Context, string, int, bool) {
+}
 func (f *fakeIdentityTelemetry) RecordVectorIndexEfRuntimeMismatch(context.Context, string, int, int) {
 }
 func (f *fakeIdentityTelemetry) RecordIdentityGraphMissing(_ context.Context, _ string, count int) {

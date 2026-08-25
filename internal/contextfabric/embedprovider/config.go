@@ -68,6 +68,22 @@ const (
 	// to lexical-only rather than blowing the stage budget (see
 	// contextfabric.Embedder's callers).
 	DefaultTimeout = 250 * time.Millisecond
+	// DefaultBatchTimeout bounds ONE embeddings call issued from the
+	// PROJECTION (write) path, where a single request carries up to
+	// MaxBatch texts rather than DefaultTimeout's one (CHAOS-3828).
+	// DefaultTimeout is sized for a single query embedding on the read
+	// path's hot path; reusing it for a MaxBatch-sized request means every
+	// write-side call times out on anything but a very fast warm local
+	// model (measured ~360ms for 64 texts against a local nomic model,
+	// comfortably over the 250ms read-side budget) -- and
+	// embedProjectionBatch's failure handling then clears every target's
+	// vector on that timeout, indistinguishable from a genuine embedder
+	// outage. 5 seconds is sized for a warm batch call against a slower or
+	// remote endpoint while still bounding one projection tick; a cold
+	// model load is the ProbeTimeout-class 9.3s case this does NOT need to
+	// cover, because acr-projector's own bootstrap already waits for the
+	// index/model to be ready before ticking.
+	DefaultBatchTimeout = 5 * time.Second
 	// DefaultMaxTransportRetries is 0: a retry against a local embedder buys
 	// nothing but latency, and the read path fails open to lexical retrieval
 	// anyway.
@@ -112,8 +128,13 @@ const (
 	EnvAPIKey          = "ACR_CONTEXT_FABRIC_EMBED_API_KEY"
 	EnvSimilarityFloor = "ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR"
 	EnvTimeout         = "ACR_CONTEXT_FABRIC_EMBED_TIMEOUT"
-	EnvMaxBatch        = "ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH"
-	EnvMaxTextRunes    = "ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES"
+	// EnvBatchTimeout is the PROJECTION (write) path's own per-call timeout
+	// (CHAOS-3828), independent of EnvTimeout. See DefaultBatchTimeout for
+	// why the read-side default cannot be reused for a MaxBatch-sized
+	// request.
+	EnvBatchTimeout = "ACR_CONTEXT_FABRIC_EMBED_BATCH_TIMEOUT"
+	EnvMaxBatch     = "ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH"
+	EnvMaxTextRunes = "ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES"
 	// EnvPrefixFamily selects the asymmetric task-prefix pair this
 	// deployment's model requires (CHAOS-3836; spec §6 T6). Unset means
 	// PrefixFamilyNone. See the embedprovider package doc comment in
@@ -248,8 +269,16 @@ type Config struct {
 	APIKey string
 	// SimilarityFloor is tau; see DefaultSimilarityFloor.
 	SimilarityFloor float64
-	// Timeout bounds one embeddings call.
+	// Timeout bounds one READ-path embeddings call (a single query text).
 	Timeout time.Duration
+	// BatchTimeout bounds one WRITE/PROJECTION-path embeddings call (up to
+	// MaxBatch texts). Kept separate from Timeout so a batch sized for the
+	// write path is not silently bounded by a budget sized for the read
+	// path's single-text hot path (CHAOS-3828). embedChunk applies this
+	// whenever a chunk carries more than one text; every read-path caller
+	// in this repository embeds exactly one text per call, so this never
+	// affects the read path.
+	BatchTimeout time.Duration
 	// ExpectResponseModel is the model id the server is expected to report in
 	// its response, when that legitimately differs from Model. Empty means
 	// "the server must report exactly Model". See EnvExpectResponseModel.
@@ -354,6 +383,9 @@ func (c Config) validate() error {
 	if c.Timeout < 10*time.Millisecond || c.Timeout > time.Minute {
 		return errors.New("embedder timeout must be between ten milliseconds and one minute")
 	}
+	if c.BatchTimeout < 10*time.Millisecond || c.BatchTimeout > time.Minute {
+		return errors.New("embedder batch timeout must be between ten milliseconds and one minute")
+	}
 	if c.MaxBatch < 1 || c.MaxBatch > 512 {
 		return errors.New("embedder max batch must be between one and five hundred twelve")
 	}
@@ -414,6 +446,10 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	batchTimeout, err := envDuration(lookup, EnvBatchTimeout, DefaultBatchTimeout)
+	if err != nil {
+		return Config{}, err
+	}
 	maxBatch, err := envInt(lookup, EnvMaxBatch, DefaultMaxBatch)
 	if err != nil {
 		return Config{}, err
@@ -435,6 +471,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		APIKey:               apiKey,
 		SimilarityFloor:      floor,
 		Timeout:              timeout,
+		BatchTimeout:         batchTimeout,
 		MaxBatch:             maxBatch,
 		MaxTextRunes:         maxTextRunes,
 		MaxTransportRetries:  retries,

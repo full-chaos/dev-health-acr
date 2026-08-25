@@ -143,10 +143,17 @@ func (e *Embedder) PrefixTagComponent() string {
 // Embed returns one vector per input text, in input order.
 //
 // Batching: texts are split into chunks of at most Config.MaxBatch and issued
-// sequentially, each under its own Config.Timeout. Sequential rather than
-// concurrent is deliberate -- a local embedder is a single process with a
-// single model loaded, so concurrent requests queue inside it anyway while
-// multiplying the chance of tripping a per-request timeout.
+// sequentially. Sequential rather than concurrent is deliberate -- a local
+// embedder is a single process with a single model loaded, so concurrent
+// requests queue inside it anyway while multiplying the chance of tripping a
+// per-request timeout.
+//
+// Timeout: a single-text chunk (every read-path caller in this repository)
+// runs under Config.Timeout; a multi-text chunk (the projection/write path)
+// runs under Config.BatchTimeout instead (CHAOS-3828) -- reusing the
+// read-side budget for a MaxBatch-sized request timed it out on every call
+// against anything but a very fast warm local model. See BatchTimeout's own
+// doc comment.
 //
 // Order: the response is reordered by each Embedding's own Index field rather
 // than trusting the order the server returned. An OpenAI-compatible server is
@@ -189,7 +196,11 @@ func (e *Embedder) embedChunk(ctx context.Context, texts []string) ([][]float32,
 	for _, text := range texts {
 		inputs = append(inputs, TruncateRunes(text, e.config.MaxTextRunes))
 	}
-	callCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)
+	timeout := e.config.Timeout
+	if len(texts) > 1 {
+		timeout = e.config.BatchTimeout
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	response, err := e.client.Embeddings.New(callCtx, openai.EmbeddingNewParams{
 		Input: openai.EmbeddingNewParamsInputUnion{OfArrayOfStrings: inputs},

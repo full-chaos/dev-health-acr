@@ -64,7 +64,7 @@ func TestMaxTextRunesFloorIsTheLargestCompleteTemplate(t *testing.T) {
 	t.Parallel()
 	valid := Config{
 		Provider: "test", BaseURL: "https://embed.example/v1/", Model: "test-model",
-		Dimension: 768, SimilarityFloor: DefaultSimilarityFloor, Timeout: DefaultTimeout,
+		Dimension: 768, SimilarityFloor: DefaultSimilarityFloor, Timeout: DefaultTimeout, BatchTimeout: DefaultBatchTimeout,
 		MaxBatch: DefaultMaxBatch, MaxTextRunes: MinimumMaxTextRunes,
 		// Not this test's concern (CHAOS-4192's credential check) -- opt
 		// out explicitly so a MaxTextRunes-floor regression is never

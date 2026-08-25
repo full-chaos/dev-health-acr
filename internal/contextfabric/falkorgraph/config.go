@@ -111,6 +111,31 @@ type Config struct {
 	// Telemetry is optional (nil-safe), same contract as
 	// zepgraph.GraphTelemetry.
 	Telemetry GraphTelemetry
+	// EmbedFailureMaxRetries bounds a short, in-process retry loop
+	// embedProjectionBatch runs on a TRANSIENT embed failure
+	// (embedprovider.IsTransientEmbedError) BEFORE clearing the batch's
+	// vectors (CHAOS-4147 item 3 / CHAOS-4259). A PERSISTENT failure is
+	// never retried -- see IsTransientEmbedError's doc comment for why an
+	// identical retry cannot change that outcome. The ZERO VALUE means no
+	// retry: a transient failure clears immediately, byte-identical to
+	// pre-CHAOS-4259 behavior, so a Config built directly (most existing
+	// tests, and any future in-process caller) is unaffected unless it
+	// opts in. Production composition goes through ConfigFromEnv, which
+	// applies DefaultEmbedFailureMaxRetries.
+	EmbedFailureMaxRetries int
+	// EmbedFailureRetryBackoff is the delay between each bounded retry
+	// above. Only consulted when EmbedFailureMaxRetries > 0.
+	EmbedFailureRetryBackoff time.Duration
+	// EmbedFailureEscalateAfter is the CONSECUTIVE-BATCH-failure threshold
+	// (post-retry, per organization) that promotes
+	// GraphTelemetry.RecordVectorProjectionEmbedFailuresEscalated from
+	// silent to firing -- see that method's doc comment for why a
+	// sustained outage needs a signal louder than the routine per-batch
+	// Warn RecordVectorProjection already emits. The ZERO VALUE disables
+	// escalation entirely (matching pre-CHAOS-4259 behavior); production
+	// composition goes through ConfigFromEnv, which applies
+	// DefaultEmbedFailureEscalateAfter.
+	EmbedFailureEscalateAfter int
 	// RawSignalObserver (CHAOS-3858, measurement-only) is optional
 	// (nil-safe), set directly by the composition root the same way
 	// Telemetry is -- a Go interface value, never env-derived, and
@@ -272,6 +297,23 @@ type GraphTelemetry interface {
 	// partially embedded graph, so "N nodes deliberately unembedded, by
 	// reason" must be a reported number, never an inference.
 	RecordVectorProjection(ctx context.Context, orgID string, embedded, cleared, skippedKind, skippedIDOnly int)
+	// RecordVectorProjectionEmbedFailuresEscalated (CHAOS-4147 item 3 /
+	// CHAOS-4259) fires when a batch's embed-call failure -- after any
+	// bounded transient retry embedProjectionBatch ran -- is the Nth
+	// CONSECUTIVE batch failure for this organization (threshold:
+	// Config.EmbedFailureEscalateAfter), so a SUSTAINED embed outage is a
+	// loud, distinguishable signal rather than indistinguishable from the
+	// routine per-batch Warn RecordVectorProjection already emits for one
+	// bad batch. Fires on every failing batch from the threshold onward
+	// (not just once at the crossing), so the signal stays live for the
+	// duration of the outage; the caller resets the streak to 0 on the
+	// next SUCCESSFUL batch, which is what stops this firing -- there is
+	// no separate "recovered" signal. transient reports whether the
+	// failure that crossed/held the threshold was itself classified
+	// transient (embedprovider.IsTransientEmbedError) or persistent: the
+	// operator response differs (check upstream connectivity/rate limits
+	// vs. fix the credential or model configuration).
+	RecordVectorProjectionEmbedFailuresEscalated(ctx context.Context, orgID string, consecutiveFailures int, transient bool)
 	// RecordVectorIndexEfRuntimeMismatch fires when bootstrap discovers a
 	// pre-existing OPERATIONAL vector index whose built efRuntime disagrees
 	// with the calibrated CHAOS-3834 policy (round-8 P2's detection-only
@@ -401,10 +443,12 @@ const (
 // a decision in the source rather than an omission.
 type NoopTelemetry struct{}
 
-func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int)      {}
-func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)                {}
-func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)              {}
-func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int, int)   {}
+func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int)    {}
+func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)              {}
+func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)            {}
+func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int, int) {}
+func (NoopTelemetry) RecordVectorProjectionEmbedFailuresEscalated(context.Context, string, int, bool) {
+}
 func (NoopTelemetry) RecordVectorIndexEfRuntimeMismatch(context.Context, string, int, int) {}
 func (NoopTelemetry) RecordIdentityGraphMissing(context.Context, string, int)              {}
 func (NoopTelemetry) RecordVectorFence(context.Context, string, VectorFenceResult, bool)   {}
@@ -475,6 +519,17 @@ func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, e
 			"org_id", orgID, "embedded", embedded, "cleared", cleared,
 			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 	}
+}
+
+// RecordVectorProjectionEmbedFailuresEscalated logs at ERROR -- deliberately
+// louder than RecordVectorProjection's Warn, which a busy rebuild already
+// uses for every single cleared batch. A SUSTAINED run of failures is a
+// materially different operational fact than one bad batch (CHAOS-4147 item
+// 3), and Error is what makes the two distinguishable in a log stream or an
+// alert rule scoped to level.
+func (t SlogTelemetry) RecordVectorProjectionEmbedFailuresEscalated(_ context.Context, orgID string, consecutiveFailures int, transient bool) {
+	t.logger().Error("context_fabric: sustained embed failures clearing vectors",
+		"org_id", orgID, "consecutive_failures", consecutiveFailures, "transient", transient)
 }
 
 // RecordVectorIndexEfRuntimeMismatch logs through the CONFIGURED logger
@@ -596,8 +651,38 @@ func (c Config) validate() error {
 	if c.PoolSize < 1 || c.PoolSize > 100 {
 		return errors.New("falkordb pool size must be between one and one hundred")
 	}
+	if c.EmbedFailureMaxRetries < 0 || c.EmbedFailureMaxRetries > 10 {
+		return errors.New("embed failure max retries must be between zero and ten")
+	}
+	if c.EmbedFailureRetryBackoff < 0 || c.EmbedFailureRetryBackoff > 30*time.Second {
+		return errors.New("embed failure retry backoff must be between zero and thirty seconds")
+	}
+	if c.EmbedFailureEscalateAfter < 0 || c.EmbedFailureEscalateAfter > 1000 {
+		return errors.New("embed failure escalate-after threshold must be between zero and one thousand")
+	}
 	return nil
 }
+
+// Defaults for the CHAOS-4259 embed-failure retry/escalation knobs. ONLY
+// ConfigFromEnv applies these; a Config built directly (the zero value)
+// stays at "no retry, no escalation" -- see each field's own doc comment.
+const (
+	// DefaultEmbedFailureMaxRetries is small and bounded: a transient embed
+	// failure (a network blip, a rate limit) either clears on its own
+	// within a couple of attempts or it does not, and retrying more just
+	// delays the batch's checkpoint advance for no better odds.
+	DefaultEmbedFailureMaxRetries = 2
+	// DefaultEmbedFailureRetryBackoff keeps the added worst-case latency
+	// small (at most MaxRetries * this, ~400ms at the defaults) against a
+	// BatchTimeout-class budget of seconds.
+	DefaultEmbedFailureRetryBackoff = 200 * time.Millisecond
+	// DefaultEmbedFailureEscalateAfter is five consecutive batch failures
+	// -- enough that one bad tick (the routine case RecordVectorProjection
+	// already reports at Warn) never escalates, but a real outage is
+	// flagged loudly well before an operator would otherwise notice only
+	// by scrolling Warn lines.
+	DefaultEmbedFailureEscalateAfter = 5
+)
 
 // Environment variable names for ConfigFromEnv, matching the ACR_<COMPONENT>_
 // naming and KEY/KEY_FILE secret convention used by internal/config, and the
@@ -613,6 +698,12 @@ const (
 	EnvMaxResults     = "ACR_CONTEXT_FABRIC_FALKOR_MAX_RESULTS"
 	EnvPoolSize       = "ACR_CONTEXT_FABRIC_FALKOR_POOL_SIZE"
 	EnvAllowInsecure  = "ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE"
+	// EnvEmbedFailureMaxRetries / EnvEmbedFailureRetryBackoff /
+	// EnvEmbedFailureEscalateAfter configure the CHAOS-4259 embed-failure
+	// retry/escalation knobs -- see Config's own field doc comments.
+	EnvEmbedFailureMaxRetries    = "ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_MAX_RETRIES"
+	EnvEmbedFailureRetryBackoff  = "ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_RETRY_BACKOFF"
+	EnvEmbedFailureEscalateAfter = "ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_ESCALATE_AFTER"
 )
 
 // Configured reports whether ACR_CONTEXT_FABRIC_FALKOR_ADDR is set at all, so
@@ -659,17 +750,32 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	embedFailureMaxRetries, err := envInt(lookup, EnvEmbedFailureMaxRetries, DefaultEmbedFailureMaxRetries)
+	if err != nil {
+		return Config{}, err
+	}
+	embedFailureRetryBackoff, err := envDuration(lookup, EnvEmbedFailureRetryBackoff, DefaultEmbedFailureRetryBackoff)
+	if err != nil {
+		return Config{}, err
+	}
+	embedFailureEscalateAfter, err := envInt(lookup, EnvEmbedFailureEscalateAfter, DefaultEmbedFailureEscalateAfter)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		Addr:               envString(lookup, EnvAddr, ""),
-		Password:           password,
-		TLS:                envBool(lookup, EnvTLS, true),
-		GraphPrefix:        envString(lookup, EnvGraphPrefix, "acr-cf"),
-		RequestTimeout:     timeout,
-		MaxAttempts:        maxAttempts,
-		MaxResults:         maxResults,
-		PoolSize:           poolSize,
-		AllowInsecure:      envBool(lookup, EnvAllowInsecure, false),
-		IncludeEmbedBodies: includeBodies,
+		Addr:                      envString(lookup, EnvAddr, ""),
+		Password:                  password,
+		TLS:                       envBool(lookup, EnvTLS, true),
+		GraphPrefix:               envString(lookup, EnvGraphPrefix, "acr-cf"),
+		RequestTimeout:            timeout,
+		MaxAttempts:               maxAttempts,
+		MaxResults:                maxResults,
+		PoolSize:                  poolSize,
+		AllowInsecure:             envBool(lookup, EnvAllowInsecure, false),
+		IncludeEmbedBodies:        includeBodies,
+		EmbedFailureMaxRetries:    embedFailureMaxRetries,
+		EmbedFailureRetryBackoff:  embedFailureRetryBackoff,
+		EmbedFailureEscalateAfter: embedFailureEscalateAfter,
 	}, nil
 }
 
