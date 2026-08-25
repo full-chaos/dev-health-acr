@@ -365,7 +365,7 @@ const (
 	// manual_fallback. Weak enough that no policy may traverse it without a
 	// product ruling; NOT weak enough to justify telling a reader "nothing is
 	// missing" when the work items are right there.
-	factScopeChainWorkItem = "work_item -BELONGS_TO_PROJECT-> project / work_item -OWNED_BY_TEAM-> team (devhealthsource/teams_projects_edges.go: queryWorkItemProjects, queryWorkItemTeams)"
+	factScopeChainWorkItem = "work_item -BELONGS_TO_PROJECT-> project / work_item -OWNED_BY_TEAM-> team (devhealthsource/teams_projects_edges.go: querySubjectProjectMemberships, queryWorkItemTeams)"
 	// factScopeChainRepository continues one hop through the work item's own
 	// repository. The zero-UUID sentinel lives on this hop: a Linear-sourced
 	// work item carries repo_id = the zero UUID and is repo-LESS by design,

@@ -144,7 +144,7 @@ func TestTeamSearchTextCarriesTheLexicalHandlesAUserWouldType(t *testing.T) {
 // ENTITY's own canonical id to projects.id verbatim, regardless of which arm
 // of the dual project-id space a given work_item's project_id column joins
 // on the OTHER end of the BELONGS_TO_PROJECT edge (CHAOS-4108: id for
-// Linear, project_key for gitlab -- queryWorkItemProjects' own concern, not
+// Linear, project_key for gitlab -- querySubjectProjectMemberships' own concern, not
 // this producer's). The two id SHAPES this entity's own id space contains
 // (provider-composite and bare UUID) must both survive verbatim; deriving an
 // id from project_key instead would strand every Linear project, which has
@@ -318,17 +318,18 @@ func TestTeamsProjectsFullSnapshotClaimsCompleteEnumeration(t *testing.T) {
 	}
 }
 
-// workItemProjectRow mirrors queryWorkItemProjects' SELECT list exactly,
-// trailing provider + p.id (the JOINED project's own canonical id column,
-// CHAOS-4108) + key_resolution_count included (CHAOS-3898 D-5: the SAME
-// per-(provider) uniqueness guard queryProjectTeams already uses, applied
-// here since the edge's To endpoint is now project.v2:<provider>:<id>).
-// resolvedProjectID is p.id -- the JOINED project row's own id, which equals
-// projectID (w.project_id) for a Linear row (the id arm) but differs from it
-// for a gitlab row matched via the project_key arm (CHAOS-4108); pass them
-// separately so a fixture can exercise either.
-func workItemProjectRow(workItemID, projectID, repoID, repoSlug string, updatedAt time.Time, provider, resolvedProjectID string) []any {
-	return []any{workItemID, projectID, repoID, repoSlug, updatedAt, provider, resolvedProjectID, uint64(1)}
+// presenceRow mirrors querySubjectProjectMemberships' SELECT list exactly
+// (teams_projects_edges.go): m.subject_kind, toString(m.repo_id),
+// m.subject_id, ifNull(r.repo, ”), m.observed_at, m.source, m.provider,
+// m.project_id, p.id, p.key_resolution_count. resolvedProjectID is p.id --
+// the JOINED project row's own id, which equals projectID (m.project_id)
+// for the id arm but differs from it for the project_key arm (CHAOS-4108);
+// pass them separately so a fixture can exercise either. keyResolutionCount
+// 0 models an unresolved (provider, project_id) (CHAOS-4193's LEFT JOIN
+// miss), 1 a clean resolution, >1 an ambiguity -- see
+// TestPresenceRowsMustResolveToExactlyOneProject.
+func presenceRow(subjectKind, repoID, subjectID, repoSlug string, observedAt time.Time, source, provider, projectID, resolvedProjectID string, keyResolutionCount uint64) []any {
+	return []any{subjectKind, repoID, subjectID, repoSlug, observedAt, source, provider, projectID, resolvedProjectID, keyResolutionCount}
 }
 
 func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug string, computedAt time.Time) []any {
@@ -347,14 +348,17 @@ func projectTeamRow(projectID, teamID, source string, validFrom time.Time, lates
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
 // a Linear work item whose repo_id is the zero UUID (3298 of that org's 3304
-// primary attributions), a gitlab work item with a real repo, and the
+// primary attributions), a gitlab work item with a real repo, a pull_request
+// presence row sourced from a transition (CHAOS-4193's own addition -- the
+// old work_items.project_id source could never see a PR at all), and the
 // collapsed ownership row the Trap C GROUP BY produces.
 func liveShapedEdgeClient() *fakeClient {
 	at := time.Date(2026, 8, 13, 19, 0, 2, 504000000, time.UTC)
 	client := liveShapedTeamsProjectsClient()
 	client.tables = append(client.tables,
-		fakeTable{match: "FROM work_items AS w FINAL", rows: [][]any{
-			workItemProjectRow("linear:CHAOS-3802", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", zeroRepositoryUUID, "", at, "linear", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7"),
+		fakeTable{match: "FROM project_membership_presence AS m", rows: [][]any{
+			presenceRow("work_item", zeroRepositoryUUID, "linear:CHAOS-3802", "", at, "work_item_column", "linear", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", 1),
+			presenceRow("pull_request", "cd620f84-2602-8dea-7809-8d1f11825cf4", "7", "full.chaos/dev-health-ops", at, "transition", "gitlab", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", 1),
 		}},
 		fakeTable{match: "FROM work_item_team_attributions AS a FINAL", rows: [][]any{
 			workItemTeamRow("linear:CHAOS-3802", "CHAOS", "native_team", "high", zeroRepositoryUUID, "", at),

@@ -132,6 +132,12 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
+	// CHAOS-4193: NextProjectionBatch now always queries
+	// project_membership_presence too (teamsProjectsTables), even for a
+	// case that only cares about team_project_ownership -- the view must
+	// exist or every case here fails on "dependency unavailable" before
+	// its own assertion is even reached.
+	createProjectMembershipPresenceView(t, ctx, direct)
 	cases := []struct {
 		name  string
 		orgID string

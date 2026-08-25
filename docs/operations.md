@@ -1130,7 +1130,9 @@ This is the chris-owned cutover CHAOS-3916 itself deferred ("a separate,
 chris-owned decision" -- see the CHAOS-3916 paragraph above): enabling
 `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED` in production for the first
 time, on an image that already carries `ClickHouseSourceVersion` v6,
-`TeamsProjectsSourceVersion` v3, and the CHAOS-4108 join-arm fix. Every
+`TeamsProjectsSourceVersion` v4 (CHAOS-4193's presence-view read swap
+requires a full rebuild under v4, not an incremental catch-up under v3),
+and the CHAOS-4108 join-arm fix. Every
 pre-flight below was learned the hard way during CHAOS-3916's local/trial
 rehearsal (see CHAOS-4147) -- skipping one reproduces that incident at
 production scale.
@@ -1192,9 +1194,9 @@ production scale.
    was permanently retired." Confirm every reader that will touch this
    organization -- including CI harnesses -- resolves epochs through the
    lifecycle-aware path before the first flip, not after.
-4. **The deployed image digest actually contains v6/v3 + CHAOS-4108.**
+4. **The deployed image digest actually contains v6/v4 + CHAOS-4108.**
    Confirm the digest being promoted was built from a commit at or after
-   `TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v3"` and
+   `TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v4"` and
    `ClickHouseSourceVersion = "devhealthsource.clickhouse.v6"`
    (`internal/contextfabric/devhealthsource/{teams_projects,clickhouse}.go`)
    and after PR #216 (CHAOS-4108's join-arm fix). An older digest re-creates

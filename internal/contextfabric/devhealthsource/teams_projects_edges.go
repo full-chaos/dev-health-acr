@@ -2,7 +2,9 @@ package devhealthsource
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -38,126 +40,232 @@ func attributionProperties(source, confidence string) map[string]contractsv1.Con
 	return properties
 }
 
-// queryWorkItemProjects projects work_item -> project (BELONGS_TO_PROJECT)
-// from work_items.project_id.
+// querySubjectProjectMemberships projects work_item -> project and
+// pull_request -> project (BELONGS_TO_PROJECT), reading the
+// project_membership_presence VIEW (CHAOS-4193/4194; ops migration 077,
+// mirrored verbatim at devhealthschema.ProjectMembershipPresenceViewDDL)
+// instead of work_items.project_id directly (this producer's own prior
+// shape, CHAOS-3802/CHAOS-4108). The read swap is WHY
+// TeamsProjectsSourceVersion bumped v3->v4 (teams_projects.go): the row
+// shape changed, so every already-projected organization needs a full
+// rebuild rather than an incremental catch-up under a version marker that
+// no longer describes what it reads.
 //
-// project_id is the ONLY usable link -- work_items.project_key exists but is
-// empty on every one of the ground-truth org's 3304 rows (live-verified), so
-// a project_key-based join would silently produce zero edges while looking
-// correct. That claim is true for the COLUMN; it was wrong about which ARM
-// of projects that column joins (CHAOS-4108, corrected). Ops deliberately
-// maintains a dual project-id space (normalize.py:165-176,
-// native_status_change.py:161-220, CHAOS-3380 x3): work_items.project_id
-// holds projects.id for Linear, but projects.project_key (a rename-safe
-// project_full_path, e.g. "full.chaos/dev-health-ops") for gitlab -- never
-// projects.id. An INNER JOIN on p.id = w.project_id alone therefore resolves
-// every Linear row but ZERO gitlab rows, live-verified -- not the "16 of 18
-// distinct project_id values / 3080 of 3086 rows" this comment used to claim
-// (that count never separated the two disjoint populations). The join below
-// widens to BOTH arms, mirroring queryProjectTeams' own "SECOND -- the
-// id-space trap" fix 130 lines below: p.id equals w.project_id, OR a
-// non-empty p.project_key equals w.project_id.
+// TWO subject kinds, one producer. The view's own ORDER BY-equivalent key
+// is (org_id, subject_kind, repo_id, subject_id, project_id) -- Context
+// Fabric ruling 2026-08-24 11:40 -- so unlike the old single-column source,
+// ONE subject can now carry SEVERAL active project rows (a PR on two
+// boards). Every row is projected independently; nothing here collapses
+// them, which is what lets a PR removed from board B keep its edge to
+// board A rather than losing both (the exact defect the view's own doc
+// comment records the pre-ruling grouping caused).
 //
-// Authorization comes from the WORK ITEM's own repo (LEFT JOIN repos), routed
-// through workItemAuthorization -- the CHAOS-3785 zero-UUID discipline. A
-// Linear-sourced work item carries repo_id = the zero UUID, which is
-// repo-less by design and must not be mistaken for an orphan.
+// source ∈ {transition, work_item_column} (Context Fabric ruling
+// 2026-08-24 09:55) discriminates the edge's evidentiary weight:
 //
-// CHAOS-3898 (design brief §1.4): projects.id alone does not name a
-// provider, and project.v2's canonical id needs one. key_resolution_count
-// (count() OVER (PARTITION BY join_key), the SAME anchor_collision-detection
-// shape queryProjectTeams already uses for project_key) now proves whether
-// THIS specific id-or-project_key VALUE resolves to exactly one project
-// within the organization -- widened from PARTITION BY id alone to cover
-// both arms the join now tries, so an id shared by one project and a
-// project_key shared by another can never be silently conflated either. The
-// projected canonical id is always built from the JOINED project row's own
-// (provider, id) -- p.id, never the raw w.project_id -- so an edge whose
-// gitlab arm matched via project_key still resolves to the SAME canonical
-// id queryProjects mints for that project (teams_projects.go), not a
-// dangling one built from the slug. Live, queryProjects' own doc comment
-// records zero cross-provider id collisions across every organization
-// checked, so this remains a defensive, currently-inert guard, not a live
-// behavior change. An ambiguous value is omitted (never guessed) and
-// counted in the SAME run-scoped ambiguity ledger queryProjectTeams
-// reports through logAmbiguousProjectKeys, via projectTeamsQuery's own
-// closure convention.
-func workItemProjectsQuery(omissions *ambiguityLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+//   - 'work_item_column' is a plain canonical column read (the SAME
+//     shape this producer always had for work_items.project_id, now
+//     passed through the view's column arm unchanged) -- presence only,
+//     no validity interval, exactly as before this migration.
+//   - 'transition' is derived from an observed provider reassignment
+//     event (project_membership_transitions). ValidFrom is the row's own
+//     observed_at: by the view's OWN construction (its `WHERE
+//     latest_to_project_id = project_id` filter on the transition arm),
+//     every row this producer ever sees here is the LATEST touch on that
+//     (subject, project) pair and it ADDED the membership -- there is by
+//     definition no later closing row, or the view would not have
+//     returned it as present. ValidTo is therefore always nil (open),
+//     which is the same "state both directions explicitly, open unless
+//     proven closed" discipline ownershipValidity (below) applies to
+//     project->team ownership; it is stated as a fact of the view's own
+//     filter, not re-derived by a second query against
+//     project_membership_transitions, because that would just recompute
+//     what the view already proved and risk disagreeing with it under
+//     replication lag between the two reads.
+//
+// pull_request subjects use the LEGACY "pull_request:<repo_id>:<number>"
+// canonical id (tables.go:295,897; chaos4099_scope_expander.go:425) --
+// deliberately NOT identity.Derive/identity.Registry. pull_request is
+// grandfathered OUT of the identity registry on purpose
+// (chaos3898_s3_census_bridge.go's bridgePullRequestSatisfier doc comment;
+// registry_parity_test.go's TestRegistryCoversEveryChangedKind pins
+// EXACTLY the five design-brief kinds, "zero exemptions, no extras"; and
+// graphrank's TestPullRequestHandleValue proves the handle-offer extractor
+// recognizes only this legacy shape). Deriving a `pull_request.v2:...` id
+// here instead would mint a BELONGS_TO_PROJECT edge whose From endpoint
+// matches no real pull_request entity node in the graph -- the exact
+// dangling-edge class CHAOS-4108 fixed for projects, reintroduced on the
+// other endpoint.
+//
+// Project resolution keeps queryProjects' dual id/key widening (CHAOS-4108)
+// unchanged in shape, now scoped by provider (PARTITION BY provider,
+// join_key rather than the old bare join_key): the view's own `provider`
+// column is a real per-row fact for BOTH arms (project_membership_transitions.
+// provider / work_items.provider), matching the 2026-08-24 09:45 ruling's
+// vocabulary constraint that (provider, project_id) -- not project_id
+// alone -- is what must resolve to a `projects` row. The join is LEFT, not
+// INNER: an INNER join would silently drop an unresolvable row before this
+// function's scan ever saw it, which is exactly the "measurement fails
+// toward fine" shape this package's telemetry rules forbid. A LEFT JOIN
+// miss reports key_resolution_count = 0 (ClickHouse's default-value
+// behaviour for an unmatched non-Nullable column), so "zero matches" and
+// "more than one match" are both visible to the scan and both counted by
+// telemetry.recordUnresolved/recordAmbiguous -- see presenceTelemetryLedger
+// (teams_projects.go).
+func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
 	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-		return queryWorkItemProjects(ctx, client, orgID, cursor, limit, omissions)
+		return querySubjectProjectMemberships(ctx, client, orgID, cursor, limit, telemetry)
 	}
 }
 
-func queryWorkItemProjects(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
-	const rowKey = "concat(toString(w.repo_id), ':', w.work_item_id)"
-	// The inner subquery flattens each project row into up to TWO candidate
-	// join keys -- its own id (every provider) and, when non-empty, its own
-	// project_key (gitlab) -- via UNION ALL, deduplicated with DISTINCT so a
-	// project whose id and project_key happen to collide is not double
-	// counted. count() OVER (PARTITION BY join_key) then measures, per
-	// DISTINCT key value, how many projects present it -- the same ambiguity
-	// signal key_resolution_count always was, now computed over the widened
-	// key space. p.id (the project's OWN canonical id column, never the join
-	// key) is carried through so the projected relationship always resolves
-	// to the SAME canonical id queryProjects mints, regardless of which arm
-	// matched.
-	statement := `SELECT w.work_item_id, w.project_id, toString(w.repo_id), ifNull(r.repo, ''), w.updated_at, p.provider, p.id, p.key_resolution_count
-FROM work_items AS w FINAL
-INNER JOIN (
-  SELECT id, provider, join_key, count() OVER (PARTITION BY join_key) AS key_resolution_count
+func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger) ([]candidate, bool, error) {
+	const rowKey = "concat(m.subject_kind, ':', toString(m.repo_id), ':', m.subject_id, ':', m.provider, ':', m.project_id)"
+	statement := `SELECT m.subject_kind, toString(m.repo_id), m.subject_id, ifNull(r.repo, ''), m.observed_at, m.source, m.provider, m.project_id, p.id, p.key_resolution_count
+FROM project_membership_presence AS m
+LEFT JOIN (
+  SELECT provider, id, join_key, count() OVER (PARTITION BY provider, join_key) AS key_resolution_count
   FROM (
-    SELECT DISTINCT id, provider, join_key FROM (
-      SELECT id, provider, id AS join_key FROM projects FINAL WHERE org_id = {org_id:String}
+    SELECT DISTINCT provider, id, join_key FROM (
+      SELECT provider, id, id AS join_key FROM projects FINAL WHERE org_id = {org_id:String}
       UNION ALL
-      SELECT id, provider, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
+      SELECT provider, id, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
     )
   )
-) AS p ON p.join_key = w.project_id
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND w.project_id != ''` + sincePredicate(cursor, "w.updated_at", rowKey) + orderBy("w.updated_at", rowKey)
+  -- codex xhigh review R2: without this, an AMBIGUOUS join_key (>1 project
+  -- sharing it) fans the LEFT JOIN below out to key_resolution_count rows
+  -- for the SAME m row -- one real presence row scanned N times, each
+  -- correctly reporting key_resolution_count>1 but each ALSO incrementing
+  -- presenceTelemetryLedger.ambiguousRows once, overcounting the very
+  -- fan-out metric the R1 fix exists to report accurately.
+  -- key_resolution_count is a window function, computed over every row
+  -- BEFORE this LIMIT BY trims the group, so the count it carries on the
+  -- one surviving row is still the TRUE ambiguity size -- only the
+  -- (provider, join_key) group is deduplicated to one representative row,
+  -- exactly the invariant p ON p.provider = m.provider AND p.join_key =
+  -- m.project_id needs to stay a 1:1 (or 1:0) join.
+  LIMIT 1 BY provider, join_key
+) AS p ON p.provider = m.provider AND p.join_key = m.project_id
+LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
+WHERE m.org_id = {org_id:String}` + sincePredicate(cursor, "m.observed_at", rowKey) + orderBy("m.observed_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var workItemID, projectID, repoID, repoSlug, provider, resolvedProjectID string
+		var subjectKind, repoID, subjectID, repoSlug, source, provider, projectID, resolvedProjectID string
 		var observedAt time.Time
 		var keyResolutionCount uint64
-		if err := r.Scan(&workItemID, &projectID, &repoID, &repoSlug, &observedAt, &provider, &resolvedProjectID, &keyResolutionCount); err != nil {
+		if err := r.Scan(&subjectKind, &repoID, &subjectID, &repoSlug, &observedAt, &source, &provider, &projectID, &resolvedProjectID, &keyResolutionCount); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
-		rowSortKey := repoID + ":" + workItemID
-		if keyResolutionCount > 1 {
-			omissions.add(provider, projectID)
+		rowSortKey := subjectKind + ":" + repoID + ":" + subjectID + ":" + provider + ":" + projectID
+		telemetry.recordRead(source, subjectKind)
+		switch {
+		case keyResolutionCount == 0:
+			telemetry.recordUnresolved(provider, projectID)
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
-		}
-		workItemCanonicalID, workItemOmitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
-		if err != nil {
-			return nil, err
+		case keyResolutionCount > 1:
+			telemetry.recordAmbiguous(provider, projectID)
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// The canonical id is always derived from the JOINED project row's
 		// own (provider, id) -- resolvedProjectID (p.id) -- never from
-		// projectID (w.project_id): the latter can be a project_key value
-		// for a gitlab row, which is not the segment shape
-		// identity.Derive(KindProject, ...) expects and would mint an id no
-		// graph node actually carries.
+		// projectID (m.project_id): the latter can be a project_key value,
+		// which is not the segment shape identity.Derive(KindProject, ...)
+		// expects and would mint an id no graph node actually carries.
 		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, resolvedProjectID}, nil)
 		if err != nil {
 			return nil, err
 		}
-		if workItemOmitted || projectOmitted {
+		if projectOmitted {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
+
+		var fromSubject contractsv1.ContextFabricSubjectRef
+		var relationshipIDPrefix, evidenceRefID string
+		var authorization contractsv1.ContextFabricAuthorizationScope
+		switch subjectKind {
+		case "work_item":
+			workItemCanonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, subjectID}, nil)
+			if err != nil {
+				return nil, err
+			}
+			if omitted {
+				return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+			}
+			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: subjectID}
+			relationshipIDPrefix = "relationship:work_item_project:"
+			evidenceRefID = "acr:v1:work-item:" + repoID + ":" + subjectID
+			// CHAOS-3785 zero-UUID discipline: a Linear-sourced work item's
+			// repo_id is repo-less BY DESIGN and must not read as an orphan.
+			authorization = workItemAuthorization(repoID, repoSlug)
+		case "pull_request":
+			// git_pull_requests.number is UInt32 (tables.go's CHAOS-3789
+			// scan-then-convert note; chaos3899_census_registry.go's
+			// pullRequestNumberPredicate is the sibling handle-registry
+			// parse of the same column, same bound) -- codex xhigh review
+			// R2: subjectID here comes from the view's unconstrained
+			// String source column (schema.go), so parsing into an int64
+			// would silently accept a negative or oversized value no real
+			// PR entity can carry, producing a canonical id that matches
+			// no node in the graph.
+			number, parseErr := strconv.ParseUint(subjectID, 10, 32)
+			if parseErr != nil {
+				return nil, fmt.Errorf("devhealthsource: presence view pull_request subject_id %q is not a valid UInt32 PR number: %w", subjectID, parseErr)
+			}
+			// Legacy pull_request canonical id scheme -- see this
+			// function's own doc comment on why identity.Derive is
+			// deliberately never used here.
+			pullRequestCanonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
+			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestCanonicalID, Label: fmt.Sprintf("PR #%d", number)}
+			relationshipIDPrefix = "relationship:pull_request_project:"
+			evidenceRefID = "acr:v1:pull-request:" + repoID + ":" + subjectID
+			// Unlike a Linear work item, a pull request always belongs to a
+			// real git repository -- git_pull_requests.repo_id is a
+			// non-nullable UUID at the source. A repoSlug miss here is
+			// therefore a genuine orphan, never a by-design repo-less
+			// subject, so this does NOT route through workItemAuthorization's
+			// zero-UUID branch.
+			if repoSlug != "" {
+				authorization = repoAuthorization(repoSlug)
+			} else {
+				authorization = contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{orphanedRepositorySentinel}}
+			}
+		default:
+			// subject_kind is a closed vocabulary at the source
+			// (project_membership_transitions.subject_kind and the view's
+			// own column-arm literal): {work_item, pull_request}. An
+			// unrecognized value is schema drift this producer must not
+			// silently misroute.
+			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown subject_kind %q", subjectKind)}
+		}
+
+		// source is a closed vocabulary too (the view's own literal 'source'
+		// column: {transition, work_item_column}) -- codex xhigh review R1:
+		// an unconditional if-transition-else-column-semantics fall-through
+		// would silently misclassify a future/drifted source value as
+		// work_item_column (no interval) rather than rejecting it, the same
+		// class of silent misroute the subject_kind switch above already
+		// fails closed against.
+		var validFrom *time.Time
+		switch source {
+		case "transition":
+			validFrom = requiredTime(observedAt)
+		case "work_item_column":
+			// No interval: a plain canonical-column passthrough, presence only.
+		default:
+			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown source %q", source)}
+		}
+
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: "relationship:work_item_project:" + repoID + ":" + workItemID + ":" + provider + ":" + projectID,
-			Type:           contractsv1.ContextFabricRelationshipBelongsToProject,
-			From:           contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: workItemID},
-			To:             contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID, Label: projectID},
-			// A plain canonical column on work_items, not an Ops-computed
-			// attribution -- unlike the two producers below.
+			RelationshipID:  relationshipIDPrefix + repoID + ":" + subjectID + ":" + provider + ":" + projectID,
+			Type:            contractsv1.ContextFabricRelationshipBelongsToProject,
+			From:            fromSubject,
+			To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID, Label: projectID},
 			Derivation:      contractsv1.ContextFabricDerivationCanonicalStructured,
 			EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization:   workItemAuthorization(repoID, repoSlug),
-			EvidenceRefIDs:  []string{"acr:v1:work-item:" + repoID + ":" + workItemID},
+			Authorization:   authorization,
+			EvidenceRefIDs:  []string{evidenceRefID},
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
+			ValidFrom:       validFrom,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})

@@ -53,7 +53,24 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // changes. Live-verified (CHAOS-4108's own re-projection decision matrix,
 // standing stack, ground-truth org 70d529e0): zero project.v2:-shaped
 // nodes exist anywhere in that org's graph today.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v3"
+//
+// v4 (CHAOS-4193): the work_item -> project edge's READ SHAPE changed --
+// querySubjectProjectMemberships (formerly queryWorkItemProjects,
+// teams_projects_edges.go) now reads project_membership_presence instead of
+// work_items.project_id directly, and additionally projects pull_request ->
+// project edges the old source could never see at all. Same deliberate-
+// rebuild discipline as v2/v3: an already-projected organization's
+// BELONGS_TO_PROJECT edges carry the OLD RelationshipID shape (no
+// pull_request_project edges, no ValidFrom on any of them, and a gitlab
+// work item's edge -- sourced from work_items.project_id directly before
+// this version -- can no longer be re-derived at all, since
+// project_membership_presence's column arm deliberately excludes gitlab,
+// Context Fabric ruling 2026-08-24 09:55: "gitlab is not registered for
+// this kind at all -- GitLab's own 'project' concept IS this schema's
+// repo_id"). Incrementally advancing under the stale v3 marker would leave
+// every already-projected organization holding edges neither shape fully
+// describes; a full rebuild is what makes every edge unambiguously v4-shaped.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v4"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -85,11 +102,11 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v3"
 // ambiguous project keys and must say so) without a package-level global or
 // shared mutable state -- the coordinator projects organizations
 // concurrently, so a shared counter would be a race.
-func teamsProjectsTables(omissions *ambiguityLedger) []entityTable {
+func teamsProjectsTables(omissions *ambiguityLedger, presence *presenceTelemetryLedger) []entityTable {
 	return []entityTable{
 		{name: "teams", query: queryTeams},
 		{name: "projects", query: queryProjects},
-		{name: "work_items_projects", query: workItemProjectsQuery(omissions)},
+		{name: "project_membership_presence", query: subjectProjectMembershipsQuery(presence)},
 		{name: "work_item_team_attributions", query: queryWorkItemTeams},
 		{name: "team_project_ownership", query: projectTeamsQuery(omissions)},
 	}
@@ -111,6 +128,13 @@ type TeamsProjectsSource struct {
 	// projects organizations concurrently, so this is genuinely shared state.
 	omissionsMu sync.Mutex
 	omissions   map[string]*ambiguityLedger
+
+	// presenceMu guards presence, CHAOS-4193's own run-scoped telemetry for
+	// the project_membership_presence read (rows read by source/subject_kind,
+	// rows dropped for an unresolved or ambiguous (provider, project_id)) --
+	// same per-organization, accumulate-across-pages discipline as omissions.
+	presenceMu sync.Mutex
+	presence   map[string]*presenceTelemetryLedger
 
 	// consumedMu guards consumed, which memoises the furthest cursor a
 	// NextProjectionBatch call proved holds nothing publishable, per
@@ -247,6 +271,180 @@ func (s *TeamsProjectsSource) ledgerFor(orgID string, fromScratch bool) *ambigui
 	return s.omissions[orgID]
 }
 
+// presenceTelemetryLedger accumulates CHAOS-4193's own read-shape telemetry
+// for one source run: how many project_membership_presence rows this
+// producer read, broken down by (source, subject_kind), and how many were
+// dropped because (provider, project_id) did not resolve to EXACTLY ONE
+// `projects` row. The two failure shapes are counted separately --
+// "unresolved" (zero matches) and "ambiguous" (more than one) -- rather
+// than folded into one number, because an operator reading this run's log
+// needs to tell "nothing ever wrote this project" from "two projects claim
+// the same id" apart; conflating them is exactly the kind of measurement
+// that reads as one health signal while hiding two different causes.
+//
+// Same run-scoped-not-page-scoped discipline as ambiguityLedger (CHAOS-3802
+// codex round-2 F3): understated telemetry reads as health.
+//
+// unresolved/ambiguous carry BOTH a distinct-key set and a plain row count
+// (codex xhigh review R1, Medium): the set alone answers "how many DIFFERENT
+// bad (provider, project_id) values did this run hit", which is what an
+// operator acts on, but it silently equals 1 whether that one bad value
+// dropped a single row or fanned out across thousands -- exactly the
+// "understated telemetry reads as health" failure this ledger's own sibling
+// (ambiguityLedger) was built to close, reached from the other direction.
+// The two numbers answer different questions and both are logged.
+type presenceTelemetryLedger struct {
+	mu             sync.Mutex
+	reads          map[string]int      // "source\x00subject_kind" -> rows read
+	unresolved     map[string]struct{} // distinct "provider\x00project_id" with zero projects matches
+	unresolvedRows int                 // total ROWS dropped for an unresolved key (can exceed len(unresolved))
+	ambiguous      map[string]struct{} // distinct "provider\x00project_id" with >1 projects matches
+	ambiguousRows  int                 // total ROWS dropped for an ambiguous key (can exceed len(ambiguous))
+}
+
+func (l *presenceTelemetryLedger) recordRead(source, subjectKind string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.reads == nil {
+		l.reads = map[string]int{}
+	}
+	l.reads[source+"\x00"+subjectKind]++
+}
+
+func (l *presenceTelemetryLedger) recordUnresolved(provider, projectID string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.unresolved == nil {
+		l.unresolved = map[string]struct{}{}
+	}
+	l.unresolved[provider+"\x00"+projectID] = struct{}{}
+	l.unresolvedRows++
+}
+
+func (l *presenceTelemetryLedger) recordAmbiguous(provider, projectID string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.ambiguous == nil {
+		l.ambiguous = map[string]struct{}{}
+	}
+	l.ambiguous[provider+"\x00"+projectID] = struct{}{}
+	l.ambiguousRows++
+}
+
+// presenceReadCount reports how many rows this run read for one (source,
+// subjectKind) pair -- zero if the ledger is nil or that combination was
+// never seen, never an error, so a caller can enumerate the full closed
+// vocabulary unconditionally.
+func (l *presenceTelemetryLedger) presenceReadCount(source, subjectKind string) int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.reads[source+"\x00"+subjectKind]
+}
+
+// unresolvedCount is the distinct-key count -- how many DIFFERENT
+// (provider, project_id) values failed to resolve.
+func (l *presenceTelemetryLedger) unresolvedCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.unresolved)
+}
+
+// unresolvedRowCount is the total ROW count -- how many presence rows were
+// dropped, which can exceed unresolvedCount when one bad key fans out
+// across many rows (codex xhigh review R1, Medium: the distinct-key count
+// alone reports "1" whether that key dropped one row or thousands).
+func (l *presenceTelemetryLedger) unresolvedRowCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.unresolvedRows
+}
+
+func (l *presenceTelemetryLedger) ambiguousCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.ambiguous)
+}
+
+func (l *presenceTelemetryLedger) ambiguousRowCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ambiguousRows
+}
+
+// presenceLedgerFor mirrors ledgerFor exactly, for the presence telemetry
+// ledger instead of the ownership-omission one.
+func (s *TeamsProjectsSource) presenceLedgerFor(orgID string, fromScratch bool) *presenceTelemetryLedger {
+	s.presenceMu.Lock()
+	defer s.presenceMu.Unlock()
+	if s.presence == nil {
+		s.presence = map[string]*presenceTelemetryLedger{}
+	}
+	if fromScratch || s.presence[orgID] == nil {
+		s.presence[orgID] = &presenceTelemetryLedger{}
+	}
+	return s.presence[orgID]
+}
+
+// logPresenceTelemetry surfaces the presence read shape once per batch --
+// CHAOS-4193's own telemetry-same-change requirement (diagnosability from
+// the run's own artifacts). The read-count line is unconditional (a
+// zero-row combination is itself informative: e.g. work_item_column
+// carrying a pull_request row would violate the view's own invariant and
+// must be visible, not silently absent from the log); the drop line only
+// fires when there is something to report, matching logAmbiguousProjectKeys'
+// own convention. Neither line carries a project id, key, or org id --
+// counts and the closed source/subject_kind vocabulary only.
+func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string, ledger *presenceTelemetryLedger) {
+	if logger == nil {
+		return
+	}
+	logger.InfoContext(ctx, "devhealthsource read project_membership_presence",
+		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"presence_rows_transition_work_item", ledger.presenceReadCount("transition", "work_item"),
+		"presence_rows_transition_pull_request", ledger.presenceReadCount("transition", "pull_request"),
+		"presence_rows_work_item_column_work_item", ledger.presenceReadCount("work_item_column", "work_item"),
+		"presence_rows_work_item_column_pull_request", ledger.presenceReadCount("work_item_column", "pull_request"))
+	unresolved, unresolvedRows := ledger.unresolvedCount(), ledger.unresolvedRowCount()
+	ambiguous, ambiguousRows := ledger.ambiguousCount(), ledger.ambiguousRowCount()
+	if unresolved == 0 && ambiguous == 0 {
+		return
+	}
+	// Both the distinct-key count and the row count are logged (codex xhigh
+	// review R1, Medium): the key count is what an operator investigates
+	// (how many DIFFERENT bad ids), the row count is the blast radius (one
+	// bad id can drop one row or thousands) -- the key count alone cannot
+	// tell those apart.
+	logger.WarnContext(ctx, "devhealthsource dropped project membership edges for an unresolved (provider, project_id)",
+		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"reason", "(provider, project_id) did not resolve to exactly one projects row",
+		"unresolved_project_entity", unresolved, "unresolved_project_entity_rows", unresolvedRows,
+		"ambiguous_project_entity", ambiguous, "ambiguous_project_entity_rows", ambiguousRows)
+}
+
 // NewTeamsProjectsSource returns a TeamsProjectsSource. enabled mirrors
 // ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED; when false the source is
 // a documented no-op rather than a partially-working adapter.
@@ -300,11 +498,13 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	}
 	ledger := s.ledgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count())
+	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
+	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
 	return sourcePlan{
 		client:         s.client,
 		source:         TeamsProjectsSourceName,
 		version:        TeamsProjectsSourceVersion,
-		tables:         teamsProjectsTables(ledger),
+		tables:         teamsProjectsTables(ledger, presence),
 		now:            s.now,
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),
 		dropConsumed:   s.forgetConsumed,
