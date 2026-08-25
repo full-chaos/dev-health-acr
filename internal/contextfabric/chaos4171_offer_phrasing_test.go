@@ -314,6 +314,20 @@ func TestRuntimeOfferPhraser_SinkFailureFallsBackStructural(t *testing.T) {
 // vocabulary, so the logger call is the ONLY place an operator can tell
 // "the model call worked but we lost the receipt" apart from "the model's
 // own output was unusable".
+// TestSanitizeLogString_StripsNewlinesButKeepsPrintableText is RED-FIRST
+// evidence for a codeQL go/log-injection finding (chaos4171pr2, alert #51):
+// an attacker-controlled request_id containing a newline must not reach
+// the sink-failure WARN log unsanitized, or it could forge a fabricated
+// log line.
+func TestSanitizeLogString_StripsNewlinesButKeepsPrintableText(t *testing.T) {
+	t.Parallel()
+	got := sanitizeLogString("request_00000001\nfake_log_line=forged\r\x00tail")
+	want := "request_00000001fake_log_line=forgedtail"
+	if got != want {
+		t.Fatalf("sanitizeLogString() = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeOfferPhraser_SinkFailureLogsDistinctlyFromAnOrdinaryFallback(t *testing.T) {
 	t.Parallel()
 	var records []slog.Record
