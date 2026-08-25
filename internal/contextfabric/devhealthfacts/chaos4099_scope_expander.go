@@ -114,7 +114,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
 			}}, nil
 		}
-		targets, targetBasis, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit)
+		targets, targetBasis, targetSource, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -128,7 +128,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		// silently query pull requests from only the first 200 while
 		// reporting a clean, non-truncated result.
 		prCounts.Truncated = prCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, Counts: prCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, Counts: prCounts}, nil
 
 	case contextfabric.FactScopePolicyProjectWorkItemPullRequestReview:
 		repos, repoCounts, err := e.projectRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout)
@@ -142,7 +142,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
 			}}, nil
 		}
-		targets, targetBasis, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit)
+		targets, targetBasis, targetSource, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -151,7 +151,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		// See the identical fix's own comment in the pull_request case
 		// above.
 		reviewCounts.Truncated = reviewCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, Counts: reviewCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, Counts: reviewCounts}, nil
 
 	// --- CHAOS-4101: team-origin policies, ruled 2026-08-24 ---
 	//
@@ -167,8 +167,8 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		}
 		targets, targetBasis, authCounts := authorizeRepositories(request.Principal, repos)
 		merged := mergeCounts(counts, authCounts)
-		merged.AttributionSourceCounts = admittedAttributionSourceCounts(repos, targets)
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, Counts: merged}, nil
+		targetSource := repositoryAttributionSources(repos, targets)
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, Counts: merged}, nil
 
 	case contextfabric.FactScopePolicyTeamPrimaryAttributionPullRequest:
 		repos, repoCounts, err := e.teamRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout)
@@ -182,14 +182,14 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
 			}}, nil
 		}
-		targets, targetBasis, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit)
+		targets, targetBasis, targetSource, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
 		prCounts.AuthorizationDroppedCount += dropped
 		prCounts.MissingNextHopCount += repoCounts.MissingNextHopCount
 		prCounts.Truncated = prCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, Counts: prCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, Counts: prCounts}, nil
 
 	case contextfabric.FactScopePolicyTeamPrimaryAttributionPullRequestReview:
 		repos, repoCounts, err := e.teamRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout)
@@ -203,14 +203,14 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
 			}}, nil
 		}
-		targets, targetBasis, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit)
+		targets, targetBasis, targetSource, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
 		reviewCounts.AuthorizationDroppedCount += dropped
 		reviewCounts.MissingNextHopCount += repoCounts.MissingNextHopCount
 		reviewCounts.Truncated = reviewCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, Counts: reviewCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, Counts: reviewCounts}, nil
 
 	default:
 		return contextfabric.FactScopeExpansionResult{}, fmt.Errorf("devhealthfacts: scope expander does not implement policy %q", request.Policy)
@@ -497,9 +497,9 @@ func repoCandidateIndex(repos []repositoryCandidate) map[string]repositoryCandid
 // (CHAOS-4101): each PR inherits the basis of the repository it belongs to,
 // via repos' own basis field -- empty/no-op for the project policy, since
 // projectRepositories never sets it.
-func (e *ScopeExpander) pullRequestsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, contextfabric.FactScopeExpansionCounts, error) {
+func (e *ScopeExpander) pullRequestsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, contextfabric.FactScopeExpansionCounts, error) {
 	if len(repos) == 0 {
-		return nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
+		return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
 	repoIDs := repositoryIDs(repos)
 	byRepoID := repoCandidateIndex(repos)
@@ -514,18 +514,18 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		{Name: "repo_ids", Value: repoIDs},
 	})
 	if err != nil {
-		return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
+		return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	defer rows.Close()
 
 	var targets []contextfabric.SubjectRef
 	var targetBasis map[string]contextfabric.FactScopeBasis
-	sourceCounts := map[string]int{}
+	var targetSource map[string]string
 	for rows.Next() {
 		var repoID string
 		var number uint32
 		if err := rows.Scan(&repoID, &number); err != nil {
-			return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
+			return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		target := contextfabric.SubjectRef{
 			Kind:        contractsv1.ContextFabricSubjectPullRequest,
@@ -537,16 +537,26 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 				targetBasis = map[string]contextfabric.FactScopeBasis{}
 			}
 			targetBasis[contextfabric.FactSubjectKey(target)] = repo.basis
-			sourceCounts[repo.attributionSource]++
+			if repo.attributionSource != "" {
+				if targetSource == nil {
+					targetSource = map[string]string{}
+				}
+				targetSource[contextfabric.FactSubjectKey(target)] = repo.attributionSource
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
+		return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
+	// AttributionSourceCounts is NOT built here (codex xhigh review round 1,
+	// confirmed real, MEDIUM): this loop sees every row up to limitPlusOne,
+	// including the overflow row the resolver uses to detect truncation, so
+	// a count built from it would include a target that is never actually
+	// admitted. TargetAttributionSource above carries the per-target source
+	// instead; the resolver derives the count from `kept`, its own
+	// requirement-level admitted set, in the SAME place it derives
+	// TargetBasis's own mix summary.
 	counts := contextfabric.FactScopeExpansionCounts{CandidateCount: len(targets)}
-	if len(sourceCounts) > 0 {
-		counts.AttributionSourceCounts = sourceCounts
-	}
 	// NOT trimmed to limit (codex xhigh review round 1, confirmed real,
 	// MEDIUM) -- see projectRepositories' own identical comment. Returning
 	// all limit+1 targets lets the resolver's own overflow-row detection
@@ -555,7 +565,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	if len(targets) >= limitPlusOne {
 		counts.Truncated = true
 	}
-	return targets, targetBasis, counts, nil
+	return targets, targetBasis, targetSource, counts, nil
 }
 
 // pullRequestReviewsForRepositories is pullRequestsForRepositories' own
@@ -569,9 +579,9 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 // Returns a per-target basis override map alongside targets/counts
 // (CHAOS-4101), the same way pullRequestsForRepositories does: each review
 // inherits the basis of the repository its pull request belongs to.
-func (e *ScopeExpander) pullRequestReviewsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, contextfabric.FactScopeExpansionCounts, error) {
+func (e *ScopeExpander) pullRequestReviewsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, contextfabric.FactScopeExpansionCounts, error) {
 	if len(repos) == 0 {
-		return nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
+		return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
 	repoIDs := repositoryIDs(repos)
 	byRepoID := repoCandidateIndex(repos)
@@ -587,23 +597,23 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		{Name: "repo_ids", Value: repoIDs},
 	})
 	if err != nil {
-		return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
+		return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	defer rows.Close()
 
 	var targets []contextfabric.SubjectRef
 	var targetBasis map[string]contextfabric.FactScopeBasis
-	sourceCounts := map[string]int{}
+	var targetSource map[string]string
 	var missingNextHop int
 	for rows.Next() {
 		var reviewID, repoID string
 		var number uint32
 		if err := rows.Scan(&reviewID, &repoID, &number); err != nil {
-			return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
+			return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		canonicalID, omitted, err := identity.Derive(identity.KindPullRequestReview, []string{repoID, strconv.FormatUint(uint64(number), 10), reviewID}, nil)
 		if err != nil {
-			return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
+			return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		if omitted {
 			// The natural key exceeded identity.MaxNaturalKeyBytes -- the
@@ -621,22 +631,29 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 				targetBasis = map[string]contextfabric.FactScopeBasis{}
 			}
 			targetBasis[contextfabric.FactSubjectKey(target)] = repo.basis
-			sourceCounts[repo.attributionSource]++
+			if repo.attributionSource != "" {
+				if targetSource == nil {
+					targetSource = map[string]string{}
+				}
+				targetSource[contextfabric.FactSubjectKey(target)] = repo.attributionSource
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
+		return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
+	// AttributionSourceCounts is NOT built here -- see
+	// pullRequestsForRepositories' own identical comment (codex xhigh
+	// review round 1, confirmed real, MEDIUM); TargetAttributionSource
+	// carries the per-target source and the resolver derives the count
+	// from its own admitted set.
 	counts := contextfabric.FactScopeExpansionCounts{CandidateCount: len(targets) + missingNextHop, MissingNextHopCount: missingNextHop}
-	if len(sourceCounts) > 0 {
-		counts.AttributionSourceCounts = sourceCounts
-	}
 	// NOT trimmed to limit (codex xhigh review round 1, confirmed real,
 	// MEDIUM) -- see projectRepositories' own identical comment.
 	if len(targets)+missingNextHop >= limitPlusOne {
 		counts.Truncated = true
 	}
-	return targets, targetBasis, counts, nil
+	return targets, targetBasis, targetSource, counts, nil
 }
 
 func repositoryIDs(repos []repositoryCandidate) []string {
@@ -648,32 +665,33 @@ func repositoryIDs(repos []repositoryCandidate) []string {
 	return ids
 }
 
-// admittedAttributionSourceCounts builds the telemetry breakdown for the
-// direct team_primary_attribution_repository_v1 policy: for each ADMITTED
-// (post-authorization) target, count one against the attributionSource of
-// the repositoryCandidate it came from. Admitted-only, not candidate-count,
-// the same discipline the pull_request/review cases build inline: an
-// authorization-dropped repository's source never reaches an operator's
-// "what sources contributed to this answer" view, only its
-// AuthorizationDroppedCount does.
-func admittedAttributionSourceCounts(repos []repositoryCandidate, admitted []contextfabric.SubjectRef) map[string]int {
+// repositoryAttributionSources builds pullRequestsForRepositories' own
+// TargetAttributionSource map for the direct team_primary_attribution_repository_v1
+// policy: for each authorized target, the attributionSource of the
+// repositoryCandidate it came from, keyed by FactSubjectKey(target). This
+// is deliberately per-target, not a pre-aggregated count (codex xhigh
+// review round 1, confirmed real, MEDIUM x2 -- see fact_scope.go's own
+// comment on TargetAttributionSource): the resolver derives
+// AttributionSourceCounts from `kept`, its OWN requirement-level cap-and-
+// dedup-applied admitted set, not from this policy's authorized-but-not-yet
+// cap-checked target list. An authorization-dropped repository's source
+// never reaches this map at all, matching AuthorizationDroppedCount's own
+// discipline.
+func repositoryAttributionSources(repos []repositoryCandidate, targets []contextfabric.SubjectRef) map[string]string {
 	byRepoID := repoCandidateIndex(repos)
-	admittedRepoIDs := make(map[string]struct{}, len(admitted))
-	for _, target := range admitted {
-		admittedRepoIDs[strings.TrimPrefix(target.CanonicalID, "repository:")] = struct{}{}
-	}
-	counts := map[string]int{}
-	for repoID := range admittedRepoIDs {
+	var source map[string]string
+	for _, target := range targets {
+		repoID := strings.TrimPrefix(target.CanonicalID, "repository:")
 		repo, ok := byRepoID[repoID]
 		if !ok || repo.attributionSource == "" {
 			continue
 		}
-		counts[repo.attributionSource]++
+		if source == nil {
+			source = map[string]string{}
+		}
+		source[contextfabric.FactSubjectKey(target)] = repo.attributionSource
 	}
-	if len(counts) == 0 {
-		return nil
-	}
-	return counts
+	return source
 }
 
 // teamAttributionSourceRank mirrors ops' own precedence order

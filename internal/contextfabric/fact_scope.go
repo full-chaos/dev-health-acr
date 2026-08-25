@@ -988,6 +988,19 @@ type FactScopeExpansionResult struct {
 	// result without forcing every policy into carrying per-target
 	// provenance it does not need.
 	TargetBasis map[string]FactScopeBasis
+	// TargetAttributionSource is TargetBasis's own companion (CHAOS-4101
+	// codex xhigh review round 1, MEDIUM): an OPTIONAL per-target
+	// work_item_team_attributions.source value, keyed by the SAME
+	// FactSubjectKey(target). Absent (nil, or a target missing from the
+	// map) means "no source to report", true for every project policy and
+	// for a team target this expander could not attribute to one source.
+	// The resolver -- never this struct's producer -- turns this into
+	// FactScopeExpansionEvent.AttributionSourceCounts, and it does so ONLY
+	// from `kept`, the requirement-level, cap-and-dedup-applied admitted
+	// set, precisely so overflow rows this expander returned for
+	// truncation detection (Limit+1) or cross-origin duplicates can never
+	// inflate the count.
+	TargetAttributionSource map[string]string
 }
 
 // FactScopeExpansionCounts is the diagnostic split. See
@@ -999,10 +1012,6 @@ type FactScopeExpansionCounts struct {
 	MissingNextHopCount       int
 	TargetKindMismatchCount   int
 	Truncated                 bool
-	// AttributionSourceCounts mirrors FactScopeExpansionEvent's own field of
-	// the same name; the resolver copies it across unchanged, exactly like
-	// every other count on this struct. See that field's doc comment.
-	AttributionSourceCounts map[string]int
 }
 
 // maxFactScopeTargets bounds how many derived subjects one requirement may
@@ -1248,7 +1257,14 @@ func (r *FactReadScopeResolver) expand(
 	event.MissingNextHopCount = result.Counts.MissingNextHopCount
 	event.TargetKindMismatchCount = result.Counts.TargetKindMismatchCount
 	event.Truncated = result.Counts.Truncated
-	event.AttributionSourceCounts = result.Counts.AttributionSourceCounts
+	// AttributionSourceCounts and any Basis mix are NOT copied here (codex
+	// xhigh review round 1, confirmed real, MEDIUM x2): both are derived
+	// below from `kept`, the set that survives the target-kind-mismatch
+	// filter, the overflow cap AND the cross-origin dedup pass, not from
+	// `result.Targets` before any of those run. Copying either field here
+	// let an overflowed or cross-origin-deduped traversal report a source
+	// mix and telemetry count for targets that were never actually admitted
+	// to the fact read.
 	if err != nil {
 		// FAILS CLOSED: not one target from a failed traversal is admitted,
 		// even if some came back before the error. A subject set assembled
@@ -1395,6 +1411,12 @@ func (r *FactReadScopeResolver) expand(
 		return
 	}
 	scope.DerivedSubjects[event.RequirementKind] = append(existing, kept...)
+	// mixedBasis and sourceCounts are BOTH derived from `kept` -- the same
+	// set the loop below binds provenance to -- rather than from
+	// result.Targets, for the same overflow/dedup reason the copy above was
+	// removed (codex xhigh review round 1, confirmed real, MEDIUM x2).
+	mixedBasis := false
+	sourceCounts := map[string]int{}
 	for _, target := range kept {
 		// Provenance binds every admitted target to the policy that admitted
 		// it. Root is recorded per ORIGIN GROUP rather than per edge -- the
@@ -1410,9 +1432,16 @@ func (r *FactReadScopeResolver) expand(
 		// policy leaves TargetBasis nil/empty, so basis falls through to
 		// rule.Basis unchanged for them -- this is additive, not a behaviour
 		// change for anything already shipped.
+		key := canonicalFactSubjectKey(target)
 		basis := rule.Basis
-		if override, ok := result.TargetBasis[canonicalFactSubjectKey(target)]; ok {
+		if override, ok := result.TargetBasis[key]; ok {
 			basis = override
+			if override != rule.Basis {
+				mixedBasis = true
+			}
+		}
+		if source, ok := result.TargetAttributionSource[key]; ok && source != "" {
+			sourceCounts[source]++
 		}
 		scope.Derivations = append(scope.Derivations, FactScopeDerivation{
 			Root:   origins[0],
@@ -1420,6 +1449,18 @@ func (r *FactReadScopeResolver) expand(
 			Policy: rule.Policy,
 			Basis:  basis,
 		})
+	}
+	// event.Basis is a MIX SUMMARY (see FactScopeExpansionEvent.Basis's own
+	// doc comment and AttributionSourceCounts' doc comment): it starts as
+	// rule.Basis and flips to attributed_primary_team the moment even ONE
+	// admitted target carried that override, so a reader who only sees the
+	// event (not the per-target Derivations) is never told a heuristic-only
+	// or mixed expansion is as solid as a pure native_team one.
+	if mixedBasis {
+		event.Basis = FactScopeBasisAttributedPrimaryTeam
+	}
+	if len(sourceCounts) > 0 {
+		event.AttributionSourceCounts = sourceCounts
 	}
 }
 

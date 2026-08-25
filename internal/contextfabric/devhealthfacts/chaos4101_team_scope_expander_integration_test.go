@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -150,14 +151,24 @@ func TestScopeExpander_TeamToRepository_BasisVariesByWinningSourceAndSentinelsEx
 	if result.Counts.MissingNextHopCount != 2 {
 		t.Fatalf("MissingNextHopCount = %d, want 2 (zero-UUID + orphan)", result.Counts.MissingNextHopCount)
 	}
-	if got := result.Counts.AttributionSourceCounts["native_team"]; got != 1 {
-		t.Fatalf("AttributionSourceCounts[native_team] = %d, want 1 (repo A)", got)
+	// AttributionSourceCounts itself is a RESOLVER-derived field (CHAOS-4101
+	// codex xhigh review round 1, confirmed real, MEDIUM x2): the resolver
+	// builds it from `kept`, its own cap-and-dedup-applied admitted set, not
+	// from every target ExpandFactScope returns. This expander-level test
+	// asserts the per-target TargetAttributionSource map ExpandFactScope
+	// actually owns instead; TestChaos4101_AttributionSourceCountsExcludeTheOverflowedTarget
+	// in the contextfabric package (unit test, fake expander) proves the
+	// resolver's own overflow-safe derivation from that map.
+	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(repoATarget)]; got != "native_team" {
+		t.Fatalf("TargetAttributionSource[repo A] = %q, want native_team", got)
 	}
-	if got := result.Counts.AttributionSourceCounts["repo_ownership"]; got != 1 {
-		t.Fatalf("AttributionSourceCounts[repo_ownership] = %d, want 1 (repo B)", got)
+	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(repoBTarget)]; got != "repo_ownership" {
+		t.Fatalf("TargetAttributionSource[repo B] = %q, want repo_ownership", got)
 	}
-	if _, present := result.Counts.AttributionSourceCounts["project_ownership"]; present {
-		t.Fatalf("AttributionSourceCounts = %+v, project_ownership must not appear: it lost to native_team on repo A and was never the winner anywhere", result.Counts.AttributionSourceCounts)
+	for key, source := range result.TargetAttributionSource {
+		if source == "project_ownership" {
+			t.Fatalf("TargetAttributionSource[%s] = project_ownership, must not appear: it lost to native_team on repo A and was never the winner anywhere", key)
+		}
 	}
 }
 
@@ -238,5 +249,50 @@ func TestScopeExpander_TeamToPullRequest_InheritsRepositoryBasisAndDropsUnauthor
 	}
 	if result.Counts.AuthorizationDroppedCount != 1 {
 		t.Fatalf("AuthorizationDroppedCount = %d, want 1 (repo B, dropped before its pull requests were ever queried)", result.Counts.AuthorizationDroppedCount)
+	}
+}
+
+// TestScopeExpander_TeamToPullRequestReview_InheritsRepositoryBasisAndDropsUnauthorized
+// is the pull_request test above's own twin for the third and last team
+// policy, team_primary_attribution_pull_request_review_v1 (codex xhigh
+// review round 1, LOW: this path had no real-ClickHouse coverage despite
+// carrying separate production logic -- pullRequestReviewsForRepositories'
+// own INNER JOIN and identity.Derive call, untested by either of the two
+// tests above). Repo A's one review must be admitted and inherit repo A's
+// activity_proxy basis; repo B carries no review fixture, so authorization
+// dropping it is unobservable here beyond the count -- the pull_request
+// test already proves content from an unauthorized repository is never
+// queried at all.
+func TestScopeExpander_TeamToPullRequestReview_InheritsRepositoryBasisAndDropsUnauthorized(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedChaos4101TeamFixture(t, ctx, direct, at)
+
+	expander := devhealthfacts.NewScopeExpander(query)
+	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+		// Authorized for repo A only.
+		Principal:       storage.Principal{OrgID: chaos4099OrgID, RepositoryScopes: []string{chaos4101RepoASlug}},
+		RequirementKind: contextfabric.FactReviews,
+		Origins:         []contextfabric.SubjectRef{chaos4101TeamSubject()},
+		Policy:          contextfabric.FactScopePolicyTeamPrimaryAttributionPullRequestReview,
+		TargetKind:      contractsv1.ContextFabricSubjectPullRequestReview,
+		Limit:           20,
+	})
+	if err != nil {
+		t.Fatalf("ExpandFactScope: %v", err)
+	}
+	if len(result.Targets) != 1 {
+		t.Fatalf("targets = %+v, want repo A's one review only", result.Targets)
+	}
+	target := result.Targets[0]
+	if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisActivityProxy {
+		t.Fatalf("target %+v basis = %q, want activity_proxy (inherited from repo A, which has a native_team row)", target, got)
+	}
+	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(target)]; got != "native_team" {
+		t.Fatalf("TargetAttributionSource[review] = %q, want native_team (repo A's winning source)", got)
+	}
+	if result.Counts.AuthorizationDroppedCount != 1 {
+		t.Fatalf("AuthorizationDroppedCount = %d, want 1 (repo B, dropped before its reviews were ever queried)", result.Counts.AuthorizationDroppedCount)
 	}
 }

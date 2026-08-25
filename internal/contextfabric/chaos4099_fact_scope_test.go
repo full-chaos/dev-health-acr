@@ -989,6 +989,13 @@ type recordingScopeExpander struct {
 	// the resolver's per-row basis resolution without a real ClickHouse-
 	// backed expander.
 	targetBasis map[string]FactScopeBasis
+	// targetAttributionSource is TargetBasis's own companion (CHAOS-4101
+	// codex xhigh review round 1): an optional per-target
+	// FactScopeExpansionResult.TargetAttributionSource override, so a test
+	// can exercise the resolver's own AttributionSourceCounts derivation
+	// (from `kept`, not from every target this double returns) without a
+	// real ClickHouse-backed expander.
+	targetAttributionSource map[string]string
 }
 
 func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request FactScopeExpansionRequest) (FactScopeExpansionResult, error) {
@@ -1005,7 +1012,7 @@ func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request Fact
 			targets = nil
 		}
 	}
-	return FactScopeExpansionResult{Targets: targets, Counts: e.counts, TargetBasis: e.targetBasis}, nil
+	return FactScopeExpansionResult{Targets: targets, Counts: e.counts, TargetBasis: e.targetBasis, TargetAttributionSource: e.targetAttributionSource}, nil
 }
 
 // disableAllProjectPolicies installs a narrow table with the SAME three
@@ -1539,6 +1546,24 @@ func TestChaos4099_ATeamPolicyExpandsWithAPerTargetBasisAndDisclosesBoth(t *test
 			t.Fatalf("derivation root = %+v, want the team origin", derivation.Root)
 		}
 	}
+	// codex xhigh review round 1 (confirmed real, MEDIUM): before this fix,
+	// event.Basis was copied from rule.Basis at event construction and
+	// never updated, so this MIXED expansion (one native_team-sourced
+	// target, one heuristic-sourced) reported activity_proxy at the EVENT
+	// level even though a per-target derivation disagreed -- contradicting
+	// AttributionSourceCounts' own doc comment that Basis is "necessarily a
+	// mix summary". Event-level Basis must flip the moment even ONE
+	// admitted target carried the override, same as gap reasoning reads it.
+	if len(bundle.Scope.Events) != 1 {
+		t.Fatalf("events = %+v, want exactly one (single requirement, single origin kind)", bundle.Scope.Events)
+	}
+	event := bundle.Scope.Events[0]
+	if event.Basis != FactScopeBasisAttributedPrimaryTeam {
+		t.Fatalf("event.Basis = %q, want attributed_primary_team: a mixed expansion must not report the rule's clean default", event.Basis)
+	}
+	if event.AttributionSourceCounts != nil {
+		t.Fatalf("event.AttributionSourceCounts = %+v, want nil: this fixture's expander sets no TargetAttributionSource override", event.AttributionSourceCounts)
+	}
 
 	result := scopeServableResult()
 	applyFactScopeDisclosure(&result, bundle.Scope)
@@ -1559,6 +1584,161 @@ func TestChaos4099_ATeamPolicyExpandsWithAPerTargetBasisAndDisclosesBoth(t *test
 	}
 	if !result.Coverage.Partial {
 		t.Fatal("Coverage.Partial = false on a proxy-derived answer")
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the disclosed result must be servable: %v", err)
+	}
+}
+
+// TestChaos4101_AttributionSourceCountsExcludeTheOverflowedTarget is the
+// direct regression for codex xhigh review round 1's second confirmed
+// MEDIUM: before this fix, AttributionSourceCounts was copied straight from
+// result.Counts -- built by the expander over EVERY row it read, including
+// the Limit+1 overflow row the resolver's own cap enforcement exists to
+// drop. With Limit=1 and two candidate targets carrying DIFFERENT sources,
+// only ONE may be admitted, so the count must name only that one winner,
+// never both.
+func TestChaos4101_AttributionSourceCountsExcludeTheOverflowedTarget(t *testing.T) {
+	enableMetricsTeamPolicy(t, 1)
+
+	admittedRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:admitted-repo"}
+	overflowRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:overflow-repo"}
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result:     FactProviderResult{State: SourceAvailable},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+		ScopeExpander: &recordingScopeExpander{
+			// Order matters: the resolver's cap enforcement keeps the
+			// FIRST rule.limitOrDefault() targets and drops the rest, so
+			// admittedRepo (index 0) survives and overflowRepo (index 1)
+			// is the one the cap must exclude from the count.
+			targets: []SubjectRef{admittedRepo, overflowRepo},
+			targetAttributionSource: map[string]string{
+				canonicalFactSubjectKey(admittedRepo): "native_team",
+				canonicalFactSubjectKey(overflowRepo): "repo_ownership",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeTeam}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(bundle.Scope.Events) != 1 {
+		t.Fatalf("events = %+v, want exactly one", bundle.Scope.Events)
+	}
+	event := bundle.Scope.Events[0]
+	if event.AdmittedCount != 1 {
+		t.Fatalf("AdmittedCount = %d, want 1: Limit=1 caps this traversal to one target", event.AdmittedCount)
+	}
+	if len(event.AttributionSourceCounts) != 1 {
+		t.Fatalf("AttributionSourceCounts = %+v, want exactly one entry: only the admitted target's source may appear", event.AttributionSourceCounts)
+	}
+	if got := event.AttributionSourceCounts["native_team"]; got != 1 {
+		t.Fatalf("AttributionSourceCounts[native_team] = %d, want 1 (the admitted target)", got)
+	}
+	if _, present := event.AttributionSourceCounts["repo_ownership"]; present {
+		t.Fatalf("AttributionSourceCounts = %+v, repo_ownership must not appear: its target was cut by the Limit=1 cap, never admitted", event.AttributionSourceCounts)
+	}
+}
+
+// TestChaos4101_TeamSubjectAdmitsRealFactsAcrossAllThreeCapabilities is the
+// team-kind corpus case CHAOS-4101's ruling owed (ext65 corpus index 61 --
+// no corpus question text appears anywhere, the case is identified by path
+// and index only, same discipline caseSixtyRequirements' own comment
+// states). It is TestChaos4099_ProjectSubjectNoLongerClaimsAProofOfAbsence's
+// team-origin twin: that test proves a project subject no longer claims
+// SourcePruned over an activity-proxy-reachable requirement, but its
+// registry wires NO expander, so a team subject hits the SAME class of gap
+// there (see TestChaos4099_TeamOriginFailsClosedWithoutAnExpander) for a
+// reason unrelated to the corpus case -- policy_unavailable because nothing
+// is wired, not because the ratified team policies are unreachable. THIS
+// test wires a real FactScopeExpander and proves the corpus case's own
+// subject (a team) is admitted and answered across all three capabilities
+// its subject_terms name (repository-scoped load via metrics, pull
+// requests, and reviews) now that team_primary_attribution_repository_v1,
+// _pull_request_v1 and _pull_request_review_v1 are ratified and ACTIVE in
+// the real (unmodified) policy table.
+func TestChaos4101_TeamSubjectAdmitsRealFactsAcrossAllThreeCapabilities(t *testing.T) {
+	t.Parallel()
+
+	prTarget := SubjectRef{Kind: SubjectPullRequest, CanonicalID: "pull_request:corpus61-repo:1"}
+	reviewTarget := SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: "pull_request_review:corpus61-repo:1:review-1"}
+	repoTarget := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:corpus61-repo"}
+
+	stubs := map[FactKind]*factProviderStub{}
+	providers := make([]FactProvider, 0, 3)
+	for kind, capability := range scopeCapabilities() {
+		stub := &factProviderStub{capability: capability, result: FactProviderResult{State: SourceAvailable}}
+		stubs[kind] = stub
+		providers = append(providers, stub)
+	}
+	// perCall order MUST match caseSixtyRequirements()'s own requirement
+	// order (PullRequests, Reviews, Metrics): Resolve walks input.Requirements
+	// in that order, one ExpandFactScope call per requirement, single team
+	// origin kind.
+	expander := &recordingScopeExpander{perCall: [][]SubjectRef{
+		{prTarget},
+		{reviewTarget},
+		{repoTarget},
+	}}
+	registry, err := NewFactCapabilityRegistry(providers, FactRegistryOptions{ScopeExpander: expander})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeTeam}, caseSixtyRequirements(), TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	bySource := coverageBySource(bundle)
+	for _, kind := range []FactKind{FactPullRequests, FactReviews, FactMetrics} {
+		observation, ok := bySource["canonical_fact:"+string(kind)]
+		if !ok {
+			t.Fatalf("coverage = %+v, want an observation for %s", bundle.Coverage.Sources, kind)
+		}
+		if observation.State == SourcePruned {
+			t.Fatalf("%s state = pruned -- that asserts a proof of absence over a team subject the ratified policy can actually reach", kind)
+		}
+	}
+	if len(bundle.Scope.Derivations) != 3 {
+		t.Fatalf("derivations = %+v, want one per admitted target (pull request, review, repository)", bundle.Scope.Derivations)
+	}
+	wantTargets := map[SubjectRef]bool{prTarget: false, reviewTarget: false, repoTarget: false}
+	for _, derivation := range bundle.Scope.Derivations {
+		if derivation.Root != scopeTeam {
+			t.Fatalf("derivation root = %+v, want the team origin", derivation.Root)
+		}
+		if derivation.Basis != FactScopeBasisActivityProxy {
+			t.Fatalf("derivation basis = %q, want activity_proxy: this fixture sets no TargetBasis override", derivation.Basis)
+		}
+		if _, known := wantTargets[derivation.Target]; !known {
+			t.Fatalf("unexpected derivation target %+v", derivation.Target)
+		}
+		wantTargets[derivation.Target] = true
+	}
+	for target, seen := range wantTargets {
+		if !seen {
+			t.Fatalf("target %+v never derived", target)
+		}
+	}
+	result := scopeServableResult()
+	applyFactScopeDisclosure(&result, bundle.Scope)
+	found := false
+	for _, limitation := range result.Limitations {
+		if limitation == contractsv1.ContextFabricFactScopeActivityProxyLimitation {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("limitations = %v, want the activity_proxy disclosure: every target here was reached via activity, not ownership", result.Limitations)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false -- an activity-proxy-derived team answer must disclose its own caveat")
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the disclosed result must be servable: %v", err)
