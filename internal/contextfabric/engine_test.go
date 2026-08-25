@@ -318,6 +318,7 @@ type recordingTelemetry struct {
 	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
 	structureNeedsDisclosed []contractsv1.ContextFabricStructureNeedKind
+	gatedOfferResolutions   []GatedOfferResolutionOutcome
 	structureOfferCounts    []structureOfferCountRecord
 	structureReceipts       []structureReceiptRecord
 	// structureExplicit (CHAOS-3972 P3) mirrors structureReceipts' own
@@ -412,6 +413,10 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
 	r.structureNeedsDisclosed = append(r.structureNeedsDisclosed, member)
+}
+
+func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {
+	r.gatedOfferResolutions = append(r.gatedOfferResolutions, outcome)
 }
 
 func (r *recordingTelemetry) RecordStructureOfferCount(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {

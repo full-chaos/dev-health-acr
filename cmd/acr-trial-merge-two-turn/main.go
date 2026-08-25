@@ -271,7 +271,21 @@ import (
 // shards must be refused, not silently merged under the first shard's
 // label. Mirrored here in the same change, same undeclared-field-dropped-
 // on-decode reason as every prior bump needed it for.
-const expectedSchemaVersion = "28"
+// "29" (CHAOS-4234, team-lead ruled 2026-08-24): the class-default window
+// gate composes kind/handle/candidate offers from an offers-only
+// resolution (regime A). (a) MEANING change on regime-A rows: every
+// kind_offer/decision-stage row field is now populated on a window-gated
+// turn 1 where v27 read zero values. (b) Additive: five twoTurnCaseResult
+// fields (turn1_offer_composed_under_window_gate, expected_subject_in_pool,
+// expected_subject_rank, expected_subject_at_offer_boundary,
+// turn2_window_receipt_attached) and two summed report counters
+// (regime_a_offer_composed_count, regime_a_turn2_answered_count -- the
+// ONLY merge arithmetic change, plain sums, no gate). (c) Harness
+// semantics: a regime-A positive arm's turn 2 now carries the window
+// receipt beside the member receipt, so turn-2 aggregates are not
+// engine-only comparable to v27; offer_miss_count stays engine-only. See
+// the producer's own ReportSchemaVersion doc comment.
+const expectedSchemaVersion = "29"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -535,8 +549,15 @@ type twoTurnCaseResult struct {
 	// PRE-repair twin, mirroring twoTurnCaseResult's identically-named
 	// field byte-for-byte.
 	ExpectedKindAtOfferBoundaryBeforeRepair bool `json:"expected_kind_at_offer_boundary_before_repair"`
-	AnchorOptionsCount                      int  `json:"anchor_options_count"`
-	HandleOptionsCount                      int  `json:"handle_options_count"`
+	// CHAOS-4234 (schema v29): mirrored byte-for-byte from the producer's
+	// twoTurnCaseResult (no omitempty on the bools -- a false is a reading).
+	Turn1OfferComposedUnderWindowGate bool `json:"turn1_offer_composed_under_window_gate"`
+	ExpectedSubjectInPool             bool `json:"expected_subject_in_pool"`
+	ExpectedSubjectRank               int  `json:"expected_subject_rank"`
+	ExpectedSubjectAtOfferBoundary    bool `json:"expected_subject_at_offer_boundary"`
+	Turn2WindowReceiptAttached        bool `json:"turn2_window_receipt_attached"`
+	AnchorOptionsCount                int  `json:"anchor_options_count"`
+	HandleOptionsCount                int  `json:"handle_options_count"`
 	// CHAOS-4119 (schema v27): HandleOptionsCount's own pre-graph-source
 	// twin, mirroring twoTurnCaseResult's identically-named field
 	// byte-for-byte.
@@ -619,11 +640,16 @@ type twoTurnReport struct {
 	WindowArmErrorCount                     int `json:"window_arm_error_count"`
 	WindowGatedCount                        int `json:"window_gated_count"`
 	WindowClassDefaultGatedCount            int `json:"window_class_default_gated_count"`
-	InferredKindHandleDecisiveCount         int `json:"inferred_kind_handle_decisive_count"`
-	InferredBaselineEquivalentCount         int `json:"inferred_baseline_equivalent_count"`
-	InferredKindInsensitivityAttestedCount  int `json:"inferred_kind_insensitivity_attested_count"`
-	InferredUnjustifiedCount                int `json:"inferred_unjustified_count"`
-	InferredPairInvalidCount                int `json:"inferred_pair_invalid_count"`
+	// RegimeAOfferComposedCount/RegimeATurn2AnsweredCount (CHAOS-4234,
+	// schema v29) mirror twoTurnReport's identically-named fields --
+	// informational, summed across shards, no gate.
+	RegimeAOfferComposedCount              int `json:"regime_a_offer_composed_count"`
+	RegimeATurn2AnsweredCount              int `json:"regime_a_turn2_answered_count"`
+	InferredKindHandleDecisiveCount        int `json:"inferred_kind_handle_decisive_count"`
+	InferredBaselineEquivalentCount        int `json:"inferred_baseline_equivalent_count"`
+	InferredKindInsensitivityAttestedCount int `json:"inferred_kind_insensitivity_attested_count"`
+	InferredUnjustifiedCount               int `json:"inferred_unjustified_count"`
+	InferredPairInvalidCount               int `json:"inferred_pair_invalid_count"`
 	// PairRetriedCount (CHAOS-4138, schema v17) mirrors twoTurnReport's
 	// identically-named field -- see that file's own doc comment.
 	// Observational only; summed across shards like every other count
@@ -948,6 +974,8 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.WindowArmErrorCount += s.WindowArmErrorCount
 		merged.WindowGatedCount += s.WindowGatedCount
 		merged.WindowClassDefaultGatedCount += s.WindowClassDefaultGatedCount
+		merged.RegimeAOfferComposedCount += s.RegimeAOfferComposedCount
+		merged.RegimeATurn2AnsweredCount += s.RegimeATurn2AnsweredCount
 		merged.InferredKindHandleDecisiveCount += s.InferredKindHandleDecisiveCount
 		merged.InferredBaselineEquivalentCount += s.InferredBaselineEquivalentCount
 		merged.InferredKindInsensitivityAttestedCount += s.InferredKindInsensitivityAttestedCount

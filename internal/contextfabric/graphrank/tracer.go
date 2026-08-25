@@ -102,7 +102,15 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// CHAOS-4154: which candidate population a statistical commit
 			// was decided over -- a closed vocabulary, see
 			// ResolutionTraceEvent.PopulationBasis's own doc comment.
-			"population_basis", event.PopulationBasis)
+			"population_basis", event.PopulationBasis,
+			// CHAOS-4234 (codex round-2 finding #1): offersOnlyDecisionTracer
+			// tags every decision event from the offers-only pass with
+			// OfferedUnderWindowGate=true before it reaches this sink --
+			// without logging it here, a production log line could show
+			// "outcome=committed" with no indication the resolution behind
+			// it was discarded unconditionally (see
+			// offersOnlyDecisionTracer's own doc comment, resolve.go).
+			"offered_under_window_gate", event.OfferedUnderWindowGate)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put
@@ -185,7 +193,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// (ResolutionTraceEvent) for what each key measures.
 			"handle_offer_count_before_graph_source", event.HandleOfferCountBeforeGraphSource,
 			"handle_offer_graph_derived_count", event.HandleOfferGraphDerivedCount,
-			"handle_offer_graph_derived_rejected_count", event.HandleOfferGraphDerivedRejectedCount)
+			"handle_offer_graph_derived_rejected_count", event.HandleOfferGraphDerivedRejectedCount,
+			"offered_under_window_gate", event.OfferedUnderWindowGate)
+	case "ranked_cut":
+		t.logger.DebugContext(ctx, "context fabric resolution trace: ranked cut",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"rank", event.Rank, "survived", event.Survived, "coverage_bypass", event.CoverageBypass)
 	case "confirmed_kind_scope":
 		// CHAOS-4154: the operator-visible half of the confirmed-kind
 		// truncation-scoping mechanism -- this event's own presence in a

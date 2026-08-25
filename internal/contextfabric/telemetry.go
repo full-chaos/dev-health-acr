@@ -217,6 +217,11 @@ func (t SlogEngineTelemetry) RecordStructureNeedsDisclosed(ctx context.Context, 
 // RecordStructureOfferCount (CHAOS-3900 P1.F). member/source are both
 // closed enums; count is a plain integer -- the full event is
 // counts/enums only, never an offer's own label/value/canonical_id.
+func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric gated offer resolution", args...)
+}
+
 func (t SlogEngineTelemetry) RecordStructureOfferCount(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
 	args := append([]any{"org_id", principal.OrgID, "member", string(member), "source", string(source), "count", count}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure offer count", args...)

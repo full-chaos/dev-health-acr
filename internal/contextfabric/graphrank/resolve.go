@@ -443,14 +443,42 @@ type ResolutionTracer interface {
 // resolution" invariant readers of this trace (production and this
 // ticket's own test helpers alike) rely on.
 type discardableDecisionTracer struct {
-	real     ResolutionTracer
-	captured *ResolutionTraceEvent
+	real              ResolutionTracer
+	captured          *ResolutionTraceEvent
+	capturedRankedCut []ResolutionTraceEvent
+}
+
+// offersOnlyDecisionTracer (CHAOS-4234, codex round-1 finding 3) tags
+// every "decision" stage event with OfferedUnderWindowGate=true before
+// forwarding it, and passes every other stage through unchanged. Used
+// ONLY at the offers-only pass's own first-pass decision call site
+// (resolveSubjects, above) -- see that call site's own comment for why
+// the tag matters: the resolution this decision belongs to is discarded
+// unconditionally, so "Outcome=committed" on an untagged event would read
+// as a real commit to anything consuming ResolutionTraceEvent without
+// also cross-referencing which mode produced it.
+type offersOnlyDecisionTracer struct{ real ResolutionTracer }
+
+func (o offersOnlyDecisionTracer) Trace(event ResolutionTraceEvent) {
+	if event.Stage == "decision" {
+		event.OfferedUnderWindowGate = true
+	}
+	if o.real != nil {
+		o.real.Trace(event)
+	}
 }
 
 func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
-	if event.Stage == "decision" {
+	switch event.Stage {
+	case "decision":
 		captured := event
 		d.captured = &captured
+		return
+	case "ranked_cut":
+		// CHAOS-4234: a scoped pass's own ranked_cut batch is discarded
+		// with its decision -- otherwise a reader keeping the LAST batch
+		// would read a discarded pass's ranks as the final ones.
+		d.capturedRankedCut = append(d.capturedRankedCut, event)
 		return
 	}
 	if d.real != nil {
@@ -461,7 +489,13 @@ func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
 // keep forwards the held-back "decision" event (if any) to the real
 // tracer -- call ONLY when the caller is retaining this call's resolution.
 func (d *discardableDecisionTracer) keep() {
-	if d.captured != nil && d.real != nil {
+	if d.real == nil {
+		return
+	}
+	for _, event := range d.capturedRankedCut {
+		d.real.Trace(event)
+	}
+	if d.captured != nil {
 		d.real.Trace(*d.captured)
 	}
 }
@@ -831,6 +865,46 @@ type ResolutionTraceEvent struct {
 	HandleOfferCountBeforeGraphSource    int
 	HandleOfferGraphDerivedCount         int
 	HandleOfferGraphDerivedRejectedCount int
+	// OfferedUnderWindowGate (CHAOS-4234) is true when this resolution
+	// ran in offers-only mode under the class-default window gate
+	// (contextfabric.OffersOnlyResolution). Set on TWO stages, for two
+	// different reasons -- both real events under offers-only mode, no
+	// stage this resolution emits leaves it unset:
+	//   - "kind_offer" (unconditional, every resolution): the trace-
+	//     visible twin of the engine's RecordGatedOfferResolution
+	//     telemetry, so a report row can tell "offers composed beside the
+	//     window offer" apart from an ordinary decisive turn without
+	//     cross-referencing the window canonicalization outcome by hand.
+	//   - "decision" (offers-only mode ONLY, codex round-1 finding 3,
+	//     offersOnlyDecisionTracer): a "decision" event's own
+	//     Outcome=="committed" would otherwise read as a real commit --
+	//     under this mode the engine discards resolution/commitBases/
+	//     commitDigests unconditionally, so nothing this event describes
+	//     ever reaches anywhere decisive. A reader of a "decision" event
+	//     MUST check this field before trusting its CommitGate/Outcome.
+	OfferedUnderWindowGate bool
+	// Rank/Survived/CoverageBypass (stage=="ranked_cut" ONLY, CHAOS-4234)
+	// describe ONE candidate's fate at ResolveFromMergedCandidatesWithGateAndBasis'
+	// final MaxSubjectCandidates cut (resolution.go): Rank is its 1-based
+	// position in the survivors-first ranked order the cut is taken over,
+	// Survived is whether it stayed inside the cut (and so reached
+	// resolution.Candidates and the offer builders' shared input). One
+	// event per candidate, emitted in rank order, so Rank==1 marks the
+	// start of a fresh batch -- a re-decision (census merge, scoped
+	// commit) emits a fresh batch and a reader keeps the LAST one.
+	// CoverageBypass is the companion emitted from resolve.go for a
+	// CHAOS-4038 coverage-floor find that the cut dropped but
+	// unionCandidatesForOffer still hands to the offer builders: Rank is 0
+	// and Survived false on such an event, because the candidate reaches
+	// the offer boundary WITHOUT surviving the cut. The harness's own
+	// expected_subject_in_pool/expected_subject_rank/
+	// expected_subject_at_offer_boundary row fields are derived from these
+	// (Subject is the SAME graph canonical id the corroboration/decision
+	// events already carry; the harness only ever writes booleans and
+	// ranks to a report).
+	Rank           int
+	Survived       bool
+	CoverageBypass bool
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -1171,6 +1245,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 	}
 	terms := SubjectTerms(request, interpreted)
+	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
+	// mode -- every commit MECHANISM below that only exists to reach a
+	// commit (shadow evidence round/census, confirmed-kind truncation
+	// scoping, survivors-first reordering) is skipped, because the engine
+	// discards this call's resolution unconditionally and keeps only the
+	// StructureOfferMaterial. Retrieval, ranking, the first-pass decision
+	// (whose trace the harness reads) and every offer builder run exactly
+	// as on a decisive turn. See contextfabric/chaos4234_offers_only.go.
+	offersOnly := contextfabric.OffersOnlyResolution(ctx)
 	candidatesBySubject := make(map[string]contextfabric.SubjectCandidate)
 	// callerSourced marks which resolved subjects came from a
 	// caller-explicit hint -- any SubjectHint.Source other than
@@ -1787,7 +1870,25 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// CHAOS-4085 commit-basis write site 2 of 3: the ordinary commit
 	// decision. ResetTo, not merge -- this is the first decision, and it
 	// defines the whole basis set for it.
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, "", false)
+	//
+	// CHAOS-4234 (codex round-1 finding 3, confirmed): firstPassTracer
+	// tags this call's OWN "decision" stage event with OfferedUnderWindowGate
+	// under offers-only mode -- the engine discards resolution/
+	// commitBases/commitDigests for this SAME call unconditionally
+	// (chaos4234_offers_only.go's gatedOfferMaterial), so an
+	// "Outcome=committed" reading here never reaches anywhere decisive.
+	// Without the tag a reader of the two-turn harness's own
+	// finalDecisionEvent() (Turn1CommitGate/Outcome) cannot tell this
+	// pass's own would-be commit apart from a real one. ranked_cut events
+	// from this SAME call are left untouched -- they drive the offer
+	// builders' own input under offers-only mode too, so they stay
+	// accurate regardless of which mode produced them. See
+	// offersOnlyDecisionTracer's own doc comment.
+	firstPassTracer := deps.ResolutionTracer
+	if offersOnly && firstPassTracer != nil {
+		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
+	}
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -1805,7 +1906,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// exact_index/identity_fast_path already had first refusal in the call
 	// above -- if either had fired, resolution.Committed would be non-empty
 	// and this block would not run.
-	if confirmedKind != nil && searchTruncated && len(resolution.Committed) == 0 {
+	if !offersOnly && confirmedKind != nil && searchTruncated && len(resolution.Committed) == 0 {
 		scopedPool, scopedObservationParentKey, scopedObservationBlocked, scopedIdentity, scopedIdentityTerms, scopeState, scopeTraversalDegraded, scopeAuthzDropped, scopeErr := buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, confirmedKind.Kind, effectiveSearchLimit)
 		if scopeErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, scopeErr
@@ -1962,7 +2063,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// "stalled" (§0's own definition: nothing committed and searchTruncated)
 	// -- the brief's own cost note ("per stalled resolution... committed
 	// resolutions pay nothing").
-	if deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
+	if !offersOnly && deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind, confirmedAnchor)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
@@ -2047,6 +2148,24 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// offers.go) for why this union must dedupe by subject, not merely
 	// concatenate.
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageCandidates)
+	// CHAOS-4234: a coverage-floor find the final cut dropped still reaches
+	// the offer builders through the union above -- emit its own
+	// "ranked_cut" companion (CoverageBypass=true, Rank 0) so a reader of
+	// resolution.go's per-candidate ranked_cut batch can compute "at the
+	// offer boundary" as Survived||CoverageBypass without re-deriving
+	// this union. See ResolutionTraceEvent.CoverageBypass' doc comment.
+	if deps.ResolutionTracer != nil && len(coverageCandidates) > 0 {
+		visible := make(map[string]bool, len(resolution.Candidates))
+		for _, candidate := range resolution.Candidates {
+			visible[SubjectKey(candidate.Subject)] = true
+		}
+		for _, candidate := range coverageCandidates {
+			if visible[SubjectKey(candidate.Subject)] {
+				continue
+			}
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{RequestID: request.RequestID, Stage: "ranked_cut", Subject: candidate.Subject, CoverageBypass: true})
+		}
+	}
 	// CHAOS-4183 phase 3 (sol design consult, team-lead ratified
 	// 2026-08-23): projectKindOfferKinds' own POST-DECISION, KIND-ONLY
 	// boundary completion for Shape A -- see its own doc comment for the
@@ -2127,6 +2246,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			KindOfferSuppressedByCardinality: kindOfferDiag.SuppressedByCardinality,
 			KindOfferCandidateOfferCount:     candidateOfferDiag.CandidateOfferCount,
 			KindOfferOfferKind:               offerKind,
+			OfferedUnderWindowGate:           offersOnly,
 			// CHAOS-4012 v22 (team-lead ruling, re-smoke follow-up): computed
 			// only when a tracer is actually wired -- this is telemetry-only,
 			// never consulted by kindOfferMaterial/candidateOfferMaterial

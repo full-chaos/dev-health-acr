@@ -1249,6 +1249,18 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	for i, index := range order {
 		ordered[i] = candidates[index]
 	}
+	// CHAOS-4234 "ranked_cut": one event per candidate, in the exact
+	// order the cut below is taken over, BEFORE it is taken -- the only
+	// place a candidate's pre-cut rank still exists. See
+	// ResolutionTraceEvent.Rank's own doc comment.
+	if tracer != nil {
+		for i, candidate := range ordered {
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "ranked_cut", Subject: candidate.Subject,
+				Rank: i + 1, Survived: max <= 0 || i < max,
+			})
+		}
+	}
 	if max > 0 && len(ordered) > max {
 		ordered = ordered[:max]
 	}

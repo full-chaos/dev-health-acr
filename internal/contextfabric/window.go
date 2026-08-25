@@ -1233,6 +1233,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 	structureCanon *requestStructureCanonicalization,
 	origin WindowCanonicalizationOutcome,
 	binding ResolvedGraphBinding,
+	gatedMaterial StructureOfferMaterial,
 ) (InvestigationResult, error) {
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -1308,16 +1309,31 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// windowClarification is nil (AllowClarification=false declined every
 	// clarification, window included), mirroring composeWindowClarification's
 	// own nil-means-nothing-in-play convention.
+	// CHAOS-4234: gatedMaterial (the class-default gate's offers-only
+	// resolution; empty for every other origin) composes kind/handle/
+	// candidate offers BESIDE the window offer -- composeGatedStructureNeeds
+	// reduces to the pre-CHAOS-4234 window-only block when it is empty.
 	var structureNeeds *contractsv1.ContextFabricStructureNeeds
 	if windowClarification != nil {
-		structureNeeds = &contractsv1.ContextFabricStructureNeeds{
-			Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
-			WindowOptions: windowClarification.Options,
-		}
+		structureNeeds = composeGatedStructureNeeds(gatedMaterial, resultID, windowClarification.Options)
+	}
+	// CHAOS-4234 (codex round-1 finding, confirmed): gatedMaterial's
+	// AnchorOptions can carry membership-verify (V2) offers -- the SAME
+	// anchorOfferMaterial call resolve.go's decisive path already uses,
+	// unconditionally part of every ResolveSubjects return, offers-only
+	// mode included. Mirrors unresolved.go's terminalResult schema
+	// dispatch exactly: gatedMaterial is the zero value (AnchorOptionsRequireV2
+	// false) on every OTHER origin this function serves (explicit-
+	// unconfirmed, RegimeAOffersDisabled, a failed offers-only read), so
+	// this schemaVersion stays V1 there, unchanged from before this
+	// ticket.
+	schemaVersion := InvestigationResultSchemaV1
+	if gatedMaterial.AnchorOptionsRequireV2 {
+		schemaVersion = InvestigationResultSchemaV2
 	}
 
 	result := InvestigationResult{
-		SchemaVersion:           InvestigationResultSchemaV1,
+		SchemaVersion:           schemaVersion,
 		ResultID:                resultID,
 		RequestID:               request.RequestID,
 		GeneratedAt:             e.now().UTC(),
@@ -1348,6 +1364,12 @@ func (e *Engine) windowConfirmationRequiredResult(
 		DeterministicAnswer:     limitation,
 		Warnings:                []string{},
 	}
+	// CHAOS-4234 (codex round-1 finding, confirmed): terminalVersions()
+	// always stamps V1 -- override to the SAME schemaVersion just chosen,
+	// mirroring unresolved.go's terminalResult (result.Versions.ContractVersion
+	// = schemaVersion) exactly, so a V2 gated result's Versions block
+	// agrees with its own SchemaVersion.
+	result.Versions.ContractVersion = schemaVersion
 	// Codex round-2 finding (confirmed): mirrors the decisive/terminal
 	// paths' own ContextFabricWindowConfirmationNudge handling exactly
 	// (engine.go, terminalResult) -- a caller that asked to be nudged must
@@ -1367,7 +1389,15 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// branch (structureNeeds is nil there) -- same discipline
 	// terminalResult's own call (unresolved.go) already applies.
 	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
-	if err := result.Validate(); err != nil {
+	// CHAOS-4234 (codex round-1 finding, confirmed): ValidateResult, not
+	// result.Validate() directly -- the latter is UNCONDITIONALLY the V1
+	// validator regardless of result.SchemaVersion (ValidateResult's own
+	// doc comment: "every storage adapter's Save must use this instead of
+	// calling result.Validate() directly, or a genuinely valid v2 result
+	// would be rejected"). A V2 gated result (membership-verify anchor
+	// offers) would fail V1's own AnchorOptions shape check here
+	// otherwise. Mirrors terminalResult's identical dispatch (unresolved.go).
+	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
