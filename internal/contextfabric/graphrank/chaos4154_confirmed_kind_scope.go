@@ -211,9 +211,19 @@ const (
 //
 // A genuine SearchKind failure aborts and propagates as an error, exactly
 // like every other retrieval pass in this package.
-func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, kind contextfabric.SubjectKind, searchLimit int) (pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, scopedIdentity identityClaimants, scopedIdentityTerms identityMatchTerms, state string, traversalDegraded int, authzDropped int, err error) {
+// vectorCensus (CHAOS-4155 Phase 1, added as this function's own 10th
+// return value rather than a side channel, matching every other
+// load-bearing value in this file's signature) is the SHADOW-ONLY vector
+// census outcome -- see chaos4155_confirmed_kind_vector_scope.go's own doc
+// comment. It is populated ONLY in the deps.VectorMechanismConfigured case
+// below (the one state this function's own switch reaches from which the
+// shadow arm has anything to prove); every other return path leaves it at
+// its zero value, which callers read as ConfirmedKindVectorScopeNotAttempted
+// via the SAME "empty state string" convention this file's other fields
+// already use. NEVER influences state/pool/scopedIdentity in this change.
+func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, kind contextfabric.SubjectKind, searchLimit int) (pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, scopedIdentity identityClaimants, scopedIdentityTerms identityMatchTerms, state string, traversalDegraded int, authzDropped int, vectorCensus ConfirmedKindVectorCensusOutcome, err error) {
 	if deps.SearchKind == nil {
-		return nil, nil, nil, nil, nil, confirmedKindScopeNotAttempted, 0, 0, nil
+		return nil, nil, nil, nil, nil, confirmedKindScopeNotAttempted, 0, 0, ConfirmedKindVectorCensusOutcome{}, nil
 	}
 	pool = make(map[string]contextfabric.SubjectCandidate)
 	observationParentKey = make(map[string]string)
@@ -256,7 +266,7 @@ func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Pri
 	for _, term := range terms {
 		results, truncated, degraded, searchErr := deps.SearchKind(ctx, term, kind, searchLimit)
 		if searchErr != nil {
-			return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopeFailed, traversalDegraded, authzDropped, searchErr
+			return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopeFailed, traversalDegraded, authzDropped, ConfirmedKindVectorCensusOutcome{}, searchErr
 		}
 		if truncated {
 			anyTruncated = true
@@ -277,13 +287,23 @@ func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Pri
 	}
 	switch {
 	case anyTruncated:
-		return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopeTruncated, traversalDegraded, authzDropped, nil
+		return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopeTruncated, traversalDegraded, authzDropped, ConfirmedKindVectorCensusOutcome{}, nil
 	case anyDegraded:
-		return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopeFailed, traversalDegraded, authzDropped, nil
+		return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopeFailed, traversalDegraded, authzDropped, ConfirmedKindVectorCensusOutcome{}, nil
 	case deps.VectorMechanismConfigured:
-		return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopePlanIncomplete, traversalDegraded, authzDropped, nil
+		// CHAOS-4155 Phase 1: the lexical channel is exhaustively proven
+		// (anyTruncated/anyDegraded both false) but a live vector mechanism
+		// means that proof alone is not enough to declare this population
+		// complete -- see chaos4154's own doc comment. The shadow census
+		// runs HERE, in this exact branch, because this is the one
+		// reachable state where it has anything to prove; its outcome is
+		// carried out for telemetry ONLY -- the returned state below is
+		// UNCHANGED (confirmedKindScopePlanIncomplete), so this function's
+		// caller-visible behavior is byte-identical to before this ticket.
+		vectorCensus = attemptConfirmedKindVectorCensus(ctx, deps, kind, terms)
+		return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopePlanIncomplete, traversalDegraded, authzDropped, vectorCensus, nil
 	default:
-		return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopeComplete, traversalDegraded, authzDropped, nil
+		return pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, confirmedKindScopeComplete, traversalDegraded, authzDropped, ConfirmedKindVectorCensusOutcome{}, nil
 	}
 }
 

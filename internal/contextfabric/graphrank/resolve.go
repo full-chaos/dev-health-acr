@@ -234,6 +234,28 @@ type ResolveDeps struct {
 	// completeness claim, exactly matching a backend with no vector arm at
 	// all.
 	VectorMechanismConfigured bool
+	// ConfirmedKindVectorCensus (CHAOS-4155 Phase 1, SHADOW ONLY -- see
+	// chaos4155_confirmed_kind_vector_scope.go's own doc comment for the
+	// full design and why this is deliberately NOT the mechanism that lets
+	// VectorMechanismConfigured==true stop forcing plan_incomplete) is an
+	// optional exact, count-closed, kind-scoped vector completeness
+	// census. nil (every composition root unless a deployment has set
+	// ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS to a
+	// positive value) is a no-op, zero cost,
+	// ConfirmedKindVectorScopeNotAttempted -- the safe default for any
+	// backend that does not implement this, matching every other optional
+	// ResolveDeps hook's nil convention.
+	//
+	// Deliberately NO error return: a shadow-arm failure must never fail
+	// the resolution it is only observing -- unlike SearchKind, whose
+	// failure propagates because a truncated/failed READ genuinely
+	// invalidates the population the caller is about to decide over, this
+	// census decides NOTHING (see buildConfirmedKindScopedSnapshot's own
+	// call site, chaos4154_confirmed_kind_scope.go: this outcome is never
+	// consulted for scopeState). Any internal error (dependency failure,
+	// count-closure mismatch, malformed row) is captured AS a returned
+	// State value instead.
+	ConfirmedKindVectorCensus func(ctx context.Context, kind contextfabric.SubjectKind, terms []string) ConfirmedKindVectorCensusOutcome
 	// VectorMarginCommitThreshold is CHAOS-3829's per-embedder-identity
 	// calibrated M (falkorgraph's retrieval_policy.go RetrievalPolicy.
 	// VectorMarginCommitThreshold): the vector-arm top-1/top-2 similarity
@@ -1173,6 +1195,27 @@ type ResolutionTraceEvent struct {
 	// anchorOfferMaterial is called and traced independently in resolve.go,
 	// not alongside kind/candidate/handle's shared call site.
 	AnchorOfferLabelsNormalizedCount int
+	// ConfirmedKindVectorScope* (stage == "confirmed_kind_scope" ONLY,
+	// CHAOS-4155 Phase 1, SHADOW telemetry): describes
+	// attemptConfirmedKindVectorCensus's own outcome -- see
+	// chaos4155_confirmed_kind_vector_scope.go's doc comment for the closed
+	// vocabulary ConfirmedKindVectorScopeState carries and why NONE of
+	// these fields are ever consulted by any commit decision in this PR.
+	// Populated only when ConfirmedKindScopeState=="plan_incomplete" (the
+	// one case chaos4154_confirmed_kind_scope.go's own state machine
+	// reaches this shadow arm from); every other stage-firing leaves these
+	// at their zero value (State=="", read as "not attempted" by any
+	// consumer, same convention as the CHAOS-4154 fields above).
+	ConfirmedKindVectorScopeState              string
+	ConfirmedKindVectorScopePopulationCount    int64
+	ConfirmedKindVectorScopeEnumeratedCount    int64
+	ConfirmedKindVectorScopeMalformedCount     int64
+	ConfirmedKindVectorScopeQueryCount         int
+	ConfirmedKindVectorScopeQueriesScored      int
+	ConfirmedKindVectorScopeComparisonCount    int64
+	ConfirmedKindVectorScopeRivalCountAboveTau int64
+	ConfirmedKindVectorScopeSnapshotStable     bool
+	ConfirmedKindVectorScopeDurationMS         int64
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -1934,7 +1977,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// above -- if either had fired, resolution.Committed would be non-empty
 	// and this block would not run.
 	if !offersOnly && confirmedKind != nil && searchTruncated && len(resolution.Committed) == 0 {
-		scopedPool, scopedObservationParentKey, scopedObservationBlocked, scopedIdentity, scopedIdentityTerms, scopeState, scopeTraversalDegraded, scopeAuthzDropped, scopeErr := buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, confirmedKind.Kind, effectiveSearchLimit)
+		scopedPool, scopedObservationParentKey, scopedObservationBlocked, scopedIdentity, scopedIdentityTerms, scopeState, scopeTraversalDegraded, scopeAuthzDropped, scopeVectorCensus, scopeErr := buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, confirmedKind.Kind, effectiveSearchLimit)
 		if scopeErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, scopeErr
 		}
@@ -1966,10 +2009,27 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			if scopeState == confirmedKindScopeComplete {
 				candidateCount = len(scopedPool)
 			}
+			// CHAOS-4155 Phase 1: ConfirmedKindVectorScope* fields are the
+			// shadow census's own outcome, carried on this SAME event --
+			// see ConfirmedKindVectorCensusOutcome's own doc comment. Zero
+			// value (State=="") on every scopeState other than
+			// confirmedKindScopePlanIncomplete, which is exactly when
+			// buildConfirmedKindScopedSnapshot's own switch invokes the
+			// shadow arm at all.
 			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 				RequestID: request.RequestID, Stage: "confirmed_kind_scope",
-				ConfirmedKindScopeState:          scopeState,
-				ConfirmedKindScopeCandidateCount: candidateCount,
+				ConfirmedKindScopeState:                    scopeState,
+				ConfirmedKindScopeCandidateCount:           candidateCount,
+				ConfirmedKindVectorScopeState:              scopeVectorCensus.State,
+				ConfirmedKindVectorScopePopulationCount:    scopeVectorCensus.PopulationCount,
+				ConfirmedKindVectorScopeEnumeratedCount:    scopeVectorCensus.EnumeratedCount,
+				ConfirmedKindVectorScopeMalformedCount:     scopeVectorCensus.MalformedCount,
+				ConfirmedKindVectorScopeQueryCount:         scopeVectorCensus.QueryCount,
+				ConfirmedKindVectorScopeQueriesScored:      scopeVectorCensus.QueriesScored,
+				ConfirmedKindVectorScopeComparisonCount:    scopeVectorCensus.ComparisonCount,
+				ConfirmedKindVectorScopeRivalCountAboveTau: scopeVectorCensus.RivalCountAboveTau,
+				ConfirmedKindVectorScopeSnapshotStable:     scopeVectorCensus.SnapshotStable,
+				ConfirmedKindVectorScopeDurationMS:         scopeVectorCensus.DurationMS,
 			})
 		}
 		// gateValid: the SAME conjunct every other commit path in this
