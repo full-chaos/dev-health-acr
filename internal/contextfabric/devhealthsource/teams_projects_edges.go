@@ -103,7 +103,6 @@ func workItemTeamAttributionDerivation(source string) (contractsv1.ContextFabric
 	return contractsv1.ContextFabricDerivationRuleInferred, contractsv1.ContextFabricEpistemicInferred
 }
 
-//
 // TWO subject kinds, one producer. The view's own ORDER BY-equivalent key
 // is (org_id, subject_kind, repo_id, subject_id, project_id) -- Context
 // Fabric ruling 2026-08-24 11:40 -- so unlike the old single-column source,
