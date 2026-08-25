@@ -337,7 +337,7 @@
         ]
       },
       "derivation": "rule_inferred",
-      "epistemic_status": "source_asserted",
+      "epistemic_status": "inferred",
       "evidence_ref_ids": [
         "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos"
       ],

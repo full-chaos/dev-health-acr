@@ -158,6 +158,36 @@ const ContextFabricFactScopeUnexpandedLimitation = "Some requested evidence coul
 // RecordFactScopeExpansion telemetry stream.
 const ContextFabricFactScopeActivityProxyLimitation = "Some evidence in this answer was gathered by association rather than by ownership, so it reflects where related activity was found and may not be the complete or authoritative set."
 
+// ContextFabricFactScopeAttributedPrimaryTeamLimitation is CHAOS-4101's
+// disclosure that some evidence in this answer was reached via a team's
+// PRIMARY WORK-ITEM ATTRIBUTION -- a computed assignment, not a fact any
+// provider asserted.
+//
+// A THIRD, INDEPENDENT DISCLOSURE, alongside (never instead of) the
+// unexpanded and activity-proxy limitations above. All three can be true of
+// one answer at once: a team-scoped question can reach some evidence
+// directly, some through the activity-proxy chain on solid team footing, and
+// some through this weaker footing, while a DIFFERENT requirement on the
+// same subject hits a policy that has never been activated at all.
+//
+// WHY A SEPARATE STRING FROM THE ACTIVITY-PROXY ONE. That disclosure says
+// "we reached this by association, not ownership" -- true of every
+// team-origin target, since the chain is a work_item BELONGS_TO_REPOSITORY
+// hop exactly like the project chain's. This one says something further:
+// which TEAM the evidence is associated with is itself Ops' own computed
+// guess for some of that evidence, not a claim any provider made. A reader
+// told only the first would still read "this team's repositories" as a
+// settled fact about team ownership of the association; this sentence is
+// what corrects that for the subset of evidence where it applies.
+//
+// FIXED and non-interpolated, the same discipline every disclosure in this
+// file holds: it names no source enum value, no confidence level, no team
+// and no policy. RecordFactScopeExpansion's AttributionSourceCounts carries
+// the closed-vocabulary source breakdown for an operator; this sentence
+// carries only the one thing a reader needs -- that some of what is here was
+// attributed by inference, not asserted.
+const ContextFabricFactScopeAttributedPrimaryTeamLimitation = "Some evidence in this answer was associated with its team by a computed attribution rather than one directly asserted by a data source, so that association may be imprecise."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -176,6 +206,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSynthesisClarificationUnavailableLimitation,
 		ContextFabricFactScopeUnexpandedLimitation,
 		ContextFabricFactScopeActivityProxyLimitation,
+		ContextFabricFactScopeAttributedPrimaryTeamLimitation,
 	}
 }
 

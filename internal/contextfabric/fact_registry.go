@@ -875,6 +875,15 @@ func canonicalFactSubjectKey(subject SubjectRef) string {
 	return string(subject.Kind) + "\x00" + subject.CanonicalID
 }
 
+// FactSubjectKey is canonicalFactSubjectKey, exported so a FactScopeExpander
+// implementation in another package (devhealthfacts) can key
+// FactScopeExpansionResult.TargetBasis with the EXACT same key the resolver
+// looks it up by (CHAOS-4101), rather than duplicating the "Kind + NUL +
+// CanonicalID" format and risking the two drifting apart.
+func FactSubjectKey(subject SubjectRef) string {
+	return canonicalFactSubjectKey(subject)
+}
+
 func classifyFactReadError(err error) (SourceState, string) {
 	var failure *FactReadFailure
 	if errors.As(err, &failure) && validFactSourceState(failure.State) {

@@ -38,7 +38,7 @@ The facts are reachable. The planner simply had no step that reached them,
 and reported the gap as a proof of absence.
 
 **`team` shares the identical gap** -- confirmed during the design spike,
-tracked as CHAOS-4101.
+tracked as CHAOS-4101 and activated per §10.
 
 ## 2. Premise correction
 
@@ -111,11 +111,15 @@ keeps its single auditable rule and providers keep their declared
 
 **Policies** (`FactScopePolicy`): `project_work_item_repository_v1`,
 `project_work_item_pull_request_v1`,
-`project_work_item_pull_request_review_v1`, plus `none` for an
-expansion-eligible pair with no policy defined — every `team` row, and every
-disclosure-only project row.
+`project_work_item_pull_request_review_v1`,
+`team_primary_attribution_repository_v1`,
+`team_primary_attribution_pull_request_v1`,
+`team_primary_attribution_pull_request_review_v1` (CHAOS-4101, §10), plus
+`none` for an expansion-eligible pair with no policy defined — every
+disclosure-only project/team row (health, status, work, etc.; see §6).
 
-**Basis** (`FactScopeBasis`): `direct` | `activity_proxy`.
+**Basis** (`FactScopeBasis`): `direct` | `activity_proxy` |
+`attributed_primary_team` (CHAOS-4101, §10 — per-target, team-origin only).
 
 **Outcome** (`FactScopeExpansionOutcome`): `not_needed`, `policy_unavailable`,
 `attempted_empty`, `matched_unauthorized`, `target_kind_mismatch`,
@@ -164,7 +168,7 @@ enforces it. That is what keeps this a closed table rather than the rule
 "anything a project cannot answer directly is a gap," which would over-claim
 reachability nobody has shown.
 
-**Why disclosure is wider than the three activation policies.** Invariant 7 is
+**Why disclosure is wider than the activation policies.** Invariant 7 is
 controlling: `SourcePruned` asserts "proven nothing missing," and on a
 reachable chain that assertion is **false**. CHAOS-3783's argument for a
 non-degrading prune is about not degrading where pruning is genuinely sound;
@@ -208,9 +212,11 @@ required_children, identity, membership}`, plus
 **Disclosure ≠ activation.** Widening disclosure is honesty. Widening
 activation is a product commitment about what a fact family *means* for a
 subject that does not own it, and each needs its own preconditions. Every
-widened row carries policy `none`, never traverses, and emits
-`policy_unavailable`. Activation scope stays the three ruled project policies;
-`TestChaos4099_OnlyTheThreeRuledPoliciesAreEverActivatable` pins it.
+widened row not covered by an activated policy carries policy `none`, never
+traverses, and emits `policy_unavailable`. Activation scope is the three
+ruled project policies plus (CHAOS-4101, §10) the three ruled team-origin
+policies — six total, never more; `TestChaos4099_OnlyTheSixRuledPoliciesAreEverActivatable`
+pins the closed set.
 
 ## 7. Telemetry
 
@@ -225,8 +231,10 @@ decision; **none** for a requirement answerable directly from its roots.
 Fields: `RequirementKind`, `OriginKind`, `TargetKind`, `Policy`, `Basis`,
 `Outcome`, `OriginCount`, `CandidateCount`, `AdmittedCount`,
 `AuthorizationDroppedCount`, `TemporalDroppedCount`, `MissingNextHopCount`,
-`TargetKindMismatchCount`, `Truncated`, `FailureClass`. Closed vocabularies
-and counts only.
+`TargetKindMismatchCount`, `Truncated`, `FailureClass`, and (CHAOS-4101, §10)
+`AttributionSourceCounts` — a closed-vocabulary count map for team-origin
+expansions only, `nil` for every project-origin one. Closed vocabularies and
+counts only.
 
 The count split is not decoration. Each one demands a different operator
 response: authorization drops are normal on a shared graph; temporal drops on
@@ -581,10 +589,96 @@ sentinel regression test whose edge removal flips the outcome
 (`TestScopeExpander_ProjectToRepository_ZeroUUIDNeverAdmitsEvenIfARepoRowClaimsIt`,
 hand-verified: reverting the guard makes it fail, restored via content diff).
 
-## 10. Team activation is a separate ticket
+## 10. Team activation (CHAOS-4101, ruled 2026-08-24)
 
-CHAOS-4101. The team-attribution edge is `rule_inferred`/`source_asserted`
-rather than a typed source-asserted chain, so expanding through it would
-launder an inference into fact scope. Activation needs a product ruling
-naming the policy and its disclosure semantics. Until then the team rows
-carry `FactScopePolicyNone` and disclose.
+**Status: RESOLVED — team origin is activated,** with `Basis` decided **per
+target** rather than per policy. This section records the ruling that
+replaces the "separate ticket, activation pending" note this section used to
+hold.
+
+**Why per-row.** `work_item_team_attributions.source` spans `native_team`
+through `manual_fallback` (`ops/src/dev_health_ops/metrics/compute_work_items.py`'s
+`_SOURCE_ORDER`), and only `native_team` is a claim any provider actually
+asserted — Linear teams only; jira/github/gitlab work items carry
+`native_team_key=None`, so every one of their rows resolves through a
+lower-ranked, Ops-*computed* source instead (the Python `team_autoimport_*`
+populators, CHAOS-4198, still unported to Go as of this ruling). A single
+`FactScopeBasis` fixed on the policy rule cannot express that a team-origin
+traversal can admit one repository on solid footing and another on
+heuristic footing in the SAME call. `FactScopeExpansionResult.TargetBasis`
+(a `map[FactSubjectKey(target)]FactScopeBasis`) carries the override; a
+target absent from the map falls back to the rule's own default.
+
+**The three policies:** `team_primary_attribution_repository_v1`,
+`team_primary_attribution_pull_request_v1`,
+`team_primary_attribution_pull_request_review_v1` — the same
+`FactMetrics`/`FactPullRequests`/`FactReviews` × `{project, team}` shape the
+three project policies already use, one hop earlier
+(`team -OWNED_BY_TEAM<- work_item`, in place of
+`project -BELONGS_TO_PROJECT<- work_item`). Naming: the ruling's own working
+name for the family was `team_primary_attribution_activity_v1`; these three
+concrete names follow `FactScopePolicy`'s own "one target kind per policy"
+rule instead, the same discipline the three project policies already honour.
+
+**The basis split:**
+
+- A repository (or a pull request/review reached through it) whose winning
+  contributing work item carries `source = native_team` gets
+  `FactScopeBasisActivityProxy` — the SAME class the project chain uses.
+  Reaching a repository via a work item is activity, not ownership,
+  regardless of how solid the team attribution itself is.
+- Every other case gets the NEW `FactScopeBasisAttributedPrimaryTeam`: the
+  team-attribution hop is itself an inference layered under the
+  already-proxy chain, so a reader is owed a second, independent caveat
+  (`ContextFabricFactScopeAttributedPrimaryTeamLimitation`) alongside the
+  activity-proxy one, not instead of it.
+- "Winning" follows Ops' own `_SOURCE_ORDER` precedence — `native_team`
+  beats every heuristic source for the SAME repository, mirrored in
+  `ScopeExpander.teamAttributionSourceRank` — because a repository reached
+  by *any* native_team-sourced work item is no weaker for also being
+  reachable through a heuristic one.
+
+```mermaid
+flowchart LR
+    T["SubjectTeam"] -->|"OWNED_BY_TEAM<br/>(work_item_team_attributions,<br/>is_primary = 1)"| WI["work_item"]
+    WI -->|"BELONGS_TO_REPOSITORY"| R["repository"]
+    R -->|"BELONGS_TO_REPOSITORY"| PR["pull_request"]
+    PR -->|"BELONGS_TO_PULL_REQUEST"| RV["pull_request_review"]
+
+    WI -. "source = native_team" .-> B1(["basis: activity_proxy<br/>(same class as the project chain)"])
+    WI -. "source = issue_project / project_ownership /<br/>repo_ownership / assignee_membership /<br/>linked_issue / manual_fallback" .-> B2(["basis: attributed_primary_team<br/>(NEW — team hop is itself inferred)"])
+
+    B1 -. "wins over" .-> B2
+```
+
+**The graph edge itself was also mis-labelled.** `devhealthsource/
+teams_projects_edges.go`'s `queryWorkItemTeams` hardcoded
+`EpistemicStatus = source_asserted` on *every* `OWNED_BY_TEAM` row
+regardless of the row's real `source` value — the exact overstatement this
+section's basis split exists to avoid, one layer down. Fixed alongside this
+ruling (`workItemTeamAttributionDerivation`): `EpistemicStatus` is now
+`source_asserted` only for `native_team`, `inferred` for every other
+source; `Derivation` stays `rule_inferred` for all of them (this edge is
+always one row of Ops' own precedence-resolved output, even when it wins on
+a native_team basis).
+
+**Telemetry.** `FactScopeExpansionEvent`/`FactScopeExpansionCounts` gained
+`AttributionSourceCounts map[string]int` (CHAOS-4101): a closed-vocabulary
+count of ADMITTED targets by their winning `work_item_team_attributions.source`
+value, `nil` for every project-origin event. `RecordFactScopeExpansion`
+logs it unconditionally (nil included), the same "a zero/absent count must
+still be written" discipline every other field on that event holds.
+
+**Per-hop authorization.** The team hop reuses the identical
+`graphrank.AuthorizedAttributes` primitive and repository-hop authorization
+point the project policies already use — no new authorization mechanism,
+proven directly against real ClickHouse by
+`TestScopeExpander_TeamToRepository_UnauthorizedPrincipalDropsTheCandidate`
+and `TestScopeExpander_TeamToPullRequest_InheritsRepositoryBasisAndDropsUnauthorized`
+(`chaos4101_team_scope_expander_integration_test.go`).
+
+**Corpus.** ext65 index 61 is the only existing team-kind case and is the
+CHAOS-4085 never-commit sentinel — unusable for measuring this activation.
+A new answerable team-kind case (and its oracle annex entry) is a follow-up
+once the standing kiac dataset is free for authoring against; not part of
+this change.

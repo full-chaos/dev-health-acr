@@ -70,17 +70,10 @@ type FactScopePolicy string
 
 const (
 	// FactScopePolicyNone marks a (requirement, origin) pair for which NO
-	// expansion policy is defined at all.
-	//
-	// It is not a placeholder for a future policy name. Team-origin
-	// expansion is exactly this case today: CHAOS-4101 confirmed the
-	// identical structural gap for `team`, but the team-attribution edge is
-	// rule_inferred/source_asserted rather than a typed source-asserted
-	// chain, so expanding through it would launder an inference into fact
-	// scope. Naming a team policy here would pre-empt the product ruling
-	// CHAOS-4101 exists to obtain. The gap is still DISCLOSED -- that is the
-	// whole point of this value existing rather than the pair simply being
-	// absent from the table.
+	// expansion policy is defined at all. Still used by every eligible pair
+	// this ticket has not ruled on (health/status/work/etc. -- see WHAT IS
+	// DELIBERATELY ABSENT below); no longer used by the three team-origin
+	// rows CHAOS-4101 activates (team-lead ruling, 2026-08-24).
 	FactScopePolicyNone FactScopePolicy = "none"
 
 	// FactScopePolicyProjectWorkItemRepository reaches a project's
@@ -92,6 +85,39 @@ const (
 	// FactScopePolicyProjectWorkItemPullRequestReview continues one hop
 	// further, to the reviews on those pull requests.
 	FactScopePolicyProjectWorkItemPullRequestReview FactScopePolicy = "project_work_item_pull_request_review_v1"
+
+	// FactScopePolicyTeamPrimaryAttributionRepository,
+	// FactScopePolicyTeamPrimaryAttributionPullRequest and
+	// FactScopePolicyTeamPrimaryAttributionPullRequestReview are CHAOS-4101's
+	// team-origin policies, ruled 2026-08-24 after this file's own
+	// FactScopePolicyNone comment (now stale, see above) held the line for.
+	//
+	// NAMED AS THREE POLICIES, NOT ONE, following the SAME "one target kind
+	// per policy" discipline FactScopePolicy's own doc comment states and the
+	// three project policies above already honour -- "team_primary_attribution
+	// _activity_v1" was the ruling's working name for the whole family; each
+	// concrete target kind gets its own versioned member of that family here,
+	// exactly as project_work_item_{repository,pull_request,
+	// pull_request_review}_v1 does. (Flagged to team-lead: if a single shared
+	// name across all three target kinds was actually intended, correct this
+	// deviation -- these three constants are the place to do it.)
+	//
+	// THE CHAIN they traverse is the team half of factScopeChainWorkItem,
+	// continued exactly like the project chain (work_item -OWNED_BY_TEAM->
+	// team, then work_item -BELONGS_TO_REPOSITORY-> repository, etc). What is
+	// NEW relative to the project policies is not the chain shape but the
+	// epistemic standing of its first hop: OWNED_BY_TEAM is Ops' own
+	// precedence-resolved attribution (work_item_team_attributions), asserted
+	// by the provider only for a `native_team` row and inferred by a
+	// heuristic (Python team_autoimport, CHAOS-4198 still unported) for
+	// every other source. See FactScopeBasisAttributedPrimaryTeam.
+	FactScopePolicyTeamPrimaryAttributionRepository FactScopePolicy = "team_primary_attribution_repository_v1"
+	// FactScopePolicyTeamPrimaryAttributionPullRequest continues the team
+	// chain to the pull requests of the reached repositories.
+	FactScopePolicyTeamPrimaryAttributionPullRequest FactScopePolicy = "team_primary_attribution_pull_request_v1"
+	// FactScopePolicyTeamPrimaryAttributionPullRequestReview continues one
+	// hop further, to the reviews on those pull requests.
+	FactScopePolicyTeamPrimaryAttributionPullRequestReview FactScopePolicy = "team_primary_attribution_pull_request_review_v1"
 )
 
 // FactScopeBasis names the EPISTEMIC standing of an expansion path -- what
@@ -119,7 +145,71 @@ const (
 	// will read the second meaning into the first, so any result derived on
 	// this basis is disclosed as a proxy.
 	FactScopeBasisActivityProxy FactScopeBasis = "activity_proxy"
+
+	// FactScopeBasisAttributedPrimaryTeam is CHAOS-4101's addition: an
+	// activity-proxy chain whose FIRST hop is itself a computed attribution
+	// rather than a typed edge, so it carries a SECOND, independent basis for
+	// caution beyond activity-vs-ownership.
+	//
+	// PER-ROW, NOT PER-POLICY (team-lead ruling, 2026-08-24) -- the one basis
+	// value that varies within a single expansion rather than being fixed by
+	// the rule. work_item_team_attributions.source spans native_team through
+	// manual_fallback (ops/src/dev_health_ops/metrics/compute_work_items.py's
+	// _SOURCE_ORDER), and only native_team is a provider-asserted fact
+	// (Linear teams; jira/github/gitlab work items carry
+	// native_team_key=None, per AGENTS.md's provider-coverage section, so
+	// every one of their rows resolves through a lower-ranked, Ops-COMPUTED
+	// source instead). A target reached through a native_team-sourced row
+	// gets the SAME basis the project chain uses (FactScopeBasisActivityProxy
+	// -- reaching a repository via a work item is activity, not ownership,
+	// regardless of how solid the team attribution itself is); a target
+	// reached ONLY through a heuristic-sourced row (issue_project,
+	// project_ownership, repo_ownership, assignee_membership, linked_issue,
+	// manual_fallback) gets THIS basis instead, because the team-attribution
+	// hop is now ALSO an inference layered under CHAOS-4099's already-proxy
+	// chain -- not just "reached via activity" but "reached via activity,
+	// attributed to this team by a heuristic, not asserted by any provider".
+	// A reader not told the difference would read a repo_ownership-derived
+	// result as equally solid to a native_team-derived one, which is
+	// CHAOS-4101's own overstatement (see devhealthsource/
+	// teams_projects_edges.go's identical fix on the graph edge) reintroduced
+	// one layer up in fact scope.
+	//
+	// See FactScopeExpansionResult.TargetBasis for how a per-target value
+	// reaches the resolver, and FactScopeExpansionEvent.AttributionSourceCounts
+	// for the closed-vocabulary source breakdown telemetry receives.
+	FactScopeBasisAttributedPrimaryTeam FactScopeBasis = "attributed_primary_team"
 )
+
+// factScopeBasisRank orders FactScopeBasis from the strongest claim to the
+// most cautious one, matching the three constants' own doc comments (direct
+// asserts the relationship; activity_proxy asserts activity, not ownership;
+// attributed_primary_team stacks a second, independent inference on top of
+// activity_proxy). Anything unrecognised ranks at the bottom (most cautious)
+// for the same fail-toward-caution reason teamAttributionSourceRankSQL's own
+// doc comment gives for an unrecognised source.
+var factScopeBasisRank = map[FactScopeBasis]int{
+	FactScopeBasisDirect:                0,
+	FactScopeBasisActivityProxy:         1,
+	FactScopeBasisAttributedPrimaryTeam: 2,
+}
+
+// factScopeBasisWeaker reports whether candidate is a MORE cautious claim
+// than current -- used when two different origin kinds reach the identical
+// target within one requirement, so the weaker of the two bases wins rather
+// than whichever origin kind happened to run first (codex xhigh review
+// round 2, confirmed real, MEDIUM).
+func factScopeBasisWeaker(candidate, current FactScopeBasis) bool {
+	candidateRank, ok := factScopeBasisRank[candidate]
+	if !ok {
+		candidateRank = len(factScopeBasisRank)
+	}
+	currentRank, ok := factScopeBasisRank[current]
+	if !ok {
+		currentRank = len(factScopeBasisRank)
+	}
+	return candidateRank > currentRank
+}
 
 // FactScopeExpansionOutcome is what the resolver decided for one
 // (requirement, origin kind, policy) triple.
@@ -307,6 +397,22 @@ type FactScopeExpansionEvent struct {
 	Truncated bool
 	// FailureClass is set only for FactScopeFailed.
 	FailureClass FactScopeFailureClass
+	// AttributionSourceCounts is CHAOS-4101's addition: for a team-origin
+	// expansion, how many ADMITTED targets trace back to each
+	// work_item_team_attributions.source value (native_team, issue_project,
+	// project_ownership, repo_ownership, assignee_membership, linked_issue,
+	// manual_fallback -- ops/compute_work_items.py's own closed _SOURCE_ORDER
+	// vocabulary; unassigned never reaches a target and so never appears
+	// here). CONTENT-SAFE by the same discipline as every other field on this
+	// struct: a source name is a closed enum value, never a team identity, a
+	// repository slug or anything else that could re-identify a subject. nil
+	// for every project-origin event -- FactScopeBasis alone already
+	// distinguishes those, and this map exists specifically to let an
+	// operator see the source mix a team-origin expansion drew from, since
+	// FactScopeExpansionEvent.Basis is necessarily a mix summary
+	// (attributed_primary_team fires if EVEN ONE admitted target came from a
+	// heuristic source) rather than the per-target detail this map carries.
+	AttributionSourceCounts map[string]int
 }
 
 // ---------------------------------------------------------------------------
@@ -362,9 +468,12 @@ const (
 	// difference is why CHAOS-4101 exists -- OWNED_BY_TEAM comes from
 	// work_item_team_attributions, an Ops-COMPUTED attribution whose source
 	// enum spans native_team/assignee_membership/issue_project/linked_issue/
-	// manual_fallback. Weak enough that no policy may traverse it without a
-	// product ruling; NOT weak enough to justify telling a reader "nothing is
-	// missing" when the work items are right there.
+	// manual_fallback. It required a product ruling before any policy could
+	// traverse it (obtained 2026-08-24 -- see the team-origin rows below and
+	// FactScopeBasisAttributedPrimaryTeam), and it was never weak enough to
+	// justify telling a reader "nothing is missing" when the work items are
+	// right there, which is why this row stayed in the eligibility table
+	// (disclosed, policy_unavailable) even before that ruling.
 	factScopeChainWorkItem = "work_item -BELONGS_TO_PROJECT-> project / work_item -OWNED_BY_TEAM-> team (devhealthsource/teams_projects_edges.go: querySubjectProjectMemberships, queryWorkItemTeams)"
 	// factScopeChainRepository continues one hop through the work item's own
 	// repository. The zero-UUID sentinel lives on this hop: a Linear-sourced
@@ -460,33 +569,48 @@ var factScopeEligibility = []factScopeEligibilityRow{
 		},
 	},
 
-	// --- Disclosure-only rows: reachable, cited, and never traversed ---
+	// --- CHAOS-4101's ACTIVATABLE team-origin policies (ruled 2026-08-24) ---
 	//
-	// policy `none` (ruling point 4). These disclose the gap and emit
-	// policy_unavailable telemetry; activating any of them is a follow-on
-	// ticket with its own preconditions, exactly as CHAOS-4101 is for team.
+	// ENABLED. The product ruling this file's own FactScopePolicyNone header
+	// used to point to has been given: a team policy activates with a PER-
+	// TARGET basis rather than a fixed one (FactScopeBasisAttributedPrimaryTeam
+	// vs FactScopeBasisActivityProxy -- see that constant's doc comment), so
+	// a target reached only through a heuristic-sourced attribution is
+	// disclosed as weaker than one reached through a native_team-sourced one,
+	// instead of either laundering the inference silently or refusing to
+	// traverse at all. Rule.Basis below is the DEFAULT the expander's
+	// TargetBasis override replaces per target; it is set to ActivityProxy
+	// (the SAME chain-shape caveat the project policies carry) rather than
+	// AttributedPrimaryTeam, so a traversal reaching every target through
+	// native_team rows is not disclosed as weaker than it is.
 	{
 		Requirement: FactMetrics, Origins: []SubjectKind{SubjectTeam},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectRepository,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainRepository,
+			Policy: FactScopePolicyTeamPrimaryAttributionRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainRepository, Enabled: true,
 		},
 	},
 	{
 		Requirement: FactPullRequests, Origins: []SubjectKind{SubjectTeam},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectPullRequest,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainPullRequest,
+			Policy: FactScopePolicyTeamPrimaryAttributionPullRequest, TargetKind: SubjectPullRequest,
+			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainPullRequest, Enabled: true,
 		},
 	},
 	{
 		Requirement: FactReviews, Origins: []SubjectKind{SubjectTeam},
 		Rule: factScopePolicyRule{
-			Policy:     FactScopePolicyNone,
+			Policy:     FactScopePolicyTeamPrimaryAttributionPullRequestReview,
 			TargetKind: contractsv1.ContextFabricSubjectPullRequestReview,
-			Basis:      FactScopeBasisActivityProxy, Chain: factScopeChainReview,
+			Basis:      FactScopeBasisActivityProxy, Chain: factScopeChainReview, Enabled: true,
 		},
 	},
+
+	// --- Disclosure-only rows: reachable, cited, and never traversed ---
+	//
+	// policy `none` (ruling point 4). These disclose the gap and emit
+	// policy_unavailable telemetry; activating any of them is a follow-on
+	// ticket with its own preconditions.
 	// health is repository-scoped, reached by the SAME chain as metrics.
 	// Project origin only -- see WHAT IS DELIBERATELY ABSENT above.
 	{
@@ -661,6 +785,26 @@ func (s *FactReadScope) HasActivityProxyDerivation() bool {
 	}
 	for _, derivation := range s.Derivations {
 		if derivation.Basis == FactScopeBasisActivityProxy {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAttributedPrimaryTeamDerivation reports whether any admitted read
+// subject entered scope on the attributed_primary_team basis (CHAOS-4101) --
+// the trigger for the second, independent proxy disclosure that basis
+// carries. Mirrors HasActivityProxyDerivation exactly; both bases can be
+// present in the same scope (a metrics requirement admitting one target via
+// a native_team-sourced work item and another via a heuristic-sourced one),
+// so this is checked separately rather than folded into the activity-proxy
+// trigger.
+func (s *FactReadScope) HasAttributedPrimaryTeamDerivation() bool {
+	if s == nil {
+		return false
+	}
+	for _, derivation := range s.Derivations {
+		if derivation.Basis == FactScopeBasisAttributedPrimaryTeam {
 			return true
 		}
 	}
@@ -852,6 +996,41 @@ type FactScopeExpansionResult struct {
 	// Counts carries every diagnostic count; the resolver copies them onto
 	// the emitted event rather than recomputing them.
 	Counts FactScopeExpansionCounts
+	// TargetBasis is CHAOS-4101's addition: an OPTIONAL per-target override
+	// of the policy rule's own Basis, keyed by FactSubjectKey(target) -- the
+	// SAME key the resolver's own dedup/cap pass already computes for each
+	// target internally (canonicalFactSubjectKey), exported as FactSubjectKey
+	// specifically so an expander implementation in another package
+	// (devhealthfacts) can populate this map without duplicating the key
+	// format. Absent (nil, or a target missing from the map) means "use
+	// rule.Basis for this target", which is every project policy's
+	// behaviour today and stays that way -- this field is additive and does
+	// not change what an expander that never sets it produces.
+	//
+	// EXISTS BECAUSE BASIS IS PER-ROW FOR THE TEAM POLICIES (team-lead
+	// ruling, 2026-08-24): a single team_primary_attribution_*_v1 traversal
+	// can admit one repository reached ONLY through a native_team-sourced
+	// work item and another reached ONLY through a project_ownership-sourced
+	// one, and those two targets carry DIFFERENT epistemic bases
+	// (FactScopeBasisActivityProxy vs FactScopeBasisAttributedPrimaryTeam --
+	// see that constant's own doc comment). A single Basis field on the rule
+	// cannot express that; this map lets ONE expander call return a mixed
+	// result without forcing every policy into carrying per-target
+	// provenance it does not need.
+	TargetBasis map[string]FactScopeBasis
+	// TargetAttributionSource is TargetBasis's own companion (CHAOS-4101
+	// codex xhigh review round 1, MEDIUM): an OPTIONAL per-target
+	// work_item_team_attributions.source value, keyed by the SAME
+	// FactSubjectKey(target). Absent (nil, or a target missing from the
+	// map) means "no source to report", true for every project policy and
+	// for a team target this expander could not attribute to one source.
+	// The resolver -- never this struct's producer -- turns this into
+	// FactScopeExpansionEvent.AttributionSourceCounts, and it does so ONLY
+	// from `kept`, the requirement-level, cap-and-dedup-applied admitted
+	// set, precisely so overflow rows this expander returned for
+	// truncation detection (Limit+1) or cross-origin duplicates can never
+	// inflate the count.
+	TargetAttributionSource map[string]string
 }
 
 // FactScopeExpansionCounts is the diagnostic split. See
@@ -989,6 +1168,12 @@ func (r *FactReadScopeResolver) resolveRequirement(
 	}
 	sort.Slice(originKinds, func(i, j int) bool { return originKinds[i] < originKinds[j] })
 
+	// derivationIndex tracks, for THIS requirement kind only, which index in
+	// scope.Derivations already carries each admitted target's provenance --
+	// freshly built per resolveRequirement call, so it never reaches across
+	// requirement kinds (codex xhigh review round 2, confirmed real, MEDIUM:
+	// see expand's own use of it below).
+	derivationIndex := map[string]int{}
 	for _, originKind := range originKinds {
 		rule, eligible := lookupFactScopePolicy(kind, originKind)
 		if !eligible {
@@ -1034,7 +1219,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			// the same reason as every rung above.
 			event.Outcome = FactScopePolicyUnavailable
 		default:
-			r.expand(ctx, principal, scope, &event, origins, rule)
+			r.expand(ctx, principal, scope, &event, origins, rule, derivationIndex)
 		}
 
 		scope.Events = append(scope.Events, event)
@@ -1093,6 +1278,7 @@ func (r *FactReadScopeResolver) expand(
 	event *FactScopeExpansionEvent,
 	origins []SubjectRef,
 	rule factScopePolicyRule,
+	derivationIndex map[string]int,
 ) {
 	result, err := r.expander.ExpandFactScope(ctx, FactScopeExpansionRequest{
 		Principal:       principal,
@@ -1108,6 +1294,14 @@ func (r *FactReadScopeResolver) expand(
 	event.MissingNextHopCount = result.Counts.MissingNextHopCount
 	event.TargetKindMismatchCount = result.Counts.TargetKindMismatchCount
 	event.Truncated = result.Counts.Truncated
+	// AttributionSourceCounts and any Basis mix are NOT copied here (codex
+	// xhigh review round 1, confirmed real, MEDIUM x2): both are derived
+	// below from `kept`, the set that survives the target-kind-mismatch
+	// filter, the overflow cap AND the cross-origin dedup pass, not from
+	// `result.Targets` before any of those run. Copying either field here
+	// let an overflowed or cross-origin-deduped traversal report a source
+	// mix and telemetry count for targets that were never actually admitted
+	// to the fact read.
 	if err != nil {
 		// FAILS CLOSED: not one target from a failed traversal is admitted,
 		// even if some came back before the error. A subject set assembled
@@ -1225,6 +1419,41 @@ func (r *FactReadScopeResolver) expand(
 	}
 	kept := make([]SubjectRef, 0, len(admitted))
 	for _, target := range admitted {
+		// DUPLICATE CHECK BEFORE THE CAP CHECK (codex xhigh review round 3,
+		// confirmed real, MEDIUM): a duplicate never consumes a cap slot --
+		// it was already counted in `existing` -- so checking the cap first
+		// could `break` the whole loop on an EARLIER admission filling the
+		// cap and never reach a LATER duplicate target that still owed a
+		// basis upgrade. Checking duplicate status first means the upgrade
+		// always runs regardless of where the cap happens to bind.
+		key := canonicalFactSubjectKey(target)
+		if _, duplicate := seen[key]; duplicate {
+			// A target already admitted by an EARLIER origin kind in this
+			// same requirement (codex xhigh review round 2, confirmed real,
+			// MEDIUM): before this fix, this origin's own per-target basis
+			// was simply discarded, so a target that both a project chain
+			// (activity_proxy) and a team chain reached could silently keep
+			// the project chain's basis even when the team chain's own
+			// traversal found only a heuristic-sourced attribution --
+			// exactly the overstatement FactScopeBasisAttributedPrimaryTeam
+			// exists to disclose. The already-recorded Derivation is
+			// upgraded to the WEAKER (more cautious) of the two bases, the
+			// same "worst outcome wins" discipline this file already
+			// applies to gaps. AttributionSourceCounts is deliberately left
+			// alone here: it counts sources for targets admitted BY THIS
+			// EVENT (the R1 fix above), and a duplicate was not admitted by
+			// this event.
+			if idx, tracked := derivationIndex[key]; tracked {
+				basis := rule.Basis
+				if override, ok := result.TargetBasis[key]; ok {
+					basis = override
+				}
+				if factScopeBasisWeaker(basis, scope.Derivations[idx].Basis) {
+					scope.Derivations[idx].Basis = basis
+				}
+			}
+			continue
+		}
 		if len(existing)+len(kept) >= rule.limitOrDefault() {
 			event.Truncated = true
 			// Never downgrade a mismatch verdict: both are degrading, but
@@ -1234,10 +1463,6 @@ func (r *FactReadScopeResolver) expand(
 				event.Outcome = FactScopeExpandedPartial
 			}
 			break
-		}
-		key := canonicalFactSubjectKey(target)
-		if _, duplicate := seen[key]; duplicate {
-			continue
 		}
 		seen[key] = struct{}{}
 		kept = append(kept, target)
@@ -1254,18 +1479,61 @@ func (r *FactReadScopeResolver) expand(
 		return
 	}
 	scope.DerivedSubjects[event.RequirementKind] = append(existing, kept...)
+	// mixedBasis and sourceCounts are BOTH derived from `kept` -- the same
+	// set the loop below binds provenance to -- rather than from
+	// result.Targets, for the same overflow/dedup reason the copy above was
+	// removed (codex xhigh review round 1, confirmed real, MEDIUM x2).
+	mixedBasis := false
+	sourceCounts := map[string]int{}
 	for _, target := range kept {
 		// Provenance binds every admitted target to the policy that admitted
 		// it. Root is recorded per ORIGIN GROUP rather than per edge -- the
 		// expander's own traversal knows which specific work item linked
 		// which repository, but that detail is neither needed here nor safe
 		// to carry into a structure the answer is composed from.
+		//
+		// BASIS IS PER-TARGET (CHAOS-4101): result.TargetBasis lets an
+		// expander override rule.Basis for one target -- the team policies
+		// use this to mark a target attributed_primary_team rather than the
+		// rule's own activity_proxy default when NONE of the work items
+		// reaching it carried a native_team attribution. Every project
+		// policy leaves TargetBasis nil/empty, so basis falls through to
+		// rule.Basis unchanged for them -- this is additive, not a behaviour
+		// change for anything already shipped.
+		key := canonicalFactSubjectKey(target)
+		basis := rule.Basis
+		if override, ok := result.TargetBasis[key]; ok {
+			basis = override
+			if override != rule.Basis {
+				mixedBasis = true
+			}
+		}
+		if source, ok := result.TargetAttributionSource[key]; ok && source != "" {
+			sourceCounts[source]++
+		}
 		scope.Derivations = append(scope.Derivations, FactScopeDerivation{
 			Root:   origins[0],
 			Target: target,
 			Policy: rule.Policy,
-			Basis:  rule.Basis,
+			Basis:  basis,
 		})
+		// Recorded so a LATER origin kind's own dedup pass (above) can
+		// upgrade this entry's Basis in place instead of discarding what it
+		// found, rather than pointing at a stale index once Derivations
+		// grows further.
+		derivationIndex[key] = len(scope.Derivations) - 1
+	}
+	// event.Basis is a MIX SUMMARY (see FactScopeExpansionEvent.Basis's own
+	// doc comment and AttributionSourceCounts' doc comment): it starts as
+	// rule.Basis and flips to attributed_primary_team the moment even ONE
+	// admitted target carried that override, so a reader who only sees the
+	// event (not the per-target Derivations) is never told a heuristic-only
+	// or mixed expansion is as solid as a pure native_team one.
+	if mixedBasis {
+		event.Basis = FactScopeBasisAttributedPrimaryTeam
+	}
+	if len(sourceCounts) > 0 {
+		event.AttributionSourceCounts = sourceCounts
 	}
 }
 
@@ -1327,6 +1595,11 @@ const factScopeUnexpandedLimitation = contractsv1.ContextFabricFactScopeUnexpand
 // (ruling invariant 6). See the contract constant's own doc comment.
 const factScopeActivityProxyLimitation = contractsv1.ContextFabricFactScopeActivityProxyLimitation
 
+// factScopeAttributedPrimaryTeamLimitation is CHAOS-4101's disclosure that
+// some evidence was associated with its team by a computed attribution
+// rather than an asserted one. See the contract constant's own doc comment.
+const factScopeAttributedPrimaryTeamLimitation = contractsv1.ContextFabricFactScopeAttributedPrimaryTeamLimitation
+
 // recordFactScopeExpansion emits every decision the resolver made.
 //
 // Needs no type assertion: RecordFactScopeExpansion is a method on
@@ -1382,12 +1655,15 @@ func applyFactScopeDisclosure(result *InvestigationResult, scope *FactReadScope)
 	// now means stage 2 flips a policy flag rather than also having to
 	// introduce an invariant -- and the mechanism is tested before it is
 	// load-bearing rather than after.
-	disclosures := make([]string, 0, 2)
+	disclosures := make([]string, 0, 3)
 	if scope.HasDisclosableGap() {
 		disclosures = append(disclosures, factScopeUnexpandedLimitation)
 	}
 	if scope.HasActivityProxyDerivation() {
 		disclosures = append(disclosures, factScopeActivityProxyLimitation)
+	}
+	if scope.HasAttributedPrimaryTeamDerivation() {
+		disclosures = append(disclosures, factScopeAttributedPrimaryTeamLimitation)
 	}
 	if len(disclosures) > 0 {
 		// appendBoundedLimitations is the ONE path by which anything is

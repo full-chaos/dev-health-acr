@@ -50,7 +50,59 @@ func attributionProperties(source, confidence string) map[string]contractsv1.Con
 // shape changed, so every already-projected organization needs a full
 // rebuild rather than an incremental catch-up under a version marker that
 // no longer describes what it reads.
+
+// attributionSourceNativeTeam is work_item_team_attributions.source's
+// strongest rank (ops/src/dev_health_ops/metrics/compute_work_items.py's
+// _SOURCE_ORDER, rank 0): the work item carries a native_team_key the
+// provider itself asserted (Linear teams only -- jira/github/gitlab work
+// items carry native_team_key=None, per AGENTS.md's provider coverage
+// section, so every one of their rows resolves through a LOWER-ranked,
+// Ops-COMPUTED source instead: issue_project/project_ownership/
+// repo_ownership/assignee_membership, all fed by the Python
+// team_autoimport_{linear,jira,github,gitlab}.py heuristic populators, or
+// linked_issue/manual_fallback). It is the only source value this producer
+// treats as an asserted fact rather than an inference.
+const attributionSourceNativeTeam = "native_team"
+
+// workItemTeamAttributionDerivation maps work_item_team_attributions.source
+// onto this edge's Derivation/EpistemicStatus pair (CHAOS-4101).
 //
+// THE BUG THIS FIXES. Every row of this edge previously carried the SAME
+// hardcoded EpistemicStatus (source_asserted) regardless of source -- so a
+// row whose real source was repo_ownership (a heuristic pattern match run by
+// the Python team_autoimport populators, CHAOS-4198 still unported) was
+// indistinguishable from a row whose source was native_team (a provider-
+// asserted fact). A consumer reading the edge's EpistemicStatus rather than
+// unpacking its attribution_source property saw every attribution as equally
+// trustworthy, which is the exact overstatement CHAOS-4101's scope pass
+// found: "the acr projection hardcodes Derivation=RuleInferred +
+// EpistemicStatus=SourceAsserted on every row regardless of the row's
+// actual source."
+//
+// Derivation stays RuleInferred for every value, including native_team: this
+// edge is always ONE ROW of Ops' own precedence-resolved output
+// (compute_work_item_team_attributions/_SOURCE_ORDER), never a plain
+// canonical column the way querySubjectProjectMemberships' BELONGS_TO_PROJECT
+// edge can be (its own work_item_column arm) -- even the native_team
+// candidate only wins because the resolver ran
+// its ranking over every candidate source and this one came out on top.
+// EpistemicStatus is what actually varies: SourceAsserted only for
+// native_team, whose underlying claim (this provider says this item belongs
+// to this team) the provider itself made; Inferred for every other source,
+// none of which any provider asserted.
+//
+// FAILS TOWARD THE WEAKER CLASSIFICATION for any source value this function
+// does not recognise (a future Enum8 addition this producer has not been
+// updated for): Inferred, never SourceAsserted. A reader must never see an
+// attribution's basis overstated because a new enum value slipped past this
+// switch.
+func workItemTeamAttributionDerivation(source string) (contractsv1.ContextFabricDerivationMethod, contractsv1.ContextFabricEpistemicStatus) {
+	if source == attributionSourceNativeTeam {
+		return contractsv1.ContextFabricDerivationRuleInferred, contractsv1.ContextFabricEpistemicSourceAsserted
+	}
+	return contractsv1.ContextFabricDerivationRuleInferred, contractsv1.ContextFabricEpistemicInferred
+}
+
 // TWO subject kinds, one producer. The view's own ORDER BY-equivalent key
 // is (org_id, subject_kind, repo_id, subject_id, project_id) -- Context
 // Fabric ruling 2026-08-24 11:40 -- so unlike the old single-column source,
@@ -284,14 +336,22 @@ WHERE m.org_id = {org_id:String}` + sincePredicate(cursor, "m.observed_at", rowK
 // project_ownership), which would collapse onto duplicate relationship IDs
 // and fail ContextFabricProjectionBatch.Validate() outright.
 //
-// Derivation is rule_inferred/source_asserted, NOT canonical_structured: this
-// table is Ops' own computed attribution (its source enum spans native_team
-// through manual_fallback, with a confidence enum beside it), not a canonical
-// column the way work_items.project_id is. Relabelling a low-confidence
+// Derivation is always RuleInferred, NOT canonical_structured: this table is
+// Ops' own computed attribution (its source enum spans native_team through
+// manual_fallback, with a confidence enum beside it), not a canonical column
+// the way work_items.project_id is -- even a native_team row only wins
+// because Ops' own resolver ranked it first among the candidates it saw.
+// EpistemicStatus, unlike Derivation, VARIES BY ROW (CHAOS-4101, fixed
+// 2026-08-24): SourceAsserted for a native_team row (the provider itself
+// asserted that claim; Linear only -- see workItemTeamAttributionDerivation),
+// Inferred for every other source. Relabelling a low-confidence
 // manual_fallback attribution as observed canonical truth is precisely the
 // "graph discoveries may not mint canonical truth" line in this package's
-// AGENTS.md. Both enums ride along as edge properties so a consumer can see
-// which it got.
+// AGENTS.md, and hardcoding SourceAsserted for every row regardless of source
+// was the identical overstatement one level up. Both enums also ride along
+// as edge properties (attribution_source/attribution_confidence) so a
+// consumer can see the exact underlying value, not just the two-way
+// EpistemicStatus split.
 //
 // Authorization deliberately derives from the work item's own repo via
 // work_items, NOT from work_item_team_attributions.repo_id: 5077 of that
@@ -320,14 +380,15 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 		if omitted {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
+		derivation, epistemicStatus := workItemTeamAttributionDerivation(source)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID:  "relationship:work_item_team:" + repoID + ":" + workItemID + ":" + teamID,
 			Type:            contractsv1.ContextFabricRelationshipOwnedByTeam,
 			From:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: workItemID},
 			To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: teamCanonicalID(teamID), Label: teamID},
 			Properties:      attributionProperties(source, confidence),
-			Derivation:      contractsv1.ContextFabricDerivationRuleInferred,
-			EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
+			Derivation:      derivation,
+			EpistemicStatus: epistemicStatus,
 			Authorization:   workItemAuthorization(repoID, repoSlug),
 			EvidenceRefIDs:  []string{"acr:v1:work-item-team:" + repoID + ":" + workItemID + ":" + teamID},
 			ObservedAt:      observedAt,
