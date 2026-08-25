@@ -42,6 +42,11 @@ func TestCHAOS3882_DivergenceTriggersAutomaticRecoveryThenReplayResumes(t *testi
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Logger: logger,
+		// fakeSource is an unbounded stream (CHAOS-3826's own drain tests
+		// use a finite lifecycleFakeSource/pages instead) -- this test's
+		// call-count bookkeeping is about divergence recovery, not
+		// draining, so extra in-tick draining is explicitly off.
+		DrainBatchBudget: -1,
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -195,6 +200,9 @@ func TestCHAOS3882_HealthyOrgNeverTriggersRecovery(t *testing.T) {
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-healthy"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Logger: discardLogger(),
+		// fakeSource is an unbounded stream; this test counts exactly one
+		// call per Tick, orthogonal to CHAOS-3826 draining.
+		DrainBatchBudget: -1,
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -242,6 +250,9 @@ func TestCHAOS3882_NeverProjectedOrgIsNotDivergence(t *testing.T) {
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-new"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Logger: discardLogger(),
+		// fakeSource is an unbounded stream; this test counts exactly one
+		// call per Tick, orthogonal to CHAOS-3826 draining.
+		DrainBatchBudget: -1,
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)

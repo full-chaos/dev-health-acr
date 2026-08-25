@@ -24,6 +24,9 @@ func TestCoordinatorReplayOfTheSameCheckpointProducesTheSameIdempotentBatch(t *t
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
+		// fakeSource is an unbounded stream; this test counts exactly one
+		// applied batch per Tick, orthogonal to CHAOS-3826 draining.
+		DrainBatchBudget: -1,
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
