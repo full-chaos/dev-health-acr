@@ -781,6 +781,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			if available < 0 {
 				available = 0
 			}
+			// codex CHAOS-3813 round-1 finding: a truncated hint never
+			// reaches GraphReader, so composePriorSubjectReceiptDispositions
+			// must not report it "applied" on the strength of some OTHER
+			// hint resolving the same subject -- mark the dropped tail
+			// before slicing so the wire disposition (and the telemetry
+			// derived from it) reflect this receipt's own fate, matching
+			// the comment above's stated intent.
+			markTrailingHintOutcomesDroppedByBudget(priorOutcomes, len(priorHints)-available)
 			priorHints = priorHints[:available]
 		}
 		if len(priorHints) > 0 {
@@ -1459,10 +1467,27 @@ const (
 // re-authorization is a question only the caller's own SubjectResolution
 // can answer, which is why this type carries no "applied" verdict itself.
 type priorSubjectReceiptOutcome struct {
-	receipt            BoundSubjectReceipt
-	hint               SubjectHint
-	hasHint            bool
-	preGraphSkipReason priorSubjectReceiptPreGraphSkipReason
+	receipt             BoundSubjectReceipt
+	hint                SubjectHint
+	hasHint             bool
+	preGraphSkipReason  priorSubjectReceiptPreGraphSkipReason
+	droppedByHintBudget bool
+}
+
+// markTrailingHintOutcomesDroppedByBudget marks the last `dropped` outcomes
+// with hasHint==true (CHAOS-3813 codex round-1 finding). priorHints and the
+// hasHint==true subset of priorOutcomes are appended together, in the same
+// relative order, inside resolvePriorSubjectHints -- so slicing
+// priorHints[:available] in the caller and marking this same subset's own
+// trailing N hasHint==true entries here removes the SAME logical hints from
+// both, without needing the two slices to share indices.
+func markTrailingHintOutcomesDroppedByBudget(outcomes []priorSubjectReceiptOutcome, dropped int) {
+	for i := len(outcomes) - 1; i >= 0 && dropped > 0; i-- {
+		if outcomes[i].hasHint {
+			outcomes[i].droppedByHintBudget = true
+			dropped--
+		}
+	}
 }
 
 func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int64, []priorSubjectReceiptOutcome) {
@@ -1570,7 +1595,15 @@ func composePriorSubjectReceiptDispositions(outcomes []priorSubjectReceiptOutcom
 	entries := make([]contractsv1.ContextFabricPriorSubjectReceiptEntry, 0, len(outcomes))
 	for _, outcome := range outcomes {
 		disposition := contractsv1.ContextFabricPriorSubjectReceiptSkippedUnloadable
-		if !outcome.hasHint {
+		if outcome.droppedByHintBudget {
+			// This receipt's own hint never reached GraphReader -- report
+			// its actual fate even if some OTHER hint happened to resolve
+			// the same subject this call (CHAOS-3813 codex round-1
+			// finding); checking `resolved` here would misreport this
+			// receipt as "applied" on the strength of a hint that was not
+			// its own.
+			disposition = contractsv1.ContextFabricPriorSubjectReceiptSkippedFailedReauth
+		} else if !outcome.hasHint {
 			switch outcome.preGraphSkipReason {
 			case priorSubjectReceiptSkipNoMatch:
 				disposition = contractsv1.ContextFabricPriorSubjectReceiptSkippedNoMatch

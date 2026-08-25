@@ -128,6 +128,20 @@ func TestAnswerProjectionVocabulariesMatchTheCanonicalOnes(t *testing.T) {
 			canonical:  schemaEnumAt(t, common, "$defs", "SourceObservation", "properties", "state"),
 			acceptedBy: func(v string) bool { return validSourceState(ContextFabricSourceState(v)) },
 		},
+		{
+			// CHAOS-3813 codex round-1 finding (Low): the projection and
+			// common schemas each define their own PriorSubjectReceiptDisposition
+			// $def (context_fabric_answer_projection.v1 is deliberately
+			// self-contained, per this test's own doc comment above) --
+			// this case closes the same drift risk every other vocabulary
+			// here is already checked against.
+			name:      "prior_subject_receipt_disposition",
+			projected: schemaEnumAt(t, projection, "$defs", "PriorSubjectReceiptDisposition"),
+			canonical: schemaEnumAt(t, common, "$defs", "PriorSubjectReceiptDisposition"),
+			acceptedBy: func(v string) bool {
+				return ValidContextFabricPriorSubjectReceiptDisposition(ContextFabricPriorSubjectReceiptDisposition(v))
+			},
+		},
 	}
 
 	for _, tc := range cases {

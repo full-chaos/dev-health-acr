@@ -1267,6 +1267,68 @@ func TestEngineCapsCombinedSubjectHintsAtContractBound(t *testing.T) {
 	}
 }
 
+// TestEngineDoesNotReportABudgetTruncatedReceiptAsAppliedOnACoincidentalMatch
+// is a codex CHAOS-3813 round-1 finding (Medium, fixed): the previous
+// version of composePriorSubjectReceiptDispositions classified a receipt
+// solely by whether its subject appeared ANYWHERE in the final
+// SubjectResolution, so a receipt whose own derived hint was dropped by
+// the maxSubjectHints budget (same fixture shape as
+// TestEngineCapsCombinedSubjectHintsAtContractBound above) could still be
+// reported "applied" if some OTHER hint happened to resolve the identical
+// subject -- exactly this test's fixture, where one of the 50 explicit
+// caller hints already names the prior receipt's own subject and the
+// stubbed graph resolves it. The receipt's own hint never reached
+// GraphReader; the disposition must say so.
+func TestEngineDoesNotReportABudgetTruncatedReceiptAsAppliedOnACoincidentalMatch(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_prior_1": priorResult}}
+	graph := &capturingGraphReader{
+		// The stubbed graph resolves project_ask_dev regardless of which
+		// hint asked for it -- standing in for "one of the caller's own
+		// 50 explicit hints already named this subject and it resolved",
+		// NOT the prior receipt's own (truncated) hint.
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	request := validInvestigationRequest()
+	hints := make([]SubjectHint, 0, 50)
+	for i := 0; i < 50; i++ {
+		hints = append(hints, SubjectHint{Kind: SubjectProject, ID: fmt.Sprintf("project_caller_%d", i), Label: fmt.Sprintf("Caller Project %d", i), Source: "workbench"})
+	}
+	request.RequestedScope.SubjectHints = hints
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}}
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	wantDispositions := []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_prior_1", ReceiptID: "receipt_abc12345", Disposition: contractsv1.ContextFabricPriorSubjectReceiptSkippedFailedReauth},
+	}
+	if !reflect.DeepEqual(result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions) {
+		t.Fatalf("PriorSubjectReceiptDispositions = %#v, want %#v (the receipt's own hint was budget-truncated and must not read as applied on the strength of an unrelated hint)", result.SubjectResolution.PriorSubjectReceiptDispositions, wantDispositions)
+	}
+	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
+		t.Fatalf("telemetry = %#v, want the budget-truncated receipt counted as a skip", telemetry.priorSubjectReceiptsSkipped)
+	}
+}
+
 // TestEngineStillPassesAGraphBudgetCappedReceiptToInterpret is a codex
 // re-review finding on CHAOS-3898 P1-1 (fixed): TestEngineCapsCombinedSubjectHintsAtContractBound's
 // same 50-explicit-hints fixture, but proving the OTHER half of the fix --

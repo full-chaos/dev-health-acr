@@ -913,6 +913,20 @@ LIMIT 1`,
 	if err := contextfabric.ValidateStoredResult(result); err != nil {
 		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
+	// CHAOS-3813 codex round-1 finding (Medium): reuseKeyColumns' own
+	// write-side guard (above, this file) stops FUTURE saves from
+	// populating reuse columns for a disposition-bearing result, but a
+	// reuse column is a property of the ROW, not of this payload check --
+	// it cannot retroactively protect an existing row saved before that
+	// guard existed, or one written by any path that skips it. Same
+	// "never trust a stored row blind, even one this package itself
+	// wrote" defense in depth as rejectExplicitNullDegradedReasons above:
+	// reject on the READ side too, so a PriorSubjectReceiptDispositions
+	// disclosure computed for one caller's own receipts can never be
+	// served verbatim as a reuse hit to an unrelated caller.
+	if len(result.SubjectResolution.PriorSubjectReceiptDispositions) > 0 {
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
+	}
 	return result, true, "", nil
 }
 

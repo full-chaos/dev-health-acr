@@ -3,11 +3,13 @@ package pginvestigation_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -168,6 +170,45 @@ func TestFindReusable_HappyPathRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok, "expected a reusable candidate")
 	require.Equal(t, result.ResultID, found.ResultID)
+}
+
+// TestFindReusable_RejectsAnExistingRowWhosePayloadCarriesPriorSubjectReceiptDispositions
+// is a codex CHAOS-3813 round-1 finding (Medium, fixed): reuseKeyColumns'
+// write-side guard (store.go) stops FUTURE saves from populating reuse
+// columns for a disposition-bearing result, but it is a property of the
+// SAVE call, not of the stored row -- it cannot retroactively protect a
+// row saved before that guard existed, or one written by any path that
+// skips it. This raw-updates a normally-saved (and therefore reusable) row
+// so its PAYLOAD carries PriorSubjectReceiptDispositions while its reuse
+// columns stay exactly as the original Save left them, simulating that
+// bypass, and proves FindReusable still misses it.
+func TestFindReusable_RejectsAnExistingRowWhosePayloadCarriesPriorSubjectReceiptDispositions(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-psrd"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_psrd01", principal.OrgID, "Is the auth migration on track, again?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	// Premise: the row is reusable before it is tainted.
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok, "premise: the freshly saved row must be reusable before the raw payload update")
+
+	tainted := result
+	tainted.SubjectResolution.PriorSubjectReceiptDispositions = []contractsv1.ContextFabricPriorSubjectReceiptEntry{
+		{PriorResultID: "result_prior_x", ReceiptID: "receipt_x", Disposition: contractsv1.ContextFabricPriorSubjectReceiptApplied},
+	}
+	payload, err := json.Marshal(tainted)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET payload = $1 WHERE result_id = $2`, payload, result.ResultID)
+	require.NoError(t, err)
+
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.False(t, ok, "a row whose payload carries PriorSubjectReceiptDispositions must never be served as a reuse hit, even with its reuse columns intact")
 }
 
 // TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot is the Codex
