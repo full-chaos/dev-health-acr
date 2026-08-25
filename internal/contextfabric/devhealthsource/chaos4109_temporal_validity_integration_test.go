@@ -364,12 +364,8 @@ func TestDuplicateAddIsAContinuationNotMalformed(t *testing.T) {
 		t.Fatalf("ValidTo = %v, want nil -- the item is still a member; a duplicate ADD must never appear to CLOSE anything", edge.ValidTo)
 	}
 	output := logged.String()
-	if !strings.Contains(output, "duplicate_add_entity=1") {
-		t.Fatalf("want duplicate_add_entity=1 (one distinct entity carries the duplicate run), got:\n%s", output)
-	}
-	if !strings.Contains(output, "duplicate_add_entity_rows=2") {
-		t.Fatalf("want duplicate_add_entity_rows=2 (both trailing touches counted as rows), got:\n%s", output)
-	}
+	assertLogHasKV(t, output, "duplicate_add_entity", "1")
+	assertLogHasKV(t, output, "duplicate_add_entity_rows", "2")
 }
 
 // TestDuplicateAddThenRemoveClosesFromTheOriginalInterval is the sibling
@@ -509,10 +505,22 @@ func TestDanglingRemoveIsCountedNotSilentlyDropped(t *testing.T) {
 		}
 	}
 	output := logged.String()
-	if !strings.Contains(output, "malformed_touch_entity=1") {
-		t.Fatalf("want malformed_touch_entity=1 (the dangling remove counted, not silently dropped), got:\n%s", output)
-	}
+	assertLogHasKV(t, output, "malformed_touch_entity", "1")
 	if strings.Contains(output, "duplicate_add_entity=") {
 		t.Fatalf("a dangling remove must never also be counted as a duplicate add:\n%s", output)
+	}
+}
+
+// assertLogHasKV checks for a slog TextHandler "key=value" attribute pair,
+// bounded on its right by a space (another attribute follows) or the
+// record's trailing newline (codex xhigh review R2, LOW, confirmed real:
+// an unbounded strings.Contains(output, key+"="+value) would also match
+// key=10, key=11, key=100... whenever value is a numeric prefix of the
+// actual logged number).
+func assertLogHasKV(t *testing.T, output, key, value string) {
+	t.Helper()
+	pair := key + "=" + value
+	if !strings.Contains(output, pair+" ") && !strings.Contains(output, pair+"\n") {
+		t.Fatalf("want %s in log output (bounded, not just as a substring), got:\n%s", pair, output)
 	}
 }

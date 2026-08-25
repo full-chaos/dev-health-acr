@@ -17,11 +17,13 @@
 # applying a real version of this file.
 
 image:
-  # Must already contain: TeamsProjectsSourceVersion v4 (CHAOS-4193 presence-view
-  # read swap requires a full rebuild), ClickHouseSourceVersion v6
+  # Must already contain: TeamsProjectsSourceVersion v6 (each of CHAOS-4193's
+  # presence-view read swap, CHAOS-4109's transition-history intervals, and
+  # CHAOS-4109's duplicate-ADD-continuation fast-follow forced a full
+  # rebuild), ClickHouseSourceVersion v6
   # (internal/contextfabric/devhealthsource/{teams_projects,clickhouse}.go),
   # and PR #216 (CHAOS-4108's join-arm fix). Pre-flight 3.
-  reference: "ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64-hex-digest-containing-v6-v4-and-4108>"
+  reference: "ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64-hex-digest-containing-clickhouse-v6-teamsprojects-v6-and-4108>"
   pullPolicy: IfNotPresent
 
 imagePullSecrets:

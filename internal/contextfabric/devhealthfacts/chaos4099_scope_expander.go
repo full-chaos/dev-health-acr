@@ -695,9 +695,10 @@ const resolvedProjectsSQL = `(
 //     difference is exactly the repositories whose history-derived
 //     membership existed but not during this question's window.
 //   - MalformedTouchCount (codex xhigh review R1, MEDIUM, confirmed real):
-//     how many touches membershipTouchesAsOfSQL flagged is_malformed (two
-//     ADD touches with no intervening REMOVE -- see that constant's own
-//     doc comment). The main answer query excludes malformed rows from
+//     how many touches membershipTouchesAsOfSQL flagged is_malformed (a
+//     REMOVE touch with no prior ADD to close -- team-lead ruling
+//     2026-08-25; see that constant's own doc comment). The main answer
+//     query excludes malformed rows from
 //     what it admits (`AND NOT iv.is_malformed`), and until this fix
 //     nothing counted them either: a malformed touch could silently drop
 //     an interval from the answer with zero telemetry signal that
