@@ -784,11 +784,13 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 	// otherwise wipe an already-real, already-decided commit/no_match
 	// Outcome it has no business touching. confirmedHandleInsensitivityProbe
 	// owns its own recover() precisely so that never happens: a panic here
-	// degrades ONLY HandleInsensitivityEvaluated/Outcome (both left at
-	// their unevaluated zero value), and `base`'s already-finalized fields
-	// are untouched because this call sits strictly after they were set and
-	// assigns nothing else. See TestConfirmedHandleProbePanicDoesNotWipeAttestation
-	// for the red/green proof.
+	// degrades ONLY HandleInsensitivityEvaluated/Outcome (Evaluated=true,
+	// Outcome=kindInsensitivityProbeError -- a distinguishable signal, NOT
+	// the unevaluated zero value; see that constant's own doc comment), and
+	// `base`'s already-finalized fields are untouched because this call
+	// sits strictly after they were set and assigns nothing else. See
+	// TestConfirmedHandleProbePanicDoesNotWipeAttestation for the red/green
+	// proof.
 	if input.ConfirmedHandle != nil && input.CensusFunc != nil && IsCensusKindRegistered(input.ConfirmedHandle.Kind) {
 		base.HandleInsensitivityEvaluated, base.HandleInsensitivityOutcome =
 			confirmedHandleInsensitivityProbe(ctx, input, anchor, anchorOK)

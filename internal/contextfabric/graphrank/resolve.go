@@ -1077,8 +1077,10 @@ type ResolutionTraceEvent struct {
 	// subject_handle hint (request.SubjectHandles, never a question-text
 	// scan) was probed via kindInsensitivityProof scoped to its own kind
 	// alone, and the verdict when it was -- "commit_sound" |
-	// "no_match_sound" | "kind_sensitive_outcome", empty when unevaluated
-	// (Outcome==false).
+	// "no_match_sound" | "kind_sensitive_outcome", or "probe_error" if the
+	// probe's own CensusFunc call panicked (confirmedHandleInsensitivityProbe's
+	// probe-local recover, chaos3899_evidence_round.go) -- empty only when
+	// truly unevaluated (Evaluated==false).
 	//
 	// UNLIKE ShadowKindInsensitivity* above, this is NEVER an attestation
 	// about the round's own real decisive Outcome -- the round's decisive

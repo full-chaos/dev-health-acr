@@ -609,7 +609,9 @@ func narrowPooledKindsByExplicitKinds(pooled []CensusKind, explicitKinds []contr
 
 // kindInsensitivityOutcome is the closed vocabulary CHAOS-3900 P1.D's
 // insensitivity proof reports (design brief §2.0/§4's kind_sensitive_outcome
-// degradation reason, split into its three concrete verdicts here).
+// degradation reason, split into its three concrete verdicts here) --
+// PLUS one fourth value, kindInsensitivityProbeError, that this proof
+// itself never returns (see that constant's own doc comment).
 type kindInsensitivityOutcome string
 
 const (
