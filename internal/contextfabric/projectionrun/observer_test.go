@@ -229,6 +229,42 @@ func TestR4_F3_SuccessfulTickLogsNoFailureClass(t *testing.T) {
 	}
 }
 
+// TestChaos3826_DrainLogLevelKeysOnAppliedNotBatches is codex round-1 F1's
+// red/green proof at the logging boundary (chaos3826_drain_hardening_test.go's
+// TestChaos3826_DrainAppliedCountExcludesTheConfirmExhaustedProbe proves the
+// COUNTING half of the same fix -- this proves the log-level DECISION built
+// on top of it): an ordinary tick where exactly one batch genuinely applied
+// reports Batches=2 (the apply, plus the mandatory confirm-exhausted
+// attempt) but Applied=1, and must log at Debug, not Info -- gating the
+// level on Batches instead would misreport this routine case as "drained
+// multiple batches".
+func TestChaos3826_DrainLogLevelKeysOnAppliedNotBatches(t *testing.T) {
+	var buffer bytes.Buffer
+	observer := SlogObserver{Logger: slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+
+	observer.ObserveProjectionDrain(DrainOutcome{
+		OrgID: "org_1", Source: "devhealth", Batches: 2, Applied: 1, YieldReason: DrainYieldExhausted, Duration: time.Second,
+	})
+	var record map[string]any
+	if err := json.Unmarshal(buffer.Bytes(), &record); err != nil {
+		t.Fatalf("log line is not valid JSON: %v (%s)", err, buffer.String())
+	}
+	if record["level"] != "DEBUG" {
+		t.Fatalf("a single genuinely-applied batch (Batches=2 from the confirm-exhausted attempt, Applied=1) must log at DEBUG, got %v: %s", record["level"], buffer.String())
+	}
+
+	buffer.Reset()
+	observer.ObserveProjectionDrain(DrainOutcome{
+		OrgID: "org_1", Source: "devhealth", Batches: 6, Applied: 5, YieldReason: DrainYieldExhausted, Duration: time.Second,
+	})
+	if err := json.Unmarshal(buffer.Bytes(), &record); err != nil {
+		t.Fatalf("log line is not valid JSON: %v (%s)", err, buffer.String())
+	}
+	if record["level"] != "INFO" {
+		t.Fatalf("a genuine multi-batch drain (Applied=5) must log at INFO, got %v: %s", record["level"], buffer.String())
+	}
+}
+
 // SELF-FOUND (lane-3778, pre-round-5): the table above proves that an UNKNOWN
 // error classifies as unclassified, but it does not prove classification keys
 // on sentinel IDENTITY rather than on error TEXT -- every case in it is

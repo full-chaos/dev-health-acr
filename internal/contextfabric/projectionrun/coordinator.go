@@ -68,12 +68,28 @@ const (
 )
 
 // DrainOutcome is CHAOS-3826's telemetry for one (org, source) pair's
-// in-tick drain: how many batches this Tick actually pulled for the pair
-// (batches-per-tick) and why the loop stopped (drain-yield-reason).
+// in-tick drain: how many RunOnce attempts this Tick actually made for the
+// pair (Batches -- a cost signal: every attempt is a real checkpoint-load
+// round-trip even when nothing was available to apply, see
+// ProjectionWorker.RunOnce's own !available branch) and why the loop
+// stopped (drain-yield-reason).
 type DrainOutcome struct {
-	OrgID       string
-	Source      string
-	Batches     int
+	OrgID  string
+	Source string
+	// Batches counts every RunOnce attempt this tick, including the final
+	// attempt that discovers the source is exhausted (available=false) --
+	// see chaos3826_drain_test.go's TestChaos3826_DrainTelemetryReportsBatchesAndYieldReason
+	// for why that attempt is deliberately counted (it is a real round-trip,
+	// not free). Codex round-1 F1: this means an ordinary tick with exactly
+	// ONE new batch reports Batches=2 (apply + confirm-exhausted), which is
+	// correct for cost accounting but is NOT by itself the right signal for
+	// "did an actual multi-batch drain happen" -- use Applied for that.
+	Batches int
+	// Applied counts only the attempts within Batches that actually applied
+	// a batch (run.Applied == true). Applied > 1 is the true "the fix drained
+	// a real backlog" signal; Applied <= 1 is routine steady state even when
+	// Batches == 2 from the mandatory confirm-exhausted attempt.
+	Applied     int
 	YieldReason DrainYieldReason
 	Duration    time.Duration
 	At          time.Time
@@ -128,10 +144,17 @@ func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 }
 
 // ObserveProjectionDrain logs CHAOS-3826's per-pair drain summary. Routine
-// single-batch pairs (the overwhelming common case: nothing new to
-// project) log at Debug, matching ObserveProjectionOutcome's own level;
-// an actual multi-batch drain -- the fix doing its job -- logs at Info so
-// it is visible without raising the default log level.
+// pairs (the overwhelming common case: nothing new, or exactly one new
+// batch, to project) log at Debug, matching ObserveProjectionOutcome's own
+// level; an actual multi-batch drain -- the fix doing its job -- logs at
+// Info so it is visible without raising the default log level.
+//
+// Codex round-1 F1: the level decision keys on outcome.Applied, NOT
+// outcome.Batches. Batches includes the mandatory confirm-exhausted
+// attempt every drain makes once it runs dry, so an ordinary tick with
+// exactly one genuinely new batch reports Batches=2 -- gating on Batches
+// would log that routine case at Info as "drained multiple batches" even
+// though only one batch actually applied.
 func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 	logger := o.Logger
 	if logger == nil {
@@ -139,10 +162,10 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 	}
 	attrs := []any{
 		"org_id", outcome.OrgID, "source", outcome.Source,
-		"batches", outcome.Batches, "drain_yield_reason", string(outcome.YieldReason),
+		"batches", outcome.Batches, "applied", outcome.Applied, "drain_yield_reason", string(outcome.YieldReason),
 		"duration_ms", outcome.Duration.Milliseconds(),
 	}
-	if outcome.Batches > 1 {
+	if outcome.Applied > 1 {
 		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
 		return
 	}
@@ -1047,7 +1070,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	key := orgID + "\x00build\x00" + source
 	started := c.now()
 	total := priorRows
-	batches := 0
+	batches, applied := 0, 0
 	reason := DrainYieldExhausted
 	for {
 		if !c.due(key) {
@@ -1066,12 +1089,22 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(attemptStarted), At: c.now()}
 		c.observer.ObserveProjectionOutcome(outcome)
 		if err != nil {
-			c.logger.WarnContext(ctx, "build tick pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
-			reason = DrainYieldError
+			// Codex round-1 F3: ctx cancellation is checked FIRST, matching
+			// runPair's own fix -- a RunOnce failure caused by ctx being
+			// cancelled must classify as DrainYieldContextDone, not
+			// DrainYieldError (checking err first made DrainYieldContextDone
+			// unreachable from this branch).
+			if ctx.Err() != nil {
+				reason = DrainYieldContextDone
+			} else {
+				c.logger.WarnContext(ctx, "build tick pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
+				reason = DrainYieldError
+			}
 			break
 		}
 		batches++
 		if run.Applied {
+			applied++
 			total += int64(run.ItemsApplied)
 		}
 		mode, terminal := classifyBuildCompletion(run)
@@ -1081,7 +1114,18 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			c.logger.InfoContext(ctx, "context_fabric: build source completed", "org_id", orgID, "source", source, "epoch", epoch, "completion_mode", string(mode), "rows_projected", total)
 		}
 		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, mode, total, c.now()); rerr != nil {
+			// Codex round-1 F2: a failed progress write now STOPS the drain
+			// instead of continuing to spend budget on top of it. Before this
+			// fix, a persistent RecordSourceProgress failure let the loop
+			// keep applying and discarding progress for up to the whole
+			// budget in a single tick -- widening the pre-3826 blast radius
+			// (at most one unrecorded batch per tick, since there was only
+			// ever one attempt) to up to `budget` unrecorded batches. Flip
+			// itself stays fail-closed either way (it rereads persisted
+			// progress), so this bounds staleness, not correctness.
 			c.logger.WarnContext(ctx, "record build source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+			reason = DrainYieldError
+			break
 		}
 		if terminal {
 			reason = DrainYieldExhausted
@@ -1099,7 +1143,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	}
 	if batches > 0 {
 		c.observer.ObserveProjectionDrain(DrainOutcome{
-			OrgID: orgID, Source: source, Batches: batches, YieldReason: reason,
+			OrgID: orgID, Source: source, Batches: batches, Applied: applied, YieldReason: reason,
 			Duration: c.now().Sub(started), At: c.now(),
 		})
 	}
@@ -1393,10 +1437,10 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 // only the inter-batch idle inside one tick is removed.
 func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale bool) {
 	started := c.now()
-	batches := 0
+	batches, applied := 0, 0
 	reason := DrainYieldExhausted
 	for {
-		pairEvaluated, applied, failed, pairStale := c.runPairOnce(ctx, orgID, source, checkpoints)
+		pairEvaluated, pairApplied, failed, pairStale := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
 			if batches == 0 {
 				return false, false
@@ -1406,13 +1450,22 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		evaluated = true
 		stale = pairStale
 		batches++
+		if pairApplied {
+			applied++
+		}
 		switch {
-		case failed:
-			reason = DrainYieldError
-		case !applied:
-			reason = DrainYieldExhausted
+		// Codex round-1 F3: ctx cancellation is checked FIRST -- a RunOnce
+		// call that fails because ctx was cancelled must classify as
+		// DrainYieldContextDone, not DrainYieldError. Checking `failed`
+		// first (as originally written) meant every cancellation reached
+		// runPairOnce as a plain RunOnce error and was misclassified,
+		// making DrainYieldContextDone effectively unreachable from here.
 		case ctx.Err() != nil:
 			reason = DrainYieldContextDone
+		case failed:
+			reason = DrainYieldError
+		case !pairApplied:
+			reason = DrainYieldExhausted
 		case budget == nil || *budget <= 0:
 			reason = DrainYieldBudgetExceeded
 		default:
@@ -1423,7 +1476,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	}
 	if batches > 0 {
 		c.observer.ObserveProjectionDrain(DrainOutcome{
-			OrgID: orgID, Source: source, Batches: batches, YieldReason: reason,
+			OrgID: orgID, Source: source, Batches: batches, Applied: applied, YieldReason: reason,
 			Duration: c.now().Sub(started), At: c.now(),
 		})
 	}
