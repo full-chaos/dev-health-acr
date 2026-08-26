@@ -368,6 +368,29 @@ func ValidContextFabricStructureDisposition(value ContextFabricStructureDisposit
 // member, INCLUDING vetoed ones (design brief §2.1's silent-drop closure).
 // Receipts are globally scoped by (PriorResultID, ReceiptID): a bare
 // receipt id is only unique within its issuing result.
+//
+// This SHOULD hold independent of window: a request's kind/anchor/handle
+// structure and its evidence window are two members carried on the SAME
+// request, and neither one's own outcome should silently withhold the
+// other's echo. CHAOS-4335 closed one concrete gap: a request whose window
+// is UNCONFIRMED or VETOED (windowVetoResult, both its pre-Interpret and its
+// post-Interpret axis-conflict call sites, engine.go) now echoes a bare
+// explicit ExpectedKinds/SubjectHandles field -- previously it silently
+// vanished, distinguishable from "no explicit field was sent" only by
+// re-deriving the original request, which a caller reading just this
+// response cannot do. See windowVetoResult's own explicitStructure parameter
+// doc comment (window.go) for the exact mechanism and its own Save-race
+// safety reasoning.
+//
+// Two related gaps remain, deliberately OUT OF SCOPE for CHAOS-4335 (own
+// ticket owed): (1) windowConfirmationRequiredResult's gate 1/2 -- an
+// UNconfirmed window that reaches a clarification_required terminal, rather
+// than a veto -- does not thread structureCanon at gate 1 (it fires before
+// canonicalizeStructure has run, same shape the veto side had), so a bare
+// explicit field there still silently vanishes; (2) the axis-conflict veto
+// specifically still does not echo window's OWN confirmed member even when a
+// receipt successfully redeemed it moments before the axis conflict fired
+// (window.go's windowVetoResult doc comment has the full reasoning for both).
 type ContextFabricConfirmedStructureEntry struct {
 	Member         ContextFabricStructureNeedKind    `json:"member"`
 	AppliedValue   string                            `json:"applied_value"`

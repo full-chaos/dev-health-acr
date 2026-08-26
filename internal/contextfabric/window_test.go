@@ -1384,6 +1384,244 @@ func TestCHAOS4003_MixedWindowConfirmedAndStructureVetoed_BothEchoed(t *testing.
 	}
 }
 
+// TestCHAOS4335_UnresolvedWindowVeto_EchoesExplicitStructureHint is the
+// red-first pin for CHAOS-4335: an MCP request carrying a bare explicit
+// structure field (ExpectedKinds, Source=explicit_unattributed,
+// Provenance=inferred_default per structureExplicitAuthority) alongside a
+// PriorWindowReceipts entry that fails to resolve must still echo that
+// explicit hint in ConfirmedStructure. Before this fix, windowVetoResult
+// (window.go) never received anything to echo -- Engine.Investigate's
+// window-canonicalization short-circuit (engine.go, immediately after
+// canonicalizeEvidenceWindow) returns BEFORE canonicalizeStructure ever
+// runs, so a genuinely-sent explicit kind/handle hint silently vanished
+// from the wire response whenever window on the SAME request happened to
+// be unconfirmed -- exactly the shape the two-turn trial harness's
+// "inferred_tier" arm hit under case 30/34 (a NEGATIVE kind hint paired
+// with a window receipt): TierRoutedCorrectly reads false because
+// ConfirmedStructure carries no explicit_unattributed/inferred_default
+// entry at all, not because the tier was wrong.
+//
+// Mirrors TestCHAOS3900_UnresolvedWindowReceiptVetoesTheWholeRequest's own
+// scaffolding (same veto: a named prior result that does not exist), with
+// an explicit ExpectedKinds field added on top.
+func TestCHAOS4335_UnresolvedWindowVeto_EchoesExplicitStructureHint(t *testing.T) {
+	t.Parallel()
+
+	store := &staticResultStore{results: map[string]InvestigationResult{}} // named prior result does not exist
+	telemetry := &recordingTelemetry{}
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results:   store,
+		Telemetry: telemetry,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("reuse gate must not be called on a window-veto request")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectWorkItem}
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_4335", ReceiptID: "winr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("result.Status = %q, want %q (window veto is ALWAYS no_match)", result.Status, InvestigationNoMatch)
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 1 (the explicit expected_kind hint, never dropped just because window vetoed the request)", len(result.ConfirmedStructure))
+	}
+	entry := result.ConfirmedStructure[0]
+	if entry.Member != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Errorf("entry.Member = %q, want %q", entry.Member, contractsv1.ContextFabricStructureNeedExpectedKind)
+	}
+	if entry.Source != contractsv1.ContextFabricStructureSourceExplicitUnattributed {
+		t.Errorf("entry.Source = %q, want %q (MCP surface, DP12(b))", entry.Source, contractsv1.ContextFabricStructureSourceExplicitUnattributed)
+	}
+	if entry.Provenance != contractsv1.ContextFabricStructureInferredDefault {
+		t.Errorf("entry.Provenance = %q, want %q", entry.Provenance, contractsv1.ContextFabricStructureInferredDefault)
+	}
+	if entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
+		t.Errorf("entry.Disposition = %q, want %q", entry.Disposition, contractsv1.ContextFabricStructureDispositionApplied)
+	}
+	if entry.AppliedValue != string(SubjectWorkItem) {
+		t.Errorf("entry.AppliedValue = %q, want %q", entry.AppliedValue, string(SubjectWorkItem))
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS4335_AxisConflictVeto_EchoesExplicitStructureHint is CHAOS-4335's
+// companion pin for windowVetoResult's OTHER call site (engine.go, the
+// post-Interpret windowVetoAxisConflict branch): unlike the pre-Interpret
+// veto above, canonicalizeStructure has ALREADY run by this point (it is
+// unconditional, right after gate 1, well before Interpret), so this call
+// site can and must thread the REAL structureCanon through rather than a
+// fresh pre-Interpret-only resolution. Mirrors
+// TestCHAOS3900_AxisConflict_InterpreterFlipVetoesInsteadOfSilentlyDropping's
+// own scaffolding, with an explicit ExpectedKinds field added.
+func TestCHAOS4335_AxisConflictVeto_EchoesExplicitStructureHint(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_window_4335"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm4335", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	asOf := time.Unix(100, 0).UTC()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return InvestigationResult{}, false, nil // miss: proceed to Interpret
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &asOf}}, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectWorkItem}
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm4335"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("result.Status = %q, want %q (window_axis_conflict is always no_match)", result.Status, InvestigationNoMatch)
+	}
+	// Exactly 1, not "at least 1": window's OWN confirmed member is a KNOWN,
+	// documented, out-of-scope gap on this specific veto (windowVetoResult's
+	// own explicitStructure parameter doc comment) -- this pins the CURRENT
+	// exact shape so that gap's eventual fix is a deliberate, visible test
+	// change here, not a silent cardinality drift nobody notices.
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want exactly 1 (the explicit expected_kind hint only -- window's own confirmed member is a documented, separate gap on this path): %+v", len(result.ConfirmedStructure), result.ConfirmedStructure)
+	}
+	entry := result.ConfirmedStructure[0]
+	if entry.Member != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Errorf("entry.Member = %q, want %q", entry.Member, contractsv1.ContextFabricStructureNeedExpectedKind)
+	}
+	if entry.Source != contractsv1.ContextFabricStructureSourceExplicitUnattributed {
+		t.Errorf("entry.Source = %q, want %q", entry.Source, contractsv1.ContextFabricStructureSourceExplicitUnattributed)
+	}
+	if entry.Provenance != contractsv1.ContextFabricStructureInferredDefault {
+		t.Errorf("entry.Provenance = %q, want %q", entry.Provenance, contractsv1.ContextFabricStructureInferredDefault)
+	}
+	if entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
+		t.Errorf("entry.Disposition = %q, want %q", entry.Disposition, contractsv1.ContextFabricStructureDispositionApplied)
+	}
+	if entry.AppliedValue != string(SubjectWorkItem) {
+		t.Errorf("entry.AppliedValue = %q, want %q", entry.AppliedValue, string(SubjectWorkItem))
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS4335_ReceiptCarryingRequest_WindowVetoDefersStructureEcho pins
+// preInterpretExplicitStructure's OWN receipt-deferral guard: a request that
+// carries BOTH a structure receipt (PriorKindReceipts) and an unresolvable
+// PriorWindowReceipts entry must echo NOTHING for structure on the veto --
+// even though ExpectedKinds is ALSO set on the same request -- because a
+// receipt-carrying request needs the result-store read canonicalizeStructure
+// itself performs (CHAOS-3478's deferred-past-every-pre-Interpret-window-gate
+// ordering), which this pre-Interpret helper must never attempt early. This
+// is the "existing deferred behavior... unchanged" half of
+// preInterpretExplicitStructure's own doc comment -- without this test no
+// coverage exercises the has-receipts branch at all.
+func TestCHAOS4335_ReceiptCarryingRequest_WindowVetoDefersStructureEcho(t *testing.T) {
+	t.Parallel()
+
+	store := &staticResultStore{results: map[string]InvestigationResult{}} // named prior results do not exist
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("reuse gate must not be called on a window-veto request")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectWorkItem}
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_4335b", ReceiptID: "kindr_confirm0001"}}
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_4335c", ReceiptID: "winr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if len(result.ConfirmedStructure) != 0 {
+		t.Fatalf("result.ConfirmedStructure = %+v, want empty -- a receipt-carrying request must still defer to canonicalizeStructure's own (unreached) result-store read, never echo the explicit field early", result.ConfirmedStructure)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
+// TestCHAOS4335_UnresolvedWindowVeto_EchoesExplicitSubjectHandle is the
+// SubjectHandles twin of TestCHAOS4335_UnresolvedWindowVeto_
+// EchoesExplicitStructureHint above -- ExpectedKinds is not the only bare
+// explicit field resolveExplicitStructure/preInterpretExplicitStructure
+// handle.
+func TestCHAOS4335_UnresolvedWindowVeto_EchoesExplicitSubjectHandle(t *testing.T) {
+	t.Parallel()
+
+	store := &staticResultStore{results: map[string]InvestigationResult{}} // named prior result does not exist
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("reuse gate must not be called on a window-veto request")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_4335d", ReceiptID: "winr_confirm0001"}}
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("result.Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if len(result.ConfirmedStructure) != 1 {
+		t.Fatalf("len(result.ConfirmedStructure) = %d, want 1: %+v", len(result.ConfirmedStructure), result.ConfirmedStructure)
+	}
+	entry := result.ConfirmedStructure[0]
+	if entry.Member != contractsv1.ContextFabricStructureNeedSubjectHandle {
+		t.Errorf("entry.Member = %q, want %q", entry.Member, contractsv1.ContextFabricStructureNeedSubjectHandle)
+	}
+	if entry.Source != contractsv1.ContextFabricStructureSourceExplicitUnattributed {
+		t.Errorf("entry.Source = %q, want %q", entry.Source, contractsv1.ContextFabricStructureSourceExplicitUnattributed)
+	}
+	if entry.Provenance != contractsv1.ContextFabricStructureInferredDefault {
+		t.Errorf("entry.Provenance = %q, want %q", entry.Provenance, contractsv1.ContextFabricStructureInferredDefault)
+	}
+	if entry.AppliedValue != "532" {
+		t.Errorf("entry.AppliedValue = %q, want %q", entry.AppliedValue, "532")
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("result fails Validate(): %v", err)
+	}
+}
+
 // TestAppendUniqueWarning (CHAOS-3900 W2) pins the dedup discipline the
 // nudge-mode Warnings append relies on: appending the SAME sentence twice
 // must not duplicate it, and the contract's own Warnings cap must never be

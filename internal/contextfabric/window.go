@@ -1092,7 +1092,39 @@ func appendUniqueWarning(warnings []string, sentence string) []string {
 	return append(warnings, sentence)
 }
 
-func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, staleEntry *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry) (InvestigationResult, error) {
+func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, staleEntry *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry,
+	// explicitStructure (CHAOS-4335): the request's OWN bare
+	// ExpectedKinds/SubjectHandles explicit-field echo -- EITHER
+	// preInterpretExplicitStructure's cheap, store-free, pre-Interpret result
+	// for the veto BEFORE canonicalizeStructure ever runs (engine.go's
+	// windowCanon.Veto branch), or structureCanon.Explicit (the already-run
+	// canonicalizeStructure's own Explicit field, NEVER its Confirmed field)
+	// for the axis-conflict veto (engine.go's windowVetoAxisConflict branch,
+	// which fires after canonicalizeStructure has already run). nil means
+	// genuinely nothing to echo -- never a signal to skip echoing something
+	// that exists.
+	//
+	// Deliberately typed []explicitStructureMember, not a full
+	// requestStructureCanonicalization: this function must never receive
+	// receipt-derived Confirmed data on this path (see
+	// preInterpretExplicitStructure's own doc comment for why -- a raw
+	// Confirmed entry here would risk an unhandled persistence race and
+	// silently drop receipt-confirmation telemetry, since this path has
+	// neither the decisive path's ErrStructureOfferSuperseded conversion nor
+	// its post-Save recordStructureConfirmationOutcome call).
+	//
+	// KNOWN GAP, out of scope for CHAOS-4335 (team-lead ruling: "veto
+	// branches only"): the axis-conflict veto still does not echo window's
+	// OWN confirmed member (windowCanon.ConfirmedMember) even when a receipt
+	// successfully redeemed it before the axis conflict fired -- unlike the
+	// decisive path (engine.go's mergeConfirmedMembers call) and the
+	// STRUCTURE-veto path (engine.go's structureVetoResult call site, which
+	// folds windowCanon.ConfirmedMember in for the identical "a confirmed
+	// member on a DIFFERENT axis must not vanish" reason). Pre-existing,
+	// unchanged by this PR; a genuine fix needs the SAME Save-race handling
+	// note above, scoped to window's own ConfirmedMember shape.
+	explicitStructure []explicitStructureMember,
+) (InvestigationResult, error) {
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))
 	}
@@ -1166,8 +1198,24 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	// the whole request was rejected" from the response, matching the
 	// disclosure discipline every other structure-receipt member's own
 	// stale veto already carries.
+	//
+	// CHAOS-4335: explicitStructure's own kind|anchor|handle echo is
+	// concatenated in ADDITION to staleEntry -- the two are about different
+	// members by construction (staleEntry is always the window member;
+	// explicitStructure never carries one, window is not part of
+	// composeConfirmedStructure at all) -- mirroring engine.go's own
+	// structureVetoResult call site, which folds windowCanon.ConfirmedMember
+	// in alongside a structure veto's own echo for the identical reason: an
+	// explicit member on this SAME request must not silently vanish just
+	// because a DIFFERENT member is why the whole request was vetoed. See
+	// this parameter's own doc comment for why it is Explicit-only, never
+	// Confirmed/receipt-derived.
+	echo := composeConfirmedStructure(nil, explicitStructure)
 	if staleEntry != nil {
-		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{*staleEntry}
+		echo = append(echo, *staleEntry)
+	}
+	if len(echo) > 0 {
+		result.ConfirmedStructure = echo
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
