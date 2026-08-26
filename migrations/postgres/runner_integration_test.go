@@ -62,8 +62,11 @@ import (
 // 0031 is CHAOS-4085's commit_gate_version reuse-key dimension. 0032 is
 // CHAOS-4305's projection-checkpoint rows_applied column, written
 // atomically with the cursor by the checkpoint's own CAS statement so the
-// build-drain's row-count accumulator can no longer diverge from it.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+// build-drain's row-count accumulator can no longer diverge from it. 0033
+// is CHAOS-4333's widening of ck_acr_cf_structure_supersession_member_
+// vocabulary to include subject_candidate (CHAOS-4012 added the enum
+// member without it).
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
