@@ -111,6 +111,49 @@ func TestDecodeVectorProperty(t *testing.T) {
 	}
 }
 
+// TestIntFromCount_RejectsNonCardinalValues is codex R2's own Medium
+// finding (CHAOS-4311, confirmed): a count(n) aggregate is a cardinality --
+// negative, fractional, or non-finite values are never legitimate, only a
+// malformed client-boundary response. Before this fix, the float64 branch
+// ran a bare int(v) conversion, so 1.9 silently truncated to a "valid" 1
+// (which the census's own count-closure check could then satisfy against a
+// single genuinely-fetched row, reading as a sound Complete census over a
+// garbage count) and NaN/Inf produced platform-defined int garbage instead
+// of a caught error.
+func TestIntFromCount_RejectsNonCardinalValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  int
+		ok    bool
+	}{
+		{"positive int64", int64(5), 5, true},
+		{"positive int", 5, 5, true},
+		{"positive integral float64", float64(5), 5, true},
+		{"zero float64", float64(0), 0, true},
+		{"fractional float64 truncates in the old code -- must now be rejected", 1.9, 0, false},
+		{"negative int64", int64(-1), 0, false},
+		{"negative int", -1, 0, false},
+		{"negative float64", -1.0, 0, false},
+		{"NaN float64", math.NaN(), 0, false},
+		{"positive infinity float64", math.Inf(1), 0, false},
+		{"negative infinity float64", math.Inf(-1), 0, false},
+		{"non-numeric string", "3", 0, false},
+		{"nil", nil, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := intFromCount(tt.value)
+			if ok != tt.ok {
+				t.Fatalf("intFromCount(%#v) ok = %v, want %v (got value %v)", tt.value, ok, tt.ok, got)
+			}
+			if ok && got != tt.want {
+				t.Fatalf("intFromCount(%#v) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBruteForceRankOrdersDescendingByTrueCosine(t *testing.T) {
 	query := []float64{1, 0}
 	corpus := []oracleVector{

@@ -2267,7 +2267,17 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// relying on that alone is the same posture every other offer-only
 		// merge in this file takes).
 		var rivalsOfferedCount int
-		if len(scopeVectorCensus.Rivals) > 0 {
+		// codex R2 (Low, confirmed): also require State==Complete explicitly,
+		// rather than trusting len(Rivals)>0 alone -- ConfirmedKindVectorCensusOutcome.Rivals'
+		// own doc comment already documents Rivals as non-nil ONLY on
+		// Complete, and the concrete falkorgraph adapter upholds that today,
+		// but this caller's own fail-closed posture should not depend
+		// entirely on a producer invariant it cannot see enforced. A future
+		// or alternate ResolveDeps.ConfirmedKindVectorCensus implementation
+		// that populated Rivals on a non-Complete state (OverBudget/
+		// Malformed/Failed/Drift/NotAttempted) would otherwise silently gain
+		// offer-only merge behavior this decision boundary never intended.
+		if scopeVectorCensus.State == ConfirmedKindVectorScopeComplete && len(scopeVectorCensus.Rivals) > 0 {
 			offerOnlyPool := make(map[string]contextfabric.SubjectCandidate)
 			rivalTraversalDegraded, rivalAuthzDropped := mergeSearchResults(
 				ctx, principal, request, deps, confirmedKindVectorCensusProvenanceMarker, scopeVectorCensus.Rivals,

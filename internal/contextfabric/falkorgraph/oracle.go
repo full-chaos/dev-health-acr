@@ -323,13 +323,38 @@ func (a *Adapter) countEmbedderFenceCorpus(ctx context.Context, key string, pred
 // already takes for a different aggregate-shaped value (that one verified
 // live to vary between int64/int/float64), rather than assuming count(n)
 // always decodes as exactly one of them.
+//
+// codex R2 (Medium, confirmed, CHAOS-4311): a count(n) is a cardinality --
+// negative, fractional, or non-finite is never a legitimate value, only a
+// malformed response. The float64 case previously ran a bare int(v)
+// conversion: a NaN/Inf produces platform-defined garbage, and a fractional
+// value like 1.9 silently truncates to 1, which the census's own
+// count-closure check (confirmedKindVectorCensus: enumeratedCount+
+// malformedCount != populationCount) could then satisfy against a single
+// genuinely-fetched row -- reading as a sound Complete census when the
+// count query actually returned nonsense. Once CHAOS-4311 makes Complete
+// decision-bearing, this helper's own permissiveness became outcome-
+// affecting rather than merely a measurement-oracle quirk, so every shape
+// here now requires a non-negative, finite, exact integer value -- ok=false
+// otherwise, which every caller already treats as a hard query-format
+// error (countKindEmbedderFenceCorpus/countEmbedderFenceCorpus), failing
+// the census/oracle closed rather than proceeding on a garbage count.
 func intFromCount(value interface{}) (int, bool) {
 	switch v := value.(type) {
 	case int64:
+		if v < 0 {
+			return 0, false
+		}
 		return int(v), true
 	case int:
+		if v < 0 {
+			return 0, false
+		}
 		return v, true
 	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v != math.Trunc(v) {
+			return 0, false
+		}
 		return int(v), true
 	default:
 		return 0, false

@@ -138,6 +138,56 @@ func TestResolveSubjects_ConfirmedKindVectorCensus_UnauthorizedRivalNeverReaches
 	}
 }
 
+// TestResolveSubjects_ConfirmedKindVectorCensus_NonCompleteStateNeverOffersInjectedRivals
+// is codex R2's own Low-confidence finding (CHAOS-4311, confirmed): the
+// rivals-merge block at the ConfirmedKindVectorCensus call site was guarded
+// only by len(scopeVectorCensus.Rivals)>0, not also State==Complete. The
+// concrete falkorgraph adapter only ever populates Rivals on Complete (see
+// ConfirmedKindVectorCensusOutcome.Rivals' own doc comment), so this was not
+// presently exploitable through the real producer -- but the caller's own
+// fail-closed property should not depend entirely on that producer
+// invariant. This test injects a non-Complete state (Failed) carrying a
+// Rivals slice anyway (a shape the real adapter never produces, but ANY
+// ResolveDeps.ConfirmedKindVectorCensus implementation could) and asserts
+// it is never merged into the offer pool.
+func TestResolveSubjects_ConfirmedKindVectorCensus_NonCompleteStateNeverOffersInjectedRivals(t *testing.T) {
+	t.Parallel()
+	kind := contextfabric.SubjectWorkItem
+	term := "widget rollout"
+	subject := contextfabric.SubjectRef{Kind: kind, CanonicalID: "wi_1", Label: "Widget Rollout Backend Task"}
+	injectedRival := candidateNode(kind, "wi_injected_on_failed_state", "Should Never Be Offered", 0, []string{"full-chaos/dev-health-acr"})
+	injectedRival.Mechanism = contextfabric.MatchVector
+	similarity := 0.91
+	injectedRival.VectorSimilarity = &similarity
+	backend := vectorCensusFixtureBackend(t, kind, term, subject, &ConfirmedKindVectorCensusOutcome{
+		// State: Failed, NOT Complete -- a shape the real adapter never
+		// produces (Rivals stays nil on every non-Complete return path), but
+		// this caller must not rely solely on that producer invariant.
+		State: ConfirmedKindVectorScopeFailed, RivalCountAboveTau: 1, Rivals: []CandidateNode{injectedRival},
+	})
+	confirmed := &contextfabric.ConfirmedExpectedKind{Kind: kind}
+	tracer := &recordingTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	_, offerMaterial, err := ResolveSubjects(context.Background(), principal, testRequest(), testInterpreted(term), deps, confirmed, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	for _, option := range offerMaterial.CandidateOptions {
+		if option.CanonicalID == "wi_injected_on_failed_state" {
+			t.Fatalf("offerMaterial.CandidateOptions = %+v, want it to OMIT the injected rival -- State=Failed (not Complete) must never merge Rivals into the offer pool, regardless of what the producer populated", offerMaterial.CandidateOptions)
+		}
+	}
+	event, ok := confirmedKindScopeEvent(tracer.events)
+	if !ok {
+		t.Fatal("no confirmed_kind_scope event captured")
+	}
+	if event.ConfirmedKindVectorScopeRivalsOfferedCount != 0 {
+		t.Fatalf("event.ConfirmedKindVectorScopeRivalsOfferedCount = %d, want 0 -- a non-Complete state's Rivals must never be merged or counted as offered", event.ConfirmedKindVectorScopeRivalsOfferedCount)
+	}
+}
+
 // TestResolveSubjects_ConfirmedKindVectorCensus_AuthorizedRivalReachesTheOfferPool
 // is the positive counterpart to the test above -- proves the mechanism
 // actually WORKS, not merely that it safely does nothing: an AUTHORIZED

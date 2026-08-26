@@ -6,7 +6,12 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
-// CHAOS-4155 Phase 1: kind-scoped vector completeness census, SHADOW ONLY.
+// CHAOS-4155: kind-scoped vector completeness census. Introduced in Phase 1
+// as SHADOW ONLY telemetry; CHAOS-4311 (Phase 3, see the PHASE 1 / PHASE 2 /
+// PHASE 3 section below) made its outcome decision-bearing in resolve.go's
+// own caller -- codex R2 (Low, confirmed) flagged this header as stale
+// after that flip, since "SHADOW ONLY" no longer describes the current
+// deployment.
 //
 // BACKGROUND: chaos4154_confirmed_kind_scope.go's buildConfirmedKindScopedSnapshot
 // proves a confirmed-kind candidate population complete via an exhaustive

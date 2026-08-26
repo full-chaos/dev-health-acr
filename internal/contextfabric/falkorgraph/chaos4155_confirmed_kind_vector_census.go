@@ -10,13 +10,21 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
-// chaos4155_confirmed_kind_vector_census.go implements CHAOS-4155 Phase 1's
-// SHADOW-ONLY kind-scoped vector completeness census -- the falkorgraph
+// chaos4155_confirmed_kind_vector_census.go implements CHAOS-4155's
+// kind-scoped vector completeness census -- the falkorgraph
 // (graphrank.ResolveDeps.ConfirmedKindVectorCensus) side of the mechanism
 // graphrank/chaos4155_confirmed_kind_vector_scope.go's own doc comment
 // designs. Read that file first; this one is the concrete implementation of
 // the exact enumeration + count-closure + stable-snapshot check it
 // describes.
+//
+// codex R2 (Low, confirmed, CHAOS-4311): this file's own outcome computation
+// has never changed shape across phases (see that other file's PHASE 1 /
+// PHASE 2 / PHASE 3 section) -- SHADOW-ONLY described Phase 1's caller
+// behavior, not this file's. As of CHAOS-4311 (Phase 3) the outcome this
+// file returns IS decision-bearing in resolve.go's own caller; "SHADOW-ONLY"
+// no longer describes the current deployment and is removed here to avoid
+// misleading a reader of this security-sensitive completeness gate.
 //
 // Reuses oracle.go's CHAOS-3831/CHAOS-3849 pagination + independent
 // count(n) closure pattern (fetchEmbedderFenceCorpus/
