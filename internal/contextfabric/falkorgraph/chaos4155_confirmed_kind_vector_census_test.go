@@ -107,7 +107,7 @@ func TestConfirmedKindVectorCensus_DisabledByDefaultNotAttempted(t *testing.T) {
 	}}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.5)
 	// ConfirmedKindVectorCensusMaxComparisons left at its zero value.
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeNotAttempted {
 		t.Fatalf("State = %q, want %q", got.State, graphrank.ConfirmedKindVectorScopeNotAttempted)
 	}
@@ -123,7 +123,7 @@ func TestConfirmedKindVectorCensus_NoEmbedderNotAttempted(t *testing.T) {
 	t.Parallel()
 	adapter := newFakeAdapter(t, &fakeConn{})
 	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeNotAttempted {
 		t.Fatalf("State = %q, want %q", got.State, graphrank.ConfirmedKindVectorScopeNotAttempted)
 	}
@@ -142,7 +142,7 @@ func TestConfirmedKindVectorCensus_CompleteOnCleanCountClosedCorpusWithStableSna
 		watermarkAfter:  []row{chaos4155WatermarkRow("github", 1)},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeComplete {
 		t.Fatalf("outcome = %+v, want State=%q", got, graphrank.ConfirmedKindVectorScopeComplete)
 	}
@@ -183,7 +183,7 @@ func TestConfirmedKindVectorCensus_OverBudgetNeverFetchesOrEmbeds(t *testing.T) 
 	}}
 	adapter := vectorAdapter(t, fake, embedder, 0.5)
 	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 50 // 100 population * 1 term = 100 > 50
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeOverBudget {
 		t.Fatalf("outcome = %+v, want State=%q", got, graphrank.ConfirmedKindVectorScopeOverBudget)
 	}
@@ -211,7 +211,7 @@ func TestConfirmedKindVectorCensus_MalformedRowFailsClosed(t *testing.T) {
 		watermarkAfter:  []row{},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeMalformed {
 		t.Fatalf("outcome = %+v, want State=%q", got, graphrank.ConfirmedKindVectorScopeMalformed)
 	}
@@ -235,7 +235,7 @@ func TestConfirmedKindVectorCensus_CountMismatchFailsClosed(t *testing.T) {
 		watermarkAfter:  []row{},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeMalformed {
 		t.Fatalf("outcome = %+v, want State=%q -- a count(n)/fetch disagreement must fail closed, never read as Complete", got, graphrank.ConfirmedKindVectorScopeMalformed)
 	}
@@ -255,7 +255,7 @@ func TestConfirmedKindVectorCensus_SnapshotDriftFailsClosed(t *testing.T) {
 		watermarkAfter:  []row{chaos4155WatermarkRow("github", 2)}, // moved mid-census
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeDrift {
 		t.Fatalf("outcome = %+v, want State=%q", got, graphrank.ConfirmedKindVectorScopeDrift)
 	}
@@ -278,7 +278,7 @@ func TestConfirmedKindVectorCensus_NewSourceAppearingIsDrift(t *testing.T) {
 		watermarkAfter:  []row{chaos4155WatermarkRow("github", 1), chaos4155WatermarkRow("jira", 1)},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeDrift {
 		t.Fatalf("outcome = %+v, want State=%q", got, graphrank.ConfirmedKindVectorScopeDrift)
 	}
@@ -301,7 +301,7 @@ func TestConfirmedKindVectorCensus_TermEmbedFailureFailsClosedNeverComplete(t *t
 	}
 	adapter := vectorAdapter(t, fake.toFakeConn(), &stubEmbedder{err: errors.New("embed provider unavailable")}, 0.5)
 	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q -- a term embed failure must never read as Complete", got, graphrank.ConfirmedKindVectorScopeFailed)
 	}
@@ -352,7 +352,7 @@ func TestConfirmedKindVectorCensus_DependencyErrorNeverPropagatesOnlyFailedState
 	t.Parallel()
 	fake := &chaos4155FakeConn{countErr: context.DeadlineExceeded}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q", got, graphrank.ConfirmedKindVectorScopeFailed)
 	}
@@ -375,7 +375,7 @@ func TestConfirmedKindVectorCensus_MalformedWatermarkRowFailsClosed(t *testing.T
 		watermarkAfter:  []row{chaos4155WatermarkRow("", 1)},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q -- a malformed (empty-source) watermark row must abort the census, never be silently dropped into a false-stable comparison", got, graphrank.ConfirmedKindVectorScopeFailed)
 	}
@@ -399,7 +399,7 @@ func TestConfirmedKindVectorCensus_FractionalGenerationFailsClosed(t *testing.T)
 		watermarkAfter:  []row{{"source": "github", "generation": 1.1}},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q -- a fractional generation must abort the census, never truncate to a coincidentally-equal int", got, graphrank.ConfirmedKindVectorScopeFailed)
 	}
@@ -419,7 +419,7 @@ func TestConfirmedKindVectorCensus_NegativeGenerationFailsClosed(t *testing.T) {
 		watermarkAfter:  []row{{"source": "github", "generation": -1}},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q -- a negative generation must abort the census", got, graphrank.ConfirmedKindVectorScopeFailed)
 	}
@@ -442,7 +442,7 @@ func TestConfirmedKindVectorCensus_MalformedEmptyEpochFailsClosed(t *testing.T) 
 		watermarkAfter:  []row{{"source": "github", "generation": int64(1), "epoch": ""}},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q -- an empty epoch must abort the census, never be silently dropped into a false-stable comparison", got, graphrank.ConfirmedKindVectorScopeFailed)
 	}
@@ -468,11 +468,167 @@ func TestConfirmedKindVectorCensus_NonFiniteQueryVectorFailsClosed(t *testing.T)
 	embedder := &stubEmbedder{vector: []float32{float32(math.NaN()), 0, 0, 0}}
 	adapter := vectorAdapter(t, fake.toFakeConn(), embedder, 0.5)
 	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
-	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q -- a non-finite query vector must abort the census, never silently score as zero rivals", got, graphrank.ConfirmedKindVectorScopeFailed)
 	}
 	if got.QueriesScored != 0 {
 		t.Fatalf("outcome.QueriesScored = %d, want 0 -- a poisoned vector must not count as a scored term", got.QueriesScored)
+	}
+}
+
+// --- CHAOS-4311 Phase 3: Rivals extraction ---
+
+// chaos4155VaryingEmbedder returns a DIFFERENT canned vector per call, in
+// order -- needed to prove the dedup-keeps-highest-similarity contract
+// below, which stubEmbedder's single fixed vector cannot exercise (every
+// term would score identically against a given corpus row).
+type chaos4155VaryingEmbedder struct {
+	vectors [][]float32
+	calls   int
+}
+
+func (e *chaos4155VaryingEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = e.vectors[e.calls%len(e.vectors)]
+		e.calls++
+	}
+	return out, nil
+}
+
+func (e *chaos4155VaryingEmbedder) Identity() contextfabric.EmbedderIdentity {
+	return contextfabric.EmbedderIdentity{Provider: "stub", Model: "stub-embed", Dimension: len(e.vectors[0])}
+}
+
+// TestConfirmedKindVectorCensus_RivalsOnlyIncludeCandidatesAboveFloor pins
+// the basic Rivals population contract alongside the pre-existing
+// RivalCountAboveTau assertion: exactly the row that cleared the floor
+// appears in Rivals, tagged MatchVector with its own raw similarity, and the
+// at-floor row (excluded per aboveSimilarityFloor's own strict ">" contract)
+// does not appear at all.
+func TestConfirmedKindVectorCensus_RivalsOnlyIncludeCandidatesAboveFloor(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      2,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0}), chaos4155SubjectRow("wi_2", []float32{0, 1, 0, 0})},
+		watermarkBefore: []row{},
+		watermarkAfter:  []row{},
+	}
+	adapter := chaos4155Adapter(t, fake, 1000)
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
+	if got.State != graphrank.ConfirmedKindVectorScopeComplete {
+		t.Fatalf("outcome.State = %q, want %q", got.State, graphrank.ConfirmedKindVectorScopeComplete)
+	}
+	if len(got.Rivals) != 1 {
+		t.Fatalf("len(got.Rivals) = %d, want 1 (only wi_1 clears the 0.5 floor; wi_2 sits exactly at it, excluded by the strict > contract)", len(got.Rivals))
+	}
+	// chaos4155SubjectRow sets propLabel to the SAME value as
+	// propCanonicalID -- toCandidateNode carries that through as Name.
+	if got.Rivals[0].Name != "wi_1" {
+		t.Errorf("Rivals[0].Name = %q, want %q (wi_2 must not appear)", got.Rivals[0].Name, "wi_1")
+	}
+	if got.Rivals[0].Mechanism != contextfabric.MatchVector {
+		t.Errorf("Rivals[0].Mechanism = %q, want %q", got.Rivals[0].Mechanism, contextfabric.MatchVector)
+	}
+	if got.Rivals[0].VectorSimilarity == nil || *got.Rivals[0].VectorSimilarity != 1.0 {
+		t.Errorf("Rivals[0].VectorSimilarity = %v, want a pointer to 1.0 (stub query vector {1,0,0,0} against wi_1's identical vector)", got.Rivals[0].VectorSimilarity)
+	}
+	if got.Rivals[0].Relevance == nil {
+		t.Fatal("Rivals[0].Relevance = nil, want a normalized relevance in the vector band")
+	}
+}
+
+// TestConfirmedKindVectorCensus_RivalsDeduplicateAcrossTermsKeepingHighestSimilarity
+// pins the CHAOS-4311 dedup contract: the SAME corpus row clearing the floor
+// against TWO different query terms at two different similarities appears
+// exactly ONCE in Rivals, carrying the HIGHER of the two similarities --
+// while RivalCountAboveTau (the Phase 1/2 telemetry field, unchanged) still
+// counts both occurrences, proving the two fields are deliberately
+// different, not a refactor of one into the other.
+func TestConfirmedKindVectorCensus_RivalsDeduplicateAcrossTermsKeepingHighestSimilarity(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      1,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
+		watermarkBefore: []row{},
+		watermarkAfter:  []row{},
+	}
+	adapter := vectorAdapter(t, fake.toFakeConn(), &chaos4155VaryingEmbedder{
+		// term 1 -> similarity 1.0 against wi_1; term 2 -> similarity ~0.707
+		// (still above the 0.5 floor). Both clear the floor; the max (1.0)
+		// must be what Rivals keeps.
+		vectors: [][]float32{{1, 0, 0, 0}, {1, 1, 0, 0}},
+	}, 0.5)
+	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"term-a", "term-b"}, temporalFilter{})
+	if got.State != graphrank.ConfirmedKindVectorScopeComplete {
+		t.Fatalf("outcome.State = %q, want %q", got.State, graphrank.ConfirmedKindVectorScopeComplete)
+	}
+	if got.RivalCountAboveTau != 2 {
+		t.Fatalf("outcome.RivalCountAboveTau = %d, want 2 (unchanged Phase 1/2 semantics: one (term, candidate) pair per term)", got.RivalCountAboveTau)
+	}
+	if len(got.Rivals) != 1 {
+		t.Fatalf("len(got.Rivals) = %d, want 1 -- the SAME candidate matched both terms and must be deduplicated", len(got.Rivals))
+	}
+	if got.Rivals[0].VectorSimilarity == nil || *got.Rivals[0].VectorSimilarity != 1.0 {
+		t.Errorf("Rivals[0].VectorSimilarity = %v, want a pointer to 1.0 (the HIGHER of the two terms' similarities, not the last-seen 0.707)", got.Rivals[0].VectorSimilarity)
+	}
+}
+
+// TestConfirmedKindVectorCensus_RivalsNilOnNonCompleteStates pins that
+// Rivals is never populated on a discarded outcome -- OverBudget here, but
+// the same return-path reasoning covers Malformed/Failed/Drift (none of
+// them reach the Rivals-building code at the tail of the Complete path).
+func TestConfirmedKindVectorCensus_RivalsNilOnNonCompleteStates(t *testing.T) {
+	t.Parallel()
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, labelWatermark) {
+			return nil, nil
+		}
+		if strings.Contains(cypher, "count(n)") {
+			return []row{chaos4155CountRow(100)}, nil
+		}
+		return nil, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.5)
+	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 50 // 100 * 1 > 50
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
+	if got.State != graphrank.ConfirmedKindVectorScopeOverBudget {
+		t.Fatalf("outcome.State = %q, want %q", got.State, graphrank.ConfirmedKindVectorScopeOverBudget)
+	}
+	if got.Rivals != nil {
+		t.Errorf("outcome.Rivals = %+v, want nil on a refused (non-Complete) outcome", got.Rivals)
+	}
+}
+
+// TestConfirmedKindVectorCensus_RivalsSortedByCanonicalID pins the
+// deterministic-ordering contract: Rivals is sorted by CanonicalID
+// regardless of the corpus's own fetch/iteration order, since this census
+// builds the dedup set via a Go map internally (randomized iteration order).
+func TestConfirmedKindVectorCensus_RivalsSortedByCanonicalID(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal: 3,
+		subjectRows: []row{
+			chaos4155SubjectRow("wi_c", []float32{1, 0, 0, 0}),
+			chaos4155SubjectRow("wi_a", []float32{1, 0, 0, 0}),
+			chaos4155SubjectRow("wi_b", []float32{1, 0, 0, 0}),
+		},
+		watermarkBefore: []row{},
+		watermarkAfter:  []row{},
+	}
+	adapter := chaos4155Adapter(t, fake, 1000)
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
+	if len(got.Rivals) != 3 {
+		t.Fatalf("len(got.Rivals) = %d, want 3", len(got.Rivals))
+	}
+	want := []string{"wi_a", "wi_b", "wi_c"}
+	for i, rival := range got.Rivals {
+		// chaos4155SubjectRow sets propLabel to the SAME value as
+		// propCanonicalID -- toCandidateNode carries that through as Name.
+		if rival.Name != want[i] {
+			t.Fatalf("Rivals[%d].Name = %q, want %q (input order was wi_c, wi_a, wi_b -- output must be sorted)", i, rival.Name, want[i])
+		}
 	}
 }

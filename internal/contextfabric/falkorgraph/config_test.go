@@ -131,6 +131,62 @@ func TestConfigFromEnvUsesConventionalNamesAndDefaults(t *testing.T) {
 	}
 }
 
+// TestConfigFromEnvDefaultsConfirmedKindVectorCensusMaxComparisonsToTenThousand
+// (CHAOS-4311 Phase 3) pins the flip from Phase 1/2's "off unless an
+// operator explicitly sets it" (0) to a real production default: with the
+// env var unset, ConfigFromEnv must now return DefaultConfirmedKindVectorCensusMaxComparisons
+// (10,000), not 0 -- a Config built directly (Config{}) is UNAFFECTED and
+// still zero-values to disabled, per that field's own doc comment.
+func TestConfigFromEnvDefaultsConfirmedKindVectorCensusMaxComparisonsToTenThousand(t *testing.T) {
+	t.Parallel()
+	values := map[string]string{EnvAddr: "falkordb:6379"}
+	lookup := func(key string) (string, bool) { value, ok := values[key]; return value, ok }
+	cfg, err := ConfigFromEnv(lookup)
+	if err != nil {
+		t.Fatalf("ConfigFromEnv() error = %v", err)
+	}
+	if cfg.ConfirmedKindVectorCensusMaxComparisons != DefaultConfirmedKindVectorCensusMaxComparisons {
+		t.Fatalf("cfg.ConfirmedKindVectorCensusMaxComparisons = %d, want the default %d", cfg.ConfirmedKindVectorCensusMaxComparisons, DefaultConfirmedKindVectorCensusMaxComparisons)
+	}
+	if DefaultConfirmedKindVectorCensusMaxComparisons != 10000 {
+		t.Fatalf("DefaultConfirmedKindVectorCensusMaxComparisons = %d, want 10000 (CHAOS-4311's own ratified budget)", DefaultConfirmedKindVectorCensusMaxComparisons)
+	}
+	var zeroValue Config
+	if zeroValue.ConfirmedKindVectorCensusMaxComparisons != 0 {
+		t.Fatalf("a directly-constructed Config{} defaults ConfirmedKindVectorCensusMaxComparisons to %d, want 0 (disabled) -- only ConfigFromEnv applies the Phase 3 default", zeroValue.ConfirmedKindVectorCensusMaxComparisons)
+	}
+}
+
+// TestConfigFromEnvConfirmedKindVectorCensusMaxComparisonsOverridesBothDirections
+// proves the env var still overrides the new default in EITHER direction,
+// including explicitly back down to 0 (disabled) -- the override must never
+// be a one-way "can only raise the budget" knob.
+func TestConfigFromEnvConfirmedKindVectorCensusMaxComparisonsOverridesBothDirections(t *testing.T) {
+	t.Parallel()
+	t.Run("raised", func(t *testing.T) {
+		values := map[string]string{EnvAddr: "falkordb:6379", EnvConfirmedKindVectorCensusMaxComparisons: "2000000"}
+		lookup := func(key string) (string, bool) { value, ok := values[key]; return value, ok }
+		cfg, err := ConfigFromEnv(lookup)
+		if err != nil {
+			t.Fatalf("ConfigFromEnv() error = %v", err)
+		}
+		if cfg.ConfirmedKindVectorCensusMaxComparisons != 2000000 {
+			t.Fatalf("cfg.ConfirmedKindVectorCensusMaxComparisons = %d, want the explicit override 2000000", cfg.ConfirmedKindVectorCensusMaxComparisons)
+		}
+	})
+	t.Run("explicitly disabled", func(t *testing.T) {
+		values := map[string]string{EnvAddr: "falkordb:6379", EnvConfirmedKindVectorCensusMaxComparisons: "0"}
+		lookup := func(key string) (string, bool) { value, ok := values[key]; return value, ok }
+		cfg, err := ConfigFromEnv(lookup)
+		if err != nil {
+			t.Fatalf("ConfigFromEnv() error = %v", err)
+		}
+		if cfg.ConfirmedKindVectorCensusMaxComparisons != 0 {
+			t.Fatalf("cfg.ConfirmedKindVectorCensusMaxComparisons = %d, want 0 -- an explicit override back to disabled must not be silently re-defaulted to 10000", cfg.ConfirmedKindVectorCensusMaxComparisons)
+		}
+	})
+}
+
 // TestConfigFromEnvHonorsOverridesAndSecretFileConvention is the direct port
 // of zepgraph's same-named test, adapted to falkorgraph's real env var names.
 func TestConfigFromEnvHonorsOverridesAndSecretFileConvention(t *testing.T) {

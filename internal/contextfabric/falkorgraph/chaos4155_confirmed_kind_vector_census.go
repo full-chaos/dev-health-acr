@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -27,8 +28,15 @@ import (
 // graphrank.ResolveDeps.ConfirmedKindVectorCensus. See that field's own doc
 // comment for the "never returns an error" contract: every failure mode is
 // captured as a returned State instead of propagated, because this arm
-// observes and never decides.
-func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID string, kind contextfabric.SubjectKind, terms []string) graphrank.ConfirmedKindVectorCensusOutcome {
+// observes and never decides. temporal (CHAOS-4311, codex R1 High,
+// confirmed): the SAME admission window this resolution's own SearchKind
+// pass already applies (reader.go's ConfirmedKindVectorCensus closure binds
+// it to the identical newTemporalFilter value) -- an inactive (current-axis)
+// filter costs nothing extra and changes no query text, but a historical
+// (ValidTime/ObservedTime/Range) resolution now excludes out-of-window
+// nodes from both the population count(n) and the enumerated corpus, the
+// same as every other retrieval path in this package already does.
+func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID string, kind contextfabric.SubjectKind, terms []string, temporal temporalFilter) graphrank.ConfirmedKindVectorCensusOutcome {
 	started := a.now()
 	if a.config.ConfirmedKindVectorCensusMaxComparisons <= 0 || a.embedder == nil {
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeNotAttempted}
@@ -44,7 +52,7 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeFailed, DurationMS: a.now().Sub(started).Milliseconds()}
 	}
 
-	populationCount, err := a.countKindEmbedderFenceCorpus(ctx, key, orgID, string(kind), identity)
+	populationCount, err := a.countKindEmbedderFenceCorpus(ctx, key, orgID, string(kind), identity, temporal)
 	if err != nil {
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeFailed, DurationMS: a.now().Sub(started).Milliseconds()}
 	}
@@ -65,7 +73,7 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 		}
 	}
 
-	corpus, enumeratedCount, malformedCount, err := a.fetchKindEmbedderFenceCorpus(ctx, key, orgID, string(kind), identity)
+	corpus, enumeratedCount, malformedCount, err := a.fetchKindEmbedderFenceCorpus(ctx, key, orgID, string(kind), identity, temporal)
 	if err != nil {
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeFailed, PopulationCount: populationCount, DurationMS: a.now().Sub(started).Milliseconds()}
 	}
@@ -80,6 +88,15 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 	var queriesScored int
 	var embedFailed bool
 	var rivalCount int64
+	// rivalsByCanonicalID (CHAOS-4311, Phase 3) accumulates the DISTINCT
+	// candidates that clear the similarity floor, across every term --
+	// see ConfirmedKindVectorCensusOutcome.Rivals' own doc comment for why
+	// this is deduplicated while rivalCount above (unchanged from Phase
+	// 1/2) is not. Keyed by CanonicalID alone: every row in corpus shares
+	// the SAME kind (this cypher's own WHERE clause), so CanonicalID is
+	// already a unique key within this fetch. Value keeps the HIGHEST
+	// similarity seen across every term this row cleared the floor for.
+	rivalsByCanonicalID := make(map[string]censusRival)
 	for _, term := range terms {
 		vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(vectorQueryText(term))})
 		if embedErr != nil || len(vectors) == 0 {
@@ -117,8 +134,12 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 		}
 		queriesScored++
 		for _, candidate := range corpus {
-			if trueCosineSimilarity(queryVector, candidate.Vector) > a.similarityFloor {
+			similarity := trueCosineSimilarity(queryVector, candidate.Vector)
+			if similarity > a.similarityFloor {
 				rivalCount++
+				if existing, ok := rivalsByCanonicalID[candidate.CanonicalID]; !ok || similarity > existing.similarity {
+					rivalsByCanonicalID[candidate.CanonicalID] = censusRival{candidate: candidate.Candidate, similarity: similarity}
+				}
 			}
 		}
 	}
@@ -152,6 +173,11 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 		return outcome
 	}
 	outcome.State = graphrank.ConfirmedKindVectorScopeComplete
+	// CHAOS-4311: Rivals attached ONLY on the Complete outcome -- see
+	// ConfirmedKindVectorCensusOutcome.Rivals' own doc comment. Every other
+	// return path above (OverBudget/Malformed/Failed/Drift) leaves this at
+	// its nil zero value, unchanged from Phase 1/2.
+	outcome.Rivals = a.sortedCensusRivals(rivalsByCanonicalID)
 	return outcome
 }
 
@@ -161,6 +187,48 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 type watermarkSnapshotEntry struct {
 	Generation int64
 	Epoch      string
+}
+
+// censusRival pairs one deduplicated rival's graphrank.CandidateNode
+// conversion with the highest cosine similarity any query term found for it
+// -- see rivalsByCanonicalID's own declaration comment (confirmedKindVectorCensus).
+type censusRival struct {
+	candidate  graphrank.CandidateNode
+	similarity float64
+}
+
+// sortedCensusRivals converts confirmedKindVectorCensus's own deduplicated
+// rival map into the CandidateNode slice ConfirmedKindVectorCensusOutcome.Rivals
+// carries: Mechanism/VectorSimilarity/Relevance stamped from each rival's own
+// highest similarity, mirroring vectorSearchNodesWithOverFetch's exact
+// construction (Mechanism=MatchVector, VectorSimilarity=the raw unclamped
+// value, Relevance=vectorRelevanceFromSimilarity against this adapter's OWN
+// a.similarityFloor -- the SAME tau every rival here already cleared to earn
+// its place in the map. This census enumerates the FULL embedder-fenced
+// corpus, so there is no truncation concept here and the floor-clamped
+// Relevance vectorSearchNodesWithOverFetch uses under truncation never
+// applies). Sorted by CanonicalID for a deterministic artifact/telemetry
+// ordering independent of Go's randomized map iteration.
+func (a *Adapter) sortedCensusRivals(rivalsByCanonicalID map[string]censusRival) []graphrank.CandidateNode {
+	if len(rivalsByCanonicalID) == 0 {
+		return nil
+	}
+	canonicalIDs := make([]string, 0, len(rivalsByCanonicalID))
+	for canonicalID := range rivalsByCanonicalID {
+		canonicalIDs = append(canonicalIDs, canonicalID)
+	}
+	sort.Strings(canonicalIDs)
+	rivals := make([]graphrank.CandidateNode, 0, len(canonicalIDs))
+	for _, canonicalID := range canonicalIDs {
+		rival := rivalsByCanonicalID[canonicalID]
+		candidate := rival.candidate
+		candidate.Mechanism = contextfabric.MatchVector
+		similarity := rival.similarity
+		candidate.VectorSimilarity = &similarity
+		candidate.Relevance = graphrank.Normalized(vectorRelevanceFromSimilarity(similarity, a.similarityFloor))
+		rivals = append(rivals, candidate)
+	}
+	return rivals
 }
 
 // chaos4155WatermarkSnapshot reads every _AcrWatermark node for orgID under
@@ -372,15 +440,18 @@ func watermarkSnapshotsEqual(before, after map[string]watermarkSnapshotEntry) bo
 // countKindEmbedderFenceCorpus is countEmbedderFenceCorpus's kind-scoped
 // sibling -- same aggregate-count-is-not-RESULTSET_SIZE-bound reasoning
 // (oracle.go's own doc comment), additionally constrained to exactly one
-// SubjectKind.
-func (a *Adapter) countKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string) (int64, error) {
+// SubjectKind. temporal (CHAOS-4311, codex R1 High, confirmed): the SAME
+// admission window kindScopedFulltextSearchNodes' own lexical pass already
+// applies -- an inactive (current-axis) filter renders as the empty string,
+// byte-identical to before this parameter existed.
+func (a *Adapter) countKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string, temporal temporalFilter) (int64, error) {
 	cypher := fmt.Sprintf(
 		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
-			"AND n.%s = $kind AND n.%s IS NOT NULL "+
+			"AND n.%s = $kind AND n.%s IS NOT NULL%s "+
 			"RETURN count(n) AS total",
-		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID,
+		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID, temporal.predicate("n"),
 	)
-	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "identity": identity, "kind": kind}, true)
+	rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"org": orgID, "identity": identity, "kind": kind}), true)
 	if err != nil {
 		return 0, safeDependencyError("count confirmed-kind vector census corpus", err)
 	}
@@ -394,6 +465,18 @@ func (a *Adapter) countKindEmbedderFenceCorpus(ctx context.Context, key, orgID, 
 	return int64(total), nil
 }
 
+// censusCorpusRow (CHAOS-4311, Phase 3) pairs one enumerated corpus row's
+// oracleVector (used for cosine scoring, unchanged from Phase 1/2) with the
+// SAME row's graphrank.CandidateNode conversion (toCandidateNode) -- needed
+// only once a row scores above the similarity floor and must become an
+// authorized offer. See ConfirmedKindVectorCensusOutcome.Rivals' own doc
+// comment for why this raw conversion is not itself caller-visible until it
+// passes through mergeSearchResults' own authorization gate downstream.
+type censusCorpusRow struct {
+	oracleVector
+	Candidate graphrank.CandidateNode
+}
+
 // fetchKindEmbedderFenceCorpus is fetchEmbedderFenceCorpus's kind-scoped
 // sibling, hardened per sol's CHAOS-4155 consult note: unlike the
 // measurement-only oracle, a malformed row here is NEVER silently skipped
@@ -401,17 +484,20 @@ func (a *Adapter) countKindEmbedderFenceCorpus(ctx context.Context, key, orgID, 
 // (confirmedKindVectorCensus) treats ANY malformedCount>0 (or a
 // enumerated+malformed count that still disagrees with the independently
 // queried population) as ConfirmedKindVectorScopeMalformed, fail-closed.
-func (a *Adapter) fetchKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string) (corpus []oracleVector, enumeratedCount int64, malformedCount int64, err error) {
+// temporal (CHAOS-4311, codex R1 High, confirmed): the SAME admission
+// window countKindEmbedderFenceCorpus and kindScopedFulltextSearchNodes'
+// own lexical pass already apply -- see that function's own doc comment.
+func (a *Adapter) fetchKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string, temporal temporalFilter) (corpus []censusCorpusRow, enumeratedCount int64, malformedCount int64, err error) {
 	cypher := fmt.Sprintf(
 		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
-			"AND n.%s = $kind AND n.%s IS NOT NULL "+
+			"AND n.%s = $kind AND n.%s IS NOT NULL%s "+
 			"RETURN n ORDER BY n.%s SKIP $skip LIMIT $limit",
-		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID, propCanonicalID,
+		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID, temporal.predicate("n"), propCanonicalID,
 	)
 	for skip := 0; ; skip += oracleFetchBatchSize {
-		rows, qerr := a.api.query(ctx, key, cypher, map[string]interface{}{
+		rows, qerr := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{
 			"org": orgID, "identity": identity, "kind": kind, "skip": skip, "limit": oracleFetchBatchSize,
-		}, true)
+		}), true)
 		if qerr != nil {
 			return nil, enumeratedCount, malformedCount, safeDependencyError("fetch confirmed-kind vector census corpus", qerr)
 		}
@@ -427,7 +513,14 @@ func (a *Adapter) fetchKindEmbedderFenceCorpus(ctx context.Context, key, orgID, 
 				malformedCount++
 				continue
 			}
-			corpus = append(corpus, oracleVector{Kind: kind, CanonicalID: canonicalID, Label: propStringValue(n.Properties[propLabel]), Vector: vector})
+			corpus = append(corpus, censusCorpusRow{
+				oracleVector: oracleVector{Kind: kind, CanonicalID: canonicalID, Label: propStringValue(n.Properties[propLabel]), Vector: vector},
+				// CHAOS-4311: toCandidateNode carries n's FULL raw
+				// Properties (Attributes) through unfiltered -- this row
+				// has NOT been authorized yet. See censusCorpusRow's own
+				// doc comment.
+				Candidate: toCandidateNode(n),
+			})
 			enumeratedCount++
 		}
 		if len(rows) < oracleFetchBatchSize {

@@ -128,12 +128,20 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// for why the confirmed-kind truncation-scoping mechanism needs
 		// this rather than any per-call signal.
 		VectorMechanismConfigured: a.embedder != nil,
-		// CHAOS-4155 Phase 1: SHADOW-only kind-scoped vector completeness
-		// census -- see graphrank.ResolveDeps.ConfirmedKindVectorCensus's
-		// own doc comment. Bound to the SAME key/orgID every other closure
-		// in this deps struct already closes over.
+		// CHAOS-4155 Phase 1 / CHAOS-4311 Phase 3: kind-scoped vector
+		// completeness census -- see
+		// graphrank.ResolveDeps.ConfirmedKindVectorCensus's own doc
+		// comment. Bound to the SAME key/orgID/temporal filter every other
+		// closure in this deps struct already closes over -- codex R1
+		// (High, confirmed) on the CHAOS-4311 PR: this census's own corpus
+		// enumeration had NO temporal predicate at all, unlike SearchKind's
+		// identical-shape lexical pass two lines above, so a historical
+		// (ValidTime/ObservedTime/Range) resolution could census -- and, once
+		// decision-bearing, commit or offer against -- nodes outside the
+		// requested window. temporal is the SAME newTemporalFilter value at
+		// the top of this function.
 		ConfirmedKindVectorCensus: func(ctx context.Context, kind contextfabric.SubjectKind, terms []string) graphrank.ConfirmedKindVectorCensusOutcome {
-			return a.confirmedKindVectorCensus(ctx, key, principal.OrgID, kind, terms)
+			return a.confirmedKindVectorCensus(ctx, key, principal.OrgID, kind, terms, temporal)
 		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject, allowExactMatch,

@@ -110,7 +110,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// "outcome=committed" with no indication the resolution behind
 			// it was discarded unconditionally (see
 			// offersOnlyDecisionTracer's own doc comment, resolve.go).
-			"offered_under_window_gate", event.OfferedUnderWindowGate)
+			"offered_under_window_gate", event.OfferedUnderWindowGate,
+			// CHAOS-4311 Phase 3: confirmedKindVectorCensusDecisiveTracer's
+			// own tag -- see ResolutionTraceEvent.ConfirmedKindVectorCensusDecisive's
+			// own doc comment for why this is the one field a reader needs
+			// to answer "which census outcome drove this decision" directly
+			// on the decision line itself.
+			"confirmed_kind_vector_census_decisive", event.ConfirmedKindVectorCensusDecisive)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put
@@ -247,7 +253,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"vector_census_comparison_count", event.ConfirmedKindVectorScopeComparisonCount,
 			"vector_census_rival_count_above_tau", event.ConfirmedKindVectorScopeRivalCountAboveTau,
 			"vector_census_snapshot_stable", event.ConfirmedKindVectorScopeSnapshotStable,
-			"vector_census_duration_ms", event.ConfirmedKindVectorScopeDurationMS)
+			"vector_census_duration_ms", event.ConfirmedKindVectorScopeDurationMS,
+			// CHAOS-4311 Phase 3: how many of this outcome's own rivals
+			// actually reached the caller-visible offer-only pool after
+			// authorization -- see ResolutionTraceEvent.ConfirmedKindVectorScopeRivalsOfferedCount's
+			// own doc comment for why this is deliberately separate from
+			// vector_census_rival_count_above_tau above.
+			"vector_census_rivals_offered_count", event.ConfirmedKindVectorScopeRivalsOfferedCount)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,

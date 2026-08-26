@@ -66,21 +66,37 @@ import (
 // therefore a PROVISIONAL label (telemetry-grade, not gate-grade) until that
 // gap closes.
 //
-// PHASE 1 / PHASE 2 SPLIT (sol's own split, team-lead: "GO exactly as sol
-// split it"): Phase 1 (THIS CHANGE) is instrumentation-only -- the shadow
-// census runs, records ConfirmedKindVectorScope* telemetry, and NEVER
-// changes buildConfirmedKindScopedSnapshot's own returned scopeState/pool:
-// every vector-enabled row still reads confirmedKindScopeState=
-// "plan_incomplete" and the commit gate's decision is BYTE-IDENTICAL to
-// pre-CHAOS-4155 behavior -- see
-// TestBuildConfirmedKindScopedSnapshot_VectorCensusNeverChangesReturnedScopeState.
-// Phase 2 (a LATER, SEPARATE change, after lane-baseline's kiac
-// closure/cost measurement selects a real
-// ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS budget and
-// adds the question-channel query) is what would let
-// ConfirmedKindVectorScopeState=="complete" actually flip scopeState to
-// confirmedKindScopeComplete and let the isolated snapshot merge in the
-// census's own vector-corroborated candidates.
+// PHASE 1 / PHASE 2 / PHASE 3 (sol's own Phase 1/2 split, team-lead: "GO
+// exactly as sol split it"; Phase 3 = CHAOS-4311, chris "Okay" 2026-08-26):
+// Phase 1 was instrumentation-only -- the shadow census ran, recorded
+// ConfirmedKindVectorScope* telemetry, and never changed
+// buildConfirmedKindScopedSnapshot's own returned scopeState/pool; every
+// vector-enabled row read confirmedKindScopeState="plan_incomplete" and the
+// commit gate's decision was byte-identical to pre-CHAOS-4155 behavior (see
+// TestBuildConfirmedKindScopedSnapshot_VectorCensusNeverChangesReturnedScopeState,
+// which still pins this file's OWN outcome-computation contract unchanged --
+// Phase 3 only widens what resolve.go's CALLER does with a Complete outcome,
+// never this function's own state machine). Phase 2 (acr #267/#269/#272/#274,
+// kiac measurement, cf-measurement-trials.md 02:00 08-26) measured the
+// mechanism live: decision metrics byte-identical across cold+2 warm reps at
+// budget 2,000,000 (real comparison counts topped out at 44/query), and 48%
+// of Complete cases surfaced >=1 vector rival above tau a lexical-only proof
+// would miss.
+//
+// Phase 3 (THIS CHANGE, CHAOS-4311) makes the outcome decision-bearing in
+// resolve.go's own caller: Complete with RivalCountAboveTau==0 lets the
+// isolated confirmed-kind-scoped population commit exactly like
+// confirmedKindScopeComplete already does (SAME re-decision call, SAME
+// confirmedKindScopedBasis=true population_basis telemetry -- see that call
+// site's own doc comment); Complete WITH rivals never commits anything new
+// (the isolated population's own re-decision does not run) but the rivals
+// this outcome now carries (Rivals, below) become an OFFER-ONLY population,
+// following CHAOS-4271's own offerOnlyPool precedent exactly (private pool
+// the commit gate never reads, nil identity so an offer-only find can never
+// collide-suppress an unrelated real commit). Every other state
+// (OverBudget/Malformed/Drift/Failed/NotAttempted) still fails closed,
+// unchanged from Phase 1/2 -- the plan stays incomplete, nothing new offers
+// or commits.
 //
 // DO-NOT-BUILD (carried over from chaos4154_confirmed_kind_scope.go's own
 // list, still binding here):
@@ -89,8 +105,9 @@ import (
 //     truncation rates, limit+1, or top-result stability -- the count-
 //     closure check here is enumeration-verified cardinality, never a bare
 //     count comparison against k.
-//   - Do not let this shadow arm's outcome influence scopeState, the
-//     isolated pool, or any gate in THIS change.
+//   - A rival never auto-commits, regardless of its own similarity or rank
+//     -- offer-only is not a lesser commit tier, it is the caller's own
+//     private pool the commit gate structurally cannot see (resolve.go).
 
 // ConfirmedKindVectorScope* is the closed vocabulary
 // ResolutionTraceEvent.ConfirmedKindVectorScopeState carries.
@@ -134,10 +151,8 @@ const (
 )
 
 // ConfirmedKindVectorCensusOutcome is ResolveDeps.ConfirmedKindVectorCensus's
-// return value -- see that field's own doc comment. Every field is a
-// closed-vocabulary state, a count, a bool, or a duration: no corpus text,
-// no candidate identities (this is a SHADOW arm; it produces no candidates
-// any caller in this change ever sees).
+// return value -- see that field's own doc comment. Every scalar field is a
+// closed-vocabulary state, a count, a bool, or a duration -- no corpus text.
 type ConfirmedKindVectorCensusOutcome struct {
 	State              string
 	PopulationCount    int64
@@ -155,6 +170,35 @@ type ConfirmedKindVectorCensusOutcome struct {
 	// callers must key off State, never this field alone, to learn why).
 	SnapshotStable bool
 	DurationMS     int64
+	// Rivals (CHAOS-4311, Phase 3) carries one CandidateNode per DISTINCT
+	// subject this census found scoring above the similarity floor against
+	// ANY of the resolution's own query terms -- non-nil only when
+	// State==Complete and at least one candidate cleared the floor. This is
+	// a DEDUPLICATED count, unlike RivalCountAboveTau above (which is
+	// unchanged from Phase 1/2 for measurement continuity: it sums every
+	// (term, candidate) pair that cleared the floor, so a single candidate
+	// matching two different query terms counts twice there) -- so
+	// len(Rivals) <= RivalCountAboveTau, with equality only when no
+	// candidate matched more than one term. A row appearing for multiple
+	// terms is represented ONCE here, keeping its own highest similarity
+	// across those terms. Sorted by CanonicalID for deterministic ordering
+	// (the census builds this via a Go map internally; map iteration order
+	// is not deterministic).
+	//
+	// Every element's own Attributes come from the SAME raw graph node this
+	// census's own exhaustive enumeration already read (falkorgraph's
+	// toCandidateNode conversion) -- i.e. genuinely UNFILTERED by
+	// authorization. This is deliberately NOT a caller-visible candidate
+	// list by construction: a Rival must still pass THROUGH the SAME
+	// authorization gate (graphrank.NodeCandidate/AuthorizedAttributes,
+	// via mergeSearchResults) every other candidate source in this package
+	// goes through before resolve.go's own offer-only merge may expose it
+	// to a caller -- see that call site's own doc comment. Mechanism is
+	// always contextfabric.MatchVector; VectorSimilarity carries the
+	// UNCLAMPED raw cosine similarity that won it inclusion (never fed into
+	// Relevance/ResultConfidence directly -- see CandidateNode.Score's own
+	// "loaded gun" doc comment).
+	Rivals []CandidateNode
 }
 
 // attemptConfirmedKindVectorCensus is buildConfirmedKindScopedSnapshot's own

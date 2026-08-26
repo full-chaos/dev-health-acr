@@ -138,19 +138,22 @@ type Config struct {
 	EmbedFailureEscalateAfter int
 	// ConfirmedKindVectorCensusMaxComparisons (CHAOS-4155 Phase 1,
 	// ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS) is
-	// the SOLE enable+budget knob for the shadow kind-scoped vector
-	// completeness census (chaos4155_confirmed_kind_vector_census.go).
-	// Zero (the default -- deliberately NOT applied by ConfigFromEnv the
-	// way EmbedFailureMaxRetries above gets a nonzero default; this is a
-	// brand-new, unvalidated-at-scale mechanism that must stay off until
-	// explicitly turned on for a measurement run) disables the shadow arm
-	// entirely: confirmedKindVectorCensus returns
+	// the SOLE enable+budget knob for the kind-scoped vector completeness
+	// census (chaos4155_confirmed_kind_vector_census.go), now
+	// DECISION-BEARING as of CHAOS-4311 Phase 3 -- see
+	// graphrank/chaos4155_confirmed_kind_vector_scope.go's own top-of-file
+	// doc comment for what a Complete outcome now does. Zero disables the
+	// arm entirely (confirmedKindVectorCensus returns
 	// ConfirmedKindVectorScopeNotAttempted immediately, zero queries, zero
-	// cost, byte-identical to the arm not existing. A positive value caps
-	// population*queryCount per resolution -- see that function's own doc
-	// comment for why exceeding it is a correctness-safe refusal
-	// (ConfirmedKindVectorScopeOverBudget), never a partial/sampled
-	// attempt.
+	// cost, byte-identical to the arm not existing) -- this is the zero
+	// VALUE's own meaning, still correct for a Config built directly;
+	// ConfigFromEnv itself now defaults to DefaultConfirmedKindVectorCensusMaxComparisons
+	// (10,000, Phase 3) rather than 0 -- see that constant's own doc
+	// comment for the Phase 2 measurement it is calibrated from. A positive
+	// value caps population*queryCount per resolution -- see
+	// confirmedKindVectorCensus's own doc comment for why exceeding it is a
+	// correctness-safe refusal (ConfirmedKindVectorScopeOverBudget), never
+	// a partial/sampled attempt.
 	ConfirmedKindVectorCensusMaxComparisons int64
 	// RawSignalObserver (CHAOS-3858, measurement-only) is optional
 	// (nil-safe), set directly by the composition root the same way
@@ -713,6 +716,21 @@ const (
 	// flagged loudly well before an operator would otherwise notice only
 	// by scrolling Warn lines.
 	DefaultEmbedFailureEscalateAfter = 5
+	// DefaultConfirmedKindVectorCensusMaxComparisons (CHAOS-4311, Phase 3)
+	// is ~200x the observed maximum per-query comparison count from the
+	// CHAOS-4155 Phase 2 kiac measurement (cf-measurement-trials.md 02:00
+	// 08-26): real comparison counts topped out at 44/query across two
+	// warm replicates at budget 2,000,000, with population never exceeding
+	// 20 rows and duration averaging ~0.4s (max 2.0s). 10,000 gives
+	// enormous headroom over any observed cost while still refusing
+	// (ConfirmedKindVectorScopeOverBudget, fail-closed, never a partial
+	// attempt) a genuinely pathological population*queryCount, unlike the
+	// Phase 1/2 measurement budget of 2,000,000 which was deliberately
+	// oversized to observe true costs without ever refusing. ONLY
+	// ConfigFromEnv applies this -- a Config built directly (the zero
+	// value) stays at "disabled" (confirmedKindVectorCensus's own
+	// `<= 0` check), matching every other knob in this const block.
+	DefaultConfirmedKindVectorCensusMaxComparisons = 10000
 )
 
 // Environment variable names for ConfigFromEnv, matching the ACR_<COMPONENT>_
@@ -799,11 +817,17 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// CHAOS-4155 Phase 1: fallback 0, NEVER a nonzero default -- see
-	// Config.ConfirmedKindVectorCensusMaxComparisons's own doc comment for
-	// why this knob must stay off until an operator explicitly sets it,
-	// unlike EmbedFailureMaxRetries/EmbedFailureEscalateAfter above.
-	confirmedKindVectorCensusMaxComparisons, err := envInt64(lookup, EnvConfirmedKindVectorCensusMaxComparisons, 0)
+	// CHAOS-4311 Phase 3 (chris "Okay" 2026-08-26): DefaultConfirmedKindVectorCensusMaxComparisons,
+	// not 0 -- Phase 1/2's "stay off until an operator explicitly sets it"
+	// posture (Config.ConfirmedKindVectorCensusMaxComparisons's own doc
+	// comment, still accurate for a Config built directly) applied only
+	// while the mechanism was unmeasured; the kiac Phase 2 measurement
+	// (cf-measurement-trials.md 02:00 08-26) now justifies an always-on
+	// production default, the same "ConfigFromEnv applies a real default,
+	// the zero-value Config stays off" split EmbedFailureMaxRetries/
+	// EmbedFailureEscalateAfter already use. EnvConfirmedKindVectorCensusMaxComparisons
+	// still overrides it either direction (including back to 0/disabled).
+	confirmedKindVectorCensusMaxComparisons, err := envInt64(lookup, EnvConfirmedKindVectorCensusMaxComparisons, DefaultConfirmedKindVectorCensusMaxComparisons)
 	if err != nil {
 		return Config{}, err
 	}

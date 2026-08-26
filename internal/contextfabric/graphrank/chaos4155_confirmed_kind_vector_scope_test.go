@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -61,7 +62,9 @@ func TestAttemptConfirmedKindVectorCensus_DelegatesKindAndTermsAndOutcome(t *tes
 	backend := &fakeGraphBackend{enableConfirmedKindVectorCensus: true, confirmedKindVectorCensusResult: want}
 	terms := []string{"widget rollout", "outage"}
 	got := attemptConfirmedKindVectorCensus(context.Background(), backend.deps(), contextfabric.SubjectWorkItem, terms)
-	if got != want {
+	// CHAOS-4311: reflect.DeepEqual, not ==, now that Rivals ([]CandidateNode)
+	// makes this struct non-comparable.
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("attemptConfirmedKindVectorCensus() = %+v, want %+v", got, want)
 	}
 	if len(backend.confirmedKindVectorCensusCalls) != 1 {

@@ -47,6 +47,16 @@ const questionProvenanceMarker = "[full question]"
 // census-recovered one.
 const censusProvenanceMarker = "[census witness]"
 
+// confirmedKindVectorCensusProvenanceMarker (CHAOS-4311 Phase 3) is the
+// SAME "bracket-wrapped, never plausibly caller-typed" discipline
+// censusProvenanceMarker documents, distinguished from it so a reader
+// correlating MatchedTerms can tell a confirmed-kind-scoped vector census
+// rival apart from a Slice C census witness. allowExactMatch=false at every
+// call site that uses this marker (mergeSearchResults' own rivals merge,
+// resolveSubjects below) for the identical reason questionProvenanceMarker's
+// own call site documents.
+const confirmedKindVectorCensusProvenanceMarker = "[confirmed kind vector census]"
+
 // matchedTermsCap mirrors contractsv1's own unexported MatchedTerms entry
 // count bound (matchedTerms:32, contextFabricWriteBounds) -- see
 // questionProvenanceMarker's doc comment for why it is mirrored rather than
@@ -509,6 +519,28 @@ func (o offersOnlyDecisionTracer) Trace(event ResolutionTraceEvent) {
 	}
 	if o.real != nil {
 		o.real.Trace(event)
+	}
+}
+
+// confirmedKindVectorCensusDecisiveTracer (CHAOS-4311 Phase 3) is
+// offersOnlyDecisionTracer's own twin: tags every "decision" stage event
+// with ConfirmedKindVectorCensusDecisive=true before forwarding, passes
+// every other stage through unchanged. Used ONLY at the confirmed-kind-scoped
+// re-decision call site (resolveSubjects, below), and only when
+// planCompleteViaVectorCensus is what let that call run at all -- see that
+// call site's own comment. Answers the ticket's own diagnosability ask
+// ("decision events must record which census outcome drove the decision")
+// directly on the event itself, rather than requiring a reader to
+// cross-reference the immediately-preceding confirmed_kind_scope event by
+// hand.
+type confirmedKindVectorCensusDecisiveTracer struct{ real ResolutionTracer }
+
+func (c confirmedKindVectorCensusDecisiveTracer) Trace(event ResolutionTraceEvent) {
+	if event.Stage == "decision" {
+		event.ConfirmedKindVectorCensusDecisive = true
+	}
+	if c.real != nil {
+		c.real.Trace(event)
 	}
 }
 
@@ -1278,6 +1310,31 @@ type ResolutionTraceEvent struct {
 	ConfirmedKindVectorScopeRivalCountAboveTau int64
 	ConfirmedKindVectorScopeSnapshotStable     bool
 	ConfirmedKindVectorScopeDurationMS         int64
+	// ConfirmedKindVectorScopeRivalsOfferedCount (stage=="confirmed_kind_scope"
+	// ONLY, CHAOS-4311 Phase 3) is how many of this outcome's own Rivals
+	// (chaos4155_confirmed_kind_vector_scope.go) actually reached the
+	// caller-visible offer-only pool after authorization (resolve.go's own
+	// merge call site, mergeSearchResults) -- 0 whenever RivalCountAboveTau
+	// is 0 (nothing to offer) OR every rival failed authorization
+	// (AuthorizedAttributes/NodeCandidate). Deliberately a SEPARATE count
+	// from RivalCountAboveTau/len(Rivals): a rival scoring above tau is not
+	// automatically a rival a PRINCIPAL is authorized to see.
+	ConfirmedKindVectorScopeRivalsOfferedCount int
+	// ConfirmedKindVectorCensusDecisive (stage=="decision" ONLY, CHAOS-4311
+	// Phase 3) is true iff THIS decision was reached over the
+	// confirmed-kind-scoped isolated population specifically because the
+	// vector census's own Complete-with-zero-rivals outcome extended the
+	// lexical-only completeness proof (chaos4154_confirmed_kind_scope.go's
+	// confirmedKindScopePlanIncomplete branch) -- false (the zero value,
+	// omitted from a log line the same way every other closed-vocabulary
+	// bool here is) when the isolated population committed WITHOUT ever
+	// needing the vector census (confirmedKindScopeComplete: no live
+	// vector mechanism was configured, or the census was never reached at
+	// all). This is the one field a reader needs to answer the ticket's
+	// own question -- "which census outcome drove the decision" -- without
+	// cross-referencing the immediately-preceding confirmed_kind_scope
+	// event's own State/vector_census_state fields by hand.
+	ConfirmedKindVectorCensusDecisive bool
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -1909,6 +1966,14 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// computed and then deliberately left unused beyond that.
 	var coverageCandidates []contextfabric.SubjectCandidate
 	var coverageFloorDegraded bool
+	// censusOfferOnlyCandidates (CHAOS-4311 Phase 3) is the confirmed-kind
+	// vector census's own offer-only population -- see this function's own
+	// confirmed-kind-scope block (below) for where it is populated. A
+	// SEPARATE variable from coverageCandidates (never merged into it):
+	// the ranked_cut CoverageBypass telemetry keyed off coverageCandidates
+	// further down would misattribute a vector-census-surfaced rival as a
+	// CHAOS-4038 lexical coverage-floor find if the two were combined.
+	var censusOfferOnlyCandidates []contextfabric.SubjectCandidate
 	if confirmedKind == nil {
 		// CHAOS-4271: this call used to pass an aliasLookupTrustworthy flag
 		// (deps.AliasLookup != nil && aliasIdentityComplete) that excluded
@@ -2179,6 +2244,68 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if scopeAuthzDropped > 0 && deps.SubjectCandidatesAuthzDropped != nil {
 			deps.SubjectCandidatesAuthzDropped(ctx, principal.OrgID, scopeAuthzDropped)
 		}
+		// CHAOS-4311 Phase 3: the census's own Rivals (non-nil only on a
+		// Complete outcome with at least one candidate above tau) become an
+		// OFFER-ONLY population -- computed HERE, before the telemetry
+		// trace below, so ConfirmedKindVectorScopeRivalsOfferedCount can
+		// ride the SAME confirmed_kind_scope event as every other census
+		// fact, rather than needing a second event later. Mirrors
+		// CHAOS-4271's own offerOnlyPool precedent exactly
+		// (chaos4038_kind_coverage.go): a PRIVATE map the commit gate never
+		// reads (never candidatesBySubject/pool), nil identity/identityTerms
+		// so an offer-only find can never collide-suppress an unrelated
+		// real commit. Every rival still passes through mergeSearchResults'
+		// own authorization gate (NodeCandidate/AuthorizedAttributes) --
+		// these rows came from the census's own exhaustive enumeration,
+		// genuinely UNFILTERED by authorization until this exact call (see
+		// ConfirmedKindVectorCensusOutcome.Rivals' own doc comment).
+		// allowExactMatch=false, vectorArmSimilarity=nil: the SAME
+		// discipline censusProvenanceMarker's own call site documents --
+		// these are vector-surfaced, never a genuine caller-typed term, and
+		// must never feed the CHAOS-3829 carve-out (structurally impossible
+		// anyway, since this pool never reaches the commit gate, but never
+		// relying on that alone is the same posture every other offer-only
+		// merge in this file takes).
+		var rivalsOfferedCount int
+		if len(scopeVectorCensus.Rivals) > 0 {
+			offerOnlyPool := make(map[string]contextfabric.SubjectCandidate)
+			rivalTraversalDegraded, rivalAuthzDropped := mergeSearchResults(
+				ctx, principal, request, deps, confirmedKindVectorCensusProvenanceMarker, scopeVectorCensus.Rivals,
+				offerOnlyPool, map[string]string{}, map[string]bool{},
+				false, nil, nil, nil,
+			)
+			if rivalTraversalDegraded > 0 && deps.TraversalDegraded != nil {
+				deps.TraversalDegraded(ctx, principal.OrgID, rivalTraversalDegraded)
+			}
+			if rivalAuthzDropped > 0 && deps.SubjectCandidatesAuthzDropped != nil {
+				deps.SubjectCandidatesAuthzDropped(ctx, principal.OrgID, rivalAuthzDropped)
+			}
+			// codex R1 (Medium, confirmed): iterate scopeVectorCensus.Rivals
+			// itself -- already sorted by CanonicalID
+			// (sortedCensusRivals's own doc comment) -- and look each one up
+			// in offerOnlyPool by key, rather than ranging over the map
+			// directly. A bare `for range offerOnlyPool` would silently
+			// discard that determinism (Go map iteration order is
+			// randomized per-process), which candidateOfferMaterial's own
+			// top-N truncation (chaos3900_structure_offers.go) would then
+			// propagate into a caller-visible offer list that varies
+			// run-to-run over the SAME authorized rival set.
+			for _, rival := range scopeVectorCensus.Rivals {
+				subject, ok := NodeSubject(rival)
+				if !ok {
+					continue
+				}
+				candidate, ok := offerOnlyPool[SubjectKey(subject)]
+				if !ok {
+					// Failed authorization (or traversal) inside
+					// mergeSearchResults above -- correctly absent, not an
+					// ordering bug.
+					continue
+				}
+				censusOfferOnlyCandidates = append(censusOfferOnlyCandidates, candidate)
+			}
+			rivalsOfferedCount = len(offerOnlyPool)
+		}
 		if deps.ResolutionTracer != nil {
 			// ConfirmedKindScopeCandidateCount (codex review finding, LOW/
 			// HIGH confidence, confirmed): 0 whenever scopeState !=
@@ -2214,14 +2341,33 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				ConfirmedKindVectorScopeRivalCountAboveTau: scopeVectorCensus.RivalCountAboveTau,
 				ConfirmedKindVectorScopeSnapshotStable:     scopeVectorCensus.SnapshotStable,
 				ConfirmedKindVectorScopeDurationMS:         scopeVectorCensus.DurationMS,
+				// ConfirmedKindVectorScopeRivalsOfferedCount (CHAOS-4311
+				// Phase 3): computed just above, before this trace call --
+				// see that computation's own doc comment.
+				ConfirmedKindVectorScopeRivalsOfferedCount: rivalsOfferedCount,
 			})
 		}
+		// planCompleteViaVectorCensus (CHAOS-4311 Phase 3, chris "Okay"
+		// 2026-08-26 on the Phase 3 flip): the lexical-only completeness
+		// proof (scopeState==confirmedKindScopeComplete) is EXTENDED by a
+		// Complete vector census that found zero rivals -- see
+		// chaos4155_confirmed_kind_vector_scope.go's own top-of-file doc
+		// comment for the ratified shape. RivalCountAboveTau==0 is
+		// deliberately the ONLY vector-side condition checked here (never
+		// len(scopeVectorCensus.Rivals), which can legitimately be smaller
+		// due to cross-term dedup, per that field's own doc comment, but is
+		// NEVER larger than RivalCountAboveTau -- either reading agrees on
+		// the zero case, and RivalCountAboveTau is the field this ticket's
+		// own acceptance criteria are written against).
+		planCompleteViaVectorCensus := scopeState == confirmedKindScopePlanIncomplete &&
+			scopeVectorCensus.State == ConfirmedKindVectorScopeComplete &&
+			scopeVectorCensus.RivalCountAboveTau == 0
 		// gateValid: the SAME conjunct every other commit path in this
 		// resolution requires -- an invalid gate must disable this one too,
 		// not just leave it to fire because the ordinary gates individually
 		// declined (mirrors the evidence-census call site's own identical
 		// guard below).
-		if scopeState == confirmedKindScopeComplete && gateValid {
+		if (scopeState == confirmedKindScopeComplete || planCompleteViaVectorCensus) && gateValid {
 			// CHAOS-4085 commit-basis write site: the confirmed-kind-scoped
 			// re-decision. ResetTo only when it actually commits (below) --
 			// an ambiguous scoped re-decision must never discard the first
@@ -2298,7 +2444,20 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// records this attempt's own completeness/candidate-count
 			// regardless of outcome, so nothing about the attempt itself
 			// becomes undiagnosable by holding back just the decision event.
-			scopedDecisionTracer := &discardableDecisionTracer{real: deps.ResolutionTracer}
+			//
+			// scopedTracerReal (CHAOS-4311 Phase 3): tagged with
+			// ConfirmedKindVectorCensusDecisive=true ONLY when
+			// planCompleteViaVectorCensus is what let this branch run at
+			// all -- see confirmedKindVectorCensusDecisiveTracer's own doc
+			// comment. Untagged (byte-identical to Phase 1/2) whenever the
+			// lexical pass alone already proved completeness, mirroring
+			// offersOnlyDecisionTracer's exact wrap-only-when-relevant
+			// pattern.
+			scopedTracerReal := deps.ResolutionTracer
+			if planCompleteViaVectorCensus && scopedTracerReal != nil {
+				scopedTracerReal = confirmedKindVectorCensusDecisiveTracer{real: scopedTracerReal}
+			}
+			scopedDecisionTracer := &discardableDecisionTracer{real: scopedTracerReal}
 			scopedResolution, scopedBases, scopedDigests := ResolveFromMergedCandidatesWithGateAndBasis(
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
@@ -2420,7 +2579,17 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// unionCandidatesForOffer's own doc comment (chaos3900_structure_
 	// offers.go) for why this union must dedupe by subject, not merely
 	// concatenate.
-	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageCandidates)
+	// CHAOS-4311 Phase 3: censusOfferOnlyCandidates unions in a SECOND,
+	// separate pass -- chained rather than folded into the coverageCandidates
+	// union above, so the ranked_cut/CoverageBypass telemetry immediately
+	// below (a CHAOS-4038/CHAOS-4234-specific diagnostic, scoped to the
+	// lexical coverage floor) never misattributes a vector-census-surfaced
+	// rival as a coverage-floor find. ConfirmedKindVectorScopeRivalsOfferedCount
+	// (traced above, at this outcome's own confirmed_kind_scope event) is
+	// this population's own diagnostic instead. unionCandidatesForOffer's
+	// own dedupe-by-subject makes chaining it twice equivalent to a single
+	// three-way union.
+	kindOfferCandidates := unionCandidatesForOffer(unionCandidatesForOffer(resolution.Candidates, coverageCandidates), censusOfferOnlyCandidates)
 	// CHAOS-4234: a coverage-floor find the final cut dropped still reaches
 	// the offer builders through the union above -- emit its own
 	// "ranked_cut" companion (CoverageBypass=true, Rank 0) so a reader of
