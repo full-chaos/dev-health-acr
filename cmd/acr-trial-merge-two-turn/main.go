@@ -305,7 +305,7 @@ import (
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "33"
+const expectedSchemaVersion = "34"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -616,6 +616,12 @@ type twoTurnCaseResult struct {
 	// recommend" / "the recommendation was not redeemed"), not an absence.
 	Turn1WindowExpandOffered  bool `json:"turn1_window_expand_offered"`
 	Turn2WindowExpandAccepted bool `json:"turn2_window_expand_accepted"`
+	// InferredWindowExpandOffered (CHAOS-4336, schema v34) mirrors
+	// twoTurnCaseResult's identically-named field byte-for-byte -- see the
+	// producer's own doc comment (chaos3742_two_turn_confirmation_test.go)
+	// for why this, not Turn1WindowExpandOffered, is what
+	// WindowGatedOfferedCount/WindowGatedSilentCount actually read.
+	InferredWindowExpandOffered bool `json:"inferred_window_expand_offered"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's

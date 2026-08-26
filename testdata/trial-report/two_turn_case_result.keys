@@ -36,6 +36,7 @@ hinted_commit_affirmation
 hinted_committed_subjects
 index
 inferred_classification
+inferred_window_expand_offered
 kind_coverage_floor_fired
 kind_coverage_floor_truncated
 kind_coverage_missing_kinds

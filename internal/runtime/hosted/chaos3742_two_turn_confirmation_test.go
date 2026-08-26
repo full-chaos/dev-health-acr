@@ -2187,6 +2187,56 @@ func twoTurnRegimeFromWindowCanonicalization(outcome contextfabric.WindowCanonic
 	}
 }
 
+// twoTurnWindowGateOutcome is the closed partition a window member's
+// inferred_tier arm result falls into for WindowArmErrorCount/
+// WindowInferredTierRanCount/WindowCommitCount/WindowGatedCount/
+// WindowGatedOfferedCount/WindowGatedSilentCount. Extracted from the
+// reporting loop (chaos3742_two_turn_confirmation_test.go) into
+// twoTurnClassifyWindowGateOutcome so that function's own logic has a
+// direct unit test, independent of running the full replay.
+type twoTurnWindowGateOutcome struct {
+	ArmError     bool
+	Committed    bool
+	Gated        bool
+	GatedOffered bool
+}
+
+// twoTurnClassifyWindowGateOutcome (CHAOS-4336, fixing a defect present
+// since CHAOS-4314's own merge, #288) classifies inferred -- the
+// inferred_tier arm's OWN gated call (member=="window" only; sets
+// TimeContext.EvidenceWindow to the case's NegativeWindowBand) -- entirely
+// from ITS OWN fields. Before this ticket, the reporting site read
+// turn1Facts.WindowExpandOffered here instead, on the claim that turn1Facts
+// "is this entry's own (member=='window') turn-1 facts... WindowExpandOffered
+// here is exactly the window gate's own recommendation on the SAME call
+// that gated this row." That claim was FALSE: turn1Facts comes from the
+// ONE shared, window-blind turn1 call every arm's row copies
+// (twoTurnStampTurn1Facts, 4 call sites) -- NOT from inferred's own call,
+// which is what the Gated condition below is actually evaluated against.
+// turn1 sets no TimeContext.EvidenceWindow at all, so it frequently never
+// reaches ANY window gate (window canonicalization outcome=none)
+// regardless of what inferred's own gated call did -- undercounting
+// WindowGatedOfferedCount and inflating WindowGatedSilentCount for every
+// such case. Confirmed live: CHAOS-4314's Run C (9/65) and CHAOS-4336's own
+// Run D (12/65, post-#290) both showed 100% of their "silent" rows sharing
+// this exact turn1-never-gated signature; a live debug trace on case 11
+// (Run D) proved inferred's own call was correctly gated while turn1
+// disclosed no window need at all. Fixed by reading
+// inferred.InferredWindowExpandOffered (computed directly off inferred's
+// own result in runTwoTurnInferredTierArm) here instead.
+func twoTurnClassifyWindowGateOutcome(inferred twoTurnCaseResult) twoTurnWindowGateOutcome {
+	if inferred.ArmInvalidReason != "" {
+		return twoTurnWindowGateOutcome{ArmError: true}
+	}
+	outcome := twoTurnWindowGateOutcome{Committed: inferred.CommittedCount > 0}
+	if inferred.Turn2Status == string(contractsv1.ContextFabricInvestigationClarificationRequired) &&
+		inferred.TierRoutedCorrectly && inferred.CommittedCount == 0 {
+		outcome.Gated = true
+		outcome.GatedOffered = inferred.InferredWindowExpandOffered
+	}
+	return outcome
+}
+
 // twoTurnCaptureTurn1Facts reads turn1Facts off turn 1's own result and its
 // (about-to-be-reset) trace. Safe to call with a nil trace (every field the
 // trace would have populated stays at its zero value, the same "not
@@ -4321,6 +4371,25 @@ type twoTurnCaseResult struct {
 	// "the recommendation was not redeemed"), never an absence.
 	Turn1WindowExpandOffered  bool `json:"turn1_window_expand_offered"`
 	Turn2WindowExpandAccepted bool `json:"turn2_window_expand_accepted"`
+	// InferredWindowExpandOffered (CHAOS-4336, schema v34) is the field
+	// WindowGatedOfferedCount/WindowGatedSilentCount (chaos3742_two_turn_confirmation_test.go's
+	// own reporting block) SHOULD have read from the start: whether window_expand
+	// was offered on the inferred_tier arm's OWN gated call (member=="window"
+	// only -- the call that sets TimeContext.EvidenceWindow to the case's
+	// NegativeWindowBand and that the WindowGatedCount condition just above
+	// this field's own reporting-block site is itself evaluated against),
+	// computed directly off that SAME call's own result.StructureNeeds.WindowExpandOptions
+	// in runTwoTurnInferredTierArm. Turn1WindowExpandOffered above is a
+	// DIFFERENT, unrelated call -- the one shared, window-blind "turn1"
+	// request every arm's row copies (twoTurnStampTurn1Facts) -- and reading
+	// it for the window_gated_silent bar was CHAOS-4336's actual defect:
+	// turn1 sets no window field at all, so it very often never reaches any
+	// window gate (window canonicalization outcome=none), making
+	// Turn1WindowExpandOffered false regardless of what the inferred_tier
+	// arm's own gated call did. Meaningful only on member=="window" rows;
+	// zero-value (never computed) elsewhere, same convention WrongCommit and
+	// several other member-scoped fields on this struct already use.
+	InferredWindowExpandOffered bool `json:"inferred_window_expand_offered"`
 }
 
 // twoTurnCaseResultIsAnomalous (CHAOS-4135) reports whether res trips one of
@@ -4426,7 +4495,7 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "33"
+const reportSchemaVersion = "34"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -7495,6 +7564,17 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	res.Turn2Status = string(result.Status)
 	res.CommittedCount = len(result.SubjectResolution.Committed)
 	res.WrongCommit = twoTurnCommittedWrong(result.SubjectResolution.Committed, tc)
+	// InferredWindowExpandOffered (CHAOS-4336): computed from THIS call's
+	// own result -- the inferred_tier arm's own gated call -- not the
+	// shared turn1 call twoTurnCaptureTurn1Facts reads for Turn1WindowExpandOffered.
+	// Only meaningful for isWindow; result.StructureNeeds is whatever this
+	// specific call composed, which for a non-window member never carries
+	// WindowExpandOptions in the first place (window_expand is minted only
+	// alongside a window-gated terminal), so no isWindow guard is strictly
+	// required, but stating it explicitly documents the field's scope.
+	if isWindow && result.StructureNeeds != nil && len(result.StructureNeeds.WindowExpandOptions) > 0 {
+		res.InferredWindowExpandOffered = true
+	}
 	// CHAOS-4086: the HINTED call's own outcome and decision. The trace was
 	// reset immediately before that call above, so the decision event this
 	// reads cannot be the baseline's.
@@ -9197,24 +9277,23 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			// has no PairInvalid/structural-exemption path of its own to
 			// conflate it with -- that function's own doc comment), so
 			// ArmInvalidReason != "" here always means the call errored.
-			if inferred.ArmInvalidReason != "" {
+			//
+			// twoTurnClassifyWindowGateOutcome (CHAOS-4336) is extracted
+			// from this block so its own logic -- specifically, which field
+			// WindowGatedOfferedCount/WindowGatedSilentCount reads -- has a
+			// direct unit test; see that function's own doc comment for the
+			// bug it fixes.
+			outcome := twoTurnClassifyWindowGateOutcome(inferred)
+			if outcome.ArmError {
 				report.WindowArmErrorCount++
 			} else {
 				report.WindowInferredTierRanCount++
-				if inferred.CommittedCount > 0 {
+				if outcome.Committed {
 					report.WindowCommitCount++
 				}
-				if inferred.Turn2Status == string(contractsv1.ContextFabricInvestigationClarificationRequired) &&
-					inferred.TierRoutedCorrectly && inferred.CommittedCount == 0 {
+				if outcome.Gated {
 					report.WindowGatedCount++
-					// WindowGatedOfferedCount/WindowGatedSilentCount
-					// (CHAOS-4314): partitions this SAME window_gated
-					// population -- chris "go" 2026-08-26's own success bar
-					// is window_gated_silent -> 0. turn1Facts is this
-					// entry's own (member=="window") turn-1 facts, so
-					// WindowExpandOffered here is exactly the window gate's
-					// own recommendation on the SAME call that gated this row.
-					if turn1Facts.WindowExpandOffered {
+					if outcome.GatedOffered {
 						report.WindowGatedOfferedCount++
 					} else {
 						report.WindowGatedSilentCount++
