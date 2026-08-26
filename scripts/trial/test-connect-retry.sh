@@ -38,10 +38,13 @@ trap 'rm -rf "$tmp"' EXIT
 # A minimal real annex fixture -- ANNEX_PATH's own existence check runs
 # before the selftest hook, same as every live invocation; content is
 # never read past that (the selftest hook exits right after psql_admin).
-cat >"$tmp/annex.json" <<'JSON'
-{"provenance":{"corpus_sha8":"deadbeef","signoff":{"by":"t","status":"APPROVED"}},
- "cases":{"0":{"band":"b"}}}
-JSON
+# CHAOS-4302: printf + file redirect, not a heredoc -- see common.sh's own
+# CHAOS-4155 comment for why a small heredoc/here-string is a deadlock risk
+# on this host's bash.
+printf '%s\n' \
+  '{"provenance":{"corpus_sha8":"deadbeef","signoff":{"by":"t","status":"APPROVED"}},' \
+  ' "cases":{"0":{"band":"b"}}}' \
+  >"$tmp/annex.json"
 
 failures=0
 check() {
@@ -61,19 +64,29 @@ check() {
 #   - returns exit codes from $1 (comma-separated), consumed one per call,
 #     the LAST value repeating for any call beyond the list's length.
 # PGCONNECT_TIMEOUT/PGPASSWORD reach it as env vars, same as a real psql.
+#
+# CHAOS-4302: no heredoc anywhere in this generator, at write time OR at
+# the generated script's own runtime -- the original nested `IFS=','
+# read -r -a arr <<<"$codes"` inside the written script was itself a small
+# here-string a future run of the generated fake psql could deadlock on.
+# Split via plain IFS word-splitting instead (save/restore explicitly, the
+# same idiom common.sh's own CHAOS-4155 fix uses).
 fake_psql() {
   mkdir -p "$tmp/bin"
   local codes="$1"
-  cat >"$tmp/bin/psql" <<FAKE
-#!/usr/bin/env bash
-echo "\$*" >>"$tmp/calls.log"
-codes="$codes"
-IFS=',' read -r -a arr <<<"\$codes"
-n=\$(( \$(grep -c '' "$tmp/calls.log" 2>/dev/null || echo 1) ))
-idx=\$(( n - 1 ))
-if (( idx >= \${#arr[@]} )); then idx=\$(( \${#arr[@]} - 1 )); fi
-exit "\${arr[\$idx]}"
-FAKE
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' "echo \"\$*\" >>\"$tmp/calls.log\""
+    printf '%s\n' "codes=\"$codes\""
+    printf '%s\n' 'old_ifs=$IFS'
+    printf '%s\n' "IFS=','"
+    printf '%s\n' 'arr=($codes)'
+    printf '%s\n' 'IFS=$old_ifs'
+    printf '%s\n' "n=\$(( \$(grep -c '' \"$tmp/calls.log\" 2>/dev/null || echo 1) ))"
+    printf '%s\n' 'idx=$(( n - 1 ))'
+    printf '%s\n' 'if (( idx >= ${#arr[@]} )); then idx=$(( ${#arr[@]} - 1 )); fi'
+    printf '%s\n' 'exit "${arr[$idx]}"'
+  } >"$tmp/bin/psql"
   chmod +x "$tmp/bin/psql"
 }
 

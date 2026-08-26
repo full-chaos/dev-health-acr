@@ -467,7 +467,10 @@ trial_wire_common_env() {
   # play -- see that branch's own comment on why coherence isn't provable
   # there. Never prints a credential.
   export ACR_TEST_TRIAL_DATA_PLANE="$data_plane_label"
-  echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port} ch=$(sed -E 's#.*@##' <<<"$ch_dsn") falkor=$falkor_addr" >&2
+  # CHAOS-4302: piped through printf, not a `<<<` here-string -- the same
+  # small-here-string deadlock class the CHAOS-4155 fix above eliminated
+  # from this function's `dsn --env` loop.
+  echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port} ch=$(printf '%s' "$ch_dsn" | sed -E 's#.*@##') falkor=$falkor_addr" >&2
 }
 
 # trial_wire_graph_lifecycle_env (CHAOS-3916, local/trial slice) is

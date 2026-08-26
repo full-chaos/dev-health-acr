@@ -41,20 +41,23 @@ plan() { ACR_TRIAL_SHARD_PLAN_ONLY=1 "$launcher" "$@" 2>/dev/null; }
 # self-consistent. These are cut down from the real file's structure.
 
 # A DENSE annex: indices 0..4.
-cat >"$tmp/dense.json" <<'JSON'
-{"provenance":{"corpus_sha8":"deadbeef","signoff":{"by":"t","status":"APPROVED"}},
- "cases":{"0":{"band":"b"},"1":{"band":"b"},"2":{"band":"b"},"3":{"band":"b"},"4":{"band":"b"}}}
-JSON
+# CHAOS-4302: printf + file redirect, not a heredoc -- see common.sh's own
+# CHAOS-4155 comment for why a small heredoc/here-string is a deadlock risk
+# on this host's bash.
+printf '%s\n' \
+  '{"provenance":{"corpus_sha8":"deadbeef","signoff":{"by":"t","status":"APPROVED"}},' \
+  ' "cases":{"0":{"band":"b"},"1":{"band":"b"},"2":{"band":"b"},"3":{"band":"b"},"4":{"band":"b"}}}' \
+  >"$tmp/dense.json"
 
 # A SPARSE annex: indices 50, 51, 64 -- the shape that makes modulo
 # splitting produce empty shards, and the reason granularity exists.
 # `_comment` is a non-numeric key: adaptSignedOracleAnnex skips those, so
 # the layout must skip them identically or a shard gets a case the harness
 # will never run.
-cat >"$tmp/sparse.json" <<'JSON'
-{"provenance":{"corpus_sha8":"deadbeef","signoff":{"by":"t","status":"APPROVED"}},
- "cases":{"50":{"band":"b"},"51":{"band":"b"},"64":{"band":"b"},"_comment":{"band":"ignored"}}}
-JSON
+printf '%s\n' \
+  '{"provenance":{"corpus_sha8":"deadbeef","signoff":{"by":"t","status":"APPROVED"}},' \
+  ' "cases":{"50":{"band":"b"},"51":{"band":"b"},"64":{"band":"b"},"_comment":{"band":"ignored"}}}' \
+  >"$tmp/sparse.json"
 
 # 1. Granularity 1 over a dense annex: one case per shard, no empties.
 check "granularity=1 dense -> 5 shards of 1" \
@@ -99,8 +102,8 @@ check "a quote in ACR_TRIAL_PG_HOST is escaped, not injected" \
   'valid
 evil"host' \
   "$(printf '%s\n%s' \
-    "$(jq -e . >/dev/null 2>&1 <<<"$evil_host_plan" && echo valid || echo INVALID)" \
-    "$(jq -r .pg_host <<<"$evil_host_plan")")"
+    "$(printf '%s' "$evil_host_plan" | jq -e . >/dev/null 2>&1 && echo valid || echo INVALID)" \
+    "$(printf '%s' "$evil_host_plan" | jq -r .pg_host)")"
 
 # 5. The concurrency cap is reported in the plan, so an operator can see
 #    what a run WILL do before it does it.

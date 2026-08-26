@@ -91,7 +91,18 @@ CASE_TIMEOUT_SEC="$(parse_duration_seconds "$CASE_TIMEOUT_RAW")" || exit 1
 # comma-separated subset) wins over LIMIT whenever it's set, since that is
 # what the test process actually runs regardless of LIMIT's value.
 if [[ -n "${ACR_TEST_TRIAL_INDICES:-}" ]]; then
-  IFS=',' read -ra _frontier_indices <<< "$ACR_TEST_TRIAL_INDICES"
+  # CHAOS-4302: plain IFS word-splitting, not a `<<<` here-string -- the
+  # same small-here-string deadlock class the CHAOS-4155 fix in common.sh
+  # eliminated (save/restore IFS and noglob explicitly, same idiom).
+  _frontier_saved_ifs="$IFS"
+  IFS=','
+  set -f
+  # shellcheck disable=SC2206 # word-splitting is the point: IFS=',' above
+  # plus noglob (set -f) make this a controlled comma split, not an
+  # accidental one.
+  _frontier_indices=($ACR_TEST_TRIAL_INDICES)
+  set +f
+  IFS="$_frontier_saved_ifs"
   CASE_COUNT="${#_frontier_indices[@]}"
 elif [[ -n "$LIMIT" ]]; then
   CASE_COUNT="$LIMIT"

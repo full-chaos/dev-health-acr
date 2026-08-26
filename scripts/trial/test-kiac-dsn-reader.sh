@@ -36,18 +36,24 @@ check() {
 # fake_dsn_bin writes a "trial-data.sh" stand-in at "$tmp/fake-trial-data.sh"
 # whose `dsn --env` subcommand prints exactly $1 (the fabricated line
 # output) to stdout and exits 0; any other invocation exits 1.
+#
+# CHAOS-4302: no heredoc anywhere in this generator, at write time OR at
+# the generated script's own runtime. $lines is written to a companion
+# data file via `printf` (a plain file write, no pipe), and the generated
+# script's payload line is just `cat` of that file -- never a nested
+# `cat <<'LINES'` inside the written script, which would itself be a small
+# heredoc a future run of the generated script could deadlock on.
 fake_dsn_bin() {
   local lines="$1"
-  cat >"$tmp/fake-trial-data.sh" <<FAKE
-#!/usr/bin/env bash
-if [[ "\${1:-}" == "dsn" && "\${2:-}" == "--env" ]]; then
-  cat <<'LINES'
-$lines
-LINES
-  exit 0
-fi
-exit 1
-FAKE
+  printf '%s\n' "$lines" >"$tmp/fake-lines.txt"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'if [[ "${1:-}" == "dsn" && "${2:-}" == "--env" ]]; then'
+    printf '  %s\n' "cat \"$tmp/fake-lines.txt\""
+    printf '  %s\n' 'exit 0'
+    printf '%s\n' 'fi'
+    printf '%s\n' 'exit 1'
+  } >"$tmp/fake-trial-data.sh"
   chmod +x "$tmp/fake-trial-data.sh"
 }
 
@@ -70,7 +76,7 @@ run_reader() {
       set -euo pipefail
       source scripts/trial/common.sh
       trial_wire_common_env
-      echo "OK $ACR_TEST_TRIAL_PG_HOST $ACR_TEST_TRIAL_PG_PASSWORD $(sed -E "s#.*@##" <<<"$ACR_TEST_TRIAL_CLICKHOUSE_DSN") $ACR_TEST_TRIAL_FALKOR_ADDR ${ACR_CONTEXT_FABRIC_FALKOR_TLS:-<unset>} ${ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE:-<unset>}"
+      echo "OK $ACR_TEST_TRIAL_PG_HOST $ACR_TEST_TRIAL_PG_PASSWORD $(printf "%s" "$ACR_TEST_TRIAL_CLICKHOUSE_DSN" | sed -E "s#.*@##") $ACR_TEST_TRIAL_FALKOR_ADDR ${ACR_CONTEXT_FABRIC_FALKOR_TLS:-<unset>} ${ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE:-<unset>}"
     ' 2>"$tmp/stderr.log") || echo "ERR $?"
 }
 
@@ -128,7 +134,7 @@ check "unrecognized key's payload never executed" \
 
 # 4. A missing expected key hard-fails (15-line count check catches a
 # short producer).
-fake_dsn_bin "$(sed '/ACR_TEST_TRIAL_FALKOR_PORT/d' <<<"$VALID_LINES")"
+fake_dsn_bin "$(printf '%s\n' "$VALID_LINES" | sed '/ACR_TEST_TRIAL_FALKOR_PORT/d')"
 check "missing expected key hard-fails" \
   "ERR 1" \
   "$(run_reader)"
@@ -137,7 +143,7 @@ check "missing expected key hard-fails" \
 # hard-fails: line count reaches 15, but the truly-missing variable stays
 # empty and trips the per-variable non-empty check (round-5 review's own
 # question -- verified here, not just asserted).
-fake_dsn_bin "$(sed 's/ACR_TEST_TRIAL_FALKOR_PORT=30503/ACR_TEST_TRIAL_PG_HOST=127.0.0.1/' <<<"$VALID_LINES")"
+fake_dsn_bin "$(printf '%s\n' "$VALID_LINES" | sed 's/ACR_TEST_TRIAL_FALKOR_PORT=30503/ACR_TEST_TRIAL_PG_HOST=127.0.0.1/')"
 check "duplicate key + one truly-missing key still hard-fails (count==15 alone is not enough)" \
   "ERR 1" \
   "$(run_reader)"
@@ -156,10 +162,10 @@ if [[ -n "${KUBECONFIG:-}" && -f "${KUBECONFIG:-/nonexistent}" ]]; then
   producer_output="$(cd "$script_dir/../.." && deploy/local/trial-data.sh dsn --env 2>/dev/null || true)"
   check "producer emits ACR_CONTEXT_FABRIC_FALKOR_TLS=false" \
     "1" \
-    "$(grep -c '^ACR_CONTEXT_FABRIC_FALKOR_TLS=false$' <<<"$producer_output")"
+    "$(printf '%s\n' "$producer_output" | grep -c '^ACR_CONTEXT_FABRIC_FALKOR_TLS=false$')"
   check "producer emits ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true" \
     "1" \
-    "$(grep -c '^ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true$' <<<"$producer_output")"
+    "$(printf '%s\n' "$producer_output" | grep -c '^ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE=true$')"
 else
   echo "skip: producer pin (KUBECONFIG not set -- needs a live kiac plane, same requirement test-connect-retry.sh has elsewhere)"
 fi
