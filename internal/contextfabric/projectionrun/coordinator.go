@@ -38,11 +38,67 @@ type Outcome struct {
 // entity/relationship/episode content.
 type Observer interface {
 	ObserveProjectionOutcome(Outcome)
+	// ObserveProjectionDrain (CHAOS-3826) fires once per (org, source) per
+	// Tick, after that pair's in-tick drain loop stops -- see runPair's
+	// doc comment. Content-safe by the same rule ObserveProjectionOutcome
+	// documents.
+	ObserveProjectionDrain(DrainOutcome)
+}
+
+// DrainYieldReason is a closed vocabulary naming why one (org, source)
+// pair's in-tick drain loop (CHAOS-3826) stopped pulling further batches.
+type DrainYieldReason string
+
+const (
+	// DrainYieldExhausted: the source reported no further batch available,
+	// or reached a terminal build-completion mode -- ordinary steady state.
+	DrainYieldExhausted DrainYieldReason = "exhausted"
+	// DrainYieldBudgetExceeded: more work was available but this
+	// organization's per-tick drain budget (Config.DrainBatchBudget,
+	// shared across every source the organization projects) was spent.
+	// The next Tick resumes from the checkpoint this tick's last batch
+	// advanced to -- no work is lost, only deferred.
+	DrainYieldBudgetExceeded DrainYieldReason = "budget_exceeded"
+	// DrainYieldError: a batch attempt failed mid-drain; the existing
+	// due()/recordBackoff per-pair schedule governs the retry, exactly as
+	// it did before CHAOS-3826.
+	DrainYieldError DrainYieldReason = "error"
+	// DrainYieldContextDone: ctx was cancelled mid-drain.
+	DrainYieldContextDone DrainYieldReason = "context_done"
+)
+
+// DrainOutcome is CHAOS-3826's telemetry for one (org, source) pair's
+// in-tick drain: how many RunOnce attempts this Tick actually made for the
+// pair (Batches -- a cost signal: every attempt is a real checkpoint-load
+// round-trip even when nothing was available to apply, see
+// ProjectionWorker.RunOnce's own !available branch) and why the loop
+// stopped (drain-yield-reason).
+type DrainOutcome struct {
+	OrgID  string
+	Source string
+	// Batches counts every RunOnce attempt this tick, including the final
+	// attempt that discovers the source is exhausted (available=false) --
+	// see chaos3826_drain_test.go's TestChaos3826_DrainTelemetryReportsBatchesAndYieldReason
+	// for why that attempt is deliberately counted (it is a real round-trip,
+	// not free). Codex round-1 F1: this means an ordinary tick with exactly
+	// ONE new batch reports Batches=2 (apply + confirm-exhausted), which is
+	// correct for cost accounting but is NOT by itself the right signal for
+	// "did an actual multi-batch drain happen" -- use Applied for that.
+	Batches int
+	// Applied counts only the attempts within Batches that actually applied
+	// a batch (run.Applied == true). Applied > 1 is the true "the fix drained
+	// a real backlog" signal; Applied <= 1 is routine steady state even when
+	// Batches == 2 from the mandatory confirm-exhausted attempt.
+	Applied     int
+	YieldReason DrainYieldReason
+	Duration    time.Duration
+	At          time.Time
 }
 
 type noopObserver struct{}
 
-func (noopObserver) ObserveProjectionOutcome(Outcome) {}
+func (noopObserver) ObserveProjectionOutcome(Outcome)    {}
+func (noopObserver) ObserveProjectionDrain(DrainOutcome) {}
 
 // SlogObserver logs every tick outcome through log/slog (codex round-3 F2).
 //
@@ -87,6 +143,35 @@ func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 	logger.Debug("context_fabric: projection tick completed", attrs...)
 }
 
+// ObserveProjectionDrain logs CHAOS-3826's per-pair drain summary. Routine
+// pairs (the overwhelming common case: nothing new, or exactly one new
+// batch, to project) log at Debug, matching ObserveProjectionOutcome's own
+// level; an actual multi-batch drain -- the fix doing its job -- logs at
+// Info so it is visible without raising the default log level.
+//
+// Codex round-1 F1: the level decision keys on outcome.Applied, NOT
+// outcome.Batches. Batches includes the mandatory confirm-exhausted
+// attempt every drain makes once it runs dry, so an ordinary tick with
+// exactly one genuinely new batch reports Batches=2 -- gating on Batches
+// would log that routine case at Info as "drained multiple batches" even
+// though only one batch actually applied.
+func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
+	logger := o.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	attrs := []any{
+		"org_id", outcome.OrgID, "source", outcome.Source,
+		"batches", outcome.Batches, "applied", outcome.Applied, "drain_yield_reason", string(outcome.YieldReason),
+		"duration_ms", outcome.Duration.Milliseconds(),
+	}
+	if outcome.Applied > 1 {
+		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
+		return
+	}
+	logger.Debug("context_fabric: projection tick drain summary", attrs...)
+}
+
 // RebuildMarker enforces the CHAOS-3753 codex finding C2 invariant: no code
 // path may run incremental projection against a purged-but-not-reset
 // graph. PurgeOrganization and resetting every source's checkpoint are two
@@ -110,6 +195,16 @@ const (
 	defaultConcurrency  = 4
 	defaultMaxBackoff   = 5 * time.Minute
 	baseBackoff         = 5 * time.Second
+	// defaultDrainBatchBudget (CHAOS-3826) is how many EXTRA batches (beyond
+	// the one every configured source always attempts each tick) one
+	// organization's Tick may pull across all its sources combined before
+	// yielding. 500 extra batches at the 200-row page cap is 100,000 rows
+	// per tick -- comfortably drains the ~36k-subject trial organization
+	// that motivated this ticket (~180 batches) in a single tick, while
+	// still bounding a much larger organization's tick so it cannot starve
+	// other organizations queued behind it in the same Tick call (see
+	// runPair's doc comment).
+	defaultDrainBatchBudget = 500
 )
 
 type Config struct {
@@ -178,8 +273,18 @@ type Config struct {
 	PollInterval time.Duration
 	Concurrency  int
 	MaxBackoff   time.Duration
-	Now          func() time.Time
-	Logger       *slog.Logger
+	// DrainBatchBudget (CHAOS-3826) bounds runPair/runBuildPair's in-tick
+	// drain -- see defaultDrainBatchBudget's doc comment. 0 (unset)
+	// defaults; a NEGATIVE value explicitly disables extra draining (every
+	// source still gets its one due()-gated attempt per tick, exactly the
+	// pre-CHAOS-3826 cadence) -- unlike every other numeric knob on this
+	// Config, 0 is not itself a meaningful "disabled" value here (a
+	// disabled drain still makes the one mandatory attempt), so it cannot
+	// double as the sentinel the way Concurrency/PollInterval's zero value
+	// does.
+	DrainBatchBudget int
+	Now              func() time.Time
+	Logger           *slog.Logger
 }
 
 // RetireScheduler drives due per-epoch retirements to completion --
@@ -223,6 +328,7 @@ type Coordinator struct {
 	poll             time.Duration
 	concurrency      int
 	maxBackoff       time.Duration
+	drainBudget      int
 	now              func() time.Time
 	logger           *slog.Logger
 
@@ -230,6 +336,15 @@ type Coordinator struct {
 
 	backoffMu sync.Mutex
 	backoff   map[string]*pairBackoff // "orgID\x00source" -> state
+
+	// buildStarted (CHAOS-3826 telemetry) records when THIS process opened
+	// an org's currently-building epoch (beginLifecycleBuild's success
+	// path), purely so runBuildTick's Flip-success log line can report the
+	// build's wall-clock duration. In-process only, like orgMu/backoff: a
+	// coordinator restart mid-build loses the start time and simply omits
+	// the field, which is a known, accepted gap -- the lifecycle state
+	// machine itself (BeginBuild/Flip/durable progress rows) is unaffected.
+	buildStarted sync.Map // orgID -> time.Time
 }
 
 // defaultGraceWindow is design brief D11's operator-set retention window,
@@ -284,6 +399,12 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = defaultMaxBackoff
 	}
+	switch {
+	case cfg.DrainBatchBudget == 0:
+		cfg.DrainBatchBudget = defaultDrainBatchBudget
+	case cfg.DrainBatchBudget < 0:
+		cfg.DrainBatchBudget = 0
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -321,7 +442,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		lifecycle: cfg.Lifecycle, epochCheckpoints: cfg.EpochCheckpoints, retireScheduler: cfg.RetireScheduler,
 		lifecycleTelem: cfg.LifecycleTelemetry, epochInvalidator: cfg.EpochResolverInvalidator, graceWindow: cfg.GraceWindow,
 		poll: cfg.PollInterval, concurrency: cfg.Concurrency,
-		maxBackoff: cfg.MaxBackoff, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
+		maxBackoff: cfg.MaxBackoff, drainBudget: cfg.DrainBatchBudget, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
 }
 
@@ -448,6 +569,7 @@ func (c *Coordinator) beginLifecycleBuild(ctx context.Context, orgID string) (op
 	_, err = c.lifecycle.BeginBuild(ctx, orgID, c.sourceNames, c.now())
 	if err == nil {
 		c.logger.InfoContext(ctx, "context_fabric: build-aside epoch opened; replay will proceed over subsequent ticks", "org_id", orgID)
+		c.buildStarted.Store(orgID, c.now())
 		c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionBeginBuild)
 		return true, nil
 	}
@@ -763,11 +885,12 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	}
 
 	evaluated, stale := false, false
+	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
 			return
 		}
-		pairEvaluated, pairStale := c.runPair(ctx, orgID, source, c.checkpoints)
+		pairEvaluated, pairStale := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
 	}
@@ -814,11 +937,12 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 	}
 
 	evaluated, stale := false, false
+	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
 			return
 		}
-		pairEvaluated, pairStale := c.runPair(ctx, orgID, source, checkpoints)
+		pairEvaluated, pairStale := c.runPair(ctx, orgID, source, checkpoints, &budget)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
 	}
@@ -873,6 +997,12 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 	// c.sourceNames and never reaching it -- the exact "a source that
 	// cannot report exhaustion MUST fail the flip gate, never silently
 	// pass" rule (design brief §9 item 3) applies here too.
+	// CHAOS-3826: one shared budget across every required source's
+	// in-tick drain this organization's build tick performs -- see
+	// runPair's doc comment for the fairness rationale, which applies
+	// identically here (a large-backlog build must not starve other
+	// organizations' next tick).
+	budget := c.drainBudget
 	for _, source := range row.RequiredSources {
 		if ctx.Err() != nil {
 			return
@@ -892,14 +1022,20 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 			continue
 		}
 		priorRows := byName[source].RowsProjected
-		c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, priorRows)
+		c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, priorRows, &budget)
 	}
 	c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)
 
 	flipped, err := c.lifecycle.Flip(ctx, orgID, targetEpoch, c.graceWindow, c.now())
 	switch {
 	case err == nil:
-		c.logger.InfoContext(ctx, "context_fabric: graph epoch flip", "org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", flipped.ActiveEpoch)
+		attrs := []any{"org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", flipped.ActiveEpoch}
+		// CHAOS-3826: report the build's wall-clock duration when this
+		// process is the one that opened it (buildStarted's doc comment).
+		if started, ok := c.buildStarted.LoadAndDelete(orgID); ok {
+			attrs = append(attrs, "build_wall_clock_ms", c.now().Sub(started.(time.Time)).Milliseconds())
+		}
+		c.logger.InfoContext(ctx, "context_fabric: graph epoch flip", attrs...)
 		c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionFlip)
 		if c.reuseInvalidator != nil {
 			if invalidateErr := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); invalidateErr != nil {
@@ -916,42 +1052,132 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 	}
 }
 
-// runBuildPair runs ONE source's build-epoch tick, under the SAME
-// due()/recordBackoff() per-pair scheduling gate ordinary runPair ticks
-// use (a distinct keyspace, "\x00build\x00", so a build tick and a
-// steady-state tick for the same (org, source) never share backoff state).
-func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, priorRows int64) {
+// runBuildPair drains ONE source's build-epoch batches within THIS tick
+// (CHAOS-3826), under the SAME due()/recordBackoff() per-pair scheduling
+// gate ordinary runPair ticks use (a distinct keyspace, "\x00build\x00",
+// so a build tick and a steady-state tick for the same (org, source)
+// never share backoff state). The first attempt is always made
+// (due()-gated only, preserving every required source's pre-3826 per-tick
+// cadence); once a batch applies and the build is still non-terminal
+// (classifyBuildCompletion's pending case -- more pages remain), the next
+// batch is fetched immediately under the SAME org lock instead of waiting
+// a full poll interval, bounded by budget (shared across every source
+// this organization's build tick drains -- see the call site and
+// runPair's doc comment for the fairness rationale). RecordSourceProgress
+// is durably upserted after every applied batch, not only at the end, so
+// a mid-drain failure never loses credit for the batches that DID apply.
+func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, priorRows int64, budget *int) {
 	key := orgID + "\x00build\x00" + source
-	if !c.due(key) {
-		return
-	}
 	started := c.now()
-	worker, werr := c.workerFor(source, checkpoints)
-	if werr != nil {
-		c.recordBackoff(key, werr)
-		c.logger.WarnContext(ctx, "build tick worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
-		return
-	}
-	run, err := worker.RunOnce(ctx, orgID, source)
-	c.recordBackoff(key, err)
-	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(started), At: c.now()}
-	c.observer.ObserveProjectionOutcome(outcome)
-	if err != nil {
-		c.logger.WarnContext(ctx, "build tick pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
-		return
-	}
 	total := priorRows
-	if run.Applied {
-		total += int64(run.ItemsApplied)
+	batches, applied := 0, 0
+	reason := DrainYieldExhausted
+	// lastMode/progressStale track the durable RecordSourceProgress write
+	// that would need retrying if the loop exits before it succeeds --
+	// see the finalizing write below.
+	var lastMode contextfabric.BuildCompletionMode
+	progressStale := false
+	for {
+		if !c.due(key) {
+			break
+		}
+		batches++ // Codex round-2 F3: every attempt counts, matching runPair -- a worker-construction or RunOnce failure is still a real round-trip.
+		attemptStarted := c.now()
+		worker, werr := c.workerFor(source, checkpoints)
+		if werr != nil {
+			c.recordBackoff(key, werr)
+			c.logger.WarnContext(ctx, "build tick worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
+			reason = DrainYieldError
+			break
+		}
+		run, err := worker.RunOnce(ctx, orgID, source)
+		c.recordBackoff(key, err)
+		outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(attemptStarted), At: c.now()}
+		c.observer.ObserveProjectionOutcome(outcome)
+		if err != nil {
+			// Codex round-2 F2: classify on whether err ITSELF is a
+			// cancellation, not on the ambient ctx.Err() -- checking ctx.Err()
+			// independently could misclassify a genuine concrete backend
+			// error as DrainYieldContextDone if ctx happened to also be
+			// cancelled (e.g. process shutdown) at the moment of the check,
+			// hiding the real failure from drain telemetry (retry/backoff
+			// still sees the real error either way via recordBackoff above).
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				reason = DrainYieldContextDone
+			} else {
+				c.logger.WarnContext(ctx, "build tick pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
+				reason = DrainYieldError
+			}
+			break
+		}
+		if run.Applied {
+			applied++
+			total += int64(run.ItemsApplied)
+		}
+		mode, terminal := classifyBuildCompletion(run)
+		if !terminal {
+			mode = contextfabric.BuildCompletionPending
+		} else {
+			c.logger.InfoContext(ctx, "context_fabric: build source completed", "org_id", orgID, "source", source, "epoch", epoch, "completion_mode", string(mode), "rows_projected", total)
+		}
+		lastMode = mode
+		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, mode, total, c.now()); rerr != nil {
+			// Codex round-2 F1: log and KEEP DRAINING (do not stop here).
+			// The next batch's own RecordSourceProgress call writes the
+			// FULL in-memory `total` accumulated so far this call -- since
+			// the checkpoint has already advanced regardless of whether
+			// THIS write succeeded, a later successful write within the
+			// same runBuildPair call self-heals the gap completely. Only
+			// stopping immediately (CHAOS-3826 round-1's own fix) removed
+			// that self-healing chance: the checkpoint had already moved
+			// past this batch, so priorRows on the NEXT tick would read
+			// the stale pre-failure total forever, permanently
+			// undercounting rows this batch genuinely applied -- worse
+			// than the transient staleness this fix accepts. progressStale
+			// tracks whether the finalizing write below still needs to run.
+			c.logger.WarnContext(ctx, "record build source progress failed; will retry before the drain returns", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+			progressStale = true
+		} else {
+			progressStale = false
+		}
+		if terminal {
+			reason = DrainYieldExhausted
+			break
+		}
+		if ctx.Err() != nil {
+			reason = DrainYieldContextDone
+			break
+		}
+		if budget == nil || *budget <= 0 {
+			reason = DrainYieldBudgetExceeded
+			break
+		}
+		*budget--
 	}
-	mode, terminal := classifyBuildCompletion(run)
-	if !terminal {
-		mode = contextfabric.BuildCompletionPending
-	} else {
-		c.logger.InfoContext(ctx, "context_fabric: build source completed", "org_id", orgID, "source", source, "epoch", epoch, "completion_mode", string(mode), "rows_projected", total)
+	// Finalizing write (Codex round-2 F1): if the LAST RecordSourceProgress
+	// attempt in the loop above failed and nothing afterward re-wrote it,
+	// retry once more with the final accumulated total before this call
+	// returns -- once runBuildPair returns, the next tick's priorRows can
+	// only ever see what was durably recorded here, so this is the last
+	// chance to avoid a permanent undercount from a transient write
+	// failure. A failure here is a genuine, bounded residual gap (Postgres
+	// unavailable for this whole drain) -- logged loudly, not silently
+	// accepted, and self-heals on the NEXT tick's own successful write
+	// (which reads a corrected total by re-applying the same batches, if
+	// the source has not already advanced its checkpoint past them --
+	// otherwise this is the SAME pre-existing checkpoint/progress
+	// non-atomicity gap performRebuild's own sibling paths carry today,
+	// not something this ticket introduces or is scoped to close).
+	if progressStale {
+		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, lastMode, total, c.now()); rerr != nil {
+			c.logger.WarnContext(ctx, "record build source progress failed after retry; rows_projected may undercount until a future successful write", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+		}
 	}
-	if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, mode, total, c.now()); rerr != nil {
-		c.logger.WarnContext(ctx, "record build source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+	if batches > 0 {
+		c.observer.ObserveProjectionDrain(DrainOutcome{
+			OrgID: orgID, Source: source, Batches: batches, Applied: applied, YieldReason: reason,
+			Duration: c.now().Sub(started), At: c.now(),
+		})
 	}
 }
 
@@ -1183,31 +1409,39 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID 
 		"org_id_hash", hash)
 }
 
-// runPair runs one (org, source) tick and reports the CHAOS-3887 freshness
-// classification back to runOrg for the per-tick fleet aggregate: evaluated
-// is true when this pair's freshness was actually checked this tick (it was
-// due), and stale is true when that check found a producer-identity drift
-// pending rebuild.
-func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, stale bool) {
+// runPairOnce attempts exactly ONE RunOnce call for (orgID, source),
+// gated by the due()/recordBackoff per-pair schedule -- the same
+// single-attempt body this function always was before CHAOS-3826.
+// evaluated is false only when due() refused the attempt outright;
+// applied mirrors ProjectionRun.Applied (a batch existed and was
+// projected -- the signal runPair's drain loop keeps going on); err
+// reports a RunOnce/worker-construction failure (a distinct yield reason
+// from "no more work", even though both currently leave applied false)
+// -- returned as the concrete error, not a bool, so runPair (Codex round-2
+// F2) can classify cancellation by inspecting THIS error's own identity
+// rather than the ambient ctx.Err(), which could coincidentally be set by
+// an unrelated cancellation and mislabel a genuine backend error.
+func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale bool) {
 	key := orgID + "\x00" + source
 	if !c.due(key) {
-		return false, false
+		return false, false, nil, false
 	}
 	started := c.now()
 	worker, werr := c.workerFor(source, checkpoints)
 	if werr != nil {
 		c.recordBackoff(key, werr)
 		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
-		return true, false
+		return true, false, werr, false
 	}
-	run, err := worker.RunOnce(ctx, orgID, source)
-	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(started), At: c.now()}
-	c.recordBackoff(key, err)
+	run, runErr := worker.RunOnce(ctx, orgID, source)
+	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: runErr, Duration: c.now().Sub(started), At: c.now()}
+	c.recordBackoff(key, runErr)
 	c.observer.ObserveProjectionOutcome(outcome)
-	switch {
-	case err != nil:
-		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
-	case run.Applied:
+	if runErr != nil {
+		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(runErr), "duration_ms", outcome.Duration.Milliseconds())
+		return true, false, runErr, false
+	}
+	if run.Applied {
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", orgID, "source", source, "batch_id", run.BatchID, "backend_watermark", run.BackendWatermark, "duration_ms", outcome.Duration.Milliseconds())
 	}
 	// CHAOS-3887 (H1): computed and logged regardless of run.Applied/err --
@@ -1215,7 +1449,89 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	// ever compared checkpoint SourceVersion against a batch's SourceVersion
 	// INSIDE the available==true branch, so a dormant organization (no new
 	// rows, available=false, no error) got no freshness signal at all.
-	return true, c.emitProjectionFreshness(ctx, orgID, source)
+	return true, run.Applied, nil, c.emitProjectionFreshness(ctx, orgID, source)
+}
+
+// runPair drains (org, source)'s pending batches within THIS tick
+// (CHAOS-3826): after a batch applies and NextProjectionBatch still has
+// more available, the next batch is fetched immediately under the SAME
+// org lock instead of waiting a full poll interval -- the drip-feed this
+// ticket exists to close. The first attempt always runs (due()-gated
+// only), preserving every configured source's pre-3826 per-tick freshness
+// cadence regardless of budget; only ADDITIONAL attempts spend budget.
+// Also reports the CHAOS-3887 freshness classification back to runOrg for
+// the per-tick fleet aggregate: evaluated is true when this pair was
+// actually checked this tick (it was due), and stale is true when the
+// LAST attempt's check found a producer-identity drift pending rebuild.
+// budget is a POINTER shared across every source this organization's
+// Tick evaluates (see runOrgLegacy/runOrgLifecycle's call sites): a
+// large-backlog source cannot starve its sibling sources' first attempt,
+// and bounding the total across all of them keeps this ORGANIZATION's
+// runOrg call bounded, so it cannot starve other organizations dispatched
+// in the same Tick (Tick.wg.Wait blocks the next poll on every dispatched
+// runOrg returning). The 200-row page cap (batch size) is unchanged --
+// only the inter-batch idle inside one tick is removed.
+func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale bool) {
+	started := c.now()
+	batches, applied := 0, 0
+	reason := DrainYieldExhausted
+	for {
+		pairEvaluated, pairApplied, pairErr, pairStale := c.runPairOnce(ctx, orgID, source, checkpoints)
+		if !pairEvaluated {
+			if batches == 0 {
+				return false, false
+			}
+			break
+		}
+		evaluated = true
+		// Codex round-3 F1: OR across every attempt this drain makes, never
+		// overwrite. Before CHAOS-3826's in-tick draining, runPair made
+		// exactly ONE attempt per tick, so assignment and OR were
+		// equivalent; now a drain can make several attempts, and an
+		// attempt that errors out reports pairStale=false unconditionally
+		// (runPairOnce never reaches the freshness check on an error) --
+		// plain assignment let that false overwrite a REAL staleness
+		// signal an earlier attempt in the SAME tick already found,
+		// silently clearing runOrg's per-tick freshness aggregate
+		// (tickFreshnessStats) to "OK" despite the tick having genuinely
+		// observed drift.
+		stale = stale || pairStale
+		batches++
+		if pairApplied {
+			applied++
+		}
+		switch {
+		// Codex round-2 F2 (refining round-1 F3): classify on whether
+		// pairErr ITSELF is a cancellation, not on the ambient ctx.Err().
+		// Checking ctx.Err() independently could misclassify a genuine
+		// concrete backend error as DrainYieldContextDone if ctx happened
+		// to also be cancelled (e.g. process shutdown) at the moment of
+		// the check, hiding the real failure from drain telemetry --
+		// recordBackoff (inside runPairOnce) still sees the real error
+		// either way, so retry/backoff behavior is unaffected.
+		case pairErr != nil && (errors.Is(pairErr, context.Canceled) || errors.Is(pairErr, context.DeadlineExceeded)):
+			reason = DrainYieldContextDone
+		case pairErr != nil:
+			reason = DrainYieldError
+		case !pairApplied:
+			reason = DrainYieldExhausted
+		case ctx.Err() != nil:
+			reason = DrainYieldContextDone
+		case budget == nil || *budget <= 0:
+			reason = DrainYieldBudgetExceeded
+		default:
+			*budget--
+			continue
+		}
+		break
+	}
+	if batches > 0 {
+		c.observer.ObserveProjectionDrain(DrainOutcome{
+			OrgID: orgID, Source: source, Batches: batches, Applied: applied, YieldReason: reason,
+			Duration: c.now().Sub(started), At: c.now(),
+		})
+	}
+	return evaluated, stale
 }
 
 // emitProjectionFreshness is the CHAOS-3887 (H1) per-org, per-source

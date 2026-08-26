@@ -192,6 +192,50 @@ func TestLifecycleBuild_RebuildDrivesTicksToFlipWithoutPurging(t *testing.T) {
 	require.NotEmpty(t, epoch1.Cursor)
 }
 
+// TestChaos3826_BuildDrainAppliesTheWholeBacklogWithinASingleTick is the
+// build-path half of CHAOS-3826's drain proof (chaos3826_drain_test.go
+// pins the steady-state runPair path against fakes; this pins runBuildPair
+// against the REAL pglifecycle.Store/pgprojection.CheckpointStore, per
+// this file's own stated philosophy). Before CHAOS-3826, runBuildPair made
+// exactly one RunOnce attempt per Tick, so a `pages`-page backlog needed
+// `pages` ticks to reach a terminal completion mode and flip -- codex
+// round-1 flagged the absence of a build-path drain test as a coverage
+// gap even though the mechanism itself (runBuildPair) is shared with the
+// already-tested runPair. budget = pages-1 mirrors
+// TestChaos3826_DrainAppliesPendingBatchesWithinASingleTickInsteadOfOnePerTick's
+// own convention: the free first attempt plus the budget's extra attempts
+// exactly covers the backlog, so it flips within ONE Tick call.
+func TestChaos3826_BuildDrainAppliesTheWholeBacklogWithinASingleTick(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionRunTestDatabase(t, ctx)
+	lifecycle, err := pglifecycle.NewStore(db)
+	require.NoError(t, err)
+	checkpoints, err := pgprojection.NewCheckpointStore(db)
+	require.NoError(t, err)
+	backend := newFakeBackend()
+	const pages = 20
+	source := &lifecycleFakeSource{name: "source-a", pages: pages}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:  []string{"org-1"},
+		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Lifecycle: lifecycle, EpochCheckpoints: checkpoints.ForEpoch,
+		GraceWindow: time.Hour, DrainBatchBudget: pages - 1, Logger: discardLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Rebuild(ctx, "org-1"))
+
+	coordinator.Tick(ctx) // exactly ONE tick
+
+	row, found, err := lifecycle.Get(ctx, "org-1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, contextfabric.LifecycleStatusGrace, row.Status,
+		"the whole %d-page backlog should drain and flip within a single Tick call, not require %d ticks", pages, pages)
+	require.Equal(t, int64(1), row.ActiveEpoch)
+}
+
 func TestLifecycleBuild_DisabledSourceCompletesWithoutTicking(t *testing.T) {
 	ctx := context.Background()
 	db := newProjectionRunTestDatabase(t, ctx)

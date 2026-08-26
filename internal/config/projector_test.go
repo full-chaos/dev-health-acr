@@ -21,6 +21,9 @@ func TestLoadProjectorDefaults(t *testing.T) {
 	if cfg.PollInterval != defaultProjectionPollInterval || cfg.Concurrency != defaultProjectionConcurrency {
 		t.Fatalf("unexpected scheduling defaults: %#v", cfg)
 	}
+	if cfg.DrainBatchBudget != defaultProjectionDrainBudget {
+		t.Fatalf("DrainBatchBudget = %d, want default %d", cfg.DrainBatchBudget, defaultProjectionDrainBudget)
+	}
 	if cfg.RequireBackingStores {
 		t.Fatal("development must not require backing stores by default")
 	}
@@ -76,10 +79,11 @@ func TestLoadProjectorEnabledProductionRequiresOrgAllowlist(t *testing.T) {
 
 func TestLoadProjectorParsesOrgAllowlistAndScheduling(t *testing.T) {
 	cfg, err := loadProjector(mapLookup(map[string]string{
-		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED":       "true",
-		"ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS":        "org-1, org-2 ,org-3",
-		"ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL": "30s",
-		"ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY":   "10",
+		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED":            "true",
+		"ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS":             "org-1, org-2 ,org-3",
+		"ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL":      "30s",
+		"ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY":        "10",
+		"ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET": "50",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +91,7 @@ func TestLoadProjectorParsesOrgAllowlistAndScheduling(t *testing.T) {
 	if len(cfg.OrgIDs) != 3 || cfg.OrgIDs[0] != "org-1" || cfg.OrgIDs[2] != "org-3" {
 		t.Fatalf("org ids = %#v", cfg.OrgIDs)
 	}
-	if cfg.PollInterval.String() != "30s" || cfg.Concurrency != 10 {
+	if cfg.PollInterval.String() != "30s" || cfg.Concurrency != 10 || cfg.DrainBatchBudget != 50 {
 		t.Fatalf("scheduling = %#v", cfg)
 	}
 }

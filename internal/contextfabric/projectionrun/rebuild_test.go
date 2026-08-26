@@ -21,6 +21,9 @@ func TestCoordinatorRebuildPurgesResetsThenNextTickReplaysFromScratch(t *testing
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
+		// fakeSource is an unbounded stream; this test's call-count
+		// bookkeeping is orthogonal to CHAOS-3826 draining.
+		DrainBatchBudget: -1,
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -161,6 +164,9 @@ func TestCoordinatorRebuildClearsASurvivingClaimSoANewVersionCanProceed(t *testi
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 		Now: func() time.Time { return clock },
+		// fakeSource is an unbounded stream; this test expects exactly one
+		// applied batch per Tick, orthogonal to CHAOS-3826 draining.
+		DrainBatchBudget: -1,
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)

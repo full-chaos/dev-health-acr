@@ -67,6 +67,16 @@ type fakeSource struct {
 	// sourceVersion, then "test.v1", matching what a non-dormant NextProjectionBatch
 	// call would have put on its batch.
 	currentSourceVersion string
+	// pages (CHAOS-3826), when > 0, bounds how many successful batches
+	// this source produces (by total call count) before reporting
+	// available=false -- like a real source that eventually catches up,
+	// and matching lifecycle_integration_test.go's own lifecycleFakeSource
+	// convention. 0 (the default) preserves the unbounded, ever-growing-
+	// cursor stream every pre-3826 test built around; the many tests that
+	// rely on "one Tick == one batch" for unrelated pacing keep that
+	// default and instead set Config.DrainBatchBudget: -1 (see e.g.
+	// TestCoordinatorSkipsAnOrganizationLockedByAnotherReplica).
+	pages int
 }
 
 func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
@@ -82,6 +92,9 @@ func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint context
 		return contextfabric.ProjectionBatch{}, false, f.err
 	}
 	if f.dormant {
+		return contextfabric.ProjectionBatch{}, false, nil
+	}
+	if f.pages > 0 && int(f.calls.Load()) > f.pages {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	next := checkpoint.Cursor + "n"
@@ -418,6 +431,10 @@ func TestCoordinatorSkipsAnOrganizationLockedByAnotherReplica(t *testing.T) {
 		OrgIDs:  []string{"org-locked-elsewhere", "org-free"},
 		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Locker: locker, Logger: discardLogger(),
+		// fakeSource is an unbounded stream; this test expects exactly one
+		// applied batch (org-free's single free attempt), orthogonal to
+		// CHAOS-3826 draining.
+		DrainBatchBudget: -1,
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)

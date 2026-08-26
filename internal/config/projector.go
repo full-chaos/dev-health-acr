@@ -13,11 +13,13 @@ const (
 	defaultProjectorListenAddress = ":8090"
 	defaultProjectionPollInterval = 15 * time.Second
 	defaultProjectionConcurrency  = 4
+	defaultProjectionDrainBudget  = 500
 	defaultProjectorPingTimeout   = 5 * time.Second
 	envContextFabricProjection    = "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED"
 	envContextFabricProjectorOrgs = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS"
 	envContextFabricPollInterval  = "ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL"
 	envContextFabricConcurrency   = "ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY"
+	envContextFabricDrainBudget   = "ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET"
 	envContextFabricTeamsProjects = "ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED"
 	envContextFabricGraphReads    = "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"
 	envProjectorListenAddress     = "ACR_PROJECTOR_ADDR"
@@ -59,9 +61,14 @@ type ProjectorConfig struct {
 	// OrgIDs is the explicit allowlist of organizations to project. See
 	// docs/design/context-fabric-projection-worker.md for why this starts
 	// as an explicit list rather than auto-discovery.
-	OrgIDs               []string
-	PollInterval         time.Duration
-	Concurrency          int
+	OrgIDs       []string
+	PollInterval time.Duration
+	Concurrency  int
+	// DrainBatchBudget (CHAOS-3826) bounds how many extra batches, beyond
+	// the one every configured source always attempts, one organization's
+	// Tick may pull across all its sources combined before yielding to the
+	// next poll -- see projectionrun.Config.DrainBatchBudget's doc comment.
+	DrainBatchBudget     int
 	TeamsProjectsEnabled bool
 }
 
@@ -111,6 +118,9 @@ func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 		return ProjectorConfig{}, err
 	}
 	if cfg.Concurrency, err = intValue(lookup, envContextFabricConcurrency, defaultProjectionConcurrency); err != nil {
+		return ProjectorConfig{}, err
+	}
+	if cfg.DrainBatchBudget, err = intValue(lookup, envContextFabricDrainBudget, defaultProjectionDrainBudget); err != nil {
 		return ProjectorConfig{}, err
 	}
 	// Defaults to true as of CHAOS-3802 (was false). The old default existed
@@ -169,7 +179,7 @@ func (c ProjectorConfig) SafeAttributes() []any {
 	return []any{
 		"environment", c.Environment, "projection_enabled", c.ProjectionEnabled,
 		"organization_count", len(c.OrgIDs), "poll_interval", c.PollInterval.String(),
-		"concurrency", c.Concurrency, "teams_projects_enabled", c.TeamsProjectsEnabled,
+		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled,
 		"require_backing_stores", c.RequireBackingStores,
 	}
 }
