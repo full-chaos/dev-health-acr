@@ -176,10 +176,17 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// CHAOS-4012: candidate_options shares the SAME bound as every
 		// other StructureNeeds offer list above.
 		"common#$defs.StructureNeeds.properties.candidate_options.maxItems": contextFabricStructureNeedsMaxOptions,
-		"common#$defs.StructureNeeds.properties.missing.maxItems":           ContextFabricStructureNeedKindCount,
-		"common#$defs.StructureNeeds.properties.missing.minItems":           1,
-		"common#$defs.HandleOption.properties.value.minLength":              1,
-		"common#$defs.HandleOption.properties.value.maxLength":              256,
+		// CHAOS-4314: window_expand_options carries AT MOST ONE
+		// recommendation (ContextFabricStructureNeeds.Validate's own
+		// "window_expand_options violates v1 bounds" on len>1) --
+		// deliberately NOT contextFabricStructureNeedsMaxOptions like every
+		// sibling offer list above: this list can never grow past 1 by
+		// construction (composeWindowExpandOption mints at most one).
+		"common#$defs.StructureNeeds.properties.window_expand_options.maxItems": 1,
+		"common#$defs.StructureNeeds.properties.missing.maxItems":               ContextFabricStructureNeedKindCount,
+		"common#$defs.StructureNeeds.properties.missing.minItems":               1,
+		"common#$defs.HandleOption.properties.value.minLength":                  1,
+		"common#$defs.HandleOption.properties.value.maxLength":                  256,
 		// matched_term_hash is a FIXED-length digest (min==max==24): not
 		// probeable in either direction (a minimum probe one below 24 is
 		// also one past the maximum, and vice versa), so mapped explicitly
@@ -195,14 +202,17 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// for both majors, so the SAME Validate() bounds this file already
 		// proves for v1 apply -- these entries exist only because the JSON
 		// Schema $defs are separate objects the probe walks independently).
-		"common#$defs.AnchorOptionV2.properties.matched_term_hash.minLength":      24,
-		"common#$defs.AnchorOptionV2.properties.matched_term_hash.maxLength":      24,
-		"common#$defs.StructureNeedsV2.properties.kind_options.maxItems":          contextFabricStructureNeedsMaxOptions,
-		"common#$defs.StructureNeedsV2.properties.anchor_options.maxItems":        contextFabricStructureNeedsMaxOptions,
-		"common#$defs.StructureNeedsV2.properties.handle_options.maxItems":        contextFabricStructureNeedsMaxOptions,
-		"common#$defs.StructureNeedsV2.properties.window_options.maxItems":        contextFabricStructureNeedsMaxOptions,
-		"common#$defs.StructureNeedsV2.properties.accepted_grammars.maxItems":     contextFabricStructureNeedsMaxOptions,
-		"common#$defs.StructureNeedsV2.properties.candidate_options.maxItems":     contextFabricStructureNeedsMaxOptions,
+		"common#$defs.AnchorOptionV2.properties.matched_term_hash.minLength":  24,
+		"common#$defs.AnchorOptionV2.properties.matched_term_hash.maxLength":  24,
+		"common#$defs.StructureNeedsV2.properties.kind_options.maxItems":      contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.anchor_options.maxItems":    contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.handle_options.maxItems":    contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.window_options.maxItems":    contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.accepted_grammars.maxItems": contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.candidate_options.maxItems": contextFabricStructureNeedsMaxOptions,
+		// CHAOS-4314: mirrors StructureNeeds.window_expand_options.maxItems
+		// above -- see that entry's own comment.
+		"common#$defs.StructureNeedsV2.properties.window_expand_options.maxItems": 1,
 		"common#$defs.StructureNeedsV2.properties.missing.maxItems":               ContextFabricStructureNeedKindCount,
 		"common#$defs.StructureNeedsV2.properties.missing.minItems":               1,
 		"common#$defs.HandleOption.properties.source_column.minLength":            1,

@@ -1308,6 +1308,54 @@
         ]
       }
     },
+    "WindowExpandOption": {
+      "description": "CHAOS-4314: the class-default window gate's pool-informed recommendation. receipt_id/option_id/label/relative_id are copied VERBATIM from one entry the same result's own window_options already carries (no fresh bounds here -- redemption applies the referenced WindowOption's own frozen start/end, never a value on this type).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^winr_"
+        },
+        "option_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "relative_id": {
+          "$ref": "#/$defs/RelativeWindowID"
+        },
+        "window_class": {
+          "type": "string",
+          "enum": [
+            "trend_assessment",
+            "recent_activity_lookup",
+            "state_snapshot",
+            "explicit_window"
+          ]
+        },
+        "candidate_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "candidate_kind": {
+          "$ref": "#/$defs/SubjectKind"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "option_id",
+        "label"
+      ]
+    },
     "WindowClarification": {
       "description": "CHAOS-3900 W1: every window option a stored result offered. RESIDUAL, SERVER-SIDE-ONLY INVARIANT (codex round 7): options.uniqueItems below rejects two options that are structurally identical in EVERY field, but standard JSON Schema (draft 2020-12) has no keyword to express uniqueness on a DERIVED SUBSET of fields -- so two options differing only in, say, label but sharing the same receipt_id or option_id pass this schema even though ContextFabricWindowClarification.Validate (validate_context_fabric_window.go, the design brief's own 'm5' invariant) rejects them. That per-field uniqueness is enforced by Go alone; it is not expressible here.",
       "type": "object",
@@ -1692,6 +1740,13 @@
             "$ref": "#/$defs/CandidateOption"
           },
           "maxItems": 20
+        },
+        "window_expand_options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowExpandOption"
+          },
+          "maxItems": 1
         }
       },
       "required": [

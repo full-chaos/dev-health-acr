@@ -174,15 +174,17 @@ func TestFoldConfirmedKindVectorCensus_AccumulatesAcrossCalls(t *testing.T) {
 // exactly the failure mode a codex xhigh review caught live during
 // CHAOS-4313's own rebase onto CHAOS-4307) a red test instead of a passing
 // report someone has to notice by eye. Originally CHAOS-4307's own
-// "...IsThirty" (pinned v30); renamed here, on the very next bump, so the
-// test's own name never hardcodes a historical version the live constant
-// has since moved past -- update the expected literal (never the
-// assertion's SHAPE) on every future bump, same discipline
-// reportSchemaVersion's own doc comment already documents.
+// "...IsThirty" (pinned v30); renamed on CHAOS-4313's own bump to a
+// version-stable name so the test's own name never hardcodes a historical
+// version the live constant has since moved past -- update the expected
+// literal (never the assertion's SHAPE) on every future bump, same
+// discipline reportSchemaVersion's own doc comment already documents.
+// CHAOS-4314's own rebase onto CHAOS-4313's second bump (#287, v32,
+// responder_effort) is exactly that next bump: v33.
 func TestTwoTurnReport_SchemaVersionPin(t *testing.T) {
 	t.Parallel()
-	if reportSchemaVersion != "32" {
-		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4313 follow-up bump -- responder_effort, following CHAOS-4313's own v31)", reportSchemaVersion, "32")
+	if reportSchemaVersion != "33" {
+		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4314 bump, following CHAOS-4313's v32)", reportSchemaVersion, "33")
 	}
 }
 

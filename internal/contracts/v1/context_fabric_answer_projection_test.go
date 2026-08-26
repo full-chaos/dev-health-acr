@@ -431,6 +431,10 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	// (codex round-1 finding: without this, the default answer surface
 	// silently reproduced the exact CHAOS-3813 drop the field exists to
 	// close).
+	//
+	// CHAOS-4314: WindowExpandOption joins the intersection deliberately --
+	// StructureNeeds gained window_expand_options, the SAME "copied verbatim
+	// from common.v1" reasoning as CandidateOption above.
 	expected := []string{
 		"AcceptedGrammar", "AnchorOption", "BoundSubjectReceipt", "CandidateOption",
 		"ConfirmedStructureEntry",
@@ -440,7 +444,7 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 		"RequestedEvidenceWindow", "ScalarValue", "StructureDisposition", "StructureNeedKind",
 		"StructureNeeds", "StructureOfferSource", "StructureProvenance", "StructureSource",
 		"SubjectKind", "SubjectRef", "TemporalLabel", "TimeContext", "VersionSet",
-		"WindowClarification", "WindowOption",
+		"WindowClarification", "WindowExpandOption", "WindowOption",
 	}
 	if !reflect.DeepEqual(shared, expected) {
 		t.Fatalf("the set of reused shapes changed: got %v, pinned %v.\nA shape that vanished was renamed or stopped being reused; a new one must be added deliberately.", shared, expected)

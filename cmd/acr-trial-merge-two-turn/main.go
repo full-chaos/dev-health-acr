@@ -305,7 +305,7 @@ import (
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "32"
+const expectedSchemaVersion = "33"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -608,6 +608,14 @@ type twoTurnCaseResult struct {
 	// field -- see that file's own doc comment (twoTurnTurn1Facts.Regime)
 	// for the engine-native derivation off RecordWindowCanonicalization.
 	Regime string `json:"turn1_regime,omitempty"`
+	// Turn1WindowExpandOffered/Turn2WindowExpandAccepted (CHAOS-4314, schema
+	// v31) mirror twoTurnCaseResult's identically-named fields byte-for-byte
+	// -- see the producer's own doc comment for the offer_kind=window_expand
+	// derivation. No omitempty, same reasoning as Turn1OfferComposedUnderWindowGate
+	// above: false is a reading ("this case's window gate had nothing to
+	// recommend" / "the recommendation was not redeemed"), not an absence.
+	Turn1WindowExpandOffered  bool `json:"turn1_window_expand_offered"`
+	Turn2WindowExpandAccepted bool `json:"turn2_window_expand_accepted"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's
@@ -678,8 +686,15 @@ type twoTurnReport struct {
 	// RegimeAOfferComposedCount/RegimeATurn2AnsweredCount (CHAOS-4234,
 	// schema v29) mirror twoTurnReport's identically-named fields --
 	// informational, summed across shards, no gate.
-	RegimeAOfferComposedCount              int `json:"regime_a_offer_composed_count"`
-	RegimeATurn2AnsweredCount              int `json:"regime_a_turn2_answered_count"`
+	RegimeAOfferComposedCount int `json:"regime_a_offer_composed_count"`
+	RegimeATurn2AnsweredCount int `json:"regime_a_turn2_answered_count"`
+	// WindowGatedOfferedCount/WindowGatedSilentCount (CHAOS-4314, schema
+	// v31) mirror twoTurnReport's identically-named fields -- the
+	// window_gated_offered/window_gated_silent split of WindowGatedCount
+	// above: every window-gated case falls into exactly one, so the two
+	// always sum to WindowGatedCount (checkInvariants below).
+	WindowGatedOfferedCount                int `json:"window_gated_offered_count"`
+	WindowGatedSilentCount                 int `json:"window_gated_silent_count"`
 	InferredKindHandleDecisiveCount        int `json:"inferred_kind_handle_decisive_count"`
 	InferredBaselineEquivalentCount        int `json:"inferred_baseline_equivalent_count"`
 	InferredKindInsensitivityAttestedCount int `json:"inferred_kind_insensitivity_attested_count"`
@@ -1041,6 +1056,8 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.WindowClassDefaultGatedCount += s.WindowClassDefaultGatedCount
 		merged.RegimeAOfferComposedCount += s.RegimeAOfferComposedCount
 		merged.RegimeATurn2AnsweredCount += s.RegimeATurn2AnsweredCount
+		merged.WindowGatedOfferedCount += s.WindowGatedOfferedCount
+		merged.WindowGatedSilentCount += s.WindowGatedSilentCount
 		merged.InferredKindHandleDecisiveCount += s.InferredKindHandleDecisiveCount
 		merged.InferredBaselineEquivalentCount += s.InferredBaselineEquivalentCount
 		merged.InferredKindInsensitivityAttestedCount += s.InferredKindInsensitivityAttestedCount
@@ -1305,6 +1322,15 @@ func evaluateGates(r twoTurnReport) error {
 	}
 	if r.WindowGatedCount != r.WindowInferredTierRanCount {
 		fail("window_gated_count=%d, want %d (== window_inferred_tier_ran_count)", r.WindowGatedCount, r.WindowInferredTierRanCount)
+	}
+	// CHAOS-4314: structural partition check, NOT the measurement bar --
+	// every window-gated case must land in exactly one of offered/silent
+	// (chris "go" 2026-08-26's own success bar, window_gated_silent -> 0, is
+	// evaluated by the orchestrator against this same pair post-merge, never
+	// gated here: a pre-CHAOS-4314-coverage run legitimately carries
+	// silent>0).
+	if r.WindowGatedOfferedCount+r.WindowGatedSilentCount != r.WindowGatedCount {
+		fail("window_gated_offered_count(%d)+window_gated_silent_count(%d)=%d, want %d (== window_gated_count): every window-gated case must land in exactly one bucket", r.WindowGatedOfferedCount, r.WindowGatedSilentCount, r.WindowGatedOfferedCount+r.WindowGatedSilentCount, r.WindowGatedCount)
 	}
 	if r.FalseNoMatchCount > 0 {
 		fail("false_no_match_count=%d, want 0", r.FalseNoMatchCount)

@@ -2115,6 +2115,18 @@ type twoTurnTurn1Facts struct {
 	// output-shape-based inference would otherwise hit, and the reason the
 	// prior, shape-based inference left 4/212 rows unplaceable.
 	Regime string
+	// WindowExpandOffered/WindowExpandOptionReceiptID (CHAOS-4314, schema
+	// v31) read turn 1's own StructureNeeds.WindowExpandOptions directly --
+	// unlike every other field on this struct, NOT sourced from a
+	// ResolutionTraceEvent (window_expand is composed in windowConfirmationRequiredResult,
+	// which never emits a graphrank trace event at all -- see
+	// contextfabric.composeWindowExpandOption's own doc comment).
+	// WindowExpandOptionReceiptID is empty when Offered is false; carried
+	// alongside so twoTurnWindowExpandAccepted (below) can check turn 2's
+	// own redemption against the EXACT receipt this case recommended,
+	// rather than merely "some window receipt was confirmed."
+	WindowExpandOffered         bool
+	WindowExpandOptionReceiptID string
 	// TraceEvents (CHAOS-4183 phase "2c", team-lead ruling 2026-08-23) is
 	// turn 1's own RAW ResolutionTraceEvent stream -- NOT populated by
 	// twoTurnCaptureTurn1Facts itself (this struct is otherwise pure
@@ -2235,6 +2247,12 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 		facts.EvidenceRoundReason = event.ShadowReason
 	}
 	facts.Regime = twoTurnRegimeFromWindowCanonicalization(trace.windowCanonicalization)
+	// CHAOS-4314: read directly off turn1's own composed StructureNeeds --
+	// see this field's own doc comment for why (no trace event carries it).
+	if turn1.StructureNeeds != nil && len(turn1.StructureNeeds.WindowExpandOptions) > 0 {
+		facts.WindowExpandOffered = true
+		facts.WindowExpandOptionReceiptID = turn1.StructureNeeds.WindowExpandOptions[0].ReceiptID
+	}
 	return facts
 }
 
@@ -2286,6 +2304,7 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.EvidenceRoundEntered = facts.EvidenceRoundEntered
 	res.EvidenceRoundReason = facts.EvidenceRoundReason
 	res.Regime = facts.Regime
+	res.Turn1WindowExpandOffered = facts.WindowExpandOffered
 	// CHAOS-4183 phase "2c": nil on every ordinary run (facts.TraceEvents is
 	// only ever non-nil when the call site force-traced this case) -- see
 	// twoTurnTurn1Facts.TraceEvents' own doc comment.
@@ -4290,6 +4309,18 @@ type twoTurnCaseResult struct {
 	// twoTurnRegimeFromWindowCanonicalization's own doc comment for exactly
 	// which outcomes fall into each bucket.
 	Regime string `json:"turn1_regime,omitempty"`
+	// Turn1WindowExpandOffered/Turn2WindowExpandAccepted (CHAOS-4314, schema
+	// v31) mirror twoTurnTurn1Facts.WindowExpandOffered and the positive
+	// arm's own ConfirmedStructure check (twoTurnWindowExpandAccepted) --
+	// the offer_kind=window_expand accepted/declined pair: Offered is
+	// stamped on every arm's row for the case (twoTurnStampTurn1Facts, same
+	// as every other Turn1-prefixed field); Accepted is stamped ONLY on the
+	// positive arm, since that is the only arm whose turn 2 can carry a
+	// PriorWindowReceipts redemption at all. No omitempty on either: false
+	// is a reading ("this case's gate had nothing to recommend" /
+	// "the recommendation was not redeemed"), never an absence.
+	Turn1WindowExpandOffered  bool `json:"turn1_window_expand_offered"`
+	Turn2WindowExpandAccepted bool `json:"turn2_window_expand_accepted"`
 }
 
 // twoTurnCaseResultIsAnomalous (CHAOS-4135) reports whether res trips one of
@@ -4395,7 +4426,7 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "32"
+const reportSchemaVersion = "33"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5189,6 +5220,16 @@ type twoTurnReport struct {
 	// merger, no bar: the measurement pair decides.
 	RegimeAOfferComposedCount int `json:"regime_a_offer_composed_count"`
 	RegimeATurn2AnsweredCount int `json:"regime_a_turn2_answered_count"`
+	// WindowGatedOfferedCount/WindowGatedSilentCount (CHAOS-4314, schema
+	// v31) partition WindowGatedCount above: every window_gated row now
+	// carries a window_expand recommendation (offered) or does not
+	// (silent) -- chris "go" 2026-08-26's own success bar is
+	// window_gated_silent -> 0. Informational, summed by the merger; the
+	// one structural invariant (offered+silent==window_gated_count) is
+	// checked post-merge, not here (see cmd/acr-trial-merge-two-turn's own
+	// checkInvariants).
+	WindowGatedOfferedCount int `json:"window_gated_offered_count"`
+	WindowGatedSilentCount  int `json:"window_gated_silent_count"`
 	// InferredKindHandleDecisiveCount/InferredBaselineEquivalentCount/
 	// InferredKindInsensitivityAttestedCount/InferredUnjustifiedCount/
 	// InferredPairInvalidCount (CHAOS-4039 v4 contract, kind/handle members
@@ -6948,7 +6989,90 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	res.FalseNoMatch = twoTurnPositiveFalseNoMatch(tc.ExpectID, turn2.Status)
 	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
+	// Turn2WindowExpandAccepted (CHAOS-4314): true only when THIS turn 2
+	// actually redeemed the EXACT receipt turn 1's own window_expand
+	// recommendation named -- see twoTurnWindowExpandAccepted's own doc
+	// comment for why this is checked against ConfirmedStructure rather
+	// than merely "some window receipt was confirmed" (regimeAWindowBand's
+	// oracle-selected receipt need not be the SAME tier composeWindowExpandOption
+	// recommended).
+	res.Turn2WindowExpandAccepted = twoTurnWindowExpandAccepted(turn1, turn2.ConfirmedStructure)
 	return res
+}
+
+// twoTurnWindowExpandAccepted (CHAOS-4314) reports whether confirmed (a
+// turn's own ConfirmedStructure) carries a window-member entry whose
+// ReceiptID matches turn1's own StructureNeeds.WindowExpandOptions[0] --
+// the fail-closed "accepted" reading: this turn redeemed the EXACT receipt
+// the window_expand offer named, not merely any window receipt.
+func twoTurnWindowExpandAccepted(turn1 contractsv1.ContextFabricInvestigationResult, confirmed []contractsv1.ContextFabricConfirmedStructureEntry) bool {
+	if turn1.StructureNeeds == nil || len(turn1.StructureNeeds.WindowExpandOptions) == 0 {
+		return false
+	}
+	recommended := turn1.StructureNeeds.WindowExpandOptions[0].ReceiptID
+	for _, entry := range confirmed {
+		// Disposition == Applied is required (codex xhigh review round 3,
+		// confirmed Medium finding): a matching Member/ReceiptID alone is
+		// not proof of a genuine redemption -- structureSupersessionVetoResult
+		// (window.go) places the SAME receipt into ConfirmedStructure with
+		// Disposition VetoedStale when a stale-superseded-offer race is
+		// discovered at Save, and that entry names the receipt precisely
+		// because it is echoing what the race discarded, not what applied.
+		// Without this check a stale race would falsely increment
+		// turn2_window_expand_accepted.
+		if entry.Member == contractsv1.ContextFabricStructureNeedWindow && entry.ReceiptID == recommended &&
+			entry.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCHAOS4314_TwoTurnWindowExpandAccepted_RejectsStaleSupersededDisposition
+// is the codex xhigh review round-3 regression: structureSupersessionVetoResult
+// (internal/contextfabric/window.go) can place a ConfirmedStructure entry
+// naming the EXACT SAME window_expand-recommended receipt with Disposition
+// VetoedStale when a stale-superseded-offer race is discovered at Save --
+// that entry echoes what the race DISCARDED, not what applied. Before this
+// fix, twoTurnWindowExpandAccepted matched on Member+ReceiptID alone and
+// would have falsely counted that race as an accepted window_expand offer.
+func TestCHAOS4314_TwoTurnWindowExpandAccepted_RejectsStaleSupersededDisposition(t *testing.T) {
+	turn1 := contractsv1.ContextFabricInvestigationResult{
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			WindowExpandOptions: []contractsv1.ContextFabricWindowExpandOption{
+				{ReceiptID: "winr_recommended90daaaaa", OptionID: "opt_90d", Label: "the last 90 days"},
+			},
+		},
+	}
+	staleConfirmed := []contractsv1.ContextFabricConfirmedStructureEntry{
+		{
+			Member: contractsv1.ContextFabricStructureNeedWindow, ReceiptID: "winr_recommended90daaaaa",
+			AppliedValue: "trailing_90d", Source: contractsv1.ContextFabricStructureSourceReceipt,
+			Provenance: contractsv1.ContextFabricStructureClarificationConfirmed,
+			// The load-bearing field: a stale-superseded race, NOT a genuine
+			// redemption.
+			Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
+		},
+	}
+	if twoTurnWindowExpandAccepted(turn1, staleConfirmed) {
+		t.Fatal("twoTurnWindowExpandAccepted = true, want false: a vetoed_stale entry is a discarded race, not an accepted redemption")
+	}
+
+	appliedConfirmed := []contractsv1.ContextFabricConfirmedStructureEntry{
+		{
+			Member: contractsv1.ContextFabricStructureNeedWindow, ReceiptID: "winr_recommended90daaaaa",
+			AppliedValue: "trailing_90d", Source: contractsv1.ContextFabricStructureSourceReceipt,
+			Provenance: contractsv1.ContextFabricStructureClarificationConfirmed,
+			// Control: the identical entry, genuinely applied, must still
+			// report accepted -- this fix must not regress the happy path
+			// TestCHAOS4314_Redemption_WindowExpandReceiptRecordsAccepted
+			// (internal/contextfabric) already proves at the engine layer.
+			Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+		},
+	}
+	if !twoTurnWindowExpandAccepted(turn1, appliedConfirmed) {
+		t.Fatal("twoTurnWindowExpandAccepted = false, want true: a genuinely applied entry naming the recommended receipt must count as accepted")
+	}
 }
 
 // twoTurnPositiveFalseNoMatch is CHAOS-4120's own positive-arm false_no_match
@@ -9083,6 +9207,18 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 				if inferred.Turn2Status == string(contractsv1.ContextFabricInvestigationClarificationRequired) &&
 					inferred.TierRoutedCorrectly && inferred.CommittedCount == 0 {
 					report.WindowGatedCount++
+					// WindowGatedOfferedCount/WindowGatedSilentCount
+					// (CHAOS-4314): partitions this SAME window_gated
+					// population -- chris "go" 2026-08-26's own success bar
+					// is window_gated_silent -> 0. turn1Facts is this
+					// entry's own (member=="window") turn-1 facts, so
+					// WindowExpandOffered here is exactly the window gate's
+					// own recommendation on the SAME call that gated this row.
+					if turn1Facts.WindowExpandOffered {
+						report.WindowGatedOfferedCount++
+					} else {
+						report.WindowGatedSilentCount++
+					}
 				}
 			}
 		} else if inferred.ArmInvalidReason == "" && inferred.CommittedCount > 0 && !inferred.PairInvalid {

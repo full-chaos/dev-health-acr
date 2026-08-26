@@ -207,6 +207,12 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// CHAOS-4012: CandidateOption.Label gets the SAME conservative
 	// treatment as every other StructureNeeds offer label above.
 	"structured.structure_needs.candidate_options[].label",
+	// CHAOS-4314: WindowExpandOption.Label gets the SAME conservative
+	// treatment; CandidateLabel is copied verbatim from another option's
+	// own (conservatively-untrusted) Label field, so it inherits the
+	// identical classification rather than a fresh judgment.
+	"structured.structure_needs.window_expand_options[].label",
+	"structured.structure_needs.window_expand_options[].candidate_label",
 	// CHAOS-4171 PR2: Phrasing is GENUINE model output (the second bounded
 	// offer-phrasing call, chaos4171_offer_phrasing.go) -- unlike Label,
 	// which is only conservatively classified untrusted, Phrasing actually
@@ -319,6 +325,12 @@ var MCPInvestigationResultUntrustedFields = []string{
 	// server-rendered today, but classified untrusted rather than
 	// widening the leaf-name-based "label" trust pattern globally.
 	"structured.structure_needs.candidate_options[].label",
+	// CHAOS-4314: WindowExpandOption.Label gets the SAME conservative
+	// treatment; CandidateLabel is copied verbatim from another option's
+	// own (conservatively-untrusted) Label field, so it inherits the
+	// identical classification rather than a fresh judgment.
+	"structured.structure_needs.window_expand_options[].label",
+	"structured.structure_needs.window_expand_options[].candidate_label",
 	// CHAOS-4171 PR2: Phrasing is GENUINE model output (the second bounded
 	// offer-phrasing call, chaos4171_offer_phrasing.go) -- unlike Label
 	// above, which is only conservatively classified untrusted, Phrasing

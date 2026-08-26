@@ -290,7 +290,50 @@ func (n ContextFabricStructureNeeds) Validate() error {
 			return fmt.Errorf("accepted_grammars: %w", err)
 		}
 	}
+	// window_expand_options (CHAOS-4314) is DELIBERATELY excluded from the
+	// addUnique sweep above: ContextFabricWindowExpandOption.ReceiptID/
+	// OptionID copy an existing window_options entry VERBATIM by design
+	// (that type's own doc comment) -- a cross-list uniqueness violation
+	// here would be the intended shape, not a minting bug. windowOptionMatches
+	// enforces the referential integrity that discipline needs instead: a
+	// window_expand receipt/option pair must name a real window_options
+	// entry, never a fabricated one -- and (codex xhigh review, confirmed
+	// Medium finding) must match it on EVERY field the type claims to copy
+	// verbatim (Label, RelativeID), not merely the id pair. An id match
+	// with a diverging label/relative_id would let a result persist a
+	// recommendation whose displayed text disagrees with what redemption
+	// actually applies -- the exact "misleading disclosure" class the
+	// verbatim-copy design exists to prevent.
+	if len(n.WindowExpandOptions) > 1 {
+		return fmt.Errorf("window_expand_options violates v1 bounds")
+	}
+	for _, opt := range n.WindowExpandOptions {
+		if err := opt.Validate(); err != nil {
+			return fmt.Errorf("window_expand_options: %w", err)
+		}
+		if !windowOptionMatches(n.WindowOptions, opt) {
+			return fmt.Errorf("window_expand_options: receipt_id/option_id/label/relative_id must match an existing window_options entry verbatim")
+		}
+	}
 	return nil
+}
+
+// windowOptionMatches reports whether options carries an entry whose
+// ReceiptID, OptionID, Label, and RelativeID all equal expand's own --
+// the referential integrity check ContextFabricWindowExpandOption's
+// deliberate duplication needs (see its own doc comment and
+// ContextFabricStructureNeeds.Validate's own comment on why it is
+// separate from the addUnique sweep). Checks every field the type's own
+// doc comment claims is copied verbatim, not merely the id pair (codex
+// xhigh review, confirmed Medium finding).
+func windowOptionMatches(options []ContextFabricWindowOption, expand ContextFabricWindowExpandOption) bool {
+	for _, opt := range options {
+		if opt.ReceiptID == expand.ReceiptID && opt.OptionID == expand.OptionID &&
+			opt.Label == expand.Label && opt.RelativeID == expand.RelativeID {
+			return true
+		}
+	}
+	return false
 }
 
 func (e ContextFabricConfirmedStructureEntry) Validate() error {

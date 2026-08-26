@@ -90,6 +90,8 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	// is embedded verbatim, so every one of its own internal refs must
 	// resolve correctly within the embedded copy, reachable or not.
 	"#/$defs/WindowConfirmationMode": "#/$defs/context_fabric_common.v1/$defs/WindowConfirmationMode",
+	// CHAOS-4314: window_expand_options' own new common $defs entry.
+	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_common.v1/$defs/WindowExpandOption",
 }
 
 // contextFabricResultDefsRewrites relocates the cross-file pointers
@@ -166,6 +168,8 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	// disposition pair (prior_subject_receipt_dispositions).
 	"#/$defs/PriorSubjectReceiptDisposition":      "#/$defs/context_fabric_answer_projection.v1/$defs/PriorSubjectReceiptDisposition",
 	"#/$defs/PriorSubjectReceiptDispositionEntry": "#/$defs/context_fabric_answer_projection.v1/$defs/PriorSubjectReceiptDispositionEntry",
+	// CHAOS-4314: window_expand_options' own new projection-local $defs entry.
+	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_answer_projection.v1/$defs/WindowExpandOption",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

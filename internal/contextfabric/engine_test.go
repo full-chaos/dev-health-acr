@@ -335,6 +335,11 @@ type recordingTelemetry struct {
 	// offerPhrasingOutcomes (CHAOS-4171 PR2) mirrors the SAME
 	// list-not-count discipline.
 	offerPhrasingOutcomes []OfferPhrasingOutcome
+	// windowGateOfferDisclosures/windowExpandOfferRedemptions (CHAOS-4314)
+	// mirror the SAME list-not-count discipline as windowCanonicalizationOutcomes
+	// above.
+	windowGateOfferDisclosures []bool
+	windowExpandOfferRedeemed  int
 }
 
 type priorConsultedRecord struct {
@@ -420,6 +425,14 @@ func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ 
 
 func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {
 	r.gatedOfferResolutions = append(r.gatedOfferResolutions, outcome)
+}
+
+func (r *recordingTelemetry) RecordWindowGateOfferDisclosure(_ context.Context, _ storage.Principal, offered bool) {
+	r.windowGateOfferDisclosures = append(r.windowGateOfferDisclosures, offered)
+}
+
+func (r *recordingTelemetry) RecordWindowExpandOfferRedeemed(_ context.Context, _ storage.Principal) {
+	r.windowExpandOfferRedeemed++
 }
 
 func (r *recordingTelemetry) RecordStructureOfferCount(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {

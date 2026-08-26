@@ -273,6 +273,22 @@ type ContextFabricStructureNeeds struct {
 	// -- both may be present on the same StructureNeeds -- see
 	// ContextFabricStructureNeedSubjectCandidate's own doc comment.
 	CandidateOptions []ContextFabricCandidateOption `json:"candidate_options,omitempty"`
+	// WindowExpandOptions (CHAOS-4314) carries AT MOST ONE recommendation --
+	// see ContextFabricWindowExpandOption's own doc comment for why it
+	// deliberately duplicates one WindowOptions entry's ReceiptID/OptionID
+	// verbatim rather than minting a fresh receipt namespace.
+	//
+	// Deliberately NOT paired with a "window_expand" StructureNeedKind
+	// member (codex xhigh review, confirmed): AGENTS.md's contract rule
+	// draws a hard line between "additive optional fields may stay in v1"
+	// and "enum changes require a new major contract" -- a NEW closed-enum
+	// value is unrecoverable for any v1-pinned consumer whose own type
+	// system encodes the vocabulary as a closed string union (Ask Dev's
+	// generated TS type, for one), where an ADDITIVE OPTIONAL FIELD like
+	// this one is not: an old client simply never reads it. Presence is
+	// discoverable directly (len(WindowExpandOptions) > 0), so Missing
+	// needs no new member to carry the same signal.
+	WindowExpandOptions []ContextFabricWindowExpandOption `json:"window_expand_options,omitempty"`
 }
 
 // ContextFabricStructureSource is the closed vocabulary for how a

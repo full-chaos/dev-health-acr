@@ -230,7 +230,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// contributed three new string leaves (prior_result_id, receipt_id,
 		// disposition), added to the projection per codex round-1 finding
 		// (the default answer surface was silently dropping the disclosure).
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 146},
+		// CHAOS-4314: 146 -> 153 -- WindowExpandOption contributed seven new
+		// string leaves (receipt_id, option_id, label, relative_id,
+		// window_class, candidate_label, candidate_kind).
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 153},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -241,7 +244,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// the wire path with v1 AnchorOption, so it adds no new path).
 		// CHAOS-3478/CHAOS-3813: 229 -> 232 -- SubjectResolution.PriorSubjectReceiptDispositions'
 		// own three new string leaves (prior_result_id, receipt_id, disposition).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 232},
+		// CHAOS-4314: 232 -> 239 -- WindowExpandOption's own seven new string
+		// leaves, same reasoning as the answer_projection surface above.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 239},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -326,6 +331,12 @@ func trustedBecauseClosed(path string) bool {
 		// StructureNeedKind enum (StructureNeeds.Validate rejects any
 		// non-member entry).
 		"member", "offer_source", "disposition", "missing",
+		// CHAOS-4314: "candidate_kind" (ContextFabricWindowExpandOption.CandidateKind)
+		// is the SAME closed ContextFabricSubjectKind enum every other "kind"
+		// leaf above already is -- named differently only to disambiguate it
+		// from a hypothetical member-level "kind" this type does not carry,
+		// never a different (freer) shape.
+		"candidate_kind",
 		// CHAOS-4087: "commit_gate" (ContextFabricCommitDecisionDigest) is a
 		// closed-vocabulary string validated against its own registry
 		// (validCommitGate) before a result is stored -- never model prose,
