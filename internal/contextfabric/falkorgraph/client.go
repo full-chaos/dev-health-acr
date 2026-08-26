@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	falkordb "github.com/FalkorDB/falkordb-go/v2"
 )
@@ -21,6 +22,13 @@ import (
 type sdkAPI struct {
 	db     *falkordb.FalkorDB
 	config Config
+	// everConnected is set true the first time ANY command against this
+	// connection succeeds. classifyConnError's CHAOS-3809 TLS-handshake
+	// decoration is gated on this still being false -- see that method's
+	// own doc comment for why (Codex round-1 P1: a blanket decoration
+	// misdiagnosed an ordinary slow query on an already-working connection
+	// as a TLS/plaintext mismatch).
+	everConnected atomic.Bool
 }
 
 func newSDKAPI(config Config) (conn, error) {
@@ -65,8 +73,9 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 	}
 	raw, err := s.db.Conn.Do(ctx, command, graphKey, text, "--compact").Result()
 	if err != nil {
-		return nil, classifyFalkorError("query context graph", err)
+		return nil, s.classifyConnError("query context graph", err)
 	}
+	s.everConnected.Store(true)
 	g := s.db.SelectGraph(graphKey)
 	result, err := falkordb.QueryResultNew(g, raw)
 	if err != nil {
@@ -91,16 +100,18 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 func (s *sdkAPI) deleteGraph(ctx context.Context, graphKey string) error {
 	err := s.db.Conn.Do(ctx, "GRAPH.DELETE", graphKey).Err()
 	if err != nil {
-		return classifyFalkorError("delete organization graph", err)
+		return s.classifyConnError("delete organization graph", err)
 	}
+	s.everConnected.Store(true)
 	return nil
 }
 
 func (s *sdkAPI) listGraphs(ctx context.Context) ([]string, error) {
 	names, err := s.db.Conn.Do(ctx, "GRAPH.LIST").StringSlice()
 	if err != nil {
-		return nil, classifyFalkorError("list graphs", err)
+		return nil, s.classifyConnError("list graphs", err)
 	}
+	s.everConnected.Store(true)
 	return names, nil
 }
 
@@ -185,12 +196,13 @@ func (s *sdkAPI) createConstraint(ctx context.Context, graphKey string, unique b
 	}
 	err := s.db.Conn.Do(ctx, args...).Err()
 	if err == nil {
+		s.everConnected.Store(true)
 		return nil
 	}
-	if errors.Is(classifyFalkorError("create constraint", err), errAlreadyExists) {
+	if errors.Is(s.classifyConnError("create constraint", err), errAlreadyExists) {
 		return nil
 	}
-	return classifyFalkorError("create constraint", err)
+	return s.classifyConnError("create constraint", err)
 }
 
 func rowString(r row, key string) string {
@@ -338,6 +350,116 @@ func safeParamValue(value interface{}) (interface{}, error) {
 	default:
 		return nil, fmt.Errorf("unsupported falkordb parameter type %T", value)
 	}
+}
+
+// classifyConnError wraps classifyFalkorError with CHAOS-3809's TLS/
+// plaintext-mismatch context: when this connection is configured for TLS and
+// the classified result is a deadline-exceeded (safeDependencyError's
+// deliberately bare-error path for context.Canceled/context.DeadlineExceeded
+// below), a TLS handshake against a plaintext FalkorDB server hangs exactly
+// the same way a slow or unreachable server would -- the discriminating
+// evidence in the ticket showed both cases surface as an identical bare
+// "context deadline exceeded", indistinguishable from each other. Naming the
+// TLS setting here turns a 30-second guessing exercise (the incident this
+// ticket documents) into a one-line diagnosis. errors.Is(result,
+// context.DeadlineExceeded) still holds after this wrap -- it only adds
+// explanation via %w, never replaces the sentinel -- so every existing
+// caller checking for a deadline is unaffected.
+//
+// This decoration is gated on everConnected -- see everConnectedProofSentinels
+// and isProofOfLife's own doc comments for the ALLOWLIST design that gate
+// uses (team-lead-ordered after four Codex rounds each found a different
+// way an earlier BLOCKLIST design let something that was NOT proof of a
+// working connection slip through). Once ANY command has ever succeeded, or
+// hit a proof-of-life classification, a later deadline is a query-level
+// timeout on a connection already proven to work, never a handshake problem
+// -- never decorated again.
+//
+// Known residual gap (Codex round-2, not closed, out of this ticket's
+// scope): falkordb-go's FalkorDBNew runs its own internal isSentinel()
+// probe (an INFO command) during construction, invisibly to sdkAPI -- if
+// that hidden probe happens to succeed against a genuinely TLS-speaking
+// server, everConnected has no way to observe it, so this connection's
+// FIRST real command could still be misdiagnosed if it happens to be slow.
+// Narrow (one possible misdiagnosis on cold start, self-correcting after
+// the first real proof-of-life event) compared to the ticket's reported
+// shape (every call, forever).
+func (s *sdkAPI) classifyConnError(operation string, err error) error {
+	classified := classifyFalkorError(operation, err)
+	if isProofOfLife(err, classified) {
+		s.everConnected.Store(true)
+		return classified
+	}
+	if !s.config.TLS || s.everConnected.Load() || !errors.Is(classified, context.DeadlineExceeded) {
+		return classified
+	}
+	return fmt.Errorf("%s: TLS handshake timed out -- %s is enabled for this connection; if the FalkorDB server does not speak TLS, set %s=false: %w",
+		operation, EnvTLS, EnvTLS, classified)
+}
+
+// everConnectedProofSentinels is the CLOSED allowlist of classifications
+// that can only be reached via a genuine FalkorDB protocol round-trip --
+// each requires the server to have actually parsed and responded to a
+// command, which is impossible unless the connection (and any TLS
+// handshake) already succeeded.
+//
+// This is deliberately an allowlist, not a blocklist ("anything that isn't
+// X or Y"). Four straight Codex rounds each found a different way a
+// blocklist admitted a shape that was NOT real proof of a working
+// connection: FalkorDB's own "Query timed out" response (round 1, fixed by
+// treating it as its own exception rather than folding it into "not a
+// deadline"), an idempotent already-exists reply reachable via a classified
+// error rather than a nil one (round 2), context.Canceled -- which carries
+// zero information about connection health, since a caller cancellation can
+// land before, during, or after a real handshake succeeds (round 3) -- and,
+// the design-breaking one, classifyFalkorError's generic/unclassified
+// fallback (round 4): a genuine connection-refused, a dropped-mid-handshake
+// EOF, or a TLS alert all reduce to that same generic fallback, and each is
+// the STRONGEST possible signal the connection never worked -- the exact
+// opposite of proof of life.
+//
+// A blocklist fails toward "assumed connected": any future or currently-
+// unrecognized error shape defaults to proof of life, which is the unsafe
+// direction -- a false positive here silently suppresses this ticket's
+// whole diagnosis for a connection's entire remaining lifetime. An
+// allowlist fails the other way: an unrecognized shape defaults to "not
+// proof", so the worst case is an occasional, still-plausible TLS
+// suggestion on a connection that actually works -- mild compared to the
+// alternative. A classification ADDED to classifyFalkorError in the future
+// without a deliberate decision here simply falls through to "not proof",
+// never silently joins the allowlist.
+//
+// TestClassifyConnErrorEverConnectedProofOfLifeTable is this table's own
+// regression test, covering every classification classifyFalkorError
+// currently produces plus generic/unrecognized shapes -- extend BOTH
+// together when classifyFalkorError gains a new case.
+var everConnectedProofSentinels = []error{
+	errAlreadyExists,
+	ErrNotFound,
+	ErrConstraintViolation,
+	ErrUnauthorized,
+	errIndexNotFound,
+}
+
+// isProofOfLife reports whether classified (the result of classifying raw
+// through classifyFalkorError) is provable evidence that FalkorDB actually
+// parsed and responded to a command -- see everConnectedProofSentinels' own
+// doc comment for why this is a closed allowlist. "Query timed out" is
+// checked against the ORIGINAL raw text rather than the classified
+// sentinel, because classifyFalkorError maps it to the same
+// context.DeadlineExceeded value a genuine pre-handshake dial timeout also
+// produces -- errors.Is alone cannot tell the two apart, only the raw
+// message can.
+func isProofOfLife(raw error, classified error) bool {
+	if raw != nil && strings.Contains(raw.Error(), "Query timed out") {
+		return true
+	}
+	for _, sentinel := range everConnectedProofSentinels {
+		if errors.Is(classified, sentinel) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyFalkorError maps FalkorDB's untyped, string-only error responses

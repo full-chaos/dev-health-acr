@@ -652,6 +652,21 @@ func (c Config) validate() error {
 	if !c.TLS && !c.AllowInsecure {
 		return errors.New("falkordb connection must use TLS")
 	}
+	// CHAOS-3809: AllowInsecure ONLY relaxes the check directly above -- it
+	// does not, and never has, turned TLS off (newSDKAPI in client.go only
+	// omits TLSConfig when c.TLS is itself false). TLS=true + AllowInsecure=
+	// true previously passed validate() silently and read to an operator as
+	// "TLS is on, but I've allowed an insecure connection" -- a reasonable
+	// misreading that produced a client which TLS-handshakes a server the
+	// operator just declared might be plaintext, hanging until
+	// RequestTimeout with no diagnosable error. Reject the pair outright,
+	// naming both variables so the fix is obvious: either turn TLS off
+	// (EnvTLS=false) for a genuinely insecure connection, or drop
+	// AllowInsecure and fix the server's TLS.
+	if c.TLS && c.AllowInsecure {
+		return fmt.Errorf("%s=true and %s=true are contradictory: %s=true requires TLS, so %s has no effect -- set %s=false for a genuinely insecure connection, or remove %s if TLS is actually required",
+			EnvTLS, EnvAllowInsecure, EnvTLS, EnvAllowInsecure, EnvTLS, EnvAllowInsecure)
+	}
 	if c.RequestTimeout < time.Second || c.RequestTimeout > 2*time.Minute {
 		return errors.New("falkordb request timeout must be between one second and two minutes")
 	}

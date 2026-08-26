@@ -45,7 +45,13 @@ func investigatorBuildRequest(t *testing.T) (buildRequest, postgresComponents, c
 }
 
 // configureGraph sets the FalkorDB selection CHAOS-3771 cut the runtime over
-// to. ALLOW_INSECURE is required because the fixture address is plaintext.
+// to. The fixture address is plaintext, so TLS must be turned OFF, not just
+// declared allow-insecure -- CHAOS-3809: ALLOW_INSECURE alone only relaxes
+// Config.validate()'s "must use TLS" check, it does not disable TLS (which
+// defaults to true), and this fixture originally set only ALLOW_INSECURE,
+// leaving TLS at its default-true and hitting the exact contradiction
+// CHAOS-3809 now rejects at validation. Both must be set together for a
+// genuinely insecure connection.
 //
 // The request timeout is pinned to the one-second floor on purpose:
 // falkorgraph.New dials eagerly during composition and blocks for the full
@@ -55,6 +61,7 @@ func investigatorBuildRequest(t *testing.T) (buildRequest, postgresComponents, c
 func configureGraph(t *testing.T) {
 	t.Helper()
 	t.Setenv(falkorgraph.EnvAddr, "127.0.0.1:6379")
+	t.Setenv(falkorgraph.EnvTLS, "false")
 	t.Setenv(falkorgraph.EnvAllowInsecure, "true")
 	t.Setenv(falkorgraph.EnvRequestTimeout, "1s")
 }

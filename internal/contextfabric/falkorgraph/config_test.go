@@ -1,6 +1,7 @@
 package falkorgraph
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,14 @@ func TestConfigValidateRejectsUnsafeConfiguration(t *testing.T) {
 		{"TLS false without allow-insecure", func(c Config) Config { c.TLS = false; c.AllowInsecure = false; return c }, true},
 		{"TLS false with allow-insecure", func(c Config) Config { c.TLS = false; c.AllowInsecure = true; return c }, false},
 		{"TLS true needs no allow-insecure", func(c Config) Config { c.TLS = true; c.AllowInsecure = false; return c }, false},
+		// CHAOS-3809: TLS=true + AllowInsecure=true is contradictory --
+		// AllowInsecure only relaxes the "must use TLS" check above, it does
+		// NOT turn TLS off (client.go only omits TLSConfig when c.TLS is
+		// false). Before this case, this pair silently passed validate() and
+		// produced a client that TLS-handshakes a server the operator
+		// explicitly declared might not speak TLS -- a 30s silent hang, not
+		// a diagnosable startup error.
+		{"TLS true with allow-insecure is contradictory", func(c Config) Config { c.TLS = true; c.AllowInsecure = true; return c }, true},
 		{"timeout too low", func(c Config) Config { c.RequestTimeout = 500 * time.Millisecond; return c }, true},
 		{"timeout too high", func(c Config) Config { c.RequestTimeout = 3 * time.Minute; return c }, true},
 		{"attempts zero", func(c Config) Config { c.MaxAttempts = 0; return c }, true},
@@ -206,6 +215,64 @@ func TestConfigFromEnvPasswordOptionalUnlikeZepAPIKey(t *testing.T) {
 	}
 	if cfg.Password != "" {
 		t.Fatalf("cfg.Password = %q, want empty when unset", cfg.Password)
+	}
+}
+
+// TestConfigFromEnvContradictoryTLSAndAllowInsecureFailsValidation is CHAOS-
+// 3809's red-first regression: it drives the contradiction through
+// ConfigFromEnv (the real composition path, matching the env-var naming
+// convention every deployment actually sets), not a bare Config{} literal --
+// the ticket's own root-cause finding is that a bare Config{} zero-values TLS
+// to false and never reproduces this trap, which is exactly why the existing
+// unit tests never caught it. TLS is left UNSET here (defaults to true per
+// TestConfigFromEnvUsesConventionalNamesAndDefaults) alongside an explicit
+// ALLOW_INSECURE=true, mirroring an operator who read ALLOW_INSECURE as "make
+// this connection insecure" without realizing TLS independently defaults on.
+func TestConfigFromEnvContradictoryTLSAndAllowInsecureFailsValidation(t *testing.T) {
+	t.Parallel()
+	values := map[string]string{
+		EnvAddr:          "falkordb:6379",
+		EnvAllowInsecure: "true",
+	}
+	lookup := func(key string) (string, bool) { value, ok := values[key]; return value, ok }
+	cfg, err := ConfigFromEnv(lookup)
+	if err != nil {
+		t.Fatalf("ConfigFromEnv() error = %v", err)
+	}
+	if !cfg.TLS || !cfg.AllowInsecure {
+		t.Fatalf("cfg = %#v, want TLS=true (default) and AllowInsecure=true", cfg)
+	}
+	err = cfg.validate()
+	if err == nil {
+		t.Fatal("validate() error = nil, want a contradictory-configuration error naming both env vars")
+	}
+	if !strings.Contains(err.Error(), EnvTLS) || !strings.Contains(err.Error(), EnvAllowInsecure) {
+		t.Fatalf("validate() error = %q, want it to name both %s and %s", err.Error(), EnvTLS, EnvAllowInsecure)
+	}
+}
+
+// TestConfigFromEnvExplicitTLSTrueAndAllowInsecureFailsValidation is the same
+// contradiction with TLS set EXPLICITLY to "true" rather than relying on the
+// default, proving the check fires on the value, not merely on the default
+// path.
+func TestConfigFromEnvExplicitTLSTrueAndAllowInsecureFailsValidation(t *testing.T) {
+	t.Parallel()
+	values := map[string]string{
+		EnvAddr:          "falkordb:6379",
+		EnvTLS:           "true",
+		EnvAllowInsecure: "true",
+	}
+	lookup := func(key string) (string, bool) { value, ok := values[key]; return value, ok }
+	cfg, err := ConfigFromEnv(lookup)
+	if err != nil {
+		t.Fatalf("ConfigFromEnv() error = %v", err)
+	}
+	err = cfg.validate()
+	if err == nil {
+		t.Fatal("validate() error = nil, want a contradictory-configuration error naming both env vars")
+	}
+	if !strings.Contains(err.Error(), EnvTLS) || !strings.Contains(err.Error(), EnvAllowInsecure) {
+		t.Fatalf("validate() error = %q, want it to name both %s and %s", err.Error(), EnvTLS, EnvAllowInsecure)
 	}
 }
 
