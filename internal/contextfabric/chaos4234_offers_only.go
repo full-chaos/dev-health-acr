@@ -163,8 +163,12 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 // adds, with receipts minted by the SAME composeStructureNeeds every
 // decisive terminal uses -- so a kindr_/handr_/cand_ receipt minted here
 // redeems through structure.go's ordinary lookup against the persisted
-// StructureNeeds, no grammar extension needed. Empty material reduces to
-// CHAOS-4118's window-only block byte-for-byte.
+// StructureNeeds, no grammar extension needed. Empty material reduces the
+// kind/handle/candidate half to CHAOS-4118's window-only block
+// byte-for-byte -- but (CHAOS-4336) no longer implies an empty
+// WindowExpandOptions too: a genuinely-empty offers-only pass still gets
+// composeWindowExpandOption's own recommendation when windowExpandUnavailable
+// is false.
 //
 // window_expand (CHAOS-4314; windowExpandUnavailable added CHAOS-4336 --
 // see composeWindowExpandOption's own doc comment) is set DIRECTLY on
