@@ -114,11 +114,18 @@ const (
 )
 
 // gatedOfferMaterial runs the offers-only resolution for a class-default
-// gated request and returns ONLY its StructureOfferMaterial (prior-offer
-// consultation applied, same as the decisive path). Every error path
-// returns empty material: the gated terminal must never be blocked by a
-// read whose only purpose is a better clarification.
-func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Principal, request InvestigationRequest, graphRequest InvestigationRequest, interpretation InterpretedQuestion, binding ResolvedGraphBinding, structureCanon requestStructureCanonicalization, priorEntries []StructurePriorEntry) StructureOfferMaterial {
+// gated request and returns its StructureOfferMaterial (prior-offer
+// consultation applied, same as the decisive path) plus windowExpandUnavailable
+// (CHAOS-4336): true exactly for the four outcomes where this function
+// never learned anything about the current window's own content --
+// Refused/Disabled/Failed/NotProjected -- so composeWindowExpandOption has
+// no informed basis to recommend a wider one either; false for
+// Empty/Composed, where the pass genuinely ran and either found nothing
+// (a real "no candidates in this window" fact, safe grounds for "try
+// wider") or found something. Every error path also returns empty
+// material: the gated terminal must never be blocked by a read whose only
+// purpose is a better clarification.
+func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Principal, request InvestigationRequest, graphRequest InvestigationRequest, interpretation InterpretedQuestion, binding ResolvedGraphBinding, structureCanon requestStructureCanonicalization, priorEntries []StructurePriorEntry) (material StructureOfferMaterial, windowExpandUnavailable bool) {
 	record := func(outcome GatedOfferResolutionOutcome) {
 		if e.telemetry != nil {
 			e.telemetry.RecordGatedOfferResolution(ctx, principal, outcome)
@@ -126,28 +133,28 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 	}
 	if !request.Options.AllowClarification {
 		record(GatedOfferResolutionRefused)
-		return StructureOfferMaterial{}
+		return StructureOfferMaterial{}, true
 	}
 	if e.regimeAOffersDisabled {
 		record(GatedOfferResolutionDisabled)
-		return StructureOfferMaterial{}
+		return StructureOfferMaterial{}, true
 	}
-	_, material, _, _, err := e.graph.ResolveSubjects(WithOffersOnlyResolution(ctx), principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
+	_, resolved, _, _, err := e.graph.ResolveSubjects(WithOffersOnlyResolution(ctx), principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
 	if err != nil && !errors.Is(err, ErrGraphNotProjected) {
 		record(GatedOfferResolutionFailed)
-		return StructureOfferMaterial{}
+		return StructureOfferMaterial{}, true
 	}
 	if errors.Is(err, ErrGraphNotProjected) {
 		record(GatedOfferResolutionNotProjected)
-		return StructureOfferMaterial{}
+		return StructureOfferMaterial{}, true
 	}
-	material = e.consultPriorStructureOffers(ctx, principal, priorEntries, material)
-	if !StructureNeedsWouldDisclose(material) {
+	resolved = e.consultPriorStructureOffers(ctx, principal, priorEntries, resolved)
+	if !StructureNeedsWouldDisclose(resolved) {
 		record(GatedOfferResolutionEmpty)
-		return StructureOfferMaterial{}
+		return StructureOfferMaterial{}, false
 	}
 	record(GatedOfferResolutionComposed)
-	return material
+	return resolved, false
 }
 
 // composeGatedStructureNeeds composes the class-default gate's disclosure:
@@ -159,21 +166,22 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 // StructureNeeds, no grammar extension needed. Empty material reduces to
 // CHAOS-4118's window-only block byte-for-byte.
 //
-// window_expand (CHAOS-4314, when the pool is non-empty -- see
-// composeWindowExpandOption) is set DIRECTLY on WindowExpandOptions,
-// deliberately NEVER added to Missing: Missing's entries are
-// StructureNeedKind, a CLOSED v1 enum that AGENTS.md's contract rule bars
-// from ever gaining a member without a new major contract (codex xhigh
-// review, confirmed HIGH finding -- an additive optional field like
-// WindowExpandOptions is fine to stay in v1; a new enum value is not, for
-// any v1-pinned consumer whose own type system encodes the vocabulary as a
-// closed union). Presence is discoverable directly from the field itself.
-func composeGatedStructureNeeds(material StructureOfferMaterial, resultID string, windowOptions []contractsv1.ContextFabricWindowOption, effective contractsv1.ContextFabricEffectiveEvidenceWindow) *contractsv1.ContextFabricStructureNeeds {
+// window_expand (CHAOS-4314; windowExpandUnavailable added CHAOS-4336 --
+// see composeWindowExpandOption's own doc comment) is set DIRECTLY on
+// WindowExpandOptions, deliberately NEVER added to Missing: Missing's
+// entries are StructureNeedKind, a CLOSED v1 enum that AGENTS.md's
+// contract rule bars from ever gaining a member without a new major
+// contract (codex xhigh review, confirmed HIGH finding -- an additive
+// optional field like WindowExpandOptions is fine to stay in v1; a new
+// enum value is not, for any v1-pinned consumer whose own type system
+// encodes the vocabulary as a closed union). Presence is discoverable
+// directly from the field itself.
+func composeGatedStructureNeeds(material StructureOfferMaterial, windowExpandUnavailable bool, resultID string, windowOptions []contractsv1.ContextFabricWindowOption, effective contractsv1.ContextFabricEffectiveEvidenceWindow) *contractsv1.ContextFabricStructureNeeds {
 	needs := composeStructureNeeds(material, resultID)
 	if needs == nil {
 		needs = &contractsv1.ContextFabricStructureNeeds{}
 	}
-	if expandOpt := composeWindowExpandOption(material, windowOptions, effective); expandOpt != nil {
+	if expandOpt := composeWindowExpandOption(material, windowExpandUnavailable, windowOptions, effective); expandOpt != nil {
 		needs.WindowExpandOptions = []contractsv1.ContextFabricWindowExpandOption{*expandOpt}
 	}
 	missing := make([]contractsv1.ContextFabricStructureNeedKind, 0, 1+len(needs.Missing))
@@ -189,18 +197,42 @@ func composeGatedStructureNeeds(material StructureOfferMaterial, resultID string
 	return needs
 }
 
-// composeWindowExpandOption (CHAOS-4314, chris "go" 2026-08-26) builds the
-// window_expand recommendation for a class-default gated request whose
-// offers-only resolution found a real, non-empty pool: "the window gate
-// refused, but resolution WOULD have found something if the caller widens
-// the window" -- not a ranking or recall problem, the SAME "never ran"
-// problem CHAOS-4234's own doc comment names. nil when material carries
-// nothing to recommend against (StructureNeedsWouldDisclose false -- the
-// gated terminal composes a window-only disclosure exactly as before this
-// ticket) or when pickWindowExpandTarget finds no tier wider than the one
-// currently bound (already at all_time).
-func composeWindowExpandOption(material StructureOfferMaterial, windowOptions []contractsv1.ContextFabricWindowOption, effective contractsv1.ContextFabricEffectiveEvidenceWindow) *contractsv1.ContextFabricWindowExpandOption {
-	if !StructureNeedsWouldDisclose(material) {
+// composeWindowExpandOption (CHAOS-4314, chris "go" 2026-08-26; CHAOS-4336,
+// 2026-08-26) builds the window_expand recommendation for a gated
+// request: "a wider window is available to try" -- a statement about the
+// window tier ALONE, not about whether the offers-only pool (kind/handle/
+// candidate material) found anything in the current window.
+//
+// CHAOS-4314's original version gated this behind
+// StructureNeedsWouldDisclose(material), which conflated two different
+// callers of this same empty-material shape: gate 2 (class-default,
+// engine.go's second window gate) with a genuinely-ran offers-only pass,
+// and gate 1 (explicit-unconfirmed, engine.go's FIRST window gate, fired
+// before Interpret/ResolveSubjects ever run -- "GATE ALL INFERRED WINDOWS
+// ... pays for zero interpreter/graph/fact/synthesis work") where
+// gatedOfferMaterial is never even attempted, StructureOfferMaterial{}
+// unconditionally by construction. Both looked identical to this
+// function, so both went silent. Measured live: CHAOS-4314's own Run C
+// (16-shard kiac trial, tip f5361b84) put window_gated_silent_count at
+// 9/65 -- all 9 were gate-1 explicit-unconfirmed cases (confirmed by
+// direct log correlation: every one paired with a "window canonicalization
+// outcome=gated_explicit_unconfirmed" event, never gated_class_default),
+// even though pickWindowExpandTarget had a real wider tier to recommend
+// every time and gate 1 needs no graph read to know that.
+//
+// CHAOS-4336's fix: windowExpandUnavailable (gatedOfferMaterial's own
+// second return value) is the caller's explicit signal for "I could not
+// learn anything about the current window's content" -- true only for
+// gate 2's Refused/Disabled/Failed/NotProjected outcomes, where
+// recommending a wider window would be an uninformed guess; false for
+// gate 2's Empty/Composed (a completed pass, safe grounds either way) AND
+// for gate 1 (no claim about pool content is being made at all -- the
+// tier-ordering fact alone is enough). windowExpandCandidateHint's own
+// ok=false path already handles empty material gracefully
+// (CandidateLabel/CandidateKind simply stay unset) -- no other caller
+// needed to change.
+func composeWindowExpandOption(material StructureOfferMaterial, windowExpandUnavailable bool, windowOptions []contractsv1.ContextFabricWindowOption, effective contractsv1.ContextFabricEffectiveEvidenceWindow) *contractsv1.ContextFabricWindowExpandOption {
+	if windowExpandUnavailable {
 		return nil
 	}
 	target := pickWindowExpandTarget(effective, windowOptions)
@@ -230,11 +262,12 @@ func composeWindowExpandOption(material StructureOfferMaterial, windowOptions []
 // the identical shape (see each type's own struct in
 // internal/contracts/v1/context_fabric_structure_types.go), so the first
 // non-empty list's own first entry is the hint. false when every list is
-// empty -- structurally unreachable given the StructureNeedsWouldDisclose
-// guard composeWindowExpandOption's own caller already applied (Missing
-// non-empty implies at least one of these four populated it), kept as an
-// explicit ok return rather than assumed so a future NEVER-ELICIT-filtered
-// Missing member cannot silently mint an empty-string CandidateLabel.
+// empty -- genuinely reachable since CHAOS-4336 removed
+// composeWindowExpandOption's StructureNeedsWouldDisclose guard (an empty
+// offers-only pool no longer suppresses the window_expand recommendation
+// itself, only this hint): the explicit ok return lets the caller leave
+// CandidateLabel/CandidateKind unset rather than mint an empty-string
+// value.
 func windowExpandCandidateHint(material StructureOfferMaterial) (label string, kind contractsv1.ContextFabricSubjectKind, ok bool) {
 	if len(material.CandidateOptions) > 0 {
 		return material.CandidateOptions[0].Label, material.CandidateOptions[0].Kind, true

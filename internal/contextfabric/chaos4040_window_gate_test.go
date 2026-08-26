@@ -128,6 +128,64 @@ func TestWindowGate_ExplicitUnconfirmed_InterceptsBeforeInterpret(t *testing.T) 
 	}
 }
 
+// TestWindowGate_ExplicitUnconfirmed_OffersWindowExpand (CHAOS-4336,
+// 2026-08-26) is the end-to-end proof for the live defect this ticket
+// fixes: gate 1 (this file's own TestWindowGate_ExplicitUnconfirmed_
+// InterceptsBeforeInterpret, same request shape) must now carry a
+// window_expand recommendation on its StructureNeeds, not just the
+// window-only disclosure. Before the fix, composeWindowExpandOption's
+// StructureNeedsWouldDisclose(material) guard made this structurally
+// impossible here -- gate 1 always calls windowConfirmationRequiredResult
+// with StructureOfferMaterial{} (engine.go's own call site, no offers-only
+// read is ever attempted before Interpret runs) -- so
+// WindowExpandOptions was unconditionally empty regardless of whether a
+// wider tier existed. Measured live in CHAOS-4314's Run C (16-shard kiac
+// trial, tip f5361b84): window_gated_silent_count=9/65, all 9 confirmed
+// (by direct log correlation) to be gate-1 cases exactly like this one.
+func TestWindowGate_ExplicitUnconfirmed_OffersWindowExpand(t *testing.T) {
+	t.Parallel()
+	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	results := newMapResultStore()
+	engine := buildWindowGateEngine(t, interpreter, graph, results)
+
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	// trailing_90d: NOT the widest tier (trailing_365d is wider), so
+	// pickWindowExpandTarget has a real recommendation to make.
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a confirmation-required result, not an error", err)
+	}
+	if interpreter.calls != 0 || graph.resolveCalls != 0 || graph.discoverCalls != 0 {
+		t.Fatalf("interpreter/graph calls = %d/%d/%d, want 0/0/0: window_expand must not cost gate 1 its zero-read guarantee", interpreter.calls, graph.resolveCalls, graph.discoverCalls)
+	}
+	if result.StructureNeeds == nil || len(result.StructureNeeds.WindowExpandOptions) != 1 {
+		t.Fatalf("StructureNeeds.WindowExpandOptions = %#v, want exactly one recommendation", result.StructureNeeds)
+	}
+	got := result.StructureNeeds.WindowExpandOptions[0]
+	if got.RelativeID != RelativeWindowTrailing365D {
+		t.Fatalf("WindowExpandOptions[0].RelativeID = %q, want %q (the next tier wider than the requested trailing_90d)", got.RelativeID, RelativeWindowTrailing365D)
+	}
+	var want *contractsv1.ContextFabricWindowOption
+	for i := range result.StructureNeeds.WindowOptions {
+		if result.StructureNeeds.WindowOptions[i].RelativeID == RelativeWindowTrailing365D {
+			want = &result.StructureNeeds.WindowOptions[i]
+		}
+	}
+	if want == nil {
+		t.Fatal("test fixture bug: no trailing_365d option in StructureNeeds.WindowOptions")
+	}
+	if got.ReceiptID != want.ReceiptID || got.OptionID != want.OptionID || got.Label != want.Label {
+		t.Fatalf("WindowExpandOptions[0] = %#v, want it to copy WindowOptions[trailing_365d] %#v verbatim on receipt_id/option_id/label", got, want)
+	}
+	if got.CandidateLabel != "" || got.CandidateKind != "" {
+		t.Fatalf("CandidateLabel/CandidateKind = %q/%q, want both unset: gate 1 has no offers-only pool to hint a candidate from", got.CandidateLabel, got.CandidateKind)
+	}
+}
+
 // TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution pins
 // gate 2 (engine.go, immediately after the axis-conflict check): a request
 // with NO window info at all -- the ordinary "no time stated" case, most
