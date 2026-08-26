@@ -75,14 +75,88 @@ func TestCHAOS4314_PickWindowExpandTarget_TargetMissingFromOptionsReturnsNil(t *
 	}
 }
 
-func TestCHAOS4314_ComposeWindowExpandOption_NilWhenPoolEmpty(t *testing.T) {
+// TestCHAOS4336_ComposeWindowExpandOption_OffersEvenWhenPoolEmpty
+// (CHAOS-4336, superseding TestCHAOS4314_ComposeWindowExpandOption_NilWhenPoolEmpty's
+// old assertion): a window_expand recommendation is "a wider window is
+// available to try", a statement about the window tier alone -- it does
+// not need the offers-only pool (kind/handle/candidate material) to have
+// found anything in the CURRENT window to be worth offering.
+// windowExpandUnavailable=false here models gate 1 (engine.go's
+// explicit-unconfirmed call site): material is StructureOfferMaterial{}
+// unconditionally by construction there (no offers-only read is ever
+// attempted -- see that call site's own doc comment), yet the tier fact
+// alone is enough to recommend widening. CHAOS-4314's original gate
+// coupled the two anyway (`if !StructureNeedsWouldDisclose(material) {
+// return nil }`), which is exactly why gate 1 went silent even with a
+// real wider tier available. Measured live in CHAOS-4314's own Run C
+// (16-shard kiac trial, tip f5361b84): window_gated_silent_count=9/65,
+// all 9 confirmed (by direct log correlation against "window
+// canonicalization outcome") to be gate-1 explicit-unconfirmed cases, not
+// gate-2 offers-only-empty ones. CandidateLabel/CandidateKind simply stay
+// unset when material is empty (windowExpandCandidateHint's own ok=false
+// path, already nil-safe) -- there is no candidate to name, but the tier
+// recommendation itself is not blocked by that absence.
+func TestCHAOS4336_ComposeWindowExpandOption_OffersEvenWhenPoolEmpty(t *testing.T) {
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	options := chaos4314WindowOptionRegistry(now)
-	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, Provenance: WindowInferredDefault}
+	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, WindowClass: WindowClassRecentActivityLookup, Provenance: WindowInferredDefault}
 
-	got := composeWindowExpandOption(StructureOfferMaterial{}, options, effective)
+	got := composeWindowExpandOption(StructureOfferMaterial{}, false, options, effective)
+	if got == nil {
+		t.Fatal("composeWindowExpandOption with empty material = nil, want a recommendation: 90d is wider than 30d regardless of pool emptiness")
+	}
+	var want *contractsv1.ContextFabricWindowOption
+	for i := range options {
+		if options[i].RelativeID == RelativeWindowTrailing90D {
+			want = &options[i]
+		}
+	}
+	if want == nil {
+		t.Fatal("test fixture bug: no trailing_90d option in the registry")
+	}
+	if got.ReceiptID != want.ReceiptID || got.OptionID != want.OptionID || got.Label != want.Label || got.RelativeID != want.RelativeID {
+		t.Fatalf("composeWindowExpandOption = %#v, want it to copy window_options[trailing_90d] %#v verbatim on receipt_id/option_id/label/relative_id even with empty material", got, want)
+	}
+	if got.CandidateLabel != "" || got.CandidateKind != "" {
+		t.Fatalf("CandidateLabel/CandidateKind = %q/%q, want both unset: empty material has no candidate to hint at", got.CandidateLabel, got.CandidateKind)
+	}
+}
+
+// TestCHAOS4336_ComposeWindowExpandOption_NilWhenWindowExpandUnavailable
+// pins the CHAOS-4336 suppression path: when the caller signals it could
+// not learn anything about the current window's content
+// (windowExpandUnavailable=true -- gate 2's own Refused/Disabled/Failed/
+// NotProjected outcomes), composeWindowExpandOption stays nil even though
+// pickWindowExpandTarget would otherwise find a real wider tier. This is
+// the regression guard TestCHAOS4234_ClassDefaultGate_
+// OffersOnlyResolveErrorFailsOpenToWindowOnly depends on at the
+// integration level -- a failed offers-only read must never turn into an
+// uninformed "try wider" guess.
+func TestCHAOS4336_ComposeWindowExpandOption_NilWhenWindowExpandUnavailable(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	options := chaos4314WindowOptionRegistry(now)
+	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, WindowClass: WindowClassRecentActivityLookup, Provenance: WindowInferredDefault}
+
+	got := composeWindowExpandOption(StructureOfferMaterial{}, true, options, effective)
 	if got != nil {
-		t.Fatalf("composeWindowExpandOption with empty material = %#v, want nil: nothing to recommend against", got)
+		t.Fatalf("composeWindowExpandOption with windowExpandUnavailable=true = %#v, want nil: no informed basis to recommend a wider window", got)
+	}
+}
+
+// TestCHAOS4336_ComposeWindowExpandOption_NilWhenPoolEmptyAndAlreadyAllTime
+// pins the ONE case CHAOS-4336 leaves nil-producing even with
+// windowExpandUnavailable=false: pickWindowExpandTarget itself has
+// nothing wider to recommend. Distinguishes "no material" (now offers)
+// from "no wider tier exists" (still nil) -- see
+// composeWindowExpandOption's own doc comment.
+func TestCHAOS4336_ComposeWindowExpandOption_NilWhenPoolEmptyAndAlreadyAllTime(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	options := chaos4314WindowOptionRegistry(now)
+	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowAllTime, Provenance: WindowInferredDefault}
+
+	got := composeWindowExpandOption(StructureOfferMaterial{}, false, options, effective)
+	if got != nil {
+		t.Fatalf("composeWindowExpandOption at all_time with empty material = %#v, want nil: nothing wider to recommend regardless of pool", got)
 	}
 }
 
@@ -95,7 +169,7 @@ func TestCHAOS4314_ComposeWindowExpandOption_NilWhenAlreadyAllTime(t *testing.T)
 		KindOptions: []KindOption{{Kind: SubjectPullRequest, Label: "a pull request", OfferSource: contractsv1.ContextFabricStructureOfferEngine}},
 	}
 
-	got := composeWindowExpandOption(material, options, effective)
+	got := composeWindowExpandOption(material, false, options, effective)
 	if got != nil {
 		t.Fatalf("composeWindowExpandOption at all_time = %#v, want nil: nothing wider to recommend", got)
 	}
@@ -110,7 +184,7 @@ func TestCHAOS4314_ComposeWindowExpandOption_ReusesTheExistingWindowOptionVerbat
 		CandidateOptions: []contractsv1.ContextFabricCandidateOption{{Kind: SubjectPullRequest, Label: "pull request #532", CanonicalID: "pr_532", OfferSource: contractsv1.ContextFabricStructureOfferEngine}},
 	}
 
-	got := composeWindowExpandOption(material, options, effective)
+	got := composeWindowExpandOption(material, false, options, effective)
 	if got == nil {
 		t.Fatal("composeWindowExpandOption = nil, want a recommendation: the pool is non-empty and 90d is wider than 30d")
 	}

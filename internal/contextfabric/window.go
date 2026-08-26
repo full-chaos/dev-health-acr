@@ -1259,6 +1259,15 @@ func (e *Engine) windowConfirmationRequiredResult(
 	origin WindowCanonicalizationOutcome,
 	binding ResolvedGraphBinding,
 	gatedMaterial StructureOfferMaterial,
+	// gatedMaterialWindowExpandUnavailable (CHAOS-4336): true iff
+	// gatedMaterial's own caller could not learn anything about the
+	// current window's content (gate 2's Refused/Disabled/Failed/
+	// NotProjected outcomes) -- see composeWindowExpandOption's own doc
+	// comment. false for gate 1 (engine.go's explicit-unconfirmed call
+	// site, which never attempts an offers-only read at all but still has
+	// enough to safely recommend a wider tier) and for gate 2's own
+	// Empty/Composed outcomes.
+	gatedMaterialWindowExpandUnavailable bool,
 	// priorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813): the caller's
 	// own composePriorSubjectReceiptDispositions output, or nil when this
 	// gate fires before resolvePriorSubjectHints has run at all (gate 1 --
@@ -1357,7 +1366,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 		// unresolved.go's terminalResult uses, so CHAOS-4234's regime-A
 		// gated offers get phrasing too -- see its own doc comment
 		// (chaos4171_offer_phrasing.go).
-		structureNeeds = e.applyOfferPhrasing(ctx, principal, request.RequestID, composeGatedStructureNeeds(gatedMaterial, resultID, windowClarification.Options, effective))
+		structureNeeds = e.applyOfferPhrasing(ctx, principal, request.RequestID, composeGatedStructureNeeds(gatedMaterial, gatedMaterialWindowExpandUnavailable, resultID, windowClarification.Options, effective))
 	}
 	// CHAOS-4234 (codex round-1 finding, confirmed): gatedMaterial's
 	// AnchorOptions can carry membership-verify (V2) offers -- the SAME

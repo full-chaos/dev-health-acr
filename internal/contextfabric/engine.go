@@ -637,7 +637,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// there is genuinely nothing to echo yet, the same "nothing
 		// attempted" convention structureCanon's own nil argument here
 		// already carries for structure receipts.
-		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, nil)
+		//
+		// windowExpandUnavailable=false (CHAOS-4336): this gate makes no
+		// claim about the current window's pool content at all -- it
+		// fires BEFORE Interpret/ResolveSubjects ever run, by design (this
+		// function's own doc comment above) -- so there is nothing to be
+		// "unavailable"; the tier-ordering fact composeWindowExpandOption
+		// needs (pickWindowExpandTarget) is available from windowCanon.Effective
+		// alone, unlike gate 2's own offers-only read.
+		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, false, nil)
 	}
 
 	// CHAOS-3900 P1 (pivot-intent design brief §2.1): canonicalize
@@ -927,7 +935,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// offers-only resolution whose commit-bearing outputs are discarded
 		// -- see chaos4234_offers_only.go for the ruling and the two
 		// safety layers.
-		gatedMaterial := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, binding, structureCanon, priorEntries)
+		gatedMaterial, gatedMaterialWindowExpandUnavailable := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, binding, structureCanon, priorEntries)
 		// CHAOS-3478/CHAOS-4234: priorOutcomes was already computed above
 		// (resolvePriorSubjectHints runs before Interpret, this gate fires
 		// after) but this gate's own resolution is offers-only and
@@ -944,7 +952,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if len(gatedDispositions) > 0 {
 			e.recordPriorSubjectReceiptSkips(ctx, principal, gatedDispositions, priorHintsStaleGraphEpochDelta)
 		}
-		return e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedDispositions)
+		return e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, gatedDispositions)
 	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh

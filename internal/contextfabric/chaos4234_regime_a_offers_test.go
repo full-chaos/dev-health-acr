@@ -227,6 +227,58 @@ func TestCHAOS4234_ClassDefaultGate_NeverProjectedOrgIsDistinctFromEmpty(t *test
 	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionNotProjected}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
 		t.Fatalf("gatedOfferResolutions = %#v, want %#v -- a never-projected org must be distinguishable from an ordinary empty pool", telemetry.gatedOfferResolutions, want)
 	}
+	// CHAOS-4336: NotProjected is one of the "no informed basis" outcomes --
+	// windowExpandUnavailable must stay true, so no window_expand
+	// recommendation leaks out even though a wider tier genuinely exists.
+	if len(result.StructureNeeds.WindowExpandOptions) != 0 {
+		t.Fatalf("WindowExpandOptions = %#v, want none: a never-projected org gave no informed basis to recommend widening", result.StructureNeeds.WindowExpandOptions)
+	}
+	if want := []bool{false}; !reflect.DeepEqual(telemetry.windowGateOfferDisclosures, want) {
+		t.Fatalf("windowGateOfferDisclosures = %#v, want %#v", telemetry.windowGateOfferDisclosures, want)
+	}
+}
+
+// TestCHAOS4336_ClassDefaultGate_EmptyPoolStillOffersWindowExpand pins the
+// gate-2 half of CHAOS-4336: unlike Failed/NotProjected/Disabled/Refused,
+// an offers-only resolution that genuinely RAN and found nothing
+// (GatedOfferResolutionEmpty) is real information -- windowExpandUnavailable
+// stays false, so composeWindowExpandOption still offers a wider tier.
+// Distinguishes this from TestCHAOS4234_ClassDefaultGate_
+// OffersOnlyResolveErrorFailsOpenToWindowOnly (Failed, correctly stays
+// silent) by mutating clause-by-clause: only the outcome the graph double
+// returns differs.
+func TestCHAOS4336_ClassDefaultGate_EmptyPoolStillOffersWindowExpand(t *testing.T) {
+	t.Parallel()
+	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+	graph := chaos4234GatedGraph()
+	graph.material = StructureOfferMaterial{} // resolved successfully, genuinely nothing to offer
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	telemetry := &recordingTelemetry{}
+	engine := buildWindowGateEngineWithTelemetry(t, interpreter, graph, store, telemetry)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if graph.resolveCalls != 1 {
+		t.Fatalf("graph.resolveCalls = %d, want 1", graph.resolveCalls)
+	}
+	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionEmpty}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
+		t.Fatalf("gatedOfferResolutions = %#v, want %#v", telemetry.gatedOfferResolutions, want)
+	}
+	if result.StructureNeeds == nil || len(result.StructureNeeds.WindowExpandOptions) != 1 {
+		t.Fatalf("StructureNeeds.WindowExpandOptions = %#v, want exactly one recommendation: the pass ran and found nothing, but that is real information, not an unavailable read", result.StructureNeeds)
+	}
+	if len(result.StructureNeeds.KindOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 || len(result.StructureNeeds.CandidateOptions) != 0 {
+		t.Fatalf("kind/handle/candidate options = %#v, want none: the pool is genuinely empty", result.StructureNeeds)
+	}
+	got := result.StructureNeeds.WindowExpandOptions[0]
+	if got.CandidateLabel != "" || got.CandidateKind != "" {
+		t.Fatalf("CandidateLabel/CandidateKind = %q/%q, want both unset: empty material has no candidate to hint at", got.CandidateLabel, got.CandidateKind)
+	}
+	if want := []bool{true}; !reflect.DeepEqual(telemetry.windowGateOfferDisclosures, want) {
+		t.Fatalf("windowGateOfferDisclosures = %#v, want %#v", telemetry.windowGateOfferDisclosures, want)
+	}
 }
 
 func TestCHAOS4234_ClassDefaultGate_RefusedNoClarificationNeverRunsTheOffersOnlyResolve(t *testing.T) {
