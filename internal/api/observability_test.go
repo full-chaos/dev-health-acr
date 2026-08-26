@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,6 +72,41 @@ func TestAppObservesRecoveredPanic(t *testing.T) {
 	}
 	if strings.Contains(buffer.String(), secret) {
 		t.Fatalf("panic log leaked raw data: %s", buffer.String())
+	}
+}
+
+// CHAOS-4330: a handler that decided 200 (handleHealth's own writeJSON
+// call) and then had its response write fail (e.g. http.Server.WriteTimeout
+// firing mid-write) must not be recorded as OutcomeSuccess in the
+// observability snapshot either -- the same reasoning
+// TestAccessLogDoesNotClaimSuccessWhenTheResponseWriteFails applies to the
+// "request completed" log line, at the metrics layer instead.
+func TestRequestObservationReportsFailureWhenTheResponseWriteFails(t *testing.T) {
+	// Given
+	sink := &snapshotSink{}
+	hooks := observability.NewHooks(sink, nil)
+	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+		Capabilities:  StaticCapabilitiesProvider{Value: contractsv1.Capabilities{SchemaVersion: contractsv1.CapabilitiesSchema}},
+		Observability: &hooks,
+	}, testLogger(&bytes.Buffer{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := &brokenResponseWriter{
+		ResponseWriter: httptest.NewRecorder(),
+		err:            errors.New("write tcp: use of closed network connection"),
+	}
+
+	// When
+	app.Handler().ServeHTTP(broken, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	// Then
+	snapshot := sink.only(t)
+	if snapshot.HTTPStatusClass != observability.HTTPStatus2xx {
+		t.Fatalf("HTTPStatusClass = %v, want 2xx unchanged (the handler's own status is not what this fix changes)", snapshot.HTTPStatusClass)
+	}
+	if snapshot.Outcome != observability.OutcomeFailure {
+		t.Fatalf("Outcome = %v, want OutcomeFailure when the response write failed even though status was 2xx", snapshot.Outcome)
 	}
 }
 

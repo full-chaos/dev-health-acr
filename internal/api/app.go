@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -184,14 +185,28 @@ func (a *App) accessLogMiddleware(next http.Handler) http.Handler {
 		started := a.now()
 		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(wrapped, r)
-		a.logger.InfoContext(r.Context(), "request completed",
+		// CHAOS-4330: `status` is whatever the handler decided BEFORE the
+		// body write that can still fail (e.g. http.Server.WriteTimeout
+		// firing mid-write on a slow investigation) -- it is not proof the
+		// client actually received a complete response. Every field below
+		// stays exactly as before; this only ADDS the one signal that lets
+		// a genuinely-failed write be told apart from a real success, both
+		// in this log line and in the observability snapshot, without
+		// changing what `status` itself reports.
+		fields := []any{
 			"request_id", RequestID(r.Context()),
 			"operation", requestOperation(r),
 			"status", wrapped.status,
 			"bytes", wrapped.bytes,
 			"duration_ms", a.now().Sub(started).Milliseconds(),
-		)
-		a.observability.ObserveRequest(r.Context(), requestObservation(requestOperation(r), wrapped.status, denialForError(wrapped.denialCode), a.now().Sub(started)))
+		}
+		level := slog.LevelInfo
+		if wrapped.writeErr != nil {
+			level = slog.LevelWarn
+			fields = append(fields, "write_error", wrapped.writeErr.Error())
+		}
+		a.logger.Log(r.Context(), level, "request completed", fields...)
+		a.observability.ObserveRequest(r.Context(), requestObservation(requestOperation(r), wrapped.status, denialForError(wrapped.denialCode), a.now().Sub(started), wrapped.writeErr != nil))
 	})
 }
 

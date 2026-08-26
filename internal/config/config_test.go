@@ -292,3 +292,41 @@ func TestLoad_answerReuseMaxAgeExplicitZeroStaysDisabled(t *testing.T) {
 		t.Fatalf("AnswerReuseMaxAge = %v, want 0 (disabled)", cfg.AnswerReuseMaxAge)
 	}
 }
+
+// CHAOS-4330: this is the exact live pair (ACR_REQUEST_TIMEOUT raised for
+// real investigations, ACR_WRITE_TIMEOUT left at its default) that let a
+// slow investigation get its connection closed by http.Server.WriteTimeout
+// mid-write while the handler still logged a successful "request completed
+// ... status 200" -- confirmed live before this fix existed.
+func TestLoad_rejectsWriteTimeoutBelowRequestTimeoutPlusHeadroom(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
+		"ACR_REQUEST_TIMEOUT": "490s",
+		// ACR_WRITE_TIMEOUT left unset -- defaults to 20s, far below 490s.
+	}))
+	if err == nil || !strings.Contains(err.Error(), "ACR_WRITE_TIMEOUT") ||
+		!strings.Contains(err.Error(), "ACR_REQUEST_TIMEOUT") {
+		t.Fatalf("load() error = %v, want an ACR_WRITE_TIMEOUT/ACR_REQUEST_TIMEOUT coherence error", err)
+	}
+}
+
+// The default pair itself (15s/20s, exactly minWriteTimeoutHeadroom apart)
+// must stay valid -- the ticket that added this check is explicit that
+// changing the defaults is out of scope.
+func TestLoad_defaultTimeoutPairRemainsValid(t *testing.T) {
+	if _, err := load(mapLookup(nil)); err != nil {
+		t.Fatalf("load() with default timeouts error = %v, want no error", err)
+	}
+}
+
+// An explicit pair that clears the headroom exactly at the boundary (not
+// merely by a wide margin) must be accepted -- this is an off-by-one check
+// on the comparison operator itself.
+func TestLoad_acceptsWriteTimeoutExactlyAtTheMinimumHeadroom(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
+		"ACR_REQUEST_TIMEOUT": "490s",
+		"ACR_WRITE_TIMEOUT":   "495s",
+	}))
+	if err != nil {
+		t.Fatalf("load() error = %v, want no error at exactly the minimum headroom", err)
+	}
+}

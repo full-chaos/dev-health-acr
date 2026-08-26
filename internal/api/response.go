@@ -13,6 +13,16 @@ type statusWriter struct {
 	status     int
 	bytes      int
 	denialCode string
+	// writeErr (CHAOS-4330) is the first error a Write call returned, if
+	// any -- e.g. http.Server.WriteTimeout firing mid-write on a slow
+	// handler, or the client disconnecting. `status` alone cannot show
+	// this: WriteHeader is called (and status recorded) BEFORE the body
+	// write that can still fail, so a handler that decided 200 and then
+	// had its response cut off would otherwise look identical, in this
+	// writer's own state, to one that actually completed. accessLogMiddleware
+	// reads this to keep "request completed" from claiming success the
+	// client never received.
+	writeErr error
 }
 
 func (w *statusWriter) WriteHeader(status int) {
@@ -23,6 +33,9 @@ func (w *statusWriter) WriteHeader(status int) {
 func (w *statusWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
 	w.bytes += n
+	if err != nil && w.writeErr == nil {
+		w.writeErr = err
+	}
 	return n, err
 }
 

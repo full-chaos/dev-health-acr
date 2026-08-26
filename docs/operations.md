@@ -963,6 +963,22 @@ global to the API, not per-route, so raising it also loosens the bound on
 every other route; a per-route timeout is the cleaner fix and is not
 implemented yet.
 
+**`ACR_WRITE_TIMEOUT` must be raised alongside it (CHAOS-4330).** This is
+`http.Server.WriteTimeout` — the wire-level deadline for writing the
+response — a completely different budget from `ACR_REQUEST_TIMEOUT`
+above, which only bounds the application-level handler. Raising
+`ACR_REQUEST_TIMEOUT` without also raising `ACR_WRITE_TIMEOUT` to match
+lets a real, legitimately-slow investigation finish its work and start
+writing the response, only to have the connection forcibly closed
+mid-write once the (still-default, 20s) write deadline fires — and the
+handler, which measures its own processing rather than the wire, still
+logs a successful `request completed ... status 200` while every actual
+client saw a dropped connection. `Validate()` now rejects `ACR_WRITE_TIMEOUT`
+set less than 5s above `ACR_REQUEST_TIMEOUT`, so this can no longer reach
+production silently — but size it with real headroom (the ask-dev
+Workbench's own launch script uses 500s/490s, a 10s margin) rather than
+the bare minimum the validator accepts.
+
 **CHAOS-3855 update: the production default is now `gpt-5.6-luna` alone, no
 fallback.** The CHAOS-3742 five-arm generative trial measured `gpt-5.6-luna`
 alone as equal-or-better than the `gpt-5-nano` + `gpt-5.6-luna` fallback chain

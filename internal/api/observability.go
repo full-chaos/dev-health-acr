@@ -19,13 +19,23 @@ func (a *App) InstrumentedOperationHandler(operation observability.Operation, ne
 	})
 }
 
-func requestObservation(operation observability.Operation, status int, denial observability.DenialClass, duration time.Duration) observability.RequestObservation {
+// writeFailed (CHAOS-4330) overrides a 2xx/3xx status's derived
+// OutcomeSuccess back to OutcomeFailure: `status` is decided before the
+// body write that can still fail (e.g. http.Server.WriteTimeout firing
+// mid-write), so a handler that intended 200 and then had its response
+// cut off must not be counted as a success in this metric either -- the
+// same reasoning accessLogMiddleware's own "request completed" log line
+// applies.
+func requestObservation(operation observability.Operation, status int, denial observability.DenialClass, duration time.Duration, writeFailed bool) observability.RequestObservation {
 	observation := observability.RequestObservation{Operation: operation, StatusClass: statusClass(status), Outcome: observability.OutcomeFailure, Denial: denial, Duration: duration}
 	switch {
 	case status >= http.StatusOK && status < http.StatusMultipleChoices:
 		observation.Outcome = observability.OutcomeSuccess
 	case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
 		observation.Outcome = observability.OutcomeDenied
+	}
+	if writeFailed {
+		observation.Outcome = observability.OutcomeFailure
 	}
 	return observation
 }

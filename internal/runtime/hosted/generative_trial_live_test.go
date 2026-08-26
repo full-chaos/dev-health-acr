@@ -612,6 +612,14 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	}
 	set("ACR_ENVIRONMENT", "test")
 	set("ACR_REQUEST_TIMEOUT", "490s")
+	// CHAOS-4330: Validate() now rejects ACR_WRITE_TIMEOUT (http.Server.
+	// WriteTimeout) more than minWriteTimeoutHeadroom below
+	// ACR_REQUEST_TIMEOUT -- this harness runs REAL, potentially slow
+	// investigations against live trial infra, exactly the shape that
+	// exposed the underlying bug in production (the server closing the
+	// connection mid-write while the handler still logs a successful
+	// completion).
+	set("ACR_WRITE_TIMEOUT", "500s")
 	set("ACR_REQUIRE_BACKING_STORES", "true")
 	set("ACR_POSTGRES_DSN", requireEnv(t, "ACR_TEST_TRIAL_POSTGRES_DSN"))
 	set("ACR_CLICKHOUSE_DSN", requireEnv(t, "ACR_TEST_TRIAL_CLICKHOUSE_DSN"))
