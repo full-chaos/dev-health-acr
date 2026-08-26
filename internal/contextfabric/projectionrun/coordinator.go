@@ -1072,10 +1072,16 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	total := priorRows
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
+	// lastMode/progressStale track the durable RecordSourceProgress write
+	// that would need retrying if the loop exits before it succeeds --
+	// see the finalizing write below.
+	var lastMode contextfabric.BuildCompletionMode
+	progressStale := false
 	for {
 		if !c.due(key) {
 			break
 		}
+		batches++ // Codex round-2 F3: every attempt counts, matching runPair -- a worker-construction or RunOnce failure is still a real round-trip.
 		attemptStarted := c.now()
 		worker, werr := c.workerFor(source, checkpoints)
 		if werr != nil {
@@ -1089,12 +1095,14 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(attemptStarted), At: c.now()}
 		c.observer.ObserveProjectionOutcome(outcome)
 		if err != nil {
-			// Codex round-1 F3: ctx cancellation is checked FIRST, matching
-			// runPair's own fix -- a RunOnce failure caused by ctx being
-			// cancelled must classify as DrainYieldContextDone, not
-			// DrainYieldError (checking err first made DrainYieldContextDone
-			// unreachable from this branch).
-			if ctx.Err() != nil {
+			// Codex round-2 F2: classify on whether err ITSELF is a
+			// cancellation, not on the ambient ctx.Err() -- checking ctx.Err()
+			// independently could misclassify a genuine concrete backend
+			// error as DrainYieldContextDone if ctx happened to also be
+			// cancelled (e.g. process shutdown) at the moment of the check,
+			// hiding the real failure from drain telemetry (retry/backoff
+			// still sees the real error either way via recordBackoff above).
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				reason = DrainYieldContextDone
 			} else {
 				c.logger.WarnContext(ctx, "build tick pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
@@ -1102,7 +1110,6 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			}
 			break
 		}
-		batches++
 		if run.Applied {
 			applied++
 			total += int64(run.ItemsApplied)
@@ -1113,19 +1120,25 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		} else {
 			c.logger.InfoContext(ctx, "context_fabric: build source completed", "org_id", orgID, "source", source, "epoch", epoch, "completion_mode", string(mode), "rows_projected", total)
 		}
+		lastMode = mode
 		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, mode, total, c.now()); rerr != nil {
-			// Codex round-1 F2: a failed progress write now STOPS the drain
-			// instead of continuing to spend budget on top of it. Before this
-			// fix, a persistent RecordSourceProgress failure let the loop
-			// keep applying and discarding progress for up to the whole
-			// budget in a single tick -- widening the pre-3826 blast radius
-			// (at most one unrecorded batch per tick, since there was only
-			// ever one attempt) to up to `budget` unrecorded batches. Flip
-			// itself stays fail-closed either way (it rereads persisted
-			// progress), so this bounds staleness, not correctness.
-			c.logger.WarnContext(ctx, "record build source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
-			reason = DrainYieldError
-			break
+			// Codex round-2 F1: log and KEEP DRAINING (do not stop here).
+			// The next batch's own RecordSourceProgress call writes the
+			// FULL in-memory `total` accumulated so far this call -- since
+			// the checkpoint has already advanced regardless of whether
+			// THIS write succeeded, a later successful write within the
+			// same runBuildPair call self-heals the gap completely. Only
+			// stopping immediately (CHAOS-3826 round-1's own fix) removed
+			// that self-healing chance: the checkpoint had already moved
+			// past this batch, so priorRows on the NEXT tick would read
+			// the stale pre-failure total forever, permanently
+			// undercounting rows this batch genuinely applied -- worse
+			// than the transient staleness this fix accepts. progressStale
+			// tracks whether the finalizing write below still needs to run.
+			c.logger.WarnContext(ctx, "record build source progress failed; will retry before the drain returns", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+			progressStale = true
+		} else {
+			progressStale = false
 		}
 		if terminal {
 			reason = DrainYieldExhausted
@@ -1140,6 +1153,25 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			break
 		}
 		*budget--
+	}
+	// Finalizing write (Codex round-2 F1): if the LAST RecordSourceProgress
+	// attempt in the loop above failed and nothing afterward re-wrote it,
+	// retry once more with the final accumulated total before this call
+	// returns -- once runBuildPair returns, the next tick's priorRows can
+	// only ever see what was durably recorded here, so this is the last
+	// chance to avoid a permanent undercount from a transient write
+	// failure. A failure here is a genuine, bounded residual gap (Postgres
+	// unavailable for this whole drain) -- logged loudly, not silently
+	// accepted, and self-heals on the NEXT tick's own successful write
+	// (which reads a corrected total by re-applying the same batches, if
+	// the source has not already advanced its checkpoint past them --
+	// otherwise this is the SAME pre-existing checkpoint/progress
+	// non-atomicity gap performRebuild's own sibling paths carry today,
+	// not something this ticket introduces or is scoped to close).
+	if progressStale {
+		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, lastMode, total, c.now()); rerr != nil {
+			c.logger.WarnContext(ctx, "record build source progress failed after retry; rows_projected may undercount until a future successful write", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+		}
 	}
 	if batches > 0 {
 		c.observer.ObserveProjectionDrain(DrainOutcome{
@@ -1382,28 +1414,32 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID 
 // single-attempt body this function always was before CHAOS-3826.
 // evaluated is false only when due() refused the attempt outright;
 // applied mirrors ProjectionRun.Applied (a batch existed and was
-// projected -- the signal runPair's drain loop keeps going on); failed
-// reports a RunOnce/worker-construction error (a distinct yield reason
-// from "no more work", even though both currently leave applied false).
-func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied, failed, stale bool) {
+// projected -- the signal runPair's drain loop keeps going on); err
+// reports a RunOnce/worker-construction failure (a distinct yield reason
+// from "no more work", even though both currently leave applied false)
+// -- returned as the concrete error, not a bool, so runPair (Codex round-2
+// F2) can classify cancellation by inspecting THIS error's own identity
+// rather than the ambient ctx.Err(), which could coincidentally be set by
+// an unrelated cancellation and mislabel a genuine backend error.
+func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale bool) {
 	key := orgID + "\x00" + source
 	if !c.due(key) {
-		return false, false, false, false
+		return false, false, nil, false
 	}
 	started := c.now()
 	worker, werr := c.workerFor(source, checkpoints)
 	if werr != nil {
 		c.recordBackoff(key, werr)
 		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
-		return true, false, true, false
+		return true, false, werr, false
 	}
-	run, err := worker.RunOnce(ctx, orgID, source)
-	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(started), At: c.now()}
-	c.recordBackoff(key, err)
+	run, runErr := worker.RunOnce(ctx, orgID, source)
+	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: runErr, Duration: c.now().Sub(started), At: c.now()}
+	c.recordBackoff(key, runErr)
 	c.observer.ObserveProjectionOutcome(outcome)
-	if err != nil {
-		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
-		return true, false, true, false
+	if runErr != nil {
+		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(runErr), "duration_ms", outcome.Duration.Milliseconds())
+		return true, false, runErr, false
 	}
 	if run.Applied {
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", orgID, "source", source, "batch_id", run.BatchID, "backend_watermark", run.BackendWatermark, "duration_ms", outcome.Duration.Milliseconds())
@@ -1413,7 +1449,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// ever compared checkpoint SourceVersion against a batch's SourceVersion
 	// INSIDE the available==true branch, so a dormant organization (no new
 	// rows, available=false, no error) got no freshness signal at all.
-	return true, run.Applied, false, c.emitProjectionFreshness(ctx, orgID, source)
+	return true, run.Applied, nil, c.emitProjectionFreshness(ctx, orgID, source)
 }
 
 // runPair drains (org, source)'s pending batches within THIS tick
@@ -1440,7 +1476,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
 	for {
-		pairEvaluated, pairApplied, failed, pairStale := c.runPairOnce(ctx, orgID, source, checkpoints)
+		pairEvaluated, pairApplied, pairErr, pairStale := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
 			if batches == 0 {
 				return false, false
@@ -1454,18 +1490,22 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 			applied++
 		}
 		switch {
-		// Codex round-1 F3: ctx cancellation is checked FIRST -- a RunOnce
-		// call that fails because ctx was cancelled must classify as
-		// DrainYieldContextDone, not DrainYieldError. Checking `failed`
-		// first (as originally written) meant every cancellation reached
-		// runPairOnce as a plain RunOnce error and was misclassified,
-		// making DrainYieldContextDone effectively unreachable from here.
-		case ctx.Err() != nil:
+		// Codex round-2 F2 (refining round-1 F3): classify on whether
+		// pairErr ITSELF is a cancellation, not on the ambient ctx.Err().
+		// Checking ctx.Err() independently could misclassify a genuine
+		// concrete backend error as DrainYieldContextDone if ctx happened
+		// to also be cancelled (e.g. process shutdown) at the moment of
+		// the check, hiding the real failure from drain telemetry --
+		// recordBackoff (inside runPairOnce) still sees the real error
+		// either way, so retry/backoff behavior is unaffected.
+		case pairErr != nil && (errors.Is(pairErr, context.Canceled) || errors.Is(pairErr, context.DeadlineExceeded)):
 			reason = DrainYieldContextDone
-		case failed:
+		case pairErr != nil:
 			reason = DrainYieldError
 		case !pairApplied:
 			reason = DrainYieldExhausted
+		case ctx.Err() != nil:
+			reason = DrainYieldContextDone
 		case budget == nil || *budget <= 0:
 			reason = DrainYieldBudgetExceeded
 		default:

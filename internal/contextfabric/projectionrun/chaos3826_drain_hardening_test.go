@@ -26,9 +26,16 @@ type fakeFaultyLifecycleStore struct {
 	row              contextfabric.OrgGraphLifecycle
 	found            bool
 	nextEpoch        int64
-	failRecordAtCall int // 1-indexed RecordSourceProgress call to fail; 0 = never
+	failRecordAtCall int  // 1-indexed RecordSourceProgress call to fail; 0 = never
+	persistFailure   bool // when true, EVERY call from failRecordAtCall onward fails (not just the one call)
 	recordCalls      int
 	progress         map[string]contextfabric.BuildSourceProgress
+}
+
+func (f *fakeFaultyLifecycleStore) recordCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.recordCalls
 }
 
 func (f *fakeFaultyLifecycleStore) Get(context.Context, string) (contextfabric.OrgGraphLifecycle, bool, error) {
@@ -55,7 +62,8 @@ func (f *fakeFaultyLifecycleStore) RecordSourceProgress(_ context.Context, _ str
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.recordCalls++
-	if f.failRecordAtCall > 0 && f.recordCalls == f.failRecordAtCall {
+	shouldFail := f.failRecordAtCall > 0 && (f.recordCalls == f.failRecordAtCall || (f.persistFailure && f.recordCalls > f.failRecordAtCall))
+	if shouldFail {
 		return errors.New("fakeFaultyLifecycleStore: injected progress write failure")
 	}
 	f.progress[source] = contextfabric.BuildSourceProgress{Source: source, CompletionMode: mode, RowsProjected: rows}
@@ -113,44 +121,96 @@ var _ contextfabric.GraphLifecycleStore = (*fakeFaultyLifecycleStore)(nil)
 // one unrecorded batch per tick, since there was only ever one attempt --
 // to up to `budget` unrecorded batches in a single tick). With the fix,
 // the drain stops the instant a progress write fails.
-func TestChaos3826_RecordSourceProgressFailureStopsTheBuildDrainInsteadOfBurningBudget(t *testing.T) {
+func TestChaos3826_RecordSourceProgressFailureSelfHealsWithinTheSameTick(t *testing.T) {
 	backend := newFakeBackend()
 	checkpoints := newFakeCheckpointStore()
-	source := &lifecycleFakeSource{name: "source-a", pages: 20}
-	store := &fakeFaultyLifecycleStore{failRecordAtCall: 2} // fails on the SECOND applied batch's progress write
+	const pages = 20
+	source := &lifecycleFakeSource{name: "source-a", pages: pages}
+	store := &fakeFaultyLifecycleStore{failRecordAtCall: 2} // fails on the SECOND applied batch's progress write ONLY
 	observer := &recordingObserver{}
 
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
 		Lifecycle: store, EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
-		GraceWindow: time.Hour, DrainBatchBudget: 50, Observer: observer, Logger: discardLogger(),
+		GraceWindow: time.Hour, DrainBatchBudget: pages, Observer: observer, Logger: discardLogger(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, coordinator.Rebuild(context.Background(), "org-1"))
 
 	coordinator.Tick(context.Background())
 
-	// The backlog has 20 pages and a budget of 50 -- if the drain kept
-	// going after the injected failure, it would consume most/all of the
-	// backlog in this ONE tick despite it. With the fix, exactly 2 RunOnce
-	// attempts happen: the batch that applied cleanly, then the one whose
-	// RecordSourceProgress write failed (which itself DID apply to the
-	// backend -- see the Applied assertion below -- only its durable
-	// lifecycle bookkeeping failed).
-	if got := source.callCount(); got != 2 {
-		t.Fatalf("expected the drain to stop after exactly 2 RunOnce attempts, got %d -- a RecordSourceProgress failure did not stop the drain", got)
+	// A ONE-SHOT progress-write failure (unlike a persistent one) must not
+	// truncate the drain: the whole 20-page backlog still applies within
+	// this one tick (lifecycleFakeSource's LAST page claims
+	// CompleteEnumeration, so the drain reaches terminal at exactly
+	// `pages` calls -- no extra confirm-exhausted attempt needed, unlike
+	// the steady-state fakeSource-based tests), and the THIRD batch's own
+	// successful write carries the full in-memory cumulative total
+	// forward (self-healing the gap the second batch's failed write would
+	// otherwise have left). Every row genuinely reaches durable
+	// rows_projected even though one intermediate write transiently
+	// failed.
+	if got := source.callCount(); got != pages {
+		t.Fatalf("expected the whole %d-page backlog to drain despite the one-shot progress-write failure, got %d calls", pages, got)
 	}
+	progress, err := store.SourceProgress(context.Background(), "org-1", 1)
+	require.NoError(t, err)
+	require.Len(t, progress, 1)
+	if progress[0].RowsProjected != pages {
+		t.Fatalf("expected durable rows_projected=%d (self-healed past the one-shot write failure), got %d", pages, progress[0].RowsProjected)
+	}
+	if progress[0].CompletionMode != contextfabric.BuildCompletionPagedFinal {
+		t.Fatalf("expected the source to reach a terminal completion mode despite the mid-drain write failure, got %q", progress[0].CompletionMode)
+	}
+}
 
-	drains := observer.snapshot()
-	if len(drains) != 1 {
-		t.Fatalf("expected exactly one DrainOutcome for (org-1, source-a), got %d: %+v", len(drains), drains)
+// TestChaos3826_PersistentRecordSourceProgressFailureRetriesOnceThenLogsTheResidualGap
+// covers the OTHER half of codex round-2 F1: when RecordSourceProgress
+// fails for the REST of the drain (not just once), the finalizing retry
+// after the loop also fails, and durable rows_projected is left at
+// whatever the LAST successful write recorded -- a bounded, logged,
+// pre-existing gap (checkpoint/progress non-atomicity predates CHAOS-3826
+// entirely), not a crash or a silent, unbounded loss. The batches
+// genuinely applied to the backend regardless -- only the lifecycle
+// bookkeeping row is stale until a future tick's write succeeds.
+func TestChaos3826_PersistentRecordSourceProgressFailureRetriesOnceThenLogsTheResidualGap(t *testing.T) {
+	backend := newFakeBackend()
+	checkpoints := newFakeCheckpointStore()
+	const pages = 5
+	source := &lifecycleFakeSource{name: "source-a", pages: pages}
+	// failRecordAtCall=1 with persistFailure=true: EVERY RecordSourceProgress
+	// call fails from the first one onward, including the finalizing retry.
+	store := &fakeFaultyLifecycleStore{failRecordAtCall: 1, persistFailure: true}
+	observer := &recordingObserver{}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Lifecycle: store, EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow: time.Hour, DrainBatchBudget: pages, Observer: observer, Logger: discardLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Rebuild(context.Background(), "org-1"))
+
+	require.NotPanics(t, func() { coordinator.Tick(context.Background()) })
+
+	// The backlog still fully applies to the backend -- a persistently
+	// failing progress WRITE never blocks the actual projection work.
+	// lifecycleFakeSource's last page claims CompleteEnumeration, so the
+	// drain reaches terminal at exactly `pages` calls.
+	if got := source.callCount(); got != pages {
+		t.Fatalf("expected the backlog to still fully apply despite every progress write failing, got %d calls", got)
 	}
-	if drains[0].Batches != 2 || drains[0].Applied != 2 {
-		t.Fatalf("expected Batches=2, Applied=2 (both attempts applied; only the second's progress write failed), got %+v", drains[0])
-	}
-	if drains[0].YieldReason != projectionrun.DrainYieldError {
-		t.Fatalf("expected DrainYieldError from the progress-write failure, got %q", drains[0].YieldReason)
+	// But durable progress recorded nothing -- every write, including the
+	// finalizing retry, failed. This is the documented residual gap, not
+	// silently swallowed: fakeFaultyLifecycleStore.recordCalls proves every
+	// attempt (including the retry) actually happened.
+	progress, err := store.SourceProgress(context.Background(), "org-1", 1)
+	require.NoError(t, err)
+	require.Empty(t, progress, "no write ever succeeded, so nothing should be durably recorded")
+	if got := store.recordCallCount(); got != pages+1 {
+		t.Fatalf("expected %d RecordSourceProgress attempts (one per applied batch, plus the finalizing retry counted the same as any other call), got %d", pages+1, got)
 	}
 }
 
@@ -261,5 +321,107 @@ func TestChaos3826_DrainClassifiesACancelledAttemptAsContextDoneNotError(t *test
 	}
 	if drains[0].YieldReason != projectionrun.DrainYieldContextDone {
 		t.Fatalf("expected DrainYieldContextDone for a RunOnce call that failed because ctx was cancelled, got %q", drains[0].YieldReason)
+	}
+}
+
+// fakeConcreteErrorDuringCancellationSource returns a genuine backend
+// error (not wrapping context.Canceled/DeadlineExceeded) while ALSO
+// cancelling the caller's ctx in the same call -- CHAOS-3826 codex round-2
+// F2's fixture: an unrelated cancellation (e.g. process shutdown) racing
+// with a real backend failure must not steal the classification.
+type fakeConcreteErrorDuringCancellationSource struct{ cancel context.CancelFunc }
+
+func (f *fakeConcreteErrorDuringCancellationSource) NextProjectionBatch(context.Context, contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	f.cancel()
+	return contextfabric.ProjectionBatch{}, false, errors.New("concrete backend failure, unrelated to cancellation")
+}
+
+// TestChaos3826_ConcreteErrorCoincidingWithCancellationStaysClassifiedAsError
+// is codex round-2 F2's red/green proof: classifying on the ambient
+// ctx.Err() (round-1's own fix) rather than on whether the ERROR ITSELF
+// is a cancellation would misreport a genuine backend failure as
+// DrainYieldContextDone whenever ctx happens to also be cancelled at the
+// moment of the check -- hiding the real failure from drain telemetry
+// even though retry/backoff still sees it via recordBackoff.
+func TestChaos3826_ConcreteErrorCoincidingWithCancellationStaysClassifiedAsError(t *testing.T) {
+	backend := newFakeBackend()
+	checkpoints := newFakeCheckpointStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	source := &fakeConcreteErrorDuringCancellationSource{cancel: cancel}
+	observer := &recordingObserver{}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Observer: observer, Logger: discardLogger(),
+	})
+	require.NoError(t, err)
+
+	coordinator.Tick(ctx)
+
+	drains := observer.snapshot()
+	if len(drains) != 1 {
+		t.Fatalf("expected exactly one DrainOutcome, got %d: %+v", len(drains), drains)
+	}
+	if drains[0].YieldReason != projectionrun.DrainYieldError {
+		t.Fatalf("expected DrainYieldError for a concrete backend failure that coincided with an unrelated ctx cancellation, got %q -- cancellation masked the real failure", drains[0].YieldReason)
+	}
+}
+
+// fakeFailingBuildSource applies `pages` batches, then fails outright
+// (never returning available=false) -- CHAOS-3826 codex round-2 F3's
+// fixture: lifecycleFakeSource can only ever report exhaustion, never a
+// genuine error, so it cannot exercise runBuildPair's error branch.
+type fakeFailingBuildSource struct {
+	pages int
+	calls int
+}
+
+func (f *fakeFailingBuildSource) NextProjectionBatch(_ context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	f.calls++
+	if f.calls > f.pages {
+		return contextfabric.ProjectionBatch{}, false, errors.New("fakeFailingBuildSource: injected failure")
+	}
+	next := checkpoint.Cursor + "n"
+	return validBatch(checkpoint.OrgID, "source-a", checkpoint.Cursor, next), true, nil
+}
+
+// TestChaos3826_BuildPathBatchesCountsAFailedAttemptLikeRunPairDoes is
+// codex round-2 F3's red/green proof: DrainOutcome.Batches' own doc
+// comment says it counts every RunOnce attempt, and runPair already does
+// (a worker-construction or RunOnce failure still increments batches
+// there) -- but runBuildPair incremented batches only AFTER its error
+// checks, so a failed attempt was silently excluded, undercounting the
+// build path's own cost telemetry relative to the steady-state path.
+func TestChaos3826_BuildPathBatchesCountsAFailedAttemptLikeRunPairDoes(t *testing.T) {
+	backend := newFakeBackend()
+	checkpoints := newFakeCheckpointStore()
+	source := &fakeFailingBuildSource{pages: 1}
+	store := &fakeFaultyLifecycleStore{}
+	observer := &recordingObserver{}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Lifecycle: store, EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow: time.Hour, DrainBatchBudget: 10, Observer: observer, Logger: discardLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Rebuild(context.Background(), "org-1"))
+
+	coordinator.Tick(context.Background())
+
+	drains := observer.snapshot()
+	if len(drains) != 1 {
+		t.Fatalf("expected exactly one DrainOutcome, got %d: %+v", len(drains), drains)
+	}
+	// One batch applies (Applied=1), then the second attempt fails
+	// outright -- Batches must count BOTH attempts (2), matching runPair's
+	// own convention, not just the one that applied.
+	if drains[0].Batches != 2 || drains[0].Applied != 1 {
+		t.Fatalf("expected Batches=2 (the apply, plus the failed attempt), Applied=1, got %+v", drains[0])
+	}
+	if drains[0].YieldReason != projectionrun.DrainYieldError {
+		t.Fatalf("expected DrainYieldError, got %q", drains[0].YieldReason)
 	}
 }
