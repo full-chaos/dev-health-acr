@@ -91,6 +91,8 @@ turn1_status
 turn1_term_search_truncated
 turn1_tied_statistical_top
 turn1_trace_events
+turn1_window_expand_offered
 turn2_status
+turn2_window_expand_accepted
 turn2_window_receipt_attached
 wrong_commit

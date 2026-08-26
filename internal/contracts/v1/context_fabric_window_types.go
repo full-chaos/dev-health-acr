@@ -299,3 +299,40 @@ type ContextFabricWindowOption struct {
 type ContextFabricWindowClarification struct {
 	Options []ContextFabricWindowOption `json:"options"`
 }
+
+// ContextFabricWindowExpandOption (CHAOS-4314) is the class-default window
+// gate's pool-informed recommendation: "the window gate refused, but the
+// gate's own offers-only resolution found a real, non-empty pool -- expand
+// to admit it." ReceiptID/OptionID/Label/RelativeID are copied VERBATIM
+// from one entry this same result's own WindowOptions already carries
+// (internal/contextfabric's composeWindowExpandOption picks the next
+// registry tier wider than the currently-bound window) -- deliberately a
+// duplicate, not a fresh mint: redeeming it is byte-identical to redeeming
+// that WindowOption directly through the existing winr_/PriorWindowReceipts/
+// resolveWindowReceipts path (fail-closed, explicit, receipted turn-2 hint;
+// no new grammar). ContextFabricStructureNeeds.Validate enforces the
+// referential tie -- a window_expand receipt_id/option_id pair must name an
+// existing window_options entry -- rather than the cross-list uniqueness
+// every OTHER StructureNeeds offer list carries, since duplicating an
+// existing receipt_id here is the intended shape.
+type ContextFabricWindowExpandOption struct {
+	ReceiptID  string                        `json:"receipt_id"`
+	OptionID   string                        `json:"option_id"`
+	Label      string                        `json:"label"`
+	RelativeID ContextFabricRelativeWindowID `json:"relative_id,omitempty"`
+	// WindowClass is the class actually bound for THIS investigation
+	// (EffectiveEvidenceWindow.WindowClass) -- the "why" behind the
+	// recommendation, never the target window's own class (RelativeID
+	// alone identifies the target; window classes are a question-class
+	// property, not a per-tier one).
+	WindowClass ContextFabricWindowClass `json:"window_class,omitempty"`
+	// CandidateLabel/CandidateKind (optional) name the top pool member the
+	// gate's own offers-only resolution found -- server-rendered label text
+	// from ContextFabricCandidateOption/AnchorOption/HandleOption/KindOption
+	// (priority order, first non-empty), never question- or model-derived
+	// prose. Absent only in the structurally-impossible case where
+	// StructureNeedsWouldDisclose(material) is true but every offer list is
+	// somehow empty.
+	CandidateLabel string                   `json:"candidate_label,omitempty"`
+	CandidateKind  ContextFabricSubjectKind `json:"candidate_kind,omitempty"`
+}

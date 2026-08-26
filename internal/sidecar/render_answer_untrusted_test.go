@@ -90,6 +90,15 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// reaches the rendering via structured.window_clarification.options[].label,
 		// covered separately below.
 		"structured.structure_needs.window_options[].label": "suppressed to avoid duplicating window_clarification.options[].label's identical, lockstep-composed content -- see RenderAnswerProjectionMarkdown's own comment",
+		// CHAOS-4314: window_expand's human-facing rendering is Ask Dev's
+		// own surface (full-chaos/ask-dev), not this plain-text markdown
+		// view -- RenderAnswerProjectionMarkdown does not (yet) render the
+		// window_expand_options block at all. Both fields still carry the
+		// untrusted declaration (a future markdown rendering must not ship
+		// unmarked), but a structural consumer reading Structured directly
+		// is Ask Dev's actual path to this offer today.
+		"structured.structure_needs.window_expand_options[].label":           "not (yet) rendered by this plain-text markdown view; Ask Dev (full-chaos/ask-dev) is the human-facing surface for window_expand offers, reading Structured directly",
+		"structured.structure_needs.window_expand_options[].candidate_label": "not (yet) rendered by this plain-text markdown view; Ask Dev (full-chaos/ask-dev) is the human-facing surface for window_expand offers, reading Structured directly",
 	}
 	for _, declared := range planted {
 		sentinel := sentinels[declared]
@@ -363,6 +372,18 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				ReceiptID: "candr_injection00000000", OptionID: "opt_candidate1", Label: "a candidate label",
 				Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repo_candidate_x",
 				OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}},
+			// CHAOS-4314: the 6th StructureNeeds member's own recommendation
+			// (at most one), same "populated so the reflection-based planting
+			// walk can reach every declared leaf" reasoning as the five
+			// offer lists above. ReceiptID/OptionID deliberately match
+			// WindowOptions[0] above -- see ContextFabricWindowExpandOption's
+			// own doc comment on why it copies an existing WindowOption
+			// verbatim rather than minting fresh.
+			WindowExpandOptions: []contractsv1.ContextFabricWindowExpandOption{{
+				ReceiptID: "winr_injection000000000", OptionID: "opt_window1", Label: "a window expand label",
+				RelativeID: contractsv1.ContextFabricRelativeWindowTrailing90D, WindowClass: contractsv1.ContextFabricWindowClassRecentActivityLookup,
+				CandidateLabel: "a window expand candidate label", CandidateKind: contractsv1.ContextFabricSubjectPullRequest,
 			}},
 		},
 		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{{

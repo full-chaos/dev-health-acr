@@ -48,7 +48,7 @@ func shardReport(shardIndex, shardCount int, timings []twoTurnCaseTiming) twoTur
 		},
 		BaseSHA: "deadbeef", OracleAnnexPath: "annex.json", OracleAnnexCorpusSHA: "abc123", OracleAnnexSignedOff: true,
 		CasesRun: 1, PositiveAppliedCount: 1, WindowPositiveAppliedCount: 1, GateReachableCount: 1,
-		WindowInferredTierRanCount: 1, WindowGatedCount: 1, WindowClassDefaultGatedCount: 1,
+		WindowInferredTierRanCount: 1, WindowGatedCount: 1, WindowGatedSilentCount: 1, WindowClassDefaultGatedCount: 1,
 		InferredKindHandleDecisiveCount: 1, InferredBaselineEquivalentCount: 1,
 		ControlsTotal: 1, ControlsWitnessed: 1,
 		OfferMissCount: map[string]int{}, ConfirmedWrongRedeemedCount: map[string]int{"expected_kind": 1},

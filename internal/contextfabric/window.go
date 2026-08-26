@@ -565,6 +565,23 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 		Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: windowConfirmedAppliedValue(*option),
 		PriorResultID: resultID, ReceiptID: receiptID, OfferSource: contractsv1.ContextFabricStructureOfferEngine,
 	}
+	// CHAOS-4314: this SAME receiptID redeems byte-identically whether it
+	// was offered as a plain WindowOption or ALSO annotated as the
+	// window_expand recommendation (composeWindowExpandOption deliberately
+	// copies, never mints fresh -- see that function's own doc comment), so
+	// the only way to tell "accepted" apart from an ordinary window
+	// confirmation is to check whether the STORED result's own
+	// StructureNeeds.WindowExpandOptions named this receipt. Checked only on
+	// the full-success path (not the stale-superseded veto branch above):
+	// "accepted" is a claim about a redemption that actually applied.
+	if e.telemetry != nil && stored.Result.StructureNeeds != nil {
+		for _, expand := range stored.Result.StructureNeeds.WindowExpandOptions {
+			if expand.ReceiptID == receiptID {
+				e.telemetry.RecordWindowExpandOfferRedeemed(ctx, principal)
+				break
+			}
+		}
+	}
 	return requestWindowCanonicalization{
 		Effective:       &effective,
 		ConfirmedMember: confirmedMember,
@@ -1340,7 +1357,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 		// unresolved.go's terminalResult uses, so CHAOS-4234's regime-A
 		// gated offers get phrasing too -- see its own doc comment
 		// (chaos4171_offer_phrasing.go).
-		structureNeeds = e.applyOfferPhrasing(ctx, principal, request.RequestID, composeGatedStructureNeeds(gatedMaterial, resultID, windowClarification.Options))
+		structureNeeds = e.applyOfferPhrasing(ctx, principal, request.RequestID, composeGatedStructureNeeds(gatedMaterial, resultID, windowClarification.Options, effective))
 	}
 	// CHAOS-4234 (codex round-1 finding, confirmed): gatedMaterial's
 	// AnchorOptions can carry membership-verify (V2) offers -- the SAME
@@ -1414,6 +1431,18 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// branch (structureNeeds is nil there) -- same discipline
 	// terminalResult's own call (unresolved.go) already applies.
 	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
+	// CHAOS-4314: window_gated_offered/window_gated_silent split -- offered
+	// iff this terminal's own StructureNeeds carries a window_expand
+	// recommendation (composeGatedStructureNeeds, gate 2 only; gatedMaterial
+	// is always the zero value on gate 1/refused/disabled/failed origins, so
+	// this is silent=true there by construction, same scope CHAOS-4234
+	// itself shipped). Called unconditionally for every window-gated
+	// terminal, exactly like RecordWindowCanonicalization just above, so a
+	// zero offered rate is as visible as a nonzero one.
+	if e.telemetry != nil {
+		offered := structureNeeds != nil && len(structureNeeds.WindowExpandOptions) > 0
+		e.telemetry.RecordWindowGateOfferDisclosure(ctx, principal, offered)
+	}
 	// CHAOS-4234 (codex round-1 finding, confirmed): ValidateResult, not
 	// result.Validate() directly -- the latter is UNCONDITIONALLY the V1
 	// validator regardless of result.SchemaVersion (ValidateResult's own

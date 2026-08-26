@@ -396,6 +396,23 @@ type EngineTelemetry interface {
 	// composed offers beside the window offer -- closed vocabulary
 	// GatedOfferResolutionOutcome (chaos4234_offers_only.go).
 	RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome)
+	// RecordWindowGateOfferDisclosure (CHAOS-4314) reports, once per
+	// window-gated terminal (both windowConfirmationRequiredResult call
+	// sites -- explicit-unconfirmed gate 1 and class-default gate 2), whether
+	// the composed StructureNeeds carried a window_expand recommendation.
+	// offered=true is the "window_gated_offered" report-schema split;
+	// offered=false is "window_gated_silent" -- gate 1 and every gate-2
+	// origin other than GatedOfferResolutionComposed report false by
+	// construction (gatedMaterial is the zero value there).
+	RecordWindowGateOfferDisclosure(ctx context.Context, principal storage.Principal, offered bool)
+	// RecordWindowExpandOfferRedeemed (CHAOS-4314) reports one successful
+	// winr_ receipt redemption (resolveWindowReceipts) whose receipt was
+	// ALSO offered as this same result's own window_expand recommendation --
+	// the "accepted" half of the offer_kind=window_expand accepted/declined
+	// split (declined is report-layer derived: offered on turn 1, never
+	// redeemed by turn 2). Called only on full redemption success, never on
+	// a veto/conflict/stale-superseded branch.
+	RecordWindowExpandOfferRedeemed(ctx context.Context, principal storage.Principal)
 	// RecordStructureOfferCount (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_offer_count{member,source}) reports how many offers one
 	// member's StructureNeeds carried, split by OfferSource (engine|prior

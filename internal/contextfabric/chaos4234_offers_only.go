@@ -158,10 +158,23 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 // redeems through structure.go's ordinary lookup against the persisted
 // StructureNeeds, no grammar extension needed. Empty material reduces to
 // CHAOS-4118's window-only block byte-for-byte.
-func composeGatedStructureNeeds(material StructureOfferMaterial, resultID string, windowOptions []contractsv1.ContextFabricWindowOption) *contractsv1.ContextFabricStructureNeeds {
+//
+// window_expand (CHAOS-4314, when the pool is non-empty -- see
+// composeWindowExpandOption) is set DIRECTLY on WindowExpandOptions,
+// deliberately NEVER added to Missing: Missing's entries are
+// StructureNeedKind, a CLOSED v1 enum that AGENTS.md's contract rule bars
+// from ever gaining a member without a new major contract (codex xhigh
+// review, confirmed HIGH finding -- an additive optional field like
+// WindowExpandOptions is fine to stay in v1; a new enum value is not, for
+// any v1-pinned consumer whose own type system encodes the vocabulary as a
+// closed union). Presence is discoverable directly from the field itself.
+func composeGatedStructureNeeds(material StructureOfferMaterial, resultID string, windowOptions []contractsv1.ContextFabricWindowOption, effective contractsv1.ContextFabricEffectiveEvidenceWindow) *contractsv1.ContextFabricStructureNeeds {
 	needs := composeStructureNeeds(material, resultID)
 	if needs == nil {
 		needs = &contractsv1.ContextFabricStructureNeeds{}
+	}
+	if expandOpt := composeWindowExpandOption(material, windowOptions, effective); expandOpt != nil {
+		needs.WindowExpandOptions = []contractsv1.ContextFabricWindowExpandOption{*expandOpt}
 	}
 	missing := make([]contractsv1.ContextFabricStructureNeedKind, 0, 1+len(needs.Missing))
 	missing = append(missing, contractsv1.ContextFabricStructureNeedWindow)
@@ -174,4 +187,100 @@ func composeGatedStructureNeeds(material StructureOfferMaterial, resultID string
 	needs.Missing = missing
 	needs.WindowOptions = windowOptions
 	return needs
+}
+
+// composeWindowExpandOption (CHAOS-4314, chris "go" 2026-08-26) builds the
+// window_expand recommendation for a class-default gated request whose
+// offers-only resolution found a real, non-empty pool: "the window gate
+// refused, but resolution WOULD have found something if the caller widens
+// the window" -- not a ranking or recall problem, the SAME "never ran"
+// problem CHAOS-4234's own doc comment names. nil when material carries
+// nothing to recommend against (StructureNeedsWouldDisclose false -- the
+// gated terminal composes a window-only disclosure exactly as before this
+// ticket) or when pickWindowExpandTarget finds no tier wider than the one
+// currently bound (already at all_time).
+func composeWindowExpandOption(material StructureOfferMaterial, windowOptions []contractsv1.ContextFabricWindowOption, effective contractsv1.ContextFabricEffectiveEvidenceWindow) *contractsv1.ContextFabricWindowExpandOption {
+	if !StructureNeedsWouldDisclose(material) {
+		return nil
+	}
+	target := pickWindowExpandTarget(effective, windowOptions)
+	if target == nil {
+		return nil
+	}
+	opt := &contractsv1.ContextFabricWindowExpandOption{
+		ReceiptID:   target.ReceiptID,
+		OptionID:    target.OptionID,
+		Label:       target.Label,
+		RelativeID:  target.RelativeID,
+		WindowClass: effective.WindowClass,
+	}
+	if label, kind, ok := windowExpandCandidateHint(material); ok {
+		opt.CandidateLabel = label
+		opt.CandidateKind = kind
+	}
+	return opt
+}
+
+// windowExpandCandidateHint names the top pool member the gate's
+// offers-only resolution found, for window_expand's own CandidateLabel/
+// CandidateKind annotation -- priority order CandidateOptions (CHAOS-4012's
+// own ranked "did you mean" list, the most specific signal) then
+// AnchorOptions, HandleOptions, KindOptions (least specific: a kind choice
+// names no particular subject). All four option types carry Label/Kind in
+// the identical shape (see each type's own struct in
+// internal/contracts/v1/context_fabric_structure_types.go), so the first
+// non-empty list's own first entry is the hint. false when every list is
+// empty -- structurally unreachable given the StructureNeedsWouldDisclose
+// guard composeWindowExpandOption's own caller already applied (Missing
+// non-empty implies at least one of these four populated it), kept as an
+// explicit ok return rather than assumed so a future NEVER-ELICIT-filtered
+// Missing member cannot silently mint an empty-string CandidateLabel.
+func windowExpandCandidateHint(material StructureOfferMaterial) (label string, kind contractsv1.ContextFabricSubjectKind, ok bool) {
+	if len(material.CandidateOptions) > 0 {
+		return material.CandidateOptions[0].Label, material.CandidateOptions[0].Kind, true
+	}
+	if len(material.AnchorOptions) > 0 {
+		return material.AnchorOptions[0].Label, material.AnchorOptions[0].Kind, true
+	}
+	if len(material.HandleOptions) > 0 {
+		return material.HandleOptions[0].Label, material.HandleOptions[0].Kind, true
+	}
+	if len(material.KindOptions) > 0 {
+		return material.KindOptions[0].Label, material.KindOptions[0].Kind, true
+	}
+	return "", "", false
+}
+
+// pickWindowExpandTarget selects the SINGLE window_expand recommendation
+// from the SAME closed 4-tier registry windowOptions already carries
+// (composeWindowClarification), by identity against the entry already
+// minted for that tier -- never a fresh mint (see
+// ContextFabricWindowExpandOption's own doc comment). The next tier wider
+// than the currently-bound RelativeID, in
+// ContextFabricRelativeWindowIDVocabulary's own published order
+// (trailing_30d < trailing_90d < trailing_365d < all_time). nil when
+// effective's own RelativeID is already the widest tier the registry
+// offers (nothing wider to recommend). When effective.RelativeID is empty
+// or not itself a registry member (an explicit Start/End bound rather than
+// a relative one, CHAOS-3900 §5.1 allows both), all_time is the only
+// defensible "definitely wider" answer, so it is targeted by default.
+func pickWindowExpandTarget(effective contractsv1.ContextFabricEffectiveEvidenceWindow, windowOptions []contractsv1.ContextFabricWindowOption) *contractsv1.ContextFabricWindowOption {
+	registry := contractsv1.ContextFabricRelativeWindowIDVocabulary()
+	targetID := contractsv1.ContextFabricRelativeWindowAllTime
+	for i, id := range registry {
+		if id != effective.RelativeID {
+			continue
+		}
+		if i+1 >= len(registry) {
+			return nil
+		}
+		targetID = registry[i+1]
+		break
+	}
+	for i := range windowOptions {
+		if windowOptions[i].RelativeID == targetID {
+			return &windowOptions[i]
+		}
+	}
+	return nil
 }

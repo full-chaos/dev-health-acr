@@ -118,6 +118,37 @@ func (o ContextFabricWindowOption) Validate() error {
 	return nil
 }
 
+// Validate checks o's own wire-shape bounds -- the SAME winr_ prefix and
+// receipt_id/option_id/label bounds ContextFabricWindowOption.Validate
+// enforces on the four fields this type deliberately copies verbatim from
+// an existing WindowOption (see this type's own doc comment for why
+// copying rather than minting fresh is the intended shape), plus the two
+// window_expand-only annotation fields. Does NOT check that the copied
+// fields actually match a WindowOptions entry -- that referential
+// integrity check needs the sibling WindowOptions list, so it lives in
+// ContextFabricStructureNeeds.Validate instead.
+func (o ContextFabricWindowExpandOption) Validate() error {
+	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasWindowReceiptPrefix(o.ReceiptID) {
+		return fmt.Errorf("window expand option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricWindowOptionReceiptPrefix)
+	}
+	if !stringLengthBetween(o.OptionID, 1, 256) || !stringLengthBetween(o.Label, 1, 200) {
+		return fmt.Errorf("window expand option option_id or label violates v1 bounds")
+	}
+	if o.RelativeID != "" && !ValidContextFabricRelativeWindowID(o.RelativeID) {
+		return fmt.Errorf("window expand option relative_id is invalid")
+	}
+	if o.WindowClass != "" && !ValidContextFabricWindowClass(o.WindowClass) {
+		return fmt.Errorf("window expand option window_class is invalid")
+	}
+	if !optionalStringBetween(o.CandidateLabel, 1, 200) {
+		return fmt.Errorf("window expand option candidate_label violates v1 bounds")
+	}
+	if o.CandidateKind != "" && !validContextFabricSubjectKind(o.CandidateKind) {
+		return fmt.Errorf("window expand option candidate_kind is invalid")
+	}
+	return nil
+}
+
 // contextFabricWindowClarificationMaxOptions bounds how many options one
 // WindowClarification may carry -- the same order-of-magnitude ceiling
 // ContextFabricRequestedScope.SubjectHints uses for a comparable

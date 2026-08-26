@@ -1790,6 +1790,12 @@ func recordStructureNeedsTelemetry(ctx context.Context, telemetry EngineTelemetr
 	for range needs.WindowOptions {
 		addCount(contractsv1.ContextFabricStructureNeedWindow, contractsv1.ContextFabricStructureOfferEngine)
 	}
+	// CHAOS-4314: WindowExpandOptions deliberately has NO StructureNeedKind
+	// member (see that field's own doc comment on why -- AGENTS.md's
+	// enum-change-requires-major-contract rule), so it never rides this
+	// Missing-keyed generic count -- RecordWindowGateOfferDisclosure/
+	// RecordWindowExpandOfferRedeemed (window.go) are its own dedicated
+	// telemetry instead.
 	// Deterministic iteration: members in Missing's own disclosure-priority
 	// order, sources in a fixed order -- so a caller comparing telemetry
 	// call sequences across two identical runs sees identical ordering.

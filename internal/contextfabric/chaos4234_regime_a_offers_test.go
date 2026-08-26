@@ -96,6 +96,19 @@ func TestCHAOS4234_ClassDefaultGate_ComposesKindAndHandleOffersBesideTheWindowOf
 	if !reflect.DeepEqual(result.StructureNeeds.Missing, wantMissing) {
 		t.Fatalf("StructureNeeds.Missing = %#v, want %#v (window first: it is still the gate's own ask)", result.StructureNeeds.Missing, wantMissing)
 	}
+	// CHAOS-4314: window_expand is carried on WindowExpandOptions directly,
+	// deliberately NEVER added to Missing (see that field's own doc
+	// comment -- a StructureNeedKind enum addition would require a new v1
+	// major, an additive field does not) -- the offers-only pool this
+	// fixture's own KindOptions/HandleOptions carries is non-empty, so the
+	// gate's disclosure now recommends expanding.
+	if len(result.StructureNeeds.WindowExpandOptions) != 1 {
+		t.Fatalf("StructureNeeds.WindowExpandOptions = %#v, want exactly 1 recommendation", result.StructureNeeds.WindowExpandOptions)
+	}
+	expand := result.StructureNeeds.WindowExpandOptions[0]
+	if !windowExpandTargetsExisting(result.StructureNeeds.WindowOptions, expand) {
+		t.Fatalf("window_expand option %#v does not name any window_options entry %#v", expand, result.StructureNeeds.WindowOptions)
+	}
 	if !reflect.DeepEqual(result.StructureNeeds.WindowOptions, result.WindowClarification.Options) {
 		t.Fatalf("StructureNeeds.WindowOptions = %#v, want the identical option set as WindowClarification.Options", result.StructureNeeds.WindowOptions)
 	}
@@ -125,6 +138,27 @@ func TestCHAOS4234_ClassDefaultGate_ComposesKindAndHandleOffersBesideTheWindowOf
 	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionComposed}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
 		t.Fatalf("gatedOfferResolutions = %#v, want %#v", telemetry.gatedOfferResolutions, want)
 	}
+	// CHAOS-4314: window_gated_offered/window_gated_silent split's producer
+	// signal -- a composed offers-only pool means offered=true.
+	if want := []bool{true}; !reflect.DeepEqual(telemetry.windowGateOfferDisclosures, want) {
+		t.Fatalf("windowGateOfferDisclosures = %#v, want %#v", telemetry.windowGateOfferDisclosures, want)
+	}
+}
+
+// windowExpandTargetsExisting reports whether expand's ReceiptID/OptionID/
+// Label/RelativeID all match a real entry in options -- the CHAOS-4314
+// referential integrity relationship ContextFabricStructureNeeds.Validate
+// itself enforces (windowOptionMatches, internal/contracts/v1),
+// reimplemented locally here since that helper is unexported outside
+// package v1.
+func windowExpandTargetsExisting(options []WindowOption, expand contractsv1.ContextFabricWindowExpandOption) bool {
+	for _, opt := range options {
+		if opt.ReceiptID == expand.ReceiptID && opt.OptionID == expand.OptionID &&
+			opt.Label == expand.Label && opt.RelativeID == expand.RelativeID {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCHAOS4234_ClassDefaultGate_OffersOnlyResolveErrorFailsOpenToWindowOnly(t *testing.T) {
@@ -154,6 +188,11 @@ func TestCHAOS4234_ClassDefaultGate_OffersOnlyResolveErrorFailsOpenToWindowOnly(
 	}
 	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionFailed}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
 		t.Fatalf("gatedOfferResolutions = %#v, want %#v", telemetry.gatedOfferResolutions, want)
+	}
+	// CHAOS-4314: a failed offers-only read has nothing to recommend --
+	// window_gated_silent, not offered.
+	if want := []bool{false}; !reflect.DeepEqual(telemetry.windowGateOfferDisclosures, want) {
+		t.Fatalf("windowGateOfferDisclosures = %#v, want %#v", telemetry.windowGateOfferDisclosures, want)
 	}
 }
 

@@ -222,6 +222,21 @@ func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, pri
 	t.logger.InfoContext(ctx, "context fabric gated offer resolution", args...)
 }
 
+// RecordWindowGateOfferDisclosure (CHAOS-4314) logs at Info: offered is the
+// window_gated_offered/window_gated_silent split's own producer signal.
+func (t SlogEngineTelemetry) RecordWindowGateOfferDisclosure(ctx context.Context, principal storage.Principal, offered bool) {
+	args := append([]any{"org_id", principal.OrgID, "offered", offered}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric window gate offer disclosure", args...)
+}
+
+// RecordWindowExpandOfferRedeemed (CHAOS-4314) logs at Info: no
+// content-bearing field, a plain occurrence count exactly like
+// RecordPriorSubjectReceiptsSkipped's own shape when skipped>0.
+func (t SlogEngineTelemetry) RecordWindowExpandOfferRedeemed(ctx context.Context, principal storage.Principal) {
+	args := append([]any{"org_id", principal.OrgID}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric window expand offer redeemed", args...)
+}
+
 func (t SlogEngineTelemetry) RecordStructureOfferCount(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
 	args := append([]any{"org_id", principal.OrgID, "member", string(member), "source", string(source), "count", count}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure offer count", args...)
