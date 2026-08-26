@@ -158,10 +158,23 @@ bypassing a misbehaving host port-forward); setting any one of those six
 vars requires setting all six, enforced at `common.sh` source time.
 Not yet exercised against a real parallel/sharded run on this data plane --
 CHAOS-4186's own smoke was sequential-subset only, per the ratified plan.
-One harness remains compose-bound regardless of this switch:
+One harness remains compose-bound regardless of this switch, DELIBERATELY:
 `run-frontier-arm.sh` talks to the compose clickhouse container directly
-via `docker exec` (its own frontier baseline, a separate measurement family)
--- tracked as CHAOS-4220 (Low), not fixed here.
+via `docker exec` (its own frontier baseline, a separate measurement
+family) -- both from the harness's own Go code AND embedded verbatim in
+the case prompt text the frontier model itself executes via its shell
+tool, so this is not a DSN/client-library connection that could just
+re-point at kiac. The kiac data plane's ClickHouse runs as a Kubernetes
+pod, unreachable by `docker exec` at all. CHAOS-4220 (Low) ratified this
+as staying compose-only rather than attempting a real kiac-exec redesign
+(docker exec vs kubectl exec, threaded through the embedded prompt text
+too, plus live re-verification of the read-only credential enforcement
+against kiac) -- and closed the one real gap that redesign decision left:
+the script now fails loud, naming the exact fix, if
+`ACR_TRIAL_DATA_PLANE` resolves to anything but `compose` (previously it
+silently ignored the switch and always read the compose container, the
+same silent-hybrid-plane trap this switch exists everywhere else to
+close).
 DSN/authority component assembly (`common.sh`'s `ch_dsn`, `ACR_TEST_TRIAL_
 POSTGRES_DSN`, and `falkor_addr`; `run-two-turn-parallel.sh`'s per-shard
 Postgres DSN) brackets an IPv6 host in `[]` via a shared

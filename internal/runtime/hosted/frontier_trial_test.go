@@ -757,3 +757,39 @@ func TestWriteReportAtomic(t *testing.T) {
 		t.Errorf("report content after second write = %q, want %q", got2, blob2)
 	}
 }
+
+// TestFrontierUnsupportedDataPlaneReason (CHAOS-4220) pins
+// frontierUnsupportedDataPlaneReason's own contract: only "kiac" is
+// refused (this harness's docker-exec-shaped ClickHouse access cannot
+// reach the kiac data plane's Kubernetes-hosted ClickHouse); everything
+// else -- unset, "compose", or any other value -- is left alone, this
+// function's job is narrowly to name the ONE unreachable plane, not to
+// validate ACR_TRIAL_DATA_PLANE generally (common.sh's own shell-side
+// switch already owns that).
+func TestFrontierUnsupportedDataPlaneReason(t *testing.T) {
+	cases := []struct {
+		name      string
+		plane     string
+		wantEmpty bool
+	}{
+		{"unset (the raw env var this function sees, not common.sh's shell-side kiac default)", "", true},
+		{"compose explicit", "compose", true},
+		{"kiac explicit", "kiac", false},
+		{"garbage value", "nonsense", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := frontierUnsupportedDataPlaneReason(c.plane)
+			if c.wantEmpty && got != "" {
+				t.Errorf("frontierUnsupportedDataPlaneReason(%q) = %q, want empty (proceed)", c.plane, got)
+			}
+			if !c.wantEmpty {
+				if got == "" {
+					t.Errorf("frontierUnsupportedDataPlaneReason(%q) = empty, want a non-empty refusal reason", c.plane)
+				} else if !strings.Contains(got, "CHAOS-4220") {
+					t.Errorf("frontierUnsupportedDataPlaneReason(%q) = %q, want it to cite CHAOS-4220", c.plane, got)
+				}
+			}
+		})
+	}
+}
