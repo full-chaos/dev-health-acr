@@ -1681,6 +1681,24 @@ type trialProvenance struct {
 	// "only file_exchange has anything to attribute" precedent
 	// immediately above).
 	ResponderTransport string `json:"responder_transport,omitempty"`
+	// ResponderEffort (CHAOS-4313 follow-up, chris/team-lead 2026-08-26
+	// 10:36 PDT, schema bump) records the reasoning-effort tier requested
+	// of the responder model -- sourced verbatim from
+	// ACR_TEST_TRIAL_RESPONDER_EFFORT (twoTurnResponderEffort), passed
+	// through unvalidated to cmd/acr-trial-responder-api's own
+	// ChatCompletionNewParams.ReasoningEffort field (see that field's own
+	// doc comment for why: this harness targets internal model tier names,
+	// e.g. "xhigh", outside the OpenAI SDK's own low/medium/high enum).
+	// Unlike ResponderModel/ResponderTransport immediately above, empty
+	// here is NOT a "field didn't exist yet" placeholder to paper over --
+	// it is itself the correct, meaningful record that the request never
+	// set ReasoningEffort at all, so the provider's own default (reported
+	// by OpenAI as "medium" for reasoning-capable models) applied. Exists
+	// so a later comparison across responder runs (e.g. luna at the
+	// provider default vs. sol at an explicit high tier) can tell effort
+	// apart from model/transport as an independent variable. Set only
+	// alongside ResponderModel/ResponderTransport (file_exchange only).
+	ResponderEffort string `json:"responder_effort,omitempty"`
 	// DataPlane/DataPlanePGHost/DataPlaneCHHost/DataPlaneFalkorHost
 	// (CHAOS-4186 follow-up, schema v28) record which store backend this
 	// run actually hit -- compose|kiac|override, sourced verbatim from

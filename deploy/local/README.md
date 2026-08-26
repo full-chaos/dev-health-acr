@@ -189,6 +189,16 @@ load. `run-frontier-arm.sh` is unaffected and stays codex-subscription-only
 -- it never used the file-exchange responder this switch selects, so there
 is nothing here for it to move to.
 
+**Reasoning effort (CHAOS-4313 follow-up)**: `ACR_TEST_TRIAL_RESPONDER_EFFORT`
+passes through verbatim to the OpenAI request's `reasoning_effort` field
+(transport=api only). No default -- unset means the field is never sent at
+all, so the provider's own default applies (unchanged from every run before
+this knob existed). Recorded in provenance as `responder_effort`, alongside
+`responder_model`/`responder_transport`, so a later comparison across runs
+(e.g. `gpt-5.6-luna` at the provider default vs. `gpt-5.6-sol` at an
+explicit `xhigh` tier) can tell effort apart from model/transport as an
+independent variable.
+
 DSN/authority component assembly (`common.sh`'s `ch_dsn`, `ACR_TEST_TRIAL_
 POSTGRES_DSN`, and `falkor_addr`; `run-two-turn-parallel.sh`'s per-shard
 Postgres DSN) brackets an IPv6 host in `[]` via a shared

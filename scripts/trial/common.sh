@@ -724,6 +724,25 @@ trial_responder_model() {
   printf '%s\n' "$m"
 }
 
+# trial_responder_effort (CHAOS-4313 follow-up, chris/team-lead 2026-08-26
+# 10:36 PDT) resolves ACR_TEST_TRIAL_RESPONDER_EFFORT for EXPORT, mirroring
+# trial_responder_model immediately above so the go test process
+# (twoTurnResponderEffort, which stamps trialProvenance.ResponderEffort) and
+# the api-transport responder actually answering (run-responder-api.sh,
+# cmd/acr-trial-responder-api's own ReasoningEffort passthrough) agree on
+# what effort was requested. Deliberately has NO default, unlike
+# trial_responder_model's own "gpt-5.6-luna" fallback under transport=api --
+# an unset ACR_TEST_TRIAL_RESPONDER_EFFORT means the request never sets
+# ReasoningEffort at all, and that is itself a meaningful, correct value to
+# record (the provider's own default applied), not a gap needing a
+# substituted placeholder. Applies to BOTH transports identically (no
+# transport branch, unlike trial_responder_model) -- codex transport simply
+# never reads this env var at all, so passing it through unconditionally is
+# harmless there.
+trial_responder_effort() {
+  printf '%s\n' "${ACR_TEST_TRIAL_RESPONDER_EFFORT:-}"
+}
+
 # Manual two-turn sharding (2026-08-24): if you hand-set
 # ACR_TEST_TRIAL_SHARD_CASE_INDICES yourself instead of going through
 # run-two-turn-parallel.sh, also set ACR_TEST_TRIAL_SHARD_COUNT and

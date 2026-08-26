@@ -305,7 +305,7 @@ import (
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "31"
+const expectedSchemaVersion = "32"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -370,6 +370,15 @@ type trialProvenance struct {
 	// additive passthrough; no merge arithmetic (same "rides through from
 	// the FIRST shard" shape as ResponderModel immediately above).
 	ResponderTransport string `json:"responder_transport,omitempty"`
+	// ResponderEffort (CHAOS-4313 follow-up, schema v32) mirrors
+	// trialProvenance's identically-named field -- see the producer's own
+	// doc comment (generative_trial_live_test.go) for what this closes.
+	// Purely additive passthrough; no merge arithmetic (same "rides through
+	// from the FIRST shard" shape as ResponderModel/ResponderTransport
+	// immediately above), but DOES get the same cross-shard agreement check
+	// those two already have (see mergeReports below) -- one launch shares
+	// one effort tier by construction, same reasoning.
+	ResponderEffort string `json:"responder_effort,omitempty"`
 	// DataPlane* (CHAOS-4186 follow-up, schema v28) mirrors trialProvenance's
 	// identically-named fields -- see the producer's own doc comment
 	// (generative_trial_live_test.go) for the provenance gap this closes.
@@ -882,6 +891,13 @@ func validateShardSet(shards []twoTurnReport, paths []string) error {
 		// under the first shard's label.
 		case s.Provenance.ResponderTransport != first.Provenance.ResponderTransport:
 			return mismatchErr(paths[i], paths[0], "provenance.responder_transport", s.Provenance.ResponderTransport, first.Provenance.ResponderTransport)
+		// ResponderEffort (CHAOS-4313 follow-up): the SAME "launch-level, not
+		// shard-level" reasoning as ResponderModel/ResponderTransport
+		// immediately above -- one reasoning-effort tier answers a whole
+		// run; shards disagreeing means part of the run was answered at a
+		// different effort tier than the rest.
+		case s.Provenance.ResponderEffort != first.Provenance.ResponderEffort:
+			return mismatchErr(paths[i], paths[0], "provenance.responder_effort", s.Provenance.ResponderEffort, first.Provenance.ResponderEffort)
 		// DataPlane (CHAOS-4186 follow-up, schema v28): the SAME "launch-
 		// level, not shard-level" reasoning as ResponderModel immediately
 		// above -- one data plane serves a whole run. Shards disagreeing

@@ -384,3 +384,25 @@ func TestChaos4313_ResponderTransportMustAgreeAcrossShards(t *testing.T) {
 		t.Errorf("error = %q, want it to name provenance.responder_transport", err.Error())
 	}
 }
+
+// TestChaos4313_ResponderEffortMustAgreeAcrossShards mirrors
+// TestChaos4313_ResponderTransportMustAgreeAcrossShards' own pattern for the
+// SAME reason: ResponderEffort is a launch-level fact -- one reasoning-
+// effort tier answers a whole run -- so two shards disagreeing about it
+// means artifacts from two different launches (or an operator changing
+// ACR_TEST_TRIAL_RESPONDER_EFFORT mid-run) are being merged into one.
+func TestChaos4313_ResponderEffortMustAgreeAcrossShards(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.Provenance.ResponderEffort = "medium"
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.Provenance.ResponderEffort = "xhigh"
+	dir, paths := writeShards(t, []twoTurnReport{a, b})
+	var stdout bytes.Buffer
+	err := run(filepath.Join(dir, "merged.json"), paths, &stdout)
+	if err == nil {
+		t.Fatal("merging shards that disagree about responder_effort must be refused")
+	}
+	if !strings.Contains(err.Error(), "provenance.responder_effort") {
+		t.Errorf("error = %q, want it to name provenance.responder_effort", err.Error())
+	}
+}

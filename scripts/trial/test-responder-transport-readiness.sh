@@ -148,6 +148,19 @@ check "transport=codex, unset model: resolves to empty (ambient-default)" "" \
 check "transport=api, explicit model: passes through unchanged" "gpt-5.6-sol" \
   "$(ACR_TEST_TRIAL_RESPONDER_MODEL=gpt-5.6-sol ACR_TEST_TRIAL_RESPONDER_TRANSPORT=api trial_responder_transport >/dev/null; ACR_TEST_TRIAL_RESPONDER_MODEL=gpt-5.6-sol trial_responder_model)"
 
+# 10. CHAOS-4313 follow-up: trial_responder_effort has NO substituted
+# default (unlike trial_responder_model immediately above) -- an unset
+# ACR_TEST_TRIAL_RESPONDER_EFFORT resolves to the empty string under BOTH
+# transports, since an empty value is itself the correct, meaningful
+# provenance record (the request never sets ReasoningEffort, the provider's
+# own default applies), not a gap needing a stand-in default. Unlike
+# trial_responder_model, this function has no transport-dependent branch at
+# all, so no TRIAL_RESPONDER_TRANSPORT precondition call is needed first.
+check "unset effort: resolves to empty" "" \
+  "$(unset ACR_TEST_TRIAL_RESPONDER_EFFORT; trial_responder_effort)"
+check "explicit effort: passes through unchanged" "xhigh" \
+  "$(ACR_TEST_TRIAL_RESPONDER_EFFORT=xhigh trial_responder_effort)"
+
 if [[ "$failures" -gt 0 ]]; then
   echo "responder-transport-readiness checks FAILED ($failures)" >&2
   exit 1

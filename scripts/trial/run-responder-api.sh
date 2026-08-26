@@ -35,6 +35,11 @@ POLL="${2:-2}"
 mkdir -p "$EXDIR/requests" "$EXDIR/responses" "$EXDIR/_responder_logs"
 
 MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-gpt-5.6-luna}"
+# CHAOS-4313 follow-up: no substituted default here, unlike MODEL above --
+# an unset value stays empty, and cmd/acr-trial-responder-api's own main()
+# leaves ReasoningEffort unset on the request when it sees an empty string
+# (see that file's own doc comment).
+EFFORT="${ACR_TEST_TRIAL_RESPONDER_EFFORT:-}"
 
 # codex xhigh review round 1 (High, confirmed): this script's OWN
 # `set -euo pipefail` never enables xtrace, but a CALLER that invokes it
@@ -73,7 +78,7 @@ fi
 # this script, or a caller sourcing it, runs afterward) and never an argv
 # element (go run's own args are just $EXDIR/$POLL; the key reaches the
 # child via envp, invisible to `ps`/`/proc/*/cmdline`).
-( cd "$repo_root" && OPENAI_API_KEY="$api_key" ACR_TEST_TRIAL_RESPONDER_MODEL="$MODEL" go run ./cmd/acr-trial-responder-api "$EXDIR" "$POLL" )
+( cd "$repo_root" && OPENAI_API_KEY="$api_key" ACR_TEST_TRIAL_RESPONDER_MODEL="$MODEL" ACR_TEST_TRIAL_RESPONDER_EFFORT="$EFFORT" go run ./cmd/acr-trial-responder-api "$EXDIR" "$POLL" )
 _responder_api_exit=$?
 [[ "$_responder_api_xtrace_was_on" -eq 1 ]] && set -x
 exit "$_responder_api_exit"

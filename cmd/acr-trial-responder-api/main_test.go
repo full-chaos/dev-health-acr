@@ -366,6 +366,139 @@ func TestAnswerOneSendsInstructionsToModel(t *testing.T) {
 	}
 }
 
+// TestResolveResponderEffort (codex xhigh review round 1, High, confirmed)
+// is the red-first proof that ACR_TEST_TRIAL_RESPONDER_EFFORT is bounded
+// before it reaches any of its three sinks (the OpenAI request, this
+// process's own stdout, the provenance artifact) -- see
+// resolveResponderEffort's own doc comment for the exact reasoning.
+func TestResolveResponderEffort(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset", raw: "", want: ""},
+		{name: "whitespace-only", raw: "   ", want: ""},
+		{name: "known tier", raw: "medium", want: "medium"},
+		{name: "internal tier name outside the SDK enum", raw: "xhigh", want: "xhigh"},
+		{name: "trims surrounding whitespace", raw: "  high  ", want: "high"},
+		{name: "underscore and hyphen allowed", raw: "tier_9-x", want: "tier_9-x"},
+		{name: "exactly 32 chars is the boundary, still valid", raw: strings.Repeat("a", 32), want: strings.Repeat("a", 32)},
+		{name: "33 chars is one over the boundary, rejected", raw: strings.Repeat("a", 33), wantErr: true},
+		{name: "embedded space is rejected", raw: "very high", wantErr: true},
+		{name: "control character is rejected", raw: "high\x00", wantErr: true},
+		{name: "embedded newline is rejected (surrounding whitespace is trimmed first, this one is not)", raw: "hi\ngh", wantErr: true},
+		{name: "long garbage/secret-shaped value is rejected", raw: "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF", wantErr: true},
+		{name: "punctuation outside the allowed set is rejected", raw: "high!", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveResponderEffort(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("resolveResponderEffort(%q) = %q, nil -- want an error", tc.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveResponderEffort(%q) unexpected error: %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Errorf("resolveResponderEffort(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAnswerOneSendsReasoningEffortWhenSet (CHAOS-4313 follow-up) is the
+// red-first proof for the ACR_TEST_TRIAL_RESPONDER_EFFORT passthrough: when
+// r.effort is non-empty, the request body actually sent to the API must
+// carry it as "reasoning_effort" -- a knob that exists but is never wired
+// into the request is worse than no knob (silently misleads provenance
+// AND the live comparison run chris asked for).
+func TestAnswerOneSendsReasoningEffortWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		capturedBody = body
+		resp := map[string]any{
+			"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": "gpt-5.6-luna",
+			"choices": []map[string]any{{"index": 0, "finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": `{"answer":"ok"}`}}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL)
+	r.effort = "xhigh"
+	writeExchangeRequest(t, dir, 1, "n1")
+
+	reqPath := filepath.Join(dir, "requests", "000001-interpret.json")
+	respPath := filepath.Join(dir, "responses", "000001-interpret.json")
+	r.answerOne(t.Context(), reqPath, respPath, filepath.Join(dir, "_responder_logs"))
+
+	if capturedBody == nil {
+		t.Fatal("fake server never received a request -- answerOne did not call the API at all")
+	}
+	if !strings.Contains(string(capturedBody), `"reasoning_effort":"xhigh"`) {
+		t.Fatalf("request body does not contain reasoning_effort=xhigh -- r.effort was set but never reached the API call.\nbody: %s", capturedBody)
+	}
+}
+
+// TestAnswerOneOmitsReasoningEffortWhenUnset (CHAOS-4313 follow-up) is the
+// companion red-first proof for the opposite direction: an empty r.effort
+// (the default, matching every case-57 run before this knob existed) must
+// send NO reasoning_effort field at all, not an empty-string one -- an
+// explicit empty value is a different (and likely rejected) request shape
+// than never sending the field, and this is the provenance-neutral case
+// every existing run's artifact already depends on.
+func TestAnswerOneOmitsReasoningEffortWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		capturedBody = body
+		resp := map[string]any{
+			"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": "gpt-5.6-luna",
+			"choices": []map[string]any{{"index": 0, "finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": `{"answer":"ok"}`}}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL) // r.effort left at its zero value ""
+	writeExchangeRequest(t, dir, 1, "n1")
+
+	reqPath := filepath.Join(dir, "requests", "000001-interpret.json")
+	respPath := filepath.Join(dir, "responses", "000001-interpret.json")
+	r.answerOne(t.Context(), reqPath, respPath, filepath.Join(dir, "_responder_logs"))
+
+	if capturedBody == nil {
+		t.Fatal("fake server never received a request -- answerOne did not call the API at all")
+	}
+	if strings.Contains(string(capturedBody), "reasoning_effort") {
+		t.Fatalf("request body contains reasoning_effort even though r.effort was never set -- want the field omitted entirely.\nbody: %s", capturedBody)
+	}
+}
+
 // TestAnswerOneRejectsOutputNotMatchingSchema is the codex xhigh review
 // round 1 (High, confirmed) red-first proof: json.Valid alone accepts ANY
 // well-formed JSON value, including one that does not satisfy the

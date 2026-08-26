@@ -265,6 +265,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -2454,6 +2455,117 @@ func TestTwoTurnResponderTransport(t *testing.T) {
 	})
 }
 
+// TestTwoTurnResponderEffort (CHAOS-4313 follow-up) differs from
+// TestTwoTurnResponderModel/TestTwoTurnResponderTransport immediately above
+// on purpose: unset (or blank/whitespace-only) reads as the EMPTY string,
+// never a substituted placeholder -- see twoTurnResponderEffort's own doc
+// comment for why an empty value is itself the correct provenance record
+// here, not a gap needing a stand-in like "ambient-default"/"api".
+func TestTwoTurnResponderEffort(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		if got := twoTurnResponderEffort(); got != "" {
+			t.Errorf("twoTurnResponderEffort() = %q, want empty", got)
+		}
+	})
+	t.Run("blank", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_RESPONDER_EFFORT", "   ")
+		if got := twoTurnResponderEffort(); got != "" {
+			t.Errorf("twoTurnResponderEffort() = %q, want empty for a whitespace-only value", got)
+		}
+	})
+	t.Run("set", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_RESPONDER_EFFORT", "xhigh")
+		if got := twoTurnResponderEffort(); got != "xhigh" {
+			t.Errorf("twoTurnResponderEffort() = %q, want the explicit value", got)
+		}
+	})
+}
+
+// TestTwoTurnResponderProvenance_EffortNeverRecordedForCodexTransport is the
+// codex xhigh review round 1 (High, confirmed) red-first proof: an operator
+// who sets ACR_TEST_TRIAL_RESPONDER_EFFORT while
+// ACR_TEST_TRIAL_RESPONDER_TRANSPORT=codex must NOT get a report claiming
+// that effort tier answered every call -- run-responder-codex.sh never
+// reads the var at all, so recording it would be false provenance.
+func TestTwoTurnResponderProvenance_EffortNeverRecordedForCodexTransport(t *testing.T) {
+	t.Setenv("ACR_TEST_TRIAL_RESPONDER_TRANSPORT", "codex")
+	t.Setenv("ACR_TEST_TRIAL_RESPONDER_EFFORT", "xhigh")
+	_, _, transport, effort := twoTurnResponderProvenance(t, "/some/exchange/dir")
+	if transport != "codex" {
+		t.Fatalf("responderTransport = %q, want %q", transport, "codex")
+	}
+	if effort != "" {
+		t.Errorf("responderEffort = %q, want empty -- run-responder-codex.sh never reads ACR_TEST_TRIAL_RESPONDER_EFFORT, so recording it here is false provenance", effort)
+	}
+}
+
+// TestTwoTurnResponderProvenance_EffortRecordedForAPITransport is the
+// companion positive case: the SAME env var, under transport=api, must be
+// recorded -- this is the transport that actually wires it into a request
+// (cmd/acr-trial-responder-api).
+func TestTwoTurnResponderProvenance_EffortRecordedForAPITransport(t *testing.T) {
+	t.Setenv("ACR_TEST_TRIAL_RESPONDER_TRANSPORT", "api")
+	t.Setenv("ACR_TEST_TRIAL_RESPONDER_EFFORT", "xhigh")
+	_, _, transport, effort := twoTurnResponderProvenance(t, "/some/exchange/dir")
+	if transport != "api" {
+		t.Fatalf("responderTransport = %q, want %q", transport, "api")
+	}
+	if effort != "xhigh" {
+		t.Errorf("responderEffort = %q, want %q", effort, "xhigh")
+	}
+}
+
+// fakeFatalfer records whether Fatalf was called, without genuinely
+// failing (no runtime.Goexit) -- lets
+// TestTwoTurnResponderProvenance_RejectsMalformedEffort assert the call
+// happened rather than relying on t.Run's subtest-failure propagation,
+// which would mark the asserting test itself as failed too.
+type fakeFatalfer struct {
+	called bool
+	msg    string
+}
+
+func (f *fakeFatalfer) Helper() {}
+func (f *fakeFatalfer) Fatalf(format string, args ...any) {
+	f.called = true
+	f.msg = fmt.Sprintf(format, args...)
+}
+
+// TestTwoTurnResponderProvenance_RejectsMalformedEffort is the codex xhigh
+// review round 2 (Medium, confirmed) red-first proof: a malformed
+// ACR_TEST_TRIAL_RESPONDER_EFFORT under transport=api must fail this
+// process closed (Fatalf) BEFORE it can be persisted into a report
+// artifact -- round 1's resolveResponderEffort only bounded the value the
+// SEPARATE responder-binary process sends/logs; this closes the identical
+// gap on the provenance side, in THIS process, which reads the same raw
+// env var independently.
+func TestTwoTurnResponderProvenance_RejectsMalformedEffort(t *testing.T) {
+	t.Setenv("ACR_TEST_TRIAL_RESPONDER_TRANSPORT", "api")
+	t.Setenv("ACR_TEST_TRIAL_RESPONDER_EFFORT", "not a valid tier!!")
+	fake := &fakeFatalfer{}
+	twoTurnResponderProvenance(fake, "/some/exchange/dir")
+	if !fake.called {
+		t.Fatal("twoTurnResponderProvenance did not call Fatalf on a malformed ACR_TEST_TRIAL_RESPONDER_EFFORT value -- it must fail closed before returning, not silently pass the value through")
+	}
+	if !strings.Contains(fake.msg, "ACR_TEST_TRIAL_RESPONDER_EFFORT") {
+		t.Errorf("Fatalf message = %q, want it to name ACR_TEST_TRIAL_RESPONDER_EFFORT", fake.msg)
+	}
+}
+
+// TestTwoTurnResponderProvenance_RealAPITransportRecordsNothing pins the
+// pre-existing real_api (exchangeDir == "") shape: no responder script
+// runs at all under this transport, so nothing here should ever be
+// attributed to a model/transport/effort.
+func TestTwoTurnResponderProvenance_RealAPITransportRecordsNothing(t *testing.T) {
+	label, model, transport, effort := twoTurnResponderProvenance(t, "")
+	if label != "real_api" {
+		t.Fatalf("transportLabel = %q, want %q", label, "real_api")
+	}
+	if model != "" || transport != "" || effort != "" {
+		t.Errorf("model/transport/effort = %q/%q/%q, want all empty for real_api", model, transport, effort)
+	}
+}
+
 // TestTwoTurnTraceCapturePoolContainsKind pins CHAOS-4038's exact
 // distinction: a corroboration-stage event for the expected kind means it
 // reached the merged pool, regardless of what the (possibly absent)
@@ -3378,6 +3490,111 @@ func twoTurnResponderTransport() string {
 	return "api"
 }
 
+// twoTurnResponderEffort (CHAOS-4313 follow-up, chris/team-lead 2026-08-26
+// 10:36 PDT) reads ACR_TEST_TRIAL_RESPONDER_EFFORT -- see
+// trialProvenance.ResponderEffort's own doc comment (generative_trial_live_test.go)
+// for what this closes. Unlike twoTurnResponderModel/twoTurnResponderTransport
+// above, there is deliberately NO substituted default here: an empty value
+// is itself the correct, meaningful provenance record ("the request never
+// set ReasoningEffort, the provider's own default applied"), not a gap to
+// paper over with a placeholder string -- cmd/acr-trial-responder-api's own
+// main() has the identical no-default shape for the same reason.
+func twoTurnResponderEffort() string {
+	return strings.TrimSpace(os.Getenv("ACR_TEST_TRIAL_RESPONDER_EFFORT"))
+}
+
+// validResponderEffortForProvenance (codex xhigh review round 2, Medium,
+// confirmed) bounds ACR_TEST_TRIAL_RESPONDER_EFFORT's character set and
+// length before it can reach a persisted provenance artifact.
+//
+// KEEP IN SYNC WITH cmd/acr-trial-responder-api/main.go's own
+// validResponderEffort (same regex, same reasoning): this package cannot
+// import that separate binary's package main, so nothing can assert
+// cross-package agreement directly -- the SAME pre-existing limitation
+// reportSchemaVersion's own doc comment already documents for
+// expectedSchemaVersion. round-1's resolveResponderEffort fix only bounded
+// the value the RESPONDER BINARY sends/logs; this closes the SAME gap on
+// the PROVENANCE side -- twoTurnResponderEffort reads the identical raw env
+// var independently, in this SEPARATE process (the go test, not the
+// responder), so a malformed value could still reach a persisted report
+// file even when main() correctly refuses to start the responder over it
+// (the run would then fail on unanswered exchanges, but the artifact
+// written at the end would still carry the raw string).
+var validResponderEffortForProvenance = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+
+// fatalfer is the minimal *testing.T surface twoTurnResponderProvenance
+// needs (Helper + Fatalf) -- see that function's own doc comment for why
+// this indirection exists instead of a direct *testing.T parameter.
+type fatalfer interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
+
+// twoTurnResponderProvenance (codex xhigh review round 1, High, confirmed)
+// computes the report's transport label plus responderModel/
+// responderTransport/responderEffort together, extracted to its own
+// function purely so it has a unit-test surface independent of
+// TestChaos3742TwoTurnConfirmationReplay's full investigator/live-corpus
+// machinery -- the SAME reasoning twoTurnRedactNonAnomalousTraceEvents'
+// own doc comment already documents for that extraction.
+//
+// responderModel/responderTransport (CHAOS-4135, extended CHAOS-4313):
+// empty for real_api -- that transport never shells out to a responder
+// script at all, so there is nothing to attribute an answer to; see
+// trialProvenance.ResponderModel/ResponderTransport's own doc comments.
+//
+// responderEffort is gated on responderTransport == "api" specifically,
+// NOT merely exchangeDir != "" like ResponderModel/ResponderTransport
+// above -- run-responder-codex.sh never reads
+// ACR_TEST_TRIAL_RESPONDER_EFFORT at all (cmd/acr-trial-responder-api is
+// the only responder that wires it into a request), so an operator who
+// sets the env var while ACR_TEST_TRIAL_RESPONDER_TRANSPORT=codex would
+// otherwise get a report falsely claiming that effort tier answered every
+// call, when in fact no request ever carried it. Before this gate existed,
+// the var was read unconditionally regardless of which responder actually
+// ran.
+//
+// responderEffort is ALSO validated against validResponderEffortForProvenance
+// (codex xhigh review round 2, Medium, confirmed) before being returned --
+// t.Fatalf's immediately on a malformed value, mirroring
+// preflightAnchorCausalChain's own "fail fast, in one case, before spending
+// hours on the other 49" philosophy: a malformed
+// ACR_TEST_TRIAL_RESPONDER_EFFORT would already make
+// cmd/acr-trial-responder-api's own main() refuse to start (round-1's
+// resolveResponderEffort fix), but that failure happens in a SEPARATE
+// process from this one -- without this check, THIS process (the go test)
+// would still read the identical raw env var independently and persist it
+// into the final report artifact even though the responder never answered
+// a single request over it.
+//
+// Takes a fatalfer, not *testing.T directly, purely so
+// TestTwoTurnResponderProvenance_RejectsMalformedEffort can substitute a
+// fake that records the call instead of genuinely failing -- a real
+// *testing.T.Fatalf's runtime.Goexit always marks every ancestor test
+// failed too, which would make a test whose entire point is "prove Fatalf
+// fires" report as a failure itself. *testing.T satisfies this interface
+// with no code changes at the real call site below.
+func twoTurnResponderProvenance(t fatalfer, exchangeDir string) (transportLabel, responderModel, responderTransport, responderEffort string) {
+	t.Helper()
+	// Transport label reflects which transport actually ran (codex round-1
+	// finding #10: hard-coding "real_api" while a file-exchange runtime is
+	// wired gives the acceptance artifact false provenance).
+	transportLabel = "real_api"
+	if exchangeDir == "" {
+		return transportLabel, "", "", ""
+	}
+	transportLabel = "file_exchange"
+	responderModel = twoTurnResponderModel()
+	responderTransport = twoTurnResponderTransport()
+	if responderTransport == "api" {
+		responderEffort = twoTurnResponderEffort()
+		if responderEffort != "" && !validResponderEffortForProvenance.MatchString(responderEffort) {
+			t.Fatalf("ACR_TEST_TRIAL_RESPONDER_EFFORT must be 1-32 characters of [A-Za-z0-9_-] -- refusing to persist an unbounded/unexpected value into the report artifact")
+		}
+	}
+	return transportLabel, responderModel, responderTransport, responderEffort
+}
+
 // twoTurnUnjustifiedShadowProbe computes the CHAOS-4062 trace-observability
 // fields for an "unjustified"-classified inferred commit: whether
 // kindInsensitivityProof was evaluated on the hinted call and its verdict
@@ -4173,12 +4390,12 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // (codex round 2, Low, confirmed): this file lives in package hosted_test and
 // cannot be imported from that separate binary's package main, so nothing
 // can assert cross-package agreement directly -- the SAME pre-existing
-// limitation every one of this constant's 30 prior bumps has always had
+// limitation every one of this constant's 31 prior bumps has always had
 // (TestRunRejectsSchemaVersionMismatch only proves the merger REFUSES a
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "31"
+const reportSchemaVersion = "32"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -8273,20 +8490,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 
-	// Transport label reflects which transport actually ran (codex round-1
-	// finding #10: hard-coding "real_api" while a file-exchange runtime is
-	// wired gives the acceptance artifact false provenance).
-	transportLabel := "real_api"
-	// responderModel/responderTransport (CHAOS-4135, extended CHAOS-4313):
-	// empty for real_api -- that transport never shells out to a responder
-	// script at all, so there is nothing to attribute an answer to; see
-	// trialProvenance.ResponderModel/ResponderTransport's own doc comments.
-	var responderModel, responderTransport string
-	if exchangeDir != "" {
-		transportLabel = "file_exchange"
-		responderModel = twoTurnResponderModel()
-		responderTransport = twoTurnResponderTransport()
-	}
+	transportLabel, responderModel, responderTransport, responderEffort := twoTurnResponderProvenance(t, exchangeDir)
 	report := twoTurnReport{
 		ReportSchemaVersion: reportSchemaVersion,
 		Provenance: trialProvenance{
@@ -8295,6 +8499,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			AnchorMembershipOffersEnabled: cfg.AnchorMembershipOffersEnabled,
 			ResponderModel:                responderModel,
 			ResponderTransport:            responderTransport,
+			ResponderEffort:               responderEffort,
 			// DataPlane* (CHAOS-4186 follow-up, schema v28): read directly
 			// from the env vars scripts/trial/common.sh already resolved
 			// and exported for this exact purpose -- never re-derived,
