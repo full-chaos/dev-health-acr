@@ -6,12 +6,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation/paritytest"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
@@ -266,13 +268,20 @@ func resultWithConfirmedStructure(resultID string, member contextfabric.Structur
 // atomically, with neither its result nor its claim persisted, while the
 // first result and its claim remain completely intact.
 // CHAOS-4003: table-ified over member -- expected_kind (the pre-existing
-// pin) AND window (the member this ticket closes the staleness hole for),
+// pin) AND window (the member that ticket closed the staleness hole for),
 // sharing ONE store/database instance across both t.Run subtests so the
 // SAME assertions also prove the two members' claims are independent of
 // each other in the REAL Postgres CHECK-constrained table (0023's own
 // member vocabulary CHECK already listed 'window' -- this is the proof the
 // Go write path actually exercises that value, not just that the
 // constraint would permit it).
+// CHAOS-4333: table-ified again over subject_candidate -- CHAOS-4012 added
+// it as a 5th StructureNeedKind, but nothing widened this table's CHECK
+// (migration 0023) to match until migration 0033. This subtest is the
+// same class of pin CHAOS-4003 added for 'window': it fails the same way
+// (a raw ck_acr_cf_structure_supersession_member_vocabulary violation,
+// sanitized into contextfabric.ErrUnavailable by Store.Save) without 0033
+// applied, confirmed live 2026-08-26 on the kiac acr-pilot cluster.
 func TestStore_structureSupersessionClaims(t *testing.T) {
 	ctx := context.Background()
 	db := newInvestigationTestDatabase(t, ctx)
@@ -281,7 +290,7 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 
 	principal := storage.Principal{OrgID: "org-supersession"}
 
-	for _, member := range []contextfabric.StructureNeedKind{"expected_kind", "window"} {
+	for _, member := range []contextfabric.StructureNeedKind{"expected_kind", "window", "subject_candidate"} {
 		t.Run(string(member), func(t *testing.T) {
 			priorResultID := "result-prior-structure-offer-" + string(member)
 
@@ -321,6 +330,58 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 			// direction: a successful round replaying itself is not a conflict.
 			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
 		})
+	}
+}
+
+// memberVocabularyPattern extracts the quoted string literals out of a
+// Postgres CHECK constraint definition of the shape
+// `CHECK ((member = ANY (ARRAY['a'::text, 'b'::text])))` -- exactly what
+// pg_get_constraintdef returns for
+// ck_acr_cf_structure_supersession_member_vocabulary.
+var memberVocabularyPattern = regexp.MustCompile(`'([^']+)'`)
+
+// TestStructureSupersessionClaimsMemberVocabularyParity is CHAOS-4333's own
+// closing pin: ck_acr_cf_structure_supersession_member_vocabulary (migration
+// 0023, widened by 0033) must allow EXACTLY the same set of values as
+// contractsv1.ContextFabricStructureNeedKindVocabulary(), the single
+// authoritative enum structureSupersessionClaims's callers draw `member`
+// from. CHAOS-4333 happened because these silently drifted apart -- CHAOS-
+// 4012 added subject_candidate to the Go enum without anyone widening this
+// CHECK, and nothing caught it until a live 503. This test fails the same
+// way the NEXT such addition would: read the constraint the migrations
+// actually left in a real Postgres database (not the migration file's own
+// source text, which would only prove the file says what it says, not
+// what got applied), and diff it against the enum -- in EITHER direction,
+// so a value removed from the enum but left in the CHECK is caught too.
+func TestStructureSupersessionClaimsMemberVocabularyParity(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+
+	var constraintDef string
+	err := db.QueryRowContext(ctx,
+		`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_acr_cf_structure_supersession_member_vocabulary'`,
+	).Scan(&constraintDef)
+	require.NoError(t, err, "ck_acr_cf_structure_supersession_member_vocabulary must exist after migrations apply")
+
+	matches := memberVocabularyPattern.FindAllStringSubmatch(constraintDef, -1)
+	require.NotEmpty(t, matches, "could not parse any member literals out of constraint definition: %s", constraintDef)
+	dbVocabulary := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		dbVocabulary[match[1]] = struct{}{}
+	}
+
+	codeVocabulary := make(map[string]struct{})
+	for _, kind := range contractsv1.ContextFabricStructureNeedKindVocabulary() {
+		codeVocabulary[string(kind)] = struct{}{}
+	}
+
+	for member := range codeVocabulary {
+		_, ok := dbVocabulary[member]
+		require.True(t, ok, "contractsv1.ContextFabricStructureNeedKind %q is not allowed by ck_acr_cf_structure_supersession_member_vocabulary -- a migration must widen it", member)
+	}
+	for member := range dbVocabulary {
+		_, ok := codeVocabulary[member]
+		require.True(t, ok, "ck_acr_cf_structure_supersession_member_vocabulary allows %q, which is not a contractsv1.ContextFabricStructureNeedKind -- the CHECK now allows more than the Go enum does", member)
 	}
 }
 
