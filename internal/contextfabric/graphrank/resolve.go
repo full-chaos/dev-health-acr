@@ -197,13 +197,20 @@ type ResolveDeps struct {
 	// absent from candidatesBySubject at that point, and ONLY when
 	// confirmedKind is nil (a request that already confirmed a kind has
 	// nothing left to disambiguate on this axis) -- strictly additive,
-	// exactly like SearchQuestion's own union contract: results merge
-	// through the SAME NodeCandidate/MergeCandidates/mergeSearchResults path
-	// every other pass uses, so a coverage-floor find competes and
+	// exactly like SearchQuestion's own union contract: for the four census
+	// kinds (pull_request/work_item/ci_run/pull_request_review), results
+	// merge through the SAME NodeCandidate/MergeCandidates/mergeSearchResults
+	// path every other pass uses, so a coverage-floor find competes and
 	// corroborates identically to one an ordinary pass found, and can only
 	// ever ADD a subject or lose an exact-confidence tie to one an earlier
 	// pass already found (mergeSearchResults' own last-processed-loses-ties
-	// convention).
+	// convention). repository/project/team (isAliasLookupScopedKind) are
+	// DIFFERENT since CHAOS-4271 codex round 1, finding 1: their finds merge
+	// into applyKindCoverageFloor's own private offerOnlyPool, never into
+	// candidatesBySubject, so they reach the expected_kind offer but can
+	// never rank, corroborate, or commit as this function's own caller
+	// (resolve.go) would -- see applyKindCoverageFloor's doc comment
+	// (chaos4038_kind_coverage.go) for the full accounting.
 	//
 	// Scoped to kindCoverageFloorKinds -- CHAOS-4271: all seven offerable
 	// kinds, including repository/project/team. A kind AliasLookup above
@@ -1849,6 +1856,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// the separate flag only ever EXCLUDED a genuinely-missing kind from
 		// rescue. See kindCoverageFloorKinds' own doc comment
 		// (chaos4038_kind_coverage.go) for the full accounting.
+		//
+		// candidatesBySubject (passed as `pool` below) is UNCHANGED by a
+		// repository/project/team find (codex round 1, finding 1, HIGH,
+		// BLOCK): applyKindCoverageFloor's own doc comment explains why those
+		// three merge into a private offerOnlyPool instead, so they can never
+		// reach resolution.Candidates or resolution.Committed via this call
+		// -- only `added` (unioned into the offer below) sees them. The four
+		// census kinds are untouched: they still merge straight into
+		// candidatesBySubject, exactly as before this ticket.
 		added, coverageTraversalDegraded, coverageAuthzDropped, coverageTruncated, coverageDegraded, coverageMissingKinds, coverageMissingKindsList, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms)
 		if coverageErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, coverageErr

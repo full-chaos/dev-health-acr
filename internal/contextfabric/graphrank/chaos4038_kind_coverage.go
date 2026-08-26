@@ -202,31 +202,60 @@ func candidatesOfKind(pool map[string]contextfabric.SubjectCandidate, kind conte
 // query below; this mirrors the ordinary per-term Search loop's own
 // unconditional per-term iteration rather than re-checking pool state
 // between kinds), this walks terms in order and calls deps.SearchKind(term,
-// kind, kindCoverageQueryLimit), merging every result into pool through the
-// SAME mergeSearchResults path every other pass uses (allowExactMatch=true:
-// terms here are the SAME genuine caller-derived subject terms the per-term
-// Search loop already used; vectorArmSimilarity=nil: this pass is a lexical
-// coverage floor, not a vector-arm competitor, so it must not participate
-// in CHAOS-3829's commit-path carve-out, the same exclusion the
-// question-level pass documents). Stops issuing further per-term calls for
-// a kind as soon as poolHasKind reports it satisfied -- a coverage floor
-// only ever needs ONE candidate to give kindOfferMaterial something to
-// offer, so the remaining terms' calls are unneeded spend. Terms beyond
-// kindCoverageMaxTermsPerKind are never tried at all (codex CHAOS-4038
-// review round 2, finding 3) -- see that constant's own doc comment for the
-// unbounded-fan-out concern it bounds.
+// kind, kindCoverageQueryLimit). Stops issuing further per-term calls for a
+// kind as soon as it is satisfied -- a coverage floor only ever needs ONE
+// candidate to give kindOfferMaterial something to offer, so the remaining
+// terms' calls are unneeded spend. Terms beyond kindCoverageMaxTermsPerKind
+// are never tried at all (codex CHAOS-4038 review round 2, finding 3) -- see
+// that constant's own doc comment for the unbounded-fan-out concern it
+// bounds.
 //
-// Returns `added`: every pool candidate belonging to a kind that started
-// this call missing and is now present -- i.e. exactly what this call put
-// into pool (codex CHAOS-4038 review, finding 1). ResolveSubjects' own final
-// ranked-candidate truncation (ResolveFromMergedCandidatesWithGate's `max`
-// cap) can drop a coverage-floor find from resolution.Candidates when the
-// pool already held `max` higher-confidence candidates of OTHER kinds --
-// exactly the scenario a small MaxSubjectCandidates plus a common-kind-heavy
-// pool produces. kindOfferMaterial's own call site (resolve.go) unions
-// `added` into resolution.Candidates for offer purposes ONLY, so a coverage
-// find still gets OFFERED even when it does not survive that cap -- the cap
-// itself, and everything commit/ranking-related, is completely untouched.
+// MERGE TARGET SPLITS BY KIND (CHAOS-4271 codex round 1, finding 1 -- HIGH,
+// BLOCK): the four census kinds (pull_request/work_item/ci_run/
+// pull_request_review) merge straight into `pool` through the SAME
+// mergeSearchResults path every other pass uses (allowExactMatch=true:
+// terms here are the SAME genuine caller-derived subject terms the per-term
+// Search loop already used), exactly as before this ticket --
+// TestResolveSubjects_SearchKindCoverageTruncationNeverBlocksAnUnrelatedCommit
+// pins that an EXACT-match census-kind floor find commits, by design,
+// unchanged here. repository/project/team (isAliasLookupScopedKind) merge
+// into offerOnlyPool instead, a map `pool` never sees: their finds reach
+// `added` (below) and, through resolve.go's unionCandidatesForOffer, the
+// expected_kind offer -- but they NEVER enter candidatesBySubject, so
+// ResolveFromMergedCandidatesWithGateAndBasis (resolve.go), which reads
+// `pool` alone, cannot rank, offer via resolution.Candidates, or COMMIT one,
+// no matter how exact the match. This is the "rescue offers only; never
+// change commit decisions" condition the CHAOS-4271 orchestrator ruling
+// (2026-08-25 08:22 PDT) stated for these three kinds specifically -- unlike
+// the four census kinds, whose floor-commit behavior predates this ticket
+// and is deliberately left alone. recordIdentityClaim (chaos3884_identity.go)
+// is ALSO suppressed (nil identity/identityTerms) for these three, below
+// (codex round 2, finding 1 -- HIGH, BLOCK): identityClaimants is ONE map
+// shared across every pass this resolution runs, so letting an offer-only
+// repository/project/team floor find register a claim under the SAME
+// (class, term) key a DIFFERENT, unrelated candidate's own exact match uses
+// would let identityCollision suppress THAT candidate's commit -- changing
+// an existing, unrelated commit decision as pure collateral damage, exactly
+// what the ruling's condition forbids. TestResolveSubjects_SearchKindRescuedRepositoryNeverAutoCommitsWithoutDecisiveGrounds
+// is the commit-eligibility regression, using an EXACT-confidence repository
+// match (codex round 1, finding 2: the prior version only tested a non-exact
+// 0.5 match, too weak to have exercised the exact_index gate finding 1 is
+// actually about).
+// TestResolveSubjects_SearchKindOfferOnlyFindNeverSuppressesAnUnrelatedExactCommit
+// is the identity-collision regression (codex round 2, finding 1).
+//
+// Returns `added`: every candidate belonging to a kind that started this
+// call missing and is now present -- census-kind finds read back from
+// `pool` (codex CHAOS-4038 review, finding 1), alias-scoped-kind finds read
+// back from offerOnlyPool. ResolveSubjects' own final ranked-candidate
+// truncation (ResolveFromMergedCandidatesWithGateAndBasis's `max` cap) can
+// still drop a CENSUS-kind coverage-floor find from resolution.Candidates
+// when the pool already held `max` higher-confidence candidates of OTHER
+// kinds; an alias-scoped-kind find is never IN resolution.Candidates to
+// begin with, by this function's own design above. Either way,
+// resolve.go's unionCandidatesForOffer folds `added` into the offer's own
+// input, so a coverage find still gets OFFERED regardless of which map it
+// came from.
 //
 // A genuine SearchKind failure aborts the pass and propagates as an error,
 // exactly like Search/SearchQuestion/AliasLookup's own error handling
@@ -265,7 +294,37 @@ func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, re
 	if len(boundedTerms) > kindCoverageMaxTermsPerKind {
 		boundedTerms = boundedTerms[:kindCoverageMaxTermsPerKind]
 	}
+	// offerOnlyPool is repository/project/team's OWN merge target -- see
+	// this function's own doc comment above (CHAOS-4271 codex round 1,
+	// finding 1) for why these three never touch `pool`.
+	offerOnlyPool := make(map[string]contextfabric.SubjectCandidate)
 	for _, kind := range missing {
+		target := pool
+		// mergeIdentity/mergeIdentityTerms (CHAOS-4271 codex round 2, finding
+		// 1, HIGH, BLOCK): nil for repository/project/team -- recordIdentityClaim
+		// (chaos3884_identity.go) is unconditional inside mergeSearchResults
+		// and shares ONE identityClaimants/identityMatchTerms pair across
+		// every pass this resolution runs, so an offer-only floor find that
+		// happens to be an exact/alias/provider-key match would otherwise
+		// still register a claim under the SAME (class, term) key a
+		// DIFFERENT, unrelated candidate's own exact match uses --
+		// identityCollision (chaos3884_identity.go) then sees >1 claimant
+		// and suppresses THAT candidate's commit, even though it has nothing
+		// to do with repository/project/team. Before this ticket, a
+		// repository/project/team floor SearchKind call in the "AliasLookup
+		// complete but unmatched" scenario never happened at all, so this
+		// collision was never reachable there -- passing nil here keeps that
+		// scenario's OTHER candidates' commit decisions byte-identical,
+		// exactly the "must not change commit decisions" condition asks for.
+		// mergeSearchResults' own doc comment already documents nil as a
+		// deliberate, pre-existing convention (the SearchQuestion pass uses
+		// it for the same "this pass must not participate in identity-
+		// collision tracking" reason).
+		mergeIdentity, mergeIdentityTerms := identity, identityTerms
+		if isAliasLookupScopedKind(kind) {
+			target = offerOnlyPool
+			mergeIdentity, mergeIdentityTerms = nil, nil
+		}
 		for _, term := range boundedTerms {
 			results, kindTruncated, kindDegraded, searchErr := deps.SearchKind(ctx, term, kind, kindCoverageQueryLimit)
 			if searchErr != nil {
@@ -277,16 +336,24 @@ func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, re
 			if kindDegraded {
 				degraded = true
 			}
-			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+			// vectorArmSimilarity=nil: this pass is a lexical coverage
+			// floor, not a vector-arm competitor, so it must not
+			// participate in CHAOS-3829's commit-path carve-out, the same
+			// exclusion the question-level pass documents.
+			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, target, observationParentKey, observationBlocked, true, nil, mergeIdentity, mergeIdentityTerms)
 			traversalDegraded += termTraversalDegraded
 			authzDropped += termAuthzDropped
-			if poolHasKind(pool, kind) {
+			if poolHasKind(target, kind) {
 				break
 			}
 		}
 	}
 	for _, kind := range missing {
-		added = append(added, candidatesOfKind(pool, kind)...)
+		source := pool
+		if isAliasLookupScopedKind(kind) {
+			source = offerOnlyPool
+		}
+		added = append(added, candidatesOfKind(source, kind)...)
 	}
 	return added, traversalDegraded, authzDropped, truncated, degraded, missingKinds, missingKindsList, nil
 }

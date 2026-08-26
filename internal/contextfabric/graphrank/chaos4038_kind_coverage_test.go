@@ -275,20 +275,33 @@ func TestResolveSubjects_SearchKindNeverExceedsMaxTermsPerKind(t *testing.T) {
 // so a genuinely absent repository had no rescue path at all even though the
 // SAME lexical SearchKind mechanism that rescues work_item/pull_request/
 // ci_run/pull_request_review in this exact situation could have found it.
+//
+// Asserts the rescue lands in the expected_kind OFFER (offer.KindOptions),
+// not resolution.Candidates -- codex round 1, finding 1 (HIGH, BLOCK):
+// repository/project/team floor finds merge into applyKindCoverageFloor's
+// own private offerOnlyPool, never candidatesBySubject, so they never reach
+// resolution.Candidates (see TestResolveSubjects_SearchKindRescuedRepositoryNeverAutoCommitsWithoutDecisiveGrounds
+// for the commit-safety half of this same proof).
 func TestResolveSubjects_SearchKindRescuesAliasLookupScopedKindWhenAliasLookupCompleteButUnmatched(t *testing.T) {
 	t.Parallel()
+	// A second, ordinary-pass work_item candidate keeps the pool at 2
+	// distinct offerable kinds -- a single-kind pool with no explicit hint
+	// is suppressed by kindOfferMaterial's own disambiguation gate
+	// (chaos3900_structure_offers.go), which would make this test's offer
+	// assertion pass for the wrong reason (suppression, not visibility).
+	strongWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "Outage work item", 0.9, "*")
 	repoCandidate := candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.6, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind:     true,
 		enableAliasLookup:    true,
 		aliasLookupComplete:  true,
 		aliasLookupClaimants: map[string][]CandidateNode{},
-		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchResults:        map[string][]CandidateNode{"alpha": {strongWorkItem}},
 		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
 			"alpha": {contextfabric.SubjectRepository: {repoCandidate}},
 		},
 	}
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), nil, nil)
+	resolution, offer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -301,14 +314,19 @@ func TestResolveSubjects_SearchKindRescuesAliasLookupScopedKindWhenAliasLookupCo
 	if !found {
 		t.Fatalf("searchKindCalls = %#v, want repository queried -- AliasLookup completed but matched nothing, so the floor must still try", backend.searchKindCalls)
 	}
-	foundRepo := false
 	for _, c := range resolution.Candidates {
-		if c.Subject.Kind == contextfabric.SubjectRepository && c.Subject.CanonicalID == "repo_1" {
-			foundRepo = true
+		if c.Subject.Kind == contextfabric.SubjectRepository {
+			t.Fatalf("resolution.Candidates = %#v, want repository ABSENT -- an alias-lookup-scoped kind's floor find is offer-only (CHAOS-4271 codex round 1, finding 1)", resolution.Candidates)
 		}
 	}
-	if !foundRepo {
-		t.Fatalf("resolution.Candidates = %#v, want the SearchKind-rescued repository candidate present", resolution.Candidates)
+	foundOffer := false
+	for _, opt := range offer.KindOptions {
+		if opt.Kind == contextfabric.SubjectRepository {
+			foundOffer = true
+		}
+	}
+	if !foundOffer {
+		t.Fatalf("offer.KindOptions = %#v, want the SearchKind-rescued repository present as an expected_kind offer option", offer.KindOptions)
 	}
 }
 
@@ -351,23 +369,31 @@ func TestResolveSubjects_SearchKindRescuesOnlyTheAliasLookupScopedKindsAliasLook
 }
 
 // TestResolveSubjects_SearchKindRescuedRepositoryNeverAutoCommitsWithoutDecisiveGrounds
-// is CHAOS-4271's own commit-safety proof (team-lead condition 2, 2026-08-25):
-// widening the floor's kind set to admit repository does not touch how a
-// found candidate is GATED -- a coverage-floor find merges through the SAME
-// mergeSearchResults/NodeCandidate/commit-gate path every other pass' finds
-// already do (chaos4038_kind_coverage.go's own doc comment), so an
-// ordinary-confidence, non-exact-match repository rescue is exactly as
-// non-decisive as an ordinary-confidence work_item rescue always was --
-// CHAOS-4271 changes WHICH candidates the floor can find, never HOW a found
-// candidate is judged. This is deliberately NOT "floor finds can never
-// commit" (false: TestResolveSubjects_SearchKindCoverageTruncationNeverBlocksAnUnrelatedCommit
-// already proves an EXACT-match floor find commits normally, by design,
-// same as any other pass) -- it is the narrower, correct claim: no NEW
-// commit path opens for repository specifically, and the CHAOS-4040/4085
-// gate machinery (untouched by this diff -- zero changes outside
-// chaos4038_kind_coverage.go, its test, and one resolve.go call-site
-// argument/comment) governs identically regardless of which pass a
-// candidate arrived through.
+// is CHAOS-4271's own commit-safety proof (team-lead ruling, 2026-08-25
+// 08:22 PDT: "the change rescues offer-only rows ... it must not change
+// commit decisions"). This is the codex round 1, finding 1 (HIGH, BLOCK)
+// regression, USING AN EXACT MATCH (codex round 1, finding 2, MEDIUM: the
+// prior version of this test only used a non-exact 0.5-confidence
+// candidate, too weak to have exercised the exact_index gate finding 1 is
+// actually about -- NodeCandidate's allowExactMatch promotion fires
+// whenever the term equals the node's label/name, REGARDLESS of the
+// relevance this fixture passes in, so "acr" here gets EXACT confidence
+// exactly like TestResolveSubjects_SearchKindCoverageTruncationNeverBlocksAnUnrelatedCommit's
+// census-kind exact match does).
+//
+// Before this fix, this exact scenario would have committed: AliasLookup
+// completed but matched nothing, ordinary Search found nothing, SearchKind
+// found an exact-label repository match, NodeCandidate promoted it to exact
+// confidence, and the SAME candidatesBySubject map the exact_index gate
+// reads would have contained it (chaos4038_kind_coverage.go's own doc
+// comment, "MERGE TARGET SPLITS BY KIND"). The fix routes repository/
+// project/team floor finds into a private offerOnlyPool instead, so this
+// exact match reaches the expected_kind OFFER but never resolution.Candidates
+// or resolution.Committed -- proving the widening only ever adds an offer,
+// never a commit path, for these three kinds specifically. The four census
+// kinds are UNCHANGED (TestResolveSubjects_SearchKindCoverageTruncationNeverBlocksAnUnrelatedCommit
+// still proves an EXACT-match CENSUS-kind floor find commits normally, by
+// design, exactly as before this ticket).
 func TestResolveSubjects_SearchKindRescuedRepositoryNeverAutoCommitsWithoutDecisiveGrounds(t *testing.T) {
 	t.Parallel()
 	// A second, ordinary-pass work_item candidate keeps the pool at 2
@@ -376,7 +402,12 @@ func TestResolveSubjects_SearchKindRescuedRepositoryNeverAutoCommitsWithoutDecis
 	// (chaos3900_structure_offers.go), which would make this test's offer
 	// assertion pass for the wrong reason (suppression, not visibility).
 	strongWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "Outage work item", 0.9, "*")
-	weakRepo := candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.5, "*")
+	// exactRepo's label is the LITERAL term ("outage", testInterpreted's own
+	// term below) -- strings.EqualFold(term, node.Name) in NodeCandidate
+	// (candidate.go) fires regardless of the 0.5 relevance passed here, so
+	// this is an EXACT-confidence match, the scenario codex round 1 finding
+	// 1 identified as newly commit-eligible pre-fix.
+	exactRepo := candidateNode(contextfabric.SubjectRepository, "repo_1", "outage", 0.5, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind:     true,
 		enableAliasLookup:    true,
@@ -384,30 +415,92 @@ func TestResolveSubjects_SearchKindRescuedRepositoryNeverAutoCommitsWithoutDecis
 		aliasLookupClaimants: map[string][]CandidateNode{},
 		searchResults:        map[string][]CandidateNode{"outage": {strongWorkItem}},
 		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
-			"outage": {contextfabric.SubjectRepository: {weakRepo}},
+			"outage": {contextfabric.SubjectRepository: {exactRepo}},
 		},
 	}
 	resolution, offer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("outage"), backend.deps(), nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
-	foundOffered := false
 	for _, c := range resolution.Candidates {
-		if c.Subject.Kind == contextfabric.SubjectRepository && c.Subject.CanonicalID == "repo_1" {
-			foundOffered = true
+		if c.Subject.Kind == contextfabric.SubjectRepository {
+			t.Fatalf("resolution.Candidates = %#v, want repository ABSENT even for an EXACT match -- an alias-lookup-scoped kind's floor find is offer-only (CHAOS-4271 codex round 1, finding 1)", resolution.Candidates)
 		}
 	}
-	if !foundOffered {
-		t.Fatalf("resolution.Candidates = %#v, want the SearchKind-rescued repository present as an offer candidate", resolution.Candidates)
-	}
-	// Only the repository's OWN commit-decisiveness is this test's claim --
-	// the strong work_item candidate committing on its own separate,
+	// The repository's own commit-ineligibility is this test's claim -- the
+	// strong work_item candidate committing on its own separate,
 	// pre-existing grounds (a single decisive claimant for its own term) is
 	// expected and irrelevant here; asserting a blanket empty Committed
 	// would conflate the two.
 	for _, committed := range resolution.Committed {
 		if committed.Kind == contextfabric.SubjectRepository {
-			t.Fatalf("resolution.Committed = %#v, want repository NOT auto-committed -- an ordinary-confidence, non-exact-match coverage-floor find is never decisive on its own, exactly like the pre-CHAOS-4271 census-kind floor finds", resolution.Committed)
+			t.Fatalf("resolution.Committed = %#v, want repository NOT auto-committed -- an EXACT-match coverage-floor find for an alias-lookup-scoped kind can never reach the commit gate at all, regardless of confidence (CHAOS-4271 codex round 1, finding 1)", resolution.Committed)
+		}
+	}
+	foundOffer := false
+	for _, opt := range offer.KindOptions {
+		if opt.Kind == contextfabric.SubjectRepository {
+			foundOffer = true
+		}
+	}
+	if !foundOffer {
+		t.Fatalf("offer.KindOptions = %#v, want repository present as an expected_kind offer option", offer.KindOptions)
+	}
+}
+
+// TestResolveSubjects_SearchKindOfferOnlyFindNeverSuppressesAnUnrelatedExactCommit
+// is CHAOS-4271 codex round 2, finding 1 (HIGH, BLOCK): recordIdentityClaim
+// (chaos3884_identity.go) is called unconditionally inside mergeSearchResults
+// and shares ONE identityClaimants/identityMatchTerms pair across every pass
+// a resolution runs. Before offerOnlyPool ALSO suppressed identity tracking
+// (nil identity/identityTerms), a repository/project/team floor find that
+// happened to carry an alias- or provider-key-class mechanism could register
+// a claim under the SAME literal term a completely unrelated, DIFFERENT
+// candidate's own exact LABEL match used -- identityCrossClassRivalClaimant
+// (chaos3917_identity_unification.go) then treats that as a genuine rival
+// and blocks the unrelated candidate's exact_index commit, even though the
+// two have nothing to do with each other and the repository never itself
+// reaches resolution.Candidates or resolution.Committed. This is exactly
+// the "must not change commit decisions" violation the CHAOS-4271
+// orchestrator ruling (2026-08-25 08:22 PDT) forbids -- collateral, not
+// direct, but still a changed decision for a candidate this ticket never
+// meant to touch at all.
+func TestResolveSubjects_SearchKindOfferOnlyFindNeverSuppressesAnUnrelatedExactCommit(t *testing.T) {
+	t.Parallel()
+	// exactWorkItem's label is the LITERAL term ("outage") -- an ordinary,
+	// pre-existing exact match with no rival, decisive and committable on
+	// its own via the exact_index gate, completely unrelated to repository.
+	exactWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "outage", 0.6, "*")
+	// aliasRepo reaches the pool ONLY through applyKindCoverageFloor's own
+	// offer-only SearchKind rescue (repository is entirely missing from
+	// ordinary Search/AliasLookup here) -- its "aliases" attribute contains
+	// the SAME literal term, so NodeCandidate tags it MatchAlias
+	// (identityKeyClassAlias), the identity-class rival exactIndex's own
+	// identityCrossClassRivalClaimant checks a label-class claim against.
+	aliasRepo := aliasCandidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.6, []string{"outage"}, nil, false)
+	backend := &fakeGraphBackend{
+		enableSearchKind: true,
+		searchResults:    map[string][]CandidateNode{"outage": {exactWorkItem}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"outage": {contextfabric.SubjectRepository: {aliasRepo}},
+		},
+	}
+	resolution, offer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("outage"), backend.deps(), nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	committedWorkItem := false
+	for _, c := range resolution.Committed {
+		if c.Kind == contextfabric.SubjectWorkItem && c.CanonicalID == "wi_1" {
+			committedWorkItem = true
+		}
+	}
+	if !committedWorkItem {
+		t.Fatalf("resolution.Committed = %#v, want the work_item's OWN exact match to commit -- an offer-only repository floor find registering an alias-class claim on the SAME literal term must never suppress it via identityCrossClassRivalClaimant (CHAOS-4271 codex round 2, finding 1)", resolution.Committed)
+	}
+	for _, c := range resolution.Candidates {
+		if c.Subject.Kind == contextfabric.SubjectRepository {
+			t.Fatalf("resolution.Candidates = %#v, want repository ABSENT -- offer-only (CHAOS-4271 codex round 1, finding 1)", resolution.Candidates)
 		}
 	}
 	foundOffer := false
@@ -620,5 +713,31 @@ func TestResolveSubjects_SearchKindPropagatesBackendError(t *testing.T) {
 	}
 	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), nil, nil); err == nil {
 		t.Fatal("ResolveSubjects() error = nil, want the SearchKind backend failure propagated")
+	}
+}
+
+// TestResolveSubjects_SearchKindNeverCalledAfterAliasLookupError is codex
+// CHAOS-4271 round 1, finding 3 (LOW): resolveSubjects (resolve.go) returns
+// immediately when deps.AliasLookup itself errors -- a genuine backend
+// fault, distinct from a completeness gap -- strictly BEFORE
+// applyKindCoverageFloor ever runs (see resolve.go's own AliasLookup error
+// handling, mirrored by TestResolveSubjects_AliasLookupErrorAbortsResolution
+// in chaos3884_identity_resolution_test.go, which only asserts the error
+// itself propagates). This proves the OTHER half: the coverage floor's own
+// SearchKind backend -- enabled here and otherwise eager to fire, since
+// every floor kind is missing -- is never even reached.
+func TestResolveSubjects_SearchKindNeverCalledAfterAliasLookupError(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{
+		enableSearchKind:  true,
+		enableAliasLookup: true,
+		aliasLookupErr:    errors.New("transient identity-universe read failure"),
+		searchResults:     map[string][]CandidateNode{"alpha": {}},
+	}
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), nil, nil); err == nil {
+		t.Fatal("ResolveSubjects() error = nil, want the AliasLookup backend failure propagated")
+	}
+	if len(backend.searchKindCalls) != 0 {
+		t.Fatalf("searchKindCalls = %#v, want ZERO -- an AliasLookup error aborts resolveSubjects before the coverage floor ever runs", backend.searchKindCalls)
 	}
 }
