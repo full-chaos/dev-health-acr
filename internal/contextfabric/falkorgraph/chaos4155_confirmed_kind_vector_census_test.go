@@ -129,6 +129,37 @@ func TestConfirmedKindVectorCensus_NoEmbedderNotAttempted(t *testing.T) {
 	}
 }
 
+// TestConfirmedKindVectorCensus_NonPositiveEmbedderDimensionNotAttempted is
+// codex R2's own High-confidence H2 finding (CHAOS-4311, confirmed): a
+// configured embedder that declares a non-positive Dimension has no usable
+// vector space to census against at all -- trueCosineSimilarity's own doc
+// comment is explicit that dimension correctness is "the AC-3778-7 fence's
+// job, upstream of this call", and this census had no fence check of its
+// own. Before the fix this fell through to the ordinary code path and could
+// reach Complete with zero rivals purely because every trueCosineSimilarity
+// call silently returned 0 for a dimension mismatch. Mirrors the
+// a.embedder==nil case immediately above: this is refused before any
+// backend call, never a partial attempt.
+func TestConfirmedKindVectorCensus_NonPositiveEmbedderDimensionNotAttempted(t *testing.T) {
+	t.Parallel()
+	called := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		called = true
+		return nil, nil
+	}}
+	// stubEmbedder.Identity() derives Dimension from len(s.vector) -- an
+	// empty vector field means Dimension==0.
+	adapter := vectorAdapter(t, fake, &stubEmbedder{}, 0.5)
+	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
+	if got.State != graphrank.ConfirmedKindVectorScopeNotAttempted {
+		t.Fatalf("State = %q, want %q -- a non-positive embedder dimension has no usable vector space to census against", got.State, graphrank.ConfirmedKindVectorScopeNotAttempted)
+	}
+	if called {
+		t.Fatal("queryFunc was called, want zero backend calls when the embedder's own declared dimension is non-positive")
+	}
+}
+
 // TestConfirmedKindVectorCensus_CompleteOnCleanCountClosedCorpusWithStableSnapshot
 // is the census's own happy path: population count matches the enumerated,
 // well-formed corpus exactly, the watermark snapshot is identical before
@@ -220,6 +251,41 @@ func TestConfirmedKindVectorCensus_MalformedRowFailsClosed(t *testing.T) {
 	}
 }
 
+// TestConfirmedKindVectorCensus_StoredVectorDimensionMismatchIsMalformed is
+// codex R2's own High-confidence H2 finding (CHAOS-4311, confirmed): a
+// stored vector decodes cleanly but its LENGTH disagrees with the currently
+// configured embedder's own declared Dimension. n.embedder_identity
+// matching the stamped identity string does NOT already rule this out --
+// EmbedderIdentity.String() deliberately excludes Dimension (ports.go's own
+// doc comment: "so a mismatch can be detected numerically rather than by
+// string comparison"), so a stale row stamped under the same provider/model
+// but a different dimension passes the identity-string predicate. Before
+// the fix this row would reach trueCosineSimilarity, which returns 0 for a
+// length mismatch -- indistinguishable from a genuine "no rival" finding,
+// letting a stale-dimension corpus silently produce a false
+// Complete-with-zero-rivals. Now counted as malformed, exactly like an
+// undecodable row.
+func TestConfirmedKindVectorCensus_StoredVectorDimensionMismatchIsMalformed(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal: 1,
+		// embedder (chaos4155Adapter) declares Dimension=4; this row's
+		// stored vector is 3-wide -- a stale/wrong-dimension write, not an
+		// undecodable one.
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0})},
+		watermarkBefore: []row{},
+		watermarkAfter:  []row{},
+	}
+	adapter := chaos4155Adapter(t, fake, 1000)
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
+	if got.State != graphrank.ConfirmedKindVectorScopeMalformed {
+		t.Fatalf("outcome = %+v, want State=%q -- a stored vector whose length disagrees with the embedder's own declared Dimension must fail closed, never silently score", got, graphrank.ConfirmedKindVectorScopeMalformed)
+	}
+	if got.MalformedCount != 1 {
+		t.Fatalf("outcome.MalformedCount = %d, want 1", got.MalformedCount)
+	}
+}
+
 // TestConfirmedKindVectorCensus_CountMismatchFailsClosed proves the
 // independent count(n) reconciliation: a fetch that returns FEWER
 // well-formed rows than the count query reported (a concurrent-write race
@@ -299,7 +365,14 @@ func TestConfirmedKindVectorCensus_TermEmbedFailureFailsClosedNeverComplete(t *t
 		watermarkBefore: []row{chaos4155WatermarkRow("github", 1)},
 		watermarkAfter:  []row{chaos4155WatermarkRow("github", 1)},
 	}
-	adapter := vectorAdapter(t, fake.toFakeConn(), &stubEmbedder{err: errors.New("embed provider unavailable")}, 0.5)
+	// vector: []float32{1, 0, 0, 0} (CHAOS-4311 H2 fix): stubEmbedder.Identity()
+	// derives Dimension from len(s.vector) -- must stay non-zero and match
+	// the corpus row's own dimension above, or confirmedKindVectorCensus's
+	// new upfront dimension guard reads this as a misconfigured embedder
+	// (NotAttempted) before ever reaching the Embed() call this test means
+	// to exercise. Embed() itself always returns err regardless of vector's
+	// content, so this field is otherwise inert to what this test checks.
+	adapter := vectorAdapter(t, fake.toFakeConn(), &stubEmbedder{vector: []float32{1, 0, 0, 0}, err: errors.New("embed provider unavailable")}, 0.5)
 	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
 	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
@@ -474,6 +547,61 @@ func TestConfirmedKindVectorCensus_NonFiniteQueryVectorFailsClosed(t *testing.T)
 	}
 	if got.QueriesScored != 0 {
 		t.Fatalf("outcome.QueriesScored = %d, want 0 -- a poisoned vector must not count as a scored term", got.QueriesScored)
+	}
+}
+
+// chaos4155MismatchedDimensionEmbedder is a test-only embedder whose
+// declared Identity().Dimension is INDEPENDENT of what Embed() actually
+// returns -- stubEmbedder cannot express this (both derive from the same
+// underlying vector field by construction), but a real embedder
+// implementation bug or a live reconfiguration genuinely could return a
+// vector whose length disagrees with its own declared identity.
+type chaos4155MismatchedDimensionEmbedder struct {
+	declaredDimension int
+	returnedVector    []float32
+}
+
+func (e *chaos4155MismatchedDimensionEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = e.returnedVector
+	}
+	return out, nil
+}
+
+func (e *chaos4155MismatchedDimensionEmbedder) Identity() contextfabric.EmbedderIdentity {
+	return contextfabric.EmbedderIdentity{Provider: "stub", Model: "stub-embed", Dimension: e.declaredDimension}
+}
+
+// TestConfirmedKindVectorCensus_QueryVectorDimensionMismatchFailsClosed is
+// codex R2's own High-confidence H2 finding (CHAOS-4311, confirmed): the
+// census rejected empty and non-finite query vectors (the test above) but
+// never required the length Embed() actually returns to equal
+// EmbedderIdentity.Dimension. Before the fix, a query vector one dimension
+// off from its own declared identity (an embedder implementation bug or a
+// live reconfiguration mid-resolution) would reach trueCosineSimilarity,
+// which returns 0 for a length mismatch against every corpus row --
+// silently indistinguishable from "this term legitimately has no rivals".
+// Folded into the SAME embedFailed path the non-finite check already uses.
+func TestConfirmedKindVectorCensus_QueryVectorDimensionMismatchFailsClosed(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      1,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
+		watermarkBefore: []row{chaos4155WatermarkRow("github", 1)},
+		watermarkAfter:  []row{chaos4155WatermarkRow("github", 1)},
+	}
+	// Declares Dimension=4 (matching the corpus row above) but Embed()
+	// actually returns a 3-wide vector -- the mismatch this test exercises.
+	embedder := &chaos4155MismatchedDimensionEmbedder{declaredDimension: 4, returnedVector: []float32{1, 0, 0}}
+	adapter := vectorAdapter(t, fake.toFakeConn(), embedder, 0.5)
+	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"}, temporalFilter{})
+	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
+		t.Fatalf("outcome = %+v, want State=%q -- a query vector whose length disagrees with the embedder's own declared Dimension must abort the census, never silently score as zero rivals", got, graphrank.ConfirmedKindVectorScopeFailed)
+	}
+	if got.QueriesScored != 0 {
+		t.Fatalf("outcome.QueriesScored = %d, want 0 -- a dimension-mismatched vector must not count as a scored term", got.QueriesScored)
 	}
 }
 

@@ -436,11 +436,11 @@ func TestResolveSubjects_ConfirmedKindVectorCensus_FullQuestionRivalBlocksCommit
 	questionRival.VectorSimilarity = &similarity
 	request := testRequest()
 	backend := &fakeGraphBackend{
-		enableSearchKind:          true,
-		searchResults:             map[string][]CandidateNode{term: {}},
-		searchKindResults:         map[string]map[contextfabric.SubjectKind][]CandidateNode{term: {kind: {node}}},
-		searchTruncated:           true,
-		vectorMechanismConfigured: true,
+		enableSearchKind:                true,
+		searchResults:                   map[string][]CandidateNode{term: {}},
+		searchKindResults:               map[string]map[contextfabric.SubjectKind][]CandidateNode{term: {kind: {node}}},
+		searchTruncated:                 true,
+		vectorMechanismConfigured:       true,
 		enableConfirmedKindVectorCensus: true,
 		confirmedKindVectorCensusResult: ConfirmedKindVectorCensusOutcome{
 			// Term channel: Complete, zero rivals -- the census alone would

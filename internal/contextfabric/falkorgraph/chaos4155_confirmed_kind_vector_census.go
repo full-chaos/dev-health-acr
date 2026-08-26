@@ -52,6 +52,18 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 	if len(terms) == 0 {
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeNotAttempted}
 	}
+	// codex R2 (High, confirmed, CHAOS-4311 H2): a configured embedder that
+	// declares a non-positive Dimension has no usable vector space to
+	// census against -- trueCosineSimilarity's own doc comment is explicit
+	// that dimension correctness is "the AC-3778-7 fence's job, upstream of
+	// this call", and this census has no fence check of its own to reject a
+	// nonsensical identity, unlike normal retrieval's vectorFenceCheck. This
+	// is not attempted, mirroring the a.embedder==nil case just above --
+	// both mean "no usable vector capability configured" for this census.
+	dimension := a.embedder.Identity().Dimension
+	if dimension <= 0 {
+		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeNotAttempted}
+	}
 
 	identity := a.stampedEmbedderIdentity(a.embedder.Identity())
 
@@ -81,7 +93,7 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 		}
 	}
 
-	corpus, enumeratedCount, malformedCount, err := a.fetchKindEmbedderFenceCorpus(ctx, key, orgID, string(kind), identity, temporal)
+	corpus, enumeratedCount, malformedCount, err := a.fetchKindEmbedderFenceCorpus(ctx, key, orgID, string(kind), identity, dimension, temporal)
 	if err != nil {
 		return graphrank.ConfirmedKindVectorCensusOutcome{State: graphrank.ConfirmedKindVectorScopeFailed, PopulationCount: populationCount, DurationMS: a.now().Sub(started).Milliseconds()}
 	}
@@ -136,7 +148,17 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 		// err/empty-slice case above: this census's completeness claim
 		// requires every term to have been scored against a trustworthy
 		// vector, not silently zeroed out.
-		if !finiteVector(queryVector) {
+		//
+		// codex R2 (High, confirmed, CHAOS-4311 H2): len(queryVector) !=
+		// dimension folds in here too -- the SAME "cannot trust this term's
+		// own vector" reasoning as the finiteness check just above, for the
+		// case where Embed() returns a vector of a different length than
+		// its own declared EmbedderIdentity.Dimension (an embedder
+		// implementation bug or live reconfiguration, not a per-call
+		// transient failure). trueCosineSimilarity's own dimension-mismatch
+		// guard would otherwise silently score every corpus row 0 for this
+		// term, again indistinguishable from a genuine "no rivals" finding.
+		if !finiteVector(queryVector) || len(queryVector) != dimension {
 			embedFailed = true
 			continue
 		}
@@ -495,7 +517,19 @@ type censusCorpusRow struct {
 // temporal (CHAOS-4311, codex R1 High, confirmed): the SAME admission
 // window countKindEmbedderFenceCorpus and kindScopedFulltextSearchNodes'
 // own lexical pass already apply -- see that function's own doc comment.
-func (a *Adapter) fetchKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string, temporal temporalFilter) (corpus []censusCorpusRow, enumeratedCount int64, malformedCount int64, err error) {
+// dimension (CHAOS-4311, codex R2 High, confirmed H2): the currently
+// configured embedder's own declared Dimension -- a decoded stored vector
+// whose length disagrees is counted as malformed exactly like an
+// undecodable one, never silently scored. n.embedder_identity matching
+// $identity (the WHERE clause above) does NOT already guarantee this:
+// EmbedderIdentity.String() deliberately excludes Dimension (ports.go's own
+// doc comment: "so a mismatch can be detected numerically rather than by
+// string comparison"), so a stale row stamped under the same
+// provider/model but a different dimension would otherwise pass the
+// identity-string check and score a meaningless cosine similarity
+// (trueCosineSimilarity returns 0 for a length mismatch, which read as "no
+// rival" -- a false Complete-with-zero-rivals).
+func (a *Adapter) fetchKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string, dimension int, temporal temporalFilter) (corpus []censusCorpusRow, enumeratedCount int64, malformedCount int64, err error) {
 	cypher := fmt.Sprintf(
 		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
 			"AND n.%s = $kind AND n.%s IS NOT NULL%s "+
@@ -517,7 +551,7 @@ func (a *Adapter) fetchKindEmbedderFenceCorpus(ctx context.Context, key, orgID, 
 			}
 			canonicalID := propStringValue(n.Properties[propCanonicalID])
 			vector, vok := decodeVectorProperty(n.Properties[propEmbedding])
-			if canonicalID == "" || !vok || len(vector) == 0 {
+			if canonicalID == "" || !vok || len(vector) == 0 || len(vector) != dimension {
 				malformedCount++
 				continue
 			}
