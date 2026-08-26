@@ -200,23 +200,28 @@ check "an IPv6 ACR_TEST_TRIAL_PG_HOST is bracketed in ACR_TEST_TRIAL_POSTGRES_DS
 # test-connect-retry.sh's own six-var-override case proves it is
 # available here); only the CH_DB portion of the DSN is unpredictable
 # (a real ops/.env secret), so the check strips it, asserting only the
-# authority (host:port) both fixes touch. Two DISTINCT IPv6 literals for
-# CH vs FALKOR so neither assertion could pass by the other one's value.
+# authority (host:port) every fix touches. THREE DISTINCT IPv6 literals
+# for PG vs CH vs FALKOR so no assertion could pass on another one's
+# value (codex R3, real Medium: the first version of this case left
+# ACR_TRIAL_PG_HOST at 127.0.0.1, so a regression at common.sh:451's own
+# override-branch pg_host construction could pass this file unnoticed --
+# fixed by asserting all three legs).
 run_override_reader() {
   (cd "$script_dir/../.." && env \
-    ACR_TRIAL_PG_HOST=127.0.0.1 ACR_TRIAL_PG_PORT=5432 \
+    ACR_TRIAL_PG_HOST=2001:db7::1 ACR_TRIAL_PG_PORT=5432 \
     ACR_TRIAL_CH_HOST=2001:db8::1 ACR_TRIAL_CH_PORT=9000 \
     ACR_TRIAL_FALKOR_HOST=2001:db9::1 ACR_TRIAL_FALKOR_PORT=6379 \
     bash -c '
       set -euo pipefail
       source scripts/trial/common.sh
       trial_wire_common_env
+      pg_authority="$(printf "%s" "$ACR_TEST_TRIAL_POSTGRES_DSN" | sed -E "s#.*@##; s#/.*##")"
       ch_authority="$(printf "%s" "$ACR_TEST_TRIAL_CLICKHOUSE_DSN" | sed -E "s#.*@##; s#/.*##")"
-      printf "%s %s" "$ch_authority" "$ACR_TEST_TRIAL_FALKOR_ADDR"
+      printf "%s %s %s" "$pg_authority" "$ch_authority" "$ACR_TEST_TRIAL_FALKOR_ADDR"
     ' 2>"$tmp/stderr.log") || echo "ERR $?"
 }
-check "override branch: IPv6 ACR_TRIAL_CH_HOST/FALKOR_HOST both bracketed" \
-  "[2001:db8::1]:9000 [2001:db9::1]:6379" \
+check "override branch: IPv6 ACR_TRIAL_PG_HOST/CH_HOST/FALKOR_HOST all bracketed" \
+  "[2001:db7::1]:5432 [2001:db8::1]:9000 [2001:db9::1]:6379" \
   "$(run_override_reader)"
 
 # 6. Producer pin (CHAOS-4186 follow-up, real incident): the REAL
