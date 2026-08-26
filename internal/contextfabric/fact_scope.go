@@ -1085,6 +1085,25 @@ type FactScopeExpansionResult struct {
 	// truncation detection (Limit+1) or cross-origin duplicates can never
 	// inflate the count.
 	TargetAttributionSource map[string]string
+	// TargetRoot is CHAOS-4260's addition: an OPTIONAL per-target override of
+	// the SPECIFIC origin subject a target was reached through, keyed by the
+	// SAME FactSubjectKey(target). Absent (nil, or a target missing from the
+	// map) means "attribute to origins[0]", which is every expander's
+	// behaviour today and stays that way -- this field is additive, exactly
+	// like TargetBasis/TargetAttributionSource before it.
+	//
+	// EXISTS BECAUSE origins IS A WHOLE ORIGIN-KIND GROUP, NOT ONE ORIGIN
+	// (CHAOS-4260): when an investigation names several same-kind roots
+	// (e.g. two teams) that expand together in one expand() call, origins
+	// holds all of them, and every admitted target used to be attributed to
+	// origins[0] regardless of which origin's own edge actually reached it.
+	// An expander that CAN determine a target's true origin deterministically
+	// (e.g. via a SQL aggregate that never changes candidate cardinality --
+	// see ScopeExpander.projectRepositories' own comment) populates this map;
+	// one that cannot leaves it nil and the resolver falls through to
+	// origins[0], the same (documented, pre-existing) approximation as
+	// before.
+	TargetRoot map[string]SubjectRef
 }
 
 // FactScopeExpansionCounts is the diagnostic split. See
@@ -1583,10 +1602,7 @@ func (r *FactReadScopeResolver) expand(
 	sourceCounts := map[string]int{}
 	for _, target := range kept {
 		// Provenance binds every admitted target to the policy that admitted
-		// it. Root is recorded per ORIGIN GROUP rather than per edge -- the
-		// expander's own traversal knows which specific work item linked
-		// which repository, but that detail is neither needed here nor safe
-		// to carry into a structure the answer is composed from.
+		// it.
 		//
 		// BASIS IS PER-TARGET (CHAOS-4101): result.TargetBasis lets an
 		// expander override rule.Basis for one target -- the team policies
@@ -1607,8 +1623,24 @@ func (r *FactReadScopeResolver) expand(
 		if source, ok := result.TargetAttributionSource[key]; ok && source != "" {
 			sourceCounts[source]++
 		}
+		// ROOT IS PER-TARGET WHEN THE EXPANDER CAN DETERMINE IT (CHAOS-4260):
+		// origins[0] is the fallback for an expander that cannot attribute a
+		// target to one specific origin among a same-kind group (every
+		// expander's behaviour before this ticket, and still correct when
+		// origins has exactly one element). result.TargetRoot lets an
+		// expander that CAN determine the true origin -- e.g. via a
+		// cardinality-preserving SQL aggregate -- override it, closing the
+		// bug where every admitted target across a multi-origin group was
+		// attributed to origins[0] regardless of which origin's own edge
+		// actually reached it. FactScopeDerivation.Root has no live reader
+		// today (grep confirms); this is a correctness fix for its
+		// definition, not a behaviour change any current consumer observes.
+		root := origins[0]
+		if override, ok := result.TargetRoot[key]; ok {
+			root = override
+		}
 		scope.Derivations = append(scope.Derivations, FactScopeDerivation{
-			Root:   origins[0],
+			Root:   root,
 			Target: target,
 			Policy: rule.Policy,
 			Basis:  basis,

@@ -1096,6 +1096,11 @@ type recordingScopeExpander struct {
 	// gets targetBasisByPolicy's map; targetBasis (unscoped) still applies to
 	// every call for tests that do not need this distinction.
 	targetBasisByPolicy map[FactScopePolicy]map[string]FactScopeBasis
+	// targetRoot is CHAOS-4260's addition: an optional per-target
+	// FactScopeExpansionResult.TargetRoot override, so a test can exercise
+	// the resolver's per-target root attribution (as opposed to the
+	// origins[0] fallback) without a real ClickHouse-backed expander.
+	targetRoot map[string]SubjectRef
 }
 
 func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request FactScopeExpansionRequest) (FactScopeExpansionResult, error) {
@@ -1116,7 +1121,7 @@ func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request Fact
 	if scoped, ok := e.targetBasisByPolicy[request.Policy]; ok {
 		targetBasis = scoped
 	}
-	return FactScopeExpansionResult{Targets: targets, Counts: e.counts, TargetBasis: targetBasis, TargetAttributionSource: e.targetAttributionSource}, nil
+	return FactScopeExpansionResult{Targets: targets, Counts: e.counts, TargetBasis: targetBasis, TargetAttributionSource: e.targetAttributionSource, TargetRoot: e.targetRoot}, nil
 }
 
 // disableAllProjectPolicies installs a narrow table with the SAME three
@@ -1981,6 +1986,74 @@ func TestChaos4101_TheWeakerBasisUpgradeAppliesEvenWhenThePriorOriginFilledTheCa
 	}
 	if got := bundle.Scope.Derivations[0].Basis; got != FactScopeBasisAttributedPrimaryTeam {
 		t.Fatalf("derivation basis = %q, want attributed_primary_team: the cap being already full must not stop the duplicate's own weaker-basis upgrade from applying", got)
+	}
+}
+
+// TestChaos4260_RootIsPerTargetAcrossMultipleSameKindOrigins is CHAOS-4260's
+// headline proof: expand() is called ONCE per origin KIND with every root of
+// that kind bundled into `origins` (resolveRequirement's own byOriginKind
+// grouping, above) -- so when an investigation names two same-kind roots
+// (here, two teams) that expand together, admitting a target reached through
+// the SECOND origin must record that origin as its Root, not origins[0].
+// Before the CHAOS-4260 fix, FactScopeDerivation.Root was hardcoded to
+// origins[0] for every admitted target regardless of which origin's own edge
+// reached it -- this test's expander uses TargetRoot (mirroring how the real
+// ClickHouse-backed team/project expanders now populate it, see
+// chaos4099_scope_expander.go's projectRepositories/teamRepositories) to
+// prove the resolver actually reads that override rather than falling back
+// to origins[0] for a target the expander COULD attribute precisely.
+func TestChaos4260_RootIsPerTargetAcrossMultipleSameKindOrigins(t *testing.T) {
+	restore := factScopePolicies
+	t.Cleanup(func() { factScopePolicies = restore })
+	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {
+			SubjectTeam: {
+				Policy: FactScopePolicyTeamPrimaryAttributionRepository, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 10,
+			},
+		},
+	}
+
+	secondTeam := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:SRE", Label: "SRE"}
+	repoFromFirstTeam := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:from-platform"}
+	repoFromSecondTeam := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:from-sre"}
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result:     FactProviderResult{State: SourceAvailable},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+		ScopeExpander: &recordingScopeExpander{
+			// ONE call: both scopeTeam and secondTeam are the SAME origin
+			// kind, so resolveRequirement's byOriginKind grouping bundles
+			// them into a single expand() invocation with
+			// origins = [scopeTeam, secondTeam] (request order).
+			targets: []SubjectRef{repoFromFirstTeam, repoFromSecondTeam},
+			targetRoot: map[string]SubjectRef{
+				canonicalFactSubjectKey(repoFromFirstTeam):  scopeTeam,
+				canonicalFactSubjectKey(repoFromSecondTeam): secondTeam,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeTeam, secondTeam}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(bundle.Scope.Derivations) != 2 {
+		t.Fatalf("derivations = %+v, want exactly 2 (one per repository)", bundle.Scope.Derivations)
+	}
+	roots := map[string]SubjectRef{}
+	for _, derivation := range bundle.Scope.Derivations {
+		roots[canonicalFactSubjectKey(derivation.Target)] = derivation.Root
+	}
+	if got := roots[canonicalFactSubjectKey(repoFromFirstTeam)]; got != scopeTeam {
+		t.Fatalf("Root[%s] = %+v, want %+v (scopeTeam)", repoFromFirstTeam.CanonicalID, got, scopeTeam)
+	}
+	if got := roots[canonicalFactSubjectKey(repoFromSecondTeam)]; got != secondTeam {
+		t.Fatalf("Root[%s] = %+v, want %+v (secondTeam) -- BEFORE the CHAOS-4260 fix this collapsed to scopeTeam (origins[0]) regardless of which origin's own edge reached this target", repoFromSecondTeam.CanonicalID, got, secondTeam)
 	}
 }
 
