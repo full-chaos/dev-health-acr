@@ -151,3 +151,52 @@ func TestChaos4096_CallerHintShortCircuitEmitsDecisionEvents(t *testing.T) {
 		t.Fatalf("receipt-derived rider: CommitBasis = %q, want %q (never exempted)", got, contextfabric.CommitBasisStatistical)
 	}
 }
+
+// TestChaos4096_CallerHintShortCircuitDecisionEventFields is the RED pin for
+// codex R1 findings 1+2 on the caller-hint short circuit's own decision
+// event (resolve.go's AnyCallerSourced branch, added by this ticket):
+// unlike ResolveFromMergedCandidatesWithGateAndBasis's own decision event,
+// this short circuit runs no search and consults no ranked population, so
+// its SearchCandidateLimit/PopulationBasis must say exactly that ("none")
+// rather than silently reading as "search truncated at 0" or "unset"; and
+// it bypasses offersOnlyDecisionTracer entirely (it traces straight to
+// deps.ResolutionTracer, resolve.go's own comment on this call site), so it
+// must tag OfferedUnderWindowGate itself or an offers-only pass through
+// this path reads as an indistinguishable-from-real commit.
+func TestChaos4096_CallerHintShortCircuitDecisionEventFields(t *testing.T) {
+	t.Parallel()
+	explicit := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_explicit", Label: "Explicit"}
+	backend := &fakeGraphBackend{exactHints: map[string]CandidateNode{
+		SubjectKey(explicit): candidateNode(explicit.Kind, explicit.CanonicalID, explicit.Label, 0.2, "*"),
+	}}
+	request := testRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: explicit.Kind, ID: explicit.CanonicalID, Label: explicit.Label, Source: "workbench"},
+	}
+	tracer := &recordingTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(contextfabric.WithOffersOnlyResolution(context.Background()), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis error = %v", err)
+	}
+	if len(resolution.Committed) != 1 {
+		t.Fatalf("hint must still commit, got %v", resolution.Committed)
+	}
+
+	events := tracer.decisions()
+	if len(events) != 1 {
+		t.Fatalf("decision events = %d, want 1, got %+v", len(events), events)
+	}
+	event := events[0]
+	if !event.OfferedUnderWindowGate {
+		t.Fatalf("event = %+v, want OfferedUnderWindowGate=true under offers-only mode (this path bypasses offersOnlyDecisionTracer)", event)
+	}
+	if event.SearchCandidateLimit != request.Options.MaxSubjectCandidates {
+		t.Fatalf("event.SearchCandidateLimit = %d, want %d (Options.MaxSubjectCandidates)", event.SearchCandidateLimit, request.Options.MaxSubjectCandidates)
+	}
+	if event.PopulationBasis != "none" {
+		t.Fatalf(`event.PopulationBasis = %q, want "none" -- this short circuit never ranks or truncates a searched population`, event.PopulationBasis)
+	}
+}

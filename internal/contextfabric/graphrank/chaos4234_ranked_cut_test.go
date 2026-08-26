@@ -297,6 +297,28 @@ func TestCHAOS4234_DiscardableDecisionTracer_DiscardsRankedCutWithItsDecision(t 
 	}
 }
 
+// TestCHAOS4234_DiscardableDecisionTracer_KeepsEveryDecisionEvent is the RED
+// pin for codex R1 finding 4 (CHAOS-4096): discardableDecisionTracer.captured
+// widened from a single *ResolutionTraceEvent slot to a []ResolutionTraceEvent
+// because a scoped pass's own wrapped call can now emit MORE than one
+// "decision" event (one per committed subject, on a multi-subject commit --
+// resolution.go's own switch). A single slot silently kept only the LAST one
+// and dropped every earlier committed subject's own event when keep() replayed it.
+func TestCHAOS4234_DiscardableDecisionTracer_KeepsEveryDecisionEvent(t *testing.T) {
+	t.Parallel()
+	real := &captureResolutionTracer{}
+	scoped := &discardableDecisionTracer{real: real}
+	first := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_first"}
+	second := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_second"}
+	scoped.Trace(ResolutionTraceEvent{Stage: "decision", Outcome: "committed", Subject: first})
+	scoped.Trace(ResolutionTraceEvent{Stage: "decision", Outcome: "committed", Subject: second})
+	scoped.keep()
+	got := real.snapshot()
+	if len(got) != 2 || got[0].Subject != first || got[1].Subject != second {
+		t.Fatalf("real tracer saw %#v after keep(), want BOTH decision events, in order -- a single-slot capture would silently drop the first", got)
+	}
+}
+
 func lastEventForStage(tracer *captureResolutionTracer, stage string) (ResolutionTraceEvent, bool) {
 	events := tracer.eventsForStage(stage)
 	if len(events) == 0 {
