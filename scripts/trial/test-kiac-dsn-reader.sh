@@ -190,6 +190,35 @@ check "an IPv6 ACR_TEST_TRIAL_PG_HOST is bracketed in ACR_TEST_TRIAL_POSTGRES_DS
   "[2001:db8::1]:30500" \
   "$(run_pg_dsn_reader)"
 
+# 5e. CHAOS-4228 (codex R2, real completeness gap): the SIX-VAR ESCAPE
+# HATCH (override branch, common.sh:239-254) is a DISTINCT code path from
+# the kiac branch every check above exercises -- its own ch_dsn/
+# falkor_addr construction needs its own proof, not an inference from the
+# kiac branch sharing the same bracket_host_if_ipv6 helper. Uses the REAL
+# trial_wire_common_env and REAL trial_secret (the same ops/.env every
+# other live check in this directory already depends on --
+# test-connect-retry.sh's own six-var-override case proves it is
+# available here); only the CH_DB portion of the DSN is unpredictable
+# (a real ops/.env secret), so the check strips it, asserting only the
+# authority (host:port) both fixes touch. Two DISTINCT IPv6 literals for
+# CH vs FALKOR so neither assertion could pass by the other one's value.
+run_override_reader() {
+  (cd "$script_dir/../.." && env \
+    ACR_TRIAL_PG_HOST=127.0.0.1 ACR_TRIAL_PG_PORT=5432 \
+    ACR_TRIAL_CH_HOST=2001:db8::1 ACR_TRIAL_CH_PORT=9000 \
+    ACR_TRIAL_FALKOR_HOST=2001:db9::1 ACR_TRIAL_FALKOR_PORT=6379 \
+    bash -c '
+      set -euo pipefail
+      source scripts/trial/common.sh
+      trial_wire_common_env
+      ch_authority="$(printf "%s" "$ACR_TEST_TRIAL_CLICKHOUSE_DSN" | sed -E "s#.*@##; s#/.*##")"
+      printf "%s %s" "$ch_authority" "$ACR_TEST_TRIAL_FALKOR_ADDR"
+    ' 2>"$tmp/stderr.log") || echo "ERR $?"
+}
+check "override branch: IPv6 ACR_TRIAL_CH_HOST/FALKOR_HOST both bracketed" \
+  "[2001:db8::1]:9000 [2001:db9::1]:6379" \
+  "$(run_override_reader)"
+
 # 6. Producer pin (CHAOS-4186 follow-up, real incident): the REAL
 # trial-data.sh (not the fake used above) must emit
 # ACR_CONTEXT_FABRIC_FALKOR_TLS=false and

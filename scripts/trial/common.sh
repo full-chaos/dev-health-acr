@@ -244,7 +244,7 @@ trial_wire_common_env() {
   export ACR_TEST_TRIAL_CORPUS="$ACR_TRIAL_CORPUS"
   export ACR_TEST_TRIAL_ORG="$ACR_TRIAL_ORG"
 
-  local pg_host pg_port pg_user pg_password ch_dsn ch_host falkor_addr falkor_host data_plane_label
+  local pg_host pg_port pg_user pg_password ch_dsn ch_host falkor_addr falkor_host data_plane_label pg_dsn
   # falkor_tls/falkor_allow_insecure: only the kiac branch populates these
   # (the trial FalkorDB's plaintext posture is a kiac-plane-specific fact);
   # left empty for compose/override, so the export below is a no-op there
@@ -448,7 +448,8 @@ trial_wire_common_env() {
   # postgres:// DSN (see that script's trial_pg_dsn, same fix applied
   # there independently since it reads PG_HOST as a raw component, not
   # this composed string).
-  export ACR_TEST_TRIAL_POSTGRES_DSN="postgres://${pg_user}:${pg_password}@$(bracket_host_if_ipv6 "$pg_host"):${pg_port}/acr?sslmode=disable"
+  pg_dsn="postgres://${pg_user}:${pg_password}@$(bracket_host_if_ipv6 "$pg_host"):${pg_port}/acr?sslmode=disable"
+  export ACR_TEST_TRIAL_POSTGRES_DSN="$pg_dsn"
   export ACR_TEST_TRIAL_CLICKHOUSE_DSN="$ch_dsn"
   # Raw components, not just the composed DSN above: run-two-turn-parallel.sh
   # needs these to build a PER-SHARD Postgres DSN (same host/port/user/
