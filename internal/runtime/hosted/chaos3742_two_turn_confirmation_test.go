@@ -4121,6 +4121,23 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 	}
 }
 
+// reportSchemaVersion is twoTurnReport.ReportSchemaVersion's own literal --
+// named (CHAOS-4307) so the version this process actually stamps and the
+// version cmd/acr-trial-merge-two-turn/main.go's own expectedSchemaVersion
+// requires can each be pinned by a dedicated test independent of the much
+// larger live-corpus TestChaos3742TwoTurnConfirmationReplay.
+//
+// KEEP IN SYNC WITH cmd/acr-trial-merge-two-turn/main.go's expectedSchemaVersion
+// (codex round 2, Low, confirmed): this file lives in package hosted_test and
+// cannot be imported from that separate binary's package main, so nothing
+// can assert cross-package agreement directly -- the SAME pre-existing
+// limitation every one of this constant's 29 prior bumps has always had
+// (TestRunRejectsSchemaVersionMismatch only proves the merger REFUSES a
+// mismatched artifact at runtime, never that the two literals themselves
+// agree at build time). Bump both in the SAME change; a mismatch surfaces
+// live the moment a real producer artifact is merged, per that test.
+const reportSchemaVersion = "30"
+
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
 	// renames are otherwise invisible to a consumer parsing the JSON --
@@ -4717,6 +4734,12 @@ type twoTurnReport struct {
 	// unrelated DataPlane provenance bump above -- this change re-numbers
 	// to v29 to stay lockstep, not v28.)
 	//
+	// "30" (CHAOS-4307): purely additive -- ConfirmedKindVectorCensus*
+	// (see that field group's own doc comment, below) is new; no existing
+	// key's meaning, presence, or JSON name changes. The mirror in
+	// cmd/acr-trial-merge-two-turn/main.go gained the same fields plus the
+	// matching mergeReports sums in the same change.
+	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
 	// stale key under a new meaning.
@@ -5051,6 +5074,114 @@ type twoTurnReport struct {
 	// pass/fail check in this file -- observational only.
 	Timings       []twoTurnCaseTiming       `json:"timings,omitempty"`
 	TimingSummary []twoTurnArmTimingSummary `json:"timing_summary,omitempty"`
+	// ConfirmedKindVectorCensus* (CHAOS-4307, schema v30): run-level rollup
+	// of the CHAOS-4155 shadow kind-scoped vector census's own outcome,
+	// folded (foldConfirmedKindVectorCensus, below) from every
+	// "confirmed_kind_scope" ResolutionTraceEvent this run's calls captured
+	// -- turn 1, each arm's own turn-2 call, the inferred-tier arm's
+	// separate baseline pass, and each mutation-probe result -- BEFORE
+	// twoTurnRedactNonAnomalousTraceEvents clears the per-row TraceEvents/
+	// BaselineTraceEvents this would otherwise have to be recomputed from.
+	// That ordering is load-bearing, not incidental: a census outcome of
+	// "complete" or "not_attempted" is not itself an anomaly
+	// (twoTurnCaseResultIsAnomalous does not look at it), so on an ordinary
+	// run nearly every row's own TraceEvents is redacted to nil before
+	// serialization -- these rollups are the ONLY place this run's census
+	// activity survives into the artifact at all. Existence of THIS FIELD
+	// SET is the whole point of the ticket: CHAOS-4155 Phase 2's own
+	// measurement needed four separate reachability-gap PRs (#269 env
+	// wiring, #272 launcher deadlock, #274 log-level + slog tee) just to
+	// grep the same facts out of DebugContext-level Slog lines across N
+	// shard .gotest.log files -- landing here means any future measurement
+	// run reads the merged JSON artifact directly, with no dependency on
+	// log level, on the two-turn harness (or any future harness making the
+	// same in-memory-tracer design choice) remembering to tee to slog, or
+	// on shell-side log correlation across shards.
+	//
+	// ConfirmedKindVectorCensusStateCount is keyed by the closed-vocabulary
+	// ConfirmedKindVectorScope* state strings (chaos4155_confirmed_kind_vector_scope.go)
+	// this report's own per-row vector-census fields already use --
+	// "complete", "over_budget", "malformed", "incomplete_snapshot_drift",
+	// "failed", "not_attempted". The empty state (the confirmed_kind_scope
+	// event's own vector-census sub-fields never populated at all -- the
+	// ordinary, frequent case where buildConfirmedKindScopedSnapshot never
+	// reached the branch that invokes the shadow arm in the first place,
+	// e.g. no live vector mechanism configured) is DELIBERATELY never
+	// tallied here: it is not a census outcome, it is the absence of an
+	// attempt, and folding it in would make "how many times did the census
+	// actually run" indistinguishable from "how many confirmed_kind_scope
+	// events fired at all" -- a materially different, already-answerable
+	// (via ConfirmedKindScopeCandidateCount's own sibling fields, out of
+	// this ticket's scope) question. omitempty: a run with zero eligible
+	// (plan_incomplete, vector-mechanism-configured) cases carries no key
+	// at all, matching OfferMissCount's own convention for an unpopulated
+	// map.
+	ConfirmedKindVectorCensusStateCount map[string]int `json:"confirmed_kind_vector_census_state_count,omitempty"`
+	// PopulationSum/ComparisonSum/QueryCountSum/RivalCountAboveTauSum/
+	// DurationMSSum sum the correspondingly-named ConfirmedKindVectorScope*
+	// field across EVERY confirmed_kind_scope event with a non-empty state
+	// this run captured, regardless of which state -- a consumer wanting
+	// e.g. "average population size over complete-state censuses" divides
+	// PopulationSum by StateCount["complete"] only when that is the
+	// quantity wanted; these sums are deliberately unconditional on state
+	// so a reader can also ask "total comparison cost this run actually
+	// spent" without re-deriving it per state. Sums, not per-case rows: see
+	// this field group's own top-of-block comment for why a run-level
+	// rollup, not per-case data, is what CHAOS-4307 asked for. omitempty:
+	// zero on a run that never folded a single confirmed_kind_scope event
+	// with a populated census, indistinguishable from (and no worse than)
+	// every real zero-cost census this run may have folded -- StateCount's
+	// own presence/absence is the signal for "did this run see the
+	// mechanism at all," not these scalars.
+	ConfirmedKindVectorCensusPopulationSum         int64 `json:"confirmed_kind_vector_census_population_sum,omitempty"`
+	ConfirmedKindVectorCensusComparisonSum         int64 `json:"confirmed_kind_vector_census_comparison_sum,omitempty"`
+	ConfirmedKindVectorCensusQueryCountSum         int   `json:"confirmed_kind_vector_census_query_count_sum,omitempty"`
+	ConfirmedKindVectorCensusRivalCountAboveTauSum int64 `json:"confirmed_kind_vector_census_rival_count_above_tau_sum,omitempty"`
+	ConfirmedKindVectorCensusDurationMSSum         int64 `json:"confirmed_kind_vector_census_duration_ms_sum,omitempty"`
+}
+
+// foldConfirmedKindVectorCensus is the single aggregation point for the
+// CHAOS-4307 rollup above: it reads every "confirmed_kind_scope" stage event
+// out of one already-captured resolve call's own trace (events) and folds
+// each one's ConfirmedKindVectorScope* fields into report's run-level
+// counters. An event with Stage != "confirmed_kind_scope", or one whose
+// ConfirmedKindVectorScopeState is empty (the shadow arm's own branch never
+// reached -- see ConfirmedKindVectorCensusStateCount's own doc comment), is
+// silently skipped -- both are the ordinary, frequent, not-a-bug shape.
+//
+// Deliberately sums EVERY matching event rather than reducing to a single
+// "last one wins" reading the way kindCoverageFloorEvent/confirmedKindRescueEvent
+// do for their own stages: buildConfirmedKindScopedSnapshot can run more
+// than once inside a single captured call (a stalled resolution's
+// evidence-census re-resolve), and each attempt is a genuinely independent
+// census outcome this run actually paid for -- collapsing to the last would
+// silently drop real comparison/population cost from the rollup.
+//
+// Callers are responsible for invoking this EXACTLY ONCE per real resolve()
+// call this harness makes into the SAME report -- turn 1 (read directly off
+// the shared traceCapture before the first arm's own trace.reset(), the
+// same "before the reset" discipline twoTurnCaptureTurn1Facts's own callers
+// already follow), each arm's own turn-2 call (res.TraceEvents), the
+// inferred-tier arm's separate baseline pass (res.BaselineTraceEvents), and
+// each mutation-probe result (its own res.TraceEvents) -- NEVER via
+// twoTurnStampTurn1Facts, which stamps the SAME turn-1 facts onto every
+// arm's own row and would silently multiply-count turn 1's contribution
+// once per arm if this were folded there instead.
+func foldConfirmedKindVectorCensus(report *twoTurnReport, events []graphrank.ResolutionTraceEvent) {
+	for _, event := range events {
+		if event.Stage != "confirmed_kind_scope" || event.ConfirmedKindVectorScopeState == "" {
+			continue
+		}
+		if report.ConfirmedKindVectorCensusStateCount == nil {
+			report.ConfirmedKindVectorCensusStateCount = map[string]int{}
+		}
+		report.ConfirmedKindVectorCensusStateCount[event.ConfirmedKindVectorScopeState]++
+		report.ConfirmedKindVectorCensusPopulationSum += event.ConfirmedKindVectorScopePopulationCount
+		report.ConfirmedKindVectorCensusComparisonSum += event.ConfirmedKindVectorScopeComparisonCount
+		report.ConfirmedKindVectorCensusQueryCountSum += event.ConfirmedKindVectorScopeQueryCount
+		report.ConfirmedKindVectorCensusRivalCountAboveTauSum += event.ConfirmedKindVectorScopeRivalCountAboveTau
+		report.ConfirmedKindVectorCensusDurationMSSum += event.ConfirmedKindVectorScopeDurationMS
+	}
 }
 
 // TestTwoTurnCaseResultCarriesNoQuestionText mirrors
@@ -6515,6 +6646,18 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	// call site in this file.
 	if trace != nil {
 		twoTurnFoldSynthesisStatusOverride(&res, trace.synthesisOverride)
+		// CHAOS-4307 (codex round 2, Medium, confirmed): res.TraceEvents is
+		// normally set only by twoTurnStampDecision on the success path
+		// below -- an Investigate() call can emit a confirmed_kind_scope
+		// event during resolution and still fail later at a downstream
+		// stage (graph/fact/synthesis), which used to discard that event
+		// entirely on this early return, silently undercounting the
+		// CHAOS-4307 census rollup. Setting it here too is safe: on the
+		// success path, twoTurnStampDecision's own trace.snapshot() call
+		// below reassigns the SAME content (trace is not reset in
+		// between), so this is never a double-fold at the caller's own
+		// foldConfirmedKindVectorCensus(report, positive.TraceEvents) site.
+		res.TraceEvents = trace.snapshot()
 	}
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
@@ -7594,6 +7737,12 @@ func runTwoTurnConfirmedWrongArm(t *testing.T, ctx context.Context, investigator
 	// comment) makes this and the setup fold above safe in any order.
 	if trace != nil {
 		twoTurnFoldSynthesisStatusOverride(&res, trace.synthesisOverride)
+		// CHAOS-4307 (codex round 2, Medium, confirmed): see
+		// runTwoTurnPositiveArm's own identical comment -- this call
+		// redeems a confirmed receipt (setTwoTurnReceipt above), so it CAN
+		// reach the confirmed-kind-scoped census path and must not discard
+		// that event on an error return either.
+		res.TraceEvents = trace.snapshot()
 	}
 	if err != nil {
 		res.Turn2Status = "error:" + contextFabricRejectionClass(err)
@@ -8083,7 +8232,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		responderModel = twoTurnResponderModel()
 	}
 	report := twoTurnReport{
-		ReportSchemaVersion: "29",
+		ReportSchemaVersion: reportSchemaVersion,
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
@@ -8470,6 +8619,20 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		// twoTurnCaptureForcedTurn1Trace's own doc comment for the
 		// debug-only, local-artifacts-only discipline this exists under.
 		turn1Facts.TraceEvents = twoTurnCaptureForcedTurn1Trace(traceCapture, entry.Index, forceTraceIndices)
+		// CHAOS-4307: fold turn 1's own confirmed_kind_scope events into the
+		// report's run-level census rollup HERE -- before the first arm's
+		// own trace.reset() below, the identical "before the reset" urgency
+		// turn1SynthesisOverride/turn1Facts's own captures above already
+		// document -- and reading traceCapture directly (not
+		// turn1Facts.TraceEvents, which is nil on every non-forced-trace
+		// case) so this rollup is never gated behind the debug-only
+		// forceTraceIndices discipline. Exactly once per case: turn1Facts
+		// itself gets stamped onto every arm's row below
+		// (twoTurnStampTurn1Facts), so folding from any of THOSE rows
+		// instead would multiply-count turn 1's contribution once per arm.
+		if traceCapture != nil {
+			foldConfirmedKindVectorCensus(&report, traceCapture.snapshot())
+		}
 		turn1Timing := buildTwoTurnArmTiming("turn1", turn1Started, modelCallCapture)
 		// positiveTiming/inferredTiming/confirmedWrongTiming/mutationTiming
 		// (CHAOS-4058) default to zero-duration/zero-call records naming
@@ -8610,6 +8773,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if turn1Facts.Regime == twoTurnRegimeAWindowGated && twoTurnStatusAnswered(positive.Turn2Status) {
 			report.RegimeATurn2AnsweredCount++
 		}
+		// CHAOS-4307: fold BEFORE the tail redaction pass
+		// (twoTurnRedactNonAnomalousTraceEvents) clears positive.TraceEvents
+		// on every non-anomalous row -- see foldConfirmedKindVectorCensus's
+		// own doc comment.
+		foldConfirmedKindVectorCensus(&report, positive.TraceEvents)
 		report.Results = append(report.Results, positive)
 
 		modelCallCapture.reset()
@@ -8670,6 +8838,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 				report.InferredUnjustifiedCount++
 			}
 		}
+		// CHAOS-4307: two independent resolve calls on this arm -- the
+		// hinted call (TraceEvents) and, for non-window members, the paired
+		// no-hint baseline call (BaselineTraceEvents) -- both folded, same
+		// "before redaction" discipline as the positive arm above.
+		foldConfirmedKindVectorCensus(&report, inferred.TraceEvents)
+		foldConfirmedKindVectorCensus(&report, inferred.BaselineTraceEvents)
 		report.Results = append(report.Results, inferred)
 
 		modelCallCapture.reset()
@@ -8684,6 +8858,8 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if confirmedWrong.WrongCommit {
 			report.WrongCommitCount++
 		}
+		// CHAOS-4307: same "before redaction" discipline as the positive arm.
+		foldConfirmedKindVectorCensus(&report, confirmedWrong.TraceEvents)
 		report.Results = append(report.Results, confirmedWrong)
 
 		// Mutation/non-vacuity arm: only meaningful against a case the
@@ -8718,6 +8894,9 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 					if mutationResult.MutationTripped {
 						report.MutationProbesTripped[mutationResult.MutationProbe]++
 					}
+					// CHAOS-4307: same "before redaction" discipline as the
+					// other three arms above.
+					foldConfirmedKindVectorCensus(&report, mutationResult.TraceEvents)
 					report.Results = append(report.Results, mutationResult)
 				}
 			}
