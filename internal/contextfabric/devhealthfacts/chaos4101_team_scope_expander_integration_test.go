@@ -361,3 +361,113 @@ func TestScopeExpander_TeamToRepository_CrossRepoWorkItemIDCollisionExcludesTheW
 		}
 	}
 }
+
+// TestScopeExpander_TeamToRepository_RootIsPerTargetAcrossTwoTeamOrigins is
+// CHAOS-4260's real-ClickHouse proof, the exact scenario the ticket names:
+// "an investigation names multiple same-kind subjects as roots (e.g. two
+// teams) and they are traversed together in one expand() call". Two teams,
+// each with its own primary attribution reaching its OWN, otherwise
+// unrelated repository, requested together as Origins in ONE
+// ExpandFactScope call. Before the fix, teamRepositories never populated a
+// per-target root at all (repositoryCandidate had no such field), so
+// fact_scope.go's expand() attributed EVERY admitted repository to
+// origins[0] regardless of which team's own edge reached it --
+// TestChaos4260_RootIsPerTargetAcrossMultipleSameKindOrigins (fake-expander
+// unit test, contextfabric package) proves the resolver-side half of that
+// fix; this proves the ClickHouse-backed teamRepositories query itself now
+// resolves the correct origin per repository, including through the
+// `min(a.team_id)` aggregate's tiebreak when both teams reach the SAME
+// repository.
+func TestScopeExpander_TeamToRepository_RootIsPerTargetAcrossTwoTeamOrigins(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	for _, statement := range devhealthschema.DDL("teams", "work_items", "work_item_team_attributions", "repos") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	mustSeed := func(label, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", label, err)
+		}
+	}
+
+	const teamAID = "ROOT-TEAM-A"
+	const teamBID = "ROOT-TEAM-B"
+	const repoOnlyAID = "b1198fbc-1945-3717-05d8-eb78866b4ea0"
+	const repoOnlyASlug = "acme/root-repo-a"
+	const repoOnlyBID = "b2298fbc-1945-3717-05d8-eb78866b4ea1"
+	const repoOnlyBSlug = "acme/root-repo-b"
+	const repoSharedID = "b3398fbc-1945-3717-05d8-eb78866b4ea2"
+	const repoSharedSlug = "acme/root-repo-shared"
+
+	mustSeed("team A", `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		teamAID, "Root Team A", "", at, chaos4099OrgID, "linear", teamAID, uint8(1))
+	mustSeed("team B", `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		teamBID, "Root Team B", "", at, chaos4099OrgID, "linear", teamBID, uint8(1))
+	mustSeed("repo only-A", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		repoOnlyAID, chaos4099OrgID, repoOnlyASlug, "github", at)
+	mustSeed("repo only-B", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		repoOnlyBID, chaos4099OrgID, repoOnlyBSlug, "github", at)
+	mustSeed("repo shared", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		repoSharedID, chaos4099OrgID, repoSharedSlug, "github", at)
+
+	workItem := func(id, repoID string) {
+		mustSeed("work item "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, repoID, chaos4099OrgID, "issue "+id, "open", "", "", "", at)
+	}
+	attribution := func(label, workItemID, repoID, teamID string) {
+		mustSeed(label, `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			chaos4099OrgID, repoID, workItemID, teamID, "native_team", uint8(1), "high", at)
+	}
+
+	workItem("wi-only-a", repoOnlyAID)
+	attribution("team A -> repo only-A", "wi-only-a", repoOnlyAID, teamAID)
+	workItem("wi-only-b", repoOnlyBID)
+	attribution("team B -> repo only-B", "wi-only-b", repoOnlyBID, teamBID)
+	// The shared repo is reached by BOTH teams, on two DIFFERENT work items
+	// (a repo/work_item pair is the join's natural key, so this is two
+	// distinct, independently real attributions, not a duplicate row).
+	// teamAID < teamBID lexicographically, so min(a.team_id) -- and
+	// therefore this repo's root -- must resolve to team A.
+	workItem("wi-shared-a", repoSharedID)
+	attribution("team A -> repo shared", "wi-shared-a", repoSharedID, teamAID)
+	workItem("wi-shared-b", repoSharedID)
+	attribution("team B -> repo shared", "wi-shared-b", repoSharedID, teamBID)
+
+	teamASubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + teamAID, Label: "Root Team A"}
+	teamBSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + teamBID, Label: "Root Team B"}
+
+	expander := devhealthfacts.NewScopeExpander(query)
+	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+		Principal:       storage.Principal{OrgID: chaos4099OrgID, RepositoryScopes: []string{"*"}},
+		RequirementKind: contextfabric.FactMetrics,
+		// BOTH teams in ONE call -- this is the exact shape resolveRequirement
+		// produces when an investigation names two same-kind roots.
+		Origins:    []contextfabric.SubjectRef{teamASubject, teamBSubject},
+		Policy:     contextfabric.FactScopePolicyTeamPrimaryAttributionRepository,
+		TargetKind: contextfabric.SubjectRepository,
+		Limit:      20,
+	})
+	if err != nil {
+		t.Fatalf("ExpandFactScope: %v", err)
+	}
+	if len(result.Targets) != 3 {
+		t.Fatalf("targets = %+v, want all 3 repositories", result.Targets)
+	}
+	repoOnlyATarget := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoOnlyAID, Label: repoOnlyASlug}
+	repoOnlyBTarget := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoOnlyBID, Label: repoOnlyBSlug}
+	repoSharedTarget := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoSharedID, Label: repoSharedSlug}
+
+	if got := result.TargetRoot[contextfabric.FactSubjectKey(repoOnlyATarget)]; got != teamASubject {
+		t.Fatalf("TargetRoot[repo only-A] = %+v, want team A (%+v): its ONLY attribution is from team A", got, teamASubject)
+	}
+	if got := result.TargetRoot[contextfabric.FactSubjectKey(repoOnlyBTarget)]; got != teamBSubject {
+		t.Fatalf("TargetRoot[repo only-B] = %+v, want team B (%+v): its ONLY attribution is from team B -- BEFORE the CHAOS-4260 fix this collapsed to origins[0] (team A) regardless", got, teamBSubject)
+	}
+	if got := result.TargetRoot[contextfabric.FactSubjectKey(repoSharedTarget)]; got != teamASubject {
+		t.Fatalf("TargetRoot[repo shared] = %+v, want team A (%+v): min(a.team_id) tiebreaks to the lexicographically smaller of the two teams reaching it", got, teamASubject)
+	}
+}
