@@ -317,3 +317,30 @@ func TestChaos4085_ProductionTraceEmitsConfirmedKindScopeAndVectorCensusDiagnost
 		t.Fatalf("vector_census_duration_ms = %v, want 7", record["vector_census_duration_ms"])
 	}
 }
+
+// TestChaos4081_ProductionTraceEmitsHandleInsensitivity is the sink-level
+// pin for codex R1's MEDIUM finding: ShadowHandleInsensitivityEvaluated/
+// Outcome were populated on ResolutionTraceEvent and read correctly by an
+// in-memory tracer (TestConfirmedHandleProbeReachesTraceEvent), but the
+// PRODUCTION sink (SlogResolutionTracer, wired runtime/hosted/open.go) never
+// logged them -- exactly the CHAOS-4085 lesson this file's own doc comment
+// exists to enforce, recurring on a new field pair.
+func TestChaos4081_ProductionTraceEmitsHandleInsensitivity(t *testing.T) {
+	record := captureTraceJSON(t, ResolutionTraceEvent{
+		RequestID: "request_sink_4081", Stage: "evidence_round",
+		ShadowOutcome:                      string(ShadowWouldCommit),
+		ShadowHandleInsensitivityEvaluated: true,
+		ShadowHandleInsensitivityOutcome:   string(kindInsensitivityCommitSound),
+	})
+
+	if got, ok := record["shadow_handle_insensitivity_evaluated"].(bool); !ok || !got {
+		t.Fatalf("shadow_handle_insensitivity_evaluated = %v, want true", record["shadow_handle_insensitivity_evaluated"])
+	}
+	if got, ok := record["shadow_handle_insensitivity_outcome"].(string); !ok || got != string(kindInsensitivityCommitSound) {
+		t.Fatalf("shadow_handle_insensitivity_outcome = %v, want %q", record["shadow_handle_insensitivity_outcome"], kindInsensitivityCommitSound)
+	}
+	// Beside, not instead of, the field it sits next to.
+	if got, ok := record["shadow_outcome"].(string); !ok || got != string(ShadowWouldCommit) {
+		t.Fatalf("shadow_outcome = %v, want %q", record["shadow_outcome"], ShadowWouldCommit)
+	}
+}

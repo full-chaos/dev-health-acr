@@ -157,20 +157,28 @@ package hosted_test
 //         CHAOS-4079 is deliberately pass/fail NEUTRAL for this harness --
 //         it only ever ADDS trace-level observability, never loosens a bar.
 //       - A handle-member equivalent of kind_insensitivity_attested does
-//         NOT exist. CHAOS-4081 found request.SubjectHandles never reaches
-//         the shadow evidence round at all -- it feeds handleOfferMaterial
-//         (offer ranking, resolve.go) and explicit-structure
-//         stamping/echo (resolveExplicitStructure, structure.go), neither
-//         of which is the census-attestation mechanism kind_insensitivity_
-//         attested is built on. OPEN, Backlog, and correctly so: this is a
-//         genuine, currently permanent bound on what the handle member can
-//         attest, not a bug to strip. Confirmed by direct sweep: no
-//         handle-path attestation
-//         function exists anywhere in this file or the merge tool: a
-//         handle-member decisive inferred-tier commit can only ever land
-//         baseline_equivalent or unjustified, never
-//         kind_insensitivity_attested -- the harness already refuses to
-//         claim more than CHAOS-4081 leaves it able to prove.
+//         NOT exist. CHAOS-4081 (team-lead ruling, path (a)) closed the
+//         narrower gap that request.SubjectHandles never reached the shadow
+//         evidence round AT ALL: a confirmed explicit subject_handle hint
+//         now also reaches RunShadowEvidenceRound
+//         (ShadowEvidenceRoundInput.ConfirmedHandle) and populates
+//         Attestation.HandleInsensitivityEvaluated/Outcome -- but this is
+//         OBSERVATION only, never attestation: those two fields can never
+//         widen the round's own decisive Outcome/Kinds (see
+//         ConfirmedHandle's own doc comment, chaos3899_evidence_round.go),
+//         so this harness still has nothing to read for the handle member
+//         that plays kind_insensitivity_attested's role. request.
+//         SubjectHandles otherwise still feeds only handleOfferMaterial
+//         (offer ranking, resolve.go) and explicit-structure stamping/echo
+//         (resolveExplicitStructure, structure.go). OPEN, Backlog, and
+//         correctly so: this is a genuine, currently permanent bound on
+//         what the handle member can attest, not a bug to strip. Confirmed
+//         by direct sweep: no handle-path ATTESTATION function exists
+//         anywhere in this file or the merge tool: a handle-member decisive
+//         inferred-tier commit can only ever land baseline_equivalent or
+//         unjustified, never kind_insensitivity_attested -- the harness
+//         already refuses to claim more than CHAOS-4081 leaves it able to
+//         prove.
 //
 // A third shape, added by this audit rather than pre-named in CHAOS-4083:
 // a paired-leg divergence with no available EXPLANATION is not evidence of

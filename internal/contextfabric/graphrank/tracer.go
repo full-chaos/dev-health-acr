@@ -288,7 +288,16 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// production telemetry strictly less informative than the
 			// harness's own tracer, reading every observation as an
 			// attestation. Closed enum, no free text.
-			"shadow_kind_insensitivity_mode", event.ShadowKindInsensitivityMode)
+			"shadow_kind_insensitivity_mode", event.ShadowKindInsensitivityMode,
+			// CHAOS-4081 (codex R1, Medium, confirmed): the handle member's
+			// own probe outcome MUST reach production logs on this same
+			// event, exactly like shadow_kind_insensitivity_* immediately
+			// above -- omitting it left this test-visible-only, so a
+			// production log consumer had no way to observe the gap
+			// CHAOS-4081 exists to make OBSERVABLE. Same closed-vocabulary
+			// discipline: no free text, count/enum/bool only.
+			"shadow_handle_insensitivity_evaluated", event.ShadowHandleInsensitivityEvaluated,
+			"shadow_handle_insensitivity_outcome", event.ShadowHandleInsensitivityOutcome)
 	case "evidence_probe":
 		// CHAOS-3899: ONE per-kind census receipt (brief §1.3(3), "Per-kind,
 		// never aggregated across kinds").

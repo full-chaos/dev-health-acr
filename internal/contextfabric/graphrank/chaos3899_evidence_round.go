@@ -769,14 +769,59 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 	// explicit-kind-narrowing branch above already trusts for an identical
 	// shape of proof, just over one caller-named kind instead of the whole
 	// pre-narrowing pool.
+	//
+	// PROBE-LOCAL RECOVERY (codex R1, High, confirmed 2026-08-25): base.
+	// Outcome/Kinds/NonCensusedSurvivor are ALREADY FINAL by this point --
+	// this call is the one place in the whole function that runs strictly
+	// after the round's real decision is committed to `base`. The caller,
+	// runShadowEvidenceRoundForResolution (resolve.go), wraps the ENTIRE
+	// round in its own top-level `defer recover()` that replaces the WHOLE
+	// returned Attestation with its zero value on any panic anywhere in
+	// this call tree -- correct for a panic that happens BEFORE the
+	// decision is final (there is nothing real yet to lose), but a panic
+	// from THIS purely observational probe (e.g. a caller-supplied
+	// CensusFunc that panics on the confirmed-handle's own kind) would
+	// otherwise wipe an already-real, already-decided commit/no_match
+	// Outcome it has no business touching. confirmedHandleInsensitivityProbe
+	// owns its own recover() precisely so that never happens: a panic here
+	// degrades ONLY HandleInsensitivityEvaluated/Outcome (both left at
+	// their unevaluated zero value), and `base`'s already-finalized fields
+	// are untouched because this call sits strictly after they were set and
+	// assigns nothing else. See TestConfirmedHandleProbePanicDoesNotWipeAttestation
+	// for the red/green proof.
 	if input.ConfirmedHandle != nil && input.CensusFunc != nil && IsCensusKindRegistered(input.ConfirmedHandle.Kind) {
-		base.HandleInsensitivityEvaluated = true
-		base.HandleInsensitivityOutcome = kindInsensitivityProof(ctx, input.OrgID,
-			[]CensusKind{input.ConfirmedHandle.Kind},
-			input.ConfirmedHandle.Kind, input.ConfirmedHandle.Value, true,
-			anchor.Kind, anchor.CanonicalID, anchorOK, input.CensusFunc)
+		base.HandleInsensitivityEvaluated, base.HandleInsensitivityOutcome =
+			confirmedHandleInsensitivityProbe(ctx, input, anchor, anchorOK)
 	}
 	return emit(base)
+}
+
+// confirmedHandleInsensitivityProbe (CHAOS-4081, codex R1 High fix) is the
+// ConfirmedHandle-scoped kindInsensitivityProof call, isolated behind its
+// OWN deferred recover() -- see the call site's doc comment (immediately
+// above, in RunShadowEvidenceRound) for why this must never let a panic
+// propagate into the caller's top-level recover(), which would zero-value
+// an already-decided Attestation instead of degrading just this probe's own
+// two output fields.
+func confirmedHandleInsensitivityProbe(ctx context.Context, input ShadowEvidenceRoundInput, anchor AnchorBinding, anchorOK bool) (evaluated bool, outcome kindInsensitivityOutcome) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Degrade to "never evaluated" -- the SAME zero value this
+			// probe already reports when ConfirmedHandle is nil or names
+			// an unregistered kind, so a consumer sees no difference
+			// between "not attempted" and "attempted, probe itself
+			// failed". Nothing else is touched: `base` in the caller was
+			// already final before this call, and this named-return
+			// recovery only ever writes evaluated/outcome, never base.
+			evaluated, outcome = false, ""
+		}
+	}()
+	evaluated = true
+	outcome = kindInsensitivityProof(ctx, input.OrgID,
+		[]CensusKind{input.ConfirmedHandle.Kind},
+		input.ConfirmedHandle.Kind, input.ConfirmedHandle.Value, true,
+		anchor.Kind, anchor.CanonicalID, anchorOK, input.CensusFunc)
+	return evaluated, outcome
 }
 
 // kindInsensitivityOutcomeFromRound (CHAOS-4079) is kindInsensitivityProof's
