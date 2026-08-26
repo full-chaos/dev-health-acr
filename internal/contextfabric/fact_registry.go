@@ -229,9 +229,27 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return CanonicalFactBundle{}, errors.New("authenticated organization is required")
 	}
-	if err := ctx.Err(); err != nil {
-		return CanonicalFactBundle{}, err
-	}
+	// CHAOS-4257: a pre-resolution ctx.Err() short-circuit used to live here
+	// (this repository's original Reset-0 shape, predating CHAOS-4099's
+	// scope resolver entirely). It returned a bare CanonicalFactBundle{} --
+	// Scope always nil -- for a context already cancelled before this
+	// function's first line ran, which directly contradicted the invariant
+	// the resolver seam below states explicitly: "THE RESOLVER ALWAYS RUNS,
+	// AND ALWAYS WINS." Every OTHER error return in this function (the
+	// parameter-rejection, buildFactQuery, provider-cancellation and
+	// mergeFactProviderResult paths below) rides the resolved scope out
+	// alongside its error for exactly this reason -- a cancelled read still
+	// discloses what it could determine about its own scope. The
+	// pre-resolution check was the one path that discarded it, and did so
+	// more often than any other under host contention: the earlier a
+	// caller's `cancel()` lands relative to this function being scheduled,
+	// the more likely it fires before Resolve ever runs (chris, CHAOS-4257:
+	// reproduced 9/10 failures under load, up from an initial 1/5).
+	// Removed here; the equivalent check now runs immediately AFTER
+	// scope resolution, once bundle.Scope is populated, so a cancelled read
+	// is reported exactly like every other cancellation this function
+	// already handles.
+	//
 	// CHAOS-4099, codex round 3 (High). The incoming scope is dropped HERE,
 	// before validation, not merely overwritten later at the resolver.
 	//
@@ -324,6 +342,15 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	resolved := r.scopeResolver.Resolve(ctx, principal, newFactScopeResolveInput(request), capabilities)
 	request.Scope = &resolved
 	bundle.Scope = &resolved
+	// CHAOS-4257: the ctx.Err() check this function used to run before ANY
+	// of the above -- see that removed block's own comment -- moves to here,
+	// the earliest point after the resolver has actually run. bundle, not a
+	// zero value: a read cancelled at this exact instant still discloses the
+	// scope it just resolved, the same discipline every other error path
+	// below already follows.
+	if err := ctx.Err(); err != nil {
+		return bundle, err
+	}
 	// allowedSubjects is recomputed AFTER scope resolution: derived targets
 	// enter the investigation scope set through request.Scope, and the value
 	// computed above (before the resolver ran) would not contain them --
