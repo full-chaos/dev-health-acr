@@ -684,6 +684,27 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	set(falkorgraph.EnvCommitTopGap, os.Getenv("ACR_TEST_TRIAL_COMMIT_TOP_GAP"))
 	set(falkorgraph.EnvVectorMarginCommitThreshold, os.Getenv("ACR_TEST_TRIAL_VECTOR_MARGIN_COMMIT_THRESHOLD"))
 
+	// CHAOS-4155 Phase 2 harness enablement: the SAME OPTIONAL-passthrough
+	// convention as the four CommitGatePolicy knobs directly above, for
+	// the identical reason. #267 (CHAOS-4155 Phase 1) shipped the shadow
+	// kind-scoped vector completeness census gated behind
+	// falkorgraph.EnvConfirmedKindVectorCensusMaxComparisons
+	// (ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS)
+	// but never added this line -- clearAmbientACREnv above already wiped
+	// any bare export of it from the calling shell (it does not start
+	// with ACR_TEST_TRIAL_, so it is not exempt, and it is deliberately
+	// absent from acrEnvIsolationAllowlist for the same reason
+	// ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED is), so before this line
+	// NO env var -- bare or ACR_TEST_TRIAL_-prefixed -- could ever reach
+	// the census: exporting the real name before launching any trial
+	// script silently did nothing, leaving Phase 2's own "measure the
+	// shadow arm" request with no way to turn the arm on at all. A
+	// measurement run sets ACR_TEST_TRIAL_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS
+	// explicitly; every other trial script leaves it unset and stays
+	// byte-identical (set() is a no-op on empty, matching the ticket's own
+	// "off by default everywhere else" requirement).
+	set(falkorgraph.EnvConfirmedKindVectorCensusMaxComparisons, os.Getenv("ACR_TEST_TRIAL_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS"))
+
 	// Throwaway evidence key: unused by the Investigate() path this
 	// harness exercises, but openClickHouse's evidence-ID codec
 	// construction requires a structurally valid one to satisfy
