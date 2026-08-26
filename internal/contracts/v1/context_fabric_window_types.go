@@ -300,10 +300,23 @@ type ContextFabricWindowClarification struct {
 	Options []ContextFabricWindowOption `json:"options"`
 }
 
-// ContextFabricWindowExpandOption (CHAOS-4314) is the class-default window
-// gate's pool-informed recommendation: "the window gate refused, but the
-// gate's own offers-only resolution found a real, non-empty pool -- expand
-// to admit it." ReceiptID/OptionID/Label/RelativeID are copied VERBATIM
+// ContextFabricWindowExpandOption (CHAOS-4314; semantics widened CHAOS-4336,
+// 2026-08-26) is a gated window's recommendation: "a wider window tier is
+// available to try." Presence is a statement about the TIER ORDERING alone
+// (RelativeID is strictly wider than the currently-bound window) -- it is
+// NOT evidence that any offers-only pool exists or was found non-empty.
+// CHAOS-4314 originally scoped this to the class-default gate's own
+// offers-only resolution finding a real, non-empty pool; CHAOS-4336 also
+// emits it for the explicit-unconfirmed gate (which never runs an
+// offers-only resolution at all) and for the class-default gate's own
+// Empty outcome (a resolution that genuinely ran and found nothing) --
+// suppressed only when the gate could not learn anything informative about
+// the current window's content at all (a failed/unavailable/disabled/
+// refused offers-only read) or when no wider tier exists. A client must
+// not infer "there is a real subject pool waiting in a wider window" from
+// this field's mere presence -- see CandidateLabel/CandidateKind below for
+// the (now genuinely optional) pool-derived hint. ReceiptID/OptionID/Label/RelativeID
+// are copied VERBATIM
 // from one entry this same result's own WindowOptions already carries
 // (internal/contextfabric's composeWindowExpandOption picks the next
 // registry tier wider than the currently-bound window) -- deliberately a
@@ -327,12 +340,15 @@ type ContextFabricWindowExpandOption struct {
 	// property, not a per-tier one).
 	WindowClass ContextFabricWindowClass `json:"window_class,omitempty"`
 	// CandidateLabel/CandidateKind (optional) name the top pool member the
-	// gate's own offers-only resolution found -- server-rendered label text
-	// from ContextFabricCandidateOption/AnchorOption/HandleOption/KindOption
+	// gate's own offers-only resolution found (when one ran and found
+	// anything) -- server-rendered label text from
+	// ContextFabricCandidateOption/AnchorOption/HandleOption/KindOption
 	// (priority order, first non-empty), never question- or model-derived
-	// prose. Absent only in the structurally-impossible case where
-	// StructureNeedsWouldDisclose(material) is true but every offer list is
-	// somehow empty.
+	// prose. Absent (CHAOS-4336) whenever no offers-only pool exists to hint
+	// from at all -- the explicit-unconfirmed gate (no resolution ever
+	// runs) and the class-default gate's own Empty outcome (a resolution
+	// that ran and found nothing) both leave this genuinely unset; a client
+	// must treat it as optional, not as a signal something went wrong.
 	CandidateLabel string                   `json:"candidate_label,omitempty"`
 	CandidateKind  ContextFabricSubjectKind `json:"candidate_kind,omitempty"`
 }

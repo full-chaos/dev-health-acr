@@ -1309,7 +1309,7 @@
       }
     },
     "WindowExpandOption": {
-      "description": "CHAOS-4314: the class-default window gate's pool-informed recommendation. receipt_id/option_id/label/relative_id are copied VERBATIM from one entry the same result's own window_options already carries (no fresh bounds here -- redemption applies the referenced WindowOption's own frozen start/end, never a value on this type).",
+      "description": "CHAOS-4314; semantics widened CHAOS-4336: a gated window's recommendation that a wider tier is available to try -- presence is a statement about tier ordering alone, never evidence that an offers-only pool was found non-empty (see candidate_label/candidate_kind, now genuinely optional). receipt_id/option_id/label/relative_id are copied VERBATIM from one entry the same result's own window_options already carries (no fresh bounds here -- redemption applies the referenced WindowOption's own frozen start/end, never a value on this type).",
       "type": "object",
       "additionalProperties": false,
       "properties": {
