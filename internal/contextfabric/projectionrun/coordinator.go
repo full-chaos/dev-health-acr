@@ -1484,7 +1484,18 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 			break
 		}
 		evaluated = true
-		stale = pairStale
+		// Codex round-3 F1: OR across every attempt this drain makes, never
+		// overwrite. Before CHAOS-3826's in-tick draining, runPair made
+		// exactly ONE attempt per tick, so assignment and OR were
+		// equivalent; now a drain can make several attempts, and an
+		// attempt that errors out reports pairStale=false unconditionally
+		// (runPairOnce never reaches the freshness check on an error) --
+		// plain assignment let that false overwrite a REAL staleness
+		// signal an earlier attempt in the SAME tick already found,
+		// silently clearing runOrg's per-tick freshness aggregate
+		// (tickFreshnessStats) to "OK" despite the tick having genuinely
+		// observed drift.
+		stale = stale || pairStale
 		batches++
 		if pairApplied {
 			applied++

@@ -1,8 +1,12 @@
 package projectionrun_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -423,5 +427,86 @@ func TestChaos3826_BuildPathBatchesCountsAFailedAttemptLikeRunPairDoes(t *testin
 	}
 	if drains[0].YieldReason != projectionrun.DrainYieldError {
 		t.Fatalf("expected DrainYieldError, got %q", drains[0].YieldReason)
+	}
+}
+
+// fakeStaleThenFailingSource applies exactly ONE batch whose SourceVersion
+// stays mismatched from CurrentProjectionSourceVersion (so the CHAOS-3887
+// freshness check reports stale=true), then fails outright on the SECOND
+// attempt -- CHAOS-3826 codex round-3 F1's fixture: an error-classified
+// LATER attempt in the same drain must not erase an earlier attempt's real
+// staleness signal.
+type fakeStaleThenFailingSource struct{ calls int }
+
+func (f *fakeStaleThenFailingSource) NextProjectionBatch(_ context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	f.calls++
+	if f.calls == 1 {
+		next := checkpoint.Cursor + "n"
+		batch := validBatch(checkpoint.OrgID, "source-a", checkpoint.Cursor, next)
+		batch.SourceVersion = "producer.v1"
+		for i := range batch.Entities {
+			batch.Entities[i].SourceVersion = "producer.v1"
+		}
+		return batch, true, nil
+	}
+	return contextfabric.ProjectionBatch{}, false, errors.New("fakeStaleThenFailingSource: injected failure")
+}
+
+// CurrentProjectionSourceVersion always disagrees with the applied batch's
+// own "producer.v1", so the backend watermark ApplyProjectionBatch writes
+// (SourceVersion="producer.v1") stays stale relative to it even after the
+// batch lands -- unlike fakeSource's own convention where the batch and the
+// current version usually agree.
+func (f *fakeStaleThenFailingSource) CurrentProjectionSourceVersion() string { return "producer.v2" }
+
+// TestChaos3826_DrainPreservesStalenessFoundByAnEarlierAttemptDespiteALaterFailure
+// is codex round-3 F1's red/green proof: runPair's per-tick `stale`
+// aggregate must OR across every attempt the drain makes, not be
+// overwritten by the LAST one. Before CHAOS-3826's in-tick draining,
+// runPair made exactly one attempt per tick, so overwrite and OR were
+// equivalent; the drain loop makes overwrite a real bug, because an
+// attempt that errors out always reports stale=false (runPairOnce never
+// reaches the freshness check on an error) -- silently clearing a REAL
+// staleness signal an earlier attempt in the SAME tick already found, and
+// misreporting the whole tick as "orgs_ok" instead of
+// "orgs_rebuild_required" in the CHAOS-3887 fleet aggregate.
+func TestChaos3826_DrainPreservesStalenessFoundByAnEarlierAttemptDespiteALaterFailure(t *testing.T) {
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	backend := newFakeBackend()
+	checkpoints := newFakeCheckpointStore()
+	source := &fakeStaleThenFailingSource{}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Logger: logger,
+	})
+	require.NoError(t, err)
+
+	coordinator.Tick(context.Background())
+
+	if source.calls != 2 {
+		t.Fatalf("expected exactly 2 attempts (the applying stale one, then the failing one), got %d", source.calls)
+	}
+
+	var lastSummary map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			continue
+		}
+		if record["msg"] == "context_fabric: projection tick freshness summary" {
+			lastSummary = record
+		}
+	}
+	if lastSummary == nil {
+		t.Fatalf("no freshness summary line logged: %s", buffer.String())
+	}
+	if got, ok := lastSummary["orgs_rebuild_required"].(float64); !ok || got != 1 {
+		t.Fatalf("expected orgs_rebuild_required=1 (the earlier attempt's real staleness must survive the later failure), got %v: %s", lastSummary["orgs_rebuild_required"], buffer.String())
+	}
+	if got, ok := lastSummary["orgs_ok"].(float64); !ok || got != 0 {
+		t.Fatalf("expected orgs_ok=0 (this organization is NOT fresh -- staleness was found), got %v: %s", lastSummary["orgs_ok"], buffer.String())
 	}
 }
