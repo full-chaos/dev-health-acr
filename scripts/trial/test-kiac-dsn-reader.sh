@@ -148,6 +148,15 @@ check "duplicate key + one truly-missing key still hard-fails (count==15 alone i
   "ERR 1" \
   "$(run_reader)"
 
+# 5b. CHAOS-4228: an IPv6 ACR_TEST_TRIAL_CH_HOST must come out of
+# trial_wire_common_env's kiac branch bracketed inside
+# ACR_TEST_TRIAL_CLICKHOUSE_DSN (bracket_host_if_ipv6 in common.sh) --
+# unbracketed, the DSN's own trailing `:<port>` would be indistinguishable
+# from one more `:`-separated group of the address.
+fake_dsn_bin "${VALID_LINES/ACR_TEST_TRIAL_CH_HOST=127.0.0.1/ACR_TEST_TRIAL_CH_HOST=2001:db8::1}"
+check "an IPv6 ACR_TEST_TRIAL_CH_HOST is bracketed in ACR_TEST_TRIAL_CLICKHOUSE_DSN" \
+  "OK 127.0.0.1 pw [2001:db8::1]:30502/default 127.0.0.1:30503 false true" \
+  "$(run_reader)"
 
 # 6. Producer pin (CHAOS-4186 follow-up, real incident): the REAL
 # trial-data.sh (not the fake used above) must emit
