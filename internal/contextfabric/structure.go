@@ -969,7 +969,7 @@ func (e *Engine) resolveExplicitStructure(request InvestigationRequest, confirme
 	return explicit, structureVetoNone
 }
 
-// preInterpretExplicitStructureCanon (CHAOS-4335) computes the SAME
+// preInterpretExplicitStructure (CHAOS-4335) computes the SAME
 // explicit_unattributed/inferred_default echo canonicalizeStructure's own
 // "no receipts at all" branch produces for a bare ExpectedKinds/
 // SubjectHandles field (structure.go:440-449 above), but is safe to call
@@ -991,14 +991,32 @@ func (e *Engine) resolveExplicitStructure(request InvestigationRequest, confirme
 // behavior for a receipt-carrying request is unchanged. Returns nil when
 // the request carries no explicit field at all (nothing to echo).
 //
+// Returns []explicitStructureMember, deliberately NOT the full
+// requestStructureCanonicalization: a caller on a veto/no_match path must
+// never carry a `Confirmed` (receipt-derived) entry, because composing that
+// into a wire-visible ConfirmedStructure entry implies the SAME
+// Save-time-supersession/telemetry handling the decisive path gives every
+// receipt confirmation (structureSupersessionVetoResult's
+// ErrStructureOfferSuperseded conversion, recordStructureConfirmationOutcome
+// AFTER Save succeeds) -- windowVetoResult has neither, so a raw `Confirmed`
+// entry reaching it would risk a persistence error surfacing on an ordinary
+// supersession race and permanently drop that receipt's confirmation
+// telemetry (codex review finding, round 1). This function structurally
+// cannot produce one: resolveExplicitStructure's own return type carries no
+// Confirmed data at all.
+//
 // Root cause this closes (CHAOS-4335): a request whose window turned out
 // unconfirmed or vetoed short-circuits engine.go's Investigate before
 // canonicalizeStructure ever runs, so a genuinely-sent explicit
 // ExpectedKinds/SubjectHandles hint silently vanished from ConfirmedStructure
 // -- a client-authority-bearing explicit field (design brief §2.5) that has
 // nothing to do with whether window, a DIFFERENT member, happened to
-// resolve on the same request.
-func (e *Engine) preInterpretExplicitStructureCanon(request InvestigationRequest) *requestStructureCanonicalization {
+// resolve on the same request. Scope: the two windowVetoResult call sites
+// ONLY (engine.go) -- gate 1/2 (windowConfirmationRequiredResult) and the
+// axis-conflict veto's own window-member echo are OUT OF SCOPE for this
+// change (team-lead ruling: "veto branches only"); see windowVetoResult's
+// own structureCanon parameter doc comment for the remaining known gaps.
+func (e *Engine) preInterpretExplicitStructure(request InvestigationRequest) []explicitStructureMember {
 	if len(request.PriorKindReceipts) > 0 || len(request.PriorAnchorReceipts) > 0 || len(request.PriorHandleReceipts) > 0 || len(request.PriorCandidateReceipts) > 0 {
 		return nil
 	}
@@ -1012,7 +1030,7 @@ func (e *Engine) preInterpretExplicitStructureCanon(request InvestigationRequest
 		// function never actually detected against anything.
 		return nil
 	}
-	return &requestStructureCanonicalization{Explicit: explicit}
+	return explicit
 }
 
 // structureExplicitAuthority implements the DP12(b) uniform surface split

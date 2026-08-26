@@ -620,13 +620,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// site below), the same "nothing attempted yet" convention every
 		// other pre-receipt-resolution veto uses.
 		//
-		// CHAOS-4335: preInterpretExplicitStructureCanon threads a bare
-		// explicit ExpectedKinds/SubjectHandles hint through this
-		// short-circuit -- cheap and store-free, so it costs this class of
-		// request nothing extra (structureCanon itself, which DOES need the
-		// store for a receipt-carrying request, still has not run and is
-		// not attempted here).
-		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil, e.preInterpretExplicitStructureCanon(request))
+		// CHAOS-4335: preInterpretExplicitStructure threads a bare explicit
+		// ExpectedKinds/SubjectHandles hint through this short-circuit --
+		// cheap and store-free, so it costs this class of request nothing
+		// extra (structureCanon itself, which DOES need the store for a
+		// receipt-carrying request, still has not run and is not attempted
+		// here).
+		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil, e.preInterpretExplicitStructure(request))
 	}
 	// CHAOS-4040 (sol-max ruling 2026-08-21, "GATE ALL INFERRED WINDOWS
 	// out of decisive terminals"): an MCP bare explicit evidence_window
@@ -909,10 +909,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			e.recordPriorSubjectReceiptSkips(ctx, principal, axisConflictDispositions, priorHintsStaleGraphEpochDelta)
 		}
 		// CHAOS-4335: structureCanon has ALREADY run by this point
-		// (unconditional, right after gate 1, well before Interpret) --
-		// thread the REAL one through rather than the pre-Interpret-only
-		// helper the other windowVetoResult call site above uses.
-		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, &structureCanon)
+		// (unconditional, right after gate 1, well before Interpret) -- its
+		// Explicit field is the REAL, conflict-checked-against-receipts
+		// result, more accurate than re-deriving one fresh (a member already
+		// receipt-confirmed correctly produces no Explicit entry for
+		// itself -- resolveExplicitStructure's own confirmedMemberValue
+		// match-and-say-nothing branch). Confirmed is deliberately NOT
+		// passed here -- see windowVetoResult's own explicitStructure
+		// parameter doc comment for why a receipt-derived entry cannot
+		// safely reach this veto path.
+		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit)
 	}
 	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
 	// call, shared by BOTH DP4(a) sites (the offer-builder merge below,
