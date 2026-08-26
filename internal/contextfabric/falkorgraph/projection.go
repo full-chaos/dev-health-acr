@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -535,14 +536,79 @@ func (a *Adapter) applyTombstone(ctx context.Context, key, orgID string, tombsto
 	return classifyProjectionError("apply subject tombstone", err)
 }
 
+// chaos4298SentinelEpoch is the fixed epoch value writeWatermark's ON MATCH
+// branch self-heals a pre-epoch node to (a node written by the FIRST
+// CHAOS-4298 push -- generation, no epoch -- before this follow-up fix
+// shipped). A short, human-legible constant that can never collide with a
+// real epoch nonce (always a stringified unix-nanos value, ~19 digits) --
+// see writeWatermark's own doc comment for why this must be a FIXED
+// constant, never a fresh per-call value, for the self-heal to converge.
+const chaos4298SentinelEpoch = "chaos4298-pre-epoch"
+
+// writeWatermark is the ONLY writer of the _AcrWatermark schema (every
+// (org, source) sentinel in the graph flows through this one call, from
+// ApplyProjectionBatch's own single call site) -- so the generation/epoch
+// fields below are properties every existing and future watermark consumer
+// sees, not something scoped to one caller.
+//
+// CHAOS-4298: `generation` is a monotonic per-(org,source) counter, bumped
+// on EVERY write regardless of whether backend_watermark's own value
+// actually changed. It closes an ABA gap chaos4155WatermarkSnapshot's own
+// doc comment (falkorgraph) names: two point-in-time reads of
+// backend_watermark ALONE cannot detect a write landing and then being
+// followed by a second write that happens to restore the exact prior value
+// (w1 -> w2 -> w1) between the reads -- that sequence read as "stable" even
+// though a projection write genuinely occurred mid-read. generation cannot
+// revert: `coalesce(w.generation, 0) + 1` treats a NEVER-before-generationed
+// node (a fresh MERGE-created node, OR a pre-CHAOS-4298 node written before
+// this field existed) identically -- both read the property as absent
+// (coalesce's 0 fallback) and become generation=1 on this write, then
+// increment normally on every write after -- so a source self-heals to a
+// meaningful generation on its very next projection write with no backfill
+// migration needed.
+//
+// CHAOS-4298 follow-up (team-lead ruling, 2026-08-26): generation ALONE is
+// scoped to one graph node's lifetime -- PurgeOrganization deletes the
+// whole graph, so the next write to a (org, source) creates a FRESH node
+// whose generation self-heals to 1 again, indistinguishable from the
+// SAME node still at generation 1. `epoch` closes this: a writer-generated
+// nonce (this call's own projectedAt, nanosecond-resolution -- a real
+// collision across two SEPARATE writes is not reachable on real hardware;
+// see the ON CREATE branch below) assigned ONCE, the very first time a
+// node is created under its current graph-key lifetime, and NEVER
+// reassigned after that (ON MATCH only touches epoch via coalesce, which
+// is a no-op once epoch is non-null). A purge-and-rebuild always takes the
+// ON CREATE branch again (MERGE finds no existing node), so the rebuilt
+// node gets a DIFFERENT epoch even if its generation happens to land back
+// on 1 -- the two reads can then never agree on (epoch, generation) across
+// a purge, closing the gap generation alone could not. A node that already
+// has generation but no epoch (written by CHAOS-4298's own first push,
+// before this follow-up) self-heals via ON MATCH's
+// `coalesce(w.epoch, chaos4298SentinelEpoch)` -- assigned once, to the
+// SAME fixed constant regardless of which write performs the heal, then
+// stable (like any other epoch) until the next purge.
+//
+// Duplicated across the ON CREATE/ON MATCH branches rather than a single
+// trailing plain SET (mirrors referencedSubjectStubMergeCypher's own
+// established ON CREATE/ON MATCH shape, projection.go) -- both branches
+// still run inside the ONE MERGE query FalkorDB executes atomically
+// against this key, so no separate read-then-write round trip exists for
+// a concurrent writer on the same (org, source) to race between.
 func (a *Adapter) writeWatermark(ctx context.Context, key string, batch contextfabric.ProjectionBatch, watermark string) error {
 	projectedAt := a.now().UTC()
-	cypher := fmt.Sprintf("MERGE (w:%s {%s:$org, source:$source}) SET w += $attrs", labelWatermark, propOrgID)
+	cypher := fmt.Sprintf(
+		"MERGE (w:%s {%s:$org, source:$source}) "+
+			"ON CREATE SET w.epoch = $epoch, w.generation = coalesce(w.generation, 0) + 1, w += $attrs "+
+			"ON MATCH SET w.epoch = coalesce(w.epoch, $sentinelEpoch), w.generation = coalesce(w.generation, 0) + 1, w += $attrs",
+		labelWatermark, propOrgID)
 	attrs := map[string]interface{}{
 		"cursor": batch.NextCursor, propSourceVersion: batch.SourceVersion, "backend_watermark": watermark,
 		"projected_at": projectedAt.Format(time.RFC3339Nano), "projected_at_ns": projectedAt.UnixNano(),
 	}
-	_, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": batch.OrgID, "source": batch.Source, "attrs": attrs}, false)
+	_, err := a.api.query(ctx, key, cypher, map[string]interface{}{
+		"org": batch.OrgID, "source": batch.Source, "attrs": attrs,
+		"epoch": strconv.FormatInt(projectedAt.UnixNano(), 10), "sentinelEpoch": chaos4298SentinelEpoch,
+	}, false)
 	return classifyProjectionError("write projection watermark", err)
 }
 
