@@ -158,6 +158,38 @@ check "an IPv6 ACR_TEST_TRIAL_CH_HOST is bracketed in ACR_TEST_TRIAL_CLICKHOUSE_
   "OK 127.0.0.1 pw [2001:db8::1]:30502/default 127.0.0.1:30503 false true" \
   "$(run_reader)"
 
+# 5c. CHAOS-4228 (codex R1, real High): an IPv6 ACR_TEST_TRIAL_FALKOR_HOST
+# must also come out bracketed in ACR_TEST_TRIAL_FALKOR_ADDR --
+# falkorgraph.Config.validate() parses this with Go's net.SplitHostPort,
+# which hard-rejects an unbracketed IPv6 host:port (not just an ambiguous
+# string: a real startup failure for the FalkorDB client).
+fake_dsn_bin "${VALID_LINES/ACR_TEST_TRIAL_FALKOR_HOST=127.0.0.1/ACR_TEST_TRIAL_FALKOR_HOST=2001:db8::1}"
+check "an IPv6 ACR_TEST_TRIAL_FALKOR_HOST is bracketed in ACR_TEST_TRIAL_FALKOR_ADDR" \
+  "OK 127.0.0.1 pw 127.0.0.1:30502/default [2001:db8::1]:30503 false true" \
+  "$(run_reader)"
+
+# 5d. CHAOS-4228 (codex R1, coverage gap): an IPv6 ACR_TEST_TRIAL_PG_HOST
+# must also come out bracketed in ACR_TEST_TRIAL_POSTGRES_DSN
+# (common.sh's own postgres:// DSN, the other site this ticket's fix
+# touches besides the ClickHouse DSN above). A dedicated small reader
+# (not run_reader(), which every OTHER check above shares) keeps this
+# addition from changing any existing check's expected string.
+run_pg_dsn_reader() {
+  (cd "$script_dir/../.." && env \
+    ACR_TRIAL_DATA_PLANE=kiac \
+    ACR_TRIAL_KIAC_DSN_BIN="$tmp/fake-trial-data.sh" \
+    bash -c '
+      set -euo pipefail
+      source scripts/trial/common.sh
+      trial_wire_common_env
+      printf "%s" "$ACR_TEST_TRIAL_POSTGRES_DSN" | sed -E "s#.*@##; s#/.*##"
+    ' 2>"$tmp/stderr.log") || echo "ERR $?"
+}
+fake_dsn_bin "${VALID_LINES/ACR_TEST_TRIAL_PG_HOST=127.0.0.1/ACR_TEST_TRIAL_PG_HOST=2001:db8::1}"
+check "an IPv6 ACR_TEST_TRIAL_PG_HOST is bracketed in ACR_TEST_TRIAL_POSTGRES_DSN" \
+  "[2001:db8::1]:30500" \
+  "$(run_pg_dsn_reader)"
+
 # 6. Producer pin (CHAOS-4186 follow-up, real incident): the REAL
 # trial-data.sh (not the fake used above) must emit
 # ACR_CONTEXT_FABRIC_FALKOR_TLS=false and

@@ -266,7 +266,12 @@ trial_wire_common_env() {
     pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
     ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@$(bracket_host_if_ipv6 "$ACR_TRIAL_CH_HOST"):${ACR_TRIAL_CH_PORT}/$(trial_secret CLICKHOUSE_DB)"
     ch_host="$ACR_TRIAL_CH_HOST"
-    falkor_addr="${ACR_TRIAL_FALKOR_HOST}:${ACR_TRIAL_FALKOR_PORT}"
+    # CHAOS-4228 (codex R1, real High): falkor_addr is host:port too, and
+    # falkorgraph.Config.validate() parses it with net.SplitHostPort,
+    # which requires the same [] bracketing for an IPv6 host -- an
+    # unbracketed IPv6 address here fails startup validation outright,
+    # not just an ambiguous string.
+    falkor_addr="$(bracket_host_if_ipv6 "$ACR_TRIAL_FALKOR_HOST"):${ACR_TRIAL_FALKOR_PORT}"
     falkor_host="$ACR_TRIAL_FALKOR_HOST"
   elif [[ "$ACR_TRIAL_DATA_PLANE" == "kiac" ]]; then
     data_plane_label="kiac"
@@ -419,7 +424,8 @@ trial_wire_common_env() {
     pg_user="$_kiac_env_PG_USER"; pg_password="$_kiac_env_PG_PASSWORD"
     ch_dsn="clickhouse://${_kiac_env_CH_USER}:${_kiac_env_CH_PASSWORD}@$(bracket_host_if_ipv6 "$_kiac_env_CH_HOST"):${_kiac_env_CH_PORT}/${_kiac_env_CH_DB}"
     ch_host="$_kiac_env_CH_HOST"
-    falkor_addr="${_kiac_env_FALKOR_HOST}:${_kiac_env_FALKOR_PORT}"
+    # CHAOS-4228: same bracket_host_if_ipv6 as the override branch above.
+    falkor_addr="$(bracket_host_if_ipv6 "$_kiac_env_FALKOR_HOST"):${_kiac_env_FALKOR_PORT}"
     falkor_host="$_kiac_env_FALKOR_HOST"
     falkor_tls="$_kiac_env_FALKOR_TLS"
     falkor_allow_insecure="$_kiac_env_FALKOR_ALLOW_INSECURE"
