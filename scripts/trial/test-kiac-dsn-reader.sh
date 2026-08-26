@@ -148,6 +148,81 @@ check "duplicate key + one truly-missing key still hard-fails (count==15 alone i
   "ERR 1" \
   "$(run_reader)"
 
+# 5b. CHAOS-4228: an IPv6 ACR_TEST_TRIAL_CH_HOST must come out of
+# trial_wire_common_env's kiac branch bracketed inside
+# ACR_TEST_TRIAL_CLICKHOUSE_DSN (bracket_host_if_ipv6 in common.sh) --
+# unbracketed, the DSN's own trailing `:<port>` would be indistinguishable
+# from one more `:`-separated group of the address.
+fake_dsn_bin "${VALID_LINES/ACR_TEST_TRIAL_CH_HOST=127.0.0.1/ACR_TEST_TRIAL_CH_HOST=2001:db8::1}"
+check "an IPv6 ACR_TEST_TRIAL_CH_HOST is bracketed in ACR_TEST_TRIAL_CLICKHOUSE_DSN" \
+  "OK 127.0.0.1 pw [2001:db8::1]:30502/default 127.0.0.1:30503 false true" \
+  "$(run_reader)"
+
+# 5c. CHAOS-4228 (codex R1, real High): an IPv6 ACR_TEST_TRIAL_FALKOR_HOST
+# must also come out bracketed in ACR_TEST_TRIAL_FALKOR_ADDR --
+# falkorgraph.Config.validate() parses this with Go's net.SplitHostPort,
+# which hard-rejects an unbracketed IPv6 host:port (not just an ambiguous
+# string: a real startup failure for the FalkorDB client).
+fake_dsn_bin "${VALID_LINES/ACR_TEST_TRIAL_FALKOR_HOST=127.0.0.1/ACR_TEST_TRIAL_FALKOR_HOST=2001:db8::1}"
+check "an IPv6 ACR_TEST_TRIAL_FALKOR_HOST is bracketed in ACR_TEST_TRIAL_FALKOR_ADDR" \
+  "OK 127.0.0.1 pw 127.0.0.1:30502/default [2001:db8::1]:30503 false true" \
+  "$(run_reader)"
+
+# 5d. CHAOS-4228 (codex R1, coverage gap): an IPv6 ACR_TEST_TRIAL_PG_HOST
+# must also come out bracketed in ACR_TEST_TRIAL_POSTGRES_DSN
+# (common.sh's own postgres:// DSN, the other site this ticket's fix
+# touches besides the ClickHouse DSN above). A dedicated small reader
+# (not run_reader(), which every OTHER check above shares) keeps this
+# addition from changing any existing check's expected string.
+run_pg_dsn_reader() {
+  (cd "$script_dir/../.." && env \
+    ACR_TRIAL_DATA_PLANE=kiac \
+    ACR_TRIAL_KIAC_DSN_BIN="$tmp/fake-trial-data.sh" \
+    bash -c '
+      set -euo pipefail
+      source scripts/trial/common.sh
+      trial_wire_common_env
+      printf "%s" "$ACR_TEST_TRIAL_POSTGRES_DSN" | sed -E "s#.*@##; s#/.*##"
+    ' 2>"$tmp/stderr.log") || echo "ERR $?"
+}
+fake_dsn_bin "${VALID_LINES/ACR_TEST_TRIAL_PG_HOST=127.0.0.1/ACR_TEST_TRIAL_PG_HOST=2001:db8::1}"
+check "an IPv6 ACR_TEST_TRIAL_PG_HOST is bracketed in ACR_TEST_TRIAL_POSTGRES_DSN" \
+  "[2001:db8::1]:30500" \
+  "$(run_pg_dsn_reader)"
+
+# 5e. CHAOS-4228 (codex R2, real completeness gap): the SIX-VAR ESCAPE
+# HATCH (override branch, common.sh:239-254) is a DISTINCT code path from
+# the kiac branch every check above exercises -- its own ch_dsn/
+# falkor_addr construction needs its own proof, not an inference from the
+# kiac branch sharing the same bracket_host_if_ipv6 helper. Uses the REAL
+# trial_wire_common_env and REAL trial_secret (the same ops/.env every
+# other live check in this directory already depends on --
+# test-connect-retry.sh's own six-var-override case proves it is
+# available here); only the CH_DB portion of the DSN is unpredictable
+# (a real ops/.env secret), so the check strips it, asserting only the
+# authority (host:port) every fix touches. THREE DISTINCT IPv6 literals
+# for PG vs CH vs FALKOR so no assertion could pass on another one's
+# value (codex R3, real Medium: the first version of this case left
+# ACR_TRIAL_PG_HOST at 127.0.0.1, so a regression at common.sh:451's own
+# override-branch pg_host construction could pass this file unnoticed --
+# fixed by asserting all three legs).
+run_override_reader() {
+  (cd "$script_dir/../.." && env \
+    ACR_TRIAL_PG_HOST=2001:db7::1 ACR_TRIAL_PG_PORT=5432 \
+    ACR_TRIAL_CH_HOST=2001:db8::1 ACR_TRIAL_CH_PORT=9000 \
+    ACR_TRIAL_FALKOR_HOST=2001:db9::1 ACR_TRIAL_FALKOR_PORT=6379 \
+    bash -c '
+      set -euo pipefail
+      source scripts/trial/common.sh
+      trial_wire_common_env
+      pg_authority="$(printf "%s" "$ACR_TEST_TRIAL_POSTGRES_DSN" | sed -E "s#.*@##; s#/.*##")"
+      ch_authority="$(printf "%s" "$ACR_TEST_TRIAL_CLICKHOUSE_DSN" | sed -E "s#.*@##; s#/.*##")"
+      printf "%s %s %s" "$pg_authority" "$ch_authority" "$ACR_TEST_TRIAL_FALKOR_ADDR"
+    ' 2>"$tmp/stderr.log") || echo "ERR $?"
+}
+check "override branch: IPv6 ACR_TRIAL_PG_HOST/CH_HOST/FALKOR_HOST all bracketed" \
+  "[2001:db7::1]:5432 [2001:db8::1]:9000 [2001:db9::1]:6379" \
+  "$(run_override_reader)"
 
 # 6. Producer pin (CHAOS-4186 follow-up, real incident): the REAL
 # trial-data.sh (not the fake used above) must emit

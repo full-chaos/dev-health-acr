@@ -162,11 +162,12 @@ One harness remains compose-bound regardless of this switch:
 `run-frontier-arm.sh` talks to the compose clickhouse container directly
 via `docker exec` (its own frontier baseline, a separate measurement family)
 -- tracked as CHAOS-4220 (Low), not fixed here.
-DSN component assembly (`common.sh`'s `ch_dsn`, `run-two-turn-parallel.sh`'s
-per-shard Postgres DSN) does not bracket an IPv6 host -- unreachable via the
-kiac or compose planes themselves (both always IPv4), only via the six-var
-escape hatch pointed at an IPv6 endpoint -- tracked as CHAOS-4228 (Low), not
-fixed here.
+DSN/authority component assembly (`common.sh`'s `ch_dsn`, `ACR_TEST_TRIAL_
+POSTGRES_DSN`, and `falkor_addr`; `run-two-turn-parallel.sh`'s per-shard
+Postgres DSN) brackets an IPv6 host in `[]` via a shared
+`bracket_host_if_ipv6` helper -- CHAOS-4228 (Low), fixed. Unreachable via
+the kiac or compose planes themselves (both always IPv4); only the
+six-var escape hatch can point a store at an IPv6 endpoint.
 
 ### Traps hit standing this up (read before repeating)
 

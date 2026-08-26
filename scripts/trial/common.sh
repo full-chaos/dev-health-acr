@@ -223,12 +223,28 @@ if [[ "$_acr_trial_override_set" == "1" && "${#_acr_trial_override_missing[@]}" 
   exit 1
 fi
 
+# bracket_host_if_ipv6 (CHAOS-4228): a DSN authority is `host:port` --
+# unbracketed, an IPv6 literal's own internal `:` characters make the
+# boundary with the trailing `:<port>` ambiguous (RFC 3986 requires an
+# IPv6 host to be wrapped in `[]` inside a URI authority for exactly this
+# reason). A bare IPv4 address or hostname (no `:`) passes through
+# unchanged; a host already bracketed is left alone rather than
+# double-wrapped.
+bracket_host_if_ipv6() {
+  local host="$1"
+  if [[ "$host" == *:* && "$host" != \[*\] ]]; then
+    printf '[%s]' "$host"
+  else
+    printf '%s' "$host"
+  fi
+}
+
 trial_wire_common_env() {
   export ACR_POSTGRES_CONNECTION_KIND=direct
   export ACR_TEST_TRIAL_CORPUS="$ACR_TRIAL_CORPUS"
   export ACR_TEST_TRIAL_ORG="$ACR_TRIAL_ORG"
 
-  local pg_host pg_port pg_user pg_password ch_dsn ch_host falkor_addr falkor_host data_plane_label
+  local pg_host pg_port pg_user pg_password ch_dsn ch_host falkor_addr falkor_host data_plane_label pg_dsn
   # falkor_tls/falkor_allow_insecure: only the kiac branch populates these
   # (the trial FalkorDB's plaintext posture is a kiac-plane-specific fact);
   # left empty for compose/override, so the export below is a no-op there
@@ -248,9 +264,14 @@ trial_wire_common_env() {
     data_plane_label="override"
     pg_host="$ACR_TRIAL_PG_HOST"; pg_port="$ACR_TRIAL_PG_PORT"
     pg_user="$(trial_secret POSTGRES_USER)"; pg_password="$(trial_secret POSTGRES_PASSWORD)"
-    ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@${ACR_TRIAL_CH_HOST}:${ACR_TRIAL_CH_PORT}/$(trial_secret CLICKHOUSE_DB)"
+    ch_dsn="clickhouse://$(trial_secret CLICKHOUSE_USER):$(trial_secret CLICKHOUSE_PASSWORD)@$(bracket_host_if_ipv6 "$ACR_TRIAL_CH_HOST"):${ACR_TRIAL_CH_PORT}/$(trial_secret CLICKHOUSE_DB)"
     ch_host="$ACR_TRIAL_CH_HOST"
-    falkor_addr="${ACR_TRIAL_FALKOR_HOST}:${ACR_TRIAL_FALKOR_PORT}"
+    # CHAOS-4228 (codex R1, real High): falkor_addr is host:port too, and
+    # falkorgraph.Config.validate() parses it with net.SplitHostPort,
+    # which requires the same [] bracketing for an IPv6 host -- an
+    # unbracketed IPv6 address here fails startup validation outright,
+    # not just an ambiguous string.
+    falkor_addr="$(bracket_host_if_ipv6 "$ACR_TRIAL_FALKOR_HOST"):${ACR_TRIAL_FALKOR_PORT}"
     falkor_host="$ACR_TRIAL_FALKOR_HOST"
   elif [[ "$ACR_TRIAL_DATA_PLANE" == "kiac" ]]; then
     data_plane_label="kiac"
@@ -401,9 +422,10 @@ trial_wire_common_env() {
     done
     pg_host="$_kiac_env_PG_HOST"; pg_port="$_kiac_env_PG_PORT"
     pg_user="$_kiac_env_PG_USER"; pg_password="$_kiac_env_PG_PASSWORD"
-    ch_dsn="clickhouse://${_kiac_env_CH_USER}:${_kiac_env_CH_PASSWORD}@${_kiac_env_CH_HOST}:${_kiac_env_CH_PORT}/${_kiac_env_CH_DB}"
+    ch_dsn="clickhouse://${_kiac_env_CH_USER}:${_kiac_env_CH_PASSWORD}@$(bracket_host_if_ipv6 "$_kiac_env_CH_HOST"):${_kiac_env_CH_PORT}/${_kiac_env_CH_DB}"
     ch_host="$_kiac_env_CH_HOST"
-    falkor_addr="${_kiac_env_FALKOR_HOST}:${_kiac_env_FALKOR_PORT}"
+    # CHAOS-4228: same bracket_host_if_ipv6 as the override branch above.
+    falkor_addr="$(bracket_host_if_ipv6 "$_kiac_env_FALKOR_HOST"):${_kiac_env_FALKOR_PORT}"
     falkor_host="$_kiac_env_FALKOR_HOST"
     falkor_tls="$_kiac_env_FALKOR_TLS"
     falkor_allow_insecure="$_kiac_env_FALKOR_ALLOW_INSECURE"
@@ -421,7 +443,13 @@ trial_wire_common_env() {
   fi
 
   export ACR_TEST_TRIAL_FALKOR_ADDR="$falkor_addr"
-  export ACR_TEST_TRIAL_POSTGRES_DSN="postgres://${pg_user}:${pg_password}@${pg_host}:${pg_port}/acr?sslmode=disable"
+  # CHAOS-4228: same bracket_host_if_ipv6 as the ClickHouse DSN above --
+  # this shares $pg_host with run-two-turn-parallel.sh's own per-shard
+  # postgres:// DSN (see that script's trial_pg_dsn, same fix applied
+  # there independently since it reads PG_HOST as a raw component, not
+  # this composed string).
+  pg_dsn="postgres://${pg_user}:${pg_password}@$(bracket_host_if_ipv6 "$pg_host"):${pg_port}/acr?sslmode=disable"
+  export ACR_TEST_TRIAL_POSTGRES_DSN="$pg_dsn"
   export ACR_TEST_TRIAL_CLICKHOUSE_DSN="$ch_dsn"
   # Raw components, not just the composed DSN above: run-two-turn-parallel.sh
   # needs these to build a PER-SHARD Postgres DSN (same host/port/user/

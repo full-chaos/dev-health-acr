@@ -105,6 +105,16 @@ evil"host' \
     "$(printf '%s' "$evil_host_plan" | jq -e . >/dev/null 2>&1 && echo valid || echo INVALID)" \
     "$(printf '%s' "$evil_host_plan" | jq -r .pg_host)")"
 
+# 4d. CHAOS-4228: an IPv6 ACR_TRIAL_PG_HOST must be bracketed in
+# pg_dsn_example (trial_pg_dsn's own bracket_host_if_ipv6 call) -- the
+# `pg_host` field itself stays the raw, unbracketed operator value (it is
+# not a DSN authority on its own). Unbracketed, the DSN's trailing
+# `:5432` would be indistinguishable from one more `:`-separated group of
+# the address, an ambiguous/unparseable postgres:// URI.
+check "an IPv6 ACR_TRIAL_PG_HOST is bracketed in pg_dsn_example" \
+  '{"shard_count":5,"granularity":1,"concurrency_cap":8,"case_count":5,"pg_host":"2001:db8::1","pg_port":"5432","pg_dsn_example":"postgres://plan-only:plan-only@[2001:db8::1]:5432/EXAMPLE_DB?sslmode=disable","shards":[{"index":0,"cases":"0"},{"index":1,"cases":"1"},{"index":2,"cases":"2"},{"index":3,"cases":"3"},{"index":4,"cases":"4"}]}' \
+  "$(ACR_TRIAL_CASES_PER_SHARD=1 ACR_TRIAL_PG_HOST=2001:db8::1 plan "$tmp/dense.json")"
+
 # 5. The concurrency cap is reported in the plan, so an operator can see
 #    what a run WILL do before it does it.
 check "concurrency cap is configurable and reported" \

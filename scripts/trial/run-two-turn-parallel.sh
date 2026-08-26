@@ -193,12 +193,28 @@ PG_PORT="${ACR_TEST_TRIAL_PG_PORT:-${ACR_TRIAL_PG_PORT:-5432}}"
 PG_USER="${ACR_TEST_TRIAL_PG_USER:-$(trial_secret POSTGRES_USER)}"
 PG_PASSWORD="${ACR_TEST_TRIAL_PG_PASSWORD:-$(trial_secret POSTGRES_PASSWORD)}"
 
+# bracket_host_if_ipv6 (CHAOS-4228): same fix, same reasoning, as
+# common.sh's own helper of the same name -- a DSN authority is
+# `host:port`, and an unbracketed IPv6 literal's internal `:` characters
+# make that boundary ambiguous (RFC 3986 requires `[]` around an IPv6 host
+# in a URI authority). Defined again here rather than reused from
+# common.sh because plan-only mode (above) deliberately never sources
+# common.sh -- this script's own trial_pg_dsn must work in both modes.
+bracket_host_if_ipv6() {
+  local host="$1"
+  if [[ "$host" == *:* && "$host" != \[*\] ]]; then
+    printf '[%s]' "$host"
+  else
+    printf '%s' "$host"
+  fi
+}
+
 # trial_pg_dsn (CHAOS-4116) is the ONE place a postgres:// DSN is built --
 # template_dsn and SHARD_DSN below both call this rather than each carrying
 # its own copy of the string template, so a host/port override is
 # structurally incapable of reaching one and missing the other.
 trial_pg_dsn() {
-  printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' "$PG_USER" "$PG_PASSWORD" "$PG_HOST" "$PG_PORT" "$1"
+  printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' "$PG_USER" "$PG_PASSWORD" "$(bracket_host_if_ipv6 "$PG_HOST")" "$PG_PORT" "$1"
 }
 # CHAOS-4100 (post-4108-fix graph rebuild incident): trial_wire_graph_lifecycle_env
 # is only DEFINED by the real common.sh sourced above -- plan-only mode never
