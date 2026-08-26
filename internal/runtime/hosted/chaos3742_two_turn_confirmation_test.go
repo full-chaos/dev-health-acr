@@ -870,10 +870,29 @@ type twoTurnTraceCapture struct {
 	// regardless -- the same "last wins" discipline finalDecisionEvents
 	// already needs, per subject, for a stalled resolution's re-decision.
 	windowCanonicalization contextfabric.WindowCanonicalizationOutcome
+	// slogTee (CHAOS-4155 Phase 2, codex R1 High, confirmed): nil in every
+	// existing use of this type (all the in-process unit tests below
+	// construct twoTurnTraceCapture directly with events pre-populated,
+	// never through hosted.Open) -- Trace()'s forward is a no-op for all
+	// of them, unchanged behavior. Only the live trial-harness
+	// construction below sets it. Without this, installing
+	// twoTurnTraceCapture as Options.ResolutionTracer REPLACES
+	// graphrank.NewSlogResolutionTracer entirely (open.go's own doc
+	// comment: "an in-process caller can capture trace events directly
+	// instead of only reaching them by parsing Debug-level slog output"),
+	// so DebugContext-level stages -- confirmed_kind_scope and the
+	// CHAOS-4155 vector census fields riding on it -- never reached slog
+	// at all, regardless of ACR_LOG_LEVEL/ACR_TEST_TRIAL_LOG_LEVEL. This
+	// tee restores that path without giving up the in-process capture the
+	// two-turn report itself depends on.
+	slogTee graphrank.ResolutionTracer
 }
 
 func (c *twoTurnTraceCapture) Trace(event graphrank.ResolutionTraceEvent) {
 	c.events = append(c.events, event)
+	if c.slogTee != nil {
+		c.slogTee.Trace(event)
+	}
 }
 
 // RecordSynthesisStatusOverride overrides SlogEngineTelemetry's own method
@@ -7894,14 +7913,37 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	// CHAOS-4155 Phase 2 (lane-4155-p2): this used to hardcode
+	// slog.LevelWarn, discarding cfg.LogLevel right after loading it --
+	// no env var could ever raise this harness's own log level, so a
+	// DebugContext-level event (e.g. graphrank's confirmed_kind_scope
+	// stage, which CHAOS-4155's own shadow vector census telemetry rides
+	// on) could never reach a trial run's logs regardless of what an
+	// operator set. cfg.LogLevel is ConfigFromEnv's own ACR_LOG_LEVEL
+	// value (default "info"); wireProductionEnv now threads
+	// ACR_TEST_TRIAL_LOG_LEVEL onto it the same way every other optional
+	// trial-input knob is threaded, so a measurement run sets that one
+	// var to raise this harness's own level without touching any other
+	// trial script sharing wireProductionEnv (all of which stay at the
+	// "info" default, byte-identical to before).
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	// CHAOS-4103: traceCapture's embedded SlogEngineTelemetry is built from
 	// the SAME logger every other sink in this function uses (not
 	// slog.Default() -- see buildContextFabricGraphReader's own comment on
 	// why that distinction matters), so the WARN line
 	// RecordSynthesisStatusOverride still emits is gated by this run's
 	// actual log level, not an unconfigured default.
-	traceCapture := &twoTurnTraceCapture{SlogEngineTelemetry: contextfabric.NewSlogEngineTelemetry(logger)}
+	traceCapture := &twoTurnTraceCapture{
+		SlogEngineTelemetry: contextfabric.NewSlogEngineTelemetry(logger),
+		// CHAOS-4155 Phase 2: tee every resolution trace event to the SAME
+		// production SlogResolutionTracer open.go would otherwise install
+		// by default (see twoTurnTraceCapture.slogTee's own doc comment) --
+		// gated by this run's actual cfg.LogLevel-derived logger, so a
+		// measurement run with ACR_TEST_TRIAL_LOG_LEVEL=debug can grep a
+		// shard's own .gotest.log for confirmed_kind_scope/vector_census_*
+		// the same way any other production Debug-level stage is observed.
+		slogTee: graphrank.NewSlogResolutionTracer(logger),
+	}
 	options := hosted.Options{
 		ServiceVersion: "chaos-3742-two-turn", Logger: logger, Now: time.Now,
 		ResolutionTracer: traceCapture,
