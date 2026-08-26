@@ -261,12 +261,19 @@ func TestFrontierTrialCorpus(t *testing.T) {
 // entry point can receive an unsanitized value.
 var armLabelPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// frontierUnsupportedDataPlaneReason (CHAOS-4220) is non-empty exactly
-// when plane (the raw ACR_TRIAL_DATA_PLANE value) names a data plane this
-// harness cannot reach -- empty ("", ok to proceed) for "compose", unset
-// ("", the raw env var read here, NOT common.sh's own shell-side default
-// of "kiac"), or anything else this function does not specifically know
-// to be unreachable.
+// frontierUnsupportedDataPlaneReason (CHAOS-4220) is non-empty for any
+// plane (the raw ACR_TRIAL_DATA_PLANE value) OTHER than the literal
+// string "compose" -- the ONE data plane this harness's docker-exec-shaped
+// ClickHouse access can reach. Mirrors run-frontier-arm.sh's own
+// shell-side guard exactly (`!= "compose"`, not `== "kiac"` -- codex R1,
+// real High, confirmed: an earlier version of this function only refused
+// the literal "kiac", so an UNSET ACR_TRIAL_DATA_PLANE -- the shape a
+// direct `go test` invocation has by default, since bypassing
+// run-frontier-arm.sh also bypasses common.sh's own shell-side
+// `: "${ACR_TRIAL_DATA_PLANE:=kiac}"` default resolution -- silently
+// passed this check and fell through to a live compose read anyway).
+// Fails closed on unset, "kiac", and any other/garbage value alike; only
+// the exact string "compose" is ever accepted.
 //
 // This harness's ClickHouse access is docker-exec-shaped: both
 // verifyClickHouseReadOnlyCredential (this file) AND the case prompt text
@@ -275,7 +282,11 @@ var armLabelPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // clickhouse-client ...`, never a DSN/client-library connection like
 // every other trial script's ClickHouse access. The kiac data plane's
 // ClickHouse runs as a Kubernetes pod inside a kiac-managed VM -- there
-// is no container by that name for `docker exec` to find.
+// is no container by that name for `docker exec` to find. (The six-var
+// per-store escape hatch used elsewhere in this codebase -- ACR_TRIAL_
+// {PG,CH,FALKOR}_{HOST,PORT} -- does not apply to this harness either:
+// run-frontier-arm.sh never calls trial_wire_common_env, so those vars,
+// even fully set, are never read here.)
 //
 // A real kiac-exec redesign is NOT attempted under CHAOS-4220 (its own
 // scope note permits documenting why instead of fixing): it would need
@@ -289,10 +300,13 @@ var armLabelPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // touching the kiac cluster (another lane is its sole driver), so a
 // kiac-exec path could not be live-verified even if written.
 func frontierUnsupportedDataPlaneReason(plane string) string {
-	if plane != "kiac" {
+	if plane == "compose" {
 		return ""
 	}
-	return "ACR_TRIAL_DATA_PLANE=kiac, but the frontier-baseline-arm's ClickHouse access is docker-exec-shaped and cannot reach the kiac data plane (CHAOS-4220) -- set ACR_TRIAL_DATA_PLANE=compose explicitly to run this harness"
+	if plane == "" {
+		return "ACR_TRIAL_DATA_PLANE is unset -- the frontier-baseline-arm's ClickHouse access is docker-exec-shaped and cannot reach any data plane except 'compose' (CHAOS-4220); this test was invoked directly, bypassing run-frontier-arm.sh's own shell-side default resolution (which would otherwise default to 'kiac') -- set ACR_TRIAL_DATA_PLANE=compose explicitly to run this harness"
+	}
+	return fmt.Sprintf("ACR_TRIAL_DATA_PLANE=%q, but the frontier-baseline-arm's ClickHouse access is docker-exec-shaped and cannot reach any data plane except 'compose' (CHAOS-4220) -- set ACR_TRIAL_DATA_PLANE=compose explicitly to run this harness", plane)
 }
 
 // writeReportAtomic (CHAOS-3853 review P2, ARM path hygiene) writes blob to

@@ -12,7 +12,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 # CHAOS-4220: this harness does NOT participate in the
 # ACR_TRIAL_DATA_PLANE=compose|kiac switch every other trial launcher
-# shares via common.sh (trial_wire_common_env, never called here) --
+# shares via common.sh (trial_wire_common_env, never called here) -- nor
+# does the six-var per-store escape hatch (ACR_TRIAL_{PG,CH,FALKOR}_
+# {HOST,PORT}) apply here, for the same reason: those vars, even fully
+# set (common.sh's own all-or-none check above only validates their
+# COMPLETENESS, not that anything downstream reads them), are simply
+# never consulted below -- this harness's own
+# ACR_TEST_TRIAL_FRONTIER_CLICKHOUSE_CONTAINER is the only lever on its
+# ClickHouse target.
 # ClickHouse access below is docker-exec-shaped (frontier_trial_live_test.go's
 # verifyClickHouseReadOnlyCredential, PLUS the SAME `docker exec %s
 # clickhouse-client ...` command embedded verbatim in the case prompt text

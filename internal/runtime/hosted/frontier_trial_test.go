@@ -759,23 +759,25 @@ func TestWriteReportAtomic(t *testing.T) {
 }
 
 // TestFrontierUnsupportedDataPlaneReason (CHAOS-4220) pins
-// frontierUnsupportedDataPlaneReason's own contract: only "kiac" is
-// refused (this harness's docker-exec-shaped ClickHouse access cannot
-// reach the kiac data plane's Kubernetes-hosted ClickHouse); everything
-// else -- unset, "compose", or any other value -- is left alone, this
-// function's job is narrowly to name the ONE unreachable plane, not to
-// validate ACR_TRIAL_DATA_PLANE generally (common.sh's own shell-side
-// switch already owns that).
+// frontierUnsupportedDataPlaneReason's own contract: ONLY the literal
+// string "compose" is accepted; everything else -- unset, "kiac", or any
+// other/garbage value -- is refused. codex R1 (real High, confirmed): an
+// earlier version of this test blessed "unset" as safe, matching an
+// earlier (wrong) version of the function that only refused "kiac" --
+// but a direct `go test` invocation bypasses common.sh's own shell-side
+// `: "${ACR_TRIAL_DATA_PLANE:=kiac}"` default resolution entirely, so an
+// unset raw env var there must fail closed exactly like an explicit
+// "kiac" does, not silently pass through to a live compose read.
 func TestFrontierUnsupportedDataPlaneReason(t *testing.T) {
 	cases := []struct {
 		name      string
 		plane     string
 		wantEmpty bool
 	}{
-		{"unset (the raw env var this function sees, not common.sh's shell-side kiac default)", "", true},
-		{"compose explicit", "compose", true},
+		{"compose explicit (the only accepted value)", "compose", true},
+		{"unset must fail closed, not silently pass", "", false},
 		{"kiac explicit", "kiac", false},
-		{"garbage value", "nonsense", true},
+		{"garbage value", "nonsense", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
