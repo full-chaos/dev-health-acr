@@ -8890,12 +8890,17 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// is only a failure when it is UNJUSTIFIED (neither baseline_equivalent
 	// nor kind_insensitivity_attested) or its pairing could not even be
 	// evaluated (PairInvalid). Sol-max's own mechanism finding: unconfirmed
-	// ExpectedKinds never filters the ordinary candidate pool (resolve.go),
-	// and SubjectHandles is not consumed by the census at all (handles are
-	// bound from question text, chaos3899_evidence_round.go) -- neither
-	// hint reaches interpretation or synthesis (genkitruntime/runtime.go)
-	// -- so for kind/handle the correctness proposition is NONINTERFERENCE
-	// (baseline_equivalent), not universal all-kinds census proof.
+	// ExpectedKinds never filters the ordinary candidate pool (resolve.go).
+	// CHAOS-4081 (team-lead ruling, path (a)) later threaded a CONFIRMED
+	// explicit SubjectHandles hint into the census as ConfirmedHandle, but
+	// for OBSERVATION only (Attestation.HandleInsensitivityEvaluated/
+	// Outcome) -- it still cannot attest a decisive commit the way
+	// kind_insensitivity_attested does (see that field's own doc comment,
+	// chaos3899_evidence_round.go, and the ATTESTATION BOUNDARY note near
+	// this file's own header) -- and neither hint reaches interpretation
+	// or synthesis (genkitruntime/runtime.go) -- so for kind/handle the
+	// correctness proposition is NONINTERFERENCE (baseline_equivalent),
+	// not universal all-kinds census proof.
 	if report.InferredPairInvalidCount > 0 {
 		t.Errorf("inferred_pair_invalid_count=%d, want 0 -- a no-hint baseline call could not be evaluated, so the pairing this bar depends on is broken (investigate the baseline error, not the hinted call)", report.InferredPairInvalidCount)
 	}

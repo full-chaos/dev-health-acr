@@ -627,6 +627,20 @@ const (
 	// narrowing's decisive outcome is NOT provably sound; the design
 	// brief's own rule demotes this to clarify.
 	kindInsensitivitySensitive kindInsensitivityOutcome = "kind_sensitive_outcome"
+	// kindInsensitivityProbeError (CHAOS-4081, codex R2, Medium, confirmed):
+	// NEVER returned by kindInsensitivityProof itself -- this is
+	// confirmedHandleInsensitivityProbe's OWN degraded value
+	// (chaos3899_evidence_round.go) for a panic caught by its probe-local
+	// recover(). Deliberately distinct from the zero value "" ("never
+	// evaluated at all", ConfirmedHandle nil or unregistered): a consumer
+	// that only ever checked Evaluated==false for "no probe ran" could not
+	// tell that apart from "the probe ran and its own CensusFunc panicked"
+	// -- exactly the ambiguity the outer probe_error trace reason
+	// (resolve.go's runShadowEvidenceRoundForResolution, ReasonProbeError)
+	// exists to avoid for the WHOLE round, and which the probe-local
+	// recover deliberately keeps from ever reaching there for THIS
+	// specific panic.
+	kindInsensitivityProbeError kindInsensitivityOutcome = "probe_error"
 )
 
 // kindInsensitivityProof is design brief §2.0's own all-kinds census

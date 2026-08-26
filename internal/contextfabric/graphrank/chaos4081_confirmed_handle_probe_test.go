@@ -408,7 +408,12 @@ func TestConfirmedHandleProbePanicDoesNotWipeAttestation(t *testing.T) {
 	if len(att.Kinds) == 0 {
 		t.Fatalf("att.Kinds = %v, want the pool's own census receipt preserved", att.Kinds)
 	}
-	if att.HandleInsensitivityEvaluated {
-		t.Fatalf("att.HandleInsensitivityEvaluated = true, want false -- a panicked probe must degrade to unevaluated, not fabricate a verdict")
+	// codex R2 (Medium, confirmed): Evaluated=true/Outcome=probe_error, NOT
+	// the "never evaluated" zero value -- a panicked probe DID run and its
+	// own CensusFunc is what failed, a materially different fact from "no
+	// ConfirmedHandle was ever set" that a production consumer must be
+	// able to tell apart from "not attempted at all".
+	if !att.HandleInsensitivityEvaluated || att.HandleInsensitivityOutcome != kindInsensitivityProbeError {
+		t.Fatalf("att = evaluated:%v outcome:%q, want true/%q -- a panicked probe must report a distinguishable probe-error signal, not fabricate a real verdict or collapse into the unevaluated zero value", att.HandleInsensitivityEvaluated, att.HandleInsensitivityOutcome, kindInsensitivityProbeError)
 	}
 }

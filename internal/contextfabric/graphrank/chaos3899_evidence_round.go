@@ -796,24 +796,29 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 	return emit(base)
 }
 
-// confirmedHandleInsensitivityProbe (CHAOS-4081, codex R1 High fix) is the
-// ConfirmedHandle-scoped kindInsensitivityProof call, isolated behind its
-// OWN deferred recover() -- see the call site's doc comment (immediately
-// above, in RunShadowEvidenceRound) for why this must never let a panic
-// propagate into the caller's top-level recover(), which would zero-value
-// an already-decided Attestation instead of degrading just this probe's own
+// confirmedHandleInsensitivityProbe (CHAOS-4081, codex R1 High fix; degraded
+// signal codex R2 Medium fix) is the ConfirmedHandle-scoped
+// kindInsensitivityProof call, isolated behind its OWN deferred recover() --
+// see the call site's doc comment (immediately above, in
+// RunShadowEvidenceRound) for why this must never let a panic propagate
+// into the caller's top-level recover(), which would zero-value an
+// already-decided Attestation instead of degrading just this probe's own
 // two output fields.
 func confirmedHandleInsensitivityProbe(ctx context.Context, input ShadowEvidenceRoundInput, anchor AnchorBinding, anchorOK bool) (evaluated bool, outcome kindInsensitivityOutcome) {
 	defer func() {
 		if r := recover(); r != nil {
-			// Degrade to "never evaluated" -- the SAME zero value this
-			// probe already reports when ConfirmedHandle is nil or names
-			// an unregistered kind, so a consumer sees no difference
-			// between "not attempted" and "attempted, probe itself
-			// failed". Nothing else is touched: `base` in the caller was
-			// already final before this call, and this named-return
-			// recovery only ever writes evaluated/outcome, never base.
-			evaluated, outcome = false, ""
+			// Degrade to Evaluated=true, Outcome=kindInsensitivityProbeError
+			// -- NOT the "never evaluated" zero value (codex R2, Medium,
+			// confirmed): a panic here means the probe DID run and its own
+			// CensusFunc call is what failed, which is a materially
+			// different fact than "no ConfirmedHandle was ever set" and
+			// must be distinguishable in the production trace, not folded
+			// into the same "not attempted" bucket. See
+			// kindInsensitivityProbeError's own doc comment. Nothing else
+			// is touched: `base` in the caller was already final before
+			// this call, and this named-return recovery only ever writes
+			// evaluated/outcome, never base.
+			evaluated, outcome = true, kindInsensitivityProbeError
 		}
 	}()
 	evaluated = true
