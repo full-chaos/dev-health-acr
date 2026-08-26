@@ -396,6 +396,20 @@ type ShadowEvidenceRoundInput struct {
 	// that this can never reach Outcome/Kinds/NonCensusedSurvivor and
 	// therefore never reach Slice C.
 	ConfirmedHandle *BoundHandle
+	// CallerHintShortCircuit (CHAOS-4300, 2026-08-26) is true ONLY for the
+	// resolveSubjects caller-hint short circuit's own observability-only
+	// call (resolve.go) -- false for every pre-existing call site
+	// (byte-identical for every caller before this ticket). Read-only, pure
+	// trace tag: it does not gate, narrow, or otherwise participate in ANY
+	// decisive branch below (unlike ConfirmedAnchor/ConfirmedHandle, which
+	// feed real discriminators) -- it exists solely so
+	// ShadowCallerHintShortCircuit on the emitted evidence_round/
+	// evidence_probe trace events lets a reader (and the CHAOS-4300 ticket's
+	// own measurement pair) distinguish "this census/probe ran for a commit
+	// already decided by the caller-hint short circuit" from "this ran for
+	// the ordinary stalled-resolution path" without fragile event-order
+	// correlation against a separate decision-stage event.
+	CallerHintShortCircuit bool
 }
 
 // splitCensusKinds partitions kinds into the subset the closed census
@@ -468,6 +482,10 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 				// CHAOS-4081 (team-lead ruling, path (a)):
 				ShadowHandleInsensitivityEvaluated: a.HandleInsensitivityEvaluated,
 				ShadowHandleInsensitivityOutcome:   string(a.HandleInsensitivityOutcome),
+				// CHAOS-4300: pure trace tag, read straight off the input --
+				// see ShadowEvidenceRoundInput.CallerHintShortCircuit's own
+				// doc comment.
+				ShadowCallerHintShortCircuit: input.CallerHintShortCircuit,
 			})
 			for _, k := range a.Kinds {
 				// readAtUnix stays 0 (never time.Time{}.Unix()'s large
@@ -486,6 +504,12 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 					CensusReadAtUnix: readAtUnix, CensusProtocol: k.Protocol,
 					CensusClosureMismatch: k.ClosureMismatch, CensusStatementCount: k.StatementCount,
 					CensusRowsRead: k.RowsRead, CensusHandleApplied: k.HandleApplied, CensusAnchorApplied: k.AnchorApplied,
+					// CHAOS-4300: same tag as the sibling evidence_round
+					// event above, mirrored per-kind for the same reason
+					// every other evidence_round-level fact on this event
+					// (e.g. CensusHandleApplied/CensusAnchorApplied) is
+					// already mirrored per-kind.
+					ShadowCallerHintShortCircuit: input.CallerHintShortCircuit,
 				})
 			}
 		}

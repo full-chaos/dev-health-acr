@@ -297,7 +297,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// CHAOS-4081 exists to make OBSERVABLE. Same closed-vocabulary
 			// discipline: no free text, count/enum/bool only.
 			"shadow_handle_insensitivity_evaluated", event.ShadowHandleInsensitivityEvaluated,
-			"shadow_handle_insensitivity_outcome", event.ShadowHandleInsensitivityOutcome)
+			"shadow_handle_insensitivity_outcome", event.ShadowHandleInsensitivityOutcome,
+			// CHAOS-4300: which resolution path produced this round -- see
+			// ResolutionTraceEvent.ShadowCallerHintShortCircuit's own doc
+			// comment. A plain bool, no more sensitive than any other flag
+			// on this line.
+			"shadow_caller_hint_short_circuit", event.ShadowCallerHintShortCircuit)
 	case "evidence_probe":
 		// CHAOS-3899: ONE per-kind census receipt (brief §1.3(3), "Per-kind,
 		// never aggregated across kinds").
@@ -307,7 +312,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"census_count", event.CensusCount, "census_read_at_unix", event.CensusReadAtUnix,
 			"census_protocol", event.CensusProtocol, "census_closure_mismatch", event.CensusClosureMismatch,
 			"census_statement_count", event.CensusStatementCount, "census_rows_read", event.CensusRowsRead,
-			"census_handle_applied", event.CensusHandleApplied, "census_anchor_applied", event.CensusAnchorApplied)
+			"census_handle_applied", event.CensusHandleApplied, "census_anchor_applied", event.CensusAnchorApplied,
+			// CHAOS-4300: same tag as the sibling evidence_round event.
+			"shadow_caller_hint_short_circuit", event.ShadowCallerHintShortCircuit)
 	case "evidence_census_commit":
 		// CHAOS-3896 Slice C (codex xhigh review finding, confirmed and
 		// fixed: this case was missing entirely, so a LIVE
