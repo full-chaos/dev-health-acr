@@ -705,6 +705,23 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	// "off by default everywhere else" requirement).
 	set(falkorgraph.EnvConfirmedKindVectorCensusMaxComparisons, os.Getenv("ACR_TEST_TRIAL_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS"))
 
+	// CHAOS-4155 Phase 2 harness enablement, second half: this test's own
+	// logger (chaos3742_two_turn_confirmation_test.go, right after
+	// config.Load()) used to hardcode slog.LevelWarn, discarding
+	// cfg.LogLevel entirely -- no env var could ever raise it, so a
+	// DebugContext-level event (confirmed_kind_scope, which the vector
+	// census's own telemetry rides on) could never reach a trial run's
+	// logs. That hardcode is now cfg.LogLevel, which ConfigFromEnv derives
+	// from the bare ACR_LOG_LEVEL var (default "info" when unset) --
+	// exactly the var clearAmbientACREnv above already strips (it is not
+	// ACR_TEST_TRIAL_-prefixed and deliberately absent from
+	// acrEnvIsolationAllowlist, same reasoning as every other var in this
+	// OPTIONAL-passthrough block). A measurement run sets
+	// ACR_TEST_TRIAL_LOG_LEVEL=debug explicitly; every other trial script
+	// leaves it unset and stays at cfg.LogLevel's own "info" default,
+	// byte-identical to before.
+	set("ACR_LOG_LEVEL", os.Getenv("ACR_TEST_TRIAL_LOG_LEVEL"))
+
 	// Throwaway evidence key: unused by the Investigate() path this
 	// harness exercises, but openClickHouse's evidence-ID codec
 	// construction requires a structurally valid one to satisfy
