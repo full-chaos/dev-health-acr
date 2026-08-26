@@ -34,11 +34,11 @@ func (s *CheckpointStore) LoadProjectionCheckpoint(ctx context.Context, orgID, s
 		return contextfabric.ProjectionCheckpoint{}, errors.New("pgprojection: organization and source are required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT cursor, source_version, backend_watermark, updated_at
+SELECT cursor, source_version, backend_watermark, updated_at, rows_applied
 FROM acr.context_fabric_projection_checkpoints
 WHERE org_id = $1 AND source = $2 AND epoch = 0`, orgID, source)
 	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: source}
-	err := row.Scan(&checkpoint.Cursor, &checkpoint.SourceVersion, &checkpoint.BackendWatermark, &checkpoint.UpdatedAt)
+	err := row.Scan(&checkpoint.Cursor, &checkpoint.SourceVersion, &checkpoint.BackendWatermark, &checkpoint.UpdatedAt, &checkpoint.RowsApplied)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// Zero-value cursor: never projected. This is the sentinel
@@ -78,9 +78,9 @@ func (s *CheckpointStore) CompareAndSwapProjectionCheckpoint(ctx context.Context
 	}
 	updateResult, err := s.db.ExecContext(ctx, `
 UPDATE acr.context_fabric_projection_checkpoints
-SET cursor = $3, source_version = $4, backend_watermark = $5, updated_at = $6
+SET cursor = $3, source_version = $4, backend_watermark = $5, updated_at = $6, rows_applied = $8
 WHERE org_id = $1 AND source = $2 AND epoch = 0 AND cursor = $7`,
-		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor)
+		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor, updated.RowsApplied)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint: %w", sanitizeError(err))
 	}
@@ -96,10 +96,10 @@ WHERE org_id = $1 AND source = $2 AND epoch = 0 AND cursor = $7`,
 	// that turned out to already exist -- lose cleanly rather than corrupt
 	// the row.
 	insertResult, err := s.db.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, epoch, cursor, source_version, backend_watermark, updated_at)
-VALUES ($1, $2, 0, $3, $4, $5, $6)
+INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, epoch, cursor, source_version, backend_watermark, updated_at, rows_applied)
+VALUES ($1, $2, 0, $3, $4, $5, $6, $7)
 ON CONFLICT (org_id, epoch, source) DO NOTHING`,
-		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt)
+		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, updated.RowsApplied)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint: %w", sanitizeError(err))
 	}
@@ -135,11 +135,11 @@ func (s *CheckpointStore) LoadProjectionCheckpointForEpoch(ctx context.Context, 
 		return contextfabric.ProjectionCheckpoint{}, errors.New("pgprojection: organization, non-negative epoch, and source are required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT cursor, source_version, backend_watermark, updated_at
+SELECT cursor, source_version, backend_watermark, updated_at, rows_applied
 FROM acr.context_fabric_projection_checkpoints
 WHERE org_id = $1 AND source = $2 AND epoch = $3`, orgID, source, epoch)
 	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: source, Epoch: epoch}
-	err := row.Scan(&checkpoint.Cursor, &checkpoint.SourceVersion, &checkpoint.BackendWatermark, &checkpoint.UpdatedAt)
+	err := row.Scan(&checkpoint.Cursor, &checkpoint.SourceVersion, &checkpoint.BackendWatermark, &checkpoint.UpdatedAt, &checkpoint.RowsApplied)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// Zero-value cursor for an epoch with no row yet: exactly the state
@@ -176,9 +176,9 @@ func (s *CheckpointStore) CompareAndSwapProjectionCheckpointForEpoch(ctx context
 	}
 	updateResult, err := s.db.ExecContext(ctx, `
 UPDATE acr.context_fabric_projection_checkpoints
-SET cursor = $4, source_version = $5, backend_watermark = $6, updated_at = $7
+SET cursor = $4, source_version = $5, backend_watermark = $6, updated_at = $7, rows_applied = $9
 WHERE org_id = $1 AND source = $2 AND epoch = $3 AND cursor = $8`,
-		updated.OrgID, updated.Source, updated.Epoch, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor)
+		updated.OrgID, updated.Source, updated.Epoch, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor, updated.RowsApplied)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint for epoch: %w", sanitizeError(err))
 	}
@@ -188,10 +188,10 @@ WHERE org_id = $1 AND source = $2 AND epoch = $3 AND cursor = $8`,
 		return nil
 	}
 	insertResult, err := s.db.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, epoch, cursor, source_version, backend_watermark, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, epoch, cursor, source_version, backend_watermark, updated_at, rows_applied)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (org_id, epoch, source) DO NOTHING`,
-		updated.OrgID, updated.Source, updated.Epoch, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt)
+		updated.OrgID, updated.Source, updated.Epoch, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, updated.RowsApplied)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint for epoch: %w", sanitizeError(err))
 	}

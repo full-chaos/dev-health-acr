@@ -57,6 +57,10 @@ func TestCheckpointStore_firstCompareAndSwapInsertsThenLoadRoundTrips(t *testing
 	updated := contextfabric.ProjectionCheckpoint{
 		OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-1",
 		SourceVersion: "v1", BackendWatermark: "watermark-1", UpdatedAt: time.Now().UTC(),
+		// CHAOS-4305: RowsApplied round-trips through the LEGACY (epoch-0)
+		// CAS path too, not only ForEpoch's -- codex R1 flagged the absence
+		// of a legacy-path assertion as a coverage gap.
+		RowsApplied: 42,
 	}
 	require.NoError(t, store.CompareAndSwapProjectionCheckpoint(ctx, expected, updated))
 
@@ -65,6 +69,7 @@ func TestCheckpointStore_firstCompareAndSwapInsertsThenLoadRoundTrips(t *testing
 	require.Equal(t, "cursor-1", loaded.Cursor)
 	require.Equal(t, "v1", loaded.SourceVersion)
 	require.Equal(t, "watermark-1", loaded.BackendWatermark)
+	require.Equal(t, int64(42), loaded.RowsApplied)
 }
 
 // Restart-from-checkpoint: a second store instance (simulating a worker

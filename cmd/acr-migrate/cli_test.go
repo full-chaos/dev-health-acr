@@ -101,12 +101,14 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// clearing pre-existing structure-bearing rows' reuse columns,
 	// renumbered from 0027 to 0029 for the same reason) added 0029, and
 	// CHAOS-4013 (RFC 8693 workload token exchange: acr.workload_bindings
-	// + client_credentials.workload_binding_id) added 0030, so the
-	// embedded set is now 31 files. A future migration must bump this
+	// + client_credentials.workload_binding_id) added 0030, CHAOS-4085
+	// (commit_gate_version reuse-key dimension) added 0031, and CHAOS-4305
+	// (projection checkpoint rows_applied column) added 0032, so the
+	// embedded set is now 32 files. A future migration must bump this
 	// literal too -- see expectedMigrationVersions in migrations/postgres/
 	// runner_integration_test.go for the same convention, held in one
 	// place there.
-	require.Equal(t, "applied 31 migrations\n", first.String())
+	require.Equal(t, "applied 32 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }
