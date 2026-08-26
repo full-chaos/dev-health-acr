@@ -2195,10 +2195,15 @@ func twoTurnRegimeFromWindowCanonicalization(outcome contextfabric.WindowCanonic
 // twoTurnClassifyWindowGateOutcome so that function's own logic has a
 // direct unit test, independent of running the full replay.
 type twoTurnWindowGateOutcome struct {
-	ArmError     bool
-	Committed    bool
-	Gated        bool
-	GatedOffered bool
+	ArmError           bool
+	Committed          bool
+	Gated              bool
+	GatedOffered       bool
+	GatedAlreadyWidest bool
+	// GatedSilent is NOT a field here -- callers compute it as
+	// Gated && !GatedOffered && !GatedAlreadyWidest, the same way the
+	// reporting site's own switch does, so there is exactly one place
+	// (the switch) that can disagree with itself.
 }
 
 // twoTurnClassifyWindowGateOutcome (CHAOS-4336, fixing a defect present
@@ -2224,6 +2229,15 @@ type twoTurnWindowGateOutcome struct {
 // disclosed no window need at all. Fixed by reading
 // inferred.InferredWindowExpandOffered (computed directly off inferred's
 // own result in runTwoTurnInferredTierArm) here instead.
+//
+// GatedAlreadyWidest (follow-up, same ticket): a gated call whose own
+// effective window is already the registry's widest tier (all_time) has
+// nothing wider pickWindowExpandTarget could ever recommend -- a
+// legitimate non-offer, not a defect. Run E (16-shard kiac, tip a5f5f900)
+// measured window_gated_silent=2/65 with both remaining rows (cases 53,
+// 56) confirmed all_time via a by-hand annex cross-check; this field
+// makes that partition code-level so WindowGatedSilentCount itself reads
+// 0 on a genuinely clean run, no side lookup required.
 func twoTurnClassifyWindowGateOutcome(inferred twoTurnCaseResult) twoTurnWindowGateOutcome {
 	if inferred.ArmInvalidReason != "" {
 		return twoTurnWindowGateOutcome{ArmError: true}
@@ -2232,7 +2246,12 @@ func twoTurnClassifyWindowGateOutcome(inferred twoTurnCaseResult) twoTurnWindowG
 	if inferred.Turn2Status == string(contractsv1.ContextFabricInvestigationClarificationRequired) &&
 		inferred.TierRoutedCorrectly && inferred.CommittedCount == 0 {
 		outcome.Gated = true
-		outcome.GatedOffered = inferred.InferredWindowExpandOffered
+		switch {
+		case inferred.InferredWindowExpandOffered:
+			outcome.GatedOffered = true
+		case inferred.InferredWindowAlreadyWidest:
+			outcome.GatedAlreadyWidest = true
+		}
 	}
 	return outcome
 }
@@ -4390,6 +4409,18 @@ type twoTurnCaseResult struct {
 	// zero-value (never computed) elsewhere, same convention WrongCommit and
 	// several other member-scoped fields on this struct already use.
 	InferredWindowExpandOffered bool `json:"inferred_window_expand_offered"`
+	// InferredWindowAlreadyWidest (CHAOS-4336 follow-up, schema v35) is
+	// true when the inferred_tier arm's own gated call (member=="window"
+	// only) resolved an effective window already at the registry's widest
+	// tier (all_time) -- pickWindowExpandTarget has nothing wider to
+	// recommend by design, so InferredWindowExpandOffered=false here is a
+	// legitimate non-offer, not a defect. Excludes these rows from
+	// WindowGatedSilentCount (twoTurnClassifyWindowGateOutcome), which
+	// otherwise conflated "genuinely nothing wider exists" with "should
+	// have offered but didn't" -- exactly the ambiguity Run E's
+	// window_gated_silent=2/65 (cases 53/56, both confirmed all_time via
+	// a by-hand annex cross-check) needed a side lookup to resolve.
+	InferredWindowAlreadyWidest bool `json:"inferred_window_already_widest"`
 }
 
 // twoTurnCaseResultIsAnomalous (CHAOS-4135) reports whether res trips one of
@@ -4495,7 +4526,7 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "34"
+const reportSchemaVersion = "35"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5293,12 +5324,18 @@ type twoTurnReport struct {
 	// v31) partition WindowGatedCount above: every window_gated row now
 	// carries a window_expand recommendation (offered) or does not
 	// (silent) -- chris "go" 2026-08-26's own success bar is
-	// window_gated_silent -> 0. Informational, summed by the merger; the
-	// one structural invariant (offered+silent==window_gated_count) is
+	// window_gated_silent -> 0. WindowGatedAlreadyWidestCount (CHAOS-4336
+	// follow-up, schema v35) splits a THIRD, legitimate-non-offer case out
+	// of silent: a gated call whose own effective window is already the
+	// registry's widest tier has nothing wider to offer by design, not a
+	// defect (see twoTurnClassifyWindowGateOutcome's own doc comment). All
+	// three informational, summed by the merger; the one structural
+	// invariant (offered+silent+already_widest==window_gated_count) is
 	// checked post-merge, not here (see cmd/acr-trial-merge-two-turn's own
 	// checkInvariants).
-	WindowGatedOfferedCount int `json:"window_gated_offered_count"`
-	WindowGatedSilentCount  int `json:"window_gated_silent_count"`
+	WindowGatedOfferedCount       int `json:"window_gated_offered_count"`
+	WindowGatedSilentCount        int `json:"window_gated_silent_count"`
+	WindowGatedAlreadyWidestCount int `json:"window_gated_already_widest_count"`
 	// InferredKindHandleDecisiveCount/InferredBaselineEquivalentCount/
 	// InferredKindInsensitivityAttestedCount/InferredUnjustifiedCount/
 	// InferredPairInvalidCount (CHAOS-4039 v4 contract, kind/handle members
@@ -7575,6 +7612,21 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	if isWindow && result.StructureNeeds != nil && len(result.StructureNeeds.WindowExpandOptions) > 0 {
 		res.InferredWindowExpandOffered = true
 	}
+	// InferredWindowAlreadyWidest (CHAOS-4336 follow-up): true when THIS
+	// call's own effective window is already the registry's widest tier
+	// (all_time) -- pickWindowExpandTarget (internal/contextfabric) has
+	// nothing wider to recommend, by design, regardless of gate origin or
+	// offers-only material. Run E (16-shard kiac, tip a5f5f900) measured
+	// exactly this for both its remaining "silent" cases (53, 56; both
+	// annex negative_window_band=all_time) -- a legitimate non-offer, not
+	// a defect, that the by-hand annex cross-check had to establish
+	// after the fact. This makes the partition code-level: WindowGatedSilentCount
+	// now excludes these, so a genuinely clean run reads silent=0 without
+	// needing a side lookup against the annex.
+	if isWindow && result.EffectiveEvidenceWindow != nil &&
+		result.EffectiveEvidenceWindow.RelativeID == contractsv1.ContextFabricRelativeWindowAllTime {
+		res.InferredWindowAlreadyWidest = true
+	}
 	// CHAOS-4086: the HINTED call's own outcome and decision. The trace was
 	// reset immediately before that call above, so the decision event this
 	// reads cannot be the baseline's.
@@ -9293,9 +9345,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 				}
 				if outcome.Gated {
 					report.WindowGatedCount++
-					if outcome.GatedOffered {
+					switch {
+					case outcome.GatedOffered:
 						report.WindowGatedOfferedCount++
-					} else {
+					case outcome.GatedAlreadyWidest:
+						report.WindowGatedAlreadyWidestCount++
+					default:
 						report.WindowGatedSilentCount++
 					}
 				}

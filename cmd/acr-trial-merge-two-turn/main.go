@@ -305,7 +305,7 @@ import (
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "34"
+const expectedSchemaVersion = "35"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -622,6 +622,9 @@ type twoTurnCaseResult struct {
 	// for why this, not Turn1WindowExpandOffered, is what
 	// WindowGatedOfferedCount/WindowGatedSilentCount actually read.
 	InferredWindowExpandOffered bool `json:"inferred_window_expand_offered"`
+	// InferredWindowAlreadyWidest (CHAOS-4336 follow-up, schema v35)
+	// mirrors twoTurnCaseResult's identically-named field byte-for-byte.
+	InferredWindowAlreadyWidest bool `json:"inferred_window_already_widest"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's
@@ -694,13 +697,15 @@ type twoTurnReport struct {
 	// informational, summed across shards, no gate.
 	RegimeAOfferComposedCount int `json:"regime_a_offer_composed_count"`
 	RegimeATurn2AnsweredCount int `json:"regime_a_turn2_answered_count"`
-	// WindowGatedOfferedCount/WindowGatedSilentCount (CHAOS-4314, schema
-	// v31) mirror twoTurnReport's identically-named fields -- the
-	// window_gated_offered/window_gated_silent split of WindowGatedCount
-	// above: every window-gated case falls into exactly one, so the two
-	// always sum to WindowGatedCount (checkInvariants below).
+	// WindowGatedOfferedCount/WindowGatedSilentCount/WindowGatedAlreadyWidestCount
+	// (CHAOS-4314 schema v31; AlreadyWidest added CHAOS-4336 follow-up
+	// schema v35) mirror twoTurnReport's identically-named fields -- the
+	// three-way split of WindowGatedCount above: every window-gated case
+	// falls into exactly one, so all three always sum to WindowGatedCount
+	// (checkInvariants below).
 	WindowGatedOfferedCount                int `json:"window_gated_offered_count"`
 	WindowGatedSilentCount                 int `json:"window_gated_silent_count"`
+	WindowGatedAlreadyWidestCount          int `json:"window_gated_already_widest_count"`
 	InferredKindHandleDecisiveCount        int `json:"inferred_kind_handle_decisive_count"`
 	InferredBaselineEquivalentCount        int `json:"inferred_baseline_equivalent_count"`
 	InferredKindInsensitivityAttestedCount int `json:"inferred_kind_insensitivity_attested_count"`
@@ -1064,6 +1069,7 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.RegimeATurn2AnsweredCount += s.RegimeATurn2AnsweredCount
 		merged.WindowGatedOfferedCount += s.WindowGatedOfferedCount
 		merged.WindowGatedSilentCount += s.WindowGatedSilentCount
+		merged.WindowGatedAlreadyWidestCount += s.WindowGatedAlreadyWidestCount
 		merged.InferredKindHandleDecisiveCount += s.InferredKindHandleDecisiveCount
 		merged.InferredBaselineEquivalentCount += s.InferredBaselineEquivalentCount
 		merged.InferredKindInsensitivityAttestedCount += s.InferredKindInsensitivityAttestedCount
@@ -1335,8 +1341,8 @@ func evaluateGates(r twoTurnReport) error {
 	// evaluated by the orchestrator against this same pair post-merge, never
 	// gated here: a pre-CHAOS-4314-coverage run legitimately carries
 	// silent>0).
-	if r.WindowGatedOfferedCount+r.WindowGatedSilentCount != r.WindowGatedCount {
-		fail("window_gated_offered_count(%d)+window_gated_silent_count(%d)=%d, want %d (== window_gated_count): every window-gated case must land in exactly one bucket", r.WindowGatedOfferedCount, r.WindowGatedSilentCount, r.WindowGatedOfferedCount+r.WindowGatedSilentCount, r.WindowGatedCount)
+	if got := r.WindowGatedOfferedCount + r.WindowGatedSilentCount + r.WindowGatedAlreadyWidestCount; got != r.WindowGatedCount {
+		fail("window_gated_offered_count(%d)+window_gated_silent_count(%d)+window_gated_already_widest_count(%d)=%d, want %d (== window_gated_count): every window-gated case must land in exactly one bucket", r.WindowGatedOfferedCount, r.WindowGatedSilentCount, r.WindowGatedAlreadyWidestCount, got, r.WindowGatedCount)
 	}
 	if r.FalseNoMatchCount > 0 {
 		fail("false_no_match_count=%d, want 0", r.FalseNoMatchCount)

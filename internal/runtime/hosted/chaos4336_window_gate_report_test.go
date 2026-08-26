@@ -110,3 +110,61 @@ func TestCHAOS4336_ClassifyWindowGateOutcome_ArmErrorAndNotGated(t *testing.T) {
 		}
 	})
 }
+
+// TestCHAOS4336_ClassifyWindowGateOutcome_AlreadyWidestExcludedFromSilent is
+// the red-first proof for the CHAOS-4336 follow-up: a gated call whose own
+// effective window is already the registry's widest tier (all_time) has
+// nothing wider pickWindowExpandTarget could ever recommend -- a
+// legitimate non-offer, not a defect. Before this fix, InferredWindowAlreadyWidest
+// did not exist and every non-offered gated row landed in
+// WindowGatedSilentCount regardless of cause, which is exactly what Run E
+// (16-shard kiac, tip a5f5f900) measured: window_gated_silent=2/65, both
+// rows (cases 53, 56) later confirmed all_time via a by-hand annex
+// cross-check that should never have been necessary. This fixture
+// reproduces that shape directly: InferredWindowExpandOffered=false AND
+// InferredWindowAlreadyWidest=true must report GatedAlreadyWidest=true,
+// not silent.
+func TestCHAOS4336_ClassifyWindowGateOutcome_AlreadyWidestExcludedFromSilent(t *testing.T) {
+	inferred := twoTurnCaseResult{
+		Index:                       53,
+		Member:                      string(contractsv1.ContextFabricStructureNeedWindow),
+		Arm:                         "inferred_tier",
+		Turn2Status:                 string(contractsv1.ContextFabricInvestigationClarificationRequired),
+		TierRoutedCorrectly:         true,
+		CommittedCount:              0,
+		InferredWindowExpandOffered: false,
+		InferredWindowAlreadyWidest: true, // the inferred_tier arm's OWN call resolved to all_time: nothing wider exists
+	}
+
+	got := twoTurnClassifyWindowGateOutcome(inferred)
+
+	if !got.Gated {
+		t.Fatal("Gated = false, want true")
+	}
+	if got.GatedOffered {
+		t.Fatal("GatedOffered = true, want false: no window_expand was actually composed")
+	}
+	if !got.GatedAlreadyWidest {
+		t.Fatal("GatedAlreadyWidest = false, want true: InferredWindowAlreadyWidest=true means there was genuinely nothing wider to recommend -- this must NOT fall through to silent")
+	}
+}
+
+// TestCHAOS4336_ClassifyWindowGateOutcome_GenuineSilentStillSilent proves
+// the partition did not accidentally swallow the real defect signal: a
+// gated call that was neither offered nor already-widest is still
+// reported silent (the population the →0 bar actually targets).
+func TestCHAOS4336_ClassifyWindowGateOutcome_GenuineSilentStillSilent(t *testing.T) {
+	got := twoTurnClassifyWindowGateOutcome(twoTurnCaseResult{
+		Turn2Status:                 string(contractsv1.ContextFabricInvestigationClarificationRequired),
+		TierRoutedCorrectly:         true,
+		CommittedCount:              0,
+		InferredWindowExpandOffered: false,
+		InferredWindowAlreadyWidest: false,
+	})
+	if !got.Gated {
+		t.Fatal("Gated = false, want true")
+	}
+	if got.GatedOffered || got.GatedAlreadyWidest {
+		t.Fatalf("got = %#v, want GatedOffered/GatedAlreadyWidest both false: neither an offer nor a legitimate already-widest reading", got)
+	}
+}
