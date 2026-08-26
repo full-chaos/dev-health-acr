@@ -155,21 +155,34 @@ func (a *Adapter) confirmedKindVectorCensus(ctx context.Context, key, orgID stri
 	return outcome
 }
 
+// watermarkSnapshotEntry is one source's own (epoch, generation) pair --
+// see watermarkSnapshotsEqual's own doc comment for why BOTH fields, not
+// generation alone, are what make the drift check survive a graph purge.
+type watermarkSnapshotEntry struct {
+	Generation int64
+	Epoch      string
+}
+
 // chaos4155WatermarkSnapshot reads every _AcrWatermark node for orgID under
 // the GIVEN graph key (never re-resolved -- see
 // chaos4155_confirmed_kind_vector_scope.go's "STABLE-SNAPSHOT CHECK" note
 // for why this, not a re-resolved "whatever is active now" read, is the
-// correct comparison). The returned map is source -> backend_watermark;
-// comparing two of these maps for equality (watermarkSnapshotsEqual) is the
-// whole drift check: a value changing, or a source appearing/disappearing,
-// means a projection write landed between the two calls.
-func (a *Adapter) chaos4155WatermarkSnapshot(ctx context.Context, key, orgID string) (map[string]string, error) {
-	cypher := fmt.Sprintf("MATCH (w:%s {%s:$org}) RETURN w.source AS source, w.backend_watermark AS backend_watermark", labelWatermark, propOrgID)
+// correct comparison). The returned map is source -> (epoch, generation)
+// (CHAOS-4298: projection.go's writeWatermark's own monotonic
+// per-(org,source) counter and per-node-lifetime nonce, both stamped on
+// EVERY write); comparing two of these maps for equality
+// (watermarkSnapshotsEqual) is the whole drift check: EITHER field
+// changing, or a source appearing/disappearing, means a projection write
+// (or a purge-and-rebuild) landed between the two calls. Generation+epoch,
+// not backend_watermark's raw value, is what makes this check ABA-proof --
+// see watermarkSnapshotsEqual's own doc comment.
+func (a *Adapter) chaos4155WatermarkSnapshot(ctx context.Context, key, orgID string) (map[string]watermarkSnapshotEntry, error) {
+	cypher := fmt.Sprintf("MATCH (w:%s {%s:$org}) RETURN w.source AS source, w.generation AS generation, w.epoch AS epoch", labelWatermark, propOrgID)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID}, true)
 	if err != nil {
 		return nil, safeDependencyError("read confirmed-kind vector census watermark snapshot", err)
 	}
-	snapshot := make(map[string]string, len(rows))
+	snapshot := make(map[string]watermarkSnapshotEntry, len(rows))
 	for _, r := range rows {
 		source := propStringValue(r["source"])
 		if source == "" {
@@ -186,9 +199,64 @@ func (a *Adapter) chaos4155WatermarkSnapshot(ctx context.Context, key, orgID str
 			// skip-and-reconcile.
 			return nil, fmt.Errorf("confirmed-kind vector census watermark snapshot: malformed row with empty source for org %s", orgID)
 		}
-		snapshot[source] = propStringValue(r["backend_watermark"])
+		// CHAOS-4298: same fail-closed discipline as the empty-source check
+		// above, extended to the new field -- a row with a real source but
+		// no numeric generation (e.g. a pre-CHAOS-4298 node that has never
+		// been written since this field was added, read on a code path that
+		// somehow bypasses writeWatermark's own coalesce-based self-heal)
+		// must abort the census, never silently read as generation 0 and
+		// risk a false-stable comparison against a genuinely different
+		// absent-vs-zero state.
+		generation, ok := generationFromRow(r["generation"])
+		if !ok {
+			return nil, fmt.Errorf("confirmed-kind vector census watermark snapshot: malformed row with non-numeric generation for source %q, org %s", source, orgID)
+		}
+		// CHAOS-4298 follow-up: identical discipline extended to epoch --
+		// every node writeWatermark ever produces has a non-empty epoch
+		// (either a fresh per-creation nonce or the fixed
+		// chaos4298SentinelEpoch self-heal), so an empty one here can only
+		// mean a row written before this follow-up's own generation-only
+		// predecessor was updated, or a corrupted node -- abort, matching
+		// every other malformed-row case on this same node.
+		epoch := propStringValue(r["epoch"])
+		if epoch == "" {
+			return nil, fmt.Errorf("confirmed-kind vector census watermark snapshot: malformed row with empty epoch for source %q, org %s", source, orgID)
+		}
+		snapshot[source] = watermarkSnapshotEntry{Generation: generation, Epoch: epoch}
 	}
 	return snapshot, nil
+}
+
+// generationFromRow parses a watermark row's own generation value STRICTLY
+// -- deliberately not oracle.go's intFromCount (that helper truncates via
+// int(v), which is right for a count(n) query aggregate FalkorDB always
+// returns as a genuine integer, but wrong here). codex R1 (Medium,
+// confirmed): a stray non-integral or negative value on this property
+// (only reachable via tampering outside this file's own writeWatermark,
+// but a graph is not otherwise trusted to be internally consistent by this
+// file's own "abort, never skip-and-reconcile" discipline) could silently
+// truncate two DIFFERENT generations to the SAME int (e.g. 1.9 and 1.1 both
+// truncating to 1), reporting a stable comparison over values that were
+// never actually equal. Every value this codebase's own writer ever
+// produces is a non-negative whole number by construction
+// (coalesce(w.generation, 0) + 1, starting at 1) -- anything else fails
+// closed.
+func generationFromRow(value interface{}) (int64, bool) {
+	var f float64
+	switch v := value.(type) {
+	case int64:
+		f = float64(v)
+	case int:
+		f = float64(v)
+	case float64:
+		f = v
+	default:
+		return 0, false
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) || f < 0 {
+		return 0, false
+	}
+	return int64(f), true
 }
 
 // finiteVector reports whether v is non-empty and every element is a
@@ -214,37 +282,87 @@ func finiteVector(v []float64) bool {
 }
 
 // watermarkSnapshotsEqual reports whether before and after name the SAME
-// set of sources with the SAME values. codex R1 (Medium, confirmed): an
-// earlier version only checked len(before)==len(after) plus a one-way
-// after[source]!=watermark scan, which reads a source being REPLACED by a
-// different one of equal cardinality (e.g. {github:""} -> {jira:""}) as
-// stable -- after["github"] is the zero value "", which happened to equal
-// before["github"]'s own "" watermark. Checking key PRESENCE with the
-// comma-ok form in both directions closes that gap.
+// set of sources at the SAME (epoch, generation). codex R1 (Medium,
+// confirmed): an earlier version only checked len(before)==len(after) plus
+// a one-way after[source]!=watermark scan, which reads a source being
+// REPLACED by a different one of equal cardinality (e.g. {github:""} ->
+// {jira:""}) as stable -- after["github"] is the zero value "", which
+// happened to equal before["github"]'s own "" watermark. Checking key
+// PRESENCE with the comma-ok form in both directions closes that gap; that
+// structure is unchanged here.
 //
-// codex R2 (Medium, orchestrator-waived for Phase 1, ruling
-// 2026-08-25 12:44): this is still a two-point-in-time VALUE comparison,
-// not a transactional read -- it cannot see a source's watermark move
+// CHAOS-4298 (closes codex R2's Medium, orchestrator-waived for Phase 1,
+// ruling 2026-08-25 12:44): the prior version compared before/after
+// backend_watermark STRINGS -- a two-point-in-time VALUE comparison, not a
+// transactional read, so it could not see a source's watermark move
 // w1 -> w2 -> w1 (a write landing and then being followed by another write
-// that happens to restore the exact prior value) between the before and
-// after reads. That sequence reads as SnapshotStable=true/State=Complete
-// even though a projection write genuinely occurred mid-census and the
-// corpus may have changed. Closing this needs a monotonic generation
-// fence on the watermark schema (projection.go's write path, shared far
-// beyond this shadow arm) -- a backend schema change out of scope for
-// Phase 1. Accepted because this arm is SHADOW-ONLY and proven inert to
-// any commit decision (this file's own doc comment; codex R2's own
-// verdict), and Phase 2's measurement design consumes aggregates over
-// multiple replicates, so one ABA-masked Complete cannot by itself flip a
-// measurement conclusion. Follow-up: generation-fence hardening tracked
-// as a separate Linear issue related to CHAOS-4155.
-func watermarkSnapshotsEqual(before, after map[string]string) bool {
+// that happens to restore the exact prior value) between the two reads.
+// That sequence read as SnapshotStable=true/State=Complete even though a
+// projection write genuinely occurred mid-census and the corpus may have
+// changed underneath the comparison.
+//
+// Comparing GENERATION closes THIS EXACT gap, with no transactional read
+// needed: projection.go's writeWatermark bumps generation by exactly 1 on
+// EVERY write to a (org, source), regardless of whether backend_watermark's
+// own value changed -- so generation can never revert the way a value can.
+// If before[source] == after[source] here, NO watermark write landed on
+// that source between the two reads (an intervening write, value-reverting
+// or not, would have advanced generation past what the first read saw); if
+// a watermark write DID land -- even a w1 -> w2 -> w1 round trip -- generation
+// strictly increased, so the two reads can never compare equal for that
+// source. A source's own generation identity therefore implies its
+// backend_watermark was ALSO stable (both are set by the SAME writeWatermark
+// call), without needing to fetch or compare that value at all.
+//
+// EPOCH closes generation's own residual gap (team-lead ruling, 2026-08-26,
+// same session as the generation fence above): generation alone is scoped
+// to one graph NODE's lifetime -- PurgeOrganization deletes the graph
+// outright, and the next write to that (org, source) creates a FRESH node
+// whose generation self-heals to 1 again, indistinguishable from the SAME
+// node still sitting at generation 1. epoch is a writer-generated nonce
+// stamped ONCE, the instant a node is created (writeWatermark's own ON
+// CREATE branch) or, for a pre-epoch node, self-healed ONCE to a FIXED
+// sentinel constant (ON MATCH) -- either way, never reassigned again while
+// that node exists. A purge-and-rebuild always re-creates the node (MERGE
+// finds nothing to match), so it always gets a NEW epoch, even on the
+// (most likely) case where its generation lands back on 1 -- the two reads
+// can then never agree on (epoch, generation) across a purge.
+//
+// ONE KNOWN, NAMED LIMITATION this does NOT close (codex R1 review,
+// 2026-08-26; team-lead ruling: WAIVED, documented, no follow-up ticket --
+// not a regression from the value-based comparison this replaces, which had
+// the identical exposure): WRITE-ORDERING, NOT WRITE-ATOMICITY.
+// ApplyProjectionBatch (projection.go) issues entity/relationship/content/
+// episode/tombstone/vector writes as SEPARATE GRAPH.QUERY calls, and only
+// calls writeWatermark LAST, once that whole batch has otherwise succeeded.
+// If a census's own before/after reads straddle a batch that has already
+// written corpus data but has not yet reached its own writeWatermark call
+// (e.g. still embedding), (epoch, generation) reads identical across the
+// census's two reads even though the corpus already changed -- this fence
+// proves "no committed batch completed," not "no corpus mutation is in
+// flight." The value-based comparison this replaces had the SAME exposure
+// (backend_watermark is also written last, by the same call), so this is
+// not new; closing it for real needs either a pre-batch marker or true
+// multi-statement transactions, which FalkorDB does not offer -- the
+// ticket's own alternative design ("a transactional read spanning corpus
+// fetch + before/after snapshot") is the shape that would.
+//
+// WAIVER BASIS (team-lead ruling, 2026-08-26 -- states the premise the
+// waiver above rests on, since it shifts once CHAOS-4311 lands): this
+// census is SHADOW-ONLY and decision-inert TODAY, but CHAOS-4311 (in build)
+// makes it decision-BEARING -- a rival found above the similarity floor
+// feeds an OFFER-ONLY candidate pool, never a commit. Undetected drift from
+// the residual write-ordering gap above therefore means, AT WORST, a rival
+// offer built from a slightly stale corpus -- never a wrong commit, by
+// CHAOS-4311's own offer-only-pool construction. The waiver's basis is this
+// bounded blast radius, not "shadow-only, nothing depends on it."
+func watermarkSnapshotsEqual(before, after map[string]watermarkSnapshotEntry) bool {
 	if len(before) != len(after) {
 		return false
 	}
-	for source, watermark := range before {
+	for source, entry := range before {
 		value, ok := after[source]
-		if !ok || value != watermark {
+		if !ok || value != entry {
 			return false
 		}
 	}

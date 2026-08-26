@@ -34,9 +34,15 @@ func chaos4155SubjectRow(canonicalID string, vector []float32) row {
 	}}}
 }
 
-// chaos4155WatermarkRow builds one _AcrWatermark row.
-func chaos4155WatermarkRow(source, backendWatermark string) row {
-	return row{"source": source, "backend_watermark": backendWatermark}
+// chaos4155WatermarkRow builds one _AcrWatermark row. CHAOS-4298: the
+// snapshot read is keyed on (epoch, generation), not backend_watermark's
+// raw value (see watermarkSnapshotsEqual's own doc comment for why) --
+// these are what the fixtures below now script to drive Stable vs Drift.
+// epoch defaults to a fixed "epoch-1" for every existing fixture that only
+// needs to vary generation; the purge/epoch-specific tests build their own
+// rows directly.
+func chaos4155WatermarkRow(source string, generation int64) row {
+	return row{"source": source, "generation": generation, "epoch": "epoch-1"}
 }
 
 // chaos4155FakeConn dispatches on the CYPHER SHAPE (the three distinct
@@ -132,8 +138,8 @@ func TestConfirmedKindVectorCensus_CompleteOnCleanCountClosedCorpusWithStableSna
 	fake := &chaos4155FakeConn{
 		countTotal:      2,
 		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0}), chaos4155SubjectRow("wi_2", []float32{0, 1, 0, 0})},
-		watermarkBefore: []row{chaos4155WatermarkRow("github", "wm-1")},
-		watermarkAfter:  []row{chaos4155WatermarkRow("github", "wm-1")},
+		watermarkBefore: []row{chaos4155WatermarkRow("github", 1)},
+		watermarkAfter:  []row{chaos4155WatermarkRow("github", 1)},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
 	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
@@ -245,8 +251,8 @@ func TestConfirmedKindVectorCensus_SnapshotDriftFailsClosed(t *testing.T) {
 	fake := &chaos4155FakeConn{
 		countTotal:      1,
 		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
-		watermarkBefore: []row{chaos4155WatermarkRow("github", "wm-1")},
-		watermarkAfter:  []row{chaos4155WatermarkRow("github", "wm-2")}, // moved mid-census
+		watermarkBefore: []row{chaos4155WatermarkRow("github", 1)},
+		watermarkAfter:  []row{chaos4155WatermarkRow("github", 2)}, // moved mid-census
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
 	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
@@ -268,8 +274,8 @@ func TestConfirmedKindVectorCensus_NewSourceAppearingIsDrift(t *testing.T) {
 	fake := &chaos4155FakeConn{
 		countTotal:      1,
 		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
-		watermarkBefore: []row{chaos4155WatermarkRow("github", "wm-1")},
-		watermarkAfter:  []row{chaos4155WatermarkRow("github", "wm-1"), chaos4155WatermarkRow("jira", "wm-1")},
+		watermarkBefore: []row{chaos4155WatermarkRow("github", 1)},
+		watermarkAfter:  []row{chaos4155WatermarkRow("github", 1), chaos4155WatermarkRow("jira", 1)},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
 	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
@@ -290,8 +296,8 @@ func TestConfirmedKindVectorCensus_TermEmbedFailureFailsClosedNeverComplete(t *t
 	fake := &chaos4155FakeConn{
 		countTotal:      1,
 		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
-		watermarkBefore: []row{chaos4155WatermarkRow("github", "wm-1")},
-		watermarkAfter:  []row{chaos4155WatermarkRow("github", "wm-1")},
+		watermarkBefore: []row{chaos4155WatermarkRow("github", 1)},
+		watermarkAfter:  []row{chaos4155WatermarkRow("github", 1)},
 	}
 	adapter := vectorAdapter(t, fake.toFakeConn(), &stubEmbedder{err: errors.New("embed provider unavailable")}, 0.5)
 	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 1000
@@ -311,10 +317,28 @@ func TestConfirmedKindVectorCensus_TermEmbedFailureFailsClosedNeverComplete(t *t
 // zero-value watermark as stable. Presence must be checked explicitly.
 func TestWatermarkSnapshotsEqual_EqualCardinalitySourceSwapIsNotEqual(t *testing.T) {
 	t.Parallel()
-	before := map[string]string{"github": ""}
-	after := map[string]string{"jira": ""}
+	before := map[string]watermarkSnapshotEntry{"github": {Generation: 0, Epoch: "epoch-1"}}
+	after := map[string]watermarkSnapshotEntry{"jira": {Generation: 0, Epoch: "epoch-1"}}
 	if watermarkSnapshotsEqual(before, after) {
 		t.Fatalf("watermarkSnapshotsEqual(%#v, %#v) = true, want false -- github disappearing while jira appears is drift, not equal-length coincidence", before, after)
+	}
+}
+
+// TestWatermarkSnapshotsEqual_SameGenerationDifferentEpochIsDrift is
+// CHAOS-4298's own follow-up unit-level pin (team-lead ruling,
+// 2026-08-26): the purge-and-rebuild scenario this fix exists to close --
+// a source at the SAME generation both reads (the plausible post-purge
+// case: a freshly reprojected org lands back on generation 1) but a
+// DIFFERENT epoch (the rebuilt node's own fresh ON CREATE nonce) must
+// compare as drift. Generation alone could never distinguish this from a
+// genuinely stable source; see TestLiveWatermarkEpochDetectsPurgeAndRebuildLandingOnSameGeneration
+// for the real-FalkorDB end-to-end proof of the same property.
+func TestWatermarkSnapshotsEqual_SameGenerationDifferentEpochIsDrift(t *testing.T) {
+	t.Parallel()
+	before := map[string]watermarkSnapshotEntry{"github": {Generation: 1, Epoch: "epoch-before-purge"}}
+	after := map[string]watermarkSnapshotEntry{"github": {Generation: 1, Epoch: "epoch-after-purge"}}
+	if watermarkSnapshotsEqual(before, after) {
+		t.Fatalf("watermarkSnapshotsEqual(%#v, %#v) = true, want false -- same generation but a different epoch means the node was purged and recreated, not merely unwritten", before, after)
 	}
 }
 
@@ -347,13 +371,80 @@ func TestConfirmedKindVectorCensus_MalformedWatermarkRowFailsClosed(t *testing.T
 	fake := &chaos4155FakeConn{
 		countTotal:      1,
 		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
-		watermarkBefore: []row{chaos4155WatermarkRow("", "wm-1")}, // malformed: empty source
-		watermarkAfter:  []row{chaos4155WatermarkRow("", "wm-1")},
+		watermarkBefore: []row{chaos4155WatermarkRow("", 1)}, // malformed: empty source
+		watermarkAfter:  []row{chaos4155WatermarkRow("", 1)},
 	}
 	adapter := chaos4155Adapter(t, fake, 1000)
 	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
 	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
 		t.Fatalf("outcome = %+v, want State=%q -- a malformed (empty-source) watermark row must abort the census, never be silently dropped into a false-stable comparison", got, graphrank.ConfirmedKindVectorScopeFailed)
+	}
+}
+
+// TestConfirmedKindVectorCensus_FractionalGenerationFailsClosed is codex
+// R1's own Medium finding regression (CHAOS-4298): a stray non-integral
+// generation value must abort the census, never truncate silently -- two
+// DIFFERENT generations (1.9 and 1.1) both truncate to the SAME int(1)
+// under a naive numeric parse, which would report a stable comparison over
+// values that were never actually equal. Every value this codebase's own
+// writer (writeWatermark) ever produces is a non-negative whole number by
+// construction; this row simulates a fractional value reaching the read
+// path some other way.
+func TestConfirmedKindVectorCensus_FractionalGenerationFailsClosed(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      1,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
+		watermarkBefore: []row{{"source": "github", "generation": 1.9}},
+		watermarkAfter:  []row{{"source": "github", "generation": 1.1}},
+	}
+	adapter := chaos4155Adapter(t, fake, 1000)
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
+		t.Fatalf("outcome = %+v, want State=%q -- a fractional generation must abort the census, never truncate to a coincidentally-equal int", got, graphrank.ConfirmedKindVectorScopeFailed)
+	}
+}
+
+// TestConfirmedKindVectorCensus_NegativeGenerationFailsClosed is the
+// negative-value sibling of the fractional-generation regression above --
+// writeWatermark's own coalesce(w.generation, 0) + 1 can never produce a
+// negative value, so one reaching the read path is unconditionally
+// malformed.
+func TestConfirmedKindVectorCensus_NegativeGenerationFailsClosed(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      1,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
+		watermarkBefore: []row{{"source": "github", "generation": -1}},
+		watermarkAfter:  []row{{"source": "github", "generation": -1}},
+	}
+	adapter := chaos4155Adapter(t, fake, 1000)
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
+		t.Fatalf("outcome = %+v, want State=%q -- a negative generation must abort the census", got, graphrank.ConfirmedKindVectorScopeFailed)
+	}
+}
+
+// TestConfirmedKindVectorCensus_MalformedEmptyEpochFailsClosed is the
+// epoch sibling of TestConfirmedKindVectorCensus_MalformedWatermarkRowFailsClosed
+// (CHAOS-4298 follow-up): every node writeWatermark ever produces has a
+// non-empty epoch (a fresh per-creation nonce, or the fixed
+// chaos4298SentinelEpoch self-heal) -- a row with a real source and a
+// valid generation but an empty epoch can only be malformed/corrupted,
+// never a legitimate state, and must abort the census the same way an
+// empty source already does.
+func TestConfirmedKindVectorCensus_MalformedEmptyEpochFailsClosed(t *testing.T) {
+	t.Parallel()
+	fake := &chaos4155FakeConn{
+		countTotal:      1,
+		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
+		watermarkBefore: []row{{"source": "github", "generation": int64(1), "epoch": ""}},
+		watermarkAfter:  []row{{"source": "github", "generation": int64(1), "epoch": ""}},
+	}
+	adapter := chaos4155Adapter(t, fake, 1000)
+	got := adapter.confirmedKindVectorCensus(context.Background(), "k", "org-1", contextfabric.SubjectWorkItem, []string{"outage"})
+	if got.State != graphrank.ConfirmedKindVectorScopeFailed {
+		t.Fatalf("outcome = %+v, want State=%q -- an empty epoch must abort the census, never be silently dropped into a false-stable comparison", got, graphrank.ConfirmedKindVectorScopeFailed)
 	}
 }
 
@@ -371,8 +462,8 @@ func TestConfirmedKindVectorCensus_NonFiniteQueryVectorFailsClosed(t *testing.T)
 	fake := &chaos4155FakeConn{
 		countTotal:      1,
 		subjectRows:     []row{chaos4155SubjectRow("wi_1", []float32{1, 0, 0, 0})},
-		watermarkBefore: []row{chaos4155WatermarkRow("github", "wm-1")},
-		watermarkAfter:  []row{chaos4155WatermarkRow("github", "wm-1")},
+		watermarkBefore: []row{chaos4155WatermarkRow("github", 1)},
+		watermarkAfter:  []row{chaos4155WatermarkRow("github", 1)},
 	}
 	embedder := &stubEmbedder{vector: []float32{float32(math.NaN()), 0, 0, 0}}
 	adapter := vectorAdapter(t, fake.toFakeConn(), embedder, 0.5)
