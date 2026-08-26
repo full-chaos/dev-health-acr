@@ -314,7 +314,54 @@ trial_wire_common_env() {
     # values automatically (exported below, same as every other field).
     local _kiac_env_FALKOR_TLS="" _kiac_env_FALKOR_ALLOW_INSECURE=""
     local kiac_env_count=0 kiac_line kiac_key kiac_value
-    while IFS= read -r kiac_line; do
+    # CHAOS-4155 launcher fix (lane-4155-p2, live-diagnosed via a
+    # credential-guarded `bash -x` pass): this loop used to be `while IFS=
+    # read -r kiac_line; do ... done <<<"$kiac_env_output"`. On bash >=5.1
+    # a `<<<` here-string is backed by an internal self-pipe rather than a
+    # temp file when the string is small (a performance optimization,
+    # avoiding the fork/write/rewind a temp file needs) -- on this host
+    # that self-pipe deadlocked EVERY TIME (confirmed: xtrace showed the
+    # process sleeping forever with zero children ever forked, right at
+    # this loop, across parallel AND sequential launcher attempts; not a
+    # kiac/network/Docker issue -- trial-data.sh's own output was already
+    # captured and verified correct before this loop ever runs). A `for`
+    # loop over a manually newline-split `$kiac_env_output` reads the same
+    # already-in-memory string with no pipe, no fork, and identical
+    # per-line semantics. IFS/noglob are saved and restored explicitly
+    # rather than scoped with `local IFS=`/`local -` (this is a branch
+    # inside a larger function, not a dedicated one) so nothing after this
+    # block inherits a stray no-glob/newline-only word-splitting mode.
+    # codex R1 (Medium, confirmed): the first version of this save read
+    # bare "$IFS", which -- under this script's own `set -u` -- aborts
+    # with "IFS: unbound variable" if a caller had explicitly `unset IFS`
+    # rather than leaving it at its default. The original `while IFS=
+    # read` loop never had this failure mode: `IFS=` there is a
+    # command-scoped prefix assignment for `read` alone, never a read of
+    # the ambient variable. `${IFS-}` mirrors that -- expands to empty
+    # under `-u` when IFS is unset, instead of erroring -- and
+    # `_kiac_ifs_was_unset` records which case it was so the restore
+    # below can put IFS back to truly unset rather than merely empty.
+    local _kiac_saved_ifs="${IFS-}" _kiac_ifs_was_unset=0 _kiac_had_noglob=0
+    [[ -z "${IFS+set}" ]] && _kiac_ifs_was_unset=1
+    [[ "$-" == *f* ]] && _kiac_had_noglob=1
+    # codex R1 (Low, confirmed): restores the IFS/noglob state at every
+    # exit from this loop, including the unrecognized-key hard-fail
+    # below -- every OTHER exit 1 in this function also terminates the
+    # whole process outright (no continuing caller today), but a helper
+    # is cheap insurance against a future caller that traps EXIT/RETURN
+    # around trial_wire_common_env and would otherwise observe a stray
+    # no-glob, newline-only-split shell state after a failed call.
+    _kiac_restore_ifs_noglob() {
+      [[ "$_kiac_had_noglob" -eq 1 ]] || set +f
+      if [[ "$_kiac_ifs_was_unset" -eq 1 ]]; then
+        unset IFS
+      else
+        IFS="$_kiac_saved_ifs"
+      fi
+    }
+    IFS=$'\n'
+    set -f
+    for kiac_line in $kiac_env_output; do
       [[ -z "$kiac_line" ]] && continue
       kiac_key="${kiac_line%%=*}"
       kiac_value="${kiac_line#*=}"
@@ -337,10 +384,13 @@ trial_wire_common_env() {
         ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE) _kiac_env_FALKOR_ALLOW_INSECURE="$kiac_value" ;;
         *)
           echo "common.sh: 'trial-data.sh dsn --env' emitted an unrecognized key '$kiac_key' -- refusing to assign it" >&2
+          _kiac_restore_ifs_noglob
           exit 1
           ;;
       esac
-    done <<<"$kiac_env_output"
+    done
+    _kiac_restore_ifs_noglob
+    unset -f _kiac_restore_ifs_noglob
     [[ "$kiac_env_count" -eq 15 ]] || { echo "common.sh: 'trial-data.sh dsn --env' emitted $kiac_env_count line(s), expected exactly 15" >&2; exit 1; }
     local _kiac_env_v
     for _kiac_env_v in _kiac_env_PG_HOST _kiac_env_PG_PORT _kiac_env_PG_USER _kiac_env_PG_PASSWORD _kiac_env_PG_DB \
