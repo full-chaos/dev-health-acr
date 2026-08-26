@@ -541,6 +541,189 @@ trial_run_go_test() {
   ( cd "$repo_root" && go test -run TestGenerativeTrialCorpus -count=1 -v -timeout "${1:?timeout required}" ./internal/runtime/hosted )
 }
 
+# trial_responder_transport (CHAOS-4313, chris ruling 2026-08-26 05:30 PDT:
+# trial responder runs move to the OpenAI API -- trial volume is
+# decreasing, and codex-exec's CPU load on the host now costs more than
+# API spend) resolves ACR_TEST_TRIAL_RESPONDER_TRANSPORT to "api" (default,
+# from this point on) or "codex" (retained ONLY for replaying historical
+# runs), failing loudly on anything else -- the same fail-closed-on-
+# unrecognized-value discipline ACR_TRIAL_DATA_PLANE above already applies.
+#
+# BOTH prints the resolved value to stdout (a plain top-level caller may
+# still capture it via `t="$(trial_responder_transport)"` -- this file's
+# own sol-review F1 lesson confirms a BARE, TOP-LEVEL assignment correctly
+# aborts under `set -e` when the captured command exits non-zero) AND sets
+# it into TRIAL_RESPONDER_TRANSPORT, a plain global -- the mechanism every
+# INTERNAL caller in this file must use instead (see trial_responder_script
+# and trial_require_responder_transport_ready immediately below). codex
+# xhigh review round 1 (confirmed): `case "$(trial_responder_transport)" in`
+# does NOT propagate this function's own `exit 1` -- the nested command
+# substitution forks its own subshell, that subshell's `exit 1` only
+# terminates ITSELF, and (without `shopt -s inherit_errexit`, unset here)
+# `set -e` does not detect the nested substitution's non-zero status once
+# the CALLING function is itself already running inside another subshell
+# (e.g. a launcher's own `"$(trial_responder_script)"` capture) -- so the
+# case statement silently sees an empty string, matches no pattern, and the
+# whole call chain returns 0 with no output. A DIRECT (uncaptured) call to
+# a function that itself hard-`exit`s does not have this gap at any nesting
+# depth (proven empirically before this fix landed): the `exit` builtin
+# unconditionally terminates whichever subshell is currently executing it,
+# regardless of errexit/inherit_errexit. Global state to dodge a shell
+# builtin's own semantics is not usually good practice, but File-scoped,
+# single-writer, single-consumer-per-call, and every alternative
+# (`shopt -s inherit_errexit` file-wide; bash 4.3+ nameref out-params) is
+# either a bigger blast radius against this file's already-carefully-tuned
+# `-e` handling or adds complexity disproportionate to two call sites.
+trial_responder_transport() {
+  local t="${ACR_TEST_TRIAL_RESPONDER_TRANSPORT:-api}"
+  # codex xhigh review round 1 (Low, confirmed): ACR_TEST_TRIAL_RESPONDER_TRANSPORT="   "
+  # (set but whitespace-only) is neither unset nor empty, so bash's `:-`
+  # default above never applies -- this used to fall straight to the
+  # unrecognized-value branch, while the Go-side twoTurnResponderTransport
+  # (chaos3742_two_turn_confirmation_test.go) treats the identical input as
+  # blank and defaults it to "api" (strings.TrimSpace first). Trimming here
+  # too makes both sides agree on what "blank" means for the SAME env var.
+  # Plain parameter-expansion trim (no extglob, no subprocess) -- consistent
+  # with this file's own no-heredoc/no-here-string discipline elsewhere.
+  t="${t#"${t%%[![:space:]]*}"}"
+  t="${t%"${t##*[![:space:]]}"}"
+  [[ -z "$t" ]] && t="api"
+  case "$t" in
+    api | codex)
+      printf '%s\n' "$t"
+      TRIAL_RESPONDER_TRANSPORT="$t"
+      ;;
+    *)
+      echo "common.sh: ACR_TEST_TRIAL_RESPONDER_TRANSPORT must be \"api\" or \"codex\", got \"$t\"" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# trial_responder_script (CHAOS-4313) resolves the ABSOLUTE path (via
+# $script_dir, this file's own directory) of the responder script for
+# trial_responder_transport's value. A caller backgrounds it DIRECTLY --
+# `"$(trial_responder_script)" "$exdir" >"$log" 2>&1 &` in the CALLER's own
+# shell, never inside this function. Backgrounding from inside a function
+# invoked via `$(...)` would start the process in a SUBSHELL (command
+# substitution always forks one) -- the subshell exits the instant it
+# echoes its return value, reparenting the still-running background
+# process away from the caller before the caller could ever `wait` on the
+# PID it captured. Every existing launcher's cleanup trap
+# (`wait "$responder_pid"`, run-two-turn.sh; the RESPONDER_PIDS wait loop,
+# run-two-turn-parallel.sh) depends on the responder being a DIRECT child
+# of the launcher's own shell, so this function only ever returns a path,
+# never starts the process itself.
+#
+# codex xhigh review round 1 (confirmed, TWO rounds deep): calling
+# trial_responder_transport CAPTURED -- whether via `case
+# "$(trial_responder_transport)" in` directly, or even via a bare
+# intermediate assignment (`local transport; transport="$(...)"`, this
+# function's own first-draft "fix", ALSO insufficient once THIS function is
+# itself invoked captured, e.g. `"$(trial_responder_script)"` at every real
+# call site) -- silently loses trial_responder_transport's own `exit 1` on
+# an unrecognized transport. `set -e` detecting a nested command
+# substitution's non-zero status requires `shopt -s inherit_errexit`
+# (unset here, and not added file-wide for this alone -- too large a
+# blast radius against this file's already-carefully-tuned `-e` handling
+# for two call sites); without it, a captured subshell's own internal
+# commands run with errexit effectively inert, so the failure is silently
+# swallowed and the case falls through to matching nothing, returning 0
+# with empty output. A DIRECT (uncaptured) call to a function that itself
+# hard-`exit`s has NO such gap at any nesting depth (confirmed
+# empirically): `exit` unconditionally terminates whichever subshell is
+# currently running it, independent of errexit. So this calls
+# trial_responder_transport DIRECTLY -- never captured -- and reads its
+# result back from TRIAL_RESPONDER_TRANSPORT, the global that call sets as
+# a side effect (see that function's own doc comment for why this is the
+# global's only justification).
+trial_responder_script() {
+  trial_responder_transport >/dev/null
+  case "$TRIAL_RESPONDER_TRANSPORT" in
+    api) printf '%s\n' "$script_dir/run-responder-api.sh" ;;
+    codex) printf '%s\n' "$script_dir/run-responder-codex.sh" ;;
+  esac
+}
+
+# trial_require_responder_transport_ready (CHAOS-4313 acceptance: "launcher
+# with TRANSPORT=api and no key fails closed with a named error before any
+# request is published") -- call this BEFORE creating an exchange dir or
+# starting the `go test` that would publish requests into it, so a missing
+# credential/login fails the whole launch before a single request file can
+# ever exist, not merely before the responder happens to notice on its
+# first poll tick.
+trial_require_responder_transport_ready() {
+  # See trial_responder_script's own comment immediately above for why this
+  # must be a DIRECT, uncaptured call, never `case "$(trial_responder_transport)"
+  # in` NOR a captured intermediate assignment -- the same
+  # nested-command-substitution-swallows-exit trap applies here identically
+  # (this function's own two branches also use `exit 1`, and this function
+  # is itself sometimes called from inside another capture -- e.g. a future
+  # caller wrapping it for a diagnostic message).
+  trial_responder_transport >/dev/null
+  case "$TRIAL_RESPONDER_TRANSPORT" in
+    api)
+      # codex xhigh review round 3 (High, confirmed): `-z` alone accepts a
+      # whitespace-only value (e.g. a malformed ops/.env line) as
+      # "present" -- this readiness check would then pass, but
+      # cmd/acr-trial-responder-api's own apiKey := strings.TrimSpace(...)
+      # check (main.go) trims it down to empty and refuses at the Go
+      # binary's own entry point, well after the go test has already
+      # started publishing requests. Trimming here closes the gap at the
+      # SAME point the acceptance criterion ("fails closed... before any
+      # request is published") actually requires it.
+      local api_key
+      api_key="$(trial_secret OPENAI_API_KEY)"
+      api_key="${api_key#"${api_key%%[![:space:]]*}"}"
+      api_key="${api_key%"${api_key##*[![:space:]]}"}"
+      if [[ -z "$api_key" ]]; then
+        echo "common.sh: ACR_TEST_TRIAL_RESPONDER_TRANSPORT=api but OPENAI_API_KEY is not set (or whitespace-only) in $ops_env -- refusing to start (no request would ever be answered)" >&2
+        exit 1
+      fi
+      ;;
+    codex)
+      local real_codex_home="${CODEX_HOME:-$HOME/.codex}"
+      if [[ ! -f "$real_codex_home/auth.json" ]]; then
+        echo "common.sh: ACR_TEST_TRIAL_RESPONDER_TRANSPORT=codex but $real_codex_home/auth.json not found -- log in with 'codex login' (ChatGPT subscription) first" >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+# trial_responder_model (codex xhigh review round 3, Medium, confirmed)
+# resolves ACR_TEST_TRIAL_RESPONDER_MODEL for EXPORT, so the go test
+# process (twoTurnResponderModel, which stamps trialProvenance.ResponderModel)
+# and the responder actually answering (run-responder-api.sh, which
+# defaults unset to "gpt-5.6-luna") agree on what model was used. Before
+# this existed, an unset value stayed EMPTY through export
+# ACR_TEST_TRIAL_RESPONDER_MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}" in
+# every launcher -- the responder still correctly defaulted to
+# gpt-5.6-luna internally (bash's own `${VAR:-default}` treats empty the
+# same as unset), but the go test's own fallback then recorded the LITERAL
+# STRING "ambient-default" in provenance even though gpt-5.6-luna, a real
+# and known value, was what actually answered every call.
+#
+# transport=codex keeps today's behavior unchanged (still resolves to ""
+# here, so the launcher's own export stays empty and provenance still
+# correctly says "ambient-default"): run-responder-codex.sh passes no `-m`
+# flag when unset, so codex's own actually-resolved default is genuinely
+# unknown to this harness -- there is no concrete value to reconcile
+# against, unlike the api transport's own well-defined default.
+#
+# PRECONDITION: call only after trial_require_responder_transport_ready (or
+# any direct trial_responder_transport/trial_responder_script call) has
+# already set TRIAL_RESPONDER_TRANSPORT this session -- every launcher that
+# calls this already calls trial_require_responder_transport_ready first,
+# for the unrelated fail-closed reason at that call site.
+trial_responder_model() {
+  local m="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}"
+  if [[ -z "$m" && "$TRIAL_RESPONDER_TRANSPORT" == "api" ]]; then
+    m="gpt-5.6-luna"
+  fi
+  printf '%s\n' "$m"
+}
+
 # Manual two-turn sharding (2026-08-24): if you hand-set
 # ACR_TEST_TRIAL_SHARD_CASE_INDICES yourself instead of going through
 # run-two-turn-parallel.sh, also set ACR_TEST_TRIAL_SHARD_COUNT and
