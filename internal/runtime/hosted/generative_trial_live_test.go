@@ -1666,6 +1666,21 @@ type trialProvenance struct {
 	// AnchorMembershipOffersEnabled's own "only one script populates this
 	// today" precedent immediately above.
 	ResponderModel string `json:"responder_model,omitempty"`
+	// ResponderTransport (CHAOS-4313, schema bump) records HOW the
+	// file-exchange responder answered -- "api" (a direct OpenAI Chat
+	// Completions call, cmd/acr-trial-responder-api) or "codex" (a
+	// subscription `codex exec` subprocess, run-responder-codex.sh) --
+	// sourced verbatim from ACR_TEST_TRIAL_RESPONDER_TRANSPORT
+	// (scripts/trial/common.sh's trial_responder_transport, which resolves
+	// its default and fails closed on anything else), never re-derived.
+	// Distinct from Transport above: Transport says whether this run used
+	// the file-exchange runtime AT ALL ("file_exchange" vs "real_api");
+	// this field says which OUT-OF-PROCESS responder answered it when it
+	// did. Set only alongside ResponderModel (both empty for real_api and
+	// for every run before this field existed, matching that field's own
+	// "only file_exchange has anything to attribute" precedent
+	// immediately above).
+	ResponderTransport string `json:"responder_transport,omitempty"`
 	// DataPlane/DataPlanePGHost/DataPlaneCHHost/DataPlaneFalkorHost
 	// (CHAOS-4186 follow-up, schema v28) record which store backend this
 	// run actually hit -- compose|kiac|override, sourced verbatim from

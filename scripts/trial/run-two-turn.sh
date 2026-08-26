@@ -3,9 +3,12 @@
 #
 # CHAOS-3742 acceptance debt: runs the two-turn confirmation replay
 # instrument (TestChaos3742TwoTurnConfirmationReplay, internal/runtime/hosted)
-# against the frozen corpus, answered by run-responder-codex.sh -- the SAME
-# subscription `codex exec` subprocess run-replay.sh already uses, never a
-# metered OPENAI_API_KEY (standing rule for this epic).
+# against the frozen corpus, answered via ACR_TEST_TRIAL_RESPONDER_TRANSPORT
+# (common.sh's trial_responder_script) -- "api" by default (CHAOS-4313,
+# chris ruling 2026-08-26: a direct OpenAI API call, cmd/acr-trial-
+# responder-api, metered OPENAI_API_KEY spend now expected), or "codex" for
+# the SAME subscription `codex exec` subprocess run-replay.sh still uses,
+# retained only for replaying historical runs.
 #
 # The oracle annex (design brief DP10) is REQUIRED and is NOT defaulted here
 # -- it is a chris-ratified artifact, never guessed at by a script. Pass the
@@ -18,7 +21,9 @@
 #
 # Mirrors run-replay.sh's exchange-dir lifecycle exactly (start the responder
 # before the go test, wait for the test to finish, signal DONE, wait for the
-# responder to notice and wipe its own private CODEX_HOME).
+# responder to notice and exit -- run-responder-api.sh has no CODEX_HOME to
+# wipe; run-responder-codex.sh's own private-CODEX_HOME cleanup is unchanged
+# under transport=codex).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -31,6 +36,12 @@ if [[ ! -f "$ANNEX_PATH" ]]; then
 fi
 
 trial_wire_common_env
+# CHAOS-4313 red-first fail-closed check: before ANYTHING else touches an
+# exchange dir or starts a go test that could publish a request, refuse
+# loudly if the selected responder transport cannot actually answer (a
+# missing OPENAI_API_KEY for transport=api, a missing codex login for
+# transport=codex).
+trial_require_responder_transport_ready
 # CHAOS-4100 (post-4108-fix graph rebuild incident): this script's own
 # consumer, TestChaos3742TwoTurnConfirmationReplay, is the SECOND trial
 # test (after chaos3884_replay_harness_test.go) to record
@@ -75,15 +86,22 @@ mkdir -p "$exdir/requests" "$exdir/responses"
 export ACR_TEST_TRIAL_EXCHANGE_DIR="$exdir"
 export ACR_TEST_TRIAL_EXCHANGE_TIMEOUT="${ACR_TRIAL_EXCHANGE_TIMEOUT:-10m}"
 # CHAOS-4113: explicit pass-through, not ambient inheritance -- unset by
-# default, which leaves run-responder-codex.sh's own `codex exec` call with
-# no `-m` flag (today's behavior, unchanged). See that script's own header
-# for what setting this actually does and does not affect.
-export ACR_TEST_TRIAL_RESPONDER_MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}"
+# default under transport=codex, which leaves run-responder-codex.sh's own
+# `codex exec` call with no `-m` flag (today's behavior, unchanged). See
+# that script's own header for what setting this actually does and does
+# not affect. CHAOS-4313, codex xhigh review round 3 (Medium, confirmed):
+# under transport=api, trial_responder_model resolves the SAME concrete
+# default run-responder-api.sh's own MODEL variable would otherwise apply
+# silently -- an unset value used to stay empty here, so the go test's own
+# twoTurnResponderModel() recorded the literal string "ambient-default" in
+# provenance even though gpt-5.6-luna, a real known value, was what
+# actually answered every call.
+export ACR_TEST_TRIAL_RESPONDER_MODEL="$(trial_responder_model)"
 echo "EXCHANGE_DIR=$exdir"
 echo "ORACLE_ANNEX=$ANNEX_PATH"
 
 responder_log="$exdir/_responder_driver.log"
-"$(dirname "${BASH_SOURCE[0]}")/run-responder-codex.sh" "$exdir" >"$responder_log" 2>&1 &
+"$(trial_responder_script)" "$exdir" >"$responder_log" 2>&1 &
 responder_pid=$!
 
 cleanup() {

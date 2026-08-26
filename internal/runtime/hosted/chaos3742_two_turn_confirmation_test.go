@@ -2428,6 +2428,32 @@ func TestTwoTurnResponderModel(t *testing.T) {
 	})
 }
 
+// TestTwoTurnResponderTransport (CHAOS-4313) mirrors TestTwoTurnResponderModel's
+// own pattern: unset (or blank/whitespace-only) reads as "api" -- the
+// CHAOS-4313 cutover default scripts/trial/common.sh's own
+// trial_responder_transport already applies -- never empty, which would be
+// indistinguishable from the real_api transport (this field, like
+// ResponderModel, is gated on exchangeDir != "" at its call site).
+func TestTwoTurnResponderTransport(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		if got := twoTurnResponderTransport(); got != "api" {
+			t.Errorf("twoTurnResponderTransport() = %q, want %q", got, "api")
+		}
+	})
+	t.Run("blank", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_RESPONDER_TRANSPORT", "   ")
+		if got := twoTurnResponderTransport(); got != "api" {
+			t.Errorf("twoTurnResponderTransport() = %q, want %q for a whitespace-only value", got, "api")
+		}
+	})
+	t.Run("set", func(t *testing.T) {
+		t.Setenv("ACR_TEST_TRIAL_RESPONDER_TRANSPORT", "codex")
+		if got := twoTurnResponderTransport(); got != "codex" {
+			t.Errorf("twoTurnResponderTransport() = %q, want the explicit value", got)
+		}
+	})
+}
+
 // TestTwoTurnTraceCapturePoolContainsKind pins CHAOS-4038's exact
 // distinction: a corroboration-stage event for the expected kind means it
 // reached the merged pool, regardless of what the (possibly absent)
@@ -3336,6 +3362,22 @@ func twoTurnResponderModel() string {
 	return "ambient-default"
 }
 
+// twoTurnResponderTransport (CHAOS-4313) reads
+// ACR_TEST_TRIAL_RESPONDER_TRANSPORT -- see
+// trialProvenance.ResponderTransport's own doc comment
+// (generative_trial_live_test.go) for what this closes. Defaults to "api"
+// so a run that launched via a script predating this variable's export
+// (should not happen post-cutover, but this function must be correct
+// standalone) still records the transport scripts/trial/common.sh's own
+// trial_responder_transport defaults to, rather than a misleading empty
+// string.
+func twoTurnResponderTransport() string {
+	if v := strings.TrimSpace(os.Getenv("ACR_TEST_TRIAL_RESPONDER_TRANSPORT")); v != "" {
+		return v
+	}
+	return "api"
+}
+
 // twoTurnUnjustifiedShadowProbe computes the CHAOS-4062 trace-observability
 // fields for an "unjustified"-classified inferred commit: whether
 // kindInsensitivityProof was evaluated on the hinted call and its verdict
@@ -4131,12 +4173,12 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // (codex round 2, Low, confirmed): this file lives in package hosted_test and
 // cannot be imported from that separate binary's package main, so nothing
 // can assert cross-package agreement directly -- the SAME pre-existing
-// limitation every one of this constant's 29 prior bumps has always had
+// limitation every one of this constant's 30 prior bumps has always had
 // (TestRunRejectsSchemaVersionMismatch only proves the merger REFUSES a
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "30"
+const reportSchemaVersion = "31"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -4739,6 +4781,19 @@ type twoTurnReport struct {
 	// key's meaning, presence, or JSON name changes. The mirror in
 	// cmd/acr-trial-merge-two-turn/main.go gained the same fields plus the
 	// matching mergeReports sums in the same change.
+	//
+	// "31" (CHAOS-4313, chris ruling 2026-08-26 05:30 PDT): purely
+	// additive -- responder_transport ("api"|"codex") on trialProvenance,
+	// recording which out-of-process responder answered a file_exchange
+	// run (cmd/acr-trial-responder-api's direct OpenAI API call, or
+	// run-responder-codex.sh's `codex exec` subprocess), sourced from
+	// ACR_TEST_TRIAL_RESPONDER_TRANSPORT the same way ResponderModel
+	// already sources ACR_TEST_TRIAL_RESPONDER_MODEL. Empty for real_api
+	// and for every run before this field existed, matching
+	// ResponderModel's own precedent exactly -- no other field's shape or
+	// meaning changes. The mirror in cmd/acr-trial-merge-two-turn/main.go
+	// gained the field and its cross-shard consistency check in the same
+	// change.
 	//
 	// Bump this again on any future field rename, removal, or meaning
 	// change so a consumer can detect drift instead of silently reading a
@@ -8222,14 +8277,15 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// finding #10: hard-coding "real_api" while a file-exchange runtime is
 	// wired gives the acceptance artifact false provenance).
 	transportLabel := "real_api"
-	// responderModel (CHAOS-4135): empty for real_api -- that transport
-	// never shells out to a responder script at all, so there is nothing
-	// to attribute an answer to; see trialProvenance.ResponderModel's own
-	// doc comment.
-	var responderModel string
+	// responderModel/responderTransport (CHAOS-4135, extended CHAOS-4313):
+	// empty for real_api -- that transport never shells out to a responder
+	// script at all, so there is nothing to attribute an answer to; see
+	// trialProvenance.ResponderModel/ResponderTransport's own doc comments.
+	var responderModel, responderTransport string
 	if exchangeDir != "" {
 		transportLabel = "file_exchange"
 		responderModel = twoTurnResponderModel()
+		responderTransport = twoTurnResponderTransport()
 	}
 	report := twoTurnReport{
 		ReportSchemaVersion: reportSchemaVersion,
@@ -8238,6 +8294,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
 			AnchorMembershipOffersEnabled: cfg.AnchorMembershipOffersEnabled,
 			ResponderModel:                responderModel,
+			ResponderTransport:            responderTransport,
 			// DataPlane* (CHAOS-4186 follow-up, schema v28): read directly
 			// from the env vars scripts/trial/common.sh already resolved
 			// and exported for this exact purpose -- never re-derived,

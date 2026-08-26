@@ -7,6 +7,12 @@
 # .remember/feedback_harnesses_not_api_keys.md) over the withheld trial
 # corpus. Requires `codex` on PATH and `codex login` already completed
 # (this script never touches codex auth itself).
+#
+# CHAOS-4313 scoping (team-lead ruled 2026-08-26): the ACR_TEST_TRIAL_
+# RESPONDER_TRANSPORT=api|codex cutover does NOT apply here -- this arm
+# gives codex its own read-only gh/linear-cli/ClickHouse tool-use loop per
+# case, never the file-exchange session_nonce/output_schema envelope that
+# switch selects between, so it stays codex-subscription-only.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 

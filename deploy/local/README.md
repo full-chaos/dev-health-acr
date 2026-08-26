@@ -175,6 +175,20 @@ the script now fails loud, naming the exact fix, if
 silently ignored the switch and always read the compose container, the
 same silent-hybrid-plane trap this switch exists everywhere else to
 close).
+
+**Responder transport (CHAOS-4313)**: `run-two-turn.sh` and
+`run-two-turn-parallel.sh` answer via `ACR_TEST_TRIAL_RESPONDER_TRANSPORT=
+api|codex` (default **`api`** -- a direct OpenAI API call, `cmd/acr-trial-
+responder-api`; `codex` is retained only for replaying historical runs
+against the `codex exec` subscription harness). This is a deliberate
+cost-shape change (chris ruling 2026-08-26): every measurement run now
+spends metered `OPENAI_API_KEY` tokens against the trial responder model
+(default `gpt-5.6-luna`) instead of `codex exec` CPU time on the host --
+trial volume is decreasing, and the API spend is now cheaper than the host
+load. `run-frontier-arm.sh` is unaffected and stays codex-subscription-only
+-- it never used the file-exchange responder this switch selects, so there
+is nothing here for it to move to.
+
 DSN/authority component assembly (`common.sh`'s `ch_dsn`, `ACR_TEST_TRIAL_
 POSTGRES_DSN`, and `falkor_addr`; `run-two-turn-parallel.sh`'s per-shard
 Postgres DSN) brackets an IPv6 host in `[]` via a shared

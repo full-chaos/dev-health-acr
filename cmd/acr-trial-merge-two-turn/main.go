@@ -291,11 +291,21 @@ import (
 // presence, or JSON name changes. mergeReports gained the matching sums in
 // the same change.
 //
+// "31" (CHAOS-4313, chris ruling 2026-08-26 05:30 PDT): purely additive --
+// trialProvenance gains ResponderTransport ("api"|"codex"), sourced
+// verbatim from the producer's own ACR_TEST_TRIAL_RESPONDER_TRANSPORT. No
+// merge arithmetic changes (Provenance rides through from the FIRST shard,
+// same as ResponderModel/DataPlane), but ResponderTransport gets the SAME
+// cross-shard agreement check ResponderModel/DataPlane already have (see
+// mergeReports): shards answered by different transports must be refused,
+// not silently merged under the first shard's label. See the producer's
+// own ReportSchemaVersion doc comment.
+//
 // KEEP IN SYNC WITH internal/runtime/hosted/chaos3742_two_turn_confirmation_test.go's
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "30"
+const expectedSchemaVersion = "31"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -354,6 +364,12 @@ type trialProvenance struct {
 	// through from the FIRST shard, see mergeReports, and every shard of
 	// one run shares one responder model by construction).
 	ResponderModel string `json:"responder_model,omitempty"`
+	// ResponderTransport (CHAOS-4313, schema v31) mirrors trialProvenance's
+	// identically-named field -- see the producer's own doc comment
+	// (generative_trial_live_test.go) for what this closes. Purely
+	// additive passthrough; no merge arithmetic (same "rides through from
+	// the FIRST shard" shape as ResponderModel immediately above).
+	ResponderTransport string `json:"responder_transport,omitempty"`
 	// DataPlane* (CHAOS-4186 follow-up, schema v28) mirrors trialProvenance's
 	// identically-named fields -- see the producer's own doc comment
 	// (generative_trial_live_test.go) for the provenance gap this closes.
@@ -858,6 +874,14 @@ func validateShardSet(shards []twoTurnReport, paths []string) error {
 		// below.
 		case s.Provenance.ResponderModel != first.Provenance.ResponderModel:
 			return mismatchErr(paths[i], paths[0], "provenance.responder_model", s.Provenance.ResponderModel, first.Provenance.ResponderModel)
+		// ResponderTransport (CHAOS-4313): the SAME "launch-level, not
+		// shard-level" reasoning as ResponderModel immediately above -- one
+		// transport (api|codex) answers a whole run; shards disagreeing
+		// means part of the run was answered by a different responder than
+		// the rest, which must be refused rather than silently merged
+		// under the first shard's label.
+		case s.Provenance.ResponderTransport != first.Provenance.ResponderTransport:
+			return mismatchErr(paths[i], paths[0], "provenance.responder_transport", s.Provenance.ResponderTransport, first.Provenance.ResponderTransport)
 		// DataPlane (CHAOS-4186 follow-up, schema v28): the SAME "launch-
 		// level, not shard-level" reasoning as ResponderModel immediately
 		// above -- one data plane serves a whole run. Shards disagreeing

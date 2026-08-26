@@ -99,23 +99,22 @@ SHARD_COUNT="${3:-4}"
 # ACR_TRIAL_MAX_CONCURRENT_SHARDS bounds how many shards run AT ONCE, and
 # it is independent of how many there are. It exists because the loop below
 # used to background every shard unconditionally: fine at four, but at
-# sixty-five per-case shards that is sixty-five concurrent `codex exec`
-# processes against ONE ChatGPT subscription, since run-responder-codex.sh
-# is one sequential responder PER SHARD. The default is deliberately
-# conservative -- find the subscription's ceiling in a ramp smoke whose
-# failures are free, not in a measurement run.
+# sixty-five per-case shards that is sixty-five concurrent responder
+# processes -- against ONE ChatGPT subscription under transport=codex
+# (run-responder-codex.sh is one sequential responder PER SHARD), or
+# against ONE OpenAI API key's own rate limits under transport=api
+# (CHAOS-4313, the default): the underlying bottleneck moved from a
+# subscription session to a metered account's rate limit, but the shape of
+# the risk -- N shards hammering one shared credential at once -- did not.
+# The default is deliberately conservative -- find the real ceiling in a
+# ramp smoke whose failures are free, not in a measurement run.
 CASES_PER_SHARD="${ACR_TRIAL_CASES_PER_SHARD:-}"
 MAX_CONCURRENT="${ACR_TRIAL_MAX_CONCURRENT_SHARDS:-8}"
-# ACR_TEST_TRIAL_RESPONDER_MODEL (CHAOS-4113): explicit pass-through to
-# run-responder-codex.sh, not ambient inheritance -- unset by default,
-# which leaves every shard's responder with no `-m` flag (today's
-# behavior, unchanged; see that script's own header for what setting this
-# actually does and does not affect). Exported ONCE here, before the shard
-# loop below launches its per-shard responder background jobs, since every
-# shard in one run answers with the SAME model -- each backgrounded
-# `run-responder-codex.sh` call inherits it like any other exported
-# variable, no per-shard threading needed.
-export ACR_TEST_TRIAL_RESPONDER_MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}"
+# ACR_TEST_TRIAL_RESPONDER_MODEL is resolved and exported further down,
+# right after trial_require_responder_transport_ready (which is what sets
+# TRIAL_RESPONDER_TRANSPORT that resolution needs) -- see that site's own
+# comment. PLAN_ONLY needs neither: model plays no part in the shard-layout
+# JSON this branch prints.
 # SHARD_PLAN_ONLY prints the computed layout as JSON and exits without
 # provisioning anything. The layout is the one piece of this script with
 # real logic in it, so it is made inspectable and testable rather than
@@ -342,6 +341,28 @@ if [[ "$PLAN_ONLY" == "1" ]]; then
   printf ']}\n'
   exit 0
 fi
+
+# CHAOS-4313 red-first fail-closed check: before ANY database is cloned or
+# exchange dir created, refuse loudly if the selected responder transport
+# cannot actually answer (a missing OPENAI_API_KEY for transport=api, a
+# missing codex login for transport=codex). Placed after the PLAN_ONLY exit
+# above -- plan-only sources none of common.sh's real functions (see the
+# stub block at the top of this file), so this must never run on that path.
+trial_require_responder_transport_ready
+# codex xhigh review round 3 (Medium, confirmed): resolved here (not left
+# as `export ACR_TEST_TRIAL_RESPONDER_MODEL="${ACR_TEST_TRIAL_RESPONDER_MODEL:-}"`)
+# so a shard's own go test (twoTurnResponderModel, provenance) and the
+# per-shard responder actually answering it (run-responder-api.sh's own
+# MODEL default) agree on what model was used under transport=api -- see
+# trial_responder_model's own doc comment (common.sh) for the exact
+# provenance-mismatch this closes. Exported ONCE here, before the shard
+# loop below launches its per-shard responder background jobs, since every
+# shard in one run answers with the SAME model -- each backgrounded
+# responder call inherits it like any other exported variable, no
+# per-shard threading needed. Must run AFTER trial_require_responder_transport_ready
+# immediately above (trial_responder_model's own precondition: it reads
+# TRIAL_RESPONDER_TRANSPORT, which that call is what sets).
+export ACR_TEST_TRIAL_RESPONDER_MODEL="$(trial_responder_model)"
 
 # PG_DATABASES replaces the pre-CHAOS-4100 PG_CONTAINERS: the resources
 # this script now creates and must drop are DATABASES on the standing
@@ -628,7 +649,7 @@ launch_shard() {
   exdir="${TMPDIR:-/tmp}/acr-trial-exchange-twoturn-parallel-${RUN_TAG}-${i}"
   mkdir -p "$exdir/requests" "$exdir/responses"
   EXCHANGE_DIRS+=("$exdir")
-  "$(dirname "${BASH_SOURCE[0]}")/run-responder-codex.sh" "$exdir" >"$exdir/_responder_driver.log" 2>&1 &
+  "$(trial_responder_script)" "$exdir" >"$exdir/_responder_driver.log" 2>&1 &
   RESPONDER_PIDS+=("$!")
 
   shard_out="$ACR_TRIAL_RESULTS_DIR/gen-trial-chaos3742_twoturn-parallel-${RUN_TAG}-shard${i}.json"

@@ -168,14 +168,21 @@ func TestFoldConfirmedKindVectorCensus_AccumulatesAcrossCalls(t *testing.T) {
 	}
 }
 
-// TestTwoTurnReport_SchemaVersionIsThirty pins the CHAOS-4307 schema bump --
-// a bare literal the report-construction site sets; this pin makes a future
-// silent revert to "29" a red test instead of a passing report someone has
-// to notice by eye.
-func TestTwoTurnReport_SchemaVersionIsThirty(t *testing.T) {
+// TestTwoTurnReport_SchemaVersionPin pins the CURRENT schema version -- a
+// bare literal the report-construction site sets; this pin makes a future
+// silent revert (or a rebase that forgets to recount both constants,
+// exactly the failure mode a codex xhigh review caught live during
+// CHAOS-4313's own rebase onto CHAOS-4307) a red test instead of a passing
+// report someone has to notice by eye. Originally CHAOS-4307's own
+// "...IsThirty" (pinned v30); renamed here, on the very next bump, so the
+// test's own name never hardcodes a historical version the live constant
+// has since moved past -- update the expected literal (never the
+// assertion's SHAPE) on every future bump, same discipline
+// reportSchemaVersion's own doc comment already documents.
+func TestTwoTurnReport_SchemaVersionPin(t *testing.T) {
 	t.Parallel()
-	if reportSchemaVersion != "30" {
-		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4307 bump)", reportSchemaVersion, "30")
+	if reportSchemaVersion != "31" {
+		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4313 bump, following CHAOS-4307's v30)", reportSchemaVersion, "31")
 	}
 }
 

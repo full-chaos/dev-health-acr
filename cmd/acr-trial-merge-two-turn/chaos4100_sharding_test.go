@@ -360,3 +360,27 @@ func TestChaos4186_DataPlaneMustAgreeAcrossShards(t *testing.T) {
 		t.Errorf("error = %q, want it to name provenance.data_plane", err.Error())
 	}
 }
+
+// TestChaos4313_ResponderTransportMustAgreeAcrossShards mirrors
+// TestChaos4135_ResponderModelMustAgreeAcrossShards' own pattern for the
+// SAME reason: ResponderTransport is a launch-level fact -- one transport
+// (api|codex) answers a whole run -- so two shards disagreeing about it
+// means artifacts from two different launches (or an operator changing
+// ACR_TEST_TRIAL_RESPONDER_TRANSPORT mid-run) are being merged into one,
+// which mergeReports' own "Provenance: first.Provenance" (inheriting only
+// the FIRST shard's value) would otherwise silently misattribute.
+func TestChaos4313_ResponderTransportMustAgreeAcrossShards(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.Provenance.ResponderTransport = "api"
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.Provenance.ResponderTransport = "codex"
+	dir, paths := writeShards(t, []twoTurnReport{a, b})
+	var stdout bytes.Buffer
+	err := run(filepath.Join(dir, "merged.json"), paths, &stdout)
+	if err == nil {
+		t.Fatal("merging shards that disagree about responder_transport must be refused")
+	}
+	if !strings.Contains(err.Error(), "provenance.responder_transport") {
+		t.Errorf("error = %q, want it to name provenance.responder_transport", err.Error())
+	}
+}
