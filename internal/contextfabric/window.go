@@ -1092,7 +1092,18 @@ func appendUniqueWarning(warnings []string, sentence string) []string {
 	return append(warnings, sentence)
 }
 
-func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, staleEntry *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry) (InvestigationResult, error) {
+func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto windowVetoReason, interpretation *InterpretedQuestion, staleEntry *contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry,
+	// structureCanon (CHAOS-4335): the request's OWN kind/anchor/handle
+	// structure canonicalization, when the caller has one available --
+	// preInterpretExplicitStructureCanon's cheap, store-free, pre-Interpret
+	// result for the veto BEFORE canonicalizeStructure ever runs (engine.go's
+	// windowCanon.Veto branch), or the REAL, already-computed structureCanon
+	// for the axis-conflict veto (engine.go's windowVetoAxisConflict branch,
+	// which fires after canonicalizeStructure has already run). nil means
+	// genuinely nothing to echo -- never a signal to skip echoing something
+	// that exists.
+	structureCanon *requestStructureCanonicalization,
+) (InvestigationResult, error) {
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))
 	}
@@ -1166,8 +1177,26 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	// the whole request was rejected" from the response, matching the
 	// disclosure discipline every other structure-receipt member's own
 	// stale veto already carries.
+	//
+	// CHAOS-4335: structureCanon's own explicit/confirmed kind|anchor|handle
+	// echo is concatenated in ADDITION to staleEntry -- the two are about
+	// different members by construction (staleEntry is always the window
+	// member; structureCanon never carries one, window is not part of
+	// composeConfirmedStructure at all) -- mirroring engine.go's own
+	// structureVetoResult call site, which folds windowCanon.ConfirmedMember
+	// in alongside a structure veto's own echo for the identical reason: a
+	// confirmed/explicit member on this SAME request must not silently
+	// vanish just because a DIFFERENT member is why the whole request was
+	// vetoed.
+	var echo []contractsv1.ContextFabricConfirmedStructureEntry
+	if structureCanon != nil {
+		echo = composeConfirmedStructure(structureCanon.Confirmed, structureCanon.Explicit)
+	}
 	if staleEntry != nil {
-		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{*staleEntry}
+		echo = append(echo, *staleEntry)
+	}
+	if len(echo) > 0 {
+		result.ConfirmedStructure = echo
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))

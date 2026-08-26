@@ -368,6 +368,20 @@ func ValidContextFabricStructureDisposition(value ContextFabricStructureDisposit
 // member, INCLUDING vetoed ones (design brief §2.1's silent-drop closure).
 // Receipts are globally scoped by (PriorResultID, ReceiptID): a bare
 // receipt id is only unique within its issuing result.
+//
+// This holds independent of window: a request's kind/anchor/handle
+// structure and its evidence window are two members carried on the SAME
+// request, and neither one's own outcome may silently withhold the other's
+// echo. CHAOS-4335 closed the concrete gap this invariant had gone unproven
+// for: Engine.Investigate's two window short-circuits ahead of decisive
+// resolution (windowVetoResult; windowConfirmationRequiredResult's gate 1)
+// used to return before canonicalizeStructure ever ran, so a bare explicit
+// ExpectedKinds/SubjectHandles field on a request whose window turned out
+// unconfirmed or vetoed silently vanished from ConfirmedStructure --
+// distinguishable from "no explicit field was sent" only by re-deriving the
+// original request, which a caller reading just this response cannot do.
+// window.go's windowVetoResult now threads that echo through both of its
+// call sites (see its own structureCanon parameter doc comment).
 type ContextFabricConfirmedStructureEntry struct {
 	Member         ContextFabricStructureNeedKind    `json:"member"`
 	AppliedValue   string                            `json:"applied_value"`

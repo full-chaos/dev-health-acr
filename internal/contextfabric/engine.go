@@ -619,7 +619,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// this call site (see engine.go's ordering comment at its own call
 		// site below), the same "nothing attempted yet" convention every
 		// other pre-receipt-resolution veto uses.
-		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil)
+		//
+		// CHAOS-4335: preInterpretExplicitStructureCanon threads a bare
+		// explicit ExpectedKinds/SubjectHandles hint through this
+		// short-circuit -- cheap and store-free, so it costs this class of
+		// request nothing extra (structureCanon itself, which DOES need the
+		// store for a receipt-carrying request, still has not run and is
+		// not attempted here).
+		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil, e.preInterpretExplicitStructureCanon(request))
 	}
 	// CHAOS-4040 (sol-max ruling 2026-08-21, "GATE ALL INFERRED WINDOWS
 	// out of decisive terminals"): an MCP bare explicit evidence_window
@@ -901,7 +908,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if len(axisConflictDispositions) > 0 {
 			e.recordPriorSubjectReceiptSkips(ctx, principal, axisConflictDispositions, priorHintsStaleGraphEpochDelta)
 		}
-		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions)
+		// CHAOS-4335: structureCanon has ALREADY run by this point
+		// (unconditional, right after gate 1, well before Interpret) --
+		// thread the REAL one through rather than the pre-Interpret-only
+		// helper the other windowVetoResult call site above uses.
+		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, &structureCanon)
 	}
 	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
 	// call, shared by BOTH DP4(a) sites (the offer-builder merge below,

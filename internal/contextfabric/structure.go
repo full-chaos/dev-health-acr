@@ -969,6 +969,52 @@ func (e *Engine) resolveExplicitStructure(request InvestigationRequest, confirme
 	return explicit, structureVetoNone
 }
 
+// preInterpretExplicitStructureCanon (CHAOS-4335) computes the SAME
+// explicit_unattributed/inferred_default echo canonicalizeStructure's own
+// "no receipts at all" branch produces for a bare ExpectedKinds/
+// SubjectHandles field (structure.go:440-449 above), but is safe to call
+// from Investigate's PRE-INTERPRET window-veto short-circuit: it touches
+// neither the result store nor Interpret. resolveExplicitStructure's only
+// veto branch compares the request's explicit fields against a `confirmed`
+// list built from redeemed structure RECEIPTS -- passing nil (as this
+// function always does) makes that branch unreachable by construction, the
+// same "confirmed=nil" shape canonicalizeStructure's own no-receipts branch
+// already relies on.
+//
+// Returns nil whenever the request ALSO carries a structure receipt
+// (PriorKindReceipts/PriorAnchorReceipts/PriorHandleReceipts/
+// PriorCandidateReceipts): those need the result-store read
+// canonicalizeStructure's own has-receipts branch performs, which
+// CHAOS-3478's ordering deliberately defers past every pre-Interpret window
+// gate (engine.go's own "nothing attempted yet" convention) -- this
+// function never attempts that work early, so the existing deferred
+// behavior for a receipt-carrying request is unchanged. Returns nil when
+// the request carries no explicit field at all (nothing to echo).
+//
+// Root cause this closes (CHAOS-4335): a request whose window turned out
+// unconfirmed or vetoed short-circuits engine.go's Investigate before
+// canonicalizeStructure ever runs, so a genuinely-sent explicit
+// ExpectedKinds/SubjectHandles hint silently vanished from ConfirmedStructure
+// -- a client-authority-bearing explicit field (design brief §2.5) that has
+// nothing to do with whether window, a DIFFERENT member, happened to
+// resolve on the same request.
+func (e *Engine) preInterpretExplicitStructureCanon(request InvestigationRequest) *requestStructureCanonicalization {
+	if len(request.PriorKindReceipts) > 0 || len(request.PriorAnchorReceipts) > 0 || len(request.PriorHandleReceipts) > 0 || len(request.PriorCandidateReceipts) > 0 {
+		return nil
+	}
+	if len(request.ExpectedKinds) == 0 && len(request.SubjectHandles) == 0 {
+		return nil
+	}
+	explicit, veto := e.resolveExplicitStructure(request, nil)
+	if veto != structureVetoNone {
+		// Unreachable in practice (see doc comment above); fail safe to
+		// "nothing to echo" rather than risk echoing a conflict this
+		// function never actually detected against anything.
+		return nil
+	}
+	return &requestStructureCanonicalization{Explicit: explicit}
+}
+
 // structureExplicitAuthority implements the DP12(b) uniform surface split
 // (pivot-intent design brief, ratified 07:28 08-19) for the kind/handle
 // members, mirroring windowExplicitProvenance's own identical rule
