@@ -151,13 +151,13 @@ func chaos4138WindowSetupResult(resultID, windowBand string) contractsv1.Context
 // leg response: no subject committed, so WrongCommit/FalseNoMatch cannot
 // fire. Every test below passes a fresh, empty *twoTurnTraceCapture (never
 // nil -- runTwoTurnInferredTierArm's own !isWindow branch calls
-// trace.finalDecisionEvent() unconditionally, a pre-existing precondition
+// trace.finalDecisionEvents() unconditionally, a pre-existing precondition
 // this ticket does not change); with zero events captured,
-// finalDecisionEvent's own doc comment ("zero value, ok=false if none")
-// means hintedDecision/baselineDecision.Outcome stays "", so the decisive
-// Outcome=="committed" branch never runs either. That keeps a "the retry
-// succeeded" fixture down to exactly what this function reads: Status and
-// an empty commit set.
+// finalDecisionEvents' own doc comment (empty slice if none) means
+// twoTurnLegOutcome(hintedDecisions/baselineDecisions) stays "", so the
+// decisive Outcome=="committed" branch never runs either. That keeps a "the
+// retry succeeded" fixture down to exactly what this function reads: Status
+// and an empty commit set.
 func chaos4138ClarificationResult(resultID string) contractsv1.ContextFabricInvestigationResult {
 	return contractsv1.ContextFabricInvestigationResult{
 		ResultID: resultID,
