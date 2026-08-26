@@ -6,7 +6,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"regexp"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -333,13 +334,6 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 	}
 }
 
-// memberVocabularyPattern extracts the quoted string literals out of a
-// Postgres CHECK constraint definition of the shape
-// `CHECK ((member = ANY (ARRAY['a'::text, 'b'::text])))` -- exactly what
-// pg_get_constraintdef returns for
-// ck_acr_cf_structure_supersession_member_vocabulary.
-var memberVocabularyPattern = regexp.MustCompile(`'([^']+)'`)
-
 // TestStructureSupersessionClaimsMemberVocabularyParity is CHAOS-4333's own
 // closing pin: ck_acr_cf_structure_supersession_member_vocabulary (migration
 // 0023, widened by 0033) must allow EXACTLY the same set of values as
@@ -351,38 +345,43 @@ var memberVocabularyPattern = regexp.MustCompile(`'([^']+)'`)
 // way the NEXT such addition would: read the constraint the migrations
 // actually left in a real Postgres database (not the migration file's own
 // source text, which would only prove the file says what it says, not
-// what got applied), and diff it against the enum -- in EITHER direction,
-// so a value removed from the enum but left in the CHECK is caught too.
+// what got applied), and diff it against the enum.
+//
+// Compares the FULL normalized predicate string pg_get_constraintdef
+// returns, not just the quoted literals inside it (codex review, CHAOS-
+// 4333: extracting only the literals would let a constraint like
+// `CHECK (member IN (...) OR member = chr(120))` pass while an extra
+// disjunct actually widens what's allowed beyond the enum). Postgres
+// normalizes a `member IN (...)` CHECK into this exact
+// `member = ANY (ARRAY[...])` shape -- confirmed empirically against the
+// same postgres:18-alpine image this suite already runs everywhere else,
+// with elements in the enum's own declared order (contractsv1's own
+// array, which migration 0033 appends to rather than reorders).
+//
+// The lookup is scoped to this table's own conrelid, not conname alone
+// (codex review, CHAOS-4333: constraint names are relation-scoped, so an
+// unqualified name lookup could resolve a same-named constraint on a
+// different table).
 func TestStructureSupersessionClaimsMemberVocabularyParity(t *testing.T) {
 	ctx := context.Background()
 	db := newInvestigationTestDatabase(t, ctx)
 
 	var constraintDef string
 	err := db.QueryRowContext(ctx,
-		`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_acr_cf_structure_supersession_member_vocabulary'`,
+		`SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		 WHERE conname = 'ck_acr_cf_structure_supersession_member_vocabulary'
+		   AND conrelid = 'acr.context_fabric_structure_supersession_claims'::regclass`,
 	).Scan(&constraintDef)
-	require.NoError(t, err, "ck_acr_cf_structure_supersession_member_vocabulary must exist after migrations apply")
+	require.NoError(t, err, "ck_acr_cf_structure_supersession_member_vocabulary must exist on acr.context_fabric_structure_supersession_claims after migrations apply")
 
-	matches := memberVocabularyPattern.FindAllStringSubmatch(constraintDef, -1)
-	require.NotEmpty(t, matches, "could not parse any member literals out of constraint definition: %s", constraintDef)
-	dbVocabulary := make(map[string]struct{}, len(matches))
-	for _, match := range matches {
-		dbVocabulary[match[1]] = struct{}{}
+	vocabulary := contractsv1.ContextFabricStructureNeedKindVocabulary()
+	quoted := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		quoted = append(quoted, fmt.Sprintf("'%s'::text", kind))
 	}
-
-	codeVocabulary := make(map[string]struct{})
-	for _, kind := range contractsv1.ContextFabricStructureNeedKindVocabulary() {
-		codeVocabulary[string(kind)] = struct{}{}
-	}
-
-	for member := range codeVocabulary {
-		_, ok := dbVocabulary[member]
-		require.True(t, ok, "contractsv1.ContextFabricStructureNeedKind %q is not allowed by ck_acr_cf_structure_supersession_member_vocabulary -- a migration must widen it", member)
-	}
-	for member := range dbVocabulary {
-		_, ok := codeVocabulary[member]
-		require.True(t, ok, "ck_acr_cf_structure_supersession_member_vocabulary allows %q, which is not a contractsv1.ContextFabricStructureNeedKind -- the CHECK now allows more than the Go enum does", member)
-	}
+	expectedDef := fmt.Sprintf("CHECK ((member = ANY (ARRAY[%s])))", strings.Join(quoted, ", "))
+	require.Equal(t, expectedDef, constraintDef,
+		"ck_acr_cf_structure_supersession_member_vocabulary must allow EXACTLY contractsv1.ContextFabricStructureNeedKindVocabulary(), in its declared order -- no fewer, no more, no other predicate shape")
 }
 
 // TestMigration0025_BackfillsClaimsForPreMigrationConfirmedStructure is

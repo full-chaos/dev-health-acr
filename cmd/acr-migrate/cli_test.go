@@ -103,12 +103,14 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// CHAOS-4013 (RFC 8693 workload token exchange: acr.workload_bindings
 	// + client_credentials.workload_binding_id) added 0030, CHAOS-4085
 	// (commit_gate_version reuse-key dimension) added 0031, and CHAOS-4305
-	// (projection checkpoint rows_applied column) added 0032, so the
-	// embedded set is now 32 files. A future migration must bump this
-	// literal too -- see expectedMigrationVersions in migrations/postgres/
+	// (projection checkpoint rows_applied column) added 0032, and
+	// CHAOS-4333 (widen ck_acr_cf_structure_supersession_member_vocabulary
+	// for subject_candidate) added 0033, so the embedded set is now 33
+	// files. A future migration must bump this literal too -- see
+	// expectedMigrationVersions in migrations/postgres/
 	// runner_integration_test.go for the same convention, held in one
 	// place there.
-	require.Equal(t, "applied 32 migrations\n", first.String())
+	require.Equal(t, "applied 33 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }
