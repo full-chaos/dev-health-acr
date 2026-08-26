@@ -285,7 +285,17 @@ import (
 // receipt beside the member receipt, so turn-2 aggregates are not
 // engine-only comparable to v27; offer_miss_count stays engine-only. See
 // the producer's own ReportSchemaVersion doc comment.
-const expectedSchemaVersion = "29"
+//
+// "30" (CHAOS-4307): purely additive -- ConfirmedKindVectorCensus* is new
+// (six fields: one map, five scalar sums); no existing key's meaning,
+// presence, or JSON name changes. mergeReports gained the matching sums in
+// the same change.
+//
+// KEEP IN SYNC WITH internal/runtime/hosted/chaos3742_two_turn_confirmation_test.go's
+// reportSchemaVersion -- see that constant's own doc comment for why no
+// test can assert cross-package agreement between the two literals
+// directly (a pre-existing limitation of every prior bump, not new here).
+const expectedSchemaVersion = "30"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -685,6 +695,20 @@ type twoTurnReport struct {
 	// per-shard aggregate" discipline -- see mergeReports.
 	Timings       []twoTurnCaseTiming       `json:"timings,omitempty"`
 	TimingSummary []twoTurnArmTimingSummary `json:"timing_summary,omitempty"`
+	// ConfirmedKindVectorCensus* (CHAOS-4307, schema v30) mirror
+	// twoTurnReport's identically-named fields byte-for-byte (JSON tags
+	// included) -- see the producer's own doc comments (chaos3742_two_turn_confirmation_test.go)
+	// for what each field means and why the empty-state
+	// confirmed_kind_scope event is deliberately never tallied.
+	// StateCount sums per key like MutationProbesTripped/MutationProbesRun
+	// above; the five scalar sums sum like every other Count field in this
+	// struct -- see mergeReports.
+	ConfirmedKindVectorCensusStateCount            map[string]int `json:"confirmed_kind_vector_census_state_count,omitempty"`
+	ConfirmedKindVectorCensusPopulationSum         int64          `json:"confirmed_kind_vector_census_population_sum,omitempty"`
+	ConfirmedKindVectorCensusComparisonSum         int64          `json:"confirmed_kind_vector_census_comparison_sum,omitempty"`
+	ConfirmedKindVectorCensusQueryCountSum         int            `json:"confirmed_kind_vector_census_query_count_sum,omitempty"`
+	ConfirmedKindVectorCensusRivalCountAboveTauSum int64          `json:"confirmed_kind_vector_census_rival_count_above_tau_sum,omitempty"`
+	ConfirmedKindVectorCensusDurationMSSum         int64          `json:"confirmed_kind_vector_census_duration_ms_sum,omitempty"`
 }
 
 func main() {
@@ -936,16 +960,17 @@ func validateResultUniqueness(shards []twoTurnReport, paths []string) error {
 func mergeReports(shards []twoTurnReport) twoTurnReport {
 	first := shards[0]
 	merged := twoTurnReport{
-		ReportSchemaVersion:         first.ReportSchemaVersion,
-		Provenance:                  first.Provenance,
-		BaseSHA:                     first.BaseSHA,
-		OracleAnnexPath:             first.OracleAnnexPath,
-		OracleAnnexCorpusSHA:        first.OracleAnnexCorpusSHA,
-		OracleAnnexSignedOff:        first.OracleAnnexSignedOff,
-		OfferMissCount:              map[string]int{},
-		ConfirmedWrongRedeemedCount: map[string]int{},
-		MutationProbesTripped:       map[string]int{},
-		MutationProbesRun:           map[string]int{},
+		ReportSchemaVersion:                 first.ReportSchemaVersion,
+		Provenance:                          first.Provenance,
+		BaseSHA:                             first.BaseSHA,
+		OracleAnnexPath:                     first.OracleAnnexPath,
+		OracleAnnexCorpusSHA:                first.OracleAnnexCorpusSHA,
+		OracleAnnexSignedOff:                first.OracleAnnexSignedOff,
+		OfferMissCount:                      map[string]int{},
+		ConfirmedWrongRedeemedCount:         map[string]int{},
+		MutationProbesTripped:               map[string]int{},
+		MutationProbesRun:                   map[string]int{},
+		ConfirmedKindVectorCensusStateCount: map[string]int{},
 	}
 	// The merged artifact represents the UNION of every shard, not any one
 	// shard -- never mistakable for a single shard's own report.
@@ -988,6 +1013,16 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.ControlsWitnessed += s.ControlsWitnessed
 		merged.ControlsWitnessedNoMatchCensusBacked += s.ControlsWitnessedNoMatchCensusBacked
 		merged.MutationProbeEligibleCount += s.MutationProbeEligibleCount
+		// ConfirmedKindVectorCensus* (CHAOS-4307): plain sums, same
+		// discipline as every other Count field in this loop -- see the
+		// producer's own doc comment for why these are unconditional on
+		// state (population/comparison/query/rival/duration cost this run
+		// actually spent, regardless of which state it landed in).
+		merged.ConfirmedKindVectorCensusPopulationSum += s.ConfirmedKindVectorCensusPopulationSum
+		merged.ConfirmedKindVectorCensusComparisonSum += s.ConfirmedKindVectorCensusComparisonSum
+		merged.ConfirmedKindVectorCensusQueryCountSum += s.ConfirmedKindVectorCensusQueryCountSum
+		merged.ConfirmedKindVectorCensusRivalCountAboveTauSum += s.ConfirmedKindVectorCensusRivalCountAboveTauSum
+		merged.ConfirmedKindVectorCensusDurationMSSum += s.ConfirmedKindVectorCensusDurationMSSum
 
 		for k, v := range s.OfferMissCount {
 			merged.OfferMissCount[k] += v
@@ -1000,6 +1035,9 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		}
 		for k, v := range s.MutationProbesRun {
 			merged.MutationProbesRun[k] += v
+		}
+		for k, v := range s.ConfirmedKindVectorCensusStateCount {
+			merged.ConfirmedKindVectorCensusStateCount[k] += v
 		}
 		for _, m := range s.ApplicableMembers {
 			applicableSeen[m] = true

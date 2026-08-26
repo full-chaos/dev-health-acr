@@ -132,6 +132,75 @@ func TestMergeReportsSumsPairRetriedCountAcrossShards(t *testing.T) {
 	}
 }
 
+// TestMergeReportsSumsConfirmedKindVectorCensusAcrossShards (CHAOS-4307,
+// schema v30) is PairRetriedCount's own twin for the new census rollup:
+// direct mergeReports call, pins the map-sum (StateCount, same discipline as
+// MutationProbesRun/MutationProbesTripped) AND the five scalar `+=` sums
+// together, since all six fields are folded from the SAME event stream and a
+// mirror drift on any one of them would silently understate the run's own
+// cost/closure numbers.
+func TestMergeReportsSumsConfirmedKindVectorCensusAcrossShards(t *testing.T) {
+	shard0 := shardReport(0, 2, nil)
+	shard0.ConfirmedKindVectorCensusStateCount = map[string]int{"complete": 1, "over_budget": 1}
+	shard0.ConfirmedKindVectorCensusPopulationSum = 20
+	shard0.ConfirmedKindVectorCensusComparisonSum = 44
+	shard0.ConfirmedKindVectorCensusQueryCountSum = 2
+	shard0.ConfirmedKindVectorCensusRivalCountAboveTauSum = 5
+	shard0.ConfirmedKindVectorCensusDurationMSSum = 100
+
+	shard1 := shardReport(1, 2, nil)
+	shard1.ConfirmedKindVectorCensusStateCount = map[string]int{"complete": 2, "failed": 1}
+	shard1.ConfirmedKindVectorCensusPopulationSum = 8
+	shard1.ConfirmedKindVectorCensusComparisonSum = 33
+	shard1.ConfirmedKindVectorCensusQueryCountSum = 3
+	shard1.ConfirmedKindVectorCensusRivalCountAboveTauSum = 2
+	shard1.ConfirmedKindVectorCensusDurationMSSum = 250
+
+	merged := mergeReports([]twoTurnReport{shard0, shard1})
+
+	wantStates := map[string]int{"complete": 3, "over_budget": 1, "failed": 1}
+	if !reflect.DeepEqual(merged.ConfirmedKindVectorCensusStateCount, wantStates) {
+		t.Errorf("merged.ConfirmedKindVectorCensusStateCount = %+v, want %+v", merged.ConfirmedKindVectorCensusStateCount, wantStates)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusPopulationSum, int64(28); got != want {
+		t.Errorf("merged.ConfirmedKindVectorCensusPopulationSum = %d, want %d (20+8)", got, want)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusComparisonSum, int64(77); got != want {
+		t.Errorf("merged.ConfirmedKindVectorCensusComparisonSum = %d, want %d (44+33)", got, want)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusQueryCountSum, 5; got != want {
+		t.Errorf("merged.ConfirmedKindVectorCensusQueryCountSum = %d, want %d (2+3)", got, want)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusRivalCountAboveTauSum, int64(7); got != want {
+		t.Errorf("merged.ConfirmedKindVectorCensusRivalCountAboveTauSum = %d, want %d (5+2)", got, want)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusDurationMSSum, int64(350); got != want {
+		t.Errorf("merged.ConfirmedKindVectorCensusDurationMSSum = %d, want %d (100+250)", got, want)
+	}
+}
+
+// TestMergeReportsConfirmedKindVectorCensusDefaultsToEmptyNotNil pins that a
+// run with zero folded census events (StateCount nil on every shard, same
+// zero value the field's own omitempty tag produces on an unmarshaled
+// artifact that never carried the key) still merges to a non-nil, empty map
+// -- the SAME "always addressable, never nil" convention OfferMissCount and
+// every other summed map field on this struct already gets from mergeReports'
+// own struct-literal initialization, so a caller can safely index it without
+// a nil-map guard regardless of whether any shard ever populated it.
+func TestMergeReportsConfirmedKindVectorCensusDefaultsToEmptyNotNil(t *testing.T) {
+	shard0 := shardReport(0, 2, nil)
+	shard1 := shardReport(1, 2, nil)
+
+	merged := mergeReports([]twoTurnReport{shard0, shard1})
+
+	if merged.ConfirmedKindVectorCensusStateCount == nil {
+		t.Error("merged.ConfirmedKindVectorCensusStateCount = nil, want a non-nil empty map")
+	}
+	if len(merged.ConfirmedKindVectorCensusStateCount) != 0 {
+		t.Errorf("merged.ConfirmedKindVectorCensusStateCount = %+v, want empty", merged.ConfirmedKindVectorCensusStateCount)
+	}
+}
+
 // TestMutationProbeCoverage (CHAOS-4165) pins mutationProbeCoverage's own
 // three behaviors: the floor caps required_min at mutationProbeCoverageFloor
 // when eligible exceeds it; a small eligible population caps required_min at
@@ -239,6 +308,26 @@ func TestRunEndToEndMergesValidShards(t *testing.T) {
 			{Arm: "turn1", WallDurationMS: 300, ResponderCallCount: 1, ResponderCallTotalMS: 250, ResponderCallMaxMS: 250},
 		}},
 	})
+	// CHAOS-4307 (codex R1, Medium, confirmed): TestMergeReportsSumsConfirmedKindVectorCensusAcrossShards
+	// above only proves mergeReports' own in-memory arithmetic -- it never
+	// proves these fields survive the real json.Marshal-to-disk,
+	// json.Unmarshal-from-disk round trip this tool's actual entrypoint
+	// performs. A mirror tag/name drift (the exact class of bug this whole
+	// end-to-end test exists to catch, per this test's own top-of-function
+	// comment) would silently drop an `omitempty` field on decode without
+	// tripping the schema-version gate or any purely-in-memory test.
+	shard0.ConfirmedKindVectorCensusStateCount = map[string]int{"complete": 1}
+	shard0.ConfirmedKindVectorCensusPopulationSum = 20
+	shard0.ConfirmedKindVectorCensusComparisonSum = 44
+	shard0.ConfirmedKindVectorCensusQueryCountSum = 2
+	shard0.ConfirmedKindVectorCensusRivalCountAboveTauSum = 5
+	shard0.ConfirmedKindVectorCensusDurationMSSum = 100
+	shard1.ConfirmedKindVectorCensusStateCount = map[string]int{"complete": 1, "over_budget": 1}
+	shard1.ConfirmedKindVectorCensusPopulationSum = 8
+	shard1.ConfirmedKindVectorCensusComparisonSum = 33
+	shard1.ConfirmedKindVectorCensusQueryCountSum = 3
+	shard1.ConfirmedKindVectorCensusRivalCountAboveTauSum = 2
+	shard1.ConfirmedKindVectorCensusDurationMSSum = 250
 
 	var shardPaths []string
 	for i, shard := range []twoTurnReport{shard0, shard1} {
@@ -319,6 +408,29 @@ func TestRunEndToEndMergesValidShards(t *testing.T) {
 		if !reflect.DeepEqual(res.HintedCommittedSubjects, wantHinted) {
 			t.Errorf("case %d: HintedCommittedSubjects = %+v, want %+v", res.Index, res.HintedCommittedSubjects, wantHinted)
 		}
+	}
+
+	// CHAOS-4307: the real on-disk round trip of the new census rollup --
+	// see this fixture's own comment above for why the purely in-memory
+	// mergeReports test cannot catch a JSON tag/name drift on its own.
+	wantStates := map[string]int{"complete": 2, "over_budget": 1}
+	if !reflect.DeepEqual(merged.ConfirmedKindVectorCensusStateCount, wantStates) {
+		t.Errorf("merged (on-disk) ConfirmedKindVectorCensusStateCount = %+v, want %+v", merged.ConfirmedKindVectorCensusStateCount, wantStates)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusPopulationSum, int64(28); got != want {
+		t.Errorf("merged (on-disk) ConfirmedKindVectorCensusPopulationSum = %d, want %d", got, want)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusComparisonSum, int64(77); got != want {
+		t.Errorf("merged (on-disk) ConfirmedKindVectorCensusComparisonSum = %d, want %d", got, want)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusQueryCountSum, 5; got != want {
+		t.Errorf("merged (on-disk) ConfirmedKindVectorCensusQueryCountSum = %d, want %d", got, want)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusRivalCountAboveTauSum, int64(7); got != want {
+		t.Errorf("merged (on-disk) ConfirmedKindVectorCensusRivalCountAboveTauSum = %d, want %d", got, want)
+	}
+	if got, want := merged.ConfirmedKindVectorCensusDurationMSSum, int64(350); got != want {
+		t.Errorf("merged (on-disk) ConfirmedKindVectorCensusDurationMSSum = %d, want %d", got, want)
 	}
 }
 
@@ -607,6 +719,73 @@ func TestTwoTurnCaseResultDecodesProducerShapedSynthesisStatusOverrideFields(t *
 	for _, key := range []string{`"synthesis_status_override_from":`, `"synthesis_status_override_to":`, `"synthesis_status_override_reason":`} {
 		if strings.Contains(string(zeroRaw), key) {
 			t.Errorf("zero-value twoTurnCaseResult JSON = %s, want it to omit %s (omitempty)", zeroRaw, key)
+		}
+	}
+}
+
+// TestTwoTurnReportDecodesProducerShapedConfirmedKindVectorCensusFields
+// (CHAOS-4307, codex round 2, Medium, confirmed) is
+// TestTwoTurnCaseResultDecodesProducerShapedShadowFields's own report-level
+// twin: TestRunEndToEndMergesValidShards' round trip marshals and unmarshals
+// this SAME mirror twoTurnReport type on both ends, which proves internal
+// self-consistency but can never catch a json tag on this struct that
+// disagrees with what the PRODUCER (a completely separate type in
+// internal/runtime/hosted, which cannot be imported here) actually emits --
+// a hand-written JSON literal using the exact key strings the producer's own
+// doc comments specify is the only thing that can.
+func TestTwoTurnReportDecodesProducerShapedConfirmedKindVectorCensusFields(t *testing.T) {
+	const producerJSON = `{
+		"report_schema_version": "30",
+		"confirmed_kind_vector_census_state_count": {"complete": 2, "over_budget": 1},
+		"confirmed_kind_vector_census_population_sum": 28,
+		"confirmed_kind_vector_census_comparison_sum": 77,
+		"confirmed_kind_vector_census_query_count_sum": 5,
+		"confirmed_kind_vector_census_rival_count_above_tau_sum": 7,
+		"confirmed_kind_vector_census_duration_ms_sum": 350
+	}`
+	var got twoTurnReport
+	if err := json.Unmarshal([]byte(producerJSON), &got); err != nil {
+		t.Fatalf("unmarshal producer-shaped JSON: %v", err)
+	}
+	wantStates := map[string]int{"complete": 2, "over_budget": 1}
+	if !reflect.DeepEqual(got.ConfirmedKindVectorCensusStateCount, wantStates) {
+		t.Errorf("ConfirmedKindVectorCensusStateCount = %+v, want %+v -- a json tag mismatch would silently leave this nil", got.ConfirmedKindVectorCensusStateCount, wantStates)
+	}
+	for name, pair := range map[string][2]int64{
+		"confirmed_kind_vector_census_population_sum":            {got.ConfirmedKindVectorCensusPopulationSum, 28},
+		"confirmed_kind_vector_census_comparison_sum":            {got.ConfirmedKindVectorCensusComparisonSum, 77},
+		"confirmed_kind_vector_census_rival_count_above_tau_sum": {got.ConfirmedKindVectorCensusRivalCountAboveTauSum, 7},
+		"confirmed_kind_vector_census_duration_ms_sum":           {got.ConfirmedKindVectorCensusDurationMSSum, 350},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("%s = %d, want %d -- a json tag mismatch would silently zero this", name, pair[0], pair[1])
+		}
+	}
+	if got.ConfirmedKindVectorCensusQueryCountSum != 5 {
+		t.Errorf("confirmed_kind_vector_census_query_count_sum = %d, want 5 -- a json tag mismatch would silently zero this", got.ConfirmedKindVectorCensusQueryCountSum)
+	}
+
+	// All six fields carry omitempty (a run that never folded a single
+	// confirmed_kind_scope event with a populated census must not clutter
+	// every ordinary merged artifact) -- a zero-value report must omit
+	// every one of these keys.
+	zeroRaw, err := json.Marshal(twoTurnReport{
+		OfferMissCount: map[string]int{}, ConfirmedWrongRedeemedCount: map[string]int{},
+		MutationProbesTripped: map[string]int{}, MutationProbesRun: map[string]int{},
+	})
+	if err != nil {
+		t.Fatalf("marshal zero-value report: %v", err)
+	}
+	for _, key := range []string{
+		`"confirmed_kind_vector_census_state_count"`,
+		`"confirmed_kind_vector_census_population_sum"`,
+		`"confirmed_kind_vector_census_comparison_sum"`,
+		`"confirmed_kind_vector_census_query_count_sum"`,
+		`"confirmed_kind_vector_census_rival_count_above_tau_sum"`,
+		`"confirmed_kind_vector_census_duration_ms_sum"`,
+	} {
+		if strings.Contains(string(zeroRaw), key) {
+			t.Errorf("zero-value twoTurnReport JSON = %s, want it to omit %s (omitempty)", zeroRaw, key)
 		}
 	}
 }
