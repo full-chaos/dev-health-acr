@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -279,9 +280,10 @@ func TestAccessLogDoesNotClaimSuccessWhenTheResponseWriteFails(t *testing.T) {
 	buffer := &bytes.Buffer{}
 	app := testApp(t)
 	app.logger = testLogger(buffer)
+	rawErrorText := "write tcp 10.0.0.1:8080->10.0.0.2:54321: use of closed network connection"
 	broken := &brokenResponseWriter{
 		ResponseWriter: httptest.NewRecorder(),
-		err:            errors.New("write tcp: use of closed network connection"),
+		err:            errors.New(rawErrorText),
 	}
 
 	app.Handler().ServeHTTP(broken, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -290,8 +292,15 @@ func TestAccessLogDoesNotClaimSuccessWhenTheResponseWriteFails(t *testing.T) {
 	if entry["level"] != "WARN" {
 		t.Fatalf("level = %v, want WARN when the response write failed", entry["level"])
 	}
-	if _, ok := entry["write_error"]; !ok {
-		t.Fatalf("expected a write_error field on a failed write, got: %#v", entry)
+	// A classified bucket, never the raw error text (codex review,
+	// CHAOS-4330: this repo's own observability rule forbids raw error
+	// text as a log attribute -- it can carry a remote address, as the
+	// fixture error above deliberately does, to prove this).
+	if entry["write_error"] != "write_failed" {
+		t.Fatalf("write_error = %v, want the classified bucket \"write_failed\"", entry["write_error"])
+	}
+	if strings.Contains(fmt.Sprint(entry), "10.0.0.1") {
+		t.Fatalf("log entry leaked raw write error text: %#v", entry)
 	}
 	// status still reports what the handler decided (200) -- this test does
 	// not want that changed, only that "request completed" at INFO with no

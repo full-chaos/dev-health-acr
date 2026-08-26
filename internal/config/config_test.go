@@ -2,8 +2,10 @@ package config
 
 import (
 	"log/slog"
+	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mapLookup(values map[string]string) lookupEnv {
@@ -328,5 +330,24 @@ func TestLoad_acceptsWriteTimeoutExactlyAtTheMinimumHeadroom(t *testing.T) {
 	}))
 	if err != nil {
 		t.Fatalf("load() error = %v, want no error at exactly the minimum headroom", err)
+	}
+}
+
+// CHAOS-4330 (codex review): the headroom check must not use plain
+// addition (RequestTimeout + minWriteTimeoutHeadroom) -- time.Duration is
+// signed int64 nanoseconds, and adding two independently-valid-but-large
+// values near the type's own maximum could overflow and wrap negative,
+// making an absurdly incoherent pair pass the check it exists to fail.
+// ACR_REQUEST_TIMEOUT at time.Duration's own maximum, paired with a
+// 1-second ACR_WRITE_TIMEOUT (about as incoherent as this pair can be),
+// must still be REJECTED, not silently waved through by an overflow.
+func TestLoad_rejectsIncoherentPairEvenAtDurationsMaximum(t *testing.T) {
+	huge := time.Duration(math.MaxInt64).String()
+	_, err := load(mapLookup(map[string]string{
+		"ACR_REQUEST_TIMEOUT": huge,
+		"ACR_WRITE_TIMEOUT":   "1s",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "ACR_WRITE_TIMEOUT") {
+		t.Fatalf("load() error = %v, want an ACR_WRITE_TIMEOUT/ACR_REQUEST_TIMEOUT coherence error even at the maximum representable ACR_REQUEST_TIMEOUT (not silently accepted via integer overflow)", err)
 	}
 }

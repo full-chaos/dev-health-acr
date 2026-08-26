@@ -309,7 +309,17 @@ func (c Config) Validate() error {
 	// the handler (which measures its own processing, not the wire) still
 	// logs a successful "request completed ... status 200". Fail closed at
 	// startup rather than let that pair reach production silently.
-	if c.WriteTimeout < c.RequestTimeout+minWriteTimeoutHeadroom {
+	//
+	// Computed as a subtraction, not `c.RequestTimeout + minWriteTimeoutHeadroom
+	// > c.WriteTimeout` (codex review, CHAOS-4330): both operands are
+	// time.Duration (int64 nanoseconds) and are only bounds-checked above for
+	// being positive, not for an upper limit, so adding two independently
+	// large-but-valid values could overflow and wrap negative, silently
+	// accepting a pair this check exists to reject. Subtracting two positive
+	// durations can itself only ever shrink the magnitude, never wrap --
+	// unlike the addition it replaces, this cannot overflow for any two
+	// valid (positive, non-overflowing on their own) time.Duration inputs.
+	if c.WriteTimeout-c.RequestTimeout < minWriteTimeoutHeadroom {
 		return fmt.Errorf(
 			"ACR_WRITE_TIMEOUT (%s) must be at least %s more than ACR_REQUEST_TIMEOUT (%s), or a real investigation using its full request budget can have its response write cut off mid-handler",
 			c.WriteTimeout, minWriteTimeoutHeadroom, c.RequestTimeout,

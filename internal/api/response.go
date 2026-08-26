@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -22,6 +24,21 @@ type statusWriter struct {
 	// writer's own state, to one that actually completed. accessLogMiddleware
 	// reads this to keep "request completed" from claiming success the
 	// client never received.
+	//
+	// KNOWN RESIDUAL GAP (codex review, CHAOS-4330): this only captures an
+	// error the HANDLER's own Write call observed. Go's net/http server
+	// wraps the connection in a buffered writer; a response small enough to
+	// stay inside that buffer returns nil from every Write the handler
+	// makes and is only actually flushed to the wire AFTER the handler
+	// (and this middleware) has already returned, at which point a flush
+	// failure is invisible to application code entirely -- the standard
+	// library gives no hook to observe it. This does not weaken the fix
+	// for what CHAOS-4330 actually reported: a real, several-KB investigation
+	// response is large enough that its Write calls DO cross the buffer
+	// boundary and DO surface a mid-write failure through this exact path
+	// (confirmed empirically in the original incident). Closing the small-
+	// response case fully would mean wrapping the raw net.Conn/Listener,
+	// a much larger change than this ticket's own scope.
 	writeErr error
 }
 
@@ -37,6 +54,24 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 		w.writeErr = err
 	}
 	return n, err
+}
+
+// classifyWriteError (CHAOS-4330) reduces a failed Write's error to a
+// closed, low-cardinality bucket for logging -- never the raw error text.
+// This repo's own observability rule (docs/observability.md: "Never add
+// ... error text ... as an attribute or metric label") applies here just
+// as much as it does to the observability snapshot path: a *net.OpError
+// from a failed Write can carry a remote address or other transport
+// incidental, not something to standing-log for every dropped connection.
+func classifyWriteError(err error) string {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return "client_disconnected"
+	}
+	return "write_failed"
 }
 
 func (w *statusWriter) SetDenialCode(code string) { w.denialCode = code }

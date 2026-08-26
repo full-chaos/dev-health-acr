@@ -203,7 +203,13 @@ func (a *App) accessLogMiddleware(next http.Handler) http.Handler {
 		level := slog.LevelInfo
 		if wrapped.writeErr != nil {
 			level = slog.LevelWarn
-			fields = append(fields, "write_error", wrapped.writeErr.Error())
+			// classifyWriteError, never wrapped.writeErr.Error() itself
+			// (codex review, CHAOS-4330): this repo's own observability
+			// rule (docs/observability.md) forbids raw error text as a
+			// log/metric attribute -- a *net.OpError from a failed Write
+			// can carry the remote address or other incidental transport
+			// detail, the same class of leak that rule exists to prevent.
+			fields = append(fields, "write_error", classifyWriteError(wrapped.writeErr))
 		}
 		a.logger.Log(r.Context(), level, "request completed", fields...)
 		a.observability.ObserveRequest(r.Context(), requestObservation(requestOperation(r), wrapped.status, denialForError(wrapped.denialCode), a.now().Sub(started), wrapped.writeErr != nil))
