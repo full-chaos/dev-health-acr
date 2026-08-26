@@ -70,7 +70,11 @@ check() {
 # read -r -a arr <<<"$codes"` inside the written script was itself a small
 # here-string a future run of the generated fake psql could deadlock on.
 # Split via plain IFS word-splitting instead (save/restore explicitly, the
-# same idiom common.sh's own CHAOS-4155 fix uses).
+# same idiom common.sh's own CHAOS-4155 fix uses). noglob is also
+# save/restored around the split (codex R1, real P2): unlike `read -r -a`,
+# an unquoted `arr=($codes)` pathname-expands a glob metacharacter in
+# $codes, which `read` never did -- without `set -f` this generated
+# script would silently behave differently from the original on such input.
 fake_psql() {
   mkdir -p "$tmp/bin"
   local codes="$1"
@@ -80,7 +84,9 @@ fake_psql() {
     printf '%s\n' "codes=\"$codes\""
     printf '%s\n' 'old_ifs=$IFS'
     printf '%s\n' "IFS=','"
+    printf '%s\n' 'set -f'
     printf '%s\n' 'arr=($codes)'
+    printf '%s\n' 'set +f'
     printf '%s\n' 'IFS=$old_ifs'
     printf '%s\n' "n=\$(( \$(grep -c '' \"$tmp/calls.log\" 2>/dev/null || echo 1) ))"
     printf '%s\n' 'idx=$(( n - 1 ))'
