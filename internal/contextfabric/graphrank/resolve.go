@@ -1104,6 +1104,21 @@ type ResolutionTraceEvent struct {
 	// to an attestation.
 	ShadowHandleInsensitivityEvaluated bool
 	ShadowHandleInsensitivityOutcome   string
+	// ShadowCallerHintShortCircuit (evidence_round AND evidence_probe
+	// stages, CHAOS-4300, 2026-08-26) is true when this event came from the
+	// resolveSubjects caller-hint short circuit's own observability-only
+	// shadow-round call rather than the ordinary stalled-resolution call
+	// site -- false (the zero value) for every event emitted before this
+	// ticket. A commit reached through this short circuit is ALREADY FINAL
+	// by the time this event fires (CommitBasisCallerCanonicalID/
+	// CommitBasisStatistical, recorded on the sibling "decision" stage event
+	// with CommitGate==CommitGateCallerHintShortCircuit) -- this field lets
+	// a reader separate that population from the stalled-resolution
+	// population without correlating against that separate decision event,
+	// which is exactly what the ticket's own measurement pair ("how often
+	// caller-sourced commits actually land here vs the census-bearing
+	// path") needs to count directly.
+	ShadowCallerHintShortCircuit bool
 	// CensusKind/CensusComplete/CensusCount/CensusReadAtUnix/CensusProtocol/
 	// CensusClosureMismatch/CensusStatementCount/CensusRowsRead/
 	// CensusHandleApplied/CensusAnchorApplied (evidence_probe stage ONLY,
@@ -1504,6 +1519,57 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					OfferedUnderWindowGate: offersOnly,
 				})
 			}
+		}
+		// CHAOS-4300: this short circuit's own commit is already final
+		// (FinalizeExactResolutionWithBasis/commitBases.ResetTo above) --
+		// runShadowEvidenceRoundForResolution is called exactly once
+		// elsewhere in this file, strictly DOWNSTREAM of this return, so a
+		// commit made through this short circuit structurally never reached
+		// it before this ticket: CHAOS-3896 Slice C's live evidence-census
+		// consumption and CHAOS-4081's ConfirmedHandle probe were both
+		// unreachable for it, regardless of the caller-hint's own shape (the
+		// ticket's own framing -- an observability gap, never a wrong
+		// basis). This call closes that gap, OBSERVATION ONLY:
+		//   1. offersOnly: mirrors the stalled-resolution call site's own
+		//      `!offersOnly` guard below -- the offers-only pass discards
+		//      this call's resolution unconditionally
+		//      (chaos4234_offers_only.go), so running the round for a
+		//      resolution nobody keeps would be pure waste.
+		//   2. deps.CensusFunc == nil: the same zero-cost-when-unconfigured
+		//      convention every other CensusFunc-gated mechanism in this
+		//      file already follows.
+		//   3. The returned attestation is discarded here -- never merged
+		//      into exactResolution, never reordering
+		//      exactResolution.Candidates (no SurvivorsFirstOrder call),
+		//      never reaching mergeCensusAttestedSatisfier (that call exists
+		//      exactly once, at the stalled-resolution call site below, and
+		//      stays there). RunShadowEvidenceRound
+		//      (chaos3899_evidence_round.go) traces the evidence_round/
+		//      evidence_probe events itself as a side effect of computing
+		//      it -- that trace emission is this call's entire purpose, and
+		//      it is what makes CHAOS-3896/CHAOS-4081 OBSERVABLE for this
+		//      path without letting either widen what this short circuit
+		//      already decided.
+		//
+		// Cost/deadline: reuses runShadowEvidenceRoundForResolution's own
+		// evidenceRoundDeadline context + panic recovery unchanged -- no new
+		// budget. RunShadowEvidenceRound's own early-return structure means
+		// a caller hint with neither a confirmed anchor receipt nor a
+		// confirmed/text-bound handle costs nothing beyond the call itself
+		// (ReasonNoDiscriminators, zero CensusFunc invocations) -- the same
+		// "no discriminators, no read" shape the stalled-resolution path
+		// already has. aliasClaimantsByTerm/aliasIdentityComplete are
+		// honestly empty/false here: no AliasLookup has run yet at this
+		// point in resolveSubjects (it happens later, in the hybrid-search
+		// path this short circuit never reaches) -- ConfirmedAnchor/
+		// ConfirmedHandle (this path's own real discriminator sources) are
+		// independent of AliasLookup entirely, so this costs the round
+		// nothing it actually needs. unscopedVisibility is computed via the
+		// SAME unscopedVisibilityFor the main resolution below uses, so it
+		// can never drift from what authorization actually enforces.
+		if !offersOnly && deps.CensusFunc != nil {
+			runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, exactResolution, nil, false,
+				unscopedVisibilityFor(principal, request), deps, confirmedKind, confirmedAnchor, true)
 		}
 		return exactResolution, contextfabric.StructureOfferMaterial{}, nil
 	}
@@ -1960,10 +2026,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// that against a SPECIFIC owner, so nodes under a DIFFERENT owner are
 	// still hidden, and the oracle hazard still applies; only the GLOBAL
 	// "*" is unconditional.
-	unscopedVisibility := scopesUnrestricted(principal.RepositoryScopes) &&
-		len(request.RequestedScope.RepositorySlugs) == 0 &&
-		len(request.RequestedScope.ProjectIDs) == 0 &&
-		len(request.RequestedScope.TeamIDs) == 0
+	//
+	// CHAOS-4300: extracted into unscopedVisibilityFor so the caller-hint
+	// short circuit above (which needs the identical value for its own
+	// observability-only shadow round) computes it via the SAME function
+	// rather than a second, driftable copy of this formula.
+	unscopedVisibility := unscopedVisibilityFor(principal, request)
 	// CHAOS-3857: deps.CommitGatePolicy's zero value means "not
 	// overridden" (see ResolveDeps' own doc comment on the field) -- fall
 	// back to the calibrated production thresholds explicitly here,
@@ -2267,7 +2335,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// -- the brief's own cost note ("per stalled resolution... committed
 	// resolutions pay nothing").
 	if !offersOnly && deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
-		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind, confirmedAnchor)
+		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
+		// call site, not the caller-hint short circuit's own new call above.
+		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind, confirmedAnchor, false)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
 		// named exactly one satisfier (attestedSatisfier), prove that
@@ -2718,13 +2788,28 @@ const evidenceRoundDeadline = 3 * time.Second
 // (possibly current) context skip D7's historical-axis-skip refusal and
 // run a current-state census against a historical question, silently on
 // the wrong axis.
-func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (attestation Attestation) {
+// callerHintShortCircuit (CHAOS-4300) is true ONLY for the caller-hint short
+// circuit's own observability-only call (resolveSubjects, above the main
+// resolution) and false for every pre-existing call site -- byte-identical
+// ShadowEvidenceRoundInput.CallerHintShortCircuit for every caller before
+// this ticket. See that field's own doc comment (chaos3899_evidence_round.go)
+// for what it tags and why.
+func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, resolution contextfabric.SubjectResolution, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, unscopedVisibility bool, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, callerHintShortCircuit bool) (attestation Attestation) {
 	defer func() {
 		if r := recover(); r != nil {
 			if deps.ResolutionTracer != nil {
 				deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 					RequestID: request.RequestID, Stage: "evidence_round",
 					ShadowOutcome: string(ShadowWouldClarify), ShadowReason: string(ReasonProbeError),
+					// CHAOS-4300 (codex R1, Medium, confirmed): this
+					// recovery path builds its own event rather than going
+					// through RunShadowEvidenceRound's emit() closure, so it
+					// must tag the SAME provenance a normal-path event would
+					// have carried -- omitting it defaulted to false
+					// (indistinguishable from the stalled-resolution path)
+					// for a panic on the caller-hint short circuit's own
+					// call.
+					ShadowCallerHintShortCircuit: callerHintShortCircuit,
 				})
 			}
 			// attestation stays its zero value -- see this function's own
@@ -2814,6 +2899,9 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 		// its other, nil-returning hint-present cases.
 		ObservedExplicitKindHint:     narrowingMode == explicitKindNarrowingNoOverlap || narrowingMode == explicitKindNarrowingSubsumed,
 		ObservedExplicitKindSubsumed: narrowingMode == explicitKindNarrowingSubsumed,
+		// CHAOS-4300: threaded straight through from this function's own
+		// parameter -- see that parameter's doc comment for who sets true.
+		CallerHintShortCircuit: callerHintShortCircuit,
 	}, deps.ResolutionTracer)
 	return attestation
 }
@@ -2839,6 +2927,21 @@ func scopesUnrestricted(scopes []string) bool {
 		return true
 	}
 	return slices.Contains(scopes, "*")
+}
+
+// unscopedVisibilityFor is the CHAOS-3829 codex r7 M1 rescue conjunct
+// (resolveSubjects' own inline call site carries the full derivation
+// rationale) extracted to a named function so every call site -- the main
+// resolution below AND the caller-hint short circuit's own CHAOS-4300
+// shadow-round observability call, which needs the identical value before
+// any search has run -- reads it off the SAME computation rather than a
+// second copy that could silently drift from what authorization actually
+// enforces.
+func unscopedVisibilityFor(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
+	return scopesUnrestricted(principal.RepositoryScopes) &&
+		len(request.RequestedScope.RepositorySlugs) == 0 &&
+		len(request.RequestedScope.ProjectIDs) == 0 &&
+		len(request.RequestedScope.TeamIDs) == 0
 }
 
 // mergeSearchResults is the ONE per-node ingestion path shared by

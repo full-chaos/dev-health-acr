@@ -283,7 +283,7 @@ func TestRunShadowEvidenceRoundForResolution_ConfirmedHandleWiring(t *testing.T)
 				return "work_items.work_item_id", true
 			},
 		}
-		att := runShadowEvidenceRoundForResolution(context.Background(), principal, request, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor)
+		att := runShadowEvidenceRoundForResolution(context.Background(), principal, request, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor, false)
 		if !att.HandleInsensitivityEvaluated || att.HandleInsensitivityOutcome != kindInsensitivityCommitSound {
 			t.Fatalf("att = %+v, want HandleInsensitivityEvaluated=true Outcome=%q", att, kindInsensitivityCommitSound)
 		}
@@ -299,7 +299,7 @@ func TestRunShadowEvidenceRoundForResolution_ConfirmedHandleWiring(t *testing.T)
 				return "", false
 			},
 		}
-		att := runShadowEvidenceRoundForResolution(context.Background(), principal, request, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor)
+		att := runShadowEvidenceRoundForResolution(context.Background(), principal, request, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor, false)
 		if att.HandleInsensitivityEvaluated {
 			t.Fatalf("att = %+v, want HandleInsensitivityEvaluated=false -- a grammar-rejected SubjectHandles entry must never reach ConfirmedHandle", att)
 		}
@@ -310,7 +310,7 @@ func TestRunShadowEvidenceRoundForResolution_ConfirmedHandleWiring(t *testing.T)
 			contextfabric.SubjectPullRequest: {Count: 1, CensusReadAt: readAt, SatisfierCanonicalID: "pull_request:acme/widgets:532"},
 		})
 		deps := ResolveDeps{CensusFunc: census.fn}
-		att := runShadowEvidenceRoundForResolution(context.Background(), principal, request, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor)
+		att := runShadowEvidenceRoundForResolution(context.Background(), principal, request, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor, false)
 		if att.HandleInsensitivityEvaluated {
 			t.Fatalf("att = %+v, want HandleInsensitivityEvaluated=false with no HandleGrammarChecker wired", att)
 		}
@@ -345,7 +345,7 @@ func TestRunShadowEvidenceRoundForResolution_ConfirmedHandleWiring(t *testing.T)
 				return "work_items.work_item_id", patternID != "bad_pattern"
 			},
 		}
-		att := runShadowEvidenceRoundForResolution(context.Background(), principal, orderedRequest, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor)
+		att := runShadowEvidenceRoundForResolution(context.Background(), principal, orderedRequest, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor, false)
 		if !att.HandleInsensitivityEvaluated {
 			t.Fatalf("att = %+v, want HandleInsensitivityEvaluated=true", att)
 		}
@@ -400,7 +400,7 @@ func TestConfirmedHandleProbePanicDoesNotWipeAttestation(t *testing.T) {
 		},
 	}
 
-	att := runShadowEvidenceRoundForResolution(context.Background(), principal, request, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor)
+	att := runShadowEvidenceRoundForResolution(context.Background(), principal, request, interpreted, resolution, nil, true, true, deps, nil, confirmedAnchor, false)
 
 	if att.Outcome != ShadowWouldCommit {
 		t.Fatalf("att.Outcome = %v, want would_commit -- a panic in the ConfirmedHandle probe must never wipe the round's own already-decided Outcome", att.Outcome)
