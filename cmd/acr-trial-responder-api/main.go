@@ -29,6 +29,11 @@
 //
 // Model: ACR_TEST_TRIAL_RESPONDER_MODEL (default "gpt-5.6-luna").
 //
+// Reasoning effort: ACR_TEST_TRIAL_RESPONDER_EFFORT (no default -- unset
+// means the request's own ReasoningEffort field is never sent, so the
+// provider's own default applies, unchanged from every run before this
+// knob existed).
+//
 // Hygiene: every request/response body carries real corpus text (system
 // prompt, user payload) -- this program NEVER writes that to stdout/
 // stderr. Per-request operational logs (status, timing, failure class,
@@ -48,6 +53,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -156,6 +162,21 @@ func main() {
 	if model == "" {
 		model = defaultModel
 	}
+	// effort (CHAOS-4313 follow-up, chris/team-lead 2026-08-26 10:36 PDT):
+	// ACR_TEST_TRIAL_RESPONDER_EFFORT passes through to the OpenAI
+	// ChatCompletionNewParams.ReasoningEffort field verbatim (see
+	// answerOne). Deliberately has NO default here, unlike model above --
+	// leaving it empty means the field is never set on the request at all
+	// (shared.ReasoningEffort's zero value, `omitzero`-tagged), so the
+	// provider's own default applies, exactly the same as every case-57 run
+	// before this knob existed. See resolveResponderEffort's own doc
+	// comment for why the value is still validated against a bounded
+	// character set despite not being restricted to a fixed enum.
+	effort, err := resolveResponderEffort(os.Getenv("ACR_TEST_TRIAL_RESPONDER_EFFORT"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acr-trial-responder-api: %v\n", err)
+		os.Exit(1)
+	}
 
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
@@ -176,16 +197,61 @@ func main() {
 	}
 	client := openai.NewClient(opts...)
 
-	r := &responder{client: client, model: model, exchangeDir: exdir, poll: poll, requestTimeout: defaultRequestTimeout, attempts: map[string]int{}, loggedStrictNormalization: map[string]bool{}}
+	r := &responder{client: client, model: model, effort: effort, exchangeDir: exdir, poll: poll, requestTimeout: defaultRequestTimeout, attempts: map[string]int{}, loggedStrictNormalization: map[string]bool{}}
 	if err := r.run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "acr-trial-responder-api: %v\n", err)
 		os.Exit(1)
 	}
 }
 
+// validResponderEffort bounds ACR_TEST_TRIAL_RESPONDER_EFFORT's character
+// set and length -- see resolveResponderEffort's own doc comment for why.
+var validResponderEffort = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+
+// resolveResponderEffort (codex xhigh review round 1, High, confirmed)
+// validates ACR_TEST_TRIAL_RESPONDER_EFFORT's raw value, trimmed. Empty
+// (unset, or whitespace-only) is always valid and returns "" -- see the
+// effort local's own doc comment in main() for why that means "never set
+// ReasoningEffort on the request" rather than an error.
+//
+// A non-empty value must match validResponderEffort above: shared.
+// ReasoningEffort's own typed consts only enumerate "low"/"medium"/"high"
+// (the real OpenAI API's current vocabulary), but the underlying Go type is
+// a plain string, and this harness also targets internal reasoning-tier
+// model names (e.g. an "xhigh" tier) not in that enum -- so this
+// deliberately does NOT restrict the value to a fixed enum; an
+// unrecognized-but-well-formed tier name is the provider's own 400 to
+// raise, not this harness's job to pre-guess. What this DOES bound: this
+// value is sent to the OpenAI API verbatim (answerOne), printed to this
+// process's own stdout (run's own startup log line), and persisted into a
+// provenance artifact (trialProvenance.ResponderEffort) -- three sinks that
+// must never carry a secret, corpus text, or arbitrary-length garbage, and
+// nothing upstream of this function validates the env var's shape before
+// it reaches them. A bounded closed character set (letters, digits,
+// underscore, hyphen; 1-32 characters) is generous enough for any real
+// effort-tier label while catching exactly the failure modes that matter
+// here: control characters, whitespace, and anything long enough to be a
+// credential or prose fragment rather than a tier label. Fails closed
+// (an error, not a silent empty-string fallback) so a malformed value is
+// visible at startup rather than silently dropped.
+func resolveResponderEffort(raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", nil
+	}
+	if !validResponderEffort.MatchString(v) {
+		return "", fmt.Errorf("ACR_TEST_TRIAL_RESPONDER_EFFORT must be 1-32 characters of [A-Za-z0-9_-] -- refusing to log or send an unbounded/unexpected value verbatim")
+	}
+	return v, nil
+}
+
 type responder struct {
-	client         openai.Client
-	model          string
+	client openai.Client
+	model  string
+	// effort is ACR_TEST_TRIAL_RESPONDER_EFFORT, validated by
+	// resolveResponderEffort -- "" means never set ReasoningEffort on the
+	// request (provider default).
+	effort         string
 	exchangeDir    string
 	poll           time.Duration
 	requestTimeout time.Duration
@@ -219,7 +285,11 @@ func (r *responder) run(ctx context.Context) error {
 			return fmt.Errorf("create %s: %w", d, err)
 		}
 	}
-	fmt.Printf("responder: watching %s (poll=%s, model=%s, transport=api) -- OpenAI API, never a codex subprocess\n", r.exchangeDir, r.poll, r.model)
+	effortLabel := r.effort
+	if effortLabel == "" {
+		effortLabel = "unset(provider-default)"
+	}
+	fmt.Printf("responder: watching %s (poll=%s, model=%s, effort=%s, transport=api) -- OpenAI API, never a codex subprocess\n", r.exchangeDir, r.poll, r.model, effortLabel)
 
 	for {
 		// os.ReadDir returns entries sorted by name; harmless here (unlike
@@ -394,7 +464,7 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 	callCtx, cancel := context.WithTimeout(ctx, r.requestTimeout)
 	defer cancel()
 	started := time.Now()
-	completion, callErr := r.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+	params := openai.ChatCompletionNewParams{
 		Model:    r.model,
 		Messages: messages,
 		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
@@ -415,7 +485,15 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 				},
 			},
 		},
-	})
+	}
+	if r.effort != "" {
+		// omitzero on ChatCompletionNewParams.ReasoningEffort means an empty
+		// r.effort already leaves this field genuinely unset (provider
+		// default) without this guard -- written explicitly anyway so a
+		// reader doesn't have to know that SDK detail to see the intent.
+		params.ReasoningEffort = shared.ReasoningEffort(r.effort)
+	}
+	completion, callErr := r.client.Chat.Completions.New(callCtx, params)
 	elapsed := time.Since(started)
 
 	if callErr != nil {

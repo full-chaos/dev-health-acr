@@ -181,8 +181,8 @@ func TestFoldConfirmedKindVectorCensus_AccumulatesAcrossCalls(t *testing.T) {
 // reportSchemaVersion's own doc comment already documents.
 func TestTwoTurnReport_SchemaVersionPin(t *testing.T) {
 	t.Parallel()
-	if reportSchemaVersion != "31" {
-		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4313 bump, following CHAOS-4307's v30)", reportSchemaVersion, "31")
+	if reportSchemaVersion != "32" {
+		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4313 follow-up bump -- responder_effort, following CHAOS-4313's own v31)", reportSchemaVersion, "32")
 	}
 }
 

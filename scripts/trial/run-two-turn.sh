@@ -97,6 +97,13 @@ export ACR_TEST_TRIAL_EXCHANGE_TIMEOUT="${ACR_TRIAL_EXCHANGE_TIMEOUT:-10m}"
 # provenance even though gpt-5.6-luna, a real known value, was what
 # actually answered every call.
 export ACR_TEST_TRIAL_RESPONDER_MODEL="$(trial_responder_model)"
+# CHAOS-4313 follow-up: same explicit-pass-through discipline as
+# ACR_TEST_TRIAL_RESPONDER_MODEL immediately above, so the go test's own
+# twoTurnResponderEffort() and run-responder-api.sh's own reasoning-effort
+# passthrough agree on what was actually requested. Unlike MODEL, this has
+# no substituted default -- trial_responder_effort's own empty output for
+# an unset var is itself the correct value to export here.
+export ACR_TEST_TRIAL_RESPONDER_EFFORT="$(trial_responder_effort)"
 echo "EXCHANGE_DIR=$exdir"
 echo "ORACLE_ANNEX=$ANNEX_PATH"
 

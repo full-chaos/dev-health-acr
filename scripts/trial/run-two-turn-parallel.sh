@@ -363,6 +363,11 @@ trial_require_responder_transport_ready
 # immediately above (trial_responder_model's own precondition: it reads
 # TRIAL_RESPONDER_TRANSPORT, which that call is what sets).
 export ACR_TEST_TRIAL_RESPONDER_MODEL="$(trial_responder_model)"
+# CHAOS-4313 follow-up: same "export once, before the shard loop" discipline
+# as ACR_TEST_TRIAL_RESPONDER_MODEL immediately above -- every shard in one
+# run answers at the SAME effort tier. Unlike MODEL, no substituted default
+# (see trial_responder_effort's own doc comment).
+export ACR_TEST_TRIAL_RESPONDER_EFFORT="$(trial_responder_effort)"
 
 # PG_DATABASES replaces the pre-CHAOS-4100 PG_CONTAINERS: the resources
 # this script now creates and must drop are DATABASES on the standing
