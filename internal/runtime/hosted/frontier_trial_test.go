@@ -757,3 +757,41 @@ func TestWriteReportAtomic(t *testing.T) {
 		t.Errorf("report content after second write = %q, want %q", got2, blob2)
 	}
 }
+
+// TestFrontierUnsupportedDataPlaneReason (CHAOS-4220) pins
+// frontierUnsupportedDataPlaneReason's own contract: ONLY the literal
+// string "compose" is accepted; everything else -- unset, "kiac", or any
+// other/garbage value -- is refused. codex R1 (real High, confirmed): an
+// earlier version of this test blessed "unset" as safe, matching an
+// earlier (wrong) version of the function that only refused "kiac" --
+// but a direct `go test` invocation bypasses common.sh's own shell-side
+// `: "${ACR_TRIAL_DATA_PLANE:=kiac}"` default resolution entirely, so an
+// unset raw env var there must fail closed exactly like an explicit
+// "kiac" does, not silently pass through to a live compose read.
+func TestFrontierUnsupportedDataPlaneReason(t *testing.T) {
+	cases := []struct {
+		name      string
+		plane     string
+		wantEmpty bool
+	}{
+		{"compose explicit (the only accepted value)", "compose", true},
+		{"unset must fail closed, not silently pass", "", false},
+		{"kiac explicit", "kiac", false},
+		{"garbage value", "nonsense", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := frontierUnsupportedDataPlaneReason(c.plane)
+			if c.wantEmpty && got != "" {
+				t.Errorf("frontierUnsupportedDataPlaneReason(%q) = %q, want empty (proceed)", c.plane, got)
+			}
+			if !c.wantEmpty {
+				if got == "" {
+					t.Errorf("frontierUnsupportedDataPlaneReason(%q) = empty, want a non-empty refusal reason", c.plane)
+				} else if !strings.Contains(got, "CHAOS-4220") {
+					t.Errorf("frontierUnsupportedDataPlaneReason(%q) = %q, want it to cite CHAOS-4220", c.plane, got)
+				}
+			}
+		})
+	}
+}

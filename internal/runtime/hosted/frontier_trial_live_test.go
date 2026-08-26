@@ -74,6 +74,16 @@ func TestFrontierTrialCorpus(t *testing.T) {
 	if lookErr != nil {
 		t.Skip("codex CLI not found on PATH; the frontier-baseline-arm runs through the codex subscription harness, not a metered API key")
 	}
+	// CHAOS-4220: this harness does not participate in the
+	// ACR_TRIAL_DATA_PLANE=compose|kiac switch every other trial launcher
+	// shares via common.sh -- see frontierUnsupportedDataPlaneReason's own
+	// doc comment for why. Mirrors run-frontier-arm.sh's own shell-side
+	// guard, for a caller that invokes `go test` directly, bypassing that
+	// script (this test's own usage doc comment documents that as a
+	// supported entry point).
+	if reason := frontierUnsupportedDataPlaneReason(os.Getenv("ACR_TRIAL_DATA_PLANE")); reason != "" {
+		t.Fatalf("%s", reason)
+	}
 	outPath := requireEnv(t, "ACR_TEST_TRIAL_OUT")
 	arm := os.Getenv("ACR_TEST_TRIAL_ARM")
 	if arm == "" {
@@ -250,6 +260,54 @@ func TestFrontierTrialCorpus(t *testing.T) {
 // both here (Go side) and in run-frontier-arm.sh (shell side), since either
 // entry point can receive an unsanitized value.
 var armLabelPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// frontierUnsupportedDataPlaneReason (CHAOS-4220) is non-empty for any
+// plane (the raw ACR_TRIAL_DATA_PLANE value) OTHER than the literal
+// string "compose" -- the ONE data plane this harness's docker-exec-shaped
+// ClickHouse access can reach. Mirrors run-frontier-arm.sh's own
+// shell-side guard exactly (`!= "compose"`, not `== "kiac"` -- codex R1,
+// real High, confirmed: an earlier version of this function only refused
+// the literal "kiac", so an UNSET ACR_TRIAL_DATA_PLANE -- the shape a
+// direct `go test` invocation has by default, since bypassing
+// run-frontier-arm.sh also bypasses common.sh's own shell-side
+// `: "${ACR_TRIAL_DATA_PLANE:=kiac}"` default resolution -- silently
+// passed this check and fell through to a live compose read anyway).
+// Fails closed on unset, "kiac", and any other/garbage value alike; only
+// the exact string "compose" is ever accepted.
+//
+// This harness's ClickHouse access is docker-exec-shaped: both
+// verifyClickHouseReadOnlyCredential (this file) AND the case prompt text
+// the frontier model itself executes via its shell tool
+// (buildFrontierPrompt) run a literal `docker exec <container>
+// clickhouse-client ...`, never a DSN/client-library connection like
+// every other trial script's ClickHouse access. The kiac data plane's
+// ClickHouse runs as a Kubernetes pod inside a kiac-managed VM -- there
+// is no container by that name for `docker exec` to find. (The six-var
+// per-store escape hatch used elsewhere in this codebase -- ACR_TRIAL_
+// {PG,CH,FALKOR}_{HOST,PORT} -- does not apply to this harness either:
+// run-frontier-arm.sh never calls trial_wire_common_env, so those vars,
+// even fully set, are never read here.)
+//
+// A real kiac-exec redesign is NOT attempted under CHAOS-4220 (its own
+// scope note permits documenting why instead of fixing): it would need
+// an exec-mechanism switch (docker exec vs kubectl exec) threaded through
+// both this file AND the embedded case-prompt text, PLUS live
+// re-verification of the read-only credential enforcement against the
+// kiac plane -- CHAOS-3853 explicitly verified today's docker-exec path
+// "live against the real container" (verifyClickHouseReadOnlyCredential's
+// own doc comment), and an unverified security control is not a control.
+// The lane that owns CHAOS-4220 is also explicitly forbidden from
+// touching the kiac cluster (another lane is its sole driver), so a
+// kiac-exec path could not be live-verified even if written.
+func frontierUnsupportedDataPlaneReason(plane string) string {
+	if plane == "compose" {
+		return ""
+	}
+	if plane == "" {
+		return "ACR_TRIAL_DATA_PLANE is unset -- the frontier-baseline-arm's ClickHouse access is docker-exec-shaped and cannot reach any data plane except 'compose' (CHAOS-4220); this test was invoked directly, bypassing run-frontier-arm.sh's own shell-side default resolution (which would otherwise default to 'kiac') -- set ACR_TRIAL_DATA_PLANE=compose explicitly to run this harness"
+	}
+	return fmt.Sprintf("ACR_TRIAL_DATA_PLANE=%q, but the frontier-baseline-arm's ClickHouse access is docker-exec-shaped and cannot reach any data plane except 'compose' (CHAOS-4220) -- set ACR_TRIAL_DATA_PLANE=compose explicitly to run this harness", plane)
+}
 
 // writeReportAtomic (CHAOS-3853 review P2, ARM path hygiene) writes blob to
 // a temp file in the SAME directory as path, then renames it into place, so

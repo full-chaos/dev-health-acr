@@ -10,6 +10,52 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
+# CHAOS-4220: this harness does NOT participate in the
+# ACR_TRIAL_DATA_PLANE=compose|kiac switch every other trial launcher
+# shares via common.sh (trial_wire_common_env, never called here) -- nor
+# does the six-var per-store escape hatch (ACR_TRIAL_{PG,CH,FALKOR}_
+# {HOST,PORT}) apply here, for the same reason: those vars, even fully
+# set (common.sh's own all-or-none check above only validates their
+# COMPLETENESS, not that anything downstream reads them), are simply
+# never consulted below -- this harness's own
+# ACR_TEST_TRIAL_FRONTIER_CLICKHOUSE_CONTAINER is the only lever on its
+# ClickHouse target.
+# ClickHouse access below is docker-exec-shaped (frontier_trial_live_test.go's
+# verifyClickHouseReadOnlyCredential, PLUS the SAME `docker exec %s
+# clickhouse-client ...` command embedded verbatim in the case prompt text
+# the frontier model itself executes via its own shell tool), never a
+# DSN/client-library connection like every other trial script's
+# ClickHouse access. The kiac data plane's ClickHouse runs as a
+# Kubernetes pod inside a kiac-managed VM, reachable only via `kubectl
+# exec`/`container`, never `docker exec` -- there is no container by this
+# name for `docker exec` to find.
+#
+# Before this fix, this script silently ignored ACR_TRIAL_DATA_PLANE
+# entirely: common.sh's own `: "${ACR_TRIAL_DATA_PLANE:=kiac}"` (the
+# STANDING DEFAULT, chris's order) sets it regardless, but this script's
+# own ACR_TEST_TRIAL_FRONTIER_CLICKHOUSE_CONTAINER default
+# ("dev-health-clickhouse-1") always pointed at compose -- exactly the
+# silent-hybrid-plane trap CHAOS-4100/4186 exist to structurally close
+# everywhere else: an operator expecting kiac (today's ambient default)
+# would silently get a compose read instead, with no error. Fail loud.
+#
+# A real kiac-exec redesign is NOT attempted here (CHAOS-4220's own
+# scope note permits documenting why instead of fixing): it would need an
+# exec-mechanism switch (docker exec vs kubectl exec) threaded through
+# both this script AND the embedded case-prompt text the frontier model
+# reads, PLUS live re-verification of the read-only credential
+# enforcement against the kiac plane -- CHAOS-3853 explicitly verified
+# today's docker-exec path "live against the real container" (see
+# frontier_trial_live_test.go's own doc comments), and an unverified
+# security control is not a control. This lane is also explicitly
+# forbidden from touching the kiac cluster (another lane is its sole
+# driver), so a kiac-exec path could not be live-verified here even if
+# written.
+if [[ "$ACR_TRIAL_DATA_PLANE" != "compose" ]]; then
+  echo "run-frontier-arm.sh: ACR_TRIAL_DATA_PLANE=$ACR_TRIAL_DATA_PLANE, but this harness only supports 'compose' -- its ClickHouse access is docker-exec-shaped and cannot reach the kiac data plane (CHAOS-4220). Set ACR_TRIAL_DATA_PLANE=compose explicitly to run the frontier baseline arm." >&2
+  exit 1
+fi
+
 ARM="${1:?arm label required}"
 MODEL="${2:?model required, e.g. gpt-5.6-sol}"
 EFFORT="${3:-medium}"
