@@ -336,18 +336,36 @@ func TestResolveSubjects_SearchKindRescuesAliasLookupScopedKindWhenAliasLookupCo
 // but not the other two (repository, team) -- proves the rescue is decided
 // per-kind by pool presence, not by one resolution-wide flag. The matched
 // kind must NEVER reach SearchKind (would be pure duplication); the two
-// unmatched kinds must.
+// unmatched kinds must, and codex round 3's own Low finding (2026-08-25
+// 20:26 PDT ruling: load-bearing, not separable coverage debt) is closed
+// here by supplying REAL rescued results for the two unmatched kinds and
+// asserting the offer-only path (chaos4038_kind_coverage.go's
+// offerOnlyPool) is what actually carries them: absent from
+// resolution.Candidates, present in offer.KindOptions -- exactly like
+// project's own AliasLookup-sourced match, which DOES reach
+// resolution.Candidates via the ordinary commit-eligible pool, so this test
+// also proves the two paths are genuinely different, not just differently
+// named.
 func TestResolveSubjects_SearchKindRescuesOnlyTheAliasLookupScopedKindsAliasLookupMissed(t *testing.T) {
 	t.Parallel()
 	projectCandidate := candidateNode(contextfabric.SubjectProject, "proj_1", "Widgets", 0.6, "*")
+	repoCandidate := candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.6, "*")
+	teamCandidate := candidateNode(contextfabric.SubjectTeam, "team_1", "Platform", 0.6, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind:     true,
 		enableAliasLookup:    true,
 		aliasLookupComplete:  true,
 		aliasLookupClaimants: map[string][]CandidateNode{"alpha": {projectCandidate}},
 		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"alpha": {
+				contextfabric.SubjectRepository: {repoCandidate},
+				contextfabric.SubjectTeam:       {teamCandidate},
+			},
+		},
 	}
-	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), nil, nil); err != nil {
+	resolution, offer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("alpha"), backend.deps(), nil, nil)
+	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
 	for _, call := range backend.searchKindCalls {
@@ -364,6 +382,37 @@ func TestResolveSubjects_SearchKindRescuesOnlyTheAliasLookupScopedKindsAliasLook
 		}
 		if !found {
 			t.Fatalf("searchKindCalls = %#v, want %q queried -- AliasLookup did not match it", backend.searchKindCalls, scoped)
+		}
+	}
+	// project reached the pool via AliasLookup (the ordinary, commit-eligible
+	// path), so it belongs in resolution.Candidates -- unlike repository/team
+	// below, this is NOT the offer-only path this ticket adds.
+	foundProjectCandidate := false
+	for _, c := range resolution.Candidates {
+		if c.Subject.Kind == contextfabric.SubjectProject && c.Subject.CanonicalID == "proj_1" {
+			foundProjectCandidate = true
+		}
+	}
+	if !foundProjectCandidate {
+		t.Fatalf("resolution.Candidates = %#v, want project present -- it reached the pool via AliasLookup, not the offer-only floor rescue", resolution.Candidates)
+	}
+	// repository/team reached the pool ONLY via the offer-only floor rescue
+	// (chaos4038_kind_coverage.go's offerOnlyPool) -- absent from
+	// resolution.Candidates, present only in the expected_kind offer.
+	for _, c := range resolution.Candidates {
+		if c.Subject.Kind == contextfabric.SubjectRepository || c.Subject.Kind == contextfabric.SubjectTeam {
+			t.Fatalf("resolution.Candidates = %#v, want repository/team ABSENT -- their AliasLookup-unmatched rescue is offer-only (CHAOS-4271 codex round 1, finding 1)", resolution.Candidates)
+		}
+	}
+	for _, scoped := range []contextfabric.SubjectKind{contextfabric.SubjectProject, contextfabric.SubjectRepository, contextfabric.SubjectTeam} {
+		found := false
+		for _, opt := range offer.KindOptions {
+			if opt.Kind == scoped {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("offer.KindOptions = %#v, want %q present as an expected_kind offer option, matched or rescued alike", offer.KindOptions, scoped)
 		}
 	}
 }
@@ -467,50 +516,77 @@ func TestResolveSubjects_SearchKindRescuedRepositoryNeverAutoCommitsWithoutDecis
 // meant to touch at all.
 func TestResolveSubjects_SearchKindOfferOnlyFindNeverSuppressesAnUnrelatedExactCommit(t *testing.T) {
 	t.Parallel()
-	// exactWorkItem's label is the LITERAL term ("outage") -- an ordinary,
-	// pre-existing exact match with no rival, decisive and committable on
-	// its own via the exact_index gate, completely unrelated to repository.
-	exactWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "outage", 0.6, "*")
-	// aliasRepo reaches the pool ONLY through applyKindCoverageFloor's own
-	// offer-only SearchKind rescue (repository is entirely missing from
-	// ordinary Search/AliasLookup here) -- its "aliases" attribute contains
-	// the SAME literal term, so NodeCandidate tags it MatchAlias
-	// (identityKeyClassAlias), the identity-class rival exactIndex's own
-	// identityCrossClassRivalClaimant checks a label-class claim against.
-	aliasRepo := aliasCandidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.6, []string{"outage"}, nil, false)
-	backend := &fakeGraphBackend{
-		enableSearchKind: true,
-		searchResults:    map[string][]CandidateNode{"outage": {exactWorkItem}},
-		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
-			"outage": {contextfabric.SubjectRepository: {aliasRepo}},
-		},
+	// Table-driven over all three offer-only kinds (CHAOS-4271 orchestrator
+	// ruling, 2026-08-25 20:26 PDT: the round-3 Lows are load-bearing
+	// coverage of the SAME "offer-only never changes a commit decision"
+	// invariant the two Highs violated, not separable coverage debt) --
+	// repository via BOTH identity classes SearchKind can tag it with
+	// (alias and provider-key; aliasMatched/providerMatched are mutually
+	// exclusive per NodeCandidate call, candidate.go, so these need two
+	// separate fixtures), plus project and team via the alias class each.
+	cases := []struct {
+		name            string
+		kind            contextfabric.SubjectKind
+		aliases         []string
+		providerAliases []string
+	}{
+		{name: "repository/alias", kind: contextfabric.SubjectRepository, aliases: []string{"outage"}},
+		{name: "repository/provider-key", kind: contextfabric.SubjectRepository, providerAliases: []string{"outage"}},
+		{name: "project/alias", kind: contextfabric.SubjectProject, aliases: []string{"outage"}},
+		{name: "team/alias", kind: contextfabric.SubjectTeam, aliases: []string{"outage"}},
 	}
-	resolution, offer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("outage"), backend.deps(), nil, nil)
-	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
-	}
-	committedWorkItem := false
-	for _, c := range resolution.Committed {
-		if c.Kind == contextfabric.SubjectWorkItem && c.CanonicalID == "wi_1" {
-			committedWorkItem = true
-		}
-	}
-	if !committedWorkItem {
-		t.Fatalf("resolution.Committed = %#v, want the work_item's OWN exact match to commit -- an offer-only repository floor find registering an alias-class claim on the SAME literal term must never suppress it via identityCrossClassRivalClaimant (CHAOS-4271 codex round 2, finding 1)", resolution.Committed)
-	}
-	for _, c := range resolution.Candidates {
-		if c.Subject.Kind == contextfabric.SubjectRepository {
-			t.Fatalf("resolution.Candidates = %#v, want repository ABSENT -- offer-only (CHAOS-4271 codex round 1, finding 1)", resolution.Candidates)
-		}
-	}
-	foundOffer := false
-	for _, opt := range offer.KindOptions {
-		if opt.Kind == contextfabric.SubjectRepository {
-			foundOffer = true
-		}
-	}
-	if !foundOffer {
-		t.Fatalf("offer.KindOptions = %#v, want repository present as an expected_kind offer option", offer.KindOptions)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// exactWorkItem's label is the LITERAL term ("outage") -- an
+			// ordinary, pre-existing exact match with no rival, decisive and
+			// committable on its own via the exact_index gate, completely
+			// unrelated to the offer-only kind under test.
+			exactWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "outage", 0.6, "*")
+			// offerOnlyCandidate reaches the pool ONLY through
+			// applyKindCoverageFloor's own offer-only SearchKind rescue
+			// (its kind is entirely missing from ordinary Search/
+			// AliasLookup here) -- its aliases/provider_aliases attribute
+			// contains the SAME literal term, so NodeCandidate tags it
+			// MatchAlias or MatchProviderKey, the identity-class rival
+			// exactIndex's own identityCrossClassRivalClaimant checks a
+			// label-class claim against.
+			offerOnlyCandidate := aliasCandidateNode(tc.kind, "offer_only_1", "unrelated-label", 0.6, tc.aliases, tc.providerAliases, false)
+			backend := &fakeGraphBackend{
+				enableSearchKind: true,
+				searchResults:    map[string][]CandidateNode{"outage": {exactWorkItem}},
+				searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+					"outage": {tc.kind: {offerOnlyCandidate}},
+				},
+			}
+			resolution, offer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("outage"), backend.deps(), nil, nil)
+			if err != nil {
+				t.Fatalf("ResolveSubjects() error = %v", err)
+			}
+			committedWorkItem := false
+			for _, c := range resolution.Committed {
+				if c.Kind == contextfabric.SubjectWorkItem && c.CanonicalID == "wi_1" {
+					committedWorkItem = true
+				}
+			}
+			if !committedWorkItem {
+				t.Fatalf("resolution.Committed = %#v, want the work_item's OWN exact match to commit -- an offer-only %s floor find registering a claim on the SAME literal term must never suppress it via identityCrossClassRivalClaimant (CHAOS-4271 codex round 2, finding 1)", resolution.Committed, tc.kind)
+			}
+			for _, c := range resolution.Candidates {
+				if c.Subject.Kind == tc.kind {
+					t.Fatalf("resolution.Candidates = %#v, want %s ABSENT -- offer-only (CHAOS-4271 codex round 1, finding 1)", resolution.Candidates, tc.kind)
+				}
+			}
+			foundOffer := false
+			for _, opt := range offer.KindOptions {
+				if opt.Kind == tc.kind {
+					foundOffer = true
+				}
+			}
+			if !foundOffer {
+				t.Fatalf("offer.KindOptions = %#v, want %s present as an expected_kind offer option", offer.KindOptions, tc.kind)
+			}
+		})
 	}
 }
 
