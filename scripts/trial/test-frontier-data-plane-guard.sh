@@ -34,8 +34,13 @@ check() {
 # 1. The STANDING DEFAULT (ACR_TRIAL_DATA_PLANE unset -> common.sh's own
 # `: "${ACR_TRIAL_DATA_PLANE:=kiac}"` resolves it to kiac) must be
 # refused, not silently read compose -- this IS the incident class the
-# guard exists to close.
-out="$(bash "$launcher" 2>&1)" && rc=0 || rc=$?
+# guard exists to close. `env -u` explicitly drops any ACR_TRIAL_DATA_PLANE
+# this test's OWN caller might have exported ambiently (codex R2, real
+# Low: an earlier version of this test relied on bash's own subshell not
+# inheriting one, which is true for a bare interactive shell but not
+# guaranteed for every caller) -- "unset" here means unset, not "whatever
+# happened to already be in the environment".
+out="$(env -u ACR_TRIAL_DATA_PLANE bash "$launcher" 2>&1)" && rc=0 || rc=$?
 check "unset ACR_TRIAL_DATA_PLANE (kiac default) is refused: exit status" "1" "$rc"
 case "$out" in
 *"ACR_TRIAL_DATA_PLANE=kiac"*"only supports 'compose'"*) check "message names kiac and the compose-only limitation" "yes" "yes" ;;
