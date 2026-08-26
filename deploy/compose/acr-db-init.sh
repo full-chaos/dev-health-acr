@@ -173,6 +173,73 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.device_authorizations TO :"runtime_use
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_clarification_selections FROM :"runtime_user";
 GRANT INSERT ON TABLE acr.context_fabric_clarification_selections TO :"runtime_user";
 
+-- CHAOS-3876: auditing every OTHER context_fabric_* table found the exact
+-- same gap the clarification-selections fix immediately above closed for
+-- one table. The hosted API and acr-projector (including its "priors"
+-- operator subcommands, cmd/acr-projector/priors.go's openPriorsDB) each
+-- open exactly ONE Postgres connection, as :"runtime_user" -- so a table
+-- absent from this list was not merely under-privileged, it was completely
+-- unwritable in production: every INSERT/UPDATE/SELECT against it fails
+-- permission-denied, silently swallowed by whichever caller's fail-open
+-- error handling sits above the store (the "fails-toward-fine" class this
+-- ticket named). acr_db_init_integration_test.go extends the CHAOS-3859
+-- proof seam with one real INSERT per table below, under this exact ACL.
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_checkpoints FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_projection_checkpoints TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_rebuild_markers FROM :"runtime_user";
+GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_projection_rebuild_markers TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"runtime_user";
+GRANT SELECT, INSERT ON TABLE acr.context_fabric_investigation_results TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_supersession_claims FROM :"runtime_user";
+GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_supersession_claims TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_reuse_invalidations FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_reuse_invalidations TO :"runtime_user";
+
+-- context_fabric_org_model_config.generation DEFAULTs to nextval() on its
+-- own explicit sequence (migration 0010, NOT a GENERATED ... AS IDENTITY
+-- column) -- an INSERT/UPSERT needs USAGE on that sequence in addition to
+-- INSERT on the table itself; Postgres does not imply one grant from the
+-- other for a plain sequence-backed column DEFAULT.
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_org_model_config FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_org_model_config TO :"runtime_user";
+GRANT USAGE ON SEQUENCE acr.context_fabric_org_model_config_generation_seq TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_model_execution_receipts FROM :"runtime_user";
+GRANT INSERT ON TABLE acr.context_fabric_model_execution_receipts TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_lifecycle FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_graph_lifecycle TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_epoch_retirements FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_graph_epoch_retirements TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_build_source_progress FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_graph_build_source_progress TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_selections FROM :"runtime_user";
+GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_selections TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_priors FROM :"runtime_user";
+GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_priors TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_pointer FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_structure_prior_pointer TO :"runtime_user";
+
+-- context_fabric_structure_prior_pointer_history.id is BIGSERIAL (migration
+-- 0028) -- the one exception among these tables to the app-generated-key
+-- convention every other table here follows -- so its owned sequence needs
+-- the same explicit USAGE grant as the org_model_config sequence above.
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_pointer_history FROM :"runtime_user";
+GRANT INSERT ON TABLE acr.context_fabric_structure_prior_pointer_history TO :"runtime_user";
+GRANT USAGE ON SEQUENCE acr.context_fabric_structure_prior_pointer_history_id_seq TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_revocations FROM :"runtime_user";
+GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_prior_revocations TO :"runtime_user";
+
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON TABLES FROM :"runtime_user";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON SEQUENCES FROM PUBLIC;
