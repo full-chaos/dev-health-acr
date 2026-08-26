@@ -1320,6 +1320,22 @@ type ResolutionTraceEvent struct {
 	// from RivalCountAboveTau/len(Rivals): a rival scoring above tau is not
 	// automatically a rival a PRINCIPAL is authorized to see.
 	ConfirmedKindVectorScopeRivalsOfferedCount int
+	// ConfirmedKindVectorScopeQuestionChannelRivalCount (stage==
+	// "confirmed_kind_scope" ONLY, CHAOS-4311 Phase 3, team-lead ruling
+	// "(b)" on codex R2's H1 finding) is how many AUTHORIZED, confirmed-kind
+	// candidates the resolution's own bounded full-question vector search
+	// (resolve.go's questionSearchResults, NOT the census's per-term
+	// channel) surfaced that were not already part of the isolated
+	// confirmed-kind-scoped population (scopedPool) -- i.e. genuinely new
+	// evidence the per-term census and the exhaustive lexical pass both
+	// missed. Deliberately a SEPARATE field from
+	// ConfirmedKindVectorScopeRivalsOfferedCount so a reader (and the trial
+	// report) can tell WHICH channel -- per-term census or full-question
+	// search -- supplied the rival that kept planCompleteViaVectorCensus
+	// from firing, when either did. 0 whenever no full-question search ran,
+	// it found nothing of the confirmed kind, everything it found was
+	// already in scopedPool, or every candidate failed authorization.
+	ConfirmedKindVectorScopeQuestionChannelRivalCount int
 	// ConfirmedKindVectorCensusDecisive (stage=="decision" ONLY, CHAOS-4311
 	// Phase 3) is true iff THIS decision was reached over the
 	// confirmed-kind-scoped isolated population specifically because the
@@ -1813,6 +1829,22 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// nil for a backend with no AliasLookup, the same "not implemented"
 	// convention aliasIdentityComplete=false already carries.
 	var aliasClaimantsByTerm map[string][]CandidateNode
+	// questionSearchResults (CHAOS-4311 Phase 3, codex R2 High #1 fix) is
+	// deps.SearchQuestion's own raw result slice, retained past the block
+	// below so the confirmed-kind vector census gate (further down this
+	// function) can check it for a confirmed-kind rival -- see that call
+	// site's own doc comment for why the per-TERM census alone cannot prove
+	// completeness against the bounded FULL-QUESTION query (this file's own
+	// SCOPE REDUCTION disclosure, chaos4155_confirmed_kind_vector_scope.go).
+	// nil whenever deps.SearchQuestion is unset or the question is empty --
+	// the same "not attempted" shape the block below already produces.
+	// Already floor-filtered (a.similarityFloor, the SAME tau the census
+	// itself uses) by construction -- questionVectorSearchNodes' own
+	// vectorSearchNodesWithOverFetch call -- and NOT YET authorization
+	// filtered; the gate call site below routes it through the SAME
+	// mergeSearchResults authorization gate every other candidate source
+	// uses before counting anything from it as a rival.
+	var questionSearchResults []CandidateNode
 	if deps.AliasLookup != nil {
 		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
 		if err != nil {
@@ -1863,6 +1895,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			if err != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 			}
+			// CHAOS-4311 Phase 3: captured verbatim, before any merge --
+			// see questionSearchResults' own declaration comment.
+			questionSearchResults = results
 			if truncated {
 				searchTruncated = true
 			}
@@ -2316,6 +2351,84 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			}
 			rivalsOfferedCount = len(offerOnlyPool)
 		}
+		// questionChannelRivalCount (CHAOS-4311 Phase 3, team-lead ruling
+		// 2026-08-26 "(b)": "fold resolve.go's own full-question results
+		// into the gate"): closes this file's own self-disclosed Phase 1
+		// SCOPE REDUCTION (chaos4155_confirmed_kind_vector_scope.go's own
+		// doc comment) -- the per-TERM census above proves no term-channel
+		// rival exists, but sol's own completeness claim requires covering
+		// "every interpreted term plus the bounded full-question query", and
+		// the census itself only ever embeds/scores terms. resolve.go
+		// already runs that exact bounded full-question vector search
+		// (questionSearchResults, captured verbatim above, BEFORE
+		// authorization) for every resolution with a live vector mechanism
+		// and a non-empty question -- reusing it here, rather than teaching
+		// falkorgraph's census to embed a second, redundant full-question
+		// query, is the cheapest way to actually close the gap rather than
+		// merely re-labeling it closed.
+		//
+		// A question-channel candidate counts as a rival only if it is (a)
+		// of the confirmed kind (NodeSubject) and (b) NOT already a member
+		// of scopedPool -- scopedPool already contains every kind-scoped
+		// lexical candidate the exhaustive SearchKind pass found, INCLUDING
+		// the one that would otherwise commit, and its own
+		// ResolveFromMergedCandidatesWithGateAndBasis call below already
+		// correctly stays ambiguous if scopedPool itself holds more than
+		// one candidate -- so re-discovering an ALREADY-scoped candidate via
+		// the question channel is not new evidence, only confirmation.
+		// Everything genuinely new is merged into the SAME offer-only
+		// pool the term-channel rivals above use (mirrors CHAOS-4271's
+		// offerOnlyPool precedent identically: nil identity, never
+		// candidatesBySubject), through the SAME authorization gate
+		// (mergeSearchResults/NodeCandidate/AuthorizedAttributes) -- these
+		// rows are UNFILTERED by authorization until this exact call,
+		// exactly like the census's own Rivals.
+		var questionChannelRivalCount int
+		if len(questionSearchResults) > 0 {
+			var questionChannelCandidates []CandidateNode
+			for _, candidate := range questionSearchResults {
+				subject, ok := NodeSubject(candidate)
+				if !ok || subject.Kind != confirmedKind.Kind {
+					continue
+				}
+				if _, alreadyScoped := scopedPool[SubjectKey(subject)]; alreadyScoped {
+					continue
+				}
+				questionChannelCandidates = append(questionChannelCandidates, candidate)
+			}
+			if len(questionChannelCandidates) > 0 {
+				questionOfferOnlyPool := make(map[string]contextfabric.SubjectCandidate)
+				questionRivalTraversalDegraded, questionRivalAuthzDropped := mergeSearchResults(
+					ctx, principal, request, deps, questionProvenanceMarker, questionChannelCandidates,
+					questionOfferOnlyPool, map[string]string{}, map[string]bool{},
+					false, nil, nil, nil,
+				)
+				if questionRivalTraversalDegraded > 0 && deps.TraversalDegraded != nil {
+					deps.TraversalDegraded(ctx, principal.OrgID, questionRivalTraversalDegraded)
+				}
+				if questionRivalAuthzDropped > 0 && deps.SubjectCandidatesAuthzDropped != nil {
+					deps.SubjectCandidatesAuthzDropped(ctx, principal.OrgID, questionRivalAuthzDropped)
+				}
+				// Iterate questionChannelCandidates itself (SearchQuestion's
+				// own returned, similarity-ranked order), not the map --
+				// the SAME determinism discipline the term-channel rivals
+				// loop above takes, for the identical reason
+				// (candidateOfferMaterial's own top-N truncation must see a
+				// stable order, not Go's randomized map iteration).
+				for _, candidate := range questionChannelCandidates {
+					subject, ok := NodeSubject(candidate)
+					if !ok {
+						continue
+					}
+					offered, ok := questionOfferOnlyPool[SubjectKey(subject)]
+					if !ok {
+						continue
+					}
+					censusOfferOnlyCandidates = append(censusOfferOnlyCandidates, offered)
+				}
+				questionChannelRivalCount = len(questionOfferOnlyPool)
+			}
+		}
 		if deps.ResolutionTracer != nil {
 			// ConfirmedKindScopeCandidateCount (codex review finding, LOW/
 			// HIGH confidence, confirmed): 0 whenever scopeState !=
@@ -2355,6 +2468,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// Phase 3): computed just above, before this trace call --
 				// see that computation's own doc comment.
 				ConfirmedKindVectorScopeRivalsOfferedCount: rivalsOfferedCount,
+				// ConfirmedKindVectorScopeQuestionChannelRivalCount
+				// (CHAOS-4311 Phase 3): computed just above, alongside
+				// rivalsOfferedCount -- see that computation's own doc
+				// comment. Distinguishes which channel (per-term census vs
+				// full-question search) supplied the blocking rival, when
+				// either did.
+				ConfirmedKindVectorScopeQuestionChannelRivalCount: questionChannelRivalCount,
 			})
 		}
 		// planCompleteViaVectorCensus (CHAOS-4311 Phase 3, chris "Okay"
@@ -2369,9 +2489,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// NEVER larger than RivalCountAboveTau -- either reading agrees on
 		// the zero case, and RivalCountAboveTau is the field this ticket's
 		// own acceptance criteria are written against).
+		// ALSO requires questionChannelRivalCount==0 (team-lead ruling,
+		// "(b)": closes this file's own disclosed SCOPE REDUCTION) -- a
+		// Complete term-channel census with zero rivals is still not a
+		// genuine completeness proof if the bounded full-question query
+		// independently surfaced a confirmed-kind rival the exhaustive
+		// lexical AND per-term vector passes both missed.
 		planCompleteViaVectorCensus := scopeState == confirmedKindScopePlanIncomplete &&
 			scopeVectorCensus.State == ConfirmedKindVectorScopeComplete &&
-			scopeVectorCensus.RivalCountAboveTau == 0
+			scopeVectorCensus.RivalCountAboveTau == 0 &&
+			questionChannelRivalCount == 0
 		// gateValid: the SAME conjunct every other commit path in this
 		// resolution requires -- an invalid gate must disable this one too,
 		// not just leave it to fire because the ordinary gates individually

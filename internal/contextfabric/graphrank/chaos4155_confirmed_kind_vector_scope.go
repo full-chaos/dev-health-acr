@@ -61,15 +61,26 @@ import (
 // reads stable -- no separate epoch check is needed. This needs no
 // coordinator-package change and reuses only already-public read primitives.
 //
-// SCOPE REDUCTION (Phase 1, disclosed): sol's provable claim requires
-// covering "every interpreted term plus the bounded full-question query"
-// for Complete to be a TRUE completeness proof. This Phase only queries the
-// per-term channel (the SAME terms chaos4154's own exhaustive SearchKind
-// pass already exhausts) -- the question-channel query is deferred to
-// whichever change activates the gate (Phase 2), since NOTHING in Phase 1
-// reads ConfirmedKindVectorScopeState for a decision. Complete here is
-// therefore a PROVISIONAL label (telemetry-grade, not gate-grade) until that
-// gap closes.
+// SCOPE REDUCTION (Phase 1, disclosed; CLOSED in Phase 3): sol's provable
+// claim requires covering "every interpreted term plus the bounded
+// full-question query" for Complete to be a TRUE completeness proof. This
+// file's own outcome (the per-TERM channel, the SAME terms chaos4154's own
+// exhaustive SearchKind pass already exhausts) was, through Phase 1/2,
+// deliberately incomplete on that claim -- harmless while NOTHING read
+// ConfirmedKindVectorScopeState for a decision. Phase 3 (CHAOS-4311, codex
+// R2 H1, team-lead ruling "(b)" 2026-08-26) closes the gap AT THE GATE
+// rather than in this file: resolve.go's own caller additionally requires
+// its own bounded full-question vector search (the SAME deps.SearchQuestion
+// call every ordinary resolution already runs) to have surfaced zero
+// confirmed-kind rivals beyond the isolated population, before treating a
+// Complete-with-zero-term-rivals outcome as gate-grade -- see
+// ResolutionTraceEvent.ConfirmedKindVectorScopeQuestionChannelRivalCount's
+// own doc comment (resolve.go) and planCompleteViaVectorCensus's own
+// computation. Complete, AS CONSUMED BY THE GATE (both channels checked),
+// is therefore now a gate-grade completeness proof; this file's OWN
+// Complete label (term channel only) remains, by itself, still only a
+// telemetry-grade partial proof -- exactly why the question channel is
+// checked at the CALLER, not folded into this file's own state machine.
 //
 // PHASE 1 / PHASE 2 / PHASE 3 (sol's own Phase 1/2 split, team-lead: "GO
 // exactly as sol split it"; Phase 3 = CHAOS-4311, chris "Okay" 2026-08-26):
@@ -89,19 +100,22 @@ import (
 // would miss.
 //
 // Phase 3 (THIS CHANGE, CHAOS-4311) makes the outcome decision-bearing in
-// resolve.go's own caller: Complete with RivalCountAboveTau==0 lets the
-// isolated confirmed-kind-scoped population commit exactly like
+// resolve.go's own caller: Complete with RivalCountAboveTau==0 AND ZERO
+// full-question-channel rivals (resolve.go's own questionChannelRivalCount,
+// this file's own SCOPE REDUCTION note above) lets the isolated
+// confirmed-kind-scoped population commit exactly like
 // confirmedKindScopeComplete already does (SAME re-decision call, SAME
 // confirmedKindScopedBasis=true population_basis telemetry -- see that call
-// site's own doc comment); Complete WITH rivals never commits anything new
-// (the isolated population's own re-decision does not run) but the rivals
-// this outcome now carries (Rivals, below) become an OFFER-ONLY population,
-// following CHAOS-4271's own offerOnlyPool precedent exactly (private pool
-// the commit gate never reads, nil identity so an offer-only find can never
-// collide-suppress an unrelated real commit). Every other state
-// (OverBudget/Malformed/Drift/Failed/NotAttempted) still fails closed,
-// unchanged from Phase 1/2 -- the plan stays incomplete, nothing new offers
-// or commits.
+// site's own doc comment); Complete WITH a rival on EITHER channel never
+// commits anything new (the isolated population's own re-decision does not
+// run) but the rivals from BOTH channels (term-channel Rivals below, and
+// the caller's own question-channel rivals) become an OFFER-ONLY
+// population, following CHAOS-4271's own offerOnlyPool precedent exactly
+// (private pool the commit gate never reads, nil identity so an offer-only
+// find can never collide-suppress an unrelated real commit). Every other
+// state (OverBudget/Malformed/Drift/Failed/NotAttempted) still fails
+// closed, unchanged from Phase 1/2 -- the plan stays incomplete, nothing
+// new offers or commits.
 //
 // DO-NOT-BUILD (carried over from chaos4154_confirmed_kind_scope.go's own
 // list, still binding here):
@@ -126,9 +140,11 @@ const (
 	// ConfirmedKindVectorScopeComplete: the enumeration's own count(n)
 	// closed exactly against the assembled corpus, zero malformed rows,
 	// the before/after watermark snapshot was stable, and every query term
-	// was scored against the full enumerated population. See this file's
-	// own "SCOPE REDUCTION" note for why this is a provisional, not a
-	// gate-grade, label in Phase 1.
+	// was scored against the full enumerated population -- the TERM channel
+	// only. See this file's own "SCOPE REDUCTION" note: as of Phase 3, the
+	// gate additionally requires the caller's own full-question channel to
+	// have found zero rivals before treating this label as gate-grade; by
+	// itself this label proves only the term channel complete.
 	ConfirmedKindVectorScopeComplete = "complete"
 	// ConfirmedKindVectorScopeOverBudget: population*queryCount exceeded
 	// ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS --

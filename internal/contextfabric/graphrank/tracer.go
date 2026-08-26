@@ -259,7 +259,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// authorization -- see ResolutionTraceEvent.ConfirmedKindVectorScopeRivalsOfferedCount's
 			// own doc comment for why this is deliberately separate from
 			// vector_census_rival_count_above_tau above.
-			"vector_census_rivals_offered_count", event.ConfirmedKindVectorScopeRivalsOfferedCount)
+			"vector_census_rivals_offered_count", event.ConfirmedKindVectorScopeRivalsOfferedCount,
+			// CHAOS-4311 Phase 3 (team-lead ruling "(b)"): the full-question
+			// channel's own rival count, distinct from the per-term census
+			// above -- see ResolutionTraceEvent.ConfirmedKindVectorScopeQuestionChannelRivalCount's
+			// own doc comment.
+			"question_channel_rival_count", event.ConfirmedKindVectorScopeQuestionChannelRivalCount)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,

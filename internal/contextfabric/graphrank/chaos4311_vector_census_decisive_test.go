@@ -408,3 +408,83 @@ func TestResolveSubjects_ConfirmedKindVectorCensus_RivalsPreserveSortedOrderInTh
 		}
 	}
 }
+
+// TestResolveSubjects_ConfirmedKindVectorCensus_FullQuestionRivalBlocksCommitEvenWithZeroTermChannelRivals
+// is codex R2's own High-confidence H1 finding, team-lead ruling "(b)":
+// closes this file's own self-disclosed Phase 1 SCOPE REDUCTION
+// (chaos4155_confirmed_kind_vector_scope.go's own doc comment -- "Complete
+// here is therefore a PROVISIONAL label ... until that gap closes"). The
+// per-term census alone proves no TERM-channel rival exists
+// (RivalCountAboveTau==0, exactly TestResolveSubjects_ConfirmedKindVectorCensus_NoRivalsCommitsThroughTheIsolatedPopulation's
+// own fixture), but the resolution's own bounded FULL-QUESTION vector
+// search (deps.SearchQuestion) independently surfaces a DIFFERENT,
+// authorized, confirmed-kind candidate the term-channel and the exhaustive
+// lexical pass both missed. Before the fix, planCompleteViaVectorCensus
+// only checked the term channel and would incorrectly let the isolated
+// population commit; the question-channel rival must block the commit and
+// reach the offer-only pool instead, exactly like a term-channel rival
+// does.
+func TestResolveSubjects_ConfirmedKindVectorCensus_FullQuestionRivalBlocksCommitEvenWithZeroTermChannelRivals(t *testing.T) {
+	t.Parallel()
+	kind := contextfabric.SubjectWorkItem
+	term := "widget rollout"
+	subject := contextfabric.SubjectRef{Kind: kind, CanonicalID: "wi_1", Label: "Widget Rollout Backend Task"}
+	node := candidateNode(kind, subject.CanonicalID, subject.Label, 0.9, "*")
+	questionRival := candidateNode(kind, "wi_question_rival", "A Rival Found Only By The Full Question", 0, []string{"full-chaos/dev-health-acr"})
+	questionRival.Mechanism = contextfabric.MatchVector
+	similarity := 0.91
+	questionRival.VectorSimilarity = &similarity
+	request := testRequest()
+	backend := &fakeGraphBackend{
+		enableSearchKind:          true,
+		searchResults:             map[string][]CandidateNode{term: {}},
+		searchKindResults:         map[string]map[contextfabric.SubjectKind][]CandidateNode{term: {kind: {node}}},
+		searchTruncated:           true,
+		vectorMechanismConfigured: true,
+		enableConfirmedKindVectorCensus: true,
+		confirmedKindVectorCensusResult: ConfirmedKindVectorCensusOutcome{
+			// Term channel: Complete, zero rivals -- the census alone would
+			// let this commit (see the No-Rivals test above).
+			State: ConfirmedKindVectorScopeComplete, PopulationCount: 5, EnumeratedCount: 5, RivalCountAboveTau: 0,
+		},
+		enableSearchQuestion: true,
+		searchQuestionResults: map[string][]CandidateNode{
+			request.Question: {questionRival},
+		},
+	}
+	confirmed := &contextfabric.ConfirmedExpectedKind{Kind: kind}
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	tracer := &recordingTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+	resolution, offerMaterial, err := ResolveSubjects(context.Background(), principal, request, testInterpreted(term), deps, confirmed, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want ambiguous -- a full-question-channel rival exists even though the term-channel census found zero rivals", resolution.Committed)
+	}
+	found := false
+	for _, option := range offerMaterial.CandidateOptions {
+		if option.CanonicalID == "wi_question_rival" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("offerMaterial.CandidateOptions = %+v, want it to include the full-question-channel rival wi_question_rival", offerMaterial.CandidateOptions)
+	}
+	event, ok := confirmedKindScopeEvent(tracer.events)
+	if !ok {
+		t.Fatal("no confirmed_kind_scope event captured")
+	}
+	if event.ConfirmedKindVectorScopeRivalCountAboveTau != 0 {
+		t.Fatalf("event.ConfirmedKindVectorScopeRivalCountAboveTau = %d, want 0 -- the TERM channel genuinely found no rival", event.ConfirmedKindVectorScopeRivalCountAboveTau)
+	}
+	if event.ConfirmedKindVectorScopeQuestionChannelRivalCount != 1 {
+		t.Fatalf("event.ConfirmedKindVectorScopeQuestionChannelRivalCount = %d, want 1 -- the FULL-QUESTION channel found the rival the term channel missed", event.ConfirmedKindVectorScopeQuestionChannelRivalCount)
+	}
+	decision, ok := lastDecisionEvent(tracer.events)
+	if !ok || decision.ConfirmedKindVectorCensusDecisive {
+		t.Fatalf("decision event = %+v, ok=%v, want ConfirmedKindVectorCensusDecisive=false -- planCompleteViaVectorCensus must not fire while a question-channel rival exists", decision, ok)
+	}
+}
