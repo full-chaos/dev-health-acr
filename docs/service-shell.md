@@ -21,7 +21,7 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_REQUEST_TIMEOUT` | `15s` | Per-request context deadline |
 | `ACR_READ_HEADER_TIMEOUT` | `5s` | HTTP header timeout |
 | `ACR_READ_TIMEOUT` | `20s` | HTTP read timeout |
-| `ACR_WRITE_TIMEOUT` | `20s` | HTTP write timeout |
+| `ACR_WRITE_TIMEOUT` | `20s` | HTTP write timeout — must stay >= `ACR_REQUEST_TIMEOUT` + 5s (CHAOS-4330); rejected at startup otherwise |
 | `ACR_IDLE_TIMEOUT` | `60s` | HTTP idle timeout |
 | `ACR_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown budget |
 | `ACR_MINIMUM_SIDECAR_VERSION` | `0.1.0` | Capabilities handshake floor |

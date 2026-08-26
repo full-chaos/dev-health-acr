@@ -33,6 +33,21 @@ const (
 	// unless an operator explicitly opts in by setting this variable.
 	minAnswerReuseMaxAge = time.Minute
 	maxAnswerReuseMaxAge = 24 * time.Hour
+	// minWriteTimeoutHeadroom (CHAOS-4330) is the minimum margin
+	// ACR_WRITE_TIMEOUT (http.Server.WriteTimeout) must clear above
+	// ACR_REQUEST_TIMEOUT (the application-level per-request budget
+	// timeoutMiddleware enforces). Set to exactly the DEFAULT pair's own
+	// margin (defaultWriteTimeout 20s - defaultRequestTimeout 15s = 5s) --
+	// the ticket that added this check is explicit the defaults are
+	// already coherent and out of scope to change, so this is the largest
+	// headroom Validate can require without rejecting them. A deployment
+	// that raises ACR_REQUEST_TIMEOUT (e.g. to 490s for real investigations)
+	// without raising ACR_WRITE_TIMEOUT to match has the server forcibly
+	// close the connection mid-write while the handler is still running --
+	// confirmed live: the handler had already logged "request completed
+	// ... status 200" (it measures its own processing, not the wire) while
+	// every client actually saw a dropped connection.
+	minWriteTimeoutHeadroom = 5 * time.Second
 )
 
 // Config contains only process-level configuration. Credentials and request
@@ -285,6 +300,30 @@ func (c Config) Validate() error {
 		if value <= 0 {
 			return fmt.Errorf("%s must be positive", name)
 		}
+	}
+	// CHAOS-4330: ACR_WRITE_TIMEOUT (http.Server.WriteTimeout, the wire-level
+	// deadline for writing the response) must clear ACR_REQUEST_TIMEOUT (the
+	// application-level per-request budget) by at least minWriteTimeoutHeadroom
+	// -- otherwise a real investigation that legitimately uses its whole
+	// request budget has the server close the connection mid-write, while
+	// the handler (which measures its own processing, not the wire) still
+	// logs a successful "request completed ... status 200". Fail closed at
+	// startup rather than let that pair reach production silently.
+	//
+	// Computed as a subtraction, not `c.RequestTimeout + minWriteTimeoutHeadroom
+	// > c.WriteTimeout` (codex review, CHAOS-4330): both operands are
+	// time.Duration (int64 nanoseconds) and are only bounds-checked above for
+	// being positive, not for an upper limit, so adding two independently
+	// large-but-valid values could overflow and wrap negative, silently
+	// accepting a pair this check exists to reject. Subtracting two positive
+	// durations can itself only ever shrink the magnitude, never wrap --
+	// unlike the addition it replaces, this cannot overflow for any two
+	// valid (positive, non-overflowing on their own) time.Duration inputs.
+	if c.WriteTimeout-c.RequestTimeout < minWriteTimeoutHeadroom {
+		return fmt.Errorf(
+			"ACR_WRITE_TIMEOUT (%s) must be at least %s more than ACR_REQUEST_TIMEOUT (%s), or a real investigation using its full request budget can have its response write cut off mid-handler",
+			c.WriteTimeout, minWriteTimeoutHeadroom, c.RequestTimeout,
+		)
 	}
 	if strings.TrimSpace(c.MinimumSidecarVersion) == "" {
 		return errors.New("ACR_MINIMUM_SIDECAR_VERSION is required")

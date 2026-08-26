@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -233,5 +234,97 @@ func TestRequestIDIsAvailableToDownstreamMiddleware(t *testing.T) {
 	}
 	if response.Header().Get("X-Request-ID") != testRequestID {
 		t.Fatalf("response header did not receive request ID: %q", response.Header().Get("X-Request-ID"))
+	}
+}
+
+// brokenResponseWriter simulates exactly the CHAOS-4330 mechanism:
+// http.Server.WriteTimeout (or any other mid-write connection failure)
+// closes the connection AFTER a handler has already decided its status
+// code, so every Write call after that point fails.
+type brokenResponseWriter struct {
+	http.ResponseWriter
+	err error
+}
+
+func (b *brokenResponseWriter) Write([]byte) (int, error) { return 0, b.err }
+
+// findLogEntry parses each newline-delimited JSON log line and returns the
+// last one whose "msg" matches -- accessLogMiddleware's own line, not any
+// other log statement a handler might have already emitted.
+func findLogEntry(t *testing.T, buffer *bytes.Buffer, msg string) map[string]any {
+	t.Helper()
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line is not valid JSON: %s (%v)", line, err)
+		}
+		if entry["msg"] == msg {
+			found = entry
+		}
+	}
+	if found == nil {
+		t.Fatalf("no log line with msg=%q found in: %s", msg, buffer.String())
+	}
+	return found
+}
+
+// CHAOS-4330: the handler decides `status` (here, 200 from handleHealth's
+// own writeJSON call) BEFORE the body write that this test forces to fail.
+// Before the fix, "request completed" logged status=200 regardless --
+// identical to a real success, even though the client received nothing.
+func TestAccessLogDoesNotClaimSuccessWhenTheResponseWriteFails(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	app := testApp(t)
+	app.logger = testLogger(buffer)
+	rawErrorText := "write tcp 10.0.0.1:8080->10.0.0.2:54321: use of closed network connection"
+	broken := &brokenResponseWriter{
+		ResponseWriter: httptest.NewRecorder(),
+		err:            errors.New(rawErrorText),
+	}
+
+	app.Handler().ServeHTTP(broken, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	entry := findLogEntry(t, buffer, "request completed")
+	if entry["level"] != "WARN" {
+		t.Fatalf("level = %v, want WARN when the response write failed", entry["level"])
+	}
+	// A classified bucket, never the raw error text (codex review,
+	// CHAOS-4330: this repo's own observability rule forbids raw error
+	// text as a log attribute -- it can carry a remote address, as the
+	// fixture error above deliberately does, to prove this).
+	if entry["write_error"] != "write_failed" {
+		t.Fatalf("write_error = %v, want the classified bucket \"write_failed\"", entry["write_error"])
+	}
+	if strings.Contains(fmt.Sprint(entry), "10.0.0.1") {
+		t.Fatalf("log entry leaked raw write error text: %#v", entry)
+	}
+	// status still reports what the handler decided (200) -- this test does
+	// not want that changed, only that "request completed" at INFO with no
+	// other signal can no longer be read as proof the client received it.
+	if entry["status"] != float64(http.StatusOK) {
+		t.Fatalf("status = %v, want 200 (unchanged -- write_error is the added signal, not a replaced status)", entry["status"])
+	}
+}
+
+// A genuinely successful request must NOT gain a write_error field or a
+// WARN level -- this is the fix's own negative case, proving it only
+// engages on an actual write failure.
+func TestAccessLogStaysInfoWhenTheResponseWriteSucceeds(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	app := testApp(t)
+	app.logger = testLogger(buffer)
+
+	app.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	entry := findLogEntry(t, buffer, "request completed")
+	if entry["level"] != "INFO" {
+		t.Fatalf("level = %v, want INFO on a genuinely successful write", entry["level"])
+	}
+	if _, ok := entry["write_error"]; ok {
+		t.Fatalf("unexpected write_error field on a successful write: %#v", entry)
 	}
 }
