@@ -2780,6 +2780,43 @@ func TestChaos4099_ScopeTelemetrySurvivesACancelledRead(t *testing.T) {
 	}
 }
 
+// TestChaos4257_AlreadyCancelledContextStillResolvesScope is
+// TestChaos4099_ScopeTelemetrySurvivesACancelledRead's deterministic
+// companion (CHAOS-4257, codex R1 finding: the existing test's `go cancel()`
+// race does not deterministically exercise the third race outcome it was
+// added to cover -- cancellation landing before ReadFacts's own first line
+// runs).
+//
+// Rather than racing a goroutine, this cancels ctx BEFORE calling ReadFacts
+// at all, which pins the exact code path the CHAOS-4257 fix touches: the
+// ctx.Err() check that used to run ahead of scope resolution (returning a
+// bare CanonicalFactBundle{}, Scope always nil) now runs immediately after
+// it, so a context that is ALREADY Done on entry still gets a resolved
+// Scope on its returned bundle -- deterministically, on every run, no skip
+// branch needed.
+func TestChaos4257_AlreadyCancelledContextStillResolvesScope(t *testing.T) {
+	t.Parallel()
+
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result:     FactProviderResult{State: SourceAvailable},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	bundle, err := registry.ReadFacts(ctx, storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeRepo}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if bundle.Scope == nil {
+		t.Fatal("the resolved scope was discarded for a context already cancelled at ReadFacts entry")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The eligibility table's own admission rule
 // ---------------------------------------------------------------------------
