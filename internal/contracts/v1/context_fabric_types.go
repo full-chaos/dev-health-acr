@@ -1387,6 +1387,20 @@ type ContextFabricProjectionCheckpoint struct {
 	SourceVersion    string    `json:"source_version"`
 	BackendWatermark string    `json:"backend_watermark"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	// RowsApplied (CHAOS-4305) is a durable, monotonic count of rows this
+	// (org, epoch, source) checkpoint has applied to the backend, advanced
+	// in the SAME CAS statement that moves Cursor
+	// (pgprojection.CheckpointStore.CompareAndSwapProjectionCheckpoint/
+	// ...ForEpoch) -- it can never diverge from the cursor it travels with.
+	// This closes the checkpoint<->cf_build_source_progress non-atomicity
+	// gap: projectionrun.Coordinator's runBuildPair now seeds each tick's
+	// row-count accumulator from this field (via ProjectionRun.RowsApplied)
+	// instead of from cf_build_source_progress.rows_projected, a
+	// separately-written value that could go durably stale if
+	// RecordSourceProgress failed for a whole drain. Same "not part of any
+	// external wire contract" status as Epoch above -- the json tag exists
+	// only for parity with its sibling fields.
+	RowsApplied int64 `json:"rows_applied"`
 }
 
 type ContextFabricCapabilities struct {

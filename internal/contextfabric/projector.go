@@ -45,12 +45,20 @@ type ProjectionRun struct {
 	CompleteEnumeration bool
 	// ItemsApplied (CHAOS-3898 S2a-2) is the sum of the backend receipt's
 	// per-kind applied counts (entities+edges+contents+episodes+tombstones)
-	// for this ONE tick's batch -- zero when Applied is false. A
-	// build-completion classifier (projectionrun.Coordinator) accumulates
-	// this across ticks into cf_build_source_progress's cumulative
-	// rows_projected count; nothing in RunOnce's own accept/refuse
-	// decision depends on it.
+	// for this ONE tick's batch -- zero when Applied is false.
 	ItemsApplied int
+	// RowsApplied (CHAOS-4305) is the checkpoint's own durable
+	// ProjectionCheckpoint.RowsApplied AFTER this call: the checkpoint's
+	// pre-existing value plus ItemsApplied when a batch applied, or the
+	// pre-existing value unchanged otherwise. It rides in the SAME CAS
+	// statement that advances Cursor, so it can never diverge from it.
+	// projectionrun.Coordinator's runBuildPair accumulates its per-tick row
+	// count from THIS field, not from cf_build_source_progress's
+	// separately-written rows_projected column -- closing the permanent
+	// undercount CHAOS-4305 describes (a whole drain's RecordSourceProgress
+	// writes, including the finalizing retry, all failing while the
+	// checkpoint itself keeps advancing).
+	RowsApplied int64
 }
 
 func NewProjectionWorker(source ProjectionSource, backend ProjectionBackend, checkpoints ProjectionCheckpointStore, options ProjectionWorkerOptions) (*ProjectionWorker, error) {
@@ -87,9 +95,9 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 			return ProjectionRun{}, err
 		}
 		if progressed {
-			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced}, nil
+			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied}, nil
 		}
-		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor}, nil
+		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, RowsApplied: checkpoint.RowsApplied}, nil
 	}
 	if err := batch.Validate(); err != nil {
 		return ProjectionRun{}, fmt.Errorf("projection batch: %w", err)
@@ -132,6 +140,12 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		claim := ProjectionCheckpoint{
 			OrgID: orgID, Source: sourceName, Cursor: checkpoint.Cursor, SourceVersion: batch.SourceVersion,
 			BackendWatermark: checkpoint.BackendWatermark, UpdatedAt: w.now().UTC(),
+			// RowsApplied carried through unchanged (CHAOS-4305): claiming a
+			// SourceVersion applies zero rows by construction (cursor left
+			// UNCHANGED, per this block's own doc comment above) -- a fresh
+			// literal that omitted this would silently reset an
+			// already-nonzero counter back to 0.
+			RowsApplied: checkpoint.RowsApplied,
 		}
 		if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, claim); err != nil {
 			if errors.Is(err, ErrProjectionConflict) {
@@ -148,9 +162,15 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	if receipt.BatchID != batch.BatchID {
 		return ProjectionRun{}, fmt.Errorf("%w: backend receipt does not match batch", ErrProjectionConflict)
 	}
+	itemsApplied := receipt.EntitiesApplied + receipt.EdgesApplied + receipt.ContentsApplied + receipt.EpisodesApplied + receipt.TombstonesApplied
 	updated := ProjectionCheckpoint{
 		OrgID: orgID, Source: sourceName, Cursor: batch.NextCursor, SourceVersion: batch.SourceVersion,
 		BackendWatermark: receipt.BackendWatermark, UpdatedAt: w.now().UTC(),
+		// RowsApplied (CHAOS-4305) accumulates in the SAME CAS statement
+		// that advances Cursor, so it can never diverge from it -- the
+		// atomicity fix. checkpoint.RowsApplied here is the pre-call value
+		// (unchanged by the claim sub-path above, which never touches it).
+		RowsApplied: checkpoint.RowsApplied + int64(itemsApplied),
 	}
 	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
 		if errors.Is(err, ErrProjectionConflict) {
@@ -162,7 +182,8 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		BatchID: batch.BatchID, Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: batch.NextCursor,
 		BackendWatermark: receipt.BackendWatermark, Applied: true, AppliedAt: receipt.AppliedAt,
 		CompleteEnumeration: batch.CompleteEnumeration,
-		ItemsApplied:        receipt.EntitiesApplied + receipt.EdgesApplied + receipt.ContentsApplied + receipt.EpisodesApplied + receipt.TombstonesApplied,
+		ItemsApplied:        itemsApplied,
+		RowsApplied:         updated.RowsApplied,
 	}, nil
 }
 

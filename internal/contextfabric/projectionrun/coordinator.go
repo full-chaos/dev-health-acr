@@ -970,6 +970,15 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 // reported a non-pending mode, it attempts Flip; Flip's own gate refuses
 // harmlessly until that is true, so calling it unconditionally every tick
 // once a build is open is always safe.
+//
+// byName (from SourceProgress) is still read to decide which sources are
+// ALREADY terminal (skip them) -- but, since CHAOS-4305, it is no longer
+// the source of the row-count runBuildPair seeds a fresh tick's
+// accumulator from. That now comes from the target epoch's own checkpoint
+// (ProjectionRun.RowsApplied, via runBuildPair's first RunOnce call): the
+// checkpoint's rows_applied column moves in the SAME CAS statement as its
+// cursor, so it cannot go stale independently of cf_build_source_progress
+// the way byName[source].RowsProjected could.
 func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contextfabric.OrgGraphLifecycle) {
 	if row.TargetEpoch == nil {
 		c.logger.WarnContext(ctx, "graph lifecycle row is building with no target epoch; skipping", "org_id", orgID)
@@ -1021,8 +1030,7 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 			}
 			continue
 		}
-		priorRows := byName[source].RowsProjected
-		c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, priorRows, &budget)
+		c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
 	}
 	c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)
 
@@ -1066,10 +1074,23 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 // runPair's doc comment for the fairness rationale). RecordSourceProgress
 // is durably upserted after every applied batch, not only at the end, so
 // a mid-drain failure never loses credit for the batches that DID apply.
-func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, priorRows int64, budget *int) {
+//
+// total (CHAOS-4305) is seeded and refreshed from run.RowsApplied on every
+// RunOnce call, never from a caller-supplied priorRows. run.RowsApplied is
+// the target epoch's own checkpoint.RowsApplied, which advances in the
+// SAME CAS statement as the checkpoint's cursor -- so even when EVERY
+// RecordSourceProgress write in a drain fails, including the finalizing
+// retry below, the NEXT tick's runBuildPair call still starts from the
+// correct cumulative total via its own first RunOnce's checkpoint read.
+// This is what closes the permanent undercount: before, a whole-drain
+// RecordSourceProgress outage left the NEXT tick seeding from
+// cf_build_source_progress's own last-successful (now stale) value, with
+// no way to recover the lost batches' rows once the checkpoint had already
+// advanced past them.
+func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) {
 	key := orgID + "\x00build\x00" + source
 	started := c.now()
-	total := priorRows
+	var total int64
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
 	// lastMode/progressStale track the durable RecordSourceProgress write
@@ -1110,9 +1131,12 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			}
 			break
 		}
+		// CHAOS-4305: always take the checkpoint-derived total, applied or
+		// not -- on a no-op attempt (available=false) it is simply the
+		// unchanged pre-existing count, still correct.
+		total = run.RowsApplied
 		if run.Applied {
 			applied++
-			total += int64(run.ItemsApplied)
 		}
 		mode, terminal := classifyBuildCompletion(run)
 		if !terminal {
@@ -1124,17 +1148,18 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, mode, total, c.now()); rerr != nil {
 			// Codex round-2 F1: log and KEEP DRAINING (do not stop here).
 			// The next batch's own RecordSourceProgress call writes the
-			// FULL in-memory `total` accumulated so far this call -- since
-			// the checkpoint has already advanced regardless of whether
-			// THIS write succeeded, a later successful write within the
-			// same runBuildPair call self-heals the gap completely. Only
-			// stopping immediately (CHAOS-3826 round-1's own fix) removed
-			// that self-healing chance: the checkpoint had already moved
-			// past this batch, so priorRows on the NEXT tick would read
-			// the stale pre-failure total forever, permanently
-			// undercounting rows this batch genuinely applied -- worse
-			// than the transient staleness this fix accepts. progressStale
-			// tracks whether the finalizing write below still needs to run.
+			// FULL `total` accumulated so far -- since the checkpoint has
+			// already advanced regardless of whether THIS write succeeded,
+			// a later successful write within the same runBuildPair call
+			// self-heals the gap completely. CHAOS-4305: even if NO later
+			// write in this drain (nor the finalizing retry below) ever
+			// succeeds, `total` itself can no longer go stale across ticks
+			// -- it is re-derived from run.RowsApplied (the checkpoint's own
+			// durable counter) on every call, never carried forward from
+			// this table. progressStale only tracks whether
+			// cf_build_source_progress's own DISPLAY row still needs the
+			// finalizing retry below; it no longer gates future-tick
+			// correctness.
 			c.logger.WarnContext(ctx, "record build source progress failed; will retry before the drain returns", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
 			progressStale = true
 		} else {
@@ -1157,20 +1182,20 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	// Finalizing write (Codex round-2 F1): if the LAST RecordSourceProgress
 	// attempt in the loop above failed and nothing afterward re-wrote it,
 	// retry once more with the final accumulated total before this call
-	// returns -- once runBuildPair returns, the next tick's priorRows can
-	// only ever see what was durably recorded here, so this is the last
-	// chance to avoid a permanent undercount from a transient write
-	// failure. A failure here is a genuine, bounded residual gap (Postgres
-	// unavailable for this whole drain) -- logged loudly, not silently
-	// accepted, and self-heals on the NEXT tick's own successful write
-	// (which reads a corrected total by re-applying the same batches, if
-	// the source has not already advanced its checkpoint past them --
-	// otherwise this is the SAME pre-existing checkpoint/progress
-	// non-atomicity gap performRebuild's own sibling paths carry today,
-	// not something this ticket introduces or is scoped to close).
+	// returns. CHAOS-4305: this is no longer the last chance to avoid a
+	// permanent undercount -- `total` is checkpoint-derived (run.RowsApplied),
+	// so the NEXT tick's runBuildPair call re-derives the correct value on
+	// its own regardless of whether this retry succeeds. A failure here only
+	// means cf_build_source_progress's own rows_projected DISPLAY column
+	// (read by SourceProgress/Flip's completion-mode check, telemetry, and
+	// any external status read) stays stale until some future write for
+	// this (org, epoch, source) succeeds -- logged loudly, not silently
+	// accepted, and never affects Flip (which gates on CompletionMode only)
+	// or a later tick's accumulation (which no longer reads this column at
+	// all).
 	if progressStale {
 		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, lastMode, total, c.now()); rerr != nil {
-			c.logger.WarnContext(ctx, "record build source progress failed after retry; rows_projected may undercount until a future successful write", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+			c.logger.WarnContext(ctx, "record build source progress failed after retry; the cf_build_source_progress display row may stay stale until a future successful write (rows_projected accumulation itself is unaffected -- see runBuildPair's own doc comment)", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
 		}
 	}
 	if batches > 0 {

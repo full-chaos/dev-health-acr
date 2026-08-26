@@ -172,12 +172,25 @@ func TestChaos3826_RecordSourceProgressFailureSelfHealsWithinTheSameTick(t *test
 // TestChaos3826_PersistentRecordSourceProgressFailureRetriesOnceThenLogsTheResidualGap
 // covers the OTHER half of codex round-2 F1: when RecordSourceProgress
 // fails for the REST of the drain (not just once), the finalizing retry
-// after the loop also fails, and durable rows_projected is left at
-// whatever the LAST successful write recorded -- a bounded, logged,
-// pre-existing gap (checkpoint/progress non-atomicity predates CHAOS-3826
-// entirely), not a crash or a silent, unbounded loss. The batches
-// genuinely applied to the backend regardless -- only the lifecycle
-// bookkeeping row is stale until a future tick's write succeeds.
+// after the loop also fails, and this call's own cf_build_source_progress
+// write lands nothing -- not a crash or a silent, unbounded loss, and the
+// batches genuinely applied to the backend regardless.
+//
+// CHAOS-4305 closed the follow-on risk this comment used to describe here
+// ("stale until a future tick's write succeeds" implied the STORED total
+// itself could recover): before that fix, a future tick's own priorRows
+// seeded from this now-empty table, so if the source had nothing left to
+// re-apply (checkpoint already past the whole backlog), a later successful
+// write would durably record 0 -- a PERMANENT undercount, not a transient
+// one. Since CHAOS-4305, runBuildPair's `total` is re-derived from the
+// checkpoint's own rows_applied column (ProjectionRun.RowsApplied) on every
+// call, never from this table, so a later tick reports the correct total
+// regardless of whether cf_build_source_progress's own row ever recovers --
+// see TestChaos4305_RowsProjectedSurvivesAWholeTickOfPersistentProgressWriteFailures
+// (lifecycle_integration_test.go) for that cross-tick proof against the
+// real stores. This test still stands: it proves this ONE call's own
+// cf_build_source_progress write genuinely lands nothing when every
+// attempt fails, which remains true and worth pinning.
 func TestChaos3826_PersistentRecordSourceProgressFailureRetriesOnceThenLogsTheResidualGap(t *testing.T) {
 	backend := newFakeBackend()
 	checkpoints := newFakeCheckpointStore()
@@ -215,6 +228,59 @@ func TestChaos3826_PersistentRecordSourceProgressFailureRetriesOnceThenLogsTheRe
 	require.Empty(t, progress, "no write ever succeeded, so nothing should be durably recorded")
 	if got := store.recordCallCount(); got != pages+1 {
 		t.Fatalf("expected %d RecordSourceProgress attempts (one per applied batch, plus the finalizing retry counted the same as any other call), got %d", pages+1, got)
+	}
+}
+
+// TestChaos3826_FinalizingRetryRecoversWhenOnlyTheLastLoopWriteFails is
+// codex R1's CHAOS-4305 coverage-gap follow-up: the two tests above only
+// exercise "every write succeeds but one" (self-heals mid-drain, without
+// the retry) and "every write fails including the retry" (nothing recovers
+// either way) -- neither actually depends on the finalizing retry firing.
+// This pins the retry's own specific contribution: when ONLY the drain's
+// LAST loop iteration's RecordSourceProgress call fails (the terminal
+// batch, the one no LATER mid-drain write exists to self-heal), the
+// finalizing write after the loop is the ONLY thing that durably records
+// this tick's progress at all. Removing the finalizing retry would leave
+// cf_build_source_progress empty after this test, exactly like the
+// persistent-failure test above.
+func TestChaos3826_FinalizingRetryRecoversWhenOnlyTheLastLoopWriteFails(t *testing.T) {
+	backend := newFakeBackend()
+	checkpoints := newFakeCheckpointStore()
+	const pages = 5
+	source := &lifecycleFakeSource{name: "source-a", pages: pages}
+	// failRecordAtCall=pages, persistFailure=false: only the LAST
+	// (terminal-batch) RecordSourceProgress call in the loop fails; nothing
+	// after it in the loop would ever retry on its own -- only the
+	// finalizing write after the loop can recover it.
+	store := &fakeFaultyLifecycleStore{failRecordAtCall: pages}
+	observer := &recordingObserver{}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Lifecycle: store, EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow: time.Hour, DrainBatchBudget: pages, Observer: observer, Logger: discardLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Rebuild(context.Background(), "org-1"))
+
+	coordinator.Tick(context.Background())
+
+	if got := source.callCount(); got != pages {
+		t.Fatalf("expected the whole %d-page backlog to drain despite the terminal write failing, got %d calls", pages, got)
+	}
+	progress, err := store.SourceProgress(context.Background(), "org-1", 1)
+	require.NoError(t, err)
+	require.Len(t, progress, 1, "the finalizing retry must be what durably records this tick's progress")
+	if progress[0].RowsProjected != pages {
+		t.Fatalf("expected the finalizing retry to record the full total %d, got %d", pages, progress[0].RowsProjected)
+	}
+	if progress[0].CompletionMode != contextfabric.BuildCompletionPagedFinal {
+		t.Fatalf("expected the source to reach a terminal completion mode via the finalizing retry, got %q", progress[0].CompletionMode)
+	}
+	// pages calls in the loop (the last one failing) + exactly one retry.
+	if got := store.recordCallCount(); got != pages+1 {
+		t.Fatalf("expected %d RecordSourceProgress attempts (one per batch, plus exactly one finalizing retry), got %d", pages+1, got)
 	}
 }
 

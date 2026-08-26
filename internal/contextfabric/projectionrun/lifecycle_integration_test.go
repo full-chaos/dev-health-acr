@@ -3,6 +3,7 @@ package projectionrun_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -578,4 +579,122 @@ func TestNewCoordinatorRequiresEpochCheckpointsWhenLifecycleIsSet(t *testing.T) 
 		Logger:         discardLogger(),
 	})
 	require.Error(t, err)
+}
+
+// failingProgressLifecycle wraps a REAL pglifecycle.Store (embedding it, so
+// every other method -- Get/BeginBuild/SourceProgress/Flip/Rollback/
+// BeginRetire/DrainingRetirements/AdvanceRetirement -- delegates to the
+// genuine Postgres-backed CAS implementation, per this file's own stated
+// philosophy) and injects a controllable RecordSourceProgress failure. This
+// is the CHAOS-4305 counterpart of chaos3826_drain_hardening_test.go's
+// fakeFaultyLifecycleStore, bound to the real store instead of
+// reimplementing CAS semantics by hand, so the fix under test (which
+// depends on the REAL pgprojection.CheckpointStore's CAS atomically
+// carrying rows_applied) is exercised against genuine Postgres end to end.
+type failingProgressLifecycle struct {
+	*pglifecycle.Store
+	mu   sync.Mutex
+	fail bool
+}
+
+func (f *failingProgressLifecycle) setFail(fail bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = fail
+}
+
+func (f *failingProgressLifecycle) RecordSourceProgress(ctx context.Context, orgID string, epoch int64, source string, mode contextfabric.BuildCompletionMode, rowsProjected int64, now time.Time) error {
+	f.mu.Lock()
+	failing := f.fail
+	f.mu.Unlock()
+	if failing {
+		return errors.New("failingProgressLifecycle: injected progress write failure")
+	}
+	return f.Store.RecordSourceProgress(ctx, orgID, epoch, source, mode, rowsProjected, now)
+}
+
+var _ contextfabric.GraphLifecycleStore = (*failingProgressLifecycle)(nil)
+
+// TestChaos4305_RowsProjectedSurvivesAWholeTickOfPersistentProgressWriteFailures
+// is CHAOS-4305's own red-first proof, against the REAL pglifecycle.Store/
+// pgprojection.CheckpointStore this file's philosophy insists on (only
+// RecordSourceProgress is faked, via failingProgressLifecycle -- the
+// checkpoint CAS this fix actually depends on is the genuine Postgres
+// implementation throughout).
+//
+// Before the fix: runBuildPair seeded a fresh tick's `total` from
+// cf_build_source_progress.rows_projected (byName[source].RowsProjected).
+// If EVERY RecordSourceProgress call in a drain fails, including the
+// finalizing retry, that table stays empty. Once writes recover on a LATER
+// tick, the source has nothing left to re-apply (the checkpoint already
+// advanced past the whole backlog in tick 1), so runBuildPair would durably
+// record rows_projected=0 for a source that had genuinely applied `pages`
+// batches -- a PERMANENT undercount, not a transient one.
+//
+// After the fix: runBuildPair seeds `total` from ProjectionRun.RowsApplied,
+// which mirrors the checkpoint's own rows_applied column -- written
+// atomically with the cursor by pgprojection.CheckpointStore's CAS
+// regardless of RecordSourceProgress's failure. The next tick reports the
+// correct, full total.
+func TestChaos4305_RowsProjectedSurvivesAWholeTickOfPersistentProgressWriteFailures(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionRunTestDatabase(t, ctx)
+	realLifecycle, err := pglifecycle.NewStore(db)
+	require.NoError(t, err)
+	lifecycle := &failingProgressLifecycle{Store: realLifecycle}
+	checkpoints, err := pgprojection.NewCheckpointStore(db)
+	require.NoError(t, err)
+	backend := newFakeBackend()
+	const pages = 5
+	source := &lifecycleFakeSource{name: "source-a", pages: pages}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:  []string{"org-1"},
+		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Lifecycle: lifecycle, EpochCheckpoints: checkpoints.ForEpoch,
+		GraceWindow: time.Hour, DrainBatchBudget: pages, Logger: discardLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Rebuild(ctx, "org-1"))
+
+	// Tick 1: RecordSourceProgress fails for the WHOLE tick, including the
+	// finalizing retry -- the backend still fully drains (the checkpoint
+	// advances independently of this failure), but nothing durable lands in
+	// cf_build_source_progress.
+	lifecycle.setFail(true)
+	coordinator.Tick(ctx)
+	require.Equal(t, pages, source.callCount(), "the backlog must still fully apply despite every progress write failing")
+
+	progressAfterTick1, err := realLifecycle.SourceProgress(ctx, "org-1", 1)
+	require.NoError(t, err)
+	require.Empty(t, progressAfterTick1, "no RecordSourceProgress write ever succeeded in tick 1")
+
+	// The checkpoint's own durable counter DID advance, atomically with the
+	// cursor -- prove it directly before trusting tick 2's recovery.
+	epoch1, err := checkpoints.LoadProjectionCheckpointForEpoch(ctx, "org-1", 1, "source-a")
+	require.NoError(t, err)
+	require.Equal(t, int64(pages), epoch1.RowsApplied,
+		"checkpoint.RowsApplied must reflect every genuinely-applied batch regardless of RecordSourceProgress's failure")
+
+	// Tick 2: writes recover. Before CHAOS-4305 this would durably record
+	// rows_projected=0 (seeded from the still-empty cf_build_source_progress
+	// row) even though `pages` batches had already applied and nothing is
+	// left for the source to re-apply -- a permanent undercount.
+	lifecycle.setFail(false)
+	coordinator.Tick(ctx)
+
+	progressAfterTick2, err := realLifecycle.SourceProgress(ctx, "org-1", 1)
+	require.NoError(t, err)
+	require.Len(t, progressAfterTick2, 1)
+	require.Equal(t, int64(pages), progressAfterTick2[0].RowsProjected,
+		"rows_projected must reflect the FULL backlog, not 0/stale -- CHAOS-4305's checkpoint-derived total must survive a whole tick of persistent progress-write failures")
+	// cursor_exhausted, not paged_final: tick 1's own terminal batch (the one
+	// that claimed CompleteEnumeration) is exactly the batch whose
+	// RecordSourceProgress write failed, so classifyBuildCompletion never
+	// got to record paged_final for it. Tick 2 discovers termination the
+	// OTHER way (Applied=false with a non-empty PreviousCursor) -- a
+	// different but still-terminal completion_mode, unrelated to CHAOS-4305
+	// (Flip only cares that a mode is non-pending, never which one).
+	require.Equal(t, contextfabric.BuildCompletionCursorExhausted, progressAfterTick2[0].CompletionMode)
 }
