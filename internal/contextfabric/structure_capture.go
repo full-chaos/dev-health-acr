@@ -72,10 +72,13 @@ type StructureSelectionEvent struct {
 	PriorResultID string
 	// Member is the closed StructureNeedKind vocabulary value this event
 	// reports a selection for -- "expected_kind" | "subject_anchor" |
-	// "subject_handle" (window rides its own, separately designed
-	// WindowSelectionEvent, design brief §2.4 -- window confirmation is
+	// "subject_handle" | "subject_candidate" (CHAOS-4012 #242 added the
+	// 4th; window rides its own, separately designed WindowSelectionEvent,
+	// design brief §2.4 -- window confirmation is
 	// canonicalizeEvidenceWindow's own code path, not
 	// canonicalizeStructure's, so it never reaches this capture point).
+	// pgstructureselection.knownMemberValues (migration 0034) is this
+	// vocabulary's own DB-enforced mirror -- keep both in lockstep.
 	Member string
 	// Offered is the COMPLETE option set the prior result's StructureNeeds
 	// offered for Member -- every entry of the relevant KindOptions/

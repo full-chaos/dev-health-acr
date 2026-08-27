@@ -65,8 +65,16 @@ import (
 // build-drain's row-count accumulator can no longer diverge from it. 0033
 // is CHAOS-4333's widening of ck_acr_cf_structure_supersession_member_
 // vocabulary to include subject_candidate (CHAOS-4012 added the enum
-// member without it).
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33}
+// member without it). 0034 is CHAOS-4355's own widening of the SIBLING
+// constraint on the SISTER table -- ck_acr_cf_structure_selections_
+// member_vocabulary on acr.context_fabric_structure_selections (0024) --
+// which 0033 did not touch (0033 widened
+// acr.context_fabric_structure_supersession_claims only; the two tables
+// each hold their own independent CHECK by design, see
+// pgstructureselection's own package doc comment). Adds subject_candidate
+// only, not window -- window is never a legitimate member of this table
+// (StructureSelectionEvent.Member's own doc comment).
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

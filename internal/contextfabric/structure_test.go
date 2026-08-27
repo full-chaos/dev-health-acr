@@ -1967,6 +1967,35 @@ func TestRecordStructureReceiptTelemetry_NoReceiptsRecordsNothing(t *testing.T) 
 	}
 }
 
+// TestRecordStructureReceiptTelemetry_CandidateReceiptsRecordApplied is
+// CHAOS-4355's own red-first proof (codex xhigh round-1 finding): CHAOS-4012
+// added subject_candidate as a 4th receipt-bearing member
+// (request.PriorCandidateReceipts, canonicalizeStructure's own receipt-member
+// loop), but recordStructureReceiptTelemetry's bearing slice was never
+// widened to match -- a redeemed candidate receipt emitted no
+// cf_structure_receipt{member=subject_candidate,...} decision-basis signal
+// at all, silently, exactly the class the standing telemetry-same-change
+// order exists to catch.
+func TestRecordStructureReceiptTelemetry_CandidateReceiptsRecordApplied(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	request := validInvestigationRequest()
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "r1", ReceiptID: "candr_1"}}
+	canon := requestStructureCanonicalization{Confirmed: []confirmedStructureMember{{Member: "subject_candidate"}}}
+
+	recordStructureReceiptTelemetry(context.Background(), telemetry, reusePrincipal(), request, canon)
+
+	if len(telemetry.structureReceipts) != 1 {
+		t.Fatalf("len(structureReceipts) = %d, want 1 (subject_candidate, receipt-bearing)", len(telemetry.structureReceipts))
+	}
+	if telemetry.structureReceipts[0].member != contractsv1.ContextFabricStructureNeedSubjectCandidate {
+		t.Errorf("member = %q, want subject_candidate", telemetry.structureReceipts[0].member)
+	}
+	if telemetry.structureReceipts[0].outcome != StructureReceiptApplied {
+		t.Errorf("outcome = %q, want applied", telemetry.structureReceipts[0].outcome)
+	}
+}
+
 // TestRecordStructureNeedsTelemetry_DisclosedAndOfferCounts pins the
 // disclosure + per-(member,source) count shape together, including the
 // zero-count-contributes-no-call rule.
@@ -2004,6 +2033,34 @@ func TestRecordStructureNeedsTelemetry_DisclosedAndOfferCounts(t *testing.T) {
 		if rec.count != want[rec.member] {
 			t.Errorf("record %+v: count = %d, want %d", rec, rec.count, want[rec.member])
 		}
+	}
+}
+
+// TestRecordStructureNeedsTelemetry_CandidateOfferCounts is CHAOS-4355's own
+// red-first proof (codex xhigh round-1 finding): recordStructureNeedsTelemetry's
+// offer-count loop covered KindOptions/AnchorOptions/HandleOptions only --
+// CandidateOptions (CHAOS-4012) contributed no cf_structure_offer_count
+// signal at all, silently, even though it is disclosed via Missing exactly
+// like the other three members.
+func TestRecordStructureNeedsTelemetry_CandidateOfferCounts(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	needs := &StructureNeeds{
+		Missing: []StructureNeedKind{"subject_candidate"},
+		CandidateOptions: []CandidateOption{
+			{OptionID: "opt1", OfferSource: "engine"},
+			{OptionID: "opt2", OfferSource: "engine"},
+		},
+	}
+
+	recordStructureNeedsTelemetry(context.Background(), telemetry, reusePrincipal(), needs)
+
+	if len(telemetry.structureOfferCounts) != 1 {
+		t.Fatalf("len(structureOfferCounts) = %d, want 1 (subject_candidate/engine)", len(telemetry.structureOfferCounts))
+	}
+	rec := telemetry.structureOfferCounts[0]
+	if rec.member != contractsv1.ContextFabricStructureNeedSubjectCandidate || rec.source != "engine" || rec.count != 2 {
+		t.Errorf("record = %+v, want member=subject_candidate source=engine count=2", rec)
 	}
 }
 
