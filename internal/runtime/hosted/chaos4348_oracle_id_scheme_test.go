@@ -47,10 +47,10 @@ func chaos4348ExpectedIDSchemePrefix(kind string) string {
 	return kind + ":"
 }
 
-// oracleIDSchemeMismatch reports whether canonicalID does NOT carry kind's
-// live scheme prefix -- computed directly from the (kind, id) pair the
-// oracle annex supplies, independent of whatever poolContainsSubject's own
-// pool-membership search finds. This is what makes the mismatch "fail
+// oracleIDSchemeMismatch reports whether canonicalID is NOT a well-formed
+// live-scheme id for kind -- computed directly from the (kind, id) pair
+// the oracle annex supplies, independent of whatever poolContainsSubject's
+// own pool-membership search finds. This is what makes the mismatch "fail
 // loudly instead of silently reading absent" (team-lead GO, 2026-08-26):
 // poolContainsSubject(kind, canonicalID) reads false for BOTH "the engine
 // genuinely never retrieved this subject" and "the oracle id itself is
@@ -58,11 +58,30 @@ func chaos4348ExpectedIDSchemePrefix(kind string) string {
 // regardless of what the pool search does or does not find, so a
 // regression in this specific field can never again hide behind an
 // otherwise-innocuous "absent" reading the way it did through Run F.
+//
+// codex adversarial review round 5 (HIGH, confirmed): a PREFIX check alone
+// (canonicalID starts with "<kind>.v2:") passes a truncated, malformed, or
+// extra-segment value that shares the prefix but that identity.Derive
+// could never actually produce (e.g. "project.v2:gitlab" with no second
+// segment at all) -- exactly the false-negative shape this field exists
+// to eliminate, just moved one layer down. For any kind identity.Registry
+// has migrated, this now requires identity.Segments(kind, canonicalID) --
+// Derive's own documented exact inverse -- to succeed: full structural
+// validation, not merely a prefix match. Stable, unmigrated kinds
+// (repository/team) have no such structured inverse to check against
+// (their whole scheme is "<kind>:<opaque-id>", any nonempty string
+// qualifies by definition), so those keep the prefix-plus-nonempty-suffix
+// check.
 func oracleIDSchemeMismatch(kind, canonicalID string) bool {
 	if kind == "" || canonicalID == "" {
 		return false
 	}
-	return !strings.HasPrefix(canonicalID, chaos4348ExpectedIDSchemePrefix(kind))
+	if _, ok := identity.Lookup(kind); ok {
+		_, segOK := identity.Segments(kind, canonicalID)
+		return !segOK
+	}
+	prefix := kind + ":"
+	return !strings.HasPrefix(canonicalID, prefix) || canonicalID == prefix
 }
 
 // chaos4348KnownResidualStaleAnchorIDs (CHAOS-4348 ticket comment,
@@ -123,6 +142,19 @@ func TestOracleIDSchemeMismatch(t *testing.T) {
 		// versa) must ALSO report a mismatch -- this function checks the
 		// FULL scheme, not merely "does it have a colon".
 		{"cross-kind id mismatches", "project", "repository:r1", true},
+		// codex adversarial review round 5 (HIGH, confirmed): a prefix-only
+		// check would pass every one of these -- they all start with
+		// "project.v2:" but identity.Derive could never have produced any
+		// of them. Full identity.Segments validation must catch each.
+		{"truncated v2 id (missing the second segment) mismatches", "project", "project.v2:gitlab", true},
+		{"v2 id with only the kind prefix and nothing else mismatches", "project", "project.v2:", true},
+		{"v2 id with an extra, unexpected third segment mismatches", "project", "project.v2:gitlab:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891:extra", true},
+		// NOT a case: identity.DecodeSegment never errors by design (its
+		// own doc comment) -- it only special-cases the exact "%3A"/"%25"
+		// tokens EncodeSegment emits and passes any other '%' sequence
+		// through literally, so "...70d529e0%ZZ" is well-formed (if
+		// unusual) input, not a rejectable malformed one.
+		{"stable repository id with an EMPTY suffix mismatches (not merely non-empty prefix)", "repository", "repository:", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
