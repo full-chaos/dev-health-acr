@@ -152,6 +152,42 @@ func TestCanonicalFieldRowsFailsClosedWhenMultipleFieldsAreRowsShaped(t *testing
 	}
 }
 
+// TestAttachCanonicalRowsReportsTruncatedOnAmbiguousDropEvenThoughNothingWasAttached
+// is codex CHAOS-4355 R3's P2 finding: attachCanonicalRows used to union
+// wasTruncated into its return value AFTER the `len(rows) == 0` early
+// continue, so canonicalFieldRows' fail-closed ambiguous-fields case (which
+// returns rows=nil, truncated=true) never reached the caller -- an
+// ambiguous drop silently reported truncated=false, contradicting this
+// function's own "reported unconditionally" doc comment for exactly the
+// case it exists to cover. This is the end-to-end proof: a claim citing a
+// fact with two Rows-shaped fields must come out with Rows nil AND
+// attachCanonicalRows' own truncated return value true.
+func TestAttachCanonicalRowsReportsTruncatedOnAmbiguousDropEvenThoughNothingWasAttached(t *testing.T) {
+	t.Parallel()
+	subject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	fact := CanonicalFact{
+		Kind: FactMetrics, Subject: subject,
+		Fields: map[string]FactValue{
+			"a_rows": RowsFactValue([]FactValueRow{{Fields: map[string]FactValue{"x": IntegerFactValue(1)}}}),
+			"b_rows": RowsFactValue([]FactValueRow{{Fields: map[string]FactValue{"y": IntegerFactValue(2)}}}),
+		},
+		EvidenceRefIDs: []string{"evidence_1"}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+	}
+	claims := []ClaimedFact{{
+		ClaimID: "claim_1", Kind: FactMetrics, Subject: subject, Field: "team_count", Value: ScalarValue{Integer: int64Ptr(2)},
+	}}
+	got, count, truncated := attachCanonicalRows(claims, []CanonicalFact{fact})
+	if !truncated {
+		t.Fatalf("truncated = false, want true -- the ambiguous-fields drop must be reported even though nothing was attached")
+	}
+	if count != 0 {
+		t.Fatalf("count = %d, want 0 (nothing was attached)", count)
+	}
+	if got[0].Rows != nil {
+		t.Fatalf("Rows = %+v, want nil -- ambiguous which of a_rows/b_rows the claim means", got[0].Rows)
+	}
+}
+
 // TestRuntimeAnswerSynthesizerLeavesClaimRowsNilWhenCanonicalFactCarriesNone
 // is the negative half: a claim against a canonical fact with no Rows-shaped
 // field must come out byte-identical to pre-CHAOS-4355 behavior -- nil, not

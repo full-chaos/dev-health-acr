@@ -546,12 +546,19 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 			continue
 		}
 		rows, wasTruncated := canonicalFieldRows(canonical)
+		// Union BEFORE the empty-rows early exit (codex CHAOS-4355 R3 P2
+		// finding): canonicalFieldRows returns (nil, true) for its
+		// fail-closed ambiguous-fields case, and that drop must still
+		// reach the caller even though there is no table to attach --
+		// dropping it here would silently contradict this function's own
+		// "reported unconditionally" promise for the exact case the
+		// promise exists to cover.
+		truncated = truncated || wasTruncated
 		if len(rows) == 0 {
 			continue
 		}
 		claims[i].Rows = rows
 		rowsCount += len(rows)
-		truncated = truncated || wasTruncated
 	}
 	return claims, rowsCount, truncated
 }
