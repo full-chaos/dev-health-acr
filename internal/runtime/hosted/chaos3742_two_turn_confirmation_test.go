@@ -2024,8 +2024,8 @@ type twoTurnTurn1Facts struct {
 	ExpectedSubjectAtOfferBoundary bool
 	// ExpectedSubjectRetrievalSource (CHAOS-4348, schema v37) is
 	// twoTurnTraceCapture.retrievalSourceFor's own reading: "exact_name" /
-	// "kind_scoped" / "ordinary" / "absent" -- see that method's own doc
-	// comment (chaos4234_regime_a_harness_test.go). Report bar: repository/
+	// "kind_scoped" / "both" / "ordinary" / "absent" -- see that method's
+	// own doc comment (chaos4234_regime_a_harness_test.go). Report bar: repository/
 	// project/team's expected_subject_in_pool rate and committed-positive
 	// rate per kind, cross-tabbed against this field, is what proves the
 	// new arms are actually load-bearing rather than redundant with
@@ -4320,7 +4320,7 @@ type twoTurnCaseResult struct {
 	ExpectedSubjectAtOfferBoundary bool `json:"expected_subject_at_offer_boundary"`
 	// ExpectedSubjectRetrievalSource (CHAOS-4348, schema v37) mirrors
 	// twoTurnTurn1Facts.ExpectedSubjectRetrievalSource -- see that field's
-	// own doc comment. "exact_name" / "kind_scoped" / "ordinary" / "absent".
+	// own doc comment. "exact_name" / "kind_scoped" / "both" / "ordinary" / "absent".
 	ExpectedSubjectRetrievalSource string `json:"expected_subject_retrieval_source"`
 	// Turn2WindowReceiptAttached (CHAOS-4234, schema v29, positive arm only)
 	// records the harness semantics change this ticket made: on a regime-A

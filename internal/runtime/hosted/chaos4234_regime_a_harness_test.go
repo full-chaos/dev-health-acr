@@ -66,40 +66,57 @@ func (c *twoTurnTraceCapture) rankedCutFor(kind, canonicalID string) (rank int, 
 }
 
 // retrievalSourceFor (CHAOS-4348, schema v37) reports "exact_name" or
-// "kind_scoped" if an "exact_name_search"/"kind_hint_search" trace event
+// "kind_scoped" if EXACTLY ONE of "exact_name_search"/"kind_hint_search"
 // (graphrank/chaos4348_reachability.go's traceExactNameSearch/
-// traceKindHintSearch) named this exact (kind, canonical id) ANYWHERE in
-// this resolution's trace, else "ordinary" (found by Search/SearchQuestion/
-// AliasLookup/the coverage floor's own real-pool census kinds --
-// everything that predates this ticket), else "absent" (poolContainsSubject
-// is false: never reached the pool by any path).
+// traceKindHintSearch) named this exact (kind, canonical id) anywhere in
+// this resolution's trace, "both" if BOTH did, else "ordinary" (found by
+// Search/SearchQuestion/AliasLookup/the coverage floor's own real-pool
+// census kinds -- everything that predates this ticket), else "absent"
+// (poolContainsSubject is false: never reached the pool by any path).
 //
-// HONEST LIMITATION (codex review, Medium, confirmed): this reports whether
-// the new arm FIRED for this subject, not that it was EXCLUSIVELY
+// NOT first-match-wins (codex review, Medium, confirmed): resolve.go always
+// runs applyKindHintedPoolSearch BEFORE applyExactNameArm (see that call
+// site's own doc comment for why), so a first-match read over c.events in
+// order would report "kind_scoped" for EVERY subject either arm reached,
+// even when exact-name alone was sufficient -- silently undercounting
+// exact-name's own contribution to the cross-tab this field exists to
+// build. Both stages are scanned to completion instead, and an overlap
+// gets its own explicit value rather than a masked one.
+//
+// HONEST LIMITATION (unchanged from the prior round): this reports whether
+// a new arm FIRED for this subject, not that it was EXCLUSIVELY
 // responsible -- ordinary Search has no per-subject trace event to compare
 // against, so a subject ordinary search would have found anyway, but that
-// the new arm ALSO (redundantly) rediscovers, is indistinguishable here
-// from one only the new arm could reach. Reading this field as "the new arm
-// was load-bearing" therefore over-claims; reading it as "the new arm fired
-// for this subject" (which is what it actually measures) does not. Report
-// consumers should treat exact_name/kind_scoped rates as an upper bound on
-// how often the new arms mattered, not a proof each instance needed them.
+// a new arm ALSO (redundantly) rediscovers, is indistinguishable here from
+// one only a new arm could reach. Report consumers should treat
+// exact_name/kind_scoped/both rates as an upper bound on how often the new
+// arms mattered, not a proof each instance needed them.
 func (c *twoTurnTraceCapture) retrievalSourceFor(kind, canonicalID string) string {
 	if !c.poolContainsSubject(kind, canonicalID) {
 		return "absent"
 	}
+	var sawExactName, sawKindHint bool
 	for _, e := range c.events {
 		if string(e.Subject.Kind) != kind || e.Subject.CanonicalID != canonicalID {
 			continue
 		}
 		switch e.Stage {
 		case "exact_name_search":
-			return "exact_name"
+			sawExactName = true
 		case "kind_hint_search":
-			return "kind_scoped"
+			sawKindHint = true
 		}
 	}
-	return "ordinary"
+	switch {
+	case sawExactName && sawKindHint:
+		return "both"
+	case sawExactName:
+		return "exact_name"
+	case sawKindHint:
+		return "kind_scoped"
+	default:
+		return "ordinary"
+	}
 }
 
 // twoTurnRegimeAWindowReceipt returns the turn-1 window receipt the
@@ -279,5 +296,49 @@ func TestCHAOS4234_StatusAnswered_ClosedVocabulary(t *testing.T) {
 		if got := twoTurnStatusAnswered(status); got != want {
 			t.Fatalf("twoTurnStatusAnswered(%q) = %v, want %v", status, got, want)
 		}
+	}
+}
+
+// TestRetrievalSourceFor_OverlapReportsBoth is codex round-2's own
+// regression guard: both arms firing for the SAME subject must report
+// "both", never silently collapse to whichever stage happens to be
+// scanned first ("kind_hint_search" always precedes "exact_name_search" in
+// event order, per resolve.go's own fixed pass ordering -- a first-match
+// read would therefore ALWAYS report "kind_scoped" on overlap and never
+// "exact_name", undercounting the rarer arm's own contribution).
+func TestRetrievalSourceFor_OverlapReportsBoth(t *testing.T) {
+	t.Parallel()
+	subject := contractsv1.ContextFabricSubjectRef{Kind: "project", CanonicalID: "project.v2:linear:chaos-ops"}
+	cases := []struct {
+		name   string
+		events []graphrank.ResolutionTraceEvent
+		want   string
+	}{
+		{"absent: no corroboration at all", nil, "absent"},
+		{"ordinary: corroborated, neither new stage fired", []graphrank.ResolutionTraceEvent{
+			{Stage: "corroboration", Subject: subject},
+		}, "ordinary"},
+		{"exact_name only", []graphrank.ResolutionTraceEvent{
+			{Stage: "exact_name_search", Subject: subject},
+			{Stage: "corroboration", Subject: subject},
+		}, "exact_name"},
+		{"kind_scoped only", []graphrank.ResolutionTraceEvent{
+			{Stage: "kind_hint_search", Subject: subject},
+			{Stage: "corroboration", Subject: subject},
+		}, "kind_scoped"},
+		{"both: kind_hint_search (always first in real event order) AND exact_name_search fired", []graphrank.ResolutionTraceEvent{
+			{Stage: "kind_hint_search", Subject: subject},
+			{Stage: "exact_name_search", Subject: subject},
+			{Stage: "corroboration", Subject: subject},
+		}, "both"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trace := &twoTurnTraceCapture{events: tc.events}
+			if got := trace.retrievalSourceFor(string(subject.Kind), subject.CanonicalID); got != tc.want {
+				t.Fatalf("retrievalSourceFor() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

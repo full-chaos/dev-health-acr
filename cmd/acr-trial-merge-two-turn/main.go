@@ -305,7 +305,7 @@ import (
 // factless_committed_count (fact-coverage measurement).
 //
 // "37" (CHAOS-4348): purely additive -- twoTurnCaseResult gains
-// ExpectedSubjectRetrievalSource ("exact_name"|"kind_scoped"|"ordinary"|
+// ExpectedSubjectRetrievalSource ("exact_name"|"kind_scoped"|"both"|"ordinary"|
 // "absent"), sourced from the producer's new "exact_name_search"/
 // "kind_hint_search" trace stages (graphrank/chaos4348_reachability.go).
 // No merge arithmetic changes -- the field rides through per-case, exactly

@@ -1851,14 +1851,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		}
 	}
 	// CHAOS-4348: two repository/project/team-only reachability passes,
-	// AFTER the per-term Search loop and AliasLookup above (so a kind they
-	// would have found via those ordinary passes never triggers extra work
-	// here -- applyKindHintedPoolSearch's own poolHasKind check), BEFORE the
+	// AFTER the per-term Search loop and AliasLookup above, BEFORE the
 	// question-level pass below (both are deliberate, high-confidence
 	// signals; the question-level vector pass stays the broadest, lowest-
-	// precedence source, unchanged). See chaos4348_reachability.go's own
-	// doc comment for the full root-cause account and why these are two
-	// SEPARATE mechanisms rather than one.
+	// precedence source, unchanged). applyKindHintedPoolSearch runs
+	// UNCONDITIONALLY for every hinted kind (codex review, HIGH, confirmed:
+	// an earlier version skipped a kind already represented anywhere in the
+	// pool via poolHasKind, which suppressed the search for the genuinely
+	// hinted target whenever an UNRELATED same-kind candidate got there
+	// first -- removed; see that function's own doc comment,
+	// chaos4348_reachability.go). See chaos4348_reachability.go's own doc
+	// comment for the full root-cause account and why these are two
+	// SEPARATE mechanisms rather than one. Fixed order (kind-hinted THEN
+	// exact-name) matters for retrievalSourceFor's own event-order read
+	// (chaos4234_regime_a_harness_test.go) -- see that function's doc
+	// comment for the precedence this ordering establishes.
 	if hinted := hintedPoolKinds(request, interpreted, confirmedKind); len(hinted) > 0 {
 		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted)
 		if hintedErr != nil {
