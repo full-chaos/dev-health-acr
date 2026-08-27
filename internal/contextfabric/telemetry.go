@@ -363,3 +363,23 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 	}
 	t.logger.InfoContext(ctx, "context fabric fact scope expansion outcome", args...)
 }
+
+// RecordCategoryFactComposition implements EngineTelemetry (CHAOS-4347) --
+// the operator-visible record of a status-category requirement being
+// expanded into a composed fact-kind set. Content-safe: two closed enums
+// and a closed-enum slice, nothing else. Info level -- this is the system
+// working (a requirement that would otherwise have pruned now reads real
+// facts), not a degradation the way a fact-scope gap is.
+func (t SlogEngineTelemetry) RecordCategoryFactComposition(ctx context.Context, principal storage.Principal, event CategoryFactCompositionEvent) {
+	composedKinds := make([]string, 0, len(event.ComposedKinds))
+	for _, kind := range event.ComposedKinds {
+		composedKinds = append(composedKinds, string(kind))
+	}
+	args := append([]any{
+		"org_id", principal.OrgID,
+		"requirement_kind", string(event.RequirementKind),
+		"subject_kind", string(event.SubjectKind),
+		"composed_kinds", composedKinds,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric status category fact composition", args...)
+}

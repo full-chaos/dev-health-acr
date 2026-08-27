@@ -303,6 +303,16 @@ type EngineTelemetry interface {
 	// (ruling invariant 9) -- "there were subjects you may not see" is an
 	// existence side-channel, and this stream is where it is safely said.
 	RecordFactScopeExpansion(ctx context.Context, principal storage.Principal, event FactScopeExpansionEvent)
+	// RecordCategoryFactComposition (CHAOS-4347) reports ONE status-category
+	// composition decision: a bare FactStatus requirement was expanded into
+	// the closed fact-kind set for one resolved subject kind
+	// (statusCategoryFactKindComposition, chaos4347_status_category_composition.go).
+	// Declared on THIS interface, not an optional side interface, for the
+	// SAME reason RecordFactScopeExpansion/RecordSynthesisStatusOverride are:
+	// a decision branch whose telemetry sink can be omitted by a compiling
+	// implementation is the CHAOS-4085/CHAOS-4089 failure mode this repo
+	// keeps re-learning. Content-safe: three closed enums/enum-slices only.
+	RecordCategoryFactComposition(ctx context.Context, principal storage.Principal, event CategoryFactCompositionEvent)
 	// RecordPriorSubjectReceiptSkipReason (CHAOS-3888) reports the SAME
 	// aggregate this call's RecordPriorSubjectReceiptsSkipped already
 	// reported, split by WHY each receipt in it was skipped -- a closed
@@ -1129,11 +1139,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow)
 	}
 
+	// CHAOS-4347: expand a bare "status" category requirement (the model's
+	// own 1:1 pick from the closed FactKind vocabulary -- there is no way
+	// for Interpret() to know FactStatus is work_item-only) into the
+	// composed set for repository/team subjects BEFORE merging in the
+	// graph-derived requirements below, so mergeFactRequirements' own
+	// first-kind-wins dedup sees the composed kinds like any other
+	// requirement. See composeStatusCategoryRequirements' own doc comment.
+	statusComposedRequirements := e.composeStatusCategoryRequirements(ctx, principal, interpretation.FactRequirements, subjects)
 	factRequest := CanonicalFactRequest{
 		Question:     interpretation,
 		Subjects:     subjects,
 		Cohort:       graphContext.Cohort,
-		Requirements: mergeFactRequirements(interpretation.FactRequirements, graphContext.FactRequirements),
+		Requirements: mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements),
 	}
 	// The invariant, asserted rather than assumed (CHAOS-3810). The guard
 	// above is what makes this unreachable today; this is what keeps it
