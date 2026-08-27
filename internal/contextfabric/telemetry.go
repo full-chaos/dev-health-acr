@@ -206,6 +206,17 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
 }
 
+// RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth are both
+// closed-vocabulary/plain-integer, content-safe by construction -- never a
+// question, subject label, or canonical id. hit vs. every miss reason is
+// this stream's own hit-rate denominator (RecordWindowCarry's own doc
+// comment, engine.go, for why it fires only on the carry-eligible
+// population).
+func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric window carry", args...)
+}
+
 // RecordStructureNeedsDisclosed (CHAOS-3900 P1.F). member is a closed
 // StructureNeedKind enum value -- content-safe by construction, never
 // question text or a subject identifier.

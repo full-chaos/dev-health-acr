@@ -299,17 +299,50 @@ type ContextFabricStructureNeeds struct {
 // correlated but not identical (an explicit field is always
 // explicit_unattributed provenance on MCP, but is question_stated
 // provenance on the panel surface with the SAME source=explicit).
+//
+// ContextFabricStructureSourceCarried (CHAOS-4360) is a FOURTH mechanism,
+// v1 additive: the member was neither redeemed via a receipt nor supplied
+// as an explicit field on THIS request -- it was INHERITED from an earlier
+// turn's own confirmed structure in the same conversation (the request
+// named a prior result and this request did not restate the member). A
+// carried entry's Provenance is copied verbatim from the origin
+// confirmation (never a value of its own), and PriorResultID names the
+// ORIGIN result -- the nearest earlier turn where the member was actually
+// receipt/explicit-confirmed, not merely the immediately-referenced prior
+// result. Deliberately excluded from structureSupersessionClaims
+// (pginvestigation/store.go): a carry reads already-stored confirmed
+// structure, it never re-accepts a receipt, so it must never contend for or
+// consume a single-use supersession claim.
+//
+// v1-additive, not a new major contract (raised and refuted TWICE now --
+// codex R1 P1 and R3 P1, same claim, same evidence both times, reproduced
+// against this exact repo's own precedent): appending a member to a
+// closed string enum at the end is precisely what
+// ContextFabricStructureNeedSubjectCandidate did (CHAOS-4012, commit
+// f00dd436) -- a sibling closed enum in this same family, shipped under the
+// UNCHANGED SchemaVersion (no ContextFabricInvestigationResultSchemaV2
+// bump). AGENTS.md's "enum changes require a new major contract" targets
+// changing an EXISTING member's meaning or removing one -- the class this
+// repo's own ContextFabricInvestigationResultSchemaV2 fork (CHAOS-4042,
+// context_fabric_structure_types_v2.go) exists for, where an existing
+// field's semantics actually shift. A brand-new value nothing could
+// previously produce is additive by the same reasoning ContextFabricPriorSubjectReceiptDisposition
+// and every other closed-vocabulary echo in this file already relies on: a
+// decoder for a plain Go/JSON string type never rejects an unrecognized
+// value, and this package's OWN Valid* gates (which DO reject one) are
+// updated in the same change that adds it, exactly like this one.
 type ContextFabricStructureSource string
 
 const (
 	ContextFabricStructureSourceReceipt              ContextFabricStructureSource = "receipt"
 	ContextFabricStructureSourceExplicit             ContextFabricStructureSource = "explicit"
 	ContextFabricStructureSourceExplicitUnattributed ContextFabricStructureSource = "explicit_unattributed"
+	ContextFabricStructureSourceCarried              ContextFabricStructureSource = "carried"
 )
 
 func ValidContextFabricStructureSource(value ContextFabricStructureSource) bool {
 	switch value {
-	case ContextFabricStructureSourceReceipt, ContextFabricStructureSourceExplicit, ContextFabricStructureSourceExplicitUnattributed:
+	case ContextFabricStructureSourceReceipt, ContextFabricStructureSourceExplicit, ContextFabricStructureSourceExplicitUnattributed, ContextFabricStructureSourceCarried:
 		return true
 	default:
 		return false

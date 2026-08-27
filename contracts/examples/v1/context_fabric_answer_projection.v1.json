@@ -127,5 +127,24 @@
     "reasons_omitted": 0,
     "values_clamped": 0,
     "full_result_omitted": false
-  }
+  },
+  "confirmed_structure": [
+    {
+      "member": "expected_kind",
+      "applied_value": "project",
+      "source": "receipt",
+      "prior_result_id": "result_prior_ask_dev1",
+      "receipt_id": "kindr_ask_dev_9012",
+      "provenance": "clarification_confirmed",
+      "disposition": "applied"
+    },
+    {
+      "member": "window",
+      "applied_value": "trailing_90d",
+      "source": "carried",
+      "prior_result_id": "result_prior_ask_dev1",
+      "provenance": "clarification_confirmed",
+      "disposition": "applied"
+    }
+  ]
 }

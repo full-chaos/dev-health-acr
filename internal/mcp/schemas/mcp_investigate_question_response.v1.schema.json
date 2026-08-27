@@ -1484,7 +1484,8 @@
           "enum": [
             "receipt",
             "explicit",
-            "explicit_unattributed"
+            "explicit_unattributed",
+            "carried"
           ]
         },
         "StructureProvenance": {
@@ -1907,19 +1908,41 @@
             ]
           },
           "else": {
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "prior_result_id"
-                  ]
-                },
-                {
-                  "required": [
-                    "receipt_id"
-                  ]
+            "if": {
+              "properties": {
+                "source": {
+                  "const": "carried"
                 }
+              },
+              "required": [
+                "source"
               ]
+            },
+            "then": {
+              "required": [
+                "prior_result_id"
+              ],
+              "not": {
+                "required": [
+                  "receipt_id"
+                ]
+              }
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "prior_result_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "receipt_id"
+                    ]
+                  }
+                ]
+              }
             }
           }
         },
@@ -3562,7 +3585,8 @@
           "enum": [
             "receipt",
             "explicit",
-            "explicit_unattributed"
+            "explicit_unattributed",
+            "carried"
           ]
         },
         "WindowConfirmationMode": {
@@ -3688,19 +3712,41 @@
             ]
           },
           "else": {
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "prior_result_id"
-                  ]
-                },
-                {
-                  "required": [
-                    "receipt_id"
-                  ]
+            "if": {
+              "properties": {
+                "source": {
+                  "const": "carried"
                 }
+              },
+              "required": [
+                "source"
               ]
+            },
+            "then": {
+              "required": [
+                "prior_result_id"
+              ],
+              "not": {
+                "required": [
+                  "receipt_id"
+                ]
+              }
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "prior_result_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "receipt_id"
+                    ]
+                  }
+                ]
+              }
             }
           }
         },

@@ -256,6 +256,17 @@ const (
 	// WindowCanonicalizationNone or folded into any veto value -- a
 	// window WAS in play and WOULD have been offered.
 	WindowCanonicalizationGatedRefusedNoClarification WindowCanonicalizationOutcome = "gated_refused_no_clarification"
+	// WindowCanonicalizationCarried (CHAOS-4360) is precedence step 2's
+	// OWN carry outcome: no request-side window resolved on THIS turn, but
+	// resolveCarriedWindow found one genuinely confirmed on an earlier turn
+	// in the same conversation and this call used it in place of a fresh
+	// class-table/binder-default guess. Split from
+	// WindowCanonicalizationInferredDefault for the same reason the two
+	// Gated* values above are split from it: a caller reading this stream
+	// needs to tell "guessed" from "inherited a real confirmation" apart,
+	// and this is also the value that PROVES the CHAOS-4234 gate did not
+	// fire for a request this outcome describes.
+	WindowCanonicalizationCarried WindowCanonicalizationOutcome = "carried"
 )
 
 // requestWindowCanonicalization is canonicalizeEvidenceWindow's own
@@ -806,7 +817,17 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 // step produced it, so an MCP bare explicit evidence_window -- which
 // resolves at precedence step 1 but carries inferred_default provenance
 // per DP12(b) -- is correctly reported as inferred, not as stated.
-func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effective *contractsv1.ContextFabricEffectiveEvidenceWindow) WindowCanonicalizationOutcome {
+// carried is CHAOS-4360's own signal: true iff resolveCarriedWindow (this
+// call's own Investigate/terminalResult caller) replaced an otherwise
+// inferred_default effective window with one inherited from an earlier turn
+// in the same conversation. canon.Effective stays nil either way at THIS
+// call site (a carry only ever fires when precedence step 1 resolved
+// nothing of its own -- see composeEffectiveWindow's own gate), so without
+// this parameter a carried window would fall through to the SAME
+// "effective != nil" branch an ordinary class-table/binder-default guess
+// does and misreport as inferred_default -- exactly the outcome CHAOS-4040
+// exists to distinguish this window FROM.
+func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effective *contractsv1.ContextFabricEffectiveEvidenceWindow, carried bool) WindowCanonicalizationOutcome {
 	switch canon.Veto {
 	case windowVetoConfirmationUnresolved:
 		return WindowCanonicalizationVetoUnresolved
@@ -822,6 +843,9 @@ func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effectiv
 		default:
 			return WindowCanonicalizationInferredDefault
 		}
+	}
+	if carried {
+		return WindowCanonicalizationCarried
 	}
 	if effective != nil {
 		return WindowCanonicalizationInferredDefault
