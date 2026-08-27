@@ -343,6 +343,13 @@ type nTurnTurnRecord struct {
 	CommittedCount                  int               `json:"committed_count"`
 	SentWindowReceipt               bool              `json:"sent_window_receipt"`
 	SentCandidateReceipt            bool              `json:"sent_candidate_receipt"`
+	// WindowAlreadyAppliedThisTurn (codex review round 3, P1, confirmed) is
+	// true only when an EARLIER turn already applied window before THIS
+	// turn's own request was built -- the distinguishing fact between a
+	// genuine carry-specific candidate-only turn (window survives across a
+	// fresh call) and an ordinary candidate-only turn for a case whose
+	// question never had a window in play at all.
+	WindowAlreadyAppliedThisTurn bool `json:"window_already_applied_this_turn"`
 }
 
 // nTurnCaseResult is one case's full N-turn replay. TurnsTaken is the
@@ -369,12 +376,17 @@ type nTurnCaseResult struct {
 	// vocabulary -- see nTurnIsCarriedSource/nTurnIsCarriedProvenance.
 	CarriedStructureObserved bool `json:"carried_structure_observed"`
 	// CandidateOnlyTurnAttempted is true when this case sent a turn
-	// carrying PriorCandidateReceipts WITHOUT PriorWindowReceipts in the
-	// same request -- the genuine, carry-specific transition this class
-	// exists to walk (codex review round 2, P1, confirmed): window already
-	// settled from an earlier turn, candidate redeemed on its own. False
-	// for a case that never got past window (or never needed a candidate
-	// at all).
+	// carrying PriorCandidateReceipts WITHOUT PriorWindowReceipts, AND an
+	// EARLIER turn had already applied window (nTurnTurnRecord.
+	// WindowAlreadyAppliedThisTurn) -- the genuine, carry-specific
+	// transition this class exists to walk: window already settled from an
+	// earlier turn, candidate redeemed on a fresh call. codex review round
+	// 3 (P1, confirmed) tightened this: the round-2 version counted ANY
+	// candidate-only turn, which wrongly credited a case whose question
+	// never had a window in play at all (no earlier application to carry)
+	// as if it had exercised the carry boundary. False for a case that
+	// never got past window, never needed a candidate, or sent candidate
+	// before window was ever applied.
 	CandidateOnlyTurnAttempted bool `json:"candidate_only_turn_attempted"`
 }
 
@@ -531,6 +543,15 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 				sentReceiptIDs[receiptID] = true
 			}
 		}
+		// windowAlreadyAppliedThisTurn (codex review round 3, P1, confirmed):
+		// captured BEFORE this turn's own call, so it reflects an EARLIER
+		// turn's own genuine window application -- not "window was simply
+		// never needed for this case at all". Only the former is the real
+		// carry-specific transition (window survives across a fresh call);
+		// a case whose question never has a window in play sends
+		// candidate-only turns too, but that is an ordinary redemption, not
+		// evidence this class's own carry gap was exercised.
+		windowAlreadyAppliedThisTurn := appliedWindow
 		if !attemptedWindow && !appliedCandidate {
 			if receiptID, found := nTurnSelectCandidateOffer(result, tc.ExpectKind, canonicalID); found && !sentReceiptIDs[receiptID] {
 				next.PriorCandidateReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: result.ResultID, ReceiptID: receiptID}}
@@ -550,6 +571,7 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 		rec := nTurnRecordTurn(turnIndex, result, trace)
 		rec.SentWindowReceipt = attachedWindow
 		rec.SentCandidateReceipt = attachedCandidate
+		rec.WindowAlreadyAppliedThisTurn = windowAlreadyAppliedThisTurn
 		res.Turns = append(res.Turns, rec)
 		res.TurnsTaken = turnIndex
 		for _, entry := range result.ConfirmedStructure {
@@ -571,7 +593,7 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 	res.WrongCommit = twoTurnCommittedWrong(result.SubjectResolution.Committed, tc)
 	res.WindowUnsafeCommit = nTurnWindowUnsafeCommit(result)
 	for _, rec := range res.Turns {
-		if rec.SentCandidateReceipt && !rec.SentWindowReceipt {
+		if rec.SentCandidateReceipt && !rec.SentWindowReceipt && rec.WindowAlreadyAppliedThisTurn {
 			res.CandidateOnlyTurnAttempted = true
 		}
 		for _, source := range rec.ConfirmedStructureSource {

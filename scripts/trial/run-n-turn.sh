@@ -77,8 +77,49 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Package -timeout SIZED TO THE CONFIGURED BUDGET (codex review round 3,
+# P2, confirmed): a fixed "2h" undercounted the harness's own worst-case
+# aggregate -- each Investigate call in chaos4360_nturn_confirmation_test.go
+# is budgeted 2*ACR_TEST_TRIAL_EXCHANGE_TIMEOUT+30s (mirrors run-two-turn.sh's
+# own caseTimeout formula), and this class can make up to (case count ×
+# max turns) such calls. Undercounting means `go test` can kill a slow but
+# otherwise VALID run before the report is ever written -- a false timeout
+# failure that reads as "the harness is broken" when it is only slow.
+# exchange_timeout_to_seconds parses the subset of Go duration syntax this
+# repo's trial scripts ever actually pass here (Nh, Nm, Ns, or a bare
+# combination like "1h30m") -- not a general parser, just enough to size a
+# safety-margin timeout, never to interpret the value semantically.
+exchange_timeout_to_seconds() {
+  local spec="$1" total=0 num unit
+  while [[ -n "$spec" ]]; do
+    if [[ "$spec" =~ ^([0-9]+)(h|m|s) ]]; then
+      num="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
+      case "$unit" in
+        h) total=$((total + num * 3600)) ;;
+        m) total=$((total + num * 60)) ;;
+        s) total=$((total + num)) ;;
+      esac
+      spec="${spec#"${num}${unit}"}"
+    else
+      echo "run-n-turn.sh: cannot parse ACR_TRIAL_EXCHANGE_TIMEOUT segment %q" >&2
+      total=600
+      break
+    fi
+  done
+  echo "$total"
+}
+exchange_timeout_seconds="$(exchange_timeout_to_seconds "$ACR_TEST_TRIAL_EXCHANGE_TIMEOUT")"
+per_call_timeout_seconds=$((2 * exchange_timeout_seconds + 30))
+case_count=$(($(tr -cd ',' <<<"$CASE_INDICES" | wc -c) + 1))
+turns_budget="${MAX_TURNS:-5}"
+# +600s fixed overhead margin: annex/corpus load, the epoch resolver's own
+# live read, report marshal+write -- none of these are per-Investigate-call
+# work, so they are not covered by the per-call multiplication above.
+package_timeout_seconds=$((case_count * turns_budget * per_call_timeout_seconds + 600))
+echo "PACKAGE_TIMEOUT=${package_timeout_seconds}s (case_count=$case_count max_turns=$turns_budget per_call_timeout=${per_call_timeout_seconds}s)"
+
 set +e
-( cd "$repo_root" && go test -run TestChaos4360NTurnConfirmationCarry -count=1 -v -timeout 2h ./internal/runtime/hosted )
+( cd "$repo_root" && go test -run TestChaos4360NTurnConfirmationCarry -count=1 -v -timeout "${package_timeout_seconds}s" ./internal/runtime/hosted )
 status=$?
 set -e
 

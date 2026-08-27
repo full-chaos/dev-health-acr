@@ -465,6 +465,60 @@ func TestNTurnIsCarriedSource(t *testing.T) {
 // CarriedStructureObserved, and the case must decisively commit -- proving
 // this fixture models the POST-fix shape, not the pre-fix defect the other
 // fixtures in this file pin.
+// TestChaos4360NTurnCarryOnlyTurnRequiresPriorWindow is codex review round
+// 3's own P1 mutation-kill proof: a case whose question NEVER has a window
+// in play (no WindowOptions ever offered) still sends a candidate-only
+// turn (nothing else to attach), but that is an ORDINARY redemption, not
+// evidence the carry-specific transition was exercised -- there was no
+// earlier window application for anything to carry. CandidateOnlyTurnAttempted
+// must read false here, distinguishing it from
+// TestChaos4360NTurnCarryDetectsCurrentDefect's own turn 3 (which DOES
+// follow a genuine turn-2 window application).
+func TestChaos4360NTurnCarryOnlyTurnRequiresPriorWindow(t *testing.T) {
+	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "project", ExpectID: chaos4360FixtureCanonicalID}
+	turn1 := contractsv1.ContextFabricInvestigationResult{
+		ResultID: "result_nturn_nowindow_t1", Status: contractsv1.ContextFabricInvestigationClarificationRequired,
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate},
+			// No WindowOptions at all -- this question never has a window
+			// need, unlike TestChaos4360NTurnCarryDetectsCurrentDefect's own
+			// turn 1.
+			CandidateOptions: []contractsv1.ContextFabricCandidateOption{
+				{ReceiptID: "candr_nowindow_t1", OptionID: "opt_cand_1", Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: chaos4360FixtureCanonicalID},
+			},
+		},
+	}
+	turn2 := contractsv1.ContextFabricInvestigationResult{
+		ResultID: "result_nturn_nowindow_t2", Status: contractsv1.ContextFabricInvestigationComplete,
+		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{
+			{
+				Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, ReceiptID: "candr_nowindow_t1",
+				Source: contractsv1.ContextFabricStructureSourceReceipt, Provenance: contractsv1.ContextFabricStructureClarificationConfirmed,
+				Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+			},
+		},
+		SubjectResolution: contractsv1.ContextFabricSubjectResolution{
+			Committed: []contractsv1.ContextFabricSubjectRef{{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: chaos4360FixtureCanonicalID}},
+		},
+	}
+	fake := &fakeNTurnInvestigator{t: t, responses: []contractsv1.ContextFabricInvestigationResult{turn1, turn2}}
+	trace := &twoTurnTraceCapture{}
+	res := runNTurnCase(t, context.Background(), fake, storage.Principal{OrgID: "org_fixture"}, 994, tc, chaos4360FixtureCanonicalID, 5, 0, trace)
+
+	if !res.Decisive {
+		t.Fatalf("Decisive = false, want true: this fixture converges at turn 2")
+	}
+	if len(fake.Requests) != 2 {
+		t.Fatalf("investigator received %d requests, want exactly 2", len(fake.Requests))
+	}
+	if len(fake.Requests[1].PriorWindowReceipts) != 0 {
+		t.Fatalf("turn 2 request carried PriorWindowReceipts=%+v, want none: no window was ever offered", fake.Requests[1].PriorWindowReceipts)
+	}
+	if res.CandidateOnlyTurnAttempted {
+		t.Fatalf("CandidateOnlyTurnAttempted = true, want false: turn 2 sent candidate without window, but no EARLIER turn ever applied a window for this case -- there was nothing to carry, so this is an ordinary redemption, not the carry-specific transition")
+	}
+}
+
 func TestChaos4360NTurnCarryObservedViaSource(t *testing.T) {
 	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "project", ExpectID: chaos4360FixtureCanonicalID}
 	turn1 := contractsv1.ContextFabricInvestigationResult{
