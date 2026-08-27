@@ -606,6 +606,41 @@ Full artifact:
 `.remember/trial-results/gen-trial-chaos4360_nturn-20260827T220625Z-23437.json`
 (schema v40).
 
+**GREEN measurement (2026-08-27, kiac, same cases 57/60) — lane-4360-acr's
+carry fix, PR #306, SHA `02c44254`, merged to `origin/main`.** Run from a
+disposable scratch worktree at `origin/main` (carries #306) with this
+harness's own test files copied in — never committed to either branch;
+this PR's own branch is untouched and still built against the pre-fix
+base. The carry mechanism is **definitively fixed and directly observed**:
+case 57 turn 3's `window_canonicalization_outcome` is now `carried`
+(was `gated_class_default` pre-fix), `confirmed_structure[].source`
+reports `"carried"` for the window member, and — the clearest signal —
+**`window` no longer appears in turn 3's own `missing` list at all**
+(RED: `[window, expected_kind, subject_candidate, subject_anchor,
+subject_handle]`; GREEN: `[expected_kind, subject_candidate,
+subject_anchor, subject_handle]`, `window` gone). `carry_hit_count=1`
+(was 0). Engine telemetry confirms the mechanism directly: `context
+fabric window carry outcome=hit chain_depth=0` on turn 3, vs
+`outcome=miss_no_reference` on turn 1 (no earlier confirmation to carry
+yet).
+
+Case 57 is still NOT decisive end-to-end (`clarification_required`,
+`subject_candidate` still lists `applied` yet reappears in `missing` — a
+subjectless/`ambiguous` terminal): the candidate's own commit still needs
+something past what redeeming its receipt alone provides, plausibly the
+`prior_subject_receipts` reauth path lane-4360-acr's own scope note names
+as separate and unmodified in PR #306 ("expected_kind/subject_anchor
+carry is NOT built... `prior_subject_receipts` re-verification already
+resolves the candidate-commit gap on its own once the window stops being
+gated"). This harness's turn 3 sends `PriorCandidateReceipts` only, never
+`PriorSubjectReceipts` — flagged to lane-4360-acr/team-lead as a possible
+follow-up rather than assumed to be this ticket's own residual gap. Case
+60 unaffected (never needed candidate; same decisive `degraded` result
+both before and after). Both safety invariants held in the GREEN run too
+(`wrong_commit_count=0`, `window_unsafe_commit_count=0`). Artifact (not
+committed, reproduced from this doc's own numbers):
+`.remember/trial-results/gen-trial-chaos4360_nturn-20260827T221125Z-17687.json`.
+
 ---
 
 ## Sources
