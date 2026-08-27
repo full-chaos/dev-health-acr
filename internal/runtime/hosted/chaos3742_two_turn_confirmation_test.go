@@ -8796,6 +8796,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// begins if either fixture's own work_item identifiers have drifted
 	// out of the live v2 canonical scheme (chaos4157_v2_scheme_preflight_test.go).
 	twoTurnValidateWorkItemV2Scheme(t, annex, corpus)
+	// CHAOS-4348: the two files can each be internally scheme-clean (the
+	// check above) while still DISAGREEING with each other -- exactly what
+	// Run G found (cases 57/60 stale-corpus-id, case 45 outright kind/id
+	// disagreement). See chaos4348_corpus_annex_agreement_test.go.
+	twoTurnValidateCorpusAnnexAgreement(t, annex, corpus)
 	source := requireGitSourceIdentity(t)
 
 	// Subscription-only, no metered key, ever (standing rule for this
