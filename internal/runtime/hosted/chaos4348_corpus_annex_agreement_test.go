@@ -41,6 +41,18 @@ type twoTurnCorpusAnnexDisagreement struct {
 	Index      int
 	KindDiffer bool
 	IDDiffer   bool
+	// CaseMissing (codex adversarial review, HIGH, confirmed) marks an
+	// index the annex has NO entry for at all -- any member, not just
+	// subject_anchor. Without this, an annex case that vanishes entirely
+	// (a bad edit, a bad merge) is INDISTINGUISHABLE from one that
+	// legitimately has no positive kind/id for a member: both read as the
+	// zero value from the lookup maps, so a corpus entry that ALSO
+	// happens to carry empty expect_kind/expect_id (a genuine
+	// existence_probe/ambiguity case, e.g. today's cases 31/35/37) would
+	// silently agree with a MISSING annex case, shrinking the harness's
+	// own worklist (built from annex.Entries) with no preflight failure
+	// to catch it.
+	CaseMissing bool
 }
 
 // twoTurnAnnexExpectedKindByIndex/twoTurnAnnexPositiveAnchorIDByIndex read
@@ -89,8 +101,24 @@ func twoTurnFindCorpusAnnexAgreementViolations(annex twoTurnOracleAnnex, corpus 
 	annexKind := twoTurnAnnexExpectedKindByIndex(annex)
 	annexAnchorID, _ := twoTurnAnnexPositiveAnchorIDByIndex(annex)
 
+	// annexHasCase is topology, not value agreement: TRUE iff the annex
+	// carries at least one entry (any member) for this index at all.
+	// Deliberately separate from annexKind/annexAnchorID's own presence
+	// maps -- a case can legitimately have an expected_kind entry but no
+	// subject_anchor entry (or vice versa); what must never happen
+	// silently is the annex knowing NOTHING about an index the corpus
+	// still carries a row for.
+	annexHasCase := make(map[int]bool, len(annex.Entries))
+	for _, e := range annex.Entries {
+		annexHasCase[e.Index] = true
+	}
+
 	var violations []twoTurnCorpusAnnexDisagreement
 	for i, tc := range corpus {
+		if !annexHasCase[i] {
+			violations = append(violations, twoTurnCorpusAnnexDisagreement{Index: i, CaseMissing: true})
+			continue
+		}
 		kindDiffer := tc.ExpectKind != annexKind[i]
 		idDiffer := tc.ExpectID != annexAnchorID[i]
 		if kindDiffer || idDiffer {
@@ -109,8 +137,12 @@ func twoTurnValidateCorpusAnnexAgreement(t interface{ Fatalf(string, ...any) }, 
 	if len(violations) == 0 {
 		return
 	}
-	var kindIndices, idIndices []int
+	var kindIndices, idIndices, missingIndices []int
 	for _, v := range violations {
+		if v.CaseMissing {
+			missingIndices = append(missingIndices, v.Index)
+			continue
+		}
 		if v.KindDiffer {
 			kindIndices = append(kindIndices, v.Index)
 		}
@@ -118,7 +150,7 @@ func twoTurnValidateCorpusAnnexAgreement(t interface{ Fatalf(string, ...any) }, 
 			idIndices = append(idIndices, v.Index)
 		}
 	}
-	t.Fatalf("trial corpus and oracle annex disagree on expected kind/id (see CHAOS-4348) -- kind_disagrees=%v id_disagrees=%v -- run cmd/acr-corpus-annex-sync", kindIndices, idIndices)
+	t.Fatalf("trial corpus and oracle annex disagree on expected kind/id (see CHAOS-4348) -- kind_disagrees=%v id_disagrees=%v annex_case_missing=%v -- run cmd/acr-corpus-annex-sync", kindIndices, idIndices, missingIndices)
 }
 
 // TestTwoTurnFindCorpusAnnexAgreementViolations exercises the check against
@@ -149,18 +181,26 @@ func TestTwoTurnFindCorpusAnnexAgreementViolations(t *testing.T) {
 		// so this must NOT flag despite the annex having zero anchor
 		// entries for this index.
 		{Index: 3, Member: string(contractsv1.ContextFabricStructureNeedExpectedKind), PositiveKind: "work_item"},
+		// index 4 has NO entries at all -- deliberately absent from the
+		// annex entirely (codex adversarial review, HIGH, confirmed): the
+		// corpus row below ALSO carries empty expect_kind/expect_id, the
+		// same shape a legitimate existence_probe case has -- proving
+		// this must still flag (CaseMissing), not silently agree just
+		// because both sides happen to read as the zero value.
 	}}
 	corpus := []trialCase{
 		{ExpectKind: "project", ExpectID: "project.v2:gitlab:abc"},     // index 0: agrees
 		{ExpectKind: "project", ExpectID: "project:stale-old-id"},      // index 1: stale id only
 		{ExpectKind: "project", ExpectID: "project:70d529e0-77145099"}, // index 2: wrong kind AND id
 		{ExpectKind: "work_item", ExpectID: ""},                        // index 3: agrees (no positive either side)
+		{ExpectKind: "", ExpectID: ""},                                 // index 4: annex has NO case here at all
 	}
 
 	got := twoTurnFindCorpusAnnexAgreementViolations(annex, corpus)
 	want := map[twoTurnCorpusAnnexDisagreement]bool{
 		{Index: 1, KindDiffer: false, IDDiffer: true}: true,
 		{Index: 2, KindDiffer: true, IDDiffer: true}:  true,
+		{Index: 4, CaseMissing: true}:                 true,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("violations = %#v, want exactly %d entries matching %#v", got, len(want), want)
