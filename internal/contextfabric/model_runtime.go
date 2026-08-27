@@ -529,11 +529,15 @@ func lookupCanonicalFact(facts []CanonicalFact, kind FactKind, subject SubjectRe
 //
 // rowsCount is the total number of rows attached across every claim
 // (CHAOS-4355's projected_rows_count telemetry dimension); truncated
-// reports whether any single claim's table was capped to fit
-// ContextFabricClaimedFactMaxRows -- the fact-plan-adjacent "dropped by
-// cap" signal the same ticket asks for. Both are reported unconditionally
-// by the caller, zero/false included, so a quiet run is as visible as a
-// busy one.
+// reports whether any single claim's table lost content relative to what
+// the canonical fact actually carried -- either capped to fit
+// ContextFabricClaimedFactMaxRows, or (canonicalFieldRows) because the
+// fact carried more than one Rows-shaped field and only one was kept.
+// This is the fact-plan-adjacent "dropped by cap/pruning" signal the
+// ticket asks for. Both are reported once per successful Synthesize call
+// by the caller (see RuntimeAnswerSynthesizer.Telemetry's own doc
+// comment for when that is), zero/false included, so a quiet run is as
+// visible as a busy one.
 func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []ClaimedFact, rowsCount int, truncated bool) {
 	for i := range claims {
 		canonical, ok := lookupCanonicalFact(facts, claims[i].Kind, claims[i].Subject)
@@ -551,34 +555,47 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 	return claims, rowsCount, truncated
 }
 
-// canonicalFieldRows collects every Rows-shaped field a canonical fact
-// carries, in sorted field-key order (map iteration is not stable, and
-// determinism matters here for the identical CHAOS-4109-lineage reason it
-// matters everywhere else in this package: the same inputs must produce the
-// same claim on every run), concatenates their rows, and caps the result at
+// canonicalFieldRows returns the ONE Rows-shaped field a canonical fact
+// carries, converted verbatim. It deliberately does NOT merge multiple
+// Rows-shaped fields into one table (CHAOS-4355 codex R1 P1 finding): a
+// fact could in principle carry more than one renderable table (e.g. a
+// future producer alongside MetricsProvider's project rollup, which emits
+// exactly one, team_breakdown), and concatenating two differently-shaped
+// tables into a single row stream would silently produce a
+// heterogeneous, misleading table -- worse than reporting nothing. When
+// more than one Rows-shaped field is present, this takes only the first
+// in sorted field-key order (the same determinism discipline every other
+// ordering choice in this package uses, and map iteration is not stable)
+// and reports the drop via the second return value, the identical
+// "retract rather than trust an unverified assertion" posture the rest of
+// this file already applies elsewhere. The same return value also covers
+// a cap: the chosen table is truncated to fit
 // ContextFabricClaimedFactMaxRows -- the exact bound
 // ContextFabricClaimedFact.Validate() already enforces, so a canonical
 // fact's own table can never make an otherwise-valid claim fail contract
-// validation. A cap that actually binds is reported via the second return
-// value rather than silently dropping the tail.
-func canonicalFieldRows(fact CanonicalFact) ([]contractsv1.ContextFabricClaimedFactRow, bool) {
+// validation -- and a cap that actually binds is reported rather than
+// silently dropping the tail.
+func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricClaimedFactRow, truncated bool) {
 	keys := make([]string, 0, len(fact.Fields))
 	for key, value := range fact.Fields {
 		if len(value.Rows) > 0 {
 			keys = append(keys, key)
 		}
 	}
+	if len(keys) == 0 {
+		return nil, false
+	}
 	sort.Strings(keys)
-	var rows []contractsv1.ContextFabricClaimedFactRow
-	for _, key := range keys {
-		for _, row := range fact.Fields[key].Rows {
-			rows = append(rows, convertFactValueRow(row))
-		}
+	source := fact.Fields[keys[0]].Rows
+	ambiguous := len(keys) > 1
+	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
+	for _, row := range source {
+		rows = append(rows, convertFactValueRow(row))
 	}
 	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
 		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
 	}
-	return rows, false
+	return rows, ambiguous
 }
 
 func convertFactValueRow(row FactValueRow) contractsv1.ContextFabricClaimedFactRow {
@@ -658,8 +675,17 @@ type RuntimeAnswerSynthesizer struct {
 	Sink    ModelReceiptSink
 	Options RuntimeAnswerSynthesizerOptions
 	// Telemetry is OPTIONAL (nil-safe, same convention as Sink) -- CHAOS-4355's
-	// RecordProjectedRowsCount is reported here, once per Synthesize call,
-	// unconditionally (zero included), so a nil Telemetry (every test that
+	// RecordProjectedRowsCount is reported here, once per Synthesize call
+	// that reaches claim assembly (i.e. draft.ValidateAgainst already
+	// passed), count=0 included whenever no cited canonical fact carried a
+	// renderable table -- so "no producer emitted rows" stays
+	// distinguishable from "nobody is counting". A call that returns
+	// earlier (Runtime nil, a rejected draft, a receipt-sink failure)
+	// reports nothing here: there are no claims to report rows for, and
+	// that failure is already the receipt sink's own Outcome to record
+	// (codex CHAOS-4355 R1 P2 finding -- this is a documentation fix, not
+	// a behavior change: "unconditional" previously overclaimed coverage
+	// this method never actually had). A nil Telemetry (every test that
 	// builds a synthesizer by hand) behaves exactly as before this field
 	// existed.
 	Telemetry EngineTelemetry

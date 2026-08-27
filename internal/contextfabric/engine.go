@@ -494,16 +494,23 @@ type EngineTelemetry interface {
 	// already follows.
 	RecordOfferPhrasing(ctx context.Context, principal storage.Principal, outcome OfferPhrasingOutcome)
 	// RecordProjectedRowsCount (CHAOS-4355) reports, once per Synthesize
-	// call, how many ClaimedFact.Rows entries attachCanonicalRows attached
-	// across the whole result -- the "projected_rows_count" dimension the
-	// ticket asks for -- and whether any single claim's table had to be
-	// capped to fit ContextFabricClaimedFactMaxRows (the fact-plan-adjacent
-	// "dropped by cap" signal). Declared on THIS interface rather than an
-	// optional side interface, for the same reason RecordSynthesisStatusOverride's
-	// own comment above states: a branch that can go missing by omission is
-	// the CHAOS-4089 failure mode itself. Called UNCONDITIONALLY, count=0
-	// included, so "no producer emitted a renderable table this call" stays
-	// distinguishable from "nobody is counting".
+	// call that reaches claim assembly (draft.ValidateAgainst already
+	// passed -- see RuntimeAnswerSynthesizer.Telemetry's own doc comment
+	// for exactly which calls that excludes), how many ClaimedFact.Rows
+	// entries attachCanonicalRows attached across the whole result -- the
+	// "projected_rows_count" dimension the ticket asks for -- and whether
+	// any single claim's table lost content relative to what its canonical
+	// fact actually carried, whether capped to fit
+	// ContextFabricClaimedFactMaxRows or because the fact carried more
+	// than one Rows-shaped field (canonicalFieldRows keeps only one rather
+	// than merge them into a misleading table) -- the fact-plan-adjacent
+	// "dropped by cap/pruning" signal. Declared on THIS interface rather
+	// than an optional side interface, for the same reason
+	// RecordSynthesisStatusOverride's own comment above states: a branch
+	// that can go missing by omission is the CHAOS-4089 failure mode
+	// itself. count=0 included on every call this fires for, so "no
+	// producer emitted a renderable table this call" stays distinguishable
+	// from "nobody is counting".
 	RecordProjectedRowsCount(ctx context.Context, principal storage.Principal, count int, truncated bool)
 }
 

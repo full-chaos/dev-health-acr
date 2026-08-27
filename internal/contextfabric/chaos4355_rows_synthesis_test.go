@@ -2,7 +2,9 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -34,12 +36,19 @@ func rowsClosureFixture() (SynthesisInput, SynthesisDraft, []FactValueRow) {
 	return input, draft, teamRows
 }
 
-func expectedClaimedRows(rows []FactValueRow) []ClaimedFactRow {
-	converted := make([]ClaimedFactRow, 0, len(rows))
-	for _, row := range rows {
-		converted = append(converted, convertFactValueRow(row))
+// expectedTeamRows is rowsClosureFixture's team_rows canonical field,
+// HAND-WRITTEN as the wire shape a claim should carry -- deliberately NOT
+// built by calling convertFactValueRow (the same production converter
+// under test), so this assertion cannot pass merely because the converter
+// and the test agree with each other on a shared bug (codex CHAOS-4355 R1
+// test-gap finding).
+func expectedTeamRows() []ClaimedFactRow {
+	teamA, teamB := "team_a", "team_b"
+	commitsA, commitsB := int64(12), int64(7)
+	return []ClaimedFactRow{
+		{Fields: map[string]ScalarValue{"team_id": {String: &teamA}, "commits_count": {Integer: &commitsA}}},
+		{Fields: map[string]ScalarValue{"team_id": {String: &teamB}, "commits_count": {Integer: &commitsB}}},
 	}
-	return converted
 }
 
 // TestRuntimeAnswerSynthesizerAttachesCanonicalRowsToTheClaimThatCitesThem is
@@ -53,7 +62,7 @@ func expectedClaimedRows(rows []FactValueRow) []ClaimedFactRow {
 // canonical fact's own table, copied verbatim, field-for-field.
 func TestRuntimeAnswerSynthesizerAttachesCanonicalRowsToTheClaimThatCitesThem(t *testing.T) {
 	t.Parallel()
-	input, draft, teamRows := rowsClosureFixture()
+	input, draft, _ := rowsClosureFixture()
 	synthesizer := RuntimeAnswerSynthesizer{
 		Runtime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
 		Sink:    &fakeReceiptSink{},
@@ -65,9 +74,78 @@ func TestRuntimeAnswerSynthesizerAttachesCanonicalRowsToTheClaimThatCitesThem(t 
 	if len(result.ClaimedFacts) != 1 {
 		t.Fatalf("ClaimedFacts = %v, want exactly 1", result.ClaimedFacts)
 	}
-	want := expectedClaimedRows(teamRows)
-	if !reflect.DeepEqual(result.ClaimedFacts[0].Rows, want) {
+	if want := expectedTeamRows(); !reflect.DeepEqual(result.ClaimedFacts[0].Rows, want) {
 		t.Fatalf("ClaimedFacts[0].Rows = %+v, want %+v (verbatim copy of the canonical fact's team_rows field)", result.ClaimedFacts[0].Rows, want)
+	}
+}
+
+// TestAttachCanonicalRowsOnlyAttachesToTheClaimThatCitesTheMatchingFact is
+// the wrong-fact-routing coverage codex R1 asked for: a bundle with TWO
+// canonical facts (different subjects), only one of them Rows-shaped, and
+// TWO claims, one per fact. The rows-bearing fact's rows must land on ONLY
+// the claim that cites it (same Kind+Subject) -- never on the other claim,
+// and never merged across facts.
+func TestAttachCanonicalRowsOnlyAttachesToTheClaimThatCitesTheMatchingFact(t *testing.T) {
+	t.Parallel()
+	projectSubject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	repoSubject := SubjectRef{Kind: SubjectRepository, CanonicalID: "repo_acr", Label: "acr"}
+	rowsFact := CanonicalFact{
+		Kind: FactMetrics, Subject: projectSubject,
+		Fields: map[string]FactValue{
+			"commits_count": IntegerFactValue(19),
+			"team_rows":     RowsFactValue([]FactValueRow{{Fields: map[string]FactValue{"team_id": StringFactValue("team_a")}}}),
+		},
+		EvidenceRefIDs: []string{"evidence_1"}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+	}
+	scalarOnlyFact := CanonicalFact{
+		Kind: FactMetrics, Subject: repoSubject,
+		Fields:         map[string]FactValue{"commits_count": IntegerFactValue(4)},
+		EvidenceRefIDs: []string{"evidence_2"}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+	}
+	claims := []ClaimedFact{
+		{ClaimID: "claim_repo", Kind: FactMetrics, Subject: repoSubject, Field: "commits_count", Value: ScalarValue{Integer: int64Ptr(4)}},
+		{ClaimID: "claim_project", Kind: FactMetrics, Subject: projectSubject, Field: "commits_count", Value: ScalarValue{Integer: int64Ptr(19)}},
+	}
+	got, count, truncated := attachCanonicalRows(claims, []CanonicalFact{scalarOnlyFact, rowsFact})
+	if truncated {
+		t.Fatalf("truncated = true, want false")
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+	if got[0].Rows != nil {
+		t.Fatalf("claim_repo.Rows = %+v, want nil -- its own canonical fact carries no rows, the OTHER fact's rows must not leak onto it", got[0].Rows)
+	}
+	if len(got[1].Rows) != 1 {
+		t.Fatalf("claim_project.Rows = %+v, want exactly 1 row from its own canonical fact", got[1].Rows)
+	}
+}
+
+// TestCanonicalFieldRowsKeepsOnlyOneFieldWhenMultipleAreRowsShaped is
+// codex CHAOS-4355 R1's P1 finding: a canonical fact carrying MORE than one
+// Rows-shaped field must not have them silently merged into one
+// heterogeneous table. Only the first field in sorted key order is kept,
+// and the drop is reported via the truncated return value.
+func TestCanonicalFieldRowsKeepsOnlyOneFieldWhenMultipleAreRowsShaped(t *testing.T) {
+	t.Parallel()
+	fact := CanonicalFact{
+		Kind: FactMetrics, Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"},
+		Fields: map[string]FactValue{
+			// "b_rows" sorts after "a_rows" -- must be the one dropped.
+			"a_rows": RowsFactValue([]FactValueRow{{Fields: map[string]FactValue{"x": IntegerFactValue(1)}}}),
+			"b_rows": RowsFactValue([]FactValueRow{{Fields: map[string]FactValue{"y": IntegerFactValue(2)}}, {Fields: map[string]FactValue{"y": IntegerFactValue(3)}}}),
+		},
+		EvidenceRefIDs: []string{"evidence_1"}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+	}
+	rows, truncated := canonicalFieldRows(fact)
+	if !truncated {
+		t.Fatalf("truncated = false, want true (fact carries 2 Rows-shaped fields, only one may be kept)")
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want exactly the 1 row from a_rows (the sorted-first field), never b_rows' 2 rows merged in", rows)
+	}
+	if _, ok := rows[0].Fields["x"]; !ok {
+		t.Fatalf("rows[0] = %+v, want the a_rows field (key %q), not b_rows", rows[0], "x")
 	}
 }
 
@@ -138,11 +216,35 @@ func TestRuntimeAnswerSynthesizerRecordsProjectedRowsCount(t *testing.T) {
 // is never the source of Rows, regardless of correctness.
 func TestSynthesisDraftValidateAgainstRejectsModelAuthoredRowsEvenWhenTheyMatchCanonical(t *testing.T) {
 	t.Parallel()
-	input, draft, teamRows := rowsClosureFixture()
-	draft.ClaimedFacts[0].Rows = expectedClaimedRows(teamRows)
+	input, draft, _ := rowsClosureFixture()
+	draft.ClaimedFacts[0].Rows = expectedTeamRows()
 	err := draft.ValidateAgainst(input)
-	if err == nil || err.Error() == "" {
-		t.Fatalf("ValidateAgainst() error = %v, want a rejection even though Rows matches canonical exactly", err)
+	if err == nil || !strings.Contains(err.Error(), "sets rows") {
+		t.Fatalf("ValidateAgainst() error = %v, want a sets-rows rejection even though Rows matches canonical exactly", err)
+	}
+}
+
+// TestRuntimeAnswerSynthesizerDoesNotRecordProjectedRowsCountOnRejectedDraft
+// locks in RecordProjectedRowsCount's corrected doc comment (codex CHAOS-4355
+// R1 P2 finding: it is NOT called unconditionally -- a Synthesize call that
+// never reaches claim assembly reports nothing here, because there are no
+// claims to report rows for and the rejection is already the receipt sink's
+// own outcome to record).
+func TestRuntimeAnswerSynthesizerDoesNotRecordProjectedRowsCountOnRejectedDraft(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	draft.EvidenceRefIDs = []string{"evidence_invented_by_model"}
+	telemetry := &recordingTelemetry{}
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime:   fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+		Sink:      &fakeReceiptSink{},
+		Telemetry: telemetry,
+	}
+	if _, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input); !errors.Is(err, ErrSynthesisRejected) {
+		t.Fatalf("Synthesize() error = %v, want ErrSynthesisRejected (test setup precondition)", err)
+	}
+	if len(telemetry.projectedRowsCounts) != 0 {
+		t.Fatalf("projectedRowsCounts = %v, want none recorded for a rejected draft", telemetry.projectedRowsCounts)
 	}
 }
 
