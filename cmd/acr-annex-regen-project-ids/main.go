@@ -213,15 +213,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	// codex adversarial review round 4 (HIGH, confirmed): unverified is
+	// checked FIRST, and is NEVER bypassable by -allow-unmapped -- that
+	// flag exists for a raw id with no live subject at all (a known,
+	// investigated residual, still stale-scheme), not for a provider
+	// guess this run could not corroborate. An earlier ordering checked
+	// the zero-replacement no-op BEFORE this: when EVERY -provider
+	// mapping failed corroboration, replacements was empty (same as a
+	// genuine no-op) and unmapped was ALSO empty (these ids DID have a
+	// mapping, it just failed verification) -- so that ordering exited 0
+	// with a misleading "nothing to regenerate" message instead of
+	// refusing, letting an entirely wrong mapping attempt read as success
+	// to any caller checking only the exit code.
+	if len(unverified) > 0 {
+		fmt.Fprintf(os.Stderr, "acr-annex-regen-project-ids: refusing to write: %d -provider mapping(s) produced an id NOT corroborated by -probe-evidence (a well-formed but wrong provider is indistinguishable from a correct one without this check):\n", len(unverified))
+		for _, id := range unverified {
+			fmt.Fprintf(os.Stderr, "  %s\n", id)
+		}
+		os.Exit(1)
+	}
+
 	// codex adversarial review round 3 (MEDIUM, confirmed): checked BEFORE
 	// the -verified-by/-probe-evidence requirements below -- a run that
 	// makes ZERO actual replacements (every stale id is a known residual,
-	// -allow-unmapped, nothing left to fix) has no CONTENT change to
-	// record and needs neither flag; asking for evidence to justify a
-	// change this run is not going to make is the wrong error entirely
-	// (caught by this file's own TestMain_ZeroReplacementRunIsANoOpThatDoesNotWrite,
-	// which failed against an earlier ordering that checked -verified-by
-	// first). This is a no-op, not an error: exit 0, nothing touched.
+	// -allow-unmapped, nothing left to fix, AND -- round 4 -- nothing
+	// unverified either) has no CONTENT change to record and needs
+	// neither flag. This is a no-op, not an error: exit 0, nothing
+	// touched.
 	if len(replacements) == 0 {
 		fmt.Println("acr-annex-regen-project-ids: every stale id is unmapped (nothing to regenerate) -- not writing")
 		return
@@ -236,27 +254,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "acr-annex-regen-project-ids: -probe-evidence is required to write (comma-separated trial-report artifact paths; every derived id must be machine-corroborated, not merely well-formed -- see the package doc comment)")
 		os.Exit(2)
 	}
-	// unverified is NEVER bypassable by -allow-unmapped: that flag exists
-	// for a raw id with no live subject at all (a known, investigated
-	// residual, still stale-scheme), not for a provider guess this run
-	// could not corroborate -- those are different failure shapes and
-	// conflating them would let a wrong-but-plausible provider slip
-	// through under the same escape hatch meant for "no data exists".
-	if len(unverified) > 0 {
-		fmt.Fprintf(os.Stderr, "acr-annex-regen-project-ids: refusing to write: %d -provider mapping(s) produced an id NOT corroborated by -probe-evidence (a well-formed but wrong provider is indistinguishable from a correct one without this check):\n", len(unverified))
-		for _, id := range unverified {
-			fmt.Fprintf(os.Stderr, "  %s\n", id)
-		}
-		os.Exit(1)
-	}
 
-	updated := string(raw)
-	for _, staleID := range sortedRaw {
-		newID, ok := replacements[staleID]
-		if !ok {
-			continue
-		}
-		updated = strings.ReplaceAll(updated, `"`+staleID+`"`, `"`+newID+`"`)
+	// codex adversarial review round 4 (MEDIUM, confirmed): replacement is
+	// scoped to the "cases" subtree ONLY, mirroring findStaleProjectIDs'
+	// own scoping -- an earlier version ran strings.ReplaceAll over the
+	// WHOLE serialized annex, which also rewrites a stale id anywhere it
+	// appears inside a PRIOR run's own chaos4348_id_regenerations[]
+	// history (specifically inside that entry's unresolved_stale_ids),
+	// silently corrupting the append-only audit trail to make an OLDER
+	// record look like it already resolved an id it actually left
+	// unresolved. Scoping to "cases" here, alongside findStaleProjectIDs
+	// already doing the same for detection, keeps every id-substitution
+	// touch confined to live annex content -- provenance history is only
+	// ever touched by the deliberate, structured append in
+	// injectRegenerationProvenance below, never by this blind text pass.
+	updated, err := replaceIDsInCasesOnly(string(raw), sortedRaw, replacements)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acr-annex-regen-project-ids: apply id replacements: %v\n", err)
+		os.Exit(1)
 	}
 
 	updated, err = injectRegenerationProvenance(updated, sortedRaw, replacements, occurrences, unmapped, *verifiedBy, *probeEvidence)
@@ -367,6 +382,45 @@ type chaos4348IDRegeneration struct {
 	// time carries the "why", not repeated here to avoid the two drifting
 	// apart).
 	UnresolvedStaleIDs []string `json:"unresolved_stale_ids,omitempty"`
+}
+
+// replaceIDsInCasesOnly applies every staleID -> replacements[staleID]
+// substitution to the annex's "cases" subtree ONLY (codex adversarial
+// review round 4, MEDIUM, confirmed): an earlier version ran
+// strings.ReplaceAll over the WHOLE serialized document, which also
+// rewrote a stale id anywhere it happened to appear inside a PRIOR run's
+// own provenance.chaos4348_id_regenerations[] history (specifically that
+// entry's unresolved_stale_ids, which stores the raw stale id string) --
+// silently corrupting an OLDER, already-written history record to make it
+// read as if it had resolved an id it had actually left unresolved.
+// Scoping this to "cases" -- mirroring findStaleProjectIDs' own scoping --
+// keeps every id-substitution touch confined to live annex content;
+// provenance history is only ever touched by the deliberate, structured
+// append in injectRegenerationProvenance, never by this text pass.
+func replaceIDsInCasesOnly(annexJSON string, staleIDs []string, replacements map[string]string) (string, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(annexJSON), &top); err != nil {
+		return "", fmt.Errorf("parse annex for id replacement: %w", err)
+	}
+	casesRaw, ok := top["cases"]
+	if !ok {
+		return "", fmt.Errorf("annex has no top-level \"cases\" object")
+	}
+	updatedCases := string(casesRaw)
+	for _, staleID := range staleIDs {
+		newID, ok := replacements[staleID]
+		if !ok {
+			continue
+		}
+		updatedCases = strings.ReplaceAll(updatedCases, `"`+staleID+`"`, `"`+newID+`"`)
+	}
+	top["cases"] = json.RawMessage(updatedCases)
+
+	out, err := json.MarshalIndent(top, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal annex after id replacement: %w", err)
+	}
+	return string(out), nil
 }
 
 // injectRegenerationProvenance adds a "chaos4348_id_regeneration" key to

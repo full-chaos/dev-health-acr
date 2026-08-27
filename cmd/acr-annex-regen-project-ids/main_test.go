@@ -379,3 +379,166 @@ func TestMain_ZeroReplacementRunIsANoOpThatDoesNotWrite(t *testing.T) {
 		t.Errorf("annex was modified by a zero-replacement run:\nbefore: %s\nafter:  %s", original, got)
 	}
 }
+
+// TestMain_AllUnverifiedMappingsExitsNonzeroAndDoesNotWrite is the
+// regression test for codex adversarial review round 4 (HIGH, confirmed):
+// an earlier ordering checked "replacements is empty" (the no-op path)
+// BEFORE checking "unverified is non-empty" -- when EVERY -provider
+// mapping fails -probe-evidence corroboration, replacements ends up empty
+// exactly like a genuine no-op does, so that ordering exited 0 with a
+// misleading "nothing to regenerate" message instead of refusing.
+// Exercised as a real subprocess (matching codex's own recommendation) so
+// the actual exit code and actual annex-file mutation (none) are what is
+// under test, not a hand-simulated stand-in.
+func TestMain_AllUnverifiedMappingsExitsNonzeroAndDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	annexPath := filepath.Join(dir, "annex.json")
+	original := `{"provenance": {"signoff": {"status": "APPROVED"}}, "cases": {"57": {"oracles": {"anchor": {"positive_key": "project:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891"}}}}}`
+	if err := os.WriteFile(annexPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Evidence corroborates a COMPLETELY DIFFERENT project -- the one
+	// mapping this run supplies can never be verified against it.
+	probePath := filepath.Join(dir, "probe.json")
+	probe := `{"results": [{"turn1_trace_events": [
+		{"Stage": "corroboration", "Subject": {"kind": "project", "canonical_id": "project.v2:linear:unrelated-id"}}
+	]}]}`
+	if err := os.WriteFile(probePath, []byte(probe), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "run", ".",
+		"-annex", annexPath,
+		"-provider", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891=gitlab",
+		"-verified-by", "deliberately wrong for this test",
+		"-probe-evidence", probePath,
+	)
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run . with an all-unverified mapping exited 0, want nonzero -- an unverified mapping must never read as success\noutput:\n%s", out)
+	}
+	if !strings.Contains(string(out), "NOT corroborated") {
+		t.Errorf("expected the unverified-mapping refusal message in output, got:\n%s", out)
+	}
+
+	got, err := os.ReadFile(annexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Errorf("annex was modified despite the run being refused:\nbefore: %s\nafter:  %s", original, got)
+	}
+}
+
+// TestMain_SecondRunResolvingAPriorResidualPreservesFirstRunsHistory is
+// the regression test for codex adversarial review round 4 (MEDIUM,
+// confirmed): an earlier version's id-substitution pass ran over the
+// WHOLE serialized annex, not just "cases" -- so when a SECOND real
+// invocation resolved an id the FIRST invocation had left unresolved
+// (-allow-unmapped), the blind text replace also rewrote that id
+// wherever it appeared inside the FIRST run's own already-written
+// provenance.chaos4348_id_regenerations[0].unresolved_stale_ids,
+// corrupting the append-only history to misreport what run 1 actually
+// left unresolved. Exercised as TWO real, separate subprocess
+// invocations against the SAME annex file -- not a single call to
+// injectRegenerationProvenance -- so the full write path (including
+// replaceIDsInCasesOnly) is what is under test.
+func TestMain_SecondRunResolvingAPriorResidualPreservesFirstRunsHistory(t *testing.T) {
+	dir := t.TempDir()
+	annexPath := filepath.Join(dir, "annex.json")
+	staleA := "project:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891"
+	staleB := "project:272efdae-c682-45b6-ae30-e8877eff15f4"
+	original := `{"provenance": {"signoff": {"status": "APPROVED"}}, "cases": {
+		"57": {"oracles": {"anchor": {"positive_key": "` + staleA + `"}}},
+		"46": {"oracles": {"anchor": {"negatives": ["` + staleB + `"]}}}
+	}}`
+	if err := os.WriteFile(annexPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	probeAPath := filepath.Join(dir, "probeA.json")
+	newA := "project.v2:gitlab:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891"
+	if err := os.WriteFile(probeAPath, []byte(`{"results": [{"turn1_trace_events": [
+		{"Stage": "corroboration", "Subject": {"kind": "project", "canonical_id": "`+newA+`"}}
+	]}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run 1: resolve A, leave B as a known residual (-allow-unmapped).
+	run1 := exec.Command("go", "run", ".",
+		"-annex", annexPath,
+		"-provider", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891=gitlab",
+		"-verified-by", "run 1: resolves A only",
+		"-probe-evidence", probeAPath,
+		"-allow-unmapped",
+	)
+	run1.Dir = "."
+	if out, err := run1.CombinedOutput(); err != nil {
+		t.Fatalf("run 1 failed: %v\noutput:\n%s", err, out)
+	}
+
+	// Run 2 (LATER, separate invocation): a hypothetical follow-up
+	// finally resolves B.
+	probeBPath := filepath.Join(dir, "probeB.json")
+	newB := "project.v2:someprovider:272efdae-c682-45b6-ae30-e8877eff15f4"
+	if err := os.WriteFile(probeBPath, []byte(`{"results": [{"turn1_trace_events": [
+		{"Stage": "corroboration", "Subject": {"kind": "project", "canonical_id": "`+newB+`"}}
+	]}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run2 := exec.Command("go", "run", ".",
+		"-annex", annexPath,
+		"-provider", "272efdae-c682-45b6-ae30-e8877eff15f4=someprovider",
+		"-verified-by", "run 2: resolves the residual B left by run 1",
+		"-probe-evidence", probeBPath,
+	)
+	run2.Dir = "."
+	if out, err := run2.CombinedOutput(); err != nil {
+		t.Fatalf("run 2 failed: %v\noutput:\n%s", err, out)
+	}
+
+	final, err := os.ReadFile(annexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Cases      map[string]json.RawMessage `json:"cases"`
+		Provenance struct {
+			ChaosRegenerations []struct {
+				VerifiedBy         string            `json:"verified_by"`
+				IDMappings         map[string]string `json:"id_mappings"`
+				UnresolvedStaleIDs []string          `json:"unresolved_stale_ids"`
+			} `json:"chaos4348_id_regenerations"`
+		} `json:"provenance"`
+	}
+	if err := json.Unmarshal(final, &doc); err != nil {
+		t.Fatalf("unmarshal final annex: %v", err)
+	}
+
+	if !strings.Contains(string(final), newA) || !strings.Contains(string(final), newB) {
+		t.Fatalf("final annex cases do not contain both regenerated ids -- got:\n%s", final)
+	}
+	if strings.Contains(string(doc.Cases["57"]), staleA) || strings.Contains(string(doc.Cases["46"]), staleB) {
+		t.Errorf("final annex cases still contain a stale id after both runs")
+	}
+
+	history := doc.Provenance.ChaosRegenerations
+	if len(history) != 2 {
+		t.Fatalf("chaos4348_id_regenerations has %d entries, want 2 -- got %+v", len(history), history)
+	}
+	// The core assertion: run 1's OWN record must still say it left B
+	// unresolved -- NOT that it silently resolved it (which the whole-
+	// document text replace in run 2 would have caused by rewriting
+	// run 1's history in place).
+	if len(history[0].UnresolvedStaleIDs) != 1 || history[0].UnresolvedStaleIDs[0] != staleB {
+		t.Errorf("run 1's history entry no longer records %q as unresolved -- got UnresolvedStaleIDs=%v (this is the exact corruption codex round 4 found: run 2's id substitution rewrote run 1's own history)", staleB, history[0].UnresolvedStaleIDs)
+	}
+	if history[0].IDMappings[staleA] != newA {
+		t.Errorf("run 1's history entry lost its own id_mappings for %q: got %+v", staleA, history[0].IDMappings)
+	}
+	if history[1].IDMappings[staleB] != newB {
+		t.Errorf("run 2's history entry is missing or wrong for %q: got %+v", staleB, history[1].IDMappings)
+	}
+}
