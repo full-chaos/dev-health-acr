@@ -156,6 +156,80 @@ func TestHealthProviderRowForUnrequestedRepositoryNeverAppears(t *testing.T) {
 	}
 }
 
+// healthProjectRollupRow shapes one row of the project rollup UNION output:
+// (project_key, scope, scope_id, scope_name, severity, hasRisk, risk,
+// computed_at) -- the SAME 8-column shape both the team and repo UNION
+// branches select, so one canned row list stands in for either or both.
+func healthProjectRollupRow(provider, projectID, scope, scopeID, scopeName, severity string, risk float64) []any {
+	return []any{provider + ":" + projectID, scope, scopeID, scopeName, severity, uint8(1), risk, "2026-02-21 00:00:00"}
+}
+
+// TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums pins
+// CHAOS-4363's two-layer contract: a project's health rollup carries BOTH
+// its owning teams' own compounding_risk_daily rows (scope='team') AND the
+// repositories those teams own (scope='repo'), never summed or averaged
+// into one project-level score.
+func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+		healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "elevated", 0.55),
+		healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "high", 0.81),
+	}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "team_project_ownership_and_team_repo_ownership" {
+		t.Fatalf("rollup_basis = %#v", fact.Fields["rollup_basis"])
+	}
+	if fact.Fields["team_count"].Integer == nil || *fact.Fields["team_count"].Integer != 1 {
+		t.Fatalf("team_count = %#v, want 1", fact.Fields["team_count"])
+	}
+	if fact.Fields["repo_count"].Integer == nil || *fact.Fields["repo_count"].Integer != 1 {
+		t.Fatalf("repo_count = %#v, want 1", fact.Fields["repo_count"])
+	}
+	if _, hasTop := fact.Fields["compounding_risk"]; hasTop {
+		t.Fatalf("fields = %#v, want no project-level compounding_risk", fact.Fields)
+	}
+	rows := fact.Fields["risk_breakdown"].Rows
+	if len(rows) != 2 {
+		t.Fatalf("risk_breakdown rows = %#v, want 2", rows)
+	}
+	if got := rows[0].Fields["scope"].String; got == nil || *got != "team" {
+		t.Fatalf("row[0].scope = %#v, want team", got)
+	}
+	if got := rows[1].Fields["scope"].String; got == nil || *got != "repo" {
+		t.Fatalf("row[1].scope = %#v, want repo", got)
+	}
+	if len(fact.EvidenceRefIDs) != 3 {
+		t.Fatalf("evidence_ref_ids = %#v, want project + 1 team + 1 repo", fact.EvidenceRefIDs)
+	}
+}
+
+func TestHealthProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: nil}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-404")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 0 || result.State != contextfabric.SourceAvailable {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 const maxHealthRowsPerQueryForTest = 200
 
 func healthRows(n int) [][]any {

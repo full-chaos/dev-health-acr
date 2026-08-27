@@ -31,14 +31,27 @@
 //     metrics.go's package doc comment for the full design and why this is
 //     NOT the CHAOS-4099 activity-proxy path.
 //   - FactHealth from compounding_risk_daily (repo- and team-scoped
-//     precomputed risk severity/score).
+//     precomputed risk severity/score). CHAOS-4363 widens this to add
+//     project: a project rolls up BOTH its owning teams' own compounding_risk_daily
+//     rows (team_project_ownership) and those teams' repositories'
+//     (team_repo_ownership, one hop further), into one renderable
+//     risk_breakdown table tagged by scope.
 //   - FactWorkload from capacity_forecasts (team-level Monte Carlo capacity
-//     forecast; the table has no person-level column at all).
+//     forecast; the table has no person-level column at all). CHAOS-4363
+//     widens this to add project (team_project_ownership rollup, per-team
+//     forecast breakdown -- Monte Carlo stats are never summed/averaged).
 //   - FactInvestment from investment_metrics_daily (per team/investment
-//     area/project stream, latest day, passthrough).
+//     area/project stream, latest day, passthrough). CHAOS-4363 widens this
+//     to add project (team_project_ownership rollup, per-team breakdown --
+//     investment_area/project_stream partitions are never summed across
+//     teams). investment_classifications_daily is NOT read for this: its
+//     live schema (verified 2026-08-27) carries no team_id column.
 //   - FactReadiness from estimate_coverage_metrics_daily (per-team backlog
 //     estimate-coverage ratio -- a narrow, honest slice of "readiness";
-//     no broader canonical readiness signal exists yet).
+//     no broader canonical readiness signal exists yet). CHAOS-4363 widens
+//     this to add project (team_project_ownership rollup, per-team
+//     breakdown -- estimate/backlog counts are never summed across teams
+//     tracking different work scopes).
 //   - FactOperationalDeficiencies from recommendations_daily (fired=1 rows
 //     only -- rule outcomes Ops' own rule engine already decided, never
 //     re-evaluated here).

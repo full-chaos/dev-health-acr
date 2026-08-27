@@ -307,6 +307,18 @@ deployment/review edges from `devhealthsource/tables.go`; project→team from
 end-to-end but this org's live graph currently has zero incident nodes —
 absence of evidence, not absence of a code path.
 
+**Clarification (CHAOS-4363):** the "NO edge exists" markers above describe
+the **graph** projection only. `HealthProvider`'s new project-subject rollup
+(diagram 4) reads `team_repo_ownership` directly off **ClickHouse** -- a
+real per-team repository-ownership table this package had not read before
+-- to chain `project -> team_project_ownership -> team_repo_ownership ->
+repository` for the `compounding_risk_daily` repo layer. That is a
+ClickHouse fact-producer join, not a graph edge: it does not add a
+`REPO -> TEAM`/`REPO -> PROJ` edge to this diagram, and the live trial data
+plane currently holds zero `team_repo_ownership` rows for the org above (an
+upstream ingestion gap, not a producer defect -- see this ticket's CH
+readback evidence).
+
 **Stale doc comment found (report only, no Go edit per this lane's scope):**
 `internal/contextfabric/devhealthsource/teams_projects.go:54` and
 `internal/contextfabric/devhealthsource/clickhouse.go:29` both assert,
@@ -367,10 +379,10 @@ source for the SAME kind).
 | deployments | `deployments` (per-deployment status/environment); **+`deploy_metrics_daily`** (repository aggregate, CHAOS-4347) | deployment, **repository** |
 | incidents | `operational_incidents` | incident |
 | metrics | `repo_metrics_daily`; **+`team_metrics_daily`** (team, direct); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup, CHAOS-4347) | repository, **team, project** |
-| health | `compounding_risk_daily` | repository, team |
-| workload | `capacity_forecasts` | team |
-| investment | `investment_metrics_daily` | team |
-| readiness | `estimate_coverage_metrics_daily` | team |
+| health | `compounding_risk_daily`; **+`team_project_ownership` ⋈ `compounding_risk_daily` (team layer) and +`team_project_ownership` ⋈ `team_repo_ownership` ⋈ `compounding_risk_daily` (repo layer, one hop further), both landing in one `risk_breakdown` Rows table (project, CHAOS-4363)** | repository, team, **project** |
+| workload | `capacity_forecasts`; **+`team_project_ownership` ⋈ `capacity_forecasts`, per-team `team_breakdown` Rows, never summed/averaged (project, CHAOS-4363)** | team, **project** |
+| investment | `investment_metrics_daily`; **+`team_project_ownership` ⋈ `investment_metrics_daily`, per-team `team_breakdown` Rows, never summed across (investment_area, project_stream) (project, CHAOS-4363)** | team, **project** |
+| readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project, CHAOS-4363)** | team, **project** |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | `backfill_log` | organization |
 
@@ -475,14 +487,47 @@ still open — that is a separate, still-unbuilt slice
 (`lane-4347-project`, CHAOS-4348 reachability work is currently ahead of
 it in that lane's queue).
 
-**Update (CHAOS-4363, 4347-A, routing slice only):** `statusCategoryFactKindComposition`'s
+**Update (CHAOS-4363, 4347-A, routing slice):** `statusCategoryFactKindComposition`'s
 `SubjectTeam` entry now also composes `FactInvestment`, so the team leg of
 the paragraph above is `team→{health, workload, readiness, investment}`.
-Repository's set is unchanged. This is the category-routing half of
-CHAOS-4363 only -- `investment.go` still emits a scalar today (per diagram
-4's fact table); the `Rows`-bearing per-team/day producer change the rest
-of that ticket calls for is separate, still-unbuilt work, not shipped in
-this update.
+Repository's set is unchanged.
+
+**Update (CHAOS-4363, 4347-A, producer slice — completes this ticket):**
+investment/workload/readiness/health (see the widened table above) all now
+answer for a **project** subject directly, by a real
+`team_project_ownership` join (health also chains one hop further through
+`team_repo_ownership`) -- the SAME real-join pattern `metrics.go` set for
+`FactMetrics` in CHAOS-4347, never the `FactReadScopeResolver` activity-proxy
+route. Unlike `FactMetrics`' commit counts, none of these four sum or
+average across owning teams: each source table partitions by a dimension
+(`investment_area`/`project_stream`, `work_scope_id`, or the forecast's own
+Monte Carlo statistics) that would be meaningless mixed across teams, so
+every project-level fact instead carries a `team_breakdown` (or, for health,
+`risk_breakdown`) `Rows` table with each contributing team's (and, for
+health, repository's) own row verbatim, disclosed via `rollup_basis`. A
+project-status question now reaches ≥3 `Rows` tables (investment, backlog
+risk via workload/readiness, completion risk via health) with a `team_name`
+axis, per this ticket's acceptance criterion. `investment_classifications_daily`
+is deliberately NOT read for the "classification breakdown" the ticket
+proposed: its live production schema (`system.columns`, kiac trial
+ClickHouse, 2026-08-27) carries `repo_id`/`artifact_id`/`artifact_type`, no
+`team_id` column at all -- the same "no team-keyed source" gap CHAOS-4347's
+disposition inventory found for cognitive load (`user_metrics_daily`).
+
+**Live data gap disclosed, not hidden (CH readback, 2026-08-27, org
+`70d529e0-3c06-4597-8480-794fd02328b6`):** investment (6 rows), workload (12
+rows), and readiness (17 rows) each returned real, non-zero rows for the
+project `linear:CHAOS` is currently owned by. Health's project rollup
+returned **zero** rows against this data plane -- verified as a genuine
+upstream ingestion gap, not a query defect: `compounding_risk_daily` holds
+2455 `repo`-scope rows for this org and **zero** `team`-scope rows, and
+`team_repo_ownership` holds **zero** rows across every org in this data
+plane. The query itself is proven correct by this package's own unit tests
+(synthetic fixtures exercising both UNION branches). A "completion risk"
+Rows table for a project therefore will not populate on THIS pilot data
+until Ops backfills team-scope `compounding_risk_daily` and/or
+`team_repo_ownership` -- flagged to team-lead as a follow-up, out of this
+ticket's ACR-side scope.
 
 `FactCapability.SupportedSubjectKinds` (`fact_registry.go:50-58`) is set
 once, in each provider's own `Capability()` method — code-declared, never

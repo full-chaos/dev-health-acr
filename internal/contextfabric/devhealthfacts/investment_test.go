@@ -130,6 +130,78 @@ func TestInvestmentProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 	}
 }
 
+// investmentProjectRollupRow shapes one row of the project rollup join
+// output: (project_key, team_id, team_name, investment_area, project_stream,
+// day, delivery_units, work_items_completed, prs_merged, churn_loc,
+// cycle_p50_hours).
+func investmentProjectRollupRow(provider, projectID, teamID, teamName, area, stream string, deliveryUnits, workItemsCompleted, prsMerged int64, churnLOC uint64, cycleP50Hours float64) []any {
+	return []any{provider + ":" + projectID, teamID, teamName, area, stream, "2026-02-22", deliveryUnits, workItemsCompleted, prsMerged, churnLOC, cycleP50Hours}
+}
+
+// TestInvestmentProviderProjectRollupBreaksDownByTeamNeverSums pins CHAOS-4363's
+// contract: unlike metrics.go's commit counts, investment counts are NEVER
+// summed across owning teams -- each team's own (area, stream) rows survive
+// verbatim in the renderable team_breakdown table.
+func TestInvestmentProviderProjectRollupBreaksDownByTeamNeverSums(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+		investmentProjectRollupRow("linear", "proj-1", "team-1", "Team One", "product", "growth", 30, 12, 4, 850, 18.5),
+		investmentProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "quality", "", 10, 5, 2, 100, 4.0),
+	}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "team_project_ownership_breakdown" {
+		t.Fatalf("rollup_basis = %#v", fact.Fields["rollup_basis"])
+	}
+	if fact.Fields["team_count"].Integer == nil || *fact.Fields["team_count"].Integer != 2 {
+		t.Fatalf("team_count = %#v, want 2", fact.Fields["team_count"])
+	}
+	if _, hasSum := fact.Fields["delivery_units"]; hasSum {
+		t.Fatalf("fields = %#v, want no project-level delivery_units sum -- investment areas are not additive", fact.Fields)
+	}
+	rows := fact.Fields["team_breakdown"].Rows
+	if len(rows) != 2 {
+		t.Fatalf("team_breakdown rows = %#v, want 2", rows)
+	}
+	if got := rows[0].Fields["delivery_units"].Integer; got == nil || *got != 30 {
+		t.Fatalf("row[0].delivery_units = %#v, want team-1's own 30", got)
+	}
+	if got := rows[1].Fields["delivery_units"].Integer; got == nil || *got != 10 {
+		t.Fatalf("row[1].delivery_units = %#v, want team-2's own 10, not summed", got)
+	}
+	if len(fact.EvidenceRefIDs) != 3 {
+		t.Fatalf("evidence_ref_ids = %#v, want project + 2 teams", fact.EvidenceRefIDs)
+	}
+}
+
+// TestInvestmentProviderProjectRollupNoOwningTeamsHasNoFactEntry mirrors
+// metrics.go's identical guard for the investment project path.
+func TestInvestmentProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: nil}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-404")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 0 || result.State != contextfabric.SourceAvailable {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 const maxInvestmentRowsPerQueryForTest = 200
 
 func investmentRows(n int) [][]any {

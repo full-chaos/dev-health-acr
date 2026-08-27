@@ -179,6 +179,70 @@ func TestWorkloadProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 	}
 }
 
+// workloadProjectRollupRow shapes one row of the project rollup join output:
+// (project_key, team_id, team_name, work_scope_id, throughput_mean,
+// throughput_stddev, hasP50, p50_days, insufficient_history, high_variance,
+// backlog_size, computed_at).
+func workloadProjectRollupRow(provider, projectID, teamID, teamName, workScopeID string, throughputMean, throughputStddev float64, backlogSize int64, highVariance uint8) []any {
+	return []any{provider + ":" + projectID, teamID, teamName, workScopeID, throughputMean, throughputStddev, uint8(0), int64(0), uint8(0), highVariance, backlogSize, "2026-07-27 04:00:00"}
+}
+
+// TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages pins
+// CHAOS-4363's contract: Monte Carlo forecast stats are never summed or
+// averaged across owning teams -- each team's own latest per-scope forecast
+// survives verbatim in the renderable team_breakdown table.
+func TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+		workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
+		workloadProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, 40, 0),
+	}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	if fact.Fields["team_count"].Integer == nil || *fact.Fields["team_count"].Integer != 2 {
+		t.Fatalf("team_count = %#v, want 2", fact.Fields["team_count"])
+	}
+	if _, hasTop := fact.Fields["throughput_mean"]; hasTop {
+		t.Fatalf("fields = %#v, want no project-level throughput_mean -- forecasts are not additive", fact.Fields)
+	}
+	rows := fact.Fields["team_breakdown"].Rows
+	if len(rows) != 2 {
+		t.Fatalf("team_breakdown rows = %#v, want 2", rows)
+	}
+	if got := rows[0].Fields["throughput_mean"].Number; got == nil || *got != 3.2 {
+		t.Fatalf("row[0].throughput_mean = %#v, want team-1's own 3.2", got)
+	}
+	if got := rows[1].Fields["backlog_size"].Integer; got == nil || *got != 40 {
+		t.Fatalf("row[1].backlog_size = %#v, want team-2's own 40, not summed", got)
+	}
+}
+
+func TestWorkloadProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: nil}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-404")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 0 || result.State != contextfabric.SourceAvailable {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 const maxWorkloadRowsPerQueryForTest = 200
 
 func workloadRows(n int) [][]any {
