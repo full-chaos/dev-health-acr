@@ -514,16 +514,22 @@ prior doc claimed it existed.
 
 The two-turn harness (§5) never sends a third request — every arm it
 defines is a fixed two-call shape. CHAOS-4355's live walkthrough (13:40
-08-27) found a defect that shape structurally cannot see: turn 2 can apply
-a window receipt and still come back non-decisive, because the SAME call
-that confirms window changes the census pool and supersedes the
-turn-1-offered candidate receipt — so a third turn, redeeming a FRESH
-candidate offer, is required. Nothing carries the confirmed window across
-that third call server-side (this ticket's own acr half), so it arrives
-inferred and the redemption cannot land. `chaos4360_nturn_confirmation_test.go`
-is the harness that walks this — `TestChaos4360NTurnConfirmationCarry`
-(live, kiac) and `TestChaos4360NTurnCarryDetectsCurrentDefect` (fixture,
-red-first).
+08-27) found a defect that shape structurally cannot see: the live
+Workbench batches window+candidate receipts into one turn-2 call, which
+can leave candidate unresolved (superseded by the SAME call's own
+window-driven pool change) and forces a third turn redeeming a FRESH
+candidate offer. This harness reproduces the underlying CHAOS-4360 gap
+directly, WITHOUT depending on that specific supersession path: it
+deliberately never batches window and candidate in the same call at all
+(codex review round 2, P1 — see `runNTurnCase`'s own doc comment) — window
+alone on one turn, candidate alone on a LATER turn — which guarantees any
+case needing both members takes a genuine third turn and isolates the
+carry gap precisely: nothing carries the confirmed window across that
+turn-2→turn-3 boundary server-side (this ticket's own acr half), so it
+arrives inferred again and the candidate redemption cannot land.
+`chaos4360_nturn_confirmation_test.go` is the harness that walks this —
+`TestChaos4360NTurnConfirmationCarry` (live, kiac) and
+`TestChaos4360NTurnCarryDetectsCurrentDefect` (fixture, red-first).
 
 ```mermaid
 sequenceDiagram
@@ -533,13 +539,13 @@ sequenceDiagram
   C->>E: turn 1: question, no receipts
   E-->>C: clarification_required<br/>StructureNeeds{window, subject_candidate}
 
-  C->>E: turn 2: PriorWindowReceipts + PriorCandidateReceipts<br/>(both from turn 1's offer)
-  Note over E: window applies this call;<br/>the SAME call changes the census pool,<br/>superseding the turn-1 candidate receipt
-  E-->>C: window: applied<br/>subject_candidate: vetoed_stale (superseded)<br/>StructureNeeds{subject_candidate: FRESH offer}
+  C->>E: turn 2: PriorWindowReceipts ONLY<br/>(window and candidate are NEVER batched -- runNTurnCase's own rule)
+  Note over E: window_canonicalization_outcome=receipt_confirmed
+  E-->>C: window: applied<br/>StructureNeeds{subject_candidate: still offered, untouched this turn}
 
-  C->>E: turn 3: PriorCandidateReceipts (fresh offer only)<br/>window NEVER re-sent (already applied)
-  Note over E: nothing carries the confirmed window<br/>across this call server-side (CHAOS-4360 gap) --<br/>it arrives INFERRED
-  E-->>C: window_canonicalization_outcome=gated_class_default<br/>SubjectResolution empty -- candidate redemption fails<br/>never decisive
+  C->>E: turn 3: PriorCandidateReceipts ONLY<br/>window NEVER re-sent (already applied)
+  Note over E: nothing carries the confirmed window<br/>across this call server-side (CHAOS-4360 gap) --<br/>it arrives INFERRED again
+  E-->>C: window_canonicalization_outcome=gated_class_default (reverted!)<br/>window re-appears in missing; candidate receipt applies<br/>but resolution stays subjectless -- never decisive
 ```
 
 **Carry measurement.** `ContextFabricConfirmedStructureEntry.Source`
@@ -562,21 +568,42 @@ class this ticket seeds from; indices only, no question text; predates
 lane-4360-acr's own carry fix, PR #306, still in review at the time of this
 run).** Both safety invariants held (`wrong_commit_count=0`,
 `window_unsafe_commit_count=0`); neither case reached the acceptance bar
-(decisive AND `rows_count>0`): case 57 stalled non-decisive after 2 turns
-(`offer_miss=true` — window and the candidate receipt both disposed
-`applied`, but the resolution stayed subjectless/`ambiguous`, and turn 2's
-own response offered no fresh candidate to redeem next); case 60 reached a
-decisive `degraded` terminal after 2 turns but with a **retracted** commit
-(`commit_affirmation retraction final_committed=0`) and `rows_count=0`.
-`carry_hit_count=0` on both, as expected pre-fix. `resolved_active_epoch=2`
-(`graph_lifecycle_enabled=true`) — confirmed live-read via this run's own
-epoch resolver (codex review P1 fix; the launcher enables graph-lifecycle
-mode for every run, so the report now proves what epoch was actually read
-instead of silently defaulting to 0/false). Re-run after the codex-review
-fix round (corpus/annex agreement preflight, corpus-hash pin, fail-loud on
-zero usable evidence, never-resend-by-receipt-id, exclusive report
-creation) reproduced the SAME measured outcome. Full artifact:
-`.remember/trial-results/gen-trial-chaos4360_nturn-20260827T215155Z-51221.json`
+(decisive AND `rows_count>0`); `carry_hit_count=0` on both, as expected
+pre-fix. `resolved_active_epoch=2` (`graph_lifecycle_enabled=true`) —
+confirmed live-read via this run's own epoch resolver (codex review round 1
+P1 fix; the launcher enables graph-lifecycle mode for every run, so the
+report now proves what epoch was actually read instead of silently
+defaulting to 0/false).
+
+Codex review round 2 (P1, confirmed) found the first re-run's own
+window+candidate BATCHING (both receipts in one call, mirroring the
+two-turn harness's `runTwoTurnPositiveArm`) let case 57 stall inside turn 2
+alone — the harness never actually attempted the genuine turn-3
+candidate-only exchange this class exists to walk.
+`nTurnReportExercisedCarryTransition` now fails the run loudly if that
+never happens; fixing it required splitting window and candidate across
+SEPARATE turns (never batched) — see `runNTurnCase`'s own doc comment.
+Re-run with the split algorithm, `candidate_only_turn_attempted_count=1`:
+
+- **case 57** (needs both window and candidate): turn 1 discloses both
+  offers; turn 2 sends window ONLY — applies
+  (`window_canonicalization_outcome=receipt_confirmed`); turn 3 sends the
+  candidate receipt ONLY (window never resent, per the never-resend
+  contract) — **this is the literal CHAOS-4360 defect, reproduced exactly**:
+  `window_canonicalization_outcome` reverts to `gated_class_default`
+  (inferred again) and `window` re-appears in `missing`, even though it was
+  genuinely confirmed one turn earlier. The candidate receipt itself
+  disposes `applied`, but the overall resolution stays subjectless/
+  `clarification_required` — nothing carries the confirmed window across
+  the turn-2→turn-3 boundary server-side, so the candidate redemption can
+  never stick.
+- **case 60** (needs window only, no candidate ever offered): turn 2 sends
+  window only, converges to a decisive `degraded` terminal with a
+  **retracted** commit (`commit_affirmation retraction final_committed=0`)
+  and `rows_count=0` — unaffected by the split (it never needed candidate).
+
+Full artifact:
+`.remember/trial-results/gen-trial-chaos4360_nturn-20260827T220625Z-23437.json`
 (schema v40).
 
 ---

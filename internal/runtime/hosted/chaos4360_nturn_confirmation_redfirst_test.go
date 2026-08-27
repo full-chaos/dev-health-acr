@@ -67,10 +67,10 @@ func TestChaos4360NTurnCarryDetectsCurrentDefect(t *testing.T) {
 		},
 	}
 
-	// Turn 2: the window receipt applies; the candidate receipt from turn 1
-	// is superseded by this SAME call (the census pool changed once the
-	// window landed) -- CHAOS-4355's own root cause -- so the engine comes
-	// back with a FRESH candidate offer instead of a decisive commit.
+	// Turn 2: harness sends WINDOW ONLY (codex review round 2, P1: window
+	// and candidate are never batched in the same call -- see runNTurnCase's
+	// own doc comment). It applies; the candidate is untouched this turn, so
+	// its turn-1 offer is still live and Missing still names it.
 	turn2 := contractsv1.ContextFabricInvestigationResult{
 		ResultID: "result_nturn_fixture_t2", Status: contractsv1.ContextFabricInvestigationClarificationRequired,
 		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{
@@ -79,31 +79,27 @@ func TestChaos4360NTurnCarryDetectsCurrentDefect(t *testing.T) {
 				AppliedValue: "trailing_90d", Source: contractsv1.ContextFabricStructureSourceReceipt,
 				Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
 			},
-			{
-				Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, ReceiptID: "candr_fixture_t1",
-				Source: contractsv1.ContextFabricStructureSourceReceipt, Provenance: contractsv1.ContextFabricStructureClarificationConfirmed,
-				Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
-			},
 		},
 		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
 			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate},
 			CandidateOptions: []contractsv1.ContextFabricCandidateOption{
-				{ReceiptID: "candr_fixture_t2_fresh", OptionID: "opt_cand_2", Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: chaos4360FixtureCanonicalID},
+				{ReceiptID: "candr_fixture_t1", OptionID: "opt_cand_1", Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: chaos4360FixtureCanonicalID},
 			},
 		},
 	}
 
-	// Turn 3: THE DEFECT. Nothing carried the window across turns, so it
-	// arrives inferred; the window gate fires and the fresh candidate
-	// redemption cannot land -- window is MISSING again (never carried, and
-	// this harness must not re-send the already-applied turn-2 receipt to
-	// "fix" that), the candidate receipt is vetoed, and the case never
-	// reaches a decisive answer.
+	// Turn 3: THE DEFECT. Window already applied at turn 2 -- this harness
+	// must NOT resend it -- so turn 3 carries ONLY the candidate receipt, a
+	// FRESH investigation. Because nothing carries the confirmed window
+	// across turns server-side (CHAOS-4360's own gap), it arrives INFERRED:
+	// the window gate fires (gated_class_default), the candidate redemption
+	// cannot land, and window is disclosed as MISSING again even though it
+	// was genuinely confirmed one turn ago.
 	turn3 := contractsv1.ContextFabricInvestigationResult{
 		ResultID: "result_nturn_fixture_t3", Status: contractsv1.ContextFabricInvestigationClarificationRequired,
 		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{
 			{
-				Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, ReceiptID: "candr_fixture_t2_fresh",
+				Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, ReceiptID: "candr_fixture_t1",
 				Source: contractsv1.ContextFabricStructureSourceReceipt, Provenance: contractsv1.ContextFabricStructureInferredDefault,
 				Disposition: contractsv1.ContextFabricStructureDispositionVetoedUnresolved,
 			},
@@ -127,10 +123,13 @@ func TestChaos4360NTurnCarryDetectsCurrentDefect(t *testing.T) {
 		t.Fatalf("Decisive = true, want false: this fixture scripts today's known defect (window never carries past turn 2), so the case must never reach a decisive answer")
 	}
 	if res.TurnsTaken != 3 {
-		t.Fatalf("TurnsTaken = %d, want 3: turn 1 (ask) + turn 2 (window+candidate) + turn 3 (fresh candidate, window lost) is the exact shape this class exists to walk", res.TurnsTaken)
+		t.Fatalf("TurnsTaken = %d, want 3: turn 1 (ask) + turn 2 (window only) + turn 3 (candidate only, window lost) is the exact shape this class exists to walk", res.TurnsTaken)
 	}
 	if res.FinalStatus != string(contractsv1.ContextFabricInvestigationClarificationRequired) {
 		t.Fatalf("FinalStatus = %q, want %q", res.FinalStatus, contractsv1.ContextFabricInvestigationClarificationRequired)
+	}
+	if !res.CandidateOnlyTurnAttempted {
+		t.Fatalf("CandidateOnlyTurnAttempted = false, want true: turn 3 sent PriorCandidateReceipts without PriorWindowReceipts, the genuine carry-specific transition")
 	}
 	if res.WindowUnsafeCommit {
 		t.Fatalf("WindowUnsafeCommit = true, want false: this fixture never commits at all, so the CHAOS-4040 safety invariant cannot even be exercised, let alone tripped")
@@ -144,20 +143,23 @@ func TestChaos4360NTurnCarryDetectsCurrentDefect(t *testing.T) {
 
 	// The never-re-send-an-applied-receipt contract: turn 3's own request
 	// must not carry a PriorWindowReceipts entry at all (window already
-	// applied at turn 2), and turn 2's request must not carry the SAME
-	// receipt turn 3 would have needed to resend.
+	// applied at turn 2).
 	if len(fake.Requests) != 3 {
 		t.Fatalf("investigator received %d requests, want 3", len(fake.Requests))
+	}
+	turn2Req := fake.Requests[1]
+	if len(turn2Req.PriorCandidateReceipts) != 0 {
+		t.Fatalf("turn 2 request carried PriorCandidateReceipts=%+v, want none: window and candidate are never batched in the same call", turn2Req.PriorCandidateReceipts)
 	}
 	turn3Req := fake.Requests[2]
 	if len(turn3Req.PriorWindowReceipts) != 0 {
 		t.Fatalf("turn 3 request carried PriorWindowReceipts=%+v, want none: window was already Applied at turn 2, and re-sending an applied receipt is exactly CHAOS-4355's own vetoed_stale trap (13:40 08-27 comment)", turn3Req.PriorWindowReceipts)
 	}
-	if len(turn3Req.PriorCandidateReceipts) != 1 || turn3Req.PriorCandidateReceipts[0].ReceiptID != "candr_fixture_t2_fresh" {
-		t.Fatalf("turn 3 request PriorCandidateReceipts=%+v, want exactly the FRESH turn-2 offer (candr_fixture_t2_fresh), never the stale turn-1 receipt", turn3Req.PriorCandidateReceipts)
+	if len(turn3Req.PriorCandidateReceipts) != 1 || turn3Req.PriorCandidateReceipts[0].ReceiptID != "candr_fixture_t1" {
+		t.Fatalf("turn 3 request PriorCandidateReceipts=%+v, want exactly the turn-1 offer (candr_fixture_t1)", turn3Req.PriorCandidateReceipts)
 	}
 	if turn3Req.PriorCandidateReceipts[0].ResultID != "result_nturn_fixture_t2" {
-		t.Fatalf("turn 3 request PriorCandidateReceipts[0].ResultID = %q, want the turn-2 result id (prior_result_id must name the result that OFFERED the receipt being redeemed)", turn3Req.PriorCandidateReceipts[0].ResultID)
+		t.Fatalf("turn 3 request PriorCandidateReceipts[0].ResultID = %q, want the turn-2 result id (prior_result_id must name the LATEST result the candidate offer was read from)", turn3Req.PriorCandidateReceipts[0].ResultID)
 	}
 
 	// Per-turn record shape: turn 3's own window_canonicalization_outcome
@@ -318,6 +320,71 @@ func TestChaos4360NTurnCarryNeverResendsVetoedReceiptID(t *testing.T) {
 // review, P1, confirmed): a report where every case is arm-invalid (or
 // where zero cases were selected at all) must never be read as a clean
 // run.
+// TestNTurnReportExercisedCarryTransition pins the OTHER round-2 fail-loud
+// invariant (codex review, P1, confirmed): a report where every case has
+// usable evidence but NONE of them ever sent a candidate-only turn never
+// exercised the transition this class exists to measure.
+func TestNTurnReportExercisedCarryTransition(t *testing.T) {
+	cases := []struct {
+		name   string
+		report nTurnReport
+		want   bool
+	}{
+		{"no results at all", nTurnReport{}, false},
+		{"results exist but none attempted candidate-only", nTurnReport{Results: []nTurnCaseResult{{Decisive: true}, {OfferMiss: true}}}, false},
+		{"one case attempted candidate-only", nTurnReport{Results: []nTurnCaseResult{{Decisive: true}, {CandidateOnlyTurnAttempted: true}}}, true},
+	}
+	for _, tc := range cases {
+		if got := nTurnReportExercisedCarryTransition(tc.report); got != tc.want {
+			t.Errorf("%s: nTurnReportExercisedCarryTransition = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestNTurnParseCaseIndices pins the duplicate-rejection contract (codex
+// review round 2, P2, confirmed): a repeated index must fail loudly, not
+// silently double-count that case in every aggregate field.
+func TestNTurnParseCaseIndices(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		want    []int
+		wantErr bool
+	}{
+		{"single index", "57", []int{57}, false},
+		{"two distinct indices", "57,60", []int{57, 60}, false},
+		{"whitespace tolerated", " 57 , 60 ", []int{57, 60}, false},
+		{"duplicate index rejected", "57,57", nil, true},
+		{"duplicate index rejected regardless of order", "57,60,57", nil, true},
+		{"non-integer field rejected", "57,abc", nil, true},
+		{"empty string parses to zero indices, rejected", "", nil, true},
+		{"only commas parses to zero indices, rejected", " , , ", nil, true},
+	}
+	for _, tc := range cases {
+		got, err := nTurnParseCaseIndices(tc.raw)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%s: nTurnParseCaseIndices(%q) = %v, nil, want an error", tc.name, tc.raw, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: nTurnParseCaseIndices(%q) unexpected error: %v", tc.name, tc.raw, err)
+			continue
+		}
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: nTurnParseCaseIndices(%q) = %v, want %v", tc.name, tc.raw, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: nTurnParseCaseIndices(%q) = %v, want %v", tc.name, tc.raw, got, tc.want)
+				break
+			}
+		}
+	}
+}
+
 func TestNTurnReportHasUsableEvidence(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -452,6 +519,12 @@ func TestChaos4360NTurnCarryObservedViaSource(t *testing.T) {
 func TestNTurnWindowUnsafeCommit(t *testing.T) {
 	confirmed := &contractsv1.ContextFabricEffectiveEvidenceWindow{Provenance: contractsv1.ContextFabricWindowClarificationConfirmed}
 	inferred := &contractsv1.ContextFabricEffectiveEvidenceWindow{Provenance: contractsv1.ContextFabricWindowInferredDefault}
+	// stated (codex review round 2, P2, confirmed): a question that names
+	// its own evidence window explicitly ("in the last 90 days") legitimately
+	// carries question_stated provenance -- engine.go's own decisive-path
+	// gate permits it exactly like clarification_confirmed. The original
+	// predicate wrongly flagged this as unsafe.
+	stated := &contractsv1.ContextFabricEffectiveEvidenceWindow{Provenance: contractsv1.ContextFabricWindowQuestionStated}
 
 	cases := []struct {
 		name   string
@@ -461,6 +534,7 @@ func TestNTurnWindowUnsafeCommit(t *testing.T) {
 		{"not decisive, window inferred: not a commit at all", contractsv1.ContextFabricInvestigationResult{Status: contractsv1.ContextFabricInvestigationClarificationRequired, EffectiveEvidenceWindow: inferred}, false},
 		{"decisive, no window in play (nil): legitimately no window", contractsv1.ContextFabricInvestigationResult{Status: contractsv1.ContextFabricInvestigationComplete, EffectiveEvidenceWindow: nil}, false},
 		{"decisive, window confirmed: safe", contractsv1.ContextFabricInvestigationResult{Status: contractsv1.ContextFabricInvestigationComplete, EffectiveEvidenceWindow: confirmed}, false},
+		{"decisive, window question_stated: safe (engine.go permits it, same as confirmed)", contractsv1.ContextFabricInvestigationResult{Status: contractsv1.ContextFabricInvestigationComplete, EffectiveEvidenceWindow: stated}, false},
 		{"decisive, window inferred: UNSAFE (CHAOS-4040)", contractsv1.ContextFabricInvestigationResult{Status: contractsv1.ContextFabricInvestigationComplete, EffectiveEvidenceWindow: inferred}, true},
 	}
 	for _, tc := range cases {

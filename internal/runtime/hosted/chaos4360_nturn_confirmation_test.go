@@ -11,23 +11,26 @@ package hosted_test
 // chaos3742_two_turn_confirmation_test.go is a FIXED two-call shape (turn 1
 // ask, turn 2 confirm-or-inject). CHAOS-4355's live walkthrough (13:40
 // 08-27, ticket comments) found a real defect that shape structurally
-// cannot see: turn 2 confirms the offered window via receipt, but the
-// engine's own structure-supersession guard (pginvestigation/store.go
-// IsStructureSuperseded) claims a candidate receipt the first time it is
-// redeemed -- so a candidate offered at turn 1 and confirmed at turn 2
-// alongside the window is superseded by the SAME turn-2 call that changed
-// the census pool, and turn 2 comes back with a FRESH candidate offer
-// instead of a decisive commit. A turn 3 is required to redeem THAT fresh
-// offer. Nothing before this file ever sent a request past turn 2, so
-// nothing ever observed what happens to the window at turn 3: today,
-// nothing carries a confirmed window across turns server-side, so turn 3
-// arrives with an INFERRED window, the window gate fires
-// (WindowCanonicalizationGatedClassDefault), SubjectResolution comes back
-// empty, and the turn-3 candidate redemption can never land -- the
-// question can never reach a decisive answer past two turns. Re-sending
-// the turn-2 receipt instead of the fresh one (the Workbench stopgap,
-// CHAOS-4355 comment 13:40) does not work either: the SAME supersession
-// guard marks a resend of an already-claimed receipt "vetoed_stale".
+// cannot see: the live Workbench batches window+candidate receipts into
+// one turn-2 call, and the engine's own structure-supersession guard
+// (pginvestigation/store.go IsStructureSuperseded) can claim the candidate
+// receipt before it applies -- superseded by the SAME call's own
+// window-driven pool change -- forcing a third turn to redeem a FRESH
+// candidate offer. This harness reproduces the underlying CHAOS-4360 gap
+// directly, without depending on that specific batched-supersession path:
+// runNTurnCase deliberately NEVER attaches window and candidate in the
+// same call (see its own doc comment) -- window alone on one turn,
+// candidate alone on a strictly LATER turn -- which guarantees any case
+// needing both members takes a genuine third turn and isolates the gap
+// precisely: nothing carries a confirmed window across turns server-side
+// today, so turn 3 arrives with an INFERRED window, the window gate fires
+// (WindowCanonicalizationGatedClassDefault), and the turn-3 candidate
+// redemption can never land -- the question can never reach a decisive
+// answer past two turns. Re-sending the turn-2 receipt instead of the
+// fresh one (the Workbench stopgap, CHAOS-4355 comment 13:40) does not
+// work either: the SAME supersession guard marks a resend of an
+// already-claimed receipt "vetoed_stale" -- which is exactly why this
+// harness's own never-resend contract (sentReceiptIDs) exists.
 //
 // This class exists to measure that gap directly against REAL acr (kiac
 // data plane -- mock/e2e ACR servers do not model supersession, so a mock
@@ -213,17 +216,27 @@ func nTurnSelectWindowOffer(result contractsv1.ContextFabricInvestigationResult)
 }
 
 // nTurnWindowUnsafeCommit is this class's own CHAOS-4040 (W4) safety
-// invariant: a decisive result must NEVER commit under a window that is
-// not receipt-confirmed, independent of whether same-conversation carry
-// exists yet. Evaluated only when EffectiveEvidenceWindow is present (nil
-// legitimately means no window was ever in play for this result) -- a
-// decisive result with a window in play but EffectiveEvidenceWindow absent
-// would itself be a wire-contract violation, not this predicate's concern.
+// invariant: a decisive result must NEVER commit under an INFERRED window,
+// independent of whether same-conversation carry exists yet. Evaluated
+// only when EffectiveEvidenceWindow is present (nil legitimately means no
+// window was ever in play for this result) -- a decisive result with a
+// window in play but EffectiveEvidenceWindow absent would itself be a
+// wire-contract violation, not this predicate's concern.
+//
+// codex review round 2 (P2, confirmed): the original version flagged
+// ANYTHING other than clarification_confirmed as unsafe, which wrongly
+// counted a legitimate question_stated window (the caller's own question
+// text names an explicit window, e.g. "in the last 90 days") as unsafe --
+// engine.go's own decisive-path gate (internal/contextfabric/engine.go)
+// permits BOTH question_stated and clarification_confirmed; only
+// inferred_default is the CHAOS-4040 gap. A carried window reports as
+// clarification_confirmed (lane-4360-acr, PR #306), so this predicate
+// needs no separate case for it.
 func nTurnWindowUnsafeCommit(result contractsv1.ContextFabricInvestigationResult) bool {
 	if !nTurnDecisive(result.Status) || result.EffectiveEvidenceWindow == nil {
 		return false
 	}
-	return result.EffectiveEvidenceWindow.Provenance != contractsv1.ContextFabricWindowClarificationConfirmed
+	return result.EffectiveEvidenceWindow.Provenance == contractsv1.ContextFabricWindowInferredDefault
 }
 
 // nTurnGroundTruthCandidate reads this index's subject_anchor-member
@@ -259,6 +272,57 @@ func nTurnGroundTruthCandidate(annex twoTurnOracleAnnex, index int) (canonicalID
 // evidence", not vacuously true.
 func nTurnReportHasUsableEvidence(report nTurnReport) bool {
 	return len(report.Results) > 0 && len(report.Results) > report.ArmInvalidCount
+}
+
+// nTurnReportExercisedCarryTransition reports whether AT LEAST ONE case in
+// report actually attempted the genuine carry-specific transition this
+// class exists to walk: a turn sending PriorCandidateReceipts WITHOUT
+// PriorWindowReceipts, i.e. redeeming a candidate after window was already
+// settled on an earlier turn (codex review round 2, P1, confirmed). A run
+// can pass nTurnReportHasUsableEvidence (cases genuinely ran, none
+// arm-invalid) while every one of them converged or stalled inside turn 2
+// alone -- exactly the shape the ORIGINAL 2026-08-27 baseline had before
+// this fix, which is a real, reportable RED-baseline finding on its own
+// (the harness's two-call construction never reached its own reason for
+// existing), but must never be silently reported as "the class measured
+// the gap" when it did not.
+func nTurnReportExercisedCarryTransition(report nTurnReport) bool {
+	for _, res := range report.Results {
+		if res.CandidateOnlyTurnAttempted {
+			return true
+		}
+	}
+	return false
+}
+
+// nTurnParseCaseIndices parses ACR_TEST_NTURN_CASE_INDICES's own
+// comma-separated format, rejecting a non-integer field, an empty result,
+// or a REPEATED index (codex review round 2, P2, confirmed): a duplicate
+// (e.g. "57,57") would otherwise run the same case twice under identical
+// request ids, double-counting it in every aggregate report field --
+// mirrors twoTurnShardCaseIndices' own duplicate-rejection discipline.
+func nTurnParseCaseIndices(raw string) ([]int, error) {
+	seen := map[int]bool{}
+	var indices []int
+	for _, field := range strings.Split(raw, ",") {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not an integer", field)
+		}
+		if seen[parsed] {
+			return nil, fmt.Errorf("index %d appears more than once -- a duplicate would run the same case twice and double-count it in every aggregate field", parsed)
+		}
+		seen[parsed] = true
+		indices = append(indices, parsed)
+	}
+	if len(indices) == 0 {
+		return nil, fmt.Errorf("parsed to zero indices")
+	}
+	return indices, nil
 }
 
 // nTurnTurnRecord is one turn's own observable outcome -- indices/kinds/
@@ -304,6 +368,14 @@ type nTurnCaseResult struct {
 	// forward-compatible signal) value outside the closed pre-CHAOS-4360
 	// vocabulary -- see nTurnIsCarriedSource/nTurnIsCarriedProvenance.
 	CarriedStructureObserved bool `json:"carried_structure_observed"`
+	// CandidateOnlyTurnAttempted is true when this case sent a turn
+	// carrying PriorCandidateReceipts WITHOUT PriorWindowReceipts in the
+	// same request -- the genuine, carry-specific transition this class
+	// exists to walk (codex review round 2, P1, confirmed): window already
+	// settled from an earlier turn, candidate redeemed on its own. False
+	// for a case that never got past window (or never needed a candidate
+	// at all).
+	CandidateOnlyTurnAttempted bool `json:"candidate_only_turn_attempted"`
 }
 
 // nTurnReport is this class's own top-level artifact -- a single-shard
@@ -319,15 +391,16 @@ type nTurnReport struct {
 	OracleAnnexSignedOff bool   `json:"oracle_annex_signed_off"`
 	AnnexSignoffStale    bool   `json:"annex_signoff_stale"`
 
-	MaxTurns                int `json:"max_turns"`
-	CasesRun                int `json:"cases_run"`
-	DecisiveCount           int `json:"decisive_count"`
-	OfferMissCount          int `json:"offer_miss_count"`
-	ArmInvalidCount         int `json:"arm_invalid_count"`
-	WrongCommitCount        int `json:"wrong_commit_count"`
-	WindowUnsafeCommitCount int `json:"window_unsafe_commit_count"`
-	CarryHitCount           int `json:"carry_hit_count"`
-	TurnsTakenSum           int `json:"turns_taken_sum"`
+	MaxTurns                        int `json:"max_turns"`
+	CasesRun                        int `json:"cases_run"`
+	DecisiveCount                   int `json:"decisive_count"`
+	OfferMissCount                  int `json:"offer_miss_count"`
+	ArmInvalidCount                 int `json:"arm_invalid_count"`
+	WrongCommitCount                int `json:"wrong_commit_count"`
+	WindowUnsafeCommitCount         int `json:"window_unsafe_commit_count"`
+	CarryHitCount                   int `json:"carry_hit_count"`
+	CandidateOnlyTurnAttemptedCount int `json:"candidate_only_turn_attempted_count"`
+	TurnsTakenSum                   int `json:"turns_taken_sum"`
 
 	Results []nTurnCaseResult `json:"results"`
 }
@@ -430,14 +503,35 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 		next := twoTurnRequest(index, tc, fmt.Sprintf("nturn%02d", turnIndex))
 		attachedWindow := false
 		attachedCandidate := false
+		// WINDOW FIRST, CANDIDATE ONLY ONCE WINDOW IS SETTLED (codex review
+		// round 2, P1, confirmed): the two are deliberately NEVER attached in
+		// the SAME call. Batching them (the original version's behavior,
+		// mirroring runTwoTurnPositiveArm's own two-turn pattern) let both
+		// members apply -- or fail -- inside turn 2 alone for this class's
+		// own project-candidate seed set (idx 57/60), so the live baseline
+		// never actually reached a genuine turn 3 candidate-only exchange --
+		// the exact transition this class exists to walk. Trying window
+		// alone first, and candidate only on a LATER turn once window has
+		// either applied or is no longer offered, guarantees any case that
+		// needs both members takes at least 3 turns: turn 1 ask, turn 2
+		// window, turn 3+ candidate -- a real multi-turn carry attempt, not
+		// a two-call shape wearing an N-turn label.
+		//
+		// "attemptedWindow" (not "appliedWindow") gates the fallthrough to
+		// candidate: a case whose question never needs a window at all
+		// (window simply never offered) must still reach candidate on turn
+		// 2, not stall forever waiting for a window offer that will never
+		// arrive.
+		attemptedWindow := false
 		if !appliedWindow {
 			if receiptID, found := nTurnSelectWindowOffer(result); found && !sentReceiptIDs[receiptID] {
 				next.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: result.ResultID, ReceiptID: receiptID}}
 				attachedWindow = true
+				attemptedWindow = true
 				sentReceiptIDs[receiptID] = true
 			}
 		}
-		if !appliedCandidate {
+		if !attemptedWindow && !appliedCandidate {
 			if receiptID, found := nTurnSelectCandidateOffer(result, tc.ExpectKind, canonicalID); found && !sentReceiptIDs[receiptID] {
 				next.PriorCandidateReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: result.ResultID, ReceiptID: receiptID}}
 				attachedCandidate = true
@@ -477,6 +571,9 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 	res.WrongCommit = twoTurnCommittedWrong(result.SubjectResolution.Committed, tc)
 	res.WindowUnsafeCommit = nTurnWindowUnsafeCommit(result)
 	for _, rec := range res.Turns {
+		if rec.SentCandidateReceipt && !rec.SentWindowReceipt {
+			res.CandidateOnlyTurnAttempted = true
+		}
 		for _, source := range rec.ConfirmedStructureSource {
 			if nTurnIsCarriedSource(source) {
 				res.CarriedStructureObserved = true
@@ -532,20 +629,9 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 		}
 		maxTurns = parsed
 	}
-	var caseIndices []int
-	for _, field := range strings.Split(indicesRaw, ",") {
-		field = strings.TrimSpace(field)
-		if field == "" {
-			continue
-		}
-		parsed, perr := strconv.Atoi(field)
-		if perr != nil {
-			t.Fatalf("ACR_TEST_NTURN_CASE_INDICES=%q: %q is not an integer", indicesRaw, field)
-		}
-		caseIndices = append(caseIndices, parsed)
-	}
-	if len(caseIndices) == 0 {
-		t.Fatalf("ACR_TEST_NTURN_CASE_INDICES=%q parsed to zero indices", indicesRaw)
+	caseIndices, perr := nTurnParseCaseIndices(indicesRaw)
+	if perr != nil {
+		t.Fatalf("ACR_TEST_NTURN_CASE_INDICES=%q: %v", indicesRaw, perr)
 	}
 	if len(caseIndices) > 20 {
 		t.Fatalf("ACR_TEST_NTURN_CASE_INDICES names %d cases -- this class's own RED-baseline run is capped at 20 (never the full corpus); pass a smaller seed set", len(caseIndices))
@@ -721,7 +807,10 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 		if res.CarriedStructureObserved {
 			report.CarryHitCount++
 		}
-		t.Logf("case %d: turns_taken=%d decisive=%v final_status=%s carried_structure_observed=%v", index, res.TurnsTaken, res.Decisive, res.FinalStatus, res.CarriedStructureObserved)
+		if res.CandidateOnlyTurnAttempted {
+			report.CandidateOnlyTurnAttemptedCount++
+		}
+		t.Logf("case %d: turns_taken=%d decisive=%v final_status=%s carried_structure_observed=%v candidate_only_turn_attempted=%v", index, res.TurnsTaken, res.Decisive, res.FinalStatus, res.CarriedStructureObserved, res.CandidateOnlyTurnAttempted)
 	}
 
 	// A measurement that did not happen must FAIL, loudly (AGENTS.md
@@ -729,6 +818,13 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	// nTurnReportHasUsableEvidence's own doc comment.
 	if !nTurnReportHasUsableEvidence(report) {
 		t.Fatalf("every selected case (%d) was arm-invalid (no oracle entry, or every Investigate call errored) -- this run produced NO usable live evidence; refusing to report exit=0 for a measurement that did not happen", len(report.Results))
+	}
+	// The carry-specific transition itself must have been exercised at
+	// least once (codex review round 2, P1, confirmed) -- see
+	// nTurnReportExercisedCarryTransition's own doc comment for why
+	// nTurnReportHasUsableEvidence alone is not sufficient.
+	if !nTurnReportExercisedCarryTransition(report) {
+		t.Fatalf("none of the %d selected cases ever sent a candidate-only turn (PriorCandidateReceipts without PriorWindowReceipts) -- every case converged or stalled inside window-only turns, so this run never exercised the carry-specific transition CHAOS-4360 exists to measure; pass a seed set that needs a subject_candidate redemption after window settles", len(report.Results))
 	}
 
 	raw, merr := json.MarshalIndent(report, "", "  ")
