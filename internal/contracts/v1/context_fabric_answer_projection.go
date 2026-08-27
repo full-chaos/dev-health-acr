@@ -220,6 +220,18 @@ type ContextFabricProjectedFact struct {
 	Subject ContextFabricSubjectRef  `json:"subject"`
 	Field   string                   `json:"field"`
 	Value   ContextFabricScalarValue `json:"value"`
+	// Rows mirrors ContextFabricClaimedFact.Rows (CHAOS-4347): the
+	// renderable table a claim carried, passed through unchanged so a
+	// consumer of the answer surface -- not just the canonical result --
+	// can render it. Reuses ContextFabricClaimedFactRow directly rather
+	// than a second, identically-shaped type: the two documents
+	// (context_fabric_common.v1 / context_fabric_answer_projection.v1)
+	// each keep their own JSON Schema $defs copy (ProjectedFact is a
+	// self-contained document by the same convention every other
+	// projected shape here already follows), but nothing requires the Go
+	// side to duplicate the type just because the wire schema duplicates
+	// the definition.
+	Rows []ContextFabricClaimedFactRow `json:"rows,omitempty"`
 }
 
 // ContextFabricProjectedCoverage reports one source's state. Reason is

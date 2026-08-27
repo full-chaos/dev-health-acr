@@ -1403,3 +1403,79 @@ func TestReadFactsRejectsDisallowedParametersEvenWhenEverythingPrunes(t *testing
 		}
 	})
 }
+
+// TestChaos4347_MetricsWidenedToTeamAndProjectSubjectsIsNotPruned pins
+// CHAOS-4347's widening at the planner seam: a capability that now
+// declares [repository, team, project] (the real MetricsProvider's shape
+// as of CHAOS-4347 -- devhealthfacts/metrics.go) must run, unpruned and
+// unnarrowed, for a lone team subject and for a lone project subject, and
+// the registry must return the facts the stubbed provider produced for
+// each. Before CHAOS-4347, the real MetricsProvider declared only
+// {repository}, so a team or project subject alone pruned FactMetrics
+// entirely (§3's "no subject has a supported kind" case) -- this test
+// exercises exactly the shape that flips.
+func TestChaos4347_MetricsWidenedToTeamAndProjectSubjectsIsNotPruned(t *testing.T) {
+	t.Parallel()
+
+	capability := planCapability(FactMetrics, "devhealthfacts.metrics", SubjectRepository, SubjectTeam, SubjectProject)
+
+	for _, testCase := range []struct {
+		name    string
+		subject SubjectRef
+	}{
+		{name: "team subject", subject: subject(SubjectTeam, "team_platform")},
+		{name: "project subject", subject: subject(SubjectProject, "project_titan")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Planner level: the requirement must run against this
+			// subject, not prune or narrow it away.
+			request := CanonicalFactRequest{
+				Subjects:     []SubjectRef{testCase.subject},
+				Requirements: []FactRequirement{{Kind: FactMetrics}},
+			}
+			plan := planFactReads(newFactPlanInput(request), planIndex(capability))
+			if len(plan) != 1 {
+				t.Fatalf("plan length = %d, want 1", len(plan))
+			}
+			if plan[0].Pruned {
+				t.Fatalf("Pruned = true (reason %q), want FactMetrics to run for %s -- CHAOS-4347 widened it to this kind", plan[0].Reason, testCase.subject.Kind)
+			}
+			if plan[0].Narrowed {
+				t.Fatalf("Narrowed = true (reason %q), want the lone subject to survive untouched", plan[0].Reason)
+			}
+
+			// Registry level: the widened capability must actually be
+			// QUERIED and its fact actually returned -- proving the whole
+			// path, not only the planner's own decision.
+			metrics := &factProviderStub{
+				capability: capability,
+				result: FactProviderResult{
+					State:   SourceAvailable,
+					Version: "devhealthfacts.clickhouse.v1",
+					Facts: []CanonicalFact{{
+						Kind: FactMetrics, Subject: testCase.subject,
+						Fields:         map[string]FactValue{"commits_count": IntegerFactValue(7)},
+						EvidenceRefIDs: []string{"acr:v1:team:team_platform"},
+						SourceState:    SourceAvailable,
+					}},
+				},
+			}
+			registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
+			if err != nil {
+				t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+			}
+			bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+			if err != nil {
+				t.Fatalf("ReadFacts() error = %v", err)
+			}
+			if len(metrics.queries) != 1 {
+				t.Fatalf("provider queried %d times, want exactly 1 -- a pruned capability is never called", len(metrics.queries))
+			}
+			if len(bundle.Facts) != 1 || bundle.Facts[0].Kind != FactMetrics || bundle.Facts[0].Subject.CanonicalID != testCase.subject.CanonicalID {
+				t.Fatalf("facts = %#v, want one FactMetrics fact for %s", bundle.Facts, testCase.subject.CanonicalID)
+			}
+		})
+	}
+}

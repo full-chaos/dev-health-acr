@@ -318,6 +318,10 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 				Subject: fact.Subject,
 				Field:   fact.Field,
 				Value:   fact.Value,
+				// Rows (CHAOS-4347) is carried through unchanged, same as
+				// Value -- it is copied evidence, not something this
+				// projection step computes or narrows.
+				Rows: fact.Rows,
 			})
 		}
 		drivers = append(drivers, contractsv1.ContextFabricProjectedDriver{

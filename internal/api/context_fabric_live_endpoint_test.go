@@ -318,12 +318,29 @@ func liveClaimMatchesCanonicalFact(claim contractsv1.ContextFabricClaimedFact, b
 		if !ok {
 			continue
 		}
-		// FactValue and ContextFabricScalarValue are structurally identical
-		// pointer-field unions, so compare by value (DeepEqual follows the
-		// pointers) rather than by identity.
-		if reflect.DeepEqual(contractsv1.ContextFabricScalarValue(value), claim.Value) {
+		// FactValue and ContextFabricScalarValue share the same five scalar
+		// variants (String/Integer/Number/Boolean/Null), so compare those
+		// fields directly. They are no longer directly convertible structs
+		// (CHAOS-4347 added FactValue.Rows, a producer-facing renderable-
+		// table capability ContextFabricScalarValue deliberately does not
+		// gain -- see ContextFabricClaimedFact.Rows' doc comment for why),
+		// but a claim's Value is still always scalar-only, so the
+		// comparison itself is unaffected.
+		if factValueMatchesScalarValue(value, claim.Value) {
 			return true
 		}
 	}
 	return false
+}
+
+// factValueMatchesScalarValue compares the five scalar variants
+// contextfabric.FactValue and contractsv1.ContextFabricScalarValue share.
+// See liveClaimMatchesCanonicalFact's call site for why this is no longer a
+// direct struct conversion.
+func factValueMatchesScalarValue(fact contextfabric.FactValue, scalar contractsv1.ContextFabricScalarValue) bool {
+	return reflect.DeepEqual(fact.String, scalar.String) &&
+		reflect.DeepEqual(fact.Integer, scalar.Integer) &&
+		reflect.DeepEqual(fact.Number, scalar.Number) &&
+		reflect.DeepEqual(fact.Boolean, scalar.Boolean) &&
+		fact.Null == scalar.Null
 }

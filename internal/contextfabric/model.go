@@ -310,12 +310,37 @@ type CanonicalFactRequest struct {
 	Scope *FactReadScope `json:"-"`
 }
 
+// FactValueRow is one row of a table-shaped FactValue (CHAOS-4347): a flat
+// map of column name to a LEAF FactValue. A row field must never itself
+// carry Rows -- FactValue.Validate enforces that, so a renderable fact's
+// nesting is bounded by construction, not by convention.
+type FactValueRow struct {
+	Fields map[string]FactValue `json:"fields"`
+}
+
+// maxFactValueRows and maxFactValueRowFields bound a renderable table the
+// same way CanonicalFact.Fields already bounds a fact's own field count
+// (64): a producer emitting an unbounded rollup is a producer bug, and the
+// bound catches it at Validate rather than at a downstream renderer.
+const (
+	maxFactValueRows      = 64
+	maxFactValueRowFields = 32
+)
+
 type FactValue struct {
 	String  *string  `json:"string,omitempty"`
 	Integer *int64   `json:"integer,omitempty"`
 	Number  *float64 `json:"number,omitempty"`
 	Boolean *bool    `json:"boolean,omitempty"`
 	Null    bool     `json:"null,omitempty"`
+	// Rows carries a small, renderable table (CHAOS-4347) for a fact whose
+	// evidence is genuinely a set of rows -- e.g. a project's per-team
+	// metrics rollup, where summing counts across teams is sound but
+	// averaging their rates is not (a rate is not additive across
+	// populations of different sizes). Additive: every pre-existing
+	// FactValue caller sets exactly one of the scalar variants and leaves
+	// Rows nil, so this changes nothing for them.
+	Rows []FactValueRow `json:"rows,omitempty"`
 }
 
 func StringFactValue(value string) FactValue  { return FactValue{String: &value} }
@@ -324,7 +349,20 @@ func NumberFactValue(value float64) FactValue { return FactValue{Number: &value}
 func BooleanFactValue(value bool) FactValue   { return FactValue{Boolean: &value} }
 func NullFactValue() FactValue                { return FactValue{Null: true} }
 
+// RowsFactValue builds a table-shaped FactValue (CHAOS-4347) -- a
+// renderable series/table for facts whose evidence is a set of rows rather
+// than one number. See FactValue.Rows for why this exists instead of an
+// averaged scalar.
+func RowsFactValue(rows []FactValueRow) FactValue { return FactValue{Rows: rows} }
+
 func (v FactValue) Validate() error {
+	return v.validate(true)
+}
+
+// validate is Validate's recursive worker. allowRows is false when
+// validating a row's own leaf field, which is what makes Rows-within-Rows a
+// validation error instead of a convention nobody checks.
+func (v FactValue) validate(allowRows bool) error {
 	set := 0
 	if v.String != nil {
 		set++
@@ -346,6 +384,28 @@ func (v FactValue) Validate() error {
 	}
 	if v.Null {
 		set++
+	}
+	if len(v.Rows) > 0 {
+		if !allowRows {
+			return fmt.Errorf("fact value rows must not nest")
+		}
+		set++
+		if len(v.Rows) > maxFactValueRows {
+			return fmt.Errorf("fact value rows exceed bounds")
+		}
+		for _, row := range v.Rows {
+			if len(row.Fields) == 0 || len(row.Fields) > maxFactValueRowFields {
+				return fmt.Errorf("fact value row field count is invalid")
+			}
+			for key, cell := range row.Fields {
+				if strings.TrimSpace(key) != key || len(key) == 0 || len(key) > 128 {
+					return fmt.Errorf("fact value row field key is invalid")
+				}
+				if err := cell.validate(false); err != nil {
+					return fmt.Errorf("fact value row field %q: %w", key, err)
+				}
+			}
+		}
 	}
 	if set != 1 {
 		return fmt.Errorf("fact value must contain exactly one typed value")

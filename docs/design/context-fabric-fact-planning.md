@@ -365,6 +365,22 @@ Wall-clock is reported but caveated. Dev tables are small enough that provider
 time is round-trip dominated, so round-trip **count** is the durable number
 and the observed improvements are supporting evidence only.
 
+## 6a. CHAOS-4347 — a capability's own SupportedSubjectKinds can grow
+
+Nothing in §3's rule changes when a capability declares a WIDER
+`SupportedSubjectKinds` set than it used to: the planner still partitions
+purely on the declared set, still proves the pruned branch empty, still
+never reads phrasing. CHAOS-4347 widened `MetricsProvider` from
+`{repository}` to `{repository, team, project}` by giving it real
+`team_metrics_daily`/`team_project_ownership` sources for the new kinds
+(`metrics.go`'s package doc comment) — the planner requires no change to
+narrow or run against the wider set correctly, because §3's rule was
+already declaration-driven rather than hard-coded to any one provider's
+prior shape. See `context-fabric-fact-scope.md` §11 for why this widening
+is architecturally distinct from a `FactReadScopeResolver` expansion (a
+capability gaining a REAL source for a kind, versus being granted a
+disclosed READ permission onto a kind it still does not itself support).
+
 ## 7. Known adjacent work, not taken
 
 `graphrank.AdmitEdges` knows which subject each admitted edge concerns, but

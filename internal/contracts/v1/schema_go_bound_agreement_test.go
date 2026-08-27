@@ -741,7 +741,15 @@ func schemaOnlyBoundReason(path string) string {
 		strings.Contains(path, "DriverJudgment.properties") || strings.Contains(path, "Cohort.properties") ||
 		strings.Contains(path, "CohortMember.properties") || strings.Contains(path, "SubjectCandidate.properties") ||
 		strings.Contains(path, "SubjectResolution.properties") || strings.Contains(path, "RelationshipPath.properties") ||
-		strings.Contains(path, "ClaimedFact.properties") || strings.Contains(path, "Coverage.properties"):
+		strings.Contains(path, "ClaimedFact.properties") || strings.Contains(path, "Coverage.properties") ||
+		// CHAOS-4347: ClaimedFactRow/ProjectedFactRow's own maxProperties
+		// (fields per row) is enforced by the SAME shared helper
+		// (validateClaimedFactRows -> validateScalarMap), not a
+		// path-specific constant -- same reasoning as ClaimedFact.properties
+		// just above; "ClaimedFactRow"/"ProjectedFactRow" don't match that
+		// substring themselves (the literal is "ClaimedFact.properties",
+		// and "Row" sits between "ClaimedFact" and ".properties" here).
+		strings.Contains(path, "ClaimedFactRow") || strings.Contains(path, "ProjectedFactRow"):
 		return "answer-surface field bounded by a shared helper rather than a distinct numeric constant"
 	case strings.HasPrefix(path, "result#properties."):
 		return "result-level field bounded by the shared identity or collection helpers"

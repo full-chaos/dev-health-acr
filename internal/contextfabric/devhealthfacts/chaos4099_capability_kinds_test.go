@@ -27,13 +27,27 @@ import (
 )
 
 // TestChaos4099_RealProviderSubjectKindsStayUnwidened is acceptance point 3.
+//
+// CHAOS-4347 (ruling 2026-08-26 17:52) deliberately widens FactMetrics'
+// pin below to include SubjectTeam and SubjectProject. That is NOT the
+// rejected "Option A" this test exists to catch: Option A was widening a
+// capability's SupportedSubjectKinds while inlining project/team->repository
+// PROXY joins per-provider, with no central policy and no disclosure --
+// exactly what FactReadScopeResolver was built to replace. MetricsProvider's
+// widening is a REAL table join instead (team_metrics_daily directly for
+// team; team_project_ownership -> team_metrics_daily, summed and disclosed
+// via rollup_basis/team_breakdown, for project) -- see metrics.go's package
+// doc comment. FactPullRequests and FactReviews have no such source and
+// stay exactly as CHAOS-4099 left them, so this test keeps pinning them.
 func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 	t.Parallel()
 
-	// The three families CHAOS-4099 routes through the scope resolver, with
-	// the subject kind each is expected to answer for and nothing else.
+	// The families CHAOS-4099 routes through the scope resolver, with the
+	// subject kind each is expected to answer for and nothing else.
+	// FactMetrics (CHAOS-4347) is the deliberate exception -- see the test's
+	// own doc comment above.
 	want := map[contextfabric.FactKind][]contextfabric.SubjectKind{
-		contextfabric.FactMetrics:      {contextfabric.SubjectRepository},
+		contextfabric.FactMetrics:      {contextfabric.SubjectRepository, contextfabric.SubjectTeam, contextfabric.SubjectProject},
 		contextfabric.FactPullRequests: {contextfabric.SubjectPullRequest},
 		contextfabric.FactReviews:      {contractsv1.ContextFabricSubjectPullRequestReview},
 	}
@@ -58,15 +72,27 @@ func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 // TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject is the premise
 // the whole ticket rests on, asserted rather than assumed.
 //
-// If this ever fails, CHAOS-4099's defect is either fixed by another route or
-// its analysis was wrong -- and either way the scope resolver's disclosure
-// would be claiming a gap that no longer exists. Better to fail here, loudly,
-// than to disclose a limitation that is not true.
+// If this ever fails for a capability OTHER than FactMetrics, CHAOS-4099's
+// defect is either fixed by another route or its analysis was wrong -- and
+// either way the scope resolver's disclosure would be claiming a gap that
+// no longer exists. Better to fail here, loudly, than to disclose a
+// limitation that is not true.
+//
+// FactMetrics is excluded (CHAOS-4347, ruling 2026-08-26 17:52): it now
+// answers for a project directly, by a real team_project_ownership join,
+// not by the proxy route CHAOS-4099's disclosure describes -- see
+// metrics.go's package doc comment and
+// TestChaos4099_RealProviderSubjectKindsStayUnwidened's updated doc
+// comment above. Every OTHER capability's premise is unchanged and this
+// test still proves it.
 func TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject(t *testing.T) {
 	t.Parallel()
 
 	for _, provider := range allProvidersForKindAudit() {
 		capability := provider.Capability()
+		if capability.Kind == contextfabric.FactMetrics {
+			continue
+		}
 		for _, kind := range capability.SupportedSubjectKinds {
 			if kind == contextfabric.SubjectProject {
 				t.Fatalf("capability %s now answers for a project directly -- CHAOS-4099's premise, and its disclosure, no longer hold", capability.Kind)

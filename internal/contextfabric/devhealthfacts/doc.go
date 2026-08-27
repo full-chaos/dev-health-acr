@@ -5,8 +5,12 @@
 // FactActualCompletion, FactWork, FactBlockers, and FactRequiredChildren
 // from work_items/work_item_dependencies, FactPullRequests and FactReviews
 // from git_pull_requests/git_pull_request_reviews, FactContinuousIntegration
-// from ci_pipeline_runs, FactDeployments from deployments, and FactIncidents
-// from operational_incidents. Every query reuses
+// from ci_pipeline_runs (per-run status; CHAOS-4347 adds a
+// repository-scoped aggregate shape from cicd_metrics_daily -- see ci.go),
+// FactDeployments from deployments (per-deployment status/environment;
+// CHAOS-4347 adds a repository-scoped aggregate shape from
+// deploy_metrics_daily -- see deployments.go), and FactIncidents from
+// operational_incidents. Every query reuses
 // internal/contextpacket.ClickHouseQueryClient -- the same read boundary
 // devhealthsource uses -- and is scoped to the caller's storage.Principal
 // org and to only the subjects a FactQuery asked about, never the whole
@@ -18,6 +22,14 @@
 // investment, readiness, and deficiency formulas):
 //
 //   - FactMetrics from repo_metrics_daily (latest day per repository).
+//     CHAOS-4347 widens this to [repository, team, project]: team reads
+//     team_metrics_daily directly (a genuinely team-scoped rollup, not a
+//     repository proxy); project rolls up through
+//     team_project_ownership -> team_metrics_daily, summing additive
+//     counts across owning teams while keeping each team's own rate in a
+//     disclosed per-team Rows breakdown rather than averaging them. See
+//     metrics.go's package doc comment for the full design and why this is
+//     NOT the CHAOS-4099 activity-proxy path.
 //   - FactHealth from compounding_risk_daily (repo- and team-scoped
 //     precomputed risk severity/score).
 //   - FactWorkload from capacity_forecasts (team-level Monte Carlo capacity
@@ -44,6 +56,20 @@
 // contextfabric.FactCapabilityRegistry already degrades an unregistered kind
 // to SourceUnconfigured (fact_registry.go's ReadFacts), which is the honest
 // behavior for a kind with no backing source.
+//
+// CHAOS-4347 also added a renderable-table capability to
+// contextfabric.FactValue (Rows/FactValueRow, model.go) and mirrored it,
+// additively, into contractsv1.ContextFabricClaimedFact/ProjectedFact
+// (context_fabric_types.go / context_fabric_answer_projection.go) as
+// contractsv1.ContextFabricClaimedFactRow, so a fact whose evidence is
+// genuinely a set of rows -- a project's per-team metrics rollup, for
+// instance -- has somewhere to put a table instead of forcing a lossy
+// single scalar into an answer. This package's own MetricsProvider is the
+// first (and, as of CHAOS-4347, only) producer of a Rows-bearing fact.
+// Populating a ProjectedFact.Rows from an LLM synthesis call is
+// deliberately NOT part of this change -- that is a genkitruntime/prompt
+// concern with its own version-bump discipline (a prompt version bumps on
+// every text change), not a fact-provider one.
 //
 // Neither FactMetrics nor FactEvidence is a target of
 // contractsv1.ContextFabricDriverCategoryRequiresClaimedFact's closed

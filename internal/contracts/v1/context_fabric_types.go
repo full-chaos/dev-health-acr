@@ -1062,6 +1062,30 @@ type ContextFabricClaimedFact struct {
 	Subject ContextFabricSubjectRef  `json:"subject"`
 	Field   string                   `json:"field"`
 	Value   ContextFabricScalarValue `json:"value"`
+	// Rows is an OPTIONAL, additive renderable table (CHAOS-4347): a fact
+	// whose evidence is genuinely a set of rows -- e.g. a project's
+	// per-team metrics rollup, where summing counts across teams is sound
+	// but averaging their rates is not -- carries them here instead of
+	// forcing one lossy scalar into Value. Field/Value stay required and
+	// carry the claim's primary scalar either way, so every pre-4347
+	// consumer that only reads Field/Value is unaffected.
+	//
+	// This intentionally does NOT reuse ContextFabricScalarValue as the
+	// carrier: that type is also the projection-write contract's only
+	// admitted property value (ContextFabricEntityProjection.Properties),
+	// which documents "nested objects and arrays remain disallowed" as a
+	// deliberate invariant for that surface. ContextFabricClaimedFactRow
+	// is a new, answer-surface-only shape so widening a claim can never
+	// widen what a projection batch is allowed to write.
+	Rows []ContextFabricClaimedFactRow `json:"rows,omitempty"`
+}
+
+// ContextFabricClaimedFactRow is one row of a claimed fact's OPTIONAL
+// renderable table (CHAOS-4347). Fields are LEAF ContextFabricScalarValue
+// entries -- a row never nests another table, so a renderable claim's shape
+// is bounded by construction. See ContextFabricClaimedFact.Rows.
+type ContextFabricClaimedFactRow struct {
+	Fields map[string]ContextFabricScalarValue `json:"fields"`
 }
 
 type ContextFabricSourceObservation struct {
