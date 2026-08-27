@@ -18,7 +18,9 @@ data:
   ACR_REQUIRE_BACKING_STORES: "true"
   ACR_POSTGRES_CONNECTION_KIND: direct
   ACR_MAX_ITEMS: "30"
-  ACR_MAX_OUTPUT_TOKENS: "4000"
+  # CHAOS-4355 response-bound follow-up: raised 4000 -> 65536, see
+  # deploy/helm/acr/values.yaml's maxOutputTokens comment.
+  ACR_MAX_OUTPUT_TOKENS: "65536"
   ACR_MAX_SERIALIZED_BYTES: "262144"
   ACR_REQUESTS_PER_MINUTE: "60"
   ACR_ENABLE_EPISODE_WRITEBACK: "false"

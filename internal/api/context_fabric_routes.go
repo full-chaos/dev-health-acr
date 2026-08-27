@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -73,18 +74,38 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			return
 		}
 		maximumBytes := min(int64(a.config.MaxSerializedBytes), int64(request.Options.MaxSerializedBytes))
-		encoded, err := encodeBounded(result, maximumBytes)
-		if err != nil {
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation response exceeded service limits", false, nil)
+		items := contextFabricResultItems(result)
+		encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
+		if sizeErr != nil {
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation response could not be serialized", false, nil)
+			return
+		}
+		if measuredBytes > maximumBytes {
+			// CHAOS-4355 response-bound follow-up: this is a legitimate
+			// "the answer does not fit" outcome (a Rows-bearing result over
+			// ACR_MAX_SERIALIZED_BYTES, or a caller-requested
+			// options.max_serialized_bytes below what the answer needs),
+			// never a server bug -- classify and disclose it exactly like
+			// the CompleteUsage budget below, instead of the misleading
+			// 500 "internal_error" this branch used to return with no
+			// measurement at all.
+			a.logContextFabricResponseBudgetExceeded(r, "bytes", measuredBytes, maximumBytes, items)
+			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+				"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
+			})
 			return
 		}
 		usage := limits.ResourceUsage{
-			Items:  int64(contextFabricResultItems(result)),
-			Tokens: int64((len(encoded) + 3) / 4),
-			Bytes:  int64(len(encoded)),
+			Items:  int64(items),
+			Tokens: (measuredBytes + 3) / 4,
+			Bytes:  measuredBytes,
 		}
 		if err := CompleteUsage(r.Context(), usage); err != nil {
-			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, nil)
+			a.logContextFabricResponseBudgetExceeded(r, "quota", measuredBytes, maximumBytes, items)
+			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+				"measured_bytes": usage.Bytes, "measured_tokens": usage.Tokens, "measured_items": usage.Items,
+				"max_output_tokens": a.config.MaxOutputTokens, "max_items": a.config.MaxItems,
+			})
 			return
 		}
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
@@ -392,4 +413,38 @@ func contextFabricResultItems(result contextfabric.InvestigationResult) int {
 		items += len(result.Cohort.Members)
 	}
 	return items
+}
+
+// marshalContextFabricResponse encodes a Context Fabric response payload
+// and reports its measured size unconditionally -- unlike encodeBounded
+// (read_decode.go), which discards the encoded bytes on an over-budget
+// result, leaving nothing to disclose (CHAOS-4355 response-bound
+// follow-up). Both context-fabric response routes (the investigation POST
+// handler and the result GET handler) share this so a measurement, once
+// taken, is never thrown away before the caller sees why their response
+// did not fit.
+func marshalContextFabricResponse(payload any) (encoded []byte, measuredBytes int64, err error) {
+	encoded, err = json.Marshal(payload)
+	if err != nil {
+		return nil, 0, err
+	}
+	return encoded, int64(len(encoded)), nil
+}
+
+// logContextFabricResponseBudgetExceeded is the CHAOS-4355 response-bound
+// follow-up's decision-basis telemetry (CANONICAL ARCHITECTURE's
+// diagnosis-in-artifacts rule): every time a Context Fabric response fails
+// to fit, the measured size and which check rejected it -- "bytes" for the
+// MaxSerializedBytes gate (encodeBounded's replacement above), "quota" for
+// the CompleteUsage items/tokens budget -- land in the SAME log line the
+// request_id already carries, so the defect is diagnosable from the run's
+// own artifacts without re-running with instrumentation added after the
+// fact. See writeError's "details" map on the caller side for the
+// caller-visible half of this same disclosure.
+func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason string, measuredBytes, maximumBytes int64, items int) {
+	a.logger.WarnContext(r.Context(), "context fabric response exceeded service limits",
+		"request_id", RequestID(r.Context()), "failure_class", "context_fabric_response_budget",
+		"reason", reason, "measured_bytes", measuredBytes, "max_serialized_bytes", maximumBytes,
+		"measured_tokens", (measuredBytes+3)/4, "max_output_tokens", a.config.MaxOutputTokens,
+		"measured_items", items, "max_items", a.config.MaxItems)
 }

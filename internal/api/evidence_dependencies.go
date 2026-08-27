@@ -86,7 +86,12 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 	if cfg.MaxSerializedBytes == 0 {
 		cfg.MaxSerializedBytes = 1 << 20
 	}
-	if cfg.MaxRequestBodyBytes < 1 || cfg.MaxEvidenceResponseBytes < 1 || cfg.MaxItems < 1 || cfg.MaxItems > 50 || cfg.MaxOutputTokens < 500 || cfg.MaxOutputTokens > 16_000 || cfg.MaxSerializedBytes < 8_192 || cfg.MaxSerializedBytes > 1<<20 {
+	// MaxOutputTokens ceiling matches internal/config.Config's own
+	// validation ceiling (262144 = the MaxSerializedBytes ceiling below /
+	// 4, CHAOS-4355 response-bound follow-up) -- config.Config is the sole
+	// production caller of NewApp, so this ceiling must never reject a
+	// config value config.go itself accepts.
+	if cfg.MaxRequestBodyBytes < 1 || cfg.MaxEvidenceResponseBytes < 1 || cfg.MaxItems < 1 || cfg.MaxItems > 50 || cfg.MaxOutputTokens < 500 || cfg.MaxOutputTokens > 262_144 || cfg.MaxSerializedBytes < 8_192 || cfg.MaxSerializedBytes > 1<<20 {
 		return nil, errors.New("hosted read limits are invalid")
 	}
 	if deps.Capabilities == nil {
