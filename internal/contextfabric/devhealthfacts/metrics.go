@@ -289,8 +289,23 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), tm.team_id, tm.team_name, toString(tm.day), toInt64(tm.commits_count), toInt64(tm.after_hours_commits_count), toInt64(tm.weekend_commits_count), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
 FROM (
 	SELECT id, provider, project_key
-	FROM projects FINAL
-	WHERE org_id = {org_id:String} AND concat(provider, ':', id) IN {ids:Array(String)} AND project_key IS NOT NULL
+	FROM (
+		SELECT id, provider, ifNull(project_key, '') AS project_key,
+			count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
+		FROM projects FINAL
+		WHERE org_id = {org_id:String}
+	)
+	-- Mirrors devhealthsource/teams_projects_edges.go's queryProjectTeams
+	-- exactly: an empty project_key never resolves (never assumed to mean
+	-- "no key" and joined on the empty string, which would silently merge
+	-- every key-less project's ownership into one bucket), and a
+	-- project_key more than one project shares (key_resolution_count > 1,
+	-- computed over EVERY project in the org, not just the requested one --
+	-- an org can hold the ambiguity even when only one of the colliding
+	-- projects was actually asked about) is OMITTED rather than guessed:
+	-- joining on it would attribute an unrelated project's owning teams to
+	-- the one actually requested.
+	WHERE project_key != '' AND key_resolution_count = 1 AND concat(provider, ':', id) IN {ids:Array(String)}
 ) AS p
 INNER JOIN (
 	SELECT provider, project_key, team_id

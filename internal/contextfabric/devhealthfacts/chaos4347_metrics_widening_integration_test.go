@@ -168,6 +168,106 @@ func TestCHAOS4347WideningAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
+	// TestCHAOS4347WideningAgainstRealClickHouse/ambiguous_project_key_never_misattributes_another_projects_teams
+	// is codex round-2's Medium finding: two DIFFERENT projects sharing one
+	// project_key (a real production shape -- see
+	// devhealthsource/teams_projects_edges.go's queryProjectTeams, whose
+	// own key_resolution_count guard exists for exactly this) must resolve
+	// to NOTHING for either, never silently attribute one project's owning
+	// teams to the other.
+	t.Run("ambiguous_project_key_never_misattributes_another_projects_teams", func(t *testing.T) {
+		const orgID = "org-ambiguous-key"
+		if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			"proj-ambiguous-a", orgID, "gitlab", "SHARED-KEY", "Project A", uint8(1), "active", "", ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed projects row A: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			"proj-ambiguous-b", orgID, "gitlab", "SHARED-KEY", "Project B", uint8(1), "active", "", ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed projects row B: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_metrics_daily (day, team_id, team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			date(2026, 8, 12), "team-shared", "Team Shared", uint32(50), uint32(0), uint32(0), 0.0, 0.0, ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
+			t.Fatalf("seed team-shared metrics: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "gitlab", "team-shared", "irrelevant", "SHARED-KEY", "native", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed team-shared ownership: %v", err)
+		}
+		provider := findProvider(t, providers, contextfabric.FactMetrics)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{
+				projectSubject("gitlab", "proj-ambiguous-a"), projectSubject("gitlab", "proj-ambiguous-b"),
+			},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v", err)
+		}
+		if len(result.Facts) != 0 {
+			t.Fatalf("facts = %#v, want EMPTY -- an ambiguous project_key must never attribute team-shared's metrics to either project", result.Facts)
+		}
+	})
+
+	// TestCHAOS4347WideningAgainstRealClickHouse/duplicate_ownership_rows_collapse_in_sql_before_the_row_limit
+	// is codex round-2's Low finding: the round-1 fixture only inserted TWO
+	// duplicate rows, which the OLD Go-only dedup would also have passed
+	// below the 200-row LIMIT -- it did not prove the SQL-level GROUP BY
+	// fix specifically. This inserts 205 duplicate-source rows for ONE
+	// team (crossing maxFactRowsPerQuery) plus a distinct SECOND team, and
+	// requires the second team to still survive: pre-fix, the 205
+	// duplicates alone would have exhausted the LIMIT before Go ever saw
+	// the second team's row.
+	t.Run("duplicate_ownership_rows_collapse_in_sql_before_the_row_limit", func(t *testing.T) {
+		const orgID = "org-limit-collapse"
+		if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			"proj-limit-collapse", orgID, "linear", "LIMITCOLLAPSE", "Project Limit", uint8(1), "active", "", ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed projects row: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_metrics_daily (day, team_id, team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			date(2026, 8, 12), "team-duplicated", "Team Duplicated", uint32(30), uint32(0), uint32(0), 0.0, 0.0, ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
+			t.Fatalf("seed team-duplicated metrics: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_metrics_daily (day, team_id, team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			date(2026, 8, 12), "team-second", "Team Second", uint32(9), uint32(0), uint32(0), 0.0, 0.0, ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
+			t.Fatalf("seed team-second metrics: %v", err)
+		}
+		// 205 rows for team-duplicated, each with a distinct valid_from --
+		// mirrors team_project_ownership's real ORDER BY key (org_id,
+		// provider, project_id, team_id, source, valid_from): `source` is a
+		// 5-member closed enum, so valid_from is the only column that can
+		// give 205 rows a genuinely distinct sort key, which is what keeps
+		// FINAL from collapsing them itself before the query's own GROUP BY
+		// ever runs.
+		for i := 0; i < 205; i++ {
+			if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+				orgID, "linear", "team-duplicated", "irrelevant", "LIMITCOLLAPSE", "manual", ts(2026, 1, 1, 0, i/60, i%60), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+				t.Fatalf("seed duplicate ownership row %d: %v", i, err)
+			}
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", "team-second", "irrelevant", "LIMITCOLLAPSE", "native", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed team-second ownership: %v", err)
+		}
+		provider := findProvider(t, providers, contextfabric.FactMetrics)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-limit-collapse")},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v", err)
+		}
+		if len(result.Facts) != 1 {
+			t.Fatalf("facts = %#v, want exactly 1", result.Facts)
+		}
+		fact := result.Facts[0]
+		if got := fact.Fields["team_count"].Integer; got == nil || *got != 2 {
+			t.Fatalf("team_count = %#v, want 2 (team-duplicated survives its 205 duplicate rows AND team-second is not truncated out of the LIMIT)", fact.Fields["team_count"])
+		}
+		if got := fact.Fields["commits_count"].Integer; got == nil || *got != 39 {
+			t.Fatalf("commits_count = %#v, want 30+9=39", fact.Fields["commits_count"])
+		}
+	})
+
 	t.Run("cicd_metrics_daily_repository_aggregate", func(t *testing.T) {
 		const orgID = "org-cicd"
 		repoID := "11111111-1111-1111-1111-111111111111"
