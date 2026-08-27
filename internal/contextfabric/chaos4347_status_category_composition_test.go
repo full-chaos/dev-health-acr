@@ -48,12 +48,12 @@ func TestChaos4347_ComposeStatusCategoryRequirements(t *testing.T) {
 			},
 		},
 		{
-			name:         "team subject: status composes to health+workload+readiness",
+			name:         "team subject: status composes to health+workload+readiness+investment",
 			requirements: []FactRequirement{{Kind: FactStatus}},
 			subjects:     []SubjectRef{team},
-			wantKinds:    []FactKind{FactHealth, FactReadiness, FactWorkload},
+			wantKinds:    []FactKind{FactHealth, FactInvestment, FactReadiness, FactWorkload},
 			wantCompositions: []CategoryFactCompositionEvent{
-				{RequirementKind: FactStatus, SubjectKind: SubjectTeam, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness}},
+				{RequirementKind: FactStatus, SubjectKind: SubjectTeam, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness, FactInvestment}},
 			},
 		},
 		{
@@ -83,9 +83,9 @@ func TestChaos4347_ComposeStatusCategoryRequirements(t *testing.T) {
 			name:         "requirement's OWN Subjects (non-empty) wins over the investigation-wide set",
 			requirements: []FactRequirement{{Kind: FactStatus, Subjects: []SubjectRef{team}}},
 			subjects:     []SubjectRef{repo}, // investigation-wide set is repository, but the requirement pins team
-			wantKinds:    []FactKind{FactHealth, FactReadiness, FactWorkload},
+			wantKinds:    []FactKind{FactHealth, FactInvestment, FactReadiness, FactWorkload},
 			wantCompositions: []CategoryFactCompositionEvent{
-				{RequirementKind: FactStatus, SubjectKind: SubjectTeam, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness}},
+				{RequirementKind: FactStatus, SubjectKind: SubjectTeam, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness, FactInvestment}},
 			},
 		},
 	}

@@ -85,12 +85,27 @@ func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 // TestChaos4099_RealProviderSubjectKindsStayUnwidened's updated doc
 // comment above. Every OTHER capability's premise is unchanged and this
 // test still proves it.
+//
+// FactHealth, FactWorkload, FactInvestment, and FactReadiness are ALSO
+// excluded (CHAOS-4363): each now answers for a project directly, by the
+// same real-join pattern (team_project_ownership, and for FactHealth also
+// team_repo_ownership one hop further) -- see health.go/workload.go/
+// investment.go/readiness.go's own package doc comments. This is still not
+// the rejected Option A: every join is a genuine ownership traversal with a
+// disclosed rollup_basis, never an inlined proxy with no central policy.
 func TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject(t *testing.T) {
 	t.Parallel()
 
+	realProjectJoinKinds := map[contextfabric.FactKind]bool{
+		contextfabric.FactMetrics:    true,
+		contextfabric.FactHealth:     true,
+		contextfabric.FactWorkload:   true,
+		contextfabric.FactInvestment: true,
+		contextfabric.FactReadiness:  true,
+	}
 	for _, provider := range allProvidersForKindAudit() {
 		capability := provider.Capability()
-		if capability.Kind == contextfabric.FactMetrics {
+		if realProjectJoinKinds[capability.Kind] {
 			continue
 		}
 		for _, kind := range capability.SupportedSubjectKinds {

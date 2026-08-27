@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -37,6 +38,24 @@ import (
 // query. cityHash64 of severity/compounding_risk is the last ORDER BY
 // term -- arbitrary among an exact tie, but stable, so the same row wins
 // every time.
+// CHAOS-4363 widens FactHealth to add SubjectProject: a project rolls up
+// compounding_risk_daily two ways at once, both via real ownership joins,
+// never the CHAOS-4099 activity-proxy route (that route's own project-origin
+// entry in fact_scope.go's factScopeEligibility, targeting SubjectRepository,
+// stays policy `none` -- it names a DIFFERENT, still-nonexistent path: giving
+// a project question access to the ACTUAL repository subjects underneath
+// it, not this rollup):
+//
+//   - team layer: project -> team_project_ownership -> compounding_risk_daily
+//     (scope='team'), the same join metrics.go's readProjectMetrics uses.
+//   - repo layer: project -> team_project_ownership -> team_repo_ownership ->
+//     compounding_risk_daily (scope='repo'), one hop further -- a project's
+//     repositories are reached through the teams that own it, since there is
+//     no direct project->repository ownership table.
+//
+// Both layers land in one renderable risk_breakdown table per project,
+// tagged by `scope` ('team' or 'repo'), never summed or averaged into a
+// single project-level risk score.
 type HealthProvider struct{ facts clickhouseFacts }
 
 func newHealthProvider(client contextpacket.ClickHouseQueryClient) *HealthProvider {
@@ -44,7 +63,9 @@ func newHealthProvider(client contextpacket.ClickHouseQueryClient) *HealthProvid
 }
 
 func (p *HealthProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactHealth, "devhealthfacts.health", []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam})
+	return newCapability(contextfabric.FactHealth, "devhealthfacts.health", []contextfabric.SubjectKind{
+		contextfabric.SubjectRepository, contextfabric.SubjectTeam, contextfabric.SubjectProject,
+	})
 }
 
 func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
@@ -75,6 +96,14 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 			return contextfabric.FactProviderResult{}, readFailure("query team health", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+	}
+
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+		rowCount, breakdownTruncated, scanErr := p.readProjectHealth(ctx, orgID, projectSubjects, &facts, timeBound)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query project health", scanErr)
+		}
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
@@ -128,4 +157,148 @@ WHERE rn = 1`)
 		return nil
 	}, timeBound.bindings()...)
 	return rowCount, scanErr
+}
+
+// compoundingRiskLatestSubquery returns the row_number()-deduplicated latest
+// row per scope_id for one compounding_risk_daily scope ('repo' or 'team'),
+// mirroring readScope's own statement exactly (scope is an internal Go
+// string literal, never caller-supplied, so it is safe to inline the same
+// way readScope's own `scope` parameter already is).
+func compoundingRiskLatestSubquery(scope string, timeBound factTimeBound) string {
+	return `SELECT scope_id, severity, compounding_risk, computed_at,
+		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
+	FROM compounding_risk_daily
+	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + timeBound.dayPredicate("day")
+}
+
+// healthRollupRow is one (project, scope, scope_id) triple's contribution to
+// a project's health rollup, scanned off the ownership join before Go-side
+// grouping. scope is 'team' or 'repo' -- see readProjectHealth's doc
+// comment for the two-layer chain.
+type healthRollupRow struct {
+	scope, scopeID, scopeName, severity, computedAt string
+	hasRisk                                         bool
+	risk                                            float64
+}
+
+// readProjectHealth rolls FactHealth up for a project two ways at once (see
+// the package doc comment): a team layer via team_project_ownership and a
+// repo layer one hop further via team_repo_ownership, both landing in one
+// renderable risk_breakdown table per project, tagged by scope. Neither
+// layer is summed or averaged into a single project-level risk score.
+func (p *HealthProvider) readProjectHealth(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
+	ids, bySubject := v2Index(subjects, identity.KindProject)
+	if len(ids) == 0 {
+		return 0, false, nil
+	}
+	ownershipPredicate := ownershipValidityPredicate(timeBound)
+	// Round-1 P2: the team/repo UNION ALL is wrapped in an outer SELECT
+	// before withRowLimit's LIMIT is applied. Appending LIMIT directly after
+	// two UNION ALL'd SELECTs binds it to the SECOND (repo) branch only --
+	// the team branch would be unbounded, exceeding the advertised
+	// maxFactRowsPerQuery cap -- and UNION ALL output order is otherwise
+	// unspecified, which would make risk_breakdown/evidence ordering vary
+	// between identical reads. The outer ORDER BY makes both the bound and
+	// the ordering apply to the COMBINED result.
+	statement := withRowLimit(`SELECT project_key, scope, scope_id, scope_name, severity, has_risk, risk, computed_at
+FROM (
+	SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, tpo.team_id AS scope_id, ifNull(t.name, '') AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at
+	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+	INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = tpo.team_id AND cr.rn = 1
+	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
+
+	UNION ALL
+
+	SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, tro.repo_full_name AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at
+	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+	INNER JOIN (
+		SELECT team_id, toString(repo_id) AS repo_key, repo_full_name
+		FROM team_repo_ownership FINAL
+		WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
+		GROUP BY team_id, repo_key, repo_full_name
+	) AS tro ON tro.team_id = tpo.team_id
+	INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
+)
+ORDER BY project_key, scope, scope_id`)
+	byProject := make(map[string][]healthRollupRow)
+	var projectOrder []string
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
+		var projectSubjectKey, scope, scopeID, scopeName, severity, computedAt string
+		var hasRisk uint8
+		var risk float64
+		if err := row.Scan(&projectSubjectKey, &scope, &scopeID, &scopeName, &severity, &hasRisk, &risk, &computedAt); err != nil {
+			return err
+		}
+		if _, ok := bySubject[projectSubjectKey]; !ok {
+			return nil
+		}
+		if _, seen := byProject[projectSubjectKey]; !seen {
+			projectOrder = append(projectOrder, projectSubjectKey)
+		}
+		byProject[projectSubjectKey] = append(byProject[projectSubjectKey], healthRollupRow{
+			scope: scope, scopeID: scopeID, scopeName: scopeName, severity: severity, computedAt: computedAt,
+			hasRisk: hasRisk != 0, risk: risk,
+		})
+		return nil
+	}, timeBound.bindings()...)
+	if scanErr != nil {
+		return rowCount, false, scanErr
+	}
+	for _, projectKey := range projectOrder {
+		rows := byProject[projectKey]
+		subject := bySubject[projectKey]
+		seenScopeEntries := make(map[string]bool, len(rows))
+		seenTeams := make(map[string]bool, len(rows))
+		seenRepos := make(map[string]bool, len(rows))
+		riskRows := make([]contextfabric.FactValueRow, 0, len(rows))
+		evidenceRefIDs := make([]string, 0, len(rows)+1)
+		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
+		for _, r := range rows {
+			dedupeKey := r.scope + "\x00" + r.scopeID
+			if dedupeTeamRow(seenScopeEntries, dedupeKey) {
+				continue
+			}
+			switch r.scope {
+			case "team":
+				if !dedupeTeamRow(seenTeams, r.scopeID) {
+					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.scopeID))
+				}
+			case "repo":
+				if !dedupeTeamRow(seenRepos, r.scopeID) {
+					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("repository", r.scopeID))
+				}
+			}
+			rowFields := map[string]contextfabric.FactValue{
+				"scope":       contextfabric.StringFactValue(r.scope),
+				"scope_id":    contextfabric.StringFactValue(r.scopeID),
+				"scope_name":  stringOrNull(r.scopeName),
+				"severity":    stringOrNull(r.severity),
+				"computed_at": contextfabric.StringFactValue(r.computedAt),
+			}
+			if r.hasRisk {
+				rowFields["compounding_risk"] = contextfabric.NumberFactValue(r.risk)
+			}
+			riskRows = append(riskRows, contextfabric.FactValueRow{Fields: rowFields})
+		}
+		if len(riskRows) == 0 {
+			continue
+		}
+		var capped bool
+		riskRows, capped = capFactValueRows(riskRows)
+		breakdownTruncated = breakdownTruncated || capped
+		*facts = append(*facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactHealth, Subject: subject,
+			Fields: map[string]contextfabric.FactValue{
+				// rollup_basis discloses BOTH chains this fact draws from --
+				// see the package doc comment's two-layer explanation.
+				"rollup_basis":   contextfabric.StringFactValue("team_project_ownership_and_team_repo_ownership"),
+				"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
+				"repo_count":     contextfabric.IntegerFactValue(int64(len(seenRepos))),
+				"risk_breakdown": contextfabric.RowsFactValue(riskRows),
+			},
+			EvidenceRefIDs: evidenceRefIDs,
+		})
+	}
+	return rowCount, breakdownTruncated, nil
 }

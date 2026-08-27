@@ -24,7 +24,17 @@ import (
 // be attributed across a rebuild. There is deliberately ONE name for this
 // value -- a second, unexported alias would be the anchor/alias drift this
 // package's own comments warn about elsewhere.
-const QueryVersion = "devhealthfacts.clickhouse.v1"
+//
+// v1 -> v2 (CHAOS-4363, codex round-1 P1): QueryVersion is a CONJUNCTIVE
+// answer-reuse key dimension (ports.go's ReuseKey/AnswerReuseGate). Every
+// capability in this package shares the ONE constant, so bumping it on any
+// SQL/capability shape change -- here, FactHealth/FactWorkload/
+// FactInvestment/FactReadiness widening to answer for a project subject --
+// invalidates every reuse candidate saved under the OLD shape, not only the
+// four changed ones. That over-invalidation is the safe direction: leaving
+// it unbumped would let an answer reuse gate serve a pre-deployment answer
+// that never actually ran the new project readers, silently.
+const QueryVersion = "devhealthfacts.clickhouse.v2"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -241,6 +251,97 @@ func pullRequestKey(repoID string, number int64) string {
 // path as the ones devhealthsource already produces.
 func evidenceRefID(entityType, id string) string {
 	return "acr:v1:" + entityType + ":" + id
+}
+
+// projectOwnershipJoinSQL returns the SQL join fragment resolving every
+// requested project subject (matched by "<provider>:<id>", the same key
+// v2Index(subjects, identity.KindProject) and metrics.go's readProjectMetrics
+// both use) to its owning teams via projects -> team_project_ownership.
+//
+// This mirrors metrics.go's readProjectMetrics CTE structure exactly
+// (CHAOS-4108 id-space fix, see that function's own doc comment): the join
+// is on project_key, never team_project_ownership.project_id, and a
+// project_key that is empty or resolves to more than one project in the org
+// is OMITTED, never guessed. CHAOS-4363's investment/workload/readiness/
+// health project rollups all reuse this fragment rather than re-deriving
+// it, so the id-space fix cannot drift between producers the way two
+// independently hand-authored copies could.
+//
+// Selects p.provider, p.id (so a caller can rebuild the "<provider>:<id>"
+// project subject key) and tpo.team_id (one row per currently- or
+// as-of-owning team; a team owning the project through more than one
+// `source` row still yields one row per source and must be deduped by the
+// caller the same way readProjectMetrics dedupes by team_id).
+func projectOwnershipJoinSQL(ownershipPredicate string) string {
+	return `(
+	SELECT id, provider, project_key
+	FROM (
+		SELECT id, provider, ifNull(project_key, '') AS project_key,
+			count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
+		FROM projects FINAL
+		WHERE org_id = {org_id:String}
+	)
+	WHERE project_key != '' AND key_resolution_count = 1 AND concat(provider, ':', id) IN {ids:Array(String)}
+) AS p
+INNER JOIN (
+	SELECT provider, project_key, team_id
+	FROM team_project_ownership FINAL
+	WHERE org_id = {org_id:String} AND project_key IS NOT NULL` + ownershipPredicate + `
+	GROUP BY provider, project_key, team_id
+) AS tpo ON tpo.provider = p.provider AND tpo.project_key = p.project_key`
+}
+
+// ownershipValidityPredicate returns the valid_from/valid_to predicate a
+// slowly-changing ownership edge (team_project_ownership, team_repo_ownership
+// -- both carry the same valid_from/valid_to(DateTime64) shape) must satisfy
+// for the requested time context: "currently active" on the current axis,
+// "active AT THE END of the requested window" for a bounded historical
+// query -- the same convention timebound.go's asOfExpression documents for
+// every other derived-state read in this package. Mirrors metrics.go's
+// readProjectMetrics inline ownershipPredicate exactly.
+func ownershipValidityPredicate(timeBound factTimeBound) string {
+	if timeBound.active {
+		return fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
+	}
+	return " AND valid_from <= now64(3) AND valid_to IS NULL"
+}
+
+// dedupeTeamRow reports whether teamID has already been seen in seenTeams,
+// recording it if not. team_project_ownership's own ORDER BY key includes
+// `source`, so the SAME team can legitimately appear more than once for one
+// project (e.g. a native AND a manual ownership edge both current at once);
+// every project-rollup provider in this package must dedupe by team_id
+// before aggregating, or a team owning a project through two sources would
+// be double-counted -- mirrors metrics.go's readProjectMetrics inline
+// seenTeams map.
+func dedupeTeamRow(seenTeams map[string]bool, teamID string) bool {
+	if seenTeams[teamID] {
+		return true
+	}
+	seenTeams[teamID] = true
+	return false
+}
+
+// maxProjectRollupBreakdownRows mirrors contextfabric's own maxFactValueRows
+// (model.go, 64) -- unexported there, so this package keeps its own copy
+// rather than reach across the package boundary for an internal constant.
+// Every project-rollup provider in this package (investment.go, workload.go,
+// readiness.go, health.go) MUST cap its own team_breakdown/risk_breakdown
+// Rows table at this bound before returning it (codex round-1 P1, CHAOS-4363):
+// FactValue.Validate rejects a table over 64 rows outright, which would turn
+// a large project's fact into a hard read error instead of an honestly
+// truncated answer.
+const maxProjectRollupBreakdownRows = 64
+
+// capFactValueRows truncates rows to maxProjectRollupBreakdownRows,
+// preserving the caller's own (already-deterministic, scan-order-derived)
+// ordering, and reports whether truncation happened so the caller can fold
+// it into FactProviderResult.Truncated.
+func capFactValueRows(rows []contextfabric.FactValueRow) ([]contextfabric.FactValueRow, bool) {
+	if len(rows) <= maxProjectRollupBreakdownRows {
+		return rows, false
+	}
+	return rows[:maxProjectRollupBreakdownRows], true
 }
 
 func newCapability(kind contextfabric.FactKind, name string, subjectKinds []contextfabric.SubjectKind) contextfabric.FactCapability {
