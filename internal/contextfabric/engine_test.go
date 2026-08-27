@@ -347,6 +347,17 @@ type recordingTelemetry struct {
 	// above.
 	windowGateOfferDisclosures []bool
 	windowExpandOfferRedeemed  int
+	// windowCarries (CHAOS-4360) mirrors the SAME list-not-count discipline:
+	// a test asserts the exact outcome/chain-depth pair, never merely that
+	// something fired.
+	windowCarries []windowCarryRecord
+}
+
+// windowCarryRecord (CHAOS-4360) mirrors priorSubjectReceiptSkipReasonRecord's
+// own shape one field pair over.
+type windowCarryRecord struct {
+	outcome    WindowCarryOutcome
+	chainDepth int
 }
 
 type priorConsultedRecord struct {
@@ -433,6 +444,10 @@ func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ stor
 
 func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ storage.Principal, outcome WindowCanonicalizationOutcome) {
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int) {
+	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth})
 }
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {

@@ -1484,7 +1484,8 @@
           "enum": [
             "receipt",
             "explicit",
-            "explicit_unattributed"
+            "explicit_unattributed",
+            "carried"
           ]
         },
         "StructureProvenance": {
@@ -3562,7 +3563,8 @@
           "enum": [
             "receipt",
             "explicit",
-            "explicit_unattributed"
+            "explicit_unattributed",
+            "carried"
           ]
         },
         "WindowConfirmationMode": {

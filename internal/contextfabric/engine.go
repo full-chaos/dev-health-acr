@@ -394,6 +394,17 @@ type EngineTelemetry interface {
 	// vocabulary. Called once per call, from Investigate, after
 	// canonicalizeEvidenceWindow/composeEffectiveWindow both run.
 	RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome)
+	// RecordWindowCarry (CHAOS-4360) reports the outcome of ONE
+	// same-conversation window-carry attempt -- see WindowCarryOutcome's
+	// own doc comment for the closed vocabulary (chaos4360_carry.go).
+	// Called at most once per Investigate call, ONLY when this turn's own
+	// window would otherwise be inferred_default (the same "once per
+	// non-zero signal" convention RecordWindowCanonicalization's sibling
+	// counters already use) -- so the denominator across every call this
+	// fires for IS the carry-eligible population the N-turn harness'
+	// "carry hit rate" measures. chainDepth is meaningful only when
+	// outcome==hit (0 for every miss).
+	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,
@@ -976,6 +987,26 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// run-3 acceptance bar ("class-default cases interpretation-only").
 	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
 	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
+	// CHAOS-4360: same-conversation window carry. Attempted ONLY when this
+	// turn's own canonicalization would otherwise be inferred_default --
+	// windowCanon.Effective is nil by construction at this point (see the
+	// comment two lines above), so a request-side confirmed/stated window
+	// already returned decisively above and is never second-guessed here.
+	// A hit REPLACES effectiveWindow with the carried (non-inferred)
+	// window, which is what keeps the CHAOS-4234 gate below from firing at
+	// all -- every downstream use of effectiveWindow (the decisive path,
+	// terminalResult, Save's own key) then sees the carried value exactly
+	// as if it had been confirmed on this turn. See chaos4360_carry.go for
+	// the mechanism and the defect this closes.
+	var windowCarry windowCarryResult
+	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
+		windowCarry = e.resolveCarriedWindow(ctx, principal, request, binding)
+		e.recordWindowCarry(ctx, principal, windowCarry)
+		if windowCarry.Outcome == WindowCarryHit {
+			effectiveWindow = windowCarry.Window
+		}
+	}
+	carriedStructureEntry := composeCarriedWindowEntry(windowCarry)
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
@@ -1101,7 +1132,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				emptyResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, emptyResolution)
 				e.recordPriorSubjectReceiptSkips(ctx, principal, emptyResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
 			}
-			return e.terminalResult(ctx, principal, request, interpretation, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow)
+			return e.terminalResult(ctx, principal, request, interpretation, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry)
 		}
 		// CHAOS-4088: StageSubjectResolution, not StageResolution -- the
 		// binding above already succeeded, so this is the distinct
@@ -1156,7 +1187,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow)
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry)
 	}
 
 	// CHAOS-4347: expand a bare "status" category requirement (the model's
@@ -1282,7 +1313,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// reaching this line carries a confirmed/stated window or none at all.
 	result.EffectiveEvidenceWindow = effectiveWindow
 	if e.telemetry != nil {
-		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
+		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, windowCarry.Outcome == WindowCarryHit))
 	}
 	// CHAOS-3900 W2 (design brief §4): the fresh disclosure W1's own scope
 	// note deferred -- nil unless the effective window is genuinely
@@ -1304,7 +1335,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// (empty/nil when this request carried no structure receipts) --
 	// mirrors EffectiveEvidenceWindow's own placement, right beside the
 	// window echo it is the structure-frame sibling of.
-	result.ConfirmedStructure = composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit)
+	// CHAOS-4360: a carried window is disclosed here too, appended after
+	// every receipt/explicit entry -- appendCarriedStructureEntry is a
+	// no-op unless resolveCarriedWindow actually hit above.
+	result.ConfirmedStructure = appendCarriedStructureEntry(composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit), carriedStructureEntry)
 	// CHAOS-3900 P1.G (design brief §2.1 B5): a decisive result reached via
 	// structure confirmation still carries the full (offered, selected)
 	// pair the Bridge needs. No guard needed: structureCanon.OfferSnapshot

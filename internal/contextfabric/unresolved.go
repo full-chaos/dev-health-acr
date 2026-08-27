@@ -199,6 +199,15 @@ func (e *Engine) terminalResult(
 	structureCanon requestStructureCanonicalization,
 	structureMaterial StructureOfferMaterial,
 	effectiveWindow *contractsv1.ContextFabricEffectiveEvidenceWindow,
+	// windowCarried and carriedStructureEntry (CHAOS-4360) mirror the
+	// decisive path's own carry disclosure (engine.go): windowCarried feeds
+	// windowCanonicalizationOutcome's carried-vs-inferred distinction,
+	// carriedStructureEntry is appended to this terminal's own
+	// ConfirmedStructure echo below. Both computed ONCE by the caller,
+	// alongside effectiveWindow itself -- never recomputed here, same
+	// discipline as effectiveWindow's own doc comment two lines up.
+	windowCarried bool,
+	carriedStructureEntry *contractsv1.ContextFabricConfirmedStructureEntry,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
@@ -338,7 +347,10 @@ func (e *Engine) terminalResult(
 		// this request confirmed, exactly like the window echo beside it --
 		// a confirmed kind/anchor/handle narrowed what this round searched
 		// for even when it still ended without a committed subject.
-		ConfirmedStructure: composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit),
+		// CHAOS-4360: a carried window is disclosed here too, appended after
+		// every receipt/explicit entry, mirroring the decisive path's own
+		// identical merge (engine.go).
+		ConfirmedStructure: appendCarriedStructureEntry(composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit), carriedStructureEntry),
 		// CHAOS-3900 P1.G: no guard needed -- structureCanon.OfferSnapshot
 		// is only ever non-nil alongside structureCanon.Confirmed, see
 		// requestStructureCanonicalization's own doc comment (structure.go).
@@ -369,7 +381,7 @@ func (e *Engine) terminalResult(
 	// v2 result's own SchemaVersion field.
 	result.Versions.ContractVersion = schemaVersion
 	if e.telemetry != nil {
-		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow))
+		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, windowCarried))
 	}
 	// CHAOS-3900 P1.F: StructureNeeds is composed on this subjectless-terminal
 	// path for the kind/anchor/handle members. windowConfirmationRequiredResult

@@ -352,19 +352,31 @@ func (e ContextFabricConfirmedStructureEntry) Validate() error {
 	if !ValidContextFabricStructureDisposition(e.Disposition) {
 		return fmt.Errorf("confirmed structure entry disposition is invalid")
 	}
-	// A receipt-sourced entry must name the receipt it redeemed; every
-	// other source carries no receipt at all (design brief §2.1: the echo
-	// is per CARRIED member, and only receipt-sourced members redeem
-	// something with a globally-scoped identity).
-	if e.Source == ContextFabricStructureSourceReceipt {
+	// A receipt-sourced entry must name the receipt it redeemed; a
+	// carried entry (CHAOS-4360) names the ORIGIN result it inherited from
+	// but redeemed no receipt of its own on this request, so it carries
+	// prior_result_id WITHOUT a receipt_id; every other source carries
+	// neither (design brief §2.1: the echo is per CARRIED member, and only
+	// receipt-sourced/carried members have a prior result to name).
+	switch e.Source {
+	case ContextFabricStructureSourceReceipt:
 		if !stringLengthBetween(e.PriorResultID, 8, 256) || !stringLengthBetween(e.ReceiptID, 8, 256) {
 			return fmt.Errorf("confirmed structure entry with source=receipt must carry prior_result_id and receipt_id")
 		}
 		if e.OfferSource != "" && !ValidContextFabricStructureOfferSource(e.OfferSource) {
 			return fmt.Errorf("confirmed structure entry offer_source is invalid")
 		}
-	} else if e.PriorResultID != "" || e.ReceiptID != "" {
-		return fmt.Errorf("confirmed structure entry with source=%q must not carry a receipt identity", e.Source)
+	case ContextFabricStructureSourceCarried:
+		if !stringLengthBetween(e.PriorResultID, 8, 256) {
+			return fmt.Errorf("confirmed structure entry with source=carried must carry prior_result_id")
+		}
+		if e.ReceiptID != "" {
+			return fmt.Errorf("confirmed structure entry with source=carried must not carry a receipt_id")
+		}
+	default:
+		if e.PriorResultID != "" || e.ReceiptID != "" {
+			return fmt.Errorf("confirmed structure entry with source=%q must not carry a receipt identity", e.Source)
+		}
 	}
 	if !optionalStringBetween(e.PriorVersionID, 1, 256) || !optionalStringBetween(e.PriorEntryID, 1, 256) {
 		return fmt.Errorf("confirmed structure entry prior_version_id or prior_entry_id violates v1 bounds")

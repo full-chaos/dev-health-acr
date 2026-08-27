@@ -299,17 +299,32 @@ type ContextFabricStructureNeeds struct {
 // correlated but not identical (an explicit field is always
 // explicit_unattributed provenance on MCP, but is question_stated
 // provenance on the panel surface with the SAME source=explicit).
+//
+// ContextFabricStructureSourceCarried (CHAOS-4360) is a FOURTH mechanism,
+// v1 additive: the member was neither redeemed via a receipt nor supplied
+// as an explicit field on THIS request -- it was INHERITED from an earlier
+// turn's own confirmed structure in the same conversation (the request
+// named a prior result and this request did not restate the member). A
+// carried entry's Provenance is copied verbatim from the origin
+// confirmation (never a value of its own), and PriorResultID names the
+// ORIGIN result -- the nearest earlier turn where the member was actually
+// receipt/explicit-confirmed, not merely the immediately-referenced prior
+// result. Deliberately excluded from structureSupersessionClaims
+// (pginvestigation/store.go): a carry reads already-stored confirmed
+// structure, it never re-accepts a receipt, so it must never contend for or
+// consume a single-use supersession claim.
 type ContextFabricStructureSource string
 
 const (
 	ContextFabricStructureSourceReceipt              ContextFabricStructureSource = "receipt"
 	ContextFabricStructureSourceExplicit             ContextFabricStructureSource = "explicit"
 	ContextFabricStructureSourceExplicitUnattributed ContextFabricStructureSource = "explicit_unattributed"
+	ContextFabricStructureSourceCarried              ContextFabricStructureSource = "carried"
 )
 
 func ValidContextFabricStructureSource(value ContextFabricStructureSource) bool {
 	switch value {
-	case ContextFabricStructureSourceReceipt, ContextFabricStructureSourceExplicit, ContextFabricStructureSourceExplicitUnattributed:
+	case ContextFabricStructureSourceReceipt, ContextFabricStructureSourceExplicit, ContextFabricStructureSourceExplicitUnattributed, ContextFabricStructureSourceCarried:
 		return true
 	default:
 		return false

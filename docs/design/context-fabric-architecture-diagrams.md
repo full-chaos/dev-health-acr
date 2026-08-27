@@ -42,7 +42,9 @@ flowchart TD
   API --> ENGINE["Engine.Investigate<br/>engine.go:435"]
   ENGINE --> INTERP["Interpret (model call)<br/>RuntimeQuestionInterpreter.Interpret<br/>model_runtime.go:510"]
   INTERP --> STRUCT["structure needs: kind / anchor / handle / window<br/>composeEffectiveWindow (window.go)<br/>canonicalizeStructure (chaos3900)"]
-  STRUCT --> WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
+  STRUCT --> CARRY{"CHAOS-4360 same-conversation<br/>window carry<br/>resolveCarriedWindow<br/>(chaos4360_carry.go)<br/>-- ONLY when effectiveWindow<br/>would be inferred_default"}
+  CARRY -->|"hit: nearest chain confirmation<br/>found (bounded walk,<br/>CHAOS-3898 taint gate applied)<br/>effectiveWindow REPLACED,<br/>Source=carried disclosed on<br/>ConfirmedStructure -- never<br/>re-accepts a receipt, the<br/>IsStructureSuperseded guard<br/>is untouched"| WGATE
+  CARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_window /<br/>depth_exceeded"| WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
   WGATE -->|"regime A: inferred_default"| GATED["gatedOfferMaterial<br/>chaos4234_offers_only.go"]
   GATED --> OFFRES["graph.ResolveSubjects(WithOffersOnlyResolution)<br/>same pool mechanism as regime B,<br/>commit-bearing output DISCARDED"]
   OFFRES --> WOFFER["windowConfirmationRequiredResult<br/>status=clarification_required, SubjectResolution EMPTY<br/>kind/handle/candidate offers minted BESIDE window offer"]
@@ -75,7 +77,7 @@ flowchart TD
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
   class POOL gap
-  class UNEXP,GATE2,ROWS fixed
+  class UNEXP,GATE2,ROWS,CARRY fixed
   class RETRACT refuse
 ```
 
@@ -130,6 +132,39 @@ included. A
 call rejected earlier (unavailable runtime, a model draft `ValidateAgainst`
 itself rejects, a receipt-sink failure) reports nothing here; that failure
 is the receipt sink's own outcome to record.
+
+**Updated 2026-08-27 (CHAOS-4360, `lane-4360-acr`): same-conversation
+window carry defeats the class-default gate for a re-verified turn.** Live
+walkthrough (CHAOS-4355, cf-rulings.md 06:30/09:10/13:40 08-27): turn 2
+confirms a window via `winr_` receipt and asks for a fresh subject
+clarification; the Workbench's accumulate-and-re-ask-ONCE batching means
+turn 3 carries only the new candidate pick, never the window receipt
+(re-sending it would be correctly `vetoed_stale` by
+`IsStructureSuperseded` — receipts are single-use by design, unchanged
+here). Before this ticket, turn 3's own window canonicalization therefore
+produced `inferred_default`, the WGATE node above fired, and
+`composePriorSubjectReceiptDispositions` could only ever classify the
+carried `PriorSubjectReceipts` entry as `skipped_failed_reauth` — a
+project-status question could never reach a decisive answer past two
+turns. `resolveCarriedWindow` (`chaos4360_carry.go`) now runs immediately
+before WGATE, exactly once per call, ONLY when this turn's own window
+would otherwise be inferred: it walks the chain of prior results this
+request references (bounded depth/visited count, the SAME CHAOS-3898 §2.2
+ingress taint gate `resolvePriorSubjectHints` already applies), and on a
+hit replaces `effectiveWindow` with the nearest genuinely CONFIRMED
+(never inferred) window found — so WGATE never fires for that turn, the
+REAL `ResolveSubjects` resolution runs, and the existing, unmodified
+`PriorSubjectReceipts` re-verification mechanism reaches `applied` against
+it. A carry is disclosed, never silent: a new `ContextFabricConfirmedStructureEntry`
+with `Source=carried` (a v1-additive fourth `ContextFabricStructureSource`
+value, deliberately excluded from `structureSupersessionClaims` — a carry
+reads already-stored confirmed structure, it never re-accepts a receipt)
+names the origin `PriorResultID`. Scope: this ticket carries the WINDOW
+only (the proven defect and the ticket's own literal acceptance bar);
+`expected_kind`/`subject_anchor` functional carry is flagged as a
+follow-up, not built here, since `PriorSubjectReceipts` re-verification
+already resolves the concrete candidate-commit gap on its own once the
+window stops being gated.
 
 ---
 
