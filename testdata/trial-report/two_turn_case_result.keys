@@ -8,6 +8,7 @@ baseline_commit_affirmation
 baseline_committed_subjects
 baseline_trace_events
 candidate_offer_count
+canonical_facts_count
 census_complete
 census_count
 census_ran

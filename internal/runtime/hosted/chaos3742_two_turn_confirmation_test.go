@@ -3836,11 +3836,19 @@ type twoTurnCaseResult struct {
 	// recurred across 4 independent runs while false_no_match_count read 0)
 	// -- the gate failed toward fine exactly because it was scoped narrower
 	// than the outcome it exists to catch.
-	FalseNoMatch    bool   `json:"false_no_match,omitempty"`
-	CommittedCount  int    `json:"committed_count"`
-	WrongCommit     bool   `json:"wrong_commit"`
-	MutationProbe   string `json:"mutation_probe,omitempty"`
-	MutationTripped bool   `json:"mutation_tripped,omitempty"`
+	FalseNoMatch   bool `json:"false_no_match,omitempty"`
+	CommittedCount int  `json:"committed_count"`
+	// CanonicalFactsCount (CHAOS-4347) is twoTurnCanonicalFactsCount's own
+	// result for this row's arm-terminal call -- populated whenever
+	// CommittedCount > 0 (there is no "synthesize input" to count facts in
+	// otherwise), 0 for every uncommitted row (the field's own zero value,
+	// not a distinguishable "unset"). See report.FactlessCommittedCount's
+	// own doc comment for why a committed-but-0 row matters: it is the
+	// coverage gap CHAOS-4344 case 23 exposed, now directly reportable.
+	CanonicalFactsCount int    `json:"canonical_facts_count"`
+	WrongCommit         bool   `json:"wrong_commit"`
+	MutationProbe       string `json:"mutation_probe,omitempty"`
+	MutationTripped     bool   `json:"mutation_tripped,omitempty"`
 	// ArmInvalidReason is a closed-vocabulary classification only (never
 	// raw err.Error() text -- codex round-1 finding #9: an investigator
 	// error can carry upstream detail this outcome-only artifact must not
@@ -4526,7 +4534,7 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "35"
+const reportSchemaVersion = "36"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5222,6 +5230,28 @@ type twoTurnReport struct {
 	// positive-arm outcome -- one of the ruling's ZERO-tolerance pass
 	// conditions, alongside WrongCommitCount, regardless of member or arm.
 	FalseNoMatchCount int `json:"false_no_match_count"`
+	// FactlessCommittedCount (CHAOS-4347, team-lead standing order: telemetry
+	// baked into new logic, same change) sums every twoTurnCaseResult row,
+	// ACROSS EVERY ARM (positive, inferred_tier, confirmed_wrong, mutation --
+	// unlike FalseNoMatchCount, deliberately not scoped to any subset), where
+	// CommittedCount > 0 AND CanonicalFactsCount == 0: the engine committed
+	// to a real subject and told the synthesis step nothing canonical about
+	// it, REGARDLESS of what status the synthesis step ultimately returned
+	// (no_match, degraded, complete -- all count the same here). This is the
+	// coverage bar CHAOS-4344's own case 23 exposed the harness never had:
+	// a committed-but-factless row can produce a perfectly reasonable
+	// "degraded" answer from graph paths alone and never trip
+	// FalseNoMatchCount at all, while still being exactly the coverage gap
+	// CHAOS-4347's status-category composition (internal/contextfabric/
+	// chaos4347_status_category_composition.go) exists to close.
+	//
+	// OBSERVATIONAL ONLY -- deliberately NOT a zero-tolerance gate condition
+	// (evaluateGates has no fail() check against this field): a nonzero
+	// count here can be a genuine, expected residual (e.g. the `project`
+	// kind, which has no registered fact producer at all and stays
+	// factless-committed by construction until a separate, later ticket
+	// adds one) rather than a defect signal the way FalseNoMatchCount is.
+	FactlessCommittedCount int `json:"factless_committed_count"`
 	// SynthesisStatusOverrideUncommittedCount (CHAOS-4103, team-lead ruling
 	// 2026-08-22) sums twoTurnCaseResult rows whose
 	// SynthesisStatusOverrideReason is
@@ -7085,6 +7115,7 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	}
 	res.Turn2Status = string(turn2.Status)
 	res.CommittedCount = len(turn2.SubjectResolution.Committed)
+	res.CanonicalFactsCount = twoTurnCanonicalFactsCount(turn2.Coverage)
 	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	res.Reused = turn2.Reused
@@ -7191,6 +7222,93 @@ func TestCHAOS4314_TwoTurnWindowExpandAccepted_RejectsStaleSupersededDisposition
 // and still failed to convert it.
 func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabricInvestigationStatus) bool {
 	return expectID != "" && status == contractsv1.ContextFabricInvestigationNoMatch
+}
+
+// twoTurnCanonicalFactsCount (CHAOS-4347, team-lead standing order: telemetry
+// baked into new logic, same change) counts the AVAILABLE canonical-fact
+// coverage sources on a result -- the coverage bar this harness never had.
+// Deliberately a count of DISTINCT canonical_fact:* SOURCES (fact KINDS) the
+// synthesis step actually had something to cite, not a literal row count of
+// CanonicalFactBundle.Facts (which the wire InvestigationResult does not
+// expose at all -- Coverage.Sources is the only post-hoc signal available
+// without a new engine-side capture channel, and "was there at least one
+// fact of this kind" is exactly the distinction CHAOS-4344's own case 23
+// (repository status: canonical_facts_count=0, coverage showed nothing but
+// a pruned canonical_fact:status source) needed to be reportable at all.
+//
+// A source is counted only when BOTH its Source is prefixed "canonical_fact:"
+// (excluding "context-fabric:graph" and any other non-fact source) AND its
+// State is Available -- pruned/unavailable/truncated sources contributed
+// nothing to what the model actually saw, so they must not inflate the
+// count the same way an available one does.
+func twoTurnCanonicalFactsCount(coverage contractsv1.ContextFabricCoverage) int {
+	count := 0
+	for _, source := range coverage.Sources {
+		if strings.HasPrefix(source.Source, "canonical_fact:") && source.State == contractsv1.ContextFabricSourceAvailable {
+			count++
+		}
+	}
+	return count
+}
+
+// TestTwoTurnCanonicalFactsCount pins twoTurnCanonicalFactsCount's own
+// prefix+state contract (CHAOS-4347): RED on origin/main before this change,
+// since the function did not exist there. In particular, case 23 (repository
+// status, pre-composition) is the "pruned canonical_fact:status only" row
+// below -- exactly the shape this helper must report as zero.
+func TestTwoTurnCanonicalFactsCount(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		coverage contractsv1.ContextFabricCoverage
+		want     int
+	}{
+		{
+			name:     "no sources at all",
+			coverage: contractsv1.ContextFabricCoverage{},
+			want:     0,
+		},
+		{
+			name: "case-23 shape: only a pruned canonical_fact:status source, no facts",
+			coverage: contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
+				{Source: "canonical_fact:status", State: contractsv1.ContextFabricSourcePruned},
+			}},
+			want: 0,
+		},
+		{
+			name: "composed set: metrics+health+identity all available counts 3",
+			coverage: contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
+				{Source: "canonical_fact:metrics", State: contractsv1.ContextFabricSourceAvailable},
+				{Source: "canonical_fact:health", State: contractsv1.ContextFabricSourceAvailable},
+				{Source: "canonical_fact:identity", State: contractsv1.ContextFabricSourceAvailable},
+			}},
+			want: 3,
+		},
+		{
+			name: "non-fact source (graph) never counts, regardless of state",
+			coverage: contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
+				{Source: "context-fabric:graph", State: contractsv1.ContextFabricSourceAvailable},
+			}},
+			want: 0,
+		},
+		{
+			name: "mixed: only the available fact source counts, unavailable/truncated do not",
+			coverage: contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
+				{Source: "canonical_fact:health", State: contractsv1.ContextFabricSourceAvailable},
+				{Source: "canonical_fact:workload", State: contractsv1.ContextFabricSourceUnavailable},
+				{Source: "canonical_fact:readiness", State: contractsv1.ContextFabricSourceTruncated},
+				{Source: "context-fabric:graph", State: contractsv1.ContextFabricSourceAvailable},
+			}},
+			want: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := twoTurnCanonicalFactsCount(tc.coverage); got != tc.want {
+				t.Errorf("twoTurnCanonicalFactsCount(%#v) = %d, want %d", tc.coverage, got, tc.want)
+			}
+		})
+	}
 }
 
 // setTwoTurnReceipt attaches receipt to the request field matching member.
@@ -7600,6 +7718,7 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	}
 	res.Turn2Status = string(result.Status)
 	res.CommittedCount = len(result.SubjectResolution.Committed)
+	res.CanonicalFactsCount = twoTurnCanonicalFactsCount(result.Coverage)
 	res.WrongCommit = twoTurnCommittedWrong(result.SubjectResolution.Committed, tc)
 	// InferredWindowExpandOffered (CHAOS-4336): computed from THIS call's
 	// own result -- the inferred_tier arm's own gated call -- not the
@@ -8279,6 +8398,7 @@ func runTwoTurnConfirmedWrongArm(t *testing.T, ctx context.Context, investigator
 	}
 	res.Turn2Status = string(turn2.Status)
 	res.CommittedCount = len(turn2.SubjectResolution.Committed)
+	res.CanonicalFactsCount = twoTurnCanonicalFactsCount(turn2.Coverage)
 	res.Applied = memberApplied(turn2, entry.Member)
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
@@ -8442,6 +8562,7 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 		}
 		res.Turn2Status = string(result.Status)
 		res.CommittedCount = len(result.SubjectResolution.Committed)
+		res.CanonicalFactsCount = twoTurnCanonicalFactsCount(result.Coverage)
 		res.Applied = memberApplied(result, entry.Member)
 		twoTurnStampOutcome(&res, tc, result.SubjectResolution.Committed)
 		twoTurnStampDecision(&res, trace)
@@ -9501,6 +9622,15 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	for _, res := range report.Results {
 		if res.SynthesisStatusOverrideReason == string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted) {
 			report.SynthesisStatusOverrideUncommittedCount++
+		}
+		// FactlessCommittedCount (CHAOS-4347): SAME "derived from the rows
+		// this shard actually produced, once, immediately before
+		// serialization" discipline as SynthesisStatusOverrideUncommittedCount
+		// immediately above, for the identical reason -- this counts across
+		// every arm, and a scattered per-arm increment is exactly the shape
+		// that silently undercounts when a future arm is added.
+		if res.CommittedCount > 0 && res.CanonicalFactsCount == 0 {
+			report.FactlessCommittedCount++
 		}
 	}
 

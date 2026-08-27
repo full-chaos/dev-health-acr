@@ -374,3 +374,78 @@ requirement fans out over every investigation subject even when its origin
 knew better. Narrowing at the producers is a real further win on the
 subject-binding axis; it touches `graphrank` and `falkorgraph` and was left
 out of CHAOS-3783.
+
+## 8. Status-category composition (CHAOS-4347)
+
+### The gap this closes
+
+`ContextFabricInterpretedQuestion.FactRequirements` is authored directly by
+the model, picking `Kind` values from the closed `FactKind` vocabulary --
+there is no `judgment_category` enum for it to route through (§5 explains
+why one was rejected). For a question about a subject's current state, the
+vocabulary offers exactly one obviously-matching name: `status`. The model
+picks it regardless of the resolved subject's kind, because nothing in its
+input tells it `FactStatus` is `work_item`-only
+(`devhealthfacts.StatusProvider`, `internal/contextfabric/devhealthfacts/
+workitems.go` -- backed literally by `work_items.status`, a column that has
+no repository or team analog at all).
+
+`planFactReads`'s subject-kind rule (§2-3) then does exactly what it is
+supposed to: `FactStatus`'s capability declares `SupportedSubjectKinds:
+{work_item}`, a repository or team subject does not match, the requirement
+prunes `subject_kind_unsupported`, and the investigation answers from graph
+paths alone -- even when real canonical facts exist for that subject under a
+DIFFERENT `FactKind` name. CHAOS-4344 case 23 is this exactly: a real,
+human-curated oracle case (`question_class=subject_status`,
+`kind=repository`, `authority=annotation`) that a bare `FactStatus`
+requirement could never answer, though `devhealthfacts.NewProviders`
+registers 19 producers and four of them (metrics, health, identity,
+membership) already cover `repository`.
+
+### The fix: compose, don't gate
+
+`composeStatusCategoryRequirements`
+(`internal/contextfabric/chaos4347_status_category_composition.go`), called
+once in `Engine.Investigate` right before the fact requirements are merged
+(same call site `mergeFactRequirements` already occupied) -- **after**
+subject resolution, so the resolved subject KIND is known, which is the
+load-bearing difference from the rejected §5 design: this is not a model
+category pick being trusted, it is the SAME subject-kind rule §1-§3 already
+key pruning off, applied one step earlier to WIDEN a requirement instead of
+narrowing it. A bare `FactRequirement{Kind: FactStatus}` is expanded into
+`statusCategoryFactKindComposition`'s closed set for whichever of the
+requirement's own subjects (or, if unset, the investigation-wide subjects --
+mirroring `factQuerySubjects`' own precedence exactly) have an entry:
+
+| Resolved subject kind | Composed fact kinds |
+| --- | --- |
+| `repository` | `metrics`, `health`, `identity` |
+| `team` | `health`, `workload`, `readiness` |
+| `work_item` | unchanged (`status`) -- no entry in the table by design |
+
+A mixed-kind cohort never loses either half: a subject kind absent from the
+table (`work_item`, or a future kind this table has not caught up to) keeps
+its own `FactStatus` requirement alongside whatever OTHER subject kind's
+requirement also composed. Every other category stays 1:1, untouched --
+this is scoped to the ONE category CHAOS-4344's corpus evidence proved
+broken, not a general category→set rewrite.
+
+### Telemetry (same change, per the standing order)
+
+`RecordCategoryFactComposition` (`EngineTelemetry`, non-optional -- the
+`RecordFactScopeExpansion`/`RecordSynthesisStatusOverride` discipline this
+file's own §2-3 pruning telemetry already follows) fires once per (bare
+`FactStatus` requirement, resolved subject kind) pair that actually
+composed, naming the requirement kind, the subject kind, and the exact
+composed set. It does not fire for a `work_item`-only requirement (nothing
+composed) or for any other category (never reached).
+
+### Corpus-level effect (structure only, no question text)
+
+12 of the 65 corpus cases are `subject_status` × `repository`; this change
+gives all 12 the composed fact set for the first time. A further 8 are
+`project`-kind and remain unanswerable by this composition -- `project` has
+no registered fact producer at all (§1's "project cohort" row already
+documents `2 → 0` round-trips, "previously unanswerable," for the same
+underlying reason) -- that gap is tracked separately (CHAOS-4347's own
+project-producer phase), not closed here.

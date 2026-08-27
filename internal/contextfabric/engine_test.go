@@ -307,7 +307,10 @@ type recordingTelemetry struct {
 	// test asserts the EXACT closed-vocabulary outcome and the exact counts,
 	// because "an event happened" is precisely the assertion that let
 	// CHAOS-4085's fields ship unread.
-	factScopeExpansions            []FactScopeExpansionEvent
+	factScopeExpansions []FactScopeExpansionEvent
+	// categoryFactCompositions (CHAOS-4347) records every status-category
+	// composition event verbatim, same list-not-count discipline.
+	categoryFactCompositions       []CategoryFactCompositionEvent
 	priorSubjectReceiptSkipReasons []priorSubjectReceiptSkipReasonRecord
 	answerReuseServedRequestIDs    []answerReuseServedRequestIDRecord
 	bindingEpochDeltas             []bindingEpochDeltaRecord
@@ -397,6 +400,10 @@ func (r *recordingTelemetry) RecordSynthesisStatusOverride(_ context.Context, _ 
 
 func (r *recordingTelemetry) RecordFactScopeExpansion(_ context.Context, _ storage.Principal, event FactScopeExpansionEvent) {
 	r.factScopeExpansions = append(r.factScopeExpansions, event)
+}
+
+func (r *recordingTelemetry) RecordCategoryFactComposition(_ context.Context, _ storage.Principal, event CategoryFactCompositionEvent) {
+	r.categoryFactCompositions = append(r.categoryFactCompositions, event)
 }
 
 func (r *recordingTelemetry) RecordPriorSubjectReceiptSkipReason(_ context.Context, _ storage.Principal, reason string, count int, epochDelta int64) {
