@@ -52,6 +52,7 @@ mutation_probe
 mutation_tripped
 offer_kind
 offer_miss
+oracle_id_scheme_mismatch
 pair_invalid
 pair_retried
 pair_retry_first_arm_invalid_error_type

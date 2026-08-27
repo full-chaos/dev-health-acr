@@ -623,6 +623,20 @@ var twoTurnStructureMembers = map[string]bool{
 
 // validateTwoTurnOracleAnnex checks the closed-vocabulary/shape rules a
 // malformed annex would otherwise let slide silently into a run.
+//
+// CHAOS-4348 measurement-layer fix (codex adversarial review, HIGH,
+// confirmed): the annex's own env var is ACR_TEST_TWOTURN_ORACLE_ANNEX, and
+// both scripts/trial/run-two-turn.sh and run-two-turn-parallel.sh invoke
+// `go test -run TestChaos3742TwoTurnConfirmationReplay` -- a standalone
+// TestChaos4348OracleAnnexAnchorIDsMatchLiveIdentityScheme test (this
+// file's first version of this fix) reading a DIFFERENT env var name
+// (ORACLE_ANNEX) would never run for a single real trial invocation,
+// sequential or parallel, regardless of whether the annex was actually
+// stale. The scheme check below is wired in HERE instead -- inside the
+// SAME validateTwoTurnOracleAnnex loadTwoTurnOracleAnnex already calls
+// unconditionally, on every real load, before a single case executes --
+// so a stale-scheme anchor id fails the run outright, not merely a
+// counter a caller could fail to check.
 func validateTwoTurnOracleAnnex(annex twoTurnOracleAnnex) error {
 	if annex.CorpusSHA256 == "" {
 		return fmt.Errorf("oracle annex: corpus_sha256 is required")
@@ -630,6 +644,17 @@ func validateTwoTurnOracleAnnex(annex twoTurnOracleAnnex) error {
 	for i, entry := range annex.Entries {
 		if !twoTurnStructureMembers[entry.Member] {
 			return fmt.Errorf("oracle annex entry %d: member %q is not a closed StructureNeeds member", i, entry.Member)
+		}
+		if entry.Member != string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
+			continue
+		}
+		if id := entry.PositiveAnchorCanonicalID; id != "" && !chaos4348KnownResidualStaleAnchorIDs[id] && oracleIDSchemeMismatch(entry.PositiveKind, id) {
+			return fmt.Errorf("oracle annex entry %d (case %d, positive anchor): id %q does not match kind %q's live identity scheme (want prefix %q) -- run cmd/acr-annex-regen-project-ids (CHAOS-4348)",
+				i, entry.Index, id, entry.PositiveKind, chaos4348ExpectedIDSchemePrefix(entry.PositiveKind))
+		}
+		if id := entry.NegativeAnchorCanonicalID; id != "" && !chaos4348KnownResidualStaleAnchorIDs[id] && oracleIDSchemeMismatch(entry.NegativeKind, id) {
+			return fmt.Errorf("oracle annex entry %d (case %d, negative anchor): id %q does not match kind %q's live identity scheme (want prefix %q) -- run cmd/acr-annex-regen-project-ids (CHAOS-4348)",
+				i, entry.Index, id, entry.NegativeKind, chaos4348ExpectedIDSchemePrefix(entry.NegativeKind))
 		}
 	}
 	return nil
@@ -2031,6 +2056,19 @@ type twoTurnTurn1Facts struct {
 	// new arms are actually load-bearing rather than redundant with
 	// ordinary search.
 	ExpectedSubjectRetrievalSource string
+	// OracleIDSchemeMismatch (CHAOS-4348 measurement-layer fix, schema v38)
+	// is oracleIDSchemeMismatch's own reading (chaos4348_oracle_id_scheme_test.go):
+	// true iff tc.ExpectID does NOT carry tc.ExpectKind's live canonical-id
+	// scheme prefix (identity.Derive's "<kind>.v2:" for a migrated kind,
+	// else the stable pre-migration "<kind>:"). This is the "fail loudly
+	// instead of silently reading absent" telemetry team-lead's GO
+	// required: computed directly from the (kind, id) pair, independent of
+	// poolContainsSubject's own search -- a malformed oracle id can never
+	// again hide behind an otherwise-unremarkable ExpectedSubjectInPool=false
+	// the way it did through Run F (the annex's project ids predated the
+	// identity.v2 migration and could never string-match a live pool
+	// entry, regardless of whether retrieval itself was working).
+	OracleIDSchemeMismatch bool
 	// ExpectedKindAtOfferBoundaryBeforeRepair/
 	// KindOfferDistinctKindCountBeforeRepair/
 	// KindOfferSuppressedByCardinalityBeforeRepair (CHAOS-4183 phase 3, sol
@@ -2318,6 +2356,7 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 	facts.ExpectedSubjectInPool = trace.poolContainsSubject(tc.ExpectKind, tc.ExpectID)
 	facts.ExpectedSubjectRank, facts.ExpectedSubjectAtOfferBoundary = trace.rankedCutFor(tc.ExpectKind, tc.ExpectID)
 	facts.ExpectedSubjectRetrievalSource = trace.retrievalSourceFor(tc.ExpectKind, tc.ExpectID)
+	facts.OracleIDSchemeMismatch = oracleIDSchemeMismatch(tc.ExpectKind, tc.ExpectID)
 	facts.CensusRan = trace.censusRan()
 	facts.CensusComplete = trace.censusComplete()
 	facts.CensusCount = trace.censusCount()
@@ -2375,6 +2414,7 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.ExpectedSubjectRank = facts.ExpectedSubjectRank
 	res.ExpectedSubjectAtOfferBoundary = facts.ExpectedSubjectAtOfferBoundary
 	res.ExpectedSubjectRetrievalSource = facts.ExpectedSubjectRetrievalSource
+	res.OracleIDSchemeMismatch = facts.OracleIDSchemeMismatch
 	res.AnchorOptionsCount = facts.AnchorOptionsCount
 	res.HandleOptionsCount = facts.HandleOptionsCount
 	res.HandleOptionsCountBeforeGraphSource = facts.HandleOptionsCountBeforeGraphSource
@@ -3045,6 +3085,11 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			// comment), so a real value here is what proves the plumbing,
 			// not merely the zero-value default.
 			TraceEvents: []graphrank.ResolutionTraceEvent{{Stage: "decision", CommitGate: "top_of_two"}},
+			// CHAOS-4348 measurement-layer fix: a non-default (true) value
+			// here proves twoTurnStampTurn1Facts copies OracleIDSchemeMismatch
+			// through, the same "prove the plumbing, not the zero-value
+			// default" reasoning TraceEvents' own comment above already uses.
+			OracleIDSchemeMismatch: true,
 		}
 		res := twoTurnCaseResult{}
 		twoTurnStampTurn1Facts(&res, facts)
@@ -3110,6 +3155,8 @@ func TestTwoTurnStampTurn1Facts(t *testing.T) {
 			t.Errorf("Regime = %q, want %q", res.Regime, twoTurnRegimeAWindowGated)
 		case !reflect.DeepEqual(res.Turn1TraceEvents, facts.TraceEvents):
 			t.Errorf("Turn1TraceEvents = %+v, want %+v", res.Turn1TraceEvents, facts.TraceEvents)
+		case !res.OracleIDSchemeMismatch:
+			t.Error("OracleIDSchemeMismatch = false, want true")
 		}
 	})
 }
@@ -4322,6 +4369,11 @@ type twoTurnCaseResult struct {
 	// twoTurnTurn1Facts.ExpectedSubjectRetrievalSource -- see that field's
 	// own doc comment. "exact_name" / "kind_scoped" / "both" / "ordinary" / "absent".
 	ExpectedSubjectRetrievalSource string `json:"expected_subject_retrieval_source"`
+	// OracleIDSchemeMismatch (CHAOS-4348 measurement-layer fix, schema v38)
+	// mirrors twoTurnTurn1Facts.OracleIDSchemeMismatch -- see that field's
+	// own doc comment. No omitempty: a false is a reading (the oracle id
+	// DOES match its kind's live scheme), not an absence.
+	OracleIDSchemeMismatch bool `json:"oracle_id_scheme_mismatch"`
 	// Turn2WindowReceiptAttached (CHAOS-4234, schema v29, positive arm only)
 	// records the harness semantics change this ticket made: on a regime-A
 	// case (turn 1 window-gated), the positive arm's turn 2 now carries the
@@ -4555,7 +4607,13 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "37"
+//
+// "38" (CHAOS-4348 measurement-layer fix): purely additive --
+// twoTurnCaseResult gains OracleIDSchemeMismatch, twoTurnReport gains
+// OracleIDSchemeMismatchCount (a new zero-tolerance gate, alongside
+// WrongCommitCount). No merge arithmetic changes beyond a plain sum, same
+// as WrongCommitCount/FalseNoMatchCount.
+const reportSchemaVersion = "38"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5245,6 +5303,20 @@ type twoTurnReport struct {
 	StructureAndWindowDisclosureAbsentCount int            `json:"structure_and_window_disclosure_absent_count"`
 	OfferMissCount                          map[string]int `json:"offer_miss_count"`
 	WrongCommitCount                        int            `json:"wrong_commit_count"`
+	// OracleIDSchemeMismatchCount (CHAOS-4348 measurement-layer fix, schema
+	// v38) sums twoTurnCaseResult.OracleIDSchemeMismatch across every row,
+	// ACROSS EVERY ARM (like FactlessCommittedCount, unlike
+	// FalseNoMatchCount) -- a mismatched oracle id is a property of the
+	// CASE's own expected id, not of which arm evaluated it, so a mismatch
+	// is real regardless of which arm's row happens to be read. A ZERO-
+	// TOLERANCE gate, alongside WrongCommitCount/FalseNoMatchCount/
+	// SynthesisStatusOverrideUncommittedCount: unlike FactlessCommittedCount
+	// (a legitimate, known-expected residual for some kinds), a nonzero
+	// count here means the annex itself is broken -- retrieval correctness
+	// cannot be measured AT ALL for that row until the annex is fixed
+	// (cmd/acr-annex-regen-project-ids; TestChaos4348OracleAnnexAnchorIDsMatchLiveIdentityScheme
+	// is the same rule checked directly against the annex file, red-first).
+	OracleIDSchemeMismatchCount int `json:"oracle_id_scheme_mismatch_count"`
 	// FalseNoMatchCount (CHAOS-4039 v4 contract; CHAOS-4120 widened to also
 	// sum the positive arm) sums twoTurnCaseResult.FalseNoMatch across
 	// every inferred_tier outcome (kind/handle AND window alike) AND every
@@ -9692,6 +9764,14 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if res.CommittedCount > 0 && res.CanonicalFactsCount == 0 {
 			report.FactlessCommittedCount++
 		}
+		// OracleIDSchemeMismatchCount (CHAOS-4348 measurement-layer fix):
+		// SAME "derived from the rows this shard actually produced, once,
+		// immediately before serialization" discipline as
+		// SynthesisStatusOverrideUncommittedCount/FactlessCommittedCount
+		// immediately above.
+		if res.OracleIDSchemeMismatch {
+			report.OracleIDSchemeMismatchCount++
+		}
 	}
 
 	// CHAOS-4058: run-level timing aggregate, observational only -- see
@@ -9770,6 +9850,18 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	}
 	if report.WrongCommitCount > 0 {
 		t.Errorf("wrong_commit_count=%d, want 0 (DP9: ZERO wrong commits, period)", report.WrongCommitCount)
+	}
+	// CHAOS-4348 measurement-layer fix: NEVER skipped, even under sharding
+	// (a malformed oracle id is a per-case annex defect, real regardless of
+	// shard size, same reasoning WrongCommitCount/FalseNoMatchCount already
+	// get). "Fail loudly instead of silently reading absent" -- the whole
+	// point of this counter existing is that Run F's project 0/20 could NOT
+	// distinguish "retrieval is broken" from "the annex is broken" until
+	// this field existed; a nonzero count here means this run's OTHER
+	// pool/retrieval-source measurements for the affected row(s) are not
+	// trustworthy and the annex needs regenerating before re-measuring.
+	if report.OracleIDSchemeMismatchCount > 0 {
+		t.Errorf("oracle_id_scheme_mismatch_count=%d, want 0 (the oracle annex has stale-scheme expected ids -- run cmd/acr-annex-regen-project-ids before trusting any pool/retrieval-source measurement in this report)", report.OracleIDSchemeMismatchCount)
 	}
 	// CHAOS-4039 v4 measurement contract (sol-max ruling 2026-08-20,
 	// option (c) -- amend the bar BY MEMBER, never widen resolve.go's
