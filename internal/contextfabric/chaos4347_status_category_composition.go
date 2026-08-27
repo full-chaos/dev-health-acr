@@ -33,9 +33,21 @@ import (
 // work_item is deliberately ABSENT -- FactStatus already answers it
 // correctly, and this table only ever ADDS coverage, never removes the
 // existing 1:1 behavior for the kind that already had it.
+//
+// SubjectTeam's FactInvestment entry (CHAOS-4363, 4347-A) rides alongside
+// the pre-existing FactHealth/FactWorkload/FactReadiness set: a team
+// "status" question is incomplete without investment breakdown (chris's
+// project-status list on CHAOS-4347) now that investment.go emits Rows,
+// not just a scalar -- see this ticket's own PR for the producer change.
+//
+// COORDINATION NOTE for whoever rebases onto this: CHAOS-4364 (lane-4364-flow,
+// 4347-B) adds FactFlow + FactLandscape to SubjectTeam in this SAME map,
+// plus a new SubjectProject entry, in parallel. Hand-merge both diffs on
+// this map (and the CategoryFactCompositionEvent doc comment below) --
+// never blind git merge -- whichever PR lands second.
 var statusCategoryFactKindComposition = map[SubjectKind][]FactKind{
 	SubjectRepository: {FactMetrics, FactHealth, FactIdentity},
-	SubjectTeam:       {FactHealth, FactWorkload, FactReadiness},
+	SubjectTeam:       {FactHealth, FactWorkload, FactReadiness, FactInvestment},
 }
 
 // CategoryFactCompositionEvent (CHAOS-4347) reports ONE status-category

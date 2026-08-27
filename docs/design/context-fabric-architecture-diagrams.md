@@ -475,6 +475,15 @@ still open — that is a separate, still-unbuilt slice
 (`lane-4347-project`, CHAOS-4348 reachability work is currently ahead of
 it in that lane's queue).
 
+**Update (CHAOS-4363, 4347-A, routing slice only):** `statusCategoryFactKindComposition`'s
+`SubjectTeam` entry now also composes `FactInvestment`, so the team leg of
+the paragraph above is `team→{health, workload, readiness, investment}`.
+Repository's set is unchanged. This is the category-routing half of
+CHAOS-4363 only -- `investment.go` still emits a scalar today (per diagram
+4's fact table); the `Rows`-bearing per-team/day producer change the rest
+of that ticket calls for is separate, still-unbuilt work, not shipped in
+this update.
+
 `FactCapability.SupportedSubjectKinds` (`fact_registry.go:50-58`) is set
 once, in each provider's own `Capability()` method — code-declared, never
 model/phrasing-derived (`internal/contextfabric/AGENTS.md:49`).
