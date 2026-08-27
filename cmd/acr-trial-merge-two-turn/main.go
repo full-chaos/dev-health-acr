@@ -311,11 +311,17 @@ import (
 // No merge arithmetic changes -- the field rides through per-case, exactly
 // like ExpectedSubjectInPool/ExpectedSubjectRank already do.
 //
+// "38" (CHAOS-4348 measurement-layer fix): purely additive --
+// twoTurnCaseResult gains OracleIDSchemeMismatch, twoTurnReport gains
+// OracleIDSchemeMismatchCount (a new zero-tolerance merge gate, alongside
+// WrongCommitCount). Plain sum, same merge arithmetic as
+// WrongCommitCount/FalseNoMatchCount.
+//
 // KEEP IN SYNC WITH internal/runtime/hosted/chaos3742_two_turn_confirmation_test.go's
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "37"
+const expectedSchemaVersion = "38"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -606,9 +612,12 @@ type twoTurnCaseResult struct {
 	ExpectedSubjectAtOfferBoundary    bool `json:"expected_subject_at_offer_boundary"`
 	// CHAOS-4348 (schema v37): mirrored byte-for-byte, same convention.
 	ExpectedSubjectRetrievalSource string `json:"expected_subject_retrieval_source"`
-	Turn2WindowReceiptAttached     bool   `json:"turn2_window_receipt_attached"`
-	AnchorOptionsCount             int    `json:"anchor_options_count"`
-	HandleOptionsCount             int    `json:"handle_options_count"`
+	// CHAOS-4348 measurement-layer fix (schema v38): mirrored byte-for-byte,
+	// same convention. No omitempty -- a false is a reading.
+	OracleIDSchemeMismatch     bool `json:"oracle_id_scheme_mismatch"`
+	Turn2WindowReceiptAttached bool `json:"turn2_window_receipt_attached"`
+	AnchorOptionsCount         int  `json:"anchor_options_count"`
+	HandleOptionsCount         int  `json:"handle_options_count"`
 	// CHAOS-4119 (schema v27): HandleOptionsCount's own pre-graph-source
 	// twin, mirroring twoTurnCaseResult's identically-named field
 	// byte-for-byte.
@@ -697,7 +706,12 @@ type twoTurnReport struct {
 	StructureAndWindowDisclosureAbsentCount int             `json:"structure_and_window_disclosure_absent_count"`
 	OfferMissCount                          map[string]int  `json:"offer_miss_count"`
 	WrongCommitCount                        int             `json:"wrong_commit_count"`
-	FalseNoMatchCount                       int             `json:"false_no_match_count"`
+	// OracleIDSchemeMismatchCount (CHAOS-4348 measurement-layer fix, schema
+	// v38) mirrors twoTurnReport's identically-named field byte-for-byte --
+	// see the producer's own doc comment. A ZERO-TOLERANCE merge gate,
+	// alongside WrongCommitCount: plain sum across shards, checked below.
+	OracleIDSchemeMismatchCount int `json:"oracle_id_scheme_mismatch_count"`
+	FalseNoMatchCount           int `json:"false_no_match_count"`
 	// FactlessCommittedCount (CHAOS-4347, schema v36) mirrors twoTurnReport's
 	// identically-named field byte-for-byte -- see the producer's own doc
 	// comment. OBSERVATIONAL ONLY, not a gate condition: simple per-shard sum.
@@ -1078,6 +1092,7 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.GateReachableCount += s.GateReachableCount
 		merged.StructureAndWindowDisclosureAbsentCount += s.StructureAndWindowDisclosureAbsentCount
 		merged.WrongCommitCount += s.WrongCommitCount
+		merged.OracleIDSchemeMismatchCount += s.OracleIDSchemeMismatchCount
 		merged.FalseNoMatchCount += s.FalseNoMatchCount
 		merged.FactlessCommittedCount += s.FactlessCommittedCount
 		merged.SynthesisStatusOverrideUncommittedCount += s.SynthesisStatusOverrideUncommittedCount
@@ -1349,6 +1364,12 @@ func evaluateGates(r twoTurnReport) error {
 
 	if r.WrongCommitCount > 0 {
 		fail("wrong_commit_count=%d, want 0 (DP9: ZERO wrong commits, period)", r.WrongCommitCount)
+	}
+	// CHAOS-4348 measurement-layer fix: mirrors the producer's own
+	// unconditional (never sharded-skipped) gate -- see that gate's own
+	// doc comment.
+	if r.OracleIDSchemeMismatchCount > 0 {
+		fail("oracle_id_scheme_mismatch_count=%d, want 0 (the oracle annex has stale-scheme expected ids -- run cmd/acr-annex-regen-project-ids before trusting any pool/retrieval-source measurement in this merged report)", r.OracleIDSchemeMismatchCount)
 	}
 	if r.WindowCommitCount > 0 {
 		fail("window_commit_count=%d, want 0", r.WindowCommitCount)

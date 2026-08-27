@@ -183,8 +183,8 @@ func TestFoldConfirmedKindVectorCensus_AccumulatesAcrossCalls(t *testing.T) {
 // responder_effort) is exactly that next bump: v33.
 func TestTwoTurnReport_SchemaVersionPin(t *testing.T) {
 	t.Parallel()
-	if reportSchemaVersion != "37" {
-		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4348 bump, following CHAOS-4347's v36: canonical_facts_count + factless_committed_count)", reportSchemaVersion, "37")
+	if reportSchemaVersion != "38" {
+		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4348 measurement-layer-fix bump, following CHAOS-4348's own v37: oracle_id_scheme_mismatch)", reportSchemaVersion, "38")
 	}
 }
 
