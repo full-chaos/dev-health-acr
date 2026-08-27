@@ -5251,6 +5251,9 @@ type twoTurnReport struct {
 	// kind, which has no registered fact producer at all and stays
 	// factless-committed by construction until a separate, later ticket
 	// adds one) rather than a defect signal the way FalseNoMatchCount is.
+	// Also inherits twoTurnCanonicalFactsCount's own documented known
+	// imprecision (a fact-bearing coverage state can legally carry zero
+	// facts) -- another reason this stays report-only.
 	FactlessCommittedCount int `json:"factless_committed_count"`
 	// SynthesisStatusOverrideUncommittedCount (CHAOS-4103, team-lead ruling
 	// 2026-08-22) sums twoTurnCaseResult rows whose
@@ -7225,26 +7228,47 @@ func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabr
 }
 
 // twoTurnCanonicalFactsCount (CHAOS-4347, team-lead standing order: telemetry
-// baked into new logic, same change) counts the AVAILABLE canonical-fact
+// baked into new logic, same change) counts the FACT-BEARING canonical-fact
 // coverage sources on a result -- the coverage bar this harness never had.
 // Deliberately a count of DISTINCT canonical_fact:* SOURCES (fact KINDS) the
-// synthesis step actually had something to cite, not a literal row count of
+// synthesis step could have cited, not a literal row count of
 // CanonicalFactBundle.Facts (which the wire InvestigationResult does not
 // expose at all -- Coverage.Sources is the only post-hoc signal available
-// without a new engine-side capture channel, and "was there at least one
-// fact of this kind" is exactly the distinction CHAOS-4344's own case 23
-// (repository status: canonical_facts_count=0, coverage showed nothing but
-// a pruned canonical_fact:status source) needed to be reportable at all.
+// without a new engine-side capture channel/contract field, and "was there
+// at least one fact of this kind" is exactly the distinction CHAOS-4344's
+// own case 23 (repository status: canonical_facts_count=0, coverage showed
+// nothing but a pruned canonical_fact:status source) needed to be reportable
+// at all.
 //
 // A source is counted only when BOTH its Source is prefixed "canonical_fact:"
 // (excluding "context-fabric:graph" and any other non-fact source) AND its
-// State is Available -- pruned/unavailable/truncated sources contributed
-// nothing to what the model actually saw, so they must not inflate the
-// count the same way an available one does.
+// State is one of the exact three fact-bearing states the engine itself
+// recognizes (internal/contextfabric/fact_registry.go's stateRejectsFacts):
+// Available, Stale, or Truncated -- pruned/unavailable/unconfigured/
+// unauthorized/conflicted/not_applicable sources contributed nothing to what
+// the model actually saw, so they must not inflate the count. Truncated is
+// deliberately included: fact_registry.go's own comment is explicit that
+// truncation means "there are more facts than these", never "these facts
+// need less grounding" -- a truncated source is still fact-bearing.
+//
+// KNOWN IMPRECISION (codex round-1, PR #298, Medium/high-confidence,
+// verified and accepted rather than silently left): a provider may legally
+// return a fact-bearing state (most commonly Available) with ZERO facts --
+// fact_registry.go only requires len(Facts)==0 when the state REJECTS
+// facts, never the reverse -- so this count can overcount a source that
+// ran and found nothing. Fixing that precisely needs a new wire contract
+// field carrying an actual per-kind fact count, which is out of scope for
+// this (already schema-bumping) change. This is why the field stays
+// OBSERVATIONAL ONLY (see report.FactlessCommittedCount's own doc comment)
+// and is not a gate condition.
 func twoTurnCanonicalFactsCount(coverage contractsv1.ContextFabricCoverage) int {
 	count := 0
 	for _, source := range coverage.Sources {
-		if strings.HasPrefix(source.Source, "canonical_fact:") && source.State == contractsv1.ContextFabricSourceAvailable {
+		if !strings.HasPrefix(source.Source, "canonical_fact:") {
+			continue
+		}
+		switch source.State {
+		case contractsv1.ContextFabricSourceAvailable, contractsv1.ContextFabricSourceStale, contractsv1.ContextFabricSourceTruncated:
 			count++
 		}
 	}
@@ -7292,14 +7316,29 @@ func TestTwoTurnCanonicalFactsCount(t *testing.T) {
 			want: 0,
 		},
 		{
-			name: "mixed: only the available fact source counts, unavailable/truncated do not",
+			name: "mixed: available and truncated count, unavailable and the non-fact source do not",
 			coverage: contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
 				{Source: "canonical_fact:health", State: contractsv1.ContextFabricSourceAvailable},
 				{Source: "canonical_fact:workload", State: contractsv1.ContextFabricSourceUnavailable},
 				{Source: "canonical_fact:readiness", State: contractsv1.ContextFabricSourceTruncated},
 				{Source: "context-fabric:graph", State: contractsv1.ContextFabricSourceAvailable},
 			}},
+			want: 2,
+		},
+		{
+			name: "stale is fact-bearing too (fact_registry.go's own valid-state set), so it counts",
+			coverage: contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
+				{Source: "canonical_fact:metrics", State: contractsv1.ContextFabricSourceStale},
+			}},
 			want: 1,
+		},
+		{
+			name: "not_applicable and unconfigured never count -- neither is in the fact-bearing set",
+			coverage: contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
+				{Source: "canonical_fact:identity", State: contractsv1.ContextFabricSourceNotApplicable},
+				{Source: "canonical_fact:membership", State: contractsv1.ContextFabricSourceUnconfigured},
+			}},
+			want: 0,
 		},
 	}
 	for _, tc := range cases {
