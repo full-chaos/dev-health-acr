@@ -682,3 +682,35 @@ CHAOS-4085 never-commit sentinel — unusable for measuring this activation.
 A new answerable team-kind case (and its oracle annex entry) is a follow-up
 once the standing kiac dataset is free for authoring against; not part of
 this change.
+
+## 11. CHAOS-4347 — FactMetrics widened by real join, not by this resolver
+
+CHAOS-4347 (ruling 2026-08-26 17:52) widens `MetricsProvider.SupportedSubjectKinds`
+to `[repository, team, project]` directly on the provider
+(`internal/contextfabric/devhealthfacts/metrics.go`), **not** through
+`FactReadScopeResolver`. This is deliberately outside §6's eligibility
+table and does not add a `FactMetrics` row there. The distinction that
+matters:
+
+- Every mechanism in this document derives a **READ permission onto a
+  kind the capability does not itself support** — an activity proxy
+  (`SourcePruned`'s "nothing missing" claim would otherwise be false for a
+  reachable chain) or an attributed-team inference. The capability never
+  gains the subject kind itself; the resolver grants it a narrow,
+  disclosed detour.
+- CHAOS-4347's widening is the opposite shape: `MetricsProvider` gained a
+  **genuine second and third source** for the SAME fact kind —
+  `team_metrics_daily` is directly about the team, and the project number
+  is a disclosed sum over `team_project_ownership`'s current membership,
+  never a repository's own metrics presented as if they belonged to the
+  team or project. There is no proxy chain to cite in §6's `Chain` column
+  because none is being claimed.
+
+`chaos4099_capability_kinds_test.go`'s
+`TestChaos4099_RealProviderSubjectKindsStayUnwidened` and
+`TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject` are updated
+accordingly, with `FactMetrics` named as the one deliberate exception in
+both — see that file's own comments for the full reasoning. Every other
+capability's CHAOS-4099 premise (§1's defect, §6's closed eligibility
+table) is unchanged: a capability that still has no team/project-native
+source keeps routing through this resolver exactly as before.

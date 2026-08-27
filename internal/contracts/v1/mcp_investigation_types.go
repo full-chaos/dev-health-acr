@@ -188,6 +188,10 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// service-issued vocabulary (codex round-5 R5-6).
 	"structured.key_facts[].field",
 	"structured.key_facts[].value.string",
+	// CHAOS-4347: Rows is the SAME producer-sourced fact data as Value,
+	// just shaped as a table instead of one scalar -- same reasoning,
+	// same leaf-name treatment as value.string just above.
+	"structured.key_facts[].rows[].fields{}.string",
 	"structured.coverage_summary[].reason",
 	"structured.limitations[]",
 	"structured.warnings[]",
@@ -247,6 +251,9 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.subject_resolution.candidates[].match_reasons[]",
 	"structured.claimed_facts[].field",
 	"structured.claimed_facts[].value.string",
+	// CHAOS-4347: same reasoning as claimed_facts[].value.string above --
+	// Rows carries the same producer-sourced fact data, table-shaped.
+	"structured.claimed_facts[].rows[].fields{}.string",
 	"structured.coverage.degraded_reasons[]",
 	"structured.limitations[]",
 	"structured.warnings[]",

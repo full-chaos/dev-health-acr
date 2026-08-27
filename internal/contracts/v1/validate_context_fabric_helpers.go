@@ -18,6 +18,27 @@ func validateScalarMap(values map[string]ContextFabricScalarValue) error {
 	return nil
 }
 
+// validateClaimedFactRows checks a claimed/projected fact's OPTIONAL
+// renderable table (CHAOS-4347), shared by ContextFabricClaimedFact.Validate
+// and ContextFabricAnswerProjection's key-fact validation so the two never
+// drift on what "rows" is allowed to contain. Bounds mirror the published
+// schema's ClaimedFactRow/ProjectedFactRow $defs exactly (maxItems 64 on
+// the schema's "rows" array, maxProperties 32 on each row's "fields").
+func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
+	if len(rows) > ContextFabricClaimedFactMaxRows {
+		return fmt.Errorf("claimed fact rows exceed v1 bounds")
+	}
+	for _, row := range rows {
+		if len(row.Fields) == 0 || len(row.Fields) > ContextFabricClaimedFactRowMaxFields {
+			return fmt.Errorf("claimed fact row field count violates v1 bounds")
+		}
+		if err := validateScalarMap(row.Fields); err != nil {
+			return fmt.Errorf("claimed fact row: %w", err)
+		}
+	}
+	return nil
+}
+
 func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]ContextFabricClaimedFact, bounds contextFabricBounds) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {

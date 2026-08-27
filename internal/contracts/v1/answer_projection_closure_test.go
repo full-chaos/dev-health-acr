@@ -78,6 +78,10 @@ var copiedBounds = []copiedBound{
 	{projection: "answer#$defs.ProjectedDriver.properties.evidence_ref_ids", canonical: "common#$defs.DriverJudgment.properties.evidence_ref_ids"},
 	{projection: "answer#$defs.ProjectedDriver.properties.claimed_fact_ids", canonical: "common#$defs.DriverJudgment.properties.claimed_fact_ids"},
 	{projection: "answer#$defs.ProjectedFact.properties.field", canonical: "common#$defs.ClaimedFact.properties.field"},
+	// CHAOS-4347: Rows is copied through project.go unchanged, same as
+	// Field/Value -- proves the two schemas' maxItems (64) stay in
+	// lockstep the same way field.maxLength already does.
+	{projection: "answer#$defs.ProjectedFact.properties.rows", canonical: "common#$defs.ClaimedFact.properties.rows"},
 	{projection: "answer#$defs.ProjectedCoverage.properties.source", canonical: "common#$defs.SourceObservation.properties.source"},
 	{projection: "answer#$defs.ProjectedCoverage.properties.reason", canonical: "common#$defs.SourceObservation.properties.reason"},
 	{projection: "answer#$defs.ProjectedCandidate.properties.receipt_id", canonical: "common#$defs.SubjectCandidate.properties.receipt_id"},
@@ -233,7 +237,11 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-4314: 146 -> 153 -- WindowExpandOption contributed seven new
 		// string leaves (receipt_id, option_id, label, relative_id,
 		// window_class, candidate_label, candidate_kind).
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 153},
+		// CHAOS-4347: 153 -> 154 -- ProjectedFact.Rows contributed one new
+		// string leaf (rows[].fields{}.string), the map-value collapse
+		// stringPathsIn already uses for a dynamic-key map (see
+		// FactRequirement.parameters' own additionalProperties leaf).
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 154},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -246,7 +254,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// own three new string leaves (prior_result_id, receipt_id, disposition).
 		// CHAOS-4314: 232 -> 239 -- WindowExpandOption's own seven new string
 		// leaves, same reasoning as the answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 239},
+		// CHAOS-4347: 239 -> 240 -- ClaimedFact.Rows' own new string leaf,
+		// same reasoning as the answer_projection surface above.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 240},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

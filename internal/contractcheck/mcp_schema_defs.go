@@ -92,6 +92,8 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/WindowConfirmationMode": "#/$defs/context_fabric_common.v1/$defs/WindowConfirmationMode",
 	// CHAOS-4314: window_expand_options' own new common $defs entry.
 	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_common.v1/$defs/WindowExpandOption",
+	// CHAOS-4347: ClaimedFact.rows' own new common $defs entry.
+	"#/$defs/ClaimedFactRow": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactRow",
 }
 
 // contextFabricResultDefsRewrites relocates the cross-file pointers
@@ -170,6 +172,8 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/PriorSubjectReceiptDispositionEntry": "#/$defs/context_fabric_answer_projection.v1/$defs/PriorSubjectReceiptDispositionEntry",
 	// CHAOS-4314: window_expand_options' own new projection-local $defs entry.
 	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_answer_projection.v1/$defs/WindowExpandOption",
+	// CHAOS-4347: ProjectedFact.rows' own new projection-local $defs entry.
+	"#/$defs/ProjectedFactRow": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactRow",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

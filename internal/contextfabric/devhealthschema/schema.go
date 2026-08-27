@@ -235,6 +235,46 @@ var ProductionColumns = map[string][]Column{
 		{Name: "code_ownership_gini", Type: "Float64"},
 		{Name: "org_id", Type: "String"},
 	},
+	// CHAOS-4347: team_metrics_daily/cicd_metrics_daily/deploy_metrics_daily
+	// read live from the kiac trial ClickHouse (system.columns, 2026-08-26)
+	// via `kubectl exec` into the trial-clickhouse pod (ns acr-trial-data),
+	// not inferred from the ops migration files -- this package's own doc
+	// comment requires reading types off production, and a migration file
+	// does not show later ALTERs. Positions match `system.columns.position`
+	// as read live.
+	"team_metrics_daily": {
+		{Name: "day", Type: "Date"},
+		{Name: "team_id", Type: "LowCardinality(String)"},
+		{Name: "team_name", Type: "String"},
+		{Name: "commits_count", Type: "UInt32"},
+		{Name: "after_hours_commits_count", Type: "UInt32"},
+		{Name: "weekend_commits_count", Type: "UInt32"},
+		{Name: "after_hours_commit_ratio", Type: "Float64"},
+		{Name: "weekend_commit_ratio", Type: "Float64"},
+		{Name: "computed_at", Type: "DateTime('UTC')"},
+		{Name: "org_id", Type: "String"},
+	},
+	"cicd_metrics_daily": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "day", Type: "Date"},
+		{Name: "pipelines_count", Type: "UInt32"},
+		{Name: "success_rate", Type: "Float64"},
+		{Name: "avg_duration_minutes", Type: "Nullable(Float64)"},
+		{Name: "p90_duration_minutes", Type: "Nullable(Float64)"},
+		{Name: "avg_queue_minutes", Type: "Nullable(Float64)"},
+		{Name: "computed_at", Type: "DateTime('UTC')"},
+		{Name: "org_id", Type: "String"},
+	},
+	"deploy_metrics_daily": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "day", Type: "Date"},
+		{Name: "deployments_count", Type: "UInt32"},
+		{Name: "failed_deployments_count", Type: "UInt32"},
+		{Name: "deploy_time_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "lead_time_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "computed_at", Type: "DateTime('UTC')"},
+		{Name: "org_id", Type: "String"},
+	},
 	"repos": {
 		{Name: "id", Type: "UUID"},
 		{Name: "repo", Type: "String"},
@@ -414,7 +454,9 @@ var EngineFull = map[string]string{
 	"backfill_log":                            "MergeTree ORDER BY (org_id, job_id, chunk_index) SETTINGS index_granularity = 8192",
 	"capacity_forecasts":                      "ReplacingMergeTree(computed_at) ORDER BY (org_id, forecast_id) SETTINGS index_granularity = 8192",
 	"ci_pipeline_runs":                        "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id) SETTINGS index_granularity = 8192",
+	"cicd_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"compounding_risk_daily":                  "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day, computed_at) SETTINGS index_granularity = 8192",
+	"deploy_metrics_daily":                    "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"deployments":                             "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id) SETTINGS index_granularity = 8192",
 	"estimate_coverage_metrics_daily":         "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, '')) SETTINGS index_granularity = 8192",
 	"git_pull_request_reviews":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id) SETTINGS index_granularity = 8192",
@@ -433,6 +475,7 @@ var EngineFull = map[string]string{
 	// work_item_team_attributions keys on ifNull(team_id, ''), not team_id:
 	// two attributions differing only in team are DISTINCT rows in
 	// production, and a fixture that dropped the term would collapse them.
+	"team_metrics_daily":                   "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
 	"team_project_ownership":               "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"teams":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",

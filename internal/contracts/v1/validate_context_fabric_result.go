@@ -474,6 +474,9 @@ func (c ContextFabricClaimedFact) Validate() error {
 	if err := c.Value.Validate(); err != nil {
 		return fmt.Errorf("value: %w", err)
 	}
+	if err := validateClaimedFactRows(c.Rows); err != nil {
+		return fmt.Errorf("rows: %w", err)
+	}
 	return nil
 }
 

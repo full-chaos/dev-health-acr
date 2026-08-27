@@ -216,6 +216,18 @@ const (
 	// comment (CHAOS-3784 round-3 R3-1): order-contradicted exclusion, same
 	// class as evidence_ref_id above.
 	ContextFabricClaimedFactValueMaxLength = 4000
+	// ContextFabricClaimedFactMaxRows and ContextFabricClaimedFactRowMaxFields
+	// bound a claimed/projected fact's OPTIONAL renderable table
+	// (CHAOS-4347, ContextFabricClaimedFactRow) -- see
+	// contracts/jsonschema/v1/context_fabric_common.v1.schema.json's
+	// ClaimedFact.rows/ClaimedFactRow $defs, which carry these same
+	// numbers as maxItems/maxProperties. This is NOT in
+	// ContextFabricModelFacingBounds below: no synthesis prompt states
+	// these numbers yet, because nothing populates Rows from the model
+	// today -- it is a producer-facing capability (devhealthfacts fact
+	// providers), not a synthesis output field.
+	ContextFabricClaimedFactMaxRows      = 64
+	ContextFabricClaimedFactRowMaxFields = 32
 
 	// Synthesis: top-level synthesis draft / result collections the model
 	// itself populates.

@@ -722,6 +722,14 @@
             },
             "value": {
               "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ScalarValue"
+            },
+            "rows": {
+              "description": "CHAOS-4347, additive: a renderable table for a fact whose evidence is genuinely a set of rows (e.g. a project's per-team metrics rollup) rather than one scalar. Optional; a claim carries `field`/`value` as its primary scalar either way.",
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactRow"
+              }
             }
           },
           "required": [
@@ -1949,6 +1957,24 @@
             "prior_result_id",
             "receipt_id",
             "disposition"
+          ]
+        },
+        "ProjectedFactRow": {
+          "description": "CHAOS-4347: one row of a projected fact's OPTIONAL renderable table. A row's own fields are plain scalars -- it never nests another table.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 32,
+              "additionalProperties": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ScalarValue"
+              }
+            }
+          },
+          "required": [
+            "fields"
           ]
         }
       }
@@ -4604,6 +4630,14 @@
             },
             "value": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/ScalarValue"
+            },
+            "rows": {
+              "description": "CHAOS-4347, additive: a renderable table for a fact whose evidence is genuinely a set of rows (e.g. a project's per-team metrics rollup) rather than one scalar. Optional; a claim carries `field`/`value` as its primary scalar either way.",
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactRow"
+              }
             }
           },
           "required": [
@@ -5533,6 +5567,24 @@
             "reason",
             "effective_at",
             "source_version"
+          ]
+        },
+        "ClaimedFactRow": {
+          "description": "CHAOS-4347: one row of a claimed fact's OPTIONAL renderable table. A row's own fields are plain scalars -- it never nests another table.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 32,
+              "additionalProperties": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/ScalarValue"
+              }
+            }
+          },
+          "required": [
+            "fields"
           ]
         }
       }
