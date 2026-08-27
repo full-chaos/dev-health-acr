@@ -3207,6 +3207,68 @@ func TestTwoTurnPositiveFalseNoMatch(t *testing.T) {
 	}
 }
 
+// TestTwoTurnNoMatchFactlessCommitted (CHAOS-4344, team-lead ruling
+// 2026-08-26) pins twoTurnNoMatchFactlessCommitted against a fixture built
+// from case 23's own OBSERVED structural shape (Runs C/D/E and this ticket's
+// own tip-48973b01 probe): a committed repository subject, zero canonical
+// facts because the deployment's only wired producer is scoped to
+// work_item, 25 graph paths still present. Structural fields only -- no
+// corpus question/label text anywhere in this fixture.
+func TestTwoTurnNoMatchFactlessCommitted(t *testing.T) {
+	t.Parallel()
+
+	committedSubject := []contractsv1.ContextFabricSubjectRef{
+		{Kind: "repository", CanonicalID: "repository:cd5f742c-f17b-d8b9-5083-1ce784d3817a"},
+	}
+	factlessCoverage := contractsv1.ContextFabricCoverage{
+		Sources: []contractsv1.ContextFabricSourceObservation{
+			{Source: "canonical_fact:status", State: contractsv1.ContextFabricSourcePruned, Reason: "pruned:subject_kind_unsupported: no resolved subject has a kind this capability supports (resolved: repository; supported: work_item)"},
+			{Source: "context-fabric:graph", State: contractsv1.ContextFabricSourceAvailable},
+		},
+	}
+	onePath := []contractsv1.ContextFabricRelationshipPath{{PathID: "path_0001"}}
+
+	cases := []struct {
+		name      string
+		status    contractsv1.ContextFabricInvestigationStatus
+		committed []contractsv1.ContextFabricSubjectRef
+		coverage  contractsv1.ContextFabricCoverage
+		paths     []contractsv1.ContextFabricRelationshipPath
+		want      bool
+	}{
+		{"case 23's own observed shape: doctrine-legal", contractsv1.ContextFabricInvestigationNoMatch, committedSubject, factlessCoverage, onePath, true},
+		{"no_match but nothing committed: not this class", contractsv1.ContextFabricInvestigationNoMatch, nil, factlessCoverage, onePath, false},
+		{"committed but no graph paths: bare identity hit, not this class", contractsv1.ContextFabricInvestigationNoMatch, committedSubject, factlessCoverage, nil, false},
+		{"committed subject, no coverage sources at all: nothing proves the pruning", contractsv1.ContextFabricInvestigationNoMatch, committedSubject, contractsv1.ContextFabricCoverage{}, onePath, false},
+		{
+			"pruned for a DIFFERENT reason: not this class",
+			contractsv1.ContextFabricInvestigationNoMatch, committedSubject,
+			contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
+				{Source: "canonical_fact:status", State: contractsv1.ContextFabricSourcePruned, Reason: "pruned:other_reason: unrelated to kind coverage"},
+			}},
+			onePath, false,
+		},
+		{
+			"mixed: one source pruned-kind-unsupported, another canonical_fact source unavailable for a DIFFERENT cause: not this class",
+			contractsv1.ContextFabricInvestigationNoMatch, committedSubject,
+			contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{
+				{Source: "canonical_fact:status", State: contractsv1.ContextFabricSourcePruned, Reason: "pruned:subject_kind_unsupported: ..."},
+				{Source: "canonical_fact:other", State: contractsv1.ContextFabricSourceUnavailable, Reason: "connection refused"},
+			}},
+			onePath, false,
+		},
+		{"status is degraded, not no_match: wrong status entirely", contractsv1.ContextFabricInvestigationDegraded, committedSubject, factlessCoverage, onePath, false},
+		{"status is complete: wrong status entirely", contractsv1.ContextFabricInvestigationComplete, committedSubject, factlessCoverage, onePath, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := twoTurnNoMatchFactlessCommitted(tc.status, tc.committed, tc.coverage, tc.paths); got != tc.want {
+				t.Errorf("twoTurnNoMatchFactlessCommitted(%q, committed=%d, coverage=%+v, paths=%d) = %v, want %v", tc.status, len(tc.committed), tc.coverage, len(tc.paths), got, tc.want)
+			}
+		})
+	}
+}
+
 // twoTurnStampArmFailure is the ONE way an error-derived ArmInvalidReason is
 // set (codex xhigh review round 1, P2).
 //
@@ -3836,11 +3898,23 @@ type twoTurnCaseResult struct {
 	// recurred across 4 independent runs while false_no_match_count read 0)
 	// -- the gate failed toward fine exactly because it was scoped narrower
 	// than the outcome it exists to catch.
-	FalseNoMatch    bool   `json:"false_no_match,omitempty"`
-	CommittedCount  int    `json:"committed_count"`
-	WrongCommit     bool   `json:"wrong_commit"`
-	MutationProbe   string `json:"mutation_probe,omitempty"`
-	MutationTripped bool   `json:"mutation_tripped,omitempty"`
+	FalseNoMatch bool `json:"false_no_match,omitempty"`
+	// NoMatchFactlessCommitted (CHAOS-4344, team-lead ruling 2026-08-26) is
+	// true when twoTurnNoMatchFactlessCommitted matched this row's own
+	// no_match outcome -- a doctrine-legal "subject committed, no relevant
+	// canonical facts, engine had nothing to cite" shape (see that
+	// function's own doc comment). Set at the SAME call sites that decide
+	// FalseNoMatch, and MUTUALLY EXCLUSIVE with it on a given row: a row
+	// this predicate matches is EXCLUDED from FalseNoMatch (never both
+	// true), so false_no_match's own zero-tolerance bar measures only
+	// no-match outcomes this doctrine-legal shape does not explain. Summed
+	// separately into report.NoMatchFactlessCommittedCount -- observational
+	// only, never a gate condition.
+	NoMatchFactlessCommitted bool   `json:"no_match_factless_committed,omitempty"`
+	CommittedCount           int    `json:"committed_count"`
+	WrongCommit              bool   `json:"wrong_commit"`
+	MutationProbe            string `json:"mutation_probe,omitempty"`
+	MutationTripped          bool   `json:"mutation_tripped,omitempty"`
 	// ArmInvalidReason is a closed-vocabulary classification only (never
 	// raw err.Error() text -- codex round-1 finding #9: an investigator
 	// error can carry upstream detail this outcome-only artifact must not
@@ -4526,7 +4600,7 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "35"
+const reportSchemaVersion = "36"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5222,6 +5296,28 @@ type twoTurnReport struct {
 	// positive-arm outcome -- one of the ruling's ZERO-tolerance pass
 	// conditions, alongside WrongCommitCount, regardless of member or arm.
 	FalseNoMatchCount int `json:"false_no_match_count"`
+	// NoMatchFactlessCommittedCount (CHAOS-4344, team-lead ruling
+	// 2026-08-26) sums twoTurnCaseResult.NoMatchFactlessCommitted across
+	// the positive AND inferred_tier arms, the same population
+	// FalseNoMatchCount draws from -- OBSERVATIONAL ONLY, never a gate
+	// condition (no zero-tolerance bar; a nonzero count is not itself a
+	// finding). Recurred 3 consecutive runs (C/D/E) on the same corpus
+	// case, index 23, both its expected_kind and window members: the
+	// engine correctly commits an identity-proven repository subject every
+	// time, but the deployment's only wired canonical-fact producer is
+	// scoped to work_item, so synthesis receives zero canonical facts
+	// (real graph paths still present) and is measurably inconsistent
+	// about choosing degraded (cite the paths) versus no_match on that
+	// exact input shape -- 3/5 and 2/5 respectively for byte-identical
+	// input in one observed run. Partitioned out of FalseNoMatchCount
+	// because chaos4098_synthesis_status.go's own doctrine already treats
+	// no_match as legal with a committed-but-factless subject; this is
+	// model-level inconsistency on an ambiguous judgment call, not an
+	// engine routing defect the way SynthesisStatusOverrideUncommittedCount
+	// is. Producer coverage (whether MORE canonical-fact capabilities
+	// should support non-work_item kinds) is a separate product question,
+	// tracked on its own ticket, not gated here.
+	NoMatchFactlessCommittedCount int `json:"no_match_factless_committed_count"`
 	// SynthesisStatusOverrideUncommittedCount (CHAOS-4103, team-lead ruling
 	// 2026-08-22) sums twoTurnCaseResult rows whose
 	// SynthesisStatusOverrideReason is
@@ -7092,7 +7188,17 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	// arm -- see FalseNoMatch's own doc comment (twoTurnCaseResult) for why
 	// a receipt-confirmed no_match here is at least as strong a finding as
 	// the inferred-tier arm's own version of this check.
-	res.FalseNoMatch = twoTurnPositiveFalseNoMatch(tc.ExpectID, turn2.Status)
+	//
+	// CHAOS-4344: a row twoTurnNoMatchFactlessCommitted matches is EXCLUDED
+	// from FalseNoMatch and counted under NoMatchFactlessCommitted instead
+	// -- see that function's own doc comment for the doctrine-legal shape
+	// this partitions out.
+	if tc.ExpectID != "" && turn2.Status == contractsv1.ContextFabricInvestigationNoMatch &&
+		twoTurnNoMatchFactlessCommitted(turn2.Status, turn2.SubjectResolution.Committed, turn2.Coverage, turn2.Paths) {
+		res.NoMatchFactlessCommitted = true
+	} else {
+		res.FalseNoMatch = twoTurnPositiveFalseNoMatch(tc.ExpectID, turn2.Status)
+	}
 	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
 	// Turn2WindowExpandAccepted (CHAOS-4314): true only when THIS turn 2
@@ -7191,6 +7297,56 @@ func TestCHAOS4314_TwoTurnWindowExpandAccepted_RejectsStaleSupersededDisposition
 // and still failed to convert it.
 func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabricInvestigationStatus) bool {
 	return expectID != "" && status == contractsv1.ContextFabricInvestigationNoMatch
+}
+
+// twoTurnNoMatchFactlessCommitted (CHAOS-4344) reports whether a literal
+// no_match result reflects a doctrine-legal "subject committed, nothing to
+// answer with" shape rather than a genuine no-match-direction correctness
+// defect. chaos4098_synthesis_status.go's own doc comment states the
+// distinction this function tests for: no_match is legal WITH a committed
+// subject when the engine has no canonical fact to cite about it --
+// statusSentence renders separate prose for exactly that case. This
+// function partitions that ONE doctrine-legal shape out of false_no_match's
+// zero-tolerance bar; it changes no engine behavior and no synthesis
+// prompt -- see report.NoMatchFactlessCommittedCount's own doc comment for
+// why this is a harness reporting change only (team-lead ruling,
+// 2026-08-26).
+//
+// True only when ALL of:
+//   - status is the literal no_match terminal;
+//   - at least one subject was committed (SubjectResolution.Committed is
+//     non-empty) -- a genuine "nothing resolved at all" no_match is NOT
+//     this class;
+//   - the result still carries graph paths (len(paths) > 0) -- the
+//     committed subject was genuinely reachable in the graph, not merely a
+//     bare identity hit with nothing else known about it, so the synthesis
+//     step had real context to work with and still chose no_match;
+//   - EVERY coverage source this result actually queried for canonical
+//     facts (Source prefixed "canonical_fact:") is Pruned with a
+//     subject_kind_unsupported reason -- never a MIX with some other
+//     source that is merely unavailable/truncated/conflicted for an
+//     unrelated cause, which would mean something besides kind coverage
+//     is why nothing was cited, a real signal this predicate must not
+//     absorb. A row with zero canonical_fact:* sources at all is not this
+//     class either (nothing to prove they were pruned for THIS reason).
+func twoTurnNoMatchFactlessCommitted(status contractsv1.ContextFabricInvestigationStatus, committed []contractsv1.ContextFabricSubjectRef, coverage contractsv1.ContextFabricCoverage, paths []contractsv1.ContextFabricRelationshipPath) bool {
+	if status != contractsv1.ContextFabricInvestigationNoMatch {
+		return false
+	}
+	if len(committed) == 0 || len(paths) == 0 {
+		return false
+	}
+	sawCanonicalFactSource := false
+	for _, source := range coverage.Sources {
+		if !strings.HasPrefix(source.Source, "canonical_fact:") {
+			continue
+		}
+		sawCanonicalFactSource = true
+		if source.State != contractsv1.ContextFabricSourcePruned || !strings.HasPrefix(source.Reason, contextfabric.FactPruneReasonSubjectKindUnsupported) {
+			return false
+		}
+	}
+	return sawCanonicalFactSource
 }
 
 // setTwoTurnReceipt attaches receipt to the request field matching member.
@@ -7639,8 +7795,28 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	// opposite direction. Checked on BOTH calls (team-lead ruling): a
 	// baseline that falsely no-matches is just as much a measurement
 	// problem as a hinted call that does.
-	if tc.ExpectID != "" && (result.Status == contractsv1.ContextFabricInvestigationNoMatch || (!isWindow && baseline.Status == contractsv1.ContextFabricInvestigationNoMatch)) {
-		res.FalseNoMatch = true
+	//
+	// CHAOS-4344: EITHER leg's own no_match is first checked against
+	// twoTurnNoMatchFactlessCommitted (the doctrine-legal "committed
+	// subject, no relevant canonical facts" shape -- that function's own
+	// doc comment). FalseNoMatch is set unless EVERY no_match leg that
+	// actually fired is that shape -- a leg failing for any OTHER reason
+	// must never be silently absorbed just because the OTHER leg happens
+	// to be doctrine-legal. Only when every firing leg is factless-shaped
+	// does this row count under NoMatchFactlessCommitted instead.
+	hintedNoMatch := result.Status == contractsv1.ContextFabricInvestigationNoMatch
+	baselineNoMatch := !isWindow && baseline.Status == contractsv1.ContextFabricInvestigationNoMatch
+	if tc.ExpectID != "" && (hintedNoMatch || baselineNoMatch) {
+		hintedFactless := hintedNoMatch && twoTurnNoMatchFactlessCommitted(result.Status, result.SubjectResolution.Committed, result.Coverage, result.Paths)
+		baselineFactless := baselineNoMatch && twoTurnNoMatchFactlessCommitted(baseline.Status, baseline.SubjectResolution.Committed, baseline.Coverage, baseline.Paths)
+		switch {
+		case hintedNoMatch && !hintedFactless:
+			res.FalseNoMatch = true
+		case baselineNoMatch && !baselineFactless:
+			res.FalseNoMatch = true
+		default:
+			res.NoMatchFactlessCommitted = true
+		}
 	}
 
 	var hintedDecisions []graphrank.ResolutionTraceEvent
@@ -9288,6 +9464,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if positive.FalseNoMatch {
 			report.FalseNoMatchCount++
 		}
+		// NoMatchFactlessCommittedCount (CHAOS-4344): the positive arm's own
+		// contribution -- see twoTurnCaseResult.NoMatchFactlessCommitted's
+		// own doc comment.
+		if positive.NoMatchFactlessCommitted {
+			report.NoMatchFactlessCommittedCount++
+		}
 		if turn1Facts.Regime == twoTurnRegimeAWindowGated && twoTurnStatusAnswered(positive.Turn2Status) {
 			report.RegimeATurn2AnsweredCount++
 		}
@@ -9312,6 +9494,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		}
 		if inferred.FalseNoMatch {
 			report.FalseNoMatchCount++
+		}
+		// NoMatchFactlessCommittedCount (CHAOS-4344): the inferred_tier
+		// arm's own contribution -- see
+		// twoTurnCaseResult.NoMatchFactlessCommitted's own doc comment.
+		if inferred.NoMatchFactlessCommitted {
+			report.NoMatchFactlessCommittedCount++
 		}
 		if inferred.WrongCommit {
 			report.WrongCommitCount++
