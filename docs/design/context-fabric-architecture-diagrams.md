@@ -1,9 +1,10 @@
 # Context Fabric architecture diagrams (CHAOS-4133)
 
-Five mermaid diagrams covering the question-answering pipeline, the
+Six mermaid diagrams covering the question-answering pipeline, the
 candidate-pool mechanism that hid CHAOS-4348, the live subject/graph data
-model, the fact data model, and the two-turn trial harness's measurement
-fields. Built against live code (`codegraph_explore`, file:line cited
+model, the fact data model, the two-turn trial harness's measurement
+fields, and the N-turn confirmation-carry class (CHAOS-4360). Built
+against live code (`codegraph_explore`, file:line cited
 throughout) and the live kiac trial graph (`kubectl exec ... redis-cli
 GRAPH.QUERY`, counts only, org `70d529e0-3c06-4597-8480-794fd02328b6`,
 graph key `acr-cf-fa7030e2106de7411bfbf8ebce74c620-e2`).
@@ -13,7 +14,9 @@ would have been caught immediately by a diagram that drew the candidate-pool
 vs. offer-only-pool split. Before this page, `acr/docs` had four mermaid
 blocks total and none of them drew that split.
 
-**Legend (node classes, used across all five diagrams):**
+**Legend (node classes, used across the flowchart/state diagrams; the §6
+sequence diagram uses plain notes instead, per mermaid's own sequence
+syntax):**
 - `defect` / `gap` (amber): a known, currently open gap or in-flight fix.
 - `fixed` / `terminal` (green): a shipped, ratified behavior.
 - `refuse` (red): a broken or refusing branch.
@@ -507,6 +510,64 @@ prior doc claimed it existed.
 
 ---
 
+## 6 — N-turn confirmation-carry class (CHAOS-4360)
+
+The two-turn harness (§5) never sends a third request — every arm it
+defines is a fixed two-call shape. CHAOS-4355's live walkthrough (13:40
+08-27) found a defect that shape structurally cannot see: turn 2 can apply
+a window receipt and still come back non-decisive, because the SAME call
+that confirms window changes the census pool and supersedes the
+turn-1-offered candidate receipt — so a third turn, redeeming a FRESH
+candidate offer, is required. Nothing carries the confirmed window across
+that third call server-side (this ticket's own acr half), so it arrives
+inferred and the redemption cannot land. `chaos4360_nturn_confirmation_test.go`
+is the harness that walks this — `TestChaos4360NTurnConfirmationCarry`
+(live, kiac) and `TestChaos4360NTurnCarryDetectsCurrentDefect` (fixture,
+red-first).
+
+```mermaid
+sequenceDiagram
+  participant C as Harness (runNTurnCase)
+  participant E as acr Engine
+
+  C->>E: turn 1: question, no receipts
+  E-->>C: clarification_required<br/>StructureNeeds{window, subject_candidate}
+
+  C->>E: turn 2: PriorWindowReceipts + PriorCandidateReceipts<br/>(both from turn 1's offer)
+  Note over E: window applies this call;<br/>the SAME call changes the census pool,<br/>superseding the turn-1 candidate receipt
+  E-->>C: window: applied<br/>subject_candidate: vetoed_stale (superseded)<br/>StructureNeeds{subject_candidate: FRESH offer}
+
+  C->>E: turn 3: PriorCandidateReceipts (fresh offer only)<br/>window NEVER re-sent (already applied)
+  Note over E: nothing carries the confirmed window<br/>across this call server-side (CHAOS-4360 gap) --<br/>it arrives INFERRED
+  E-->>C: window_canonicalization_outcome=gated_class_default<br/>SubjectResolution empty -- candidate redemption fails<br/>never decisive
+```
+
+**Carry-provenance measurement.** `ContextFabricConfirmedStructureEntry.Provenance`
+already carries a closed pre-CHAOS-4360 vocabulary of exactly three values
+(`inferred_default`, `question_stated`, `clarification_confirmed` —
+`nTurnKnownPreCarryProvenance`). The harness reads it generically
+(`nTurnIsCarriedProvenance`): any value outside that set is, by
+construction, a new carry tier lane-4360-acr mints — the class runs green
+on `origin/main` today (no such value can appear yet) and starts measuring
+the fix the moment it ships, with no harness-side code change and no
+coordination on an exact new spelling.
+
+**RED baseline (2026-08-27, kiac, cases 57/60 — the project-candidate
+class this ticket seeds from; indices only, no question text).** Both
+safety invariants held (`wrong_commit_count=0`,
+`window_unsafe_commit_count=0`); neither case reached the acceptance bar
+(decisive AND `rows_count>0`): case 57 stalled non-decisive after 2 turns
+(`offer_miss=true` — window and the candidate receipt both disposed
+`applied`, but the resolution stayed subjectless/`ambiguous`, and turn 2's
+own response offered no fresh candidate to redeem next); case 60 reached a
+decisive `degraded` terminal after 2 turns but with a **retracted** commit
+(`commit_affirmation retraction final_committed=0`) and `rows_count=0`.
+`carry_hit_count=0` on both, as expected pre-fix. Full artifact:
+`.remember/trial-results/gen-trial-chaos4360_nturn-20260827T210312Z-83385.json`
+(schema v40).
+
+---
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`
@@ -521,7 +582,9 @@ prior doc claimed it existed.
   `internal/contextfabric/devhealthsource/clickhouse.go`,
   `internal/runtime/hosted/chaos3742_two_turn_confirmation_test.go`,
   `internal/runtime/hosted/chaos4234_regime_a_harness_test.go`,
-  `cmd/acr-trial-merge-two-turn/main.go`.
+  `internal/runtime/hosted/chaos4360_nturn_confirmation_test.go`,
+  `internal/runtime/hosted/chaos4360_nturn_confirmation_redfirst_test.go`,
+  `cmd/acr-trial-merge-two-turn/main.go`, `scripts/trial/run-n-turn.sh`.
 - Live kiac trial graph: `kubectl -n acr-trial-data exec pod/trial-falkordb-...
   -- redis-cli GRAPH.QUERY acr-cf-fa7030e2106de7411bfbf8ebce74c620-e2 "..."`,
   2026-08-26, counts only, org `70d529e0-3c06-4597-8480-794fd02328b6`.
