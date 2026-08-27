@@ -1765,6 +1765,13 @@ func recordStructureReceiptTelemetry(ctx context.Context, telemetry EngineTeleme
 		{contractsv1.ContextFabricStructureNeedExpectedKind, request.PriorKindReceipts},
 		{contractsv1.ContextFabricStructureNeedSubjectAnchor, request.PriorAnchorReceipts},
 		{contractsv1.ContextFabricStructureNeedSubjectHandle, request.PriorHandleReceipts},
+		// CHAOS-4355 (codex xhigh round-1 finding): CHAOS-4012 added
+		// subject_candidate as a 4th receipt-bearing member
+		// (request.PriorCandidateReceipts, canonicalizeStructure's own
+		// members slice above) but this bearing slice was never widened to
+		// match -- a redeemed candidate receipt emitted no
+		// cf_structure_receipt decision-basis signal at all.
+		{contractsv1.ContextFabricStructureNeedSubjectCandidate, request.PriorCandidateReceipts},
 	}
 	outcome := StructureReceiptApplied
 	if canon.Veto != structureVetoNone {
@@ -1846,6 +1853,14 @@ func recordStructureNeedsTelemetry(ctx context.Context, telemetry EngineTelemetr
 	}
 	for _, opt := range needs.HandleOptions {
 		addCount(contractsv1.ContextFabricStructureNeedSubjectHandle, opt.OfferSource)
+	}
+	// CHAOS-4355 (codex xhigh round-1 finding): CandidateOptions (CHAOS-4012)
+	// fires independently of KindOptions (its own doc comment on
+	// ContextFabricStructureNeeds) but was omitted from this offer-count
+	// loop, so a candidate-offer StructureNeeds emitted a Missing disclosure
+	// with no matching cf_structure_offer_count signal.
+	for _, opt := range needs.CandidateOptions {
+		addCount(contractsv1.ContextFabricStructureNeedSubjectCandidate, opt.OfferSource)
 	}
 	// CHAOS-4118: ContextFabricWindowOption carries no OfferSource field --
 	// a window offer is always derived from the closed relative-window
