@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -208,7 +209,7 @@ func TestResolveCarriedWindow_MissesWhenPriorWindowIsItselfInferred(t *testing.T
 	request := validInvestigationRequest()
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_inferred", ReceiptID: "receipt_abc12345"}}
 
-	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, request.PriorSubjectReceipts, ResolvedGraphBinding{Epoch: 0})
 	if got.Outcome != WindowCarryMissNoConfirmedWindow || got.Window != nil {
 		t.Fatalf("resolveCarriedWindow() = %#v, want miss_no_confirmed_window and no window", got)
 	}
@@ -246,7 +247,7 @@ func TestResolveCarriedWindow_WalksChainToNearestConfirmation(t *testing.T) {
 	request := validInvestigationRequest()
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_b", ReceiptID: "receipt_xyz"}}
 
-	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, request.PriorSubjectReceipts, ResolvedGraphBinding{Epoch: 0})
 	if got.Outcome != WindowCarryHit {
 		t.Fatalf("resolveCarriedWindow().Outcome = %q, want hit", got.Outcome)
 	}
@@ -283,7 +284,7 @@ func TestResolveCarriedWindow_FailsClosedOnStaleGraphEpoch(t *testing.T) {
 	request := validInvestigationRequest()
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_stale", ReceiptID: "receipt_abc"}}
 
-	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, ResolvedGraphBinding{Epoch: 7})
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, request.PriorSubjectReceipts, ResolvedGraphBinding{Epoch: 7})
 	if got.Outcome != WindowCarryMissStaleGraphEpoch || got.Window != nil {
 		t.Fatalf("resolveCarriedWindow() = %#v, want miss_stale_graph_epoch and no window", got)
 	}
@@ -300,7 +301,7 @@ func TestResolveCarriedWindow_MissesOnUnloadableResult(t *testing.T) {
 	request := validInvestigationRequest()
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_missing", ReceiptID: "receipt_abc"}}
 
-	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, request.PriorSubjectReceipts, ResolvedGraphBinding{Epoch: 0})
 	if got.Outcome != WindowCarryMissUnloadable || got.Window != nil {
 		t.Fatalf("resolveCarriedWindow() = %#v, want miss_unloadable and no window", got)
 	}
@@ -314,7 +315,7 @@ func TestResolveCarriedWindow_MissesWhenNoPriorReferenced(t *testing.T) {
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
 	engine := buildCarryTestEngine(t, store)
 
-	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), validInvestigationRequest(), ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), validInvestigationRequest(), nil, ResolvedGraphBinding{Epoch: 0})
 	if got.Outcome != WindowCarryMissNoReference || got.Window != nil {
 		t.Fatalf("resolveCarriedWindow() = %#v, want miss_no_reference and no window", got)
 	}
@@ -337,5 +338,110 @@ func TestComposeCarriedWindowEntry_NilOnEveryMissOutcome(t *testing.T) {
 		if got := composeCarriedWindowEntry(windowCarryResult{Outcome: outcome}); got != nil {
 			t.Fatalf("composeCarriedWindowEntry(%q) = %#v, want nil", outcome, got)
 		}
+	}
+}
+
+// TestResolveCarriedWindow_IgnoresUnvalidatedSubjectReceipts is codex R1 P1
+// (fixed): a PriorSubjectReceipts entry whose ReceiptID matches NO candidate
+// in its referenced prior result is CHAOS-3478's own best-effort case --
+// resolvePriorSubjectHints classifies it skipped_no_match and the
+// investigation proceeds regardless, never vetoing. Before this fix, carry
+// seeded its walk from the RAW request field, so that same unmatched
+// receipt -- one that resolved NOTHING -- could still reach into the prior
+// result it merely NAMED purely to steal its window, turning an otherwise
+// inert bad receipt into a live CHAOS-4234-gate bypass. Passing an EMPTY
+// validatedSubjectReceipts (simulating "resolvePriorSubjectHints found no
+// match") while the raw request still names the same prior result must
+// produce a miss, even though that prior result's own window is a clean,
+// genuinely confirmed hit.
+func TestResolveCarriedWindow_IgnoresUnvalidatedSubjectReceipts(t *testing.T) {
+	t.Parallel()
+	prior := validInvestigationResult()
+	prior.ResultID = "result_prior_unmatched"
+	prior.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing90D, Provenance: WindowClarificationConfirmed,
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_prior_unmatched": prior}}
+	engine := buildCarryTestEngine(t, store)
+
+	request := validInvestigationRequest()
+	// The raw wire field names a real prior result, but the receipt matched
+	// nothing this call -- resolvePriorSubjectHints' own validated return
+	// would be empty for it, so the test passes nil directly rather than
+	// re-deriving that classification.
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_unmatched", ReceiptID: "receipt_matches_nothing"}}
+
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	if got.Outcome != WindowCarryMissNoReference || got.Window != nil {
+		t.Fatalf("resolveCarriedWindow() = %#v, want miss_no_reference and no window: an unvalidated PriorSubjectReceipts entry must never seed the carry walk", got)
+	}
+	if len(store.gotIDs) != 0 {
+		t.Fatalf("store.gotIDs = %#v, want no Get calls: the unvalidated receipt must not even be looked up", store.gotIDs)
+	}
+}
+
+// TestResolveCarriedWindow_PreservesOriginProvenance is codex R1 P2 (fixed):
+// a question_stated origin window must carry that SAME provenance onto the
+// carried EffectiveEvidenceWindow (verbatim copy, unaffected by this fix --
+// see carriableWindow) -- proving here that composeCarriedWindowEntry's own
+// disclosure entry now agrees, instead of hard-coding
+// clarification_confirmed regardless of the origin's real authority tier.
+func TestResolveCarriedWindow_PreservesOriginProvenance(t *testing.T) {
+	t.Parallel()
+	prior := validInvestigationResult()
+	prior.ResultID = "result_prior_stated"
+	prior.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing30D, Provenance: WindowQuestionStated,
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_prior_stated": prior}}
+	engine := buildCarryTestEngine(t, store)
+
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_stated", ReceiptID: "receipt_abc"}}
+
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, request.PriorSubjectReceipts, ResolvedGraphBinding{Epoch: 0})
+	if got.Outcome != WindowCarryHit || got.Window == nil || got.Window.Provenance != WindowQuestionStated {
+		t.Fatalf("resolveCarriedWindow() = %#v, want a hit preserving question_stated provenance on the window itself", got)
+	}
+	entry := composeCarriedWindowEntry(got)
+	if entry == nil || entry.Provenance != contractsv1.ContextFabricStructureQuestionStated {
+		t.Fatalf("composeCarriedWindowEntry() = %#v, want provenance=question_stated to match the origin, not a hard-coded clarification_confirmed", entry)
+	}
+}
+
+// TestResolveCarriedWindow_ReportsDepthExceededNotNoConfirmedWindow is codex
+// R1 P2 (fixed): when carryChainMaxVisited candidates are consumed WITHOUT
+// exhausting the frontier the walk was given, the unvisited remainder must
+// be reported as miss_depth_exceeded, never silently reclassified as
+// miss_no_confirmed_window (which claims an exhaustive search that never
+// actually happened -- AGENTS.md's own "no measurement that did not happen
+// may read as coverage" bar). carryChainMaxVisited+5 directly-referenced,
+// loadable, taint-gate-passing results with no window and no further links
+// exercises exactly the cap-mid-frontier case the fix targets.
+func TestResolveCarriedWindow_ReportsDepthExceededNotNoConfirmedWindow(t *testing.T) {
+	t.Parallel()
+	results := make(map[string]InvestigationResult, carryChainMaxVisited+5)
+	var receipts []BoundSubjectReceipt
+	for i := 0; i < carryChainMaxVisited+5; i++ {
+		id := fmt.Sprintf("result_prior_cap_%02d", i)
+		r := validInvestigationResult()
+		r.ResultID = id
+		r.EffectiveEvidenceWindow = nil
+		r.ConfirmedStructure = nil
+		results[id] = r
+		receipts = append(receipts, BoundSubjectReceipt{ResultID: id, ReceiptID: fmt.Sprintf("receipt_%02d", i)})
+	}
+	store := &staticResultStore{results: results}
+	engine := buildCarryTestEngine(t, store)
+
+	request := validInvestigationRequest()
+	request.PriorSubjectReceipts = receipts
+
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, receipts, ResolvedGraphBinding{Epoch: 0})
+	if got.Outcome != WindowCarryMissDepthExceeded || got.Window != nil {
+		t.Fatalf("resolveCarriedWindow() = %#v, want miss_depth_exceeded (the visit cap left candidates unexplored), not miss_no_confirmed_window", got)
+	}
+	if len(store.gotIDs) != carryChainMaxVisited {
+		t.Fatalf("store.gotIDs = %d Get calls, want exactly %d (the visit cap)", len(store.gotIDs), carryChainMaxVisited)
 	}
 }

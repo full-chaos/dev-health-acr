@@ -1000,7 +1000,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the mechanism and the defect this closes.
 	var windowCarry windowCarryResult
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
-		windowCarry = e.resolveCarriedWindow(ctx, principal, request, binding)
+		// codex R1 P1 (fixed): priorValidatedReceipts, never the raw
+		// request.PriorSubjectReceipts -- see carryReferencedResultIDs' own
+		// doc comment (chaos4360_carry.go) for why an unmatched
+		// PriorSubjectReceipts entry must not be able to seed the walk.
+		windowCarry = e.resolveCarriedWindow(ctx, principal, request, priorValidatedReceipts, binding)
 		e.recordWindowCarry(ctx, principal, windowCarry)
 		if windowCarry.Outcome == WindowCarryHit {
 			effectiveWindow = windowCarry.Window

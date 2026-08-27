@@ -132,7 +132,28 @@ type windowCarryResult struct {
 // deterministic field order (window first: most semantically related to a
 // window carry, so a request naming several different prior results tries
 // the most likely one first) -- first occurrence wins on a duplicate.
-func carryReferencedResultIDs(request InvestigationRequest) []string {
+//
+// validatedSubjectReceipts (codex R1 P1, fixed): the SIX fields are not
+// symmetric. PriorKindReceipts/PriorAnchorReceipts/PriorHandleReceipts/
+// PriorCandidateReceipts/PriorWindowReceipts are canonicalizeStructure's and
+// canonicalizeEvidenceWindow's own atomic-batch inputs -- an entry naming a
+// prior result that does not check out VETOES THE WHOLE REQUEST before this
+// function is ever reached (structureVetoConfirmationUnresolved /
+// windowVetoConfirmationUnresolved, engine.go's own early returns), so
+// anything still in those raw request fields by the time carry runs already
+// passed validation. PriorSubjectReceipts is the ONE field CHAOS-3478
+// deliberately made best-effort: a receipt naming no matching candidate in
+// its referenced prior result classifies skipped_no_match and the
+// investigation proceeds anyway -- resolvePriorSubjectHints' own doc comment
+// calls this out by design. Seeding the walk from the RAW field would let
+// exactly that kind of receipt -- one that matched NOTHING -- reach into an
+// unrelated prior result purely to steal its window, turning an otherwise
+// inert bad receipt into a live gate-bypass. validatedSubjectReceipts is
+// resolvePriorSubjectHints' own `validated` return (a strict subset of
+// request.PriorSubjectReceipts: only entries that matched a real candidate
+// in a real, taint-gate-passing prior result), so this function is called
+// with that instead of the raw field.
+func carryReferencedResultIDs(request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt) []string {
 	var ids []string
 	seen := make(map[string]struct{}, 8)
 	add := func(receipts []BoundSubjectReceipt) {
@@ -150,7 +171,7 @@ func carryReferencedResultIDs(request InvestigationRequest) []string {
 	}
 	add(request.PriorWindowReceipts)
 	add(request.PriorCandidateReceipts)
-	add(request.PriorSubjectReceipts)
+	add(validatedSubjectReceipts)
 	add(request.PriorKindReceipts)
 	add(request.PriorAnchorReceipts)
 	add(request.PriorHandleReceipts)
@@ -164,16 +185,16 @@ func carryReferencedResultIDs(request InvestigationRequest) []string {
 // site) -- fails closed on every ambiguity (no reference, an unloadable
 // candidate, a stale graph epoch, or a chain exhausted before a hit): "no
 // carry" is always a safe, disclosed answer, never a guess.
-func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding) windowCarryResult {
+func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding) windowCarryResult {
 	if e.results == nil {
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
-	frontier := carryReferencedResultIDs(request)
+	frontier := carryReferencedResultIDs(request, validatedSubjectReceipts)
 	if len(frontier) == 0 {
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
-	var sawUnloadable, sawStaleEpoch bool
+	var sawUnloadable, sawStaleEpoch, capExceeded bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
 		for _, resultID := range frontier {
@@ -184,6 +205,13 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 				continue
 			}
 			if len(visited) >= carryChainMaxVisited {
+				// codex R1 P2 (fixed): the unvisited remainder of THIS
+				// frontier -- and everything past it -- is being dropped
+				// right here. Record that explicitly rather than letting an
+				// empty `next` read as "walked everything, found nothing":
+				// the two are different decision bases and AGENTS.md's own
+				// diagnosability bar requires telling them apart.
+				capExceeded = true
 				break
 			}
 			visited[resultID] = struct{}{}
@@ -222,7 +250,7 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 		}
 		frontier = next
 	}
-	if len(frontier) > 0 {
+	if len(frontier) > 0 || capExceeded {
 		return windowCarryResult{Outcome: WindowCarryMissDepthExceeded}
 	}
 	switch {
@@ -290,9 +318,25 @@ func composeCarriedWindowEntry(carry windowCarryResult) *contractsv1.ContextFabr
 		AppliedValue:  appliedValue,
 		Source:        contractsv1.ContextFabricStructureSourceCarried,
 		PriorResultID: carry.SourceResultID,
-		Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
+		Provenance:    carriedStructureProvenance(carry.Window.Provenance),
 		Disposition:   contractsv1.ContextFabricStructureDispositionApplied,
 	}
+}
+
+// carriedStructureProvenance maps the origin window's OWN
+// ContextFabricWindowProvenance onto the ContextFabricStructureProvenance
+// this echo entry carries (codex R1 P2, fixed): carriableWindow already
+// guarantees the input is one of exactly two values (question_stated or
+// clarification_confirmed -- an inferred one can never reach here), but a
+// hard-coded clarification_confirmed silently overwrote a question_stated
+// origin, giving EffectiveEvidenceWindow.Provenance (copied verbatim,
+// unaffected by this function) and this entry's own Provenance two
+// different authority histories for the identical carried window.
+func carriedStructureProvenance(windowProvenance contractsv1.ContextFabricWindowProvenance) contractsv1.ContextFabricStructureProvenance {
+	if windowProvenance == contractsv1.ContextFabricWindowQuestionStated {
+		return contractsv1.ContextFabricStructureQuestionStated
+	}
+	return contractsv1.ContextFabricStructureClarificationConfirmed
 }
 
 // appendCarriedStructureEntry appends entry to entries when non-nil,

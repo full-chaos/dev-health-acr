@@ -313,6 +313,23 @@ type ContextFabricStructureNeeds struct {
 // (pginvestigation/store.go): a carry reads already-stored confirmed
 // structure, it never re-accepts a receipt, so it must never contend for or
 // consume a single-use supersession claim.
+//
+// v1-additive, not a new major contract (codex R1 P1, reproduced and
+// refuted against this exact repo's own precedent): appending a member to a
+// closed string enum at the end is precisely what
+// ContextFabricStructureNeedSubjectCandidate did (CHAOS-4012, commit
+// f00dd436) -- a sibling closed enum in this same family, shipped under the
+// UNCHANGED SchemaVersion (no ContextFabricInvestigationResultSchemaV2
+// bump). AGENTS.md's "enum changes require a new major contract" targets
+// changing an EXISTING member's meaning or removing one -- the class this
+// repo's own ContextFabricInvestigationResultSchemaV2 fork (CHAOS-4042,
+// context_fabric_structure_types_v2.go) exists for, where an existing
+// field's semantics actually shift. A brand-new value nothing could
+// previously produce is additive by the same reasoning ContextFabricPriorSubjectReceiptDisposition
+// and every other closed-vocabulary echo in this file already relies on: a
+// decoder for a plain Go/JSON string type never rejects an unrecognized
+// value, and this package's OWN Valid* gates (which DO reject one) are
+// updated in the same change that adds it, exactly like this one.
 type ContextFabricStructureSource string
 
 const (
