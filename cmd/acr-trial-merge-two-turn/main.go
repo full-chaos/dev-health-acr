@@ -301,11 +301,21 @@ import (
 // not silently merged under the first shard's label. See the producer's
 // own ReportSchemaVersion doc comment.
 //
+// "36" (CHAOS-4347): twoTurnCaseResult gains canonical_facts_count and
+// factless_committed_count (fact-coverage measurement).
+//
+// "37" (CHAOS-4348): purely additive -- twoTurnCaseResult gains
+// ExpectedSubjectRetrievalSource ("exact_name"|"kind_scoped"|"both"|"ordinary"|
+// "absent"), sourced from the producer's new "exact_name_search"/
+// "kind_hint_search" trace stages (graphrank/chaos4348_reachability.go).
+// No merge arithmetic changes -- the field rides through per-case, exactly
+// like ExpectedSubjectInPool/ExpectedSubjectRank already do.
+//
 // KEEP IN SYNC WITH internal/runtime/hosted/chaos3742_two_turn_confirmation_test.go's
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "36"
+const expectedSchemaVersion = "37"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -594,9 +604,11 @@ type twoTurnCaseResult struct {
 	ExpectedSubjectInPool             bool `json:"expected_subject_in_pool"`
 	ExpectedSubjectRank               int  `json:"expected_subject_rank"`
 	ExpectedSubjectAtOfferBoundary    bool `json:"expected_subject_at_offer_boundary"`
-	Turn2WindowReceiptAttached        bool `json:"turn2_window_receipt_attached"`
-	AnchorOptionsCount                int  `json:"anchor_options_count"`
-	HandleOptionsCount                int  `json:"handle_options_count"`
+	// CHAOS-4348 (schema v37): mirrored byte-for-byte, same convention.
+	ExpectedSubjectRetrievalSource string `json:"expected_subject_retrieval_source"`
+	Turn2WindowReceiptAttached     bool   `json:"turn2_window_receipt_attached"`
+	AnchorOptionsCount             int    `json:"anchor_options_count"`
+	HandleOptionsCount             int    `json:"handle_options_count"`
 	// CHAOS-4119 (schema v27): HandleOptionsCount's own pre-graph-source
 	// twin, mirroring twoTurnCaseResult's identically-named field
 	// byte-for-byte.

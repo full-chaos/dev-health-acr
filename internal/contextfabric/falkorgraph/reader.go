@@ -123,6 +123,13 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		SearchKind: func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 			return a.kindScopedFulltextSearchNodes(ctx, key, principal.OrgID, term, kind, limit, temporal)
 		},
+		// CHAOS-4348: every repository/project/team node in scope, once per
+		// resolution -- see ResolveDeps.ExactNameCandidates' own doc comment
+		// (graphrank/resolve.go) for why this is a separate, unranked
+		// retrieval path rather than another SearchKind call.
+		ExactNameCandidates: func(ctx context.Context) ([]graphrank.CandidateNode, bool, error) {
+			return a.chaos4348ExactNameCandidates(ctx, key, principal.OrgID, temporal)
+		},
 		// CHAOS-4154: whether THIS deployment has a live vector mechanism at
 		// all -- see ResolveDeps.VectorMechanismConfigured's own doc comment
 		// for why the confirmed-kind truncation-scoping mechanism needs

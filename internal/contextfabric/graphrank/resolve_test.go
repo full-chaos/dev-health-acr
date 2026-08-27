@@ -101,6 +101,19 @@ type fakeGraphBackend struct {
 	enableConfirmedKindVectorCensus bool
 	confirmedKindVectorCensusResult ConfirmedKindVectorCensusOutcome
 	confirmedKindVectorCensusCalls  []confirmedKindVectorCensusCall
+
+	// CHAOS-4348 ExactNameCandidates fixture. enableExactNameCandidates
+	// defaults to false, so every pre-existing test in this file -- which
+	// never sets it -- gets ResolveDeps.ExactNameCandidates == nil, exactly
+	// the pre-ticket wiring, mirroring enableSearchKind's own convention
+	// above. exactNameCandidates is returned verbatim on every call (this
+	// hook is ONCE-per-resolution, not per-term -- see its own doc comment,
+	// resolve.go); exactNameCandidatesCalls counts calls.
+	enableExactNameCandidates    bool
+	exactNameCandidates          []CandidateNode
+	exactNameCandidatesTruncated bool
+	exactNameCandidatesErr       error
+	exactNameCandidatesCalls     int
 }
 
 // confirmedKindVectorCensusCall records one
@@ -184,6 +197,15 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 		deps.ConfirmedKindVectorCensus = func(ctx context.Context, kind contextfabric.SubjectKind, terms []string) ConfirmedKindVectorCensusOutcome {
 			f.confirmedKindVectorCensusCalls = append(f.confirmedKindVectorCensusCalls, confirmedKindVectorCensusCall{kind: kind, terms: terms})
 			return f.confirmedKindVectorCensusResult
+		}
+	}
+	if f.enableExactNameCandidates {
+		deps.ExactNameCandidates = func(ctx context.Context) ([]CandidateNode, bool, error) {
+			f.exactNameCandidatesCalls++
+			if f.exactNameCandidatesErr != nil {
+				return nil, false, f.exactNameCandidatesErr
+			}
+			return f.exactNameCandidates, f.exactNameCandidatesTruncated, nil
 		}
 	}
 	return deps
