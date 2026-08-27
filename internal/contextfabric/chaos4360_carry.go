@@ -109,6 +109,19 @@ const (
 	// the same fail-closed treatment as any other bounded walk in this
 	// codebase (never silently keep going past the bound).
 	WindowCarryMissDepthExceeded WindowCarryOutcome = "miss_depth_exceeded"
+	// WindowCarryMissConflictingWindows (codex R3 P1, fixed): two or more of
+	// the SAME depth's directly-reachable candidates carried genuinely
+	// DIFFERENT confirmed windows. The six receipt fields are validated
+	// independently of one another (canonicalizeStructure/canonicalizeEvidenceWindow/
+	// resolvePriorSubjectHints each check their OWN member against its OWN
+	// named prior result), so a single request can legitimately redeem, say,
+	// a candidate receipt from one prior result and a kind receipt from a
+	// DIFFERENT one -- nothing requires them to share an origin. Picking
+	// whichever candidate happened to load first (the pre-fix behavior)
+	// could silently answer under an arbitrary one of two real but
+	// disagreeing time windows. A genuine conflict fails closed, exactly
+	// like every other carry ambiguity.
+	WindowCarryMissConflictingWindows WindowCarryOutcome = "miss_conflicting_windows"
 )
 
 // windowCarryResult is resolveCarriedWindow's own return shape.
@@ -197,6 +210,15 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 	var sawUnloadable, sawStaleEpoch, capExceeded bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
+		// hits (codex R3 P1, fixed) collects EVERY carriable window found at
+		// THIS depth, not just the first -- the six receipt fields validate
+		// independently of one another, so a single request can legitimately
+		// name two DIFFERENT prior results at the same depth (e.g. a
+		// candidate receipt from one, a kind receipt from another). Deciding
+		// on the first one seen silently picked an arbitrary window when two
+		// real, disagreeing ones were both reachable. The whole depth is
+		// scanned before any decision is made.
+		var hits []windowCarryResult
 		for _, resultID := range frontier {
 			if ctx.Err() != nil {
 				return windowCarryResult{Outcome: WindowCarryMissUnloadable}
@@ -235,7 +257,8 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 				if origin := carriedWindowOrigin(prior); origin != "" {
 					sourceResultID = origin
 				}
-				return windowCarryResult{Window: window, SourceResultID: sourceResultID, Outcome: WindowCarryHit, ChainDepth: depth}
+				hits = append(hits, windowCarryResult{Window: window, SourceResultID: sourceResultID, Outcome: WindowCarryHit, ChainDepth: depth})
+				continue
 			}
 			for _, entry := range prior.ConfirmedStructure {
 				id := strings.TrimSpace(entry.PriorResultID)
@@ -247,6 +270,14 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 				}
 				next = append(next, id)
 			}
+		}
+		if len(hits) > 0 {
+			for _, h := range hits[1:] {
+				if !windowsEquivalent(hits[0].Window, h.Window) {
+					return windowCarryResult{Outcome: WindowCarryMissConflictingWindows, ChainDepth: depth}
+				}
+			}
+			return hits[0]
 		}
 		frontier = next
 	}
@@ -273,6 +304,33 @@ func carriableWindow(window *contractsv1.ContextFabricEffectiveEvidenceWindow) *
 	}
 	copied := *window
 	return &copied
+}
+
+// windowsEquivalent reports whether a and b describe the SAME evidence
+// window (codex R3 P1) -- the test two same-depth carry candidates must
+// pass to avoid a reported conflict. RelativeID is the ordinary
+// discriminator (every window this package mints from the closed relative
+// registry carries one); a window with none (an absolute-bounds-only
+// origin) falls back to comparing Start/End directly. Deliberately ignores
+// WindowClass/Confidence/Provenance -- those describe HOW a window was
+// derived, not WHICH evidence it names, and two independently confirmed
+// windows naming the identical range are not a conflict merely because one
+// was question_stated and the other clarification_confirmed.
+func windowsEquivalent(a, b *contractsv1.ContextFabricEffectiveEvidenceWindow) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.RelativeID != "" || b.RelativeID != "" {
+		return a.RelativeID == b.RelativeID
+	}
+	return timePtrEqual(a.Start, b.Start) && timePtrEqual(a.End, b.End)
+}
+
+func timePtrEqual(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 // carriedWindowOrigin returns the ORIGIN result id a prior result's own

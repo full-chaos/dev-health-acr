@@ -445,3 +445,79 @@ func TestResolveCarriedWindow_ReportsDepthExceededNotNoConfirmedWindow(t *testin
 		t.Fatalf("store.gotIDs = %d Get calls, want exactly %d (the visit cap)", len(store.gotIDs), carryChainMaxVisited)
 	}
 }
+
+// TestResolveCarriedWindow_ConflictingWindowsAtSameDepthMiss is codex R3 P1
+// (fixed): the six prior-receipt fields validate independently of one
+// another (canonicalizeStructure checks a kind/anchor/handle/candidate
+// receipt against ITS OWN named prior result; canonicalizeEvidenceWindow
+// checks a window receipt against its own; resolvePriorSubjectHints checks
+// PriorSubjectReceipts against its own) -- nothing requires them to share an
+// origin result. A request redeeming a candidate receipt from one prior
+// result and a kind receipt from a DIFFERENT one, where the two prior
+// results carry genuinely DIFFERENT confirmed windows, must not silently
+// pick whichever one happened to load first: that could answer under an
+// arbitrary one of two real but disagreeing time windows. Both are
+// referenced directly (depth 0), so this must miss outright, never guess.
+func TestResolveCarriedWindow_ConflictingWindowsAtSameDepthMiss(t *testing.T) {
+	t.Parallel()
+	resultA := validInvestigationResult()
+	resultA.ResultID = "result_conflict_a"
+	resultA.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing30D, Provenance: WindowClarificationConfirmed,
+	}
+	resultB := validInvestigationResult()
+	resultB.ResultID = "result_conflict_b"
+	resultB.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing90D, Provenance: WindowClarificationConfirmed,
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{
+		"result_conflict_a": resultA, "result_conflict_b": resultB,
+	}}
+	engine := buildCarryTestEngine(t, store)
+
+	request := validInvestigationRequest()
+	// Two INDEPENDENTLY valid receipts naming two DIFFERENT prior results --
+	// candidate receipt from A, kind receipt from B. Neither field vetoes
+	// the other; both are legitimately reachable at depth 0.
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_conflict_a", ReceiptID: "candr_a"}}
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_conflict_b", ReceiptID: "kindr_b"}}
+
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	if got.Outcome != WindowCarryMissConflictingWindows || got.Window != nil {
+		t.Fatalf("resolveCarriedWindow() = %#v, want miss_conflicting_windows and no window: two disagreeing confirmed windows at the same depth must never resolve to a silent guess", got)
+	}
+	if entry := composeCarriedWindowEntry(got); entry != nil {
+		t.Fatalf("composeCarriedWindowEntry(%#v) = %#v, want nil on a conflict", got, entry)
+	}
+}
+
+// TestResolveCarriedWindow_EquivalentWindowsAtSameDepthHit is the negative
+// case for the fix above: two same-depth candidates carrying the IDENTICAL
+// window (same RelativeID) must still resolve cleanly -- equivalence, not
+// mere plurality, is what triggers a conflict.
+func TestResolveCarriedWindow_EquivalentWindowsAtSameDepthHit(t *testing.T) {
+	t.Parallel()
+	resultA := validInvestigationResult()
+	resultA.ResultID = "result_agree_a"
+	resultA.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing90D, Provenance: WindowClarificationConfirmed,
+	}
+	resultB := validInvestigationResult()
+	resultB.ResultID = "result_agree_b"
+	resultB.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing90D, Provenance: WindowQuestionStated,
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{
+		"result_agree_a": resultA, "result_agree_b": resultB,
+	}}
+	engine := buildCarryTestEngine(t, store)
+
+	request := validInvestigationRequest()
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_agree_a", ReceiptID: "candr_a"}}
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_agree_b", ReceiptID: "kindr_b"}}
+
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	if got.Outcome != WindowCarryHit || got.Window == nil || got.Window.RelativeID != RelativeWindowTrailing90D {
+		t.Fatalf("resolveCarriedWindow() = %#v, want a clean hit: two candidates agreeing on the SAME window must not be reported as a conflict", got)
+	}
+}

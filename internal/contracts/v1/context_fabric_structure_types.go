@@ -314,8 +314,9 @@ type ContextFabricStructureNeeds struct {
 // structure, it never re-accepts a receipt, so it must never contend for or
 // consume a single-use supersession claim.
 //
-// v1-additive, not a new major contract (codex R1 P1, reproduced and
-// refuted against this exact repo's own precedent): appending a member to a
+// v1-additive, not a new major contract (raised and refuted TWICE now --
+// codex R1 P1 and R3 P1, same claim, same evidence both times, reproduced
+// against this exact repo's own precedent): appending a member to a
 // closed string enum at the end is precisely what
 // ContextFabricStructureNeedSubjectCandidate did (CHAOS-4012, commit
 // f00dd436) -- a sibling closed enum in this same family, shipped under the
