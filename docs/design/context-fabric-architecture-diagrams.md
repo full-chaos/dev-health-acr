@@ -1,9 +1,10 @@
 # Context Fabric architecture diagrams (CHAOS-4133)
 
-Five mermaid diagrams covering the question-answering pipeline, the
+Six mermaid diagrams covering the question-answering pipeline, the
 candidate-pool mechanism that hid CHAOS-4348, the live subject/graph data
-model, the fact data model, and the two-turn trial harness's measurement
-fields. Built against live code (`codegraph_explore`, file:line cited
+model, the fact data model, the two-turn trial harness's measurement
+fields, and the N-turn confirmation-carry class (CHAOS-4360). Built
+against live code (`codegraph_explore`, file:line cited
 throughout) and the live kiac trial graph (`kubectl exec ... redis-cli
 GRAPH.QUERY`, counts only, org `70d529e0-3c06-4597-8480-794fd02328b6`,
 graph key `acr-cf-fa7030e2106de7411bfbf8ebce74c620-e2`).
@@ -13,7 +14,9 @@ would have been caught immediately by a diagram that drew the candidate-pool
 vs. offer-only-pool split. Before this page, `acr/docs` had four mermaid
 blocks total and none of them drew that split.
 
-**Legend (node classes, used across all five diagrams):**
+**Legend (node classes, used across the flowchart/state diagrams; the §6
+sequence diagram uses plain notes instead, per mermaid's own sequence
+syntax):**
 - `defect` / `gap` (amber): a known, currently open gap or in-flight fix.
 - `fixed` / `terminal` (green): a shipped, ratified behavior.
 - `refuse` (red): a broken or refusing branch.
@@ -542,6 +545,139 @@ prior doc claimed it existed.
 
 ---
 
+## 6 — N-turn confirmation-carry class (CHAOS-4360)
+
+The two-turn harness (§5) never sends a third request — every arm it
+defines is a fixed two-call shape. CHAOS-4355's live walkthrough (13:40
+08-27) found a defect that shape structurally cannot see: the live
+Workbench batches window+candidate receipts into one turn-2 call, which
+can leave candidate unresolved (superseded by the SAME call's own
+window-driven pool change) and forces a third turn redeeming a FRESH
+candidate offer. This harness reproduces the underlying CHAOS-4360 gap
+directly, WITHOUT depending on that specific supersession path: it
+deliberately never batches window and candidate in the same call at all
+(codex review round 2, P1 — see `runNTurnCase`'s own doc comment) — window
+alone on one turn, candidate alone on a LATER turn — which guarantees any
+case needing both members takes a genuine third turn and isolates the
+carry gap precisely: nothing carries the confirmed window across that
+turn-2→turn-3 boundary server-side (this ticket's own acr half), so it
+arrives inferred again and the candidate redemption cannot land.
+`chaos4360_nturn_confirmation_test.go` is the harness that walks this —
+`TestChaos4360NTurnConfirmationCarry` (live, kiac) and
+`TestChaos4360NTurnCarryDetectsCurrentDefect` (fixture, red-first).
+
+```mermaid
+sequenceDiagram
+  participant C as Harness (runNTurnCase)
+  participant E as acr Engine
+
+  C->>E: turn 1: question, no receipts
+  E-->>C: clarification_required<br/>StructureNeeds{window, subject_candidate}
+
+  C->>E: turn 2: PriorWindowReceipts ONLY<br/>(window and candidate are NEVER batched -- runNTurnCase's own rule)
+  Note over E: window_canonicalization_outcome=receipt_confirmed
+  E-->>C: window: applied<br/>StructureNeeds{subject_candidate: still offered, untouched this turn}
+
+  C->>E: turn 3: PriorCandidateReceipts ONLY<br/>window NEVER re-sent (already applied)
+  Note over E: nothing carries the confirmed window<br/>across this call server-side (CHAOS-4360 gap) --<br/>it arrives INFERRED again
+  E-->>C: window_canonicalization_outcome=gated_class_default (reverted!)<br/>window re-appears in missing; candidate receipt applies<br/>but resolution stays subjectless -- never decisive
+```
+
+**Carry measurement.** `ContextFabricConfirmedStructureEntry.Source`
+already carries a closed pre-CHAOS-4360 vocabulary of exactly three values
+(`receipt`, `explicit`, `explicit_unattributed` — `nTurnKnownPreCarrySource`).
+Per lane-4360-acr (PR #306, team communication 2026-08-27): a carried
+window keeps `Provenance=clarification_confirmed` unchanged and instead
+reports the carry on `Source`, a new closed-vocab value `"carried"`. The
+harness reads `Source` generically (`nTurnIsCarriedSource`, the primary
+signal) and `Provenance` generically as a secondary, forward-compatible
+one (`nTurnIsCarriedProvenance`): any value outside the known set on either
+field is, by construction, a new carry tier lane-4360-acr mints — the
+class runs green on `origin/main` today (neither field can carry an
+out-of-vocabulary value yet) and starts measuring the fix the moment it
+ships, with no harness-side code change and no coordination on an exact
+new spelling.
+
+**RED baseline (2026-08-27, kiac, cases 57/60 — the project-candidate
+class this ticket seeds from; indices only, no question text; predates
+lane-4360-acr's own carry fix, PR #306, still in review at the time of this
+run).** Both safety invariants held (`wrong_commit_count=0`,
+`window_unsafe_commit_count=0`); neither case reached the acceptance bar
+(decisive AND `rows_count>0`); `carry_hit_count=0` on both, as expected
+pre-fix. `resolved_active_epoch=2` (`graph_lifecycle_enabled=true`) —
+confirmed live-read via this run's own epoch resolver (codex review round 1
+P1 fix; the launcher enables graph-lifecycle mode for every run, so the
+report now proves what epoch was actually read instead of silently
+defaulting to 0/false).
+
+Codex review round 2 (P1, confirmed) found the first re-run's own
+window+candidate BATCHING (both receipts in one call, mirroring the
+two-turn harness's `runTwoTurnPositiveArm`) let case 57 stall inside turn 2
+alone — the harness never actually attempted the genuine turn-3
+candidate-only exchange this class exists to walk.
+`nTurnReportExercisedCarryTransition` now fails the run loudly if that
+never happens; fixing it required splitting window and candidate across
+SEPARATE turns (never batched) — see `runNTurnCase`'s own doc comment.
+Re-run with the split algorithm, `candidate_only_turn_attempted_count=1`:
+
+- **case 57** (needs both window and candidate): turn 1 discloses both
+  offers; turn 2 sends window ONLY — applies
+  (`window_canonicalization_outcome=receipt_confirmed`); turn 3 sends the
+  candidate receipt ONLY (window never resent, per the never-resend
+  contract) — **this is the literal CHAOS-4360 defect, reproduced exactly**:
+  `window_canonicalization_outcome` reverts to `gated_class_default`
+  (inferred again) and `window` re-appears in `missing`, even though it was
+  genuinely confirmed one turn earlier. The candidate receipt itself
+  disposes `applied`, but the overall resolution stays subjectless/
+  `clarification_required` — nothing carries the confirmed window across
+  the turn-2→turn-3 boundary server-side, so the candidate redemption can
+  never stick.
+- **case 60** (needs window only, no candidate ever offered): turn 2 sends
+  window only, converges to a decisive `degraded` terminal with a
+  **retracted** commit (`commit_affirmation retraction final_committed=0`)
+  and `rows_count=0` — unaffected by the split (it never needed candidate).
+
+Full artifact:
+`.remember/trial-results/gen-trial-chaos4360_nturn-20260827T220625Z-23437.json`
+(schema v40).
+
+**GREEN measurement (2026-08-27, kiac, same cases 57/60) — lane-4360-acr's
+carry fix, PR #306, SHA `02c44254`, merged to `origin/main`.** Run from a
+disposable scratch worktree at `origin/main` (carries #306) with this
+harness's own test files copied in — never committed to either branch;
+this PR's own branch is untouched and still built against the pre-fix
+base. The carry mechanism is **definitively fixed and directly observed**:
+case 57 turn 3's `window_canonicalization_outcome` is now `carried`
+(was `gated_class_default` pre-fix), `confirmed_structure[].source`
+reports `"carried"` for the window member, and — the clearest signal —
+**`window` no longer appears in turn 3's own `missing` list at all**
+(RED: `[window, expected_kind, subject_candidate, subject_anchor,
+subject_handle]`; GREEN: `[expected_kind, subject_candidate,
+subject_anchor, subject_handle]`, `window` gone). `carry_hit_count=1`
+(was 0). Engine telemetry confirms the mechanism directly: `context
+fabric window carry outcome=hit chain_depth=0` on turn 3, vs
+`outcome=miss_no_reference` on turn 1 (no earlier confirmation to carry
+yet).
+
+Case 57 is still NOT decisive end-to-end (`clarification_required`,
+`subject_candidate` still lists `applied` yet reappears in `missing` — a
+subjectless/`ambiguous` terminal): the candidate's own commit still needs
+something past what redeeming its receipt alone provides, plausibly the
+`prior_subject_receipts` reauth path lane-4360-acr's own scope note names
+as separate and unmodified in PR #306 ("expected_kind/subject_anchor
+carry is NOT built... `prior_subject_receipts` re-verification already
+resolves the candidate-commit gap on its own once the window stops being
+gated"). This harness's turn 3 sends `PriorCandidateReceipts` only, never
+`PriorSubjectReceipts` — flagged to lane-4360-acr/team-lead as a possible
+follow-up rather than assumed to be this ticket's own residual gap. Case
+60 unaffected (never needed candidate; same decisive `degraded` result
+both before and after). Both safety invariants held in the GREEN run too
+(`wrong_commit_count=0`, `window_unsafe_commit_count=0`). Artifact (not
+committed, reproduced from this doc's own numbers):
+`.remember/trial-results/gen-trial-chaos4360_nturn-20260827T221125Z-17687.json`.
+
+---
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`
@@ -556,7 +692,9 @@ prior doc claimed it existed.
   `internal/contextfabric/devhealthsource/clickhouse.go`,
   `internal/runtime/hosted/chaos3742_two_turn_confirmation_test.go`,
   `internal/runtime/hosted/chaos4234_regime_a_harness_test.go`,
-  `cmd/acr-trial-merge-two-turn/main.go`.
+  `internal/runtime/hosted/chaos4360_nturn_confirmation_test.go`,
+  `internal/runtime/hosted/chaos4360_nturn_confirmation_redfirst_test.go`,
+  `cmd/acr-trial-merge-two-turn/main.go`, `scripts/trial/run-n-turn.sh`.
 - Live kiac trial graph: `kubectl -n acr-trial-data exec pod/trial-falkordb-...
   -- redis-cli GRAPH.QUERY acr-cf-fa7030e2106de7411bfbf8ebce74c620-e2 "..."`,
   2026-08-26, counts only, org `70d529e0-3c06-4597-8480-794fd02328b6`.
