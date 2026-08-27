@@ -99,6 +99,19 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// is Ask Dev's actual path to this offer today.
 		"structured.structure_needs.window_expand_options[].label":           "not (yet) rendered by this plain-text markdown view; Ask Dev (full-chaos/ask-dev) is the human-facing surface for window_expand offers, reading Structured directly",
 		"structured.structure_needs.window_expand_options[].candidate_label": "not (yet) rendered by this plain-text markdown view; Ask Dev (full-chaos/ask-dev) is the human-facing surface for window_expand offers, reading Structured directly",
+		// CHAOS-4347: Rows is a brand-new renderable-table capability
+		// (ContextFabricClaimedFact.Rows / ContextFabricProjectedFact.Rows)
+		// with no producer wiring it into synthesis yet -- MetricsProvider
+		// is the first and only producer, and nothing routes a
+		// Rows-bearing fact into a driver's cited claims today. This
+		// plain-text markdown view does not (yet) render a table for it;
+		// the claim's own Field/Value pair (already covered by
+		// key_facts[].value.string, above) still renders and carries the
+		// untrusted marking for the SAME claim. Same shape as
+		// window_expand_options above: declared now so a future rendering
+		// cannot ship unmarked, carved out today because nothing produces
+		// this shape into a rendered answer yet.
+		"structured.key_facts[].rows[].fields{}.string": "not (yet) rendered by this plain-text markdown view; no producer routes a Rows-bearing fact into a driver's cited claims yet, and the claim's own field/value pair already renders with the untrusted marking",
 	}
 	for _, declared := range planted {
 		sentinel := sentinels[declared]
@@ -293,6 +306,10 @@ func TestRenderedAnswerCarriesWarningsAndEveryOmittedCount(t *testing.T) {
 func baseProjection() contractsv1.ContextFabricAnswerProjection {
 	subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_x", Label: "Ask Dev"}
 	value := "amber"
+	// A distinct backing string from value (never &value): see the Rows
+	// fixture's own comment below for why sharing a pointer here would
+	// silently corrupt this closure test.
+	rowTeamName := "cobalt"
 	return contractsv1.ContextFabricAnswerProjection{
 		SchemaVersion:      contractsv1.ContextFabricAnswerProjectionSchema,
 		ResultID:           "result_injection1",
@@ -329,6 +346,21 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 		KeyFacts: []contractsv1.ContextFabricProjectedFact{{
 			ClaimID: "claim_injection1", Kind: contractsv1.ContextFabricFactStatus, Subject: subject,
 			Field: "status", Value: contractsv1.ContextFabricScalarValue{String: &value},
+			// CHAOS-4347: Rows needs a non-empty entry so the reflection
+			// walk below can reach and plant its own declared path
+			// ("key_facts[].rows[].fields{}.string") -- an empty/nil Rows
+			// is exactly the "silently unresolvable" shape this closure
+			// test exists to catch (setStringsAtPath's rows[] segment
+			// returns false on a zero-length slice before ever reaching
+			// the map inside it). A FRESH string, never &value: sharing
+			// the Value field's pointer would let one path's planted
+			// sentinel silently overwrite the other's through the shared
+			// backing string, exactly the per-field-sentinel collision
+			// TestSentinelDerivationIsCollisionFree's own doc comment
+			// warns about, just via aliasing instead of derivation.
+			Rows: []contractsv1.ContextFabricClaimedFactRow{{
+				Fields: map[string]contractsv1.ContextFabricScalarValue{"team_name": {String: &rowTeamName}},
+			}},
 		}},
 		CoverageSummary: []contractsv1.ContextFabricProjectedCoverage{{
 			Source: "work_items", State: contractsv1.ContextFabricSourceUnavailable, Reason: "a reason",

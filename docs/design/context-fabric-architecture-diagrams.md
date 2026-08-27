@@ -276,6 +276,17 @@ erDiagram
 wired at `NewProviders`, `providers.go:14-35`; composed at
 `internal/runtime/hosted/open.go:597`):
 
+**Updated 2026-08-26/27 (CHAOS-4347, `lane-4347-ch`, PR #300):** the
+`metrics`/`continuous_integration`/`deployments` rows below are widened by
+REAL table joins/reads, never by proxying one kind's data as another's —
+see `metrics.go`'s package doc comment
+(`internal/contextfabric/devhealthfacts/metrics.go:1-83`) and
+`context-fabric-fact-scope.md` §11 for why this is architecturally
+distinct from a `FactReadScopeResolver` expansion (the resolver grants a
+disclosed READ permission onto a kind a capability does NOT itself
+support; this widening gives the capability a genuine second/third
+source for the SAME kind).
+
 | FactKind | ClickHouse table | Supported subject kinds |
 | --- | --- | --- |
 | identity | `repos`, `work_items` | repository, work_item |
@@ -287,16 +298,36 @@ wired at `NewProviders`, `providers.go:14-35`; composed at
 | required_children | `work_item_dependencies` | work_item |
 | pull_requests | `git_pull_requests` | pull_request |
 | reviews | `git_pull_request_reviews` | pull_request_review |
-| continuous_integration | `ci_pipeline_runs` | ci_pipeline_run |
-| deployments | `deployments` | deployment |
+| continuous_integration | `ci_pipeline_runs` (per-run status); **+`cicd_metrics_daily`** (repository aggregate, CHAOS-4347) | ci_pipeline_run, **repository** |
+| deployments | `deployments` (per-deployment status/environment); **+`deploy_metrics_daily`** (repository aggregate, CHAOS-4347) | deployment, **repository** |
 | incidents | `operational_incidents` | incident |
-| metrics | `repo_metrics_daily` | repository |
+| metrics | `repo_metrics_daily`; **+`team_metrics_daily`** (team, direct); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup, CHAOS-4347) | repository, **team, project** |
 | health | `compounding_risk_daily` | repository, team |
 | workload | `capacity_forecasts` | team |
 | investment | `investment_metrics_daily` | team |
 | readiness | `estimate_coverage_metrics_daily` | team |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | `backfill_log` | organization |
+
+**`FactMetrics`'s project rollup never averages a rate across
+differently-sized teams.** Additive counts (commits, after-hours/weekend
+commit counts) are SUMMED across the project's current owning teams
+(`team_project_ownership`, `valid_to IS NULL` / as-of the requested
+instant); each team's own rate (e.g. `after_hours_commit_ratio`) rides
+unmodified in a new per-team `team_breakdown` field instead, disclosed via
+a `rollup_basis` field on the fact. This is what
+`ContextFabricClaimedFact.Rows` / `ContextFabricProjectedFact.Rows`
+(new, additive, `context_fabric_types.go` / `context_fabric_answer_projection.go`,
+CHAOS-4347) exist for: a renderable table on a fact/claim whose evidence
+is genuinely a set of rows, not a lossy single scalar. Deliberately does
+NOT touch `ContextFabricScalarValue` itself (also the projection-write
+contract's property-value type, which documents "nested objects and
+arrays remain disallowed" as a deliberate invariant for THAT surface).
+Not yet wired into synthesis/prompts — `MetricsProvider`'s project rollup
+is the only producer of a `Rows`-bearing fact today, and nothing routes
+one into a driver's cited claims yet (the sidecar's own answer-rendering
+closure test carves this path out for exactly that reason,
+`internal/sidecar/render_answer_untrusted_test.go`).
 
 **Gated off: `evidence` (1 kind, not 8).** `doc.go:37-46` and
 `providers_test.go:48-52` name exactly one deliberately unregistered
@@ -312,18 +343,29 @@ likely conflates with the 8 unread CH tables below — report to team-lead;
 not corrected in this PR (docs-only, different file, out of this page's
 scope, flagging per this lane's discrepancy-reporting mandate).
 
-**8 CH tables with no reading FactProvider today** (repo-wide `rg`, zero
-hits in any `internal/contextfabric/**/*.go` read path): `team_metrics_daily`,
-`dora_metrics_daily`, `cicd_metrics_daily`, `deploy_metrics_daily`,
-`work_item_metrics_daily`, `issue_type_metrics_daily`, `user_metrics_daily`,
-`ai_impact_metrics_daily`. (One unrelated hit: `cicd_metrics_daily` appears
+**Update (CHAOS-4347, PR #300): 3 of the original 8 CH tables now have a
+reading `FactProvider`** — `team_metrics_daily`, `cicd_metrics_daily`,
+`deploy_metrics_daily` (see the widened table above). Their production
+column types were verified LIVE off the kiac trial ClickHouse
+(`system.columns`, `kubectl exec` into the `trial-clickhouse` pod, ns
+`acr-trial-data`) and added to `devhealthschema`'s shared production
+declaration, not inferred from the ops migration files alone.
+
+**5 CH tables still have no reading `FactProvider`** (unchanged, repo-wide
+`rg`, zero hits in any `internal/contextfabric/**/*.go` read path):
+`dora_metrics_daily`, `work_item_metrics_daily`, `issue_type_metrics_daily`,
+`user_metrics_daily`, `ai_impact_metrics_daily`. **Correction to this
+page's own earlier text:** `dora_metrics_daily` is keyed by
+**`repo_id`**, not `team_id` (`repo_id UUID, day Date, metric_name String,
+value Float64` — verified against both the ops migration
+(`023b_dora_metrics.sql`) and the live kiac schema) — an earlier framing
+of this table as team-scoped was wrong; it was out of scope for the
+metrics team/project widening for exactly that reason, not merely
+unstarted. (One unrelated hit remains: `cicd_metrics_daily` also appears
 in a trial-harness table-name classification map,
 `internal/runtime/hosted/frontier_trial_live_test.go:1459`, explicitly
-commented as not a read or a schema declaration.) This is CHAOS-4347's
-target: as of 2026-08-26 17:52 PDT (`.remember/now.md:75`,
-`.remember/context-fabric/cf-rulings.md:319`) it is a ruled, in-progress
-lane (`lane-4347-ch`), not yet landed — code on `main` as of `569f0f39`
-still has zero readers for these 8 tables.
+commented as not a read or a schema declaration — that reference is
+unrelated to the new FactProvider read path above.)
 
 **Category → FactKind is a 1:1 map today, and that is CHAOS-4347's other
 half.** `contextFabricDriverCategoryFactKind`
@@ -339,6 +381,22 @@ subject is unreachable (diagram 3 shows it usually is reachable). Ruled
 fix, lane's choice; approved in principle, implementation "Phase 2 held
 pending trial-case validation" as of 17:42 PDT — **not yet in
 `context_fabric_types.go` on `main`**.
+
+**Correction (flagged by lane-4347-ch, not fixed in this PR — out of this
+lane's scope): the paragraph above is now stale.** `lane-4335`'s CHAOS-4347
+PR #298 (`internal/contextfabric/chaos4347_status_category_composition.go`)
+merged as `1e9815c7`, ahead of this page's own cited baseline `569f0f39`.
+It does not touch the 1:1 `contextFabricDriverCategoryFactKind` map itself,
+but adds a composition step (`composeStatusCategoryRequirements`) between
+that map and the providers: a resolved-subject-kind repository/team
+`status` requirement now expands into repository→{metrics, health,
+identity} / team→{health, workload, readiness} before planning, so
+"status routes only to FactStatus" is no longer true post-resolution for
+those two kinds (work_item stays 1:1). The `project_status`
+new-FactKind-vs-widen-`StatusProvider` decision above is unaffected and
+still open — that is a separate, still-unbuilt slice
+(`lane-4347-project`, CHAOS-4348 reachability work is currently ahead of
+it in that lane's queue).
 
 `FactCapability.SupportedSubjectKinds` (`fact_registry.go:50-58`) is set
 once, in each provider's own `Capability()` method — code-declared, never
