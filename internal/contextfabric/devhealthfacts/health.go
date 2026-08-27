@@ -284,9 +284,9 @@ ORDER BY project_key, scope, scope_id`)
 		if len(riskRows) == 0 {
 			continue
 		}
-		var capped bool
-		riskRows, capped = capFactValueRows(riskRows)
-		breakdownTruncated = breakdownTruncated || capped
+		var omitted int
+		riskRows, omitted = capFactValueRows(riskRows)
+		breakdownTruncated = breakdownTruncated || omitted > 0
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactHealth, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{

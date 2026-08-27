@@ -276,9 +276,9 @@ ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`)
 		// a table over 64 rows outright (model.go), which would turn a
 		// large project's fact into a hard read error instead of an
 		// honestly truncated answer.
-		var capped bool
-		teamRows, capped = capFactValueRows(teamRows)
-		breakdownTruncated = breakdownTruncated || capped
+		var omitted int
+		teamRows, omitted = capFactValueRows(teamRows)
+		breakdownTruncated = breakdownTruncated || omitted > 0
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactInvestment, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{

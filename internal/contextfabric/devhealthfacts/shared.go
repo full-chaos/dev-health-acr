@@ -322,28 +322,6 @@ func dedupeTeamRow(seenTeams map[string]bool, teamID string) bool {
 	return false
 }
 
-// maxProjectRollupBreakdownRows mirrors contextfabric's own maxFactValueRows
-// (model.go, 64) -- unexported there, so this package keeps its own copy
-// rather than reach across the package boundary for an internal constant.
-// Every project-rollup provider in this package (investment.go, workload.go,
-// readiness.go, health.go) MUST cap its own team_breakdown/risk_breakdown
-// Rows table at this bound before returning it (codex round-1 P1, CHAOS-4363):
-// FactValue.Validate rejects a table over 64 rows outright, which would turn
-// a large project's fact into a hard read error instead of an honestly
-// truncated answer.
-const maxProjectRollupBreakdownRows = 64
-
-// capFactValueRows truncates rows to maxProjectRollupBreakdownRows,
-// preserving the caller's own (already-deterministic, scan-order-derived)
-// ordering, and reports whether truncation happened so the caller can fold
-// it into FactProviderResult.Truncated.
-func capFactValueRows(rows []contextfabric.FactValueRow) ([]contextfabric.FactValueRow, bool) {
-	if len(rows) <= maxProjectRollupBreakdownRows {
-		return rows, false
-	}
-	return rows[:maxProjectRollupBreakdownRows], true
-}
-
 func newCapability(kind contextfabric.FactKind, name string, subjectKinds []contextfabric.SubjectKind) contextfabric.FactCapability {
 	return contextfabric.FactCapability{
 		Kind:                  kind,
@@ -364,6 +342,13 @@ func newCapability(kind contextfabric.FactKind, name string, subjectKinds []cont
 // instead of returning a bounded, disclosed result. Truncation keeps the
 // FIRST rows in the caller's own deterministic order (never re-sorted),
 // consistent with this package's "never re-derive order from a map" rule.
+//
+// CHAOS-4363 independently added an identically-named helper backed by its
+// own unexported maxProjectRollupBreakdownRows=64 constant, for the same
+// reason (its four project-rollup providers' team_breakdown/risk_breakdown
+// Rows tables). Hand-merged on rebase onto this one, the earlier-exported
+// version: investment.go/workload.go/readiness.go/health.go now call this
+// (capped, omitted int) form rather than duplicate the constant.
 func capFactValueRows(rows []contextfabric.FactValueRow) (capped []contextfabric.FactValueRow, omitted int) {
 	if len(rows) <= contextfabric.MaxFactValueRows {
 		return rows, 0

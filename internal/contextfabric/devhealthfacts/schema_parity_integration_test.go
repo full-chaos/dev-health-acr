@@ -46,6 +46,9 @@ var factSchemaTables = []string{
 	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies",
 	"repo_metrics_daily", "compounding_risk_daily", "estimate_coverage_metrics_daily",
 	"capacity_forecasts", "investment_metrics_daily", "recommendations_daily", "backfill_log",
+	// CHAOS-4364: FlowProvider/LandscapeProvider's tables (flow.go,
+	// landscape.go).
+	"work_item_metrics_daily", "ic_landscape_rolling_30d",
 }
 
 // TestLiveSchemaParityAcrossEveryFactProvider is the round-2 F1 guard: no
@@ -129,6 +132,13 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		orgID, "CHAOS", at, at)
 	seed("backfill_log", `INSERT INTO backfill_log (org_id, provider, status, created_at) VALUES (?, ?, ?, ?)`,
 		orgID, "github", "ok", at)
+	// CHAOS-4364: FlowProvider/LandscapeProvider's own tables. uint32/
+	// uint64 typed to match the declared columns, same discipline as the
+	// git_pull_requests.number seed above.
+	seed("work_item_metrics_daily", `INSERT INTO work_item_metrics_daily (org_id, provider, team_id, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, cycle_time_p50_hours, lead_time_p50_hours, wip_age_p50_hours, bug_completed_ratio, story_points_completed, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, "github", "CHAOS", "scope-1", day, uint32(3), uint32(2), uint32(1), 4.5, 6.0, 2.0, 0.1, 3.0, at)
+	seed("ic_landscape_rolling_30d", `INSERT INTO ic_landscape_rolling_30d (org_id, repo_id, as_of_day, identity_id, team_id, map_name, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, repoID, day, "identity-parity", "CHAOS", "backend", uint64(100), uint32(2), 5.0, uint32(3), at)
 
 	principal := storage.Principal{OrgID: orgID}
 	subjects := map[contextfabric.FactKind]contextfabric.SubjectRef{
@@ -151,6 +161,8 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		contextfabric.FactReadiness:               teamSubject("CHAOS"),
 		contextfabric.FactOperationalDeficiencies: teamSubject("CHAOS"),
 		contextfabric.FactSourceHealth:            organizationSubject(orgID),
+		contextfabric.FactFlow:                    teamSubject("CHAOS"),
+		contextfabric.FactLandscape:               teamSubject("CHAOS"),
 	}
 
 	providers := devhealthfacts.NewProviders(client)

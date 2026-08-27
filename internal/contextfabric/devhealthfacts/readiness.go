@@ -245,9 +245,9 @@ ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`)
 		if len(teamRows) == 0 {
 			continue
 		}
-		var capped bool
-		teamRows, capped = capFactValueRows(teamRows)
-		breakdownTruncated = breakdownTruncated || capped
+		var omitted int
+		teamRows, omitted = capFactValueRows(teamRows)
+		breakdownTruncated = breakdownTruncated || omitted > 0
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReadiness, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{

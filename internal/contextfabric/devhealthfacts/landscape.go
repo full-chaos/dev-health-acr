@@ -119,7 +119,7 @@ func (p *LandscapeProvider) readTeamLandscape(ctx context.Context, orgID string,
 	if len(ids) == 0 {
 		return 0, 0, nil
 	}
-	statement := withRowLimit(`SELECT toString(team_id), map_name, toString(as_of_day), count(), toInt64(sum(churn_loc_30d)), toInt64(sum(delivery_units_30d)), avg(cycle_p50_30d_hours), toInt64(max(wip_max_30d))
+	statement := withRowLimit(`SELECT toString(team_id), map_name, toString(as_of_day), toInt64(count()), toInt64(sum(churn_loc_30d)), toInt64(sum(delivery_units_30d)), avg(cycle_p50_30d_hours), toInt64(max(wip_max_30d))
 FROM (
 	SELECT team_id, map_name, as_of_day, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d,
 		max(as_of_day) OVER (PARTITION BY team_id) AS latest_day
@@ -191,7 +191,7 @@ func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID stri
 	if timeBound.active {
 		ownershipPredicate = fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
 	}
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), il.team_id, il.map_name, toString(il.as_of_day), count(), toInt64(sum(il.churn_loc_30d)), toInt64(sum(il.delivery_units_30d)), avg(il.cycle_p50_30d_hours), toInt64(max(il.wip_max_30d))
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), il.team_id, il.map_name, toString(il.as_of_day), toInt64(count()), toInt64(sum(il.churn_loc_30d)), toInt64(sum(il.delivery_units_30d)), avg(il.cycle_p50_30d_hours), toInt64(max(il.wip_max_30d))
 FROM (
 	SELECT id, provider, project_key
 	FROM (
