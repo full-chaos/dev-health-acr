@@ -65,7 +65,7 @@ func (c *twoTurnTraceCapture) rankedCutFor(kind, canonicalID string) (rank int, 
 	return rank, atOfferBoundary
 }
 
-// retrievalSourceFor (CHAOS-4348, schema v36) reports "exact_name" or
+// retrievalSourceFor (CHAOS-4348, schema v37) reports "exact_name" or
 // "kind_scoped" if an "exact_name_search"/"kind_hint_search" trace event
 // (graphrank/chaos4348_reachability.go's traceExactNameSearch/
 // traceKindHintSearch) named this exact (kind, canonical id) ANYWHERE in

@@ -2022,7 +2022,7 @@ type twoTurnTurn1Facts struct {
 	ExpectedSubjectInPool          bool
 	ExpectedSubjectRank            int
 	ExpectedSubjectAtOfferBoundary bool
-	// ExpectedSubjectRetrievalSource (CHAOS-4348, schema v36) is
+	// ExpectedSubjectRetrievalSource (CHAOS-4348, schema v37) is
 	// twoTurnTraceCapture.retrievalSourceFor's own reading: "exact_name" /
 	// "kind_scoped" / "ordinary" / "absent" -- see that method's own doc
 	// comment (chaos4234_regime_a_harness_test.go). Report bar: repository/
@@ -4318,7 +4318,7 @@ type twoTurnCaseResult struct {
 	ExpectedSubjectInPool          bool `json:"expected_subject_in_pool"`
 	ExpectedSubjectRank            int  `json:"expected_subject_rank"`
 	ExpectedSubjectAtOfferBoundary bool `json:"expected_subject_at_offer_boundary"`
-	// ExpectedSubjectRetrievalSource (CHAOS-4348, schema v36) mirrors
+	// ExpectedSubjectRetrievalSource (CHAOS-4348, schema v37) mirrors
 	// twoTurnTurn1Facts.ExpectedSubjectRetrievalSource -- see that field's
 	// own doc comment. "exact_name" / "kind_scoped" / "ordinary" / "absent".
 	ExpectedSubjectRetrievalSource string `json:"expected_subject_retrieval_source"`
@@ -4555,7 +4555,7 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // mismatched artifact at runtime, never that the two literals themselves
 // agree at build time). Bump both in the SAME change; a mismatch surfaces
 // live the moment a real producer artifact is merged, per that test.
-const reportSchemaVersion = "36"
+const reportSchemaVersion = "37"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
