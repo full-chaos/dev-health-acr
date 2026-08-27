@@ -202,6 +202,42 @@ func TestInvestmentProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T
 	}
 }
 
+// TestInvestmentProviderProjectRollupCapsBreakdownAt64Rows is codex round-1
+// P1: contextfabric.FactValue.Validate rejects a Rows table over 64 entries
+// outright, so a project with more distinct (team, area, stream) rows than
+// that must be CAPPED, with Truncated reported, never passed through
+// verbatim as a hard read error.
+func TestInvestmentProviderProjectRollupCapsBreakdownAt64Rows(t *testing.T) {
+	t.Parallel()
+	const rowsOverCap = 70
+	rows := make([][]any, rowsOverCap)
+	for i := 0; i < rowsOverCap; i++ {
+		rows[i] = investmentProjectRollupRow("linear", "proj-1", "team-"+strconv.Itoa(i), "Team", "product", "growth", 1, 1, 0, 0, 0)
+	}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: rows}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	breakdown := result.Facts[0].Fields["team_breakdown"].Rows
+	if len(breakdown) != 64 {
+		t.Fatalf("team_breakdown rows = %d, want capped at 64", len(breakdown))
+	}
+	if err := result.Facts[0].Fields["team_breakdown"].Validate(); err != nil {
+		t.Fatalf("capped team_breakdown still fails FactValue.Validate(): %v -- the 64-row cap must make this always pass", err)
+	}
+	if !result.Truncated {
+		t.Fatalf("result.Truncated = false, want true when a project's breakdown is capped")
+	}
+}
+
 const maxInvestmentRowsPerQueryForTest = 200
 
 func investmentRows(n int) [][]any {

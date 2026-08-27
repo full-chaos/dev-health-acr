@@ -24,7 +24,17 @@ import (
 // be attributed across a rebuild. There is deliberately ONE name for this
 // value -- a second, unexported alias would be the anchor/alias drift this
 // package's own comments warn about elsewhere.
-const QueryVersion = "devhealthfacts.clickhouse.v1"
+//
+// v1 -> v2 (CHAOS-4363, codex round-1 P1): QueryVersion is a CONJUNCTIVE
+// answer-reuse key dimension (ports.go's ReuseKey/AnswerReuseGate). Every
+// capability in this package shares the ONE constant, so bumping it on any
+// SQL/capability shape change -- here, FactHealth/FactWorkload/
+// FactInvestment/FactReadiness widening to answer for a project subject --
+// invalidates every reuse candidate saved under the OLD shape, not only the
+// four changed ones. That over-invalidation is the safe direction: leaving
+// it unbumped would let an answer reuse gate serve a pre-deployment answer
+// that never actually ran the new project readers, silently.
+const QueryVersion = "devhealthfacts.clickhouse.v2"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -310,6 +320,28 @@ func dedupeTeamRow(seenTeams map[string]bool, teamID string) bool {
 	}
 	seenTeams[teamID] = true
 	return false
+}
+
+// maxProjectRollupBreakdownRows mirrors contextfabric's own maxFactValueRows
+// (model.go, 64) -- unexported there, so this package keeps its own copy
+// rather than reach across the package boundary for an internal constant.
+// Every project-rollup provider in this package (investment.go, workload.go,
+// readiness.go, health.go) MUST cap its own team_breakdown/risk_breakdown
+// Rows table at this bound before returning it (codex round-1 P1, CHAOS-4363):
+// FactValue.Validate rejects a table over 64 rows outright, which would turn
+// a large project's fact into a hard read error instead of an honestly
+// truncated answer.
+const maxProjectRollupBreakdownRows = 64
+
+// capFactValueRows truncates rows to maxProjectRollupBreakdownRows,
+// preserving the caller's own (already-deterministic, scan-order-derived)
+// ordering, and reports whether truncation happened so the caller can fold
+// it into FactProviderResult.Truncated.
+func capFactValueRows(rows []contextfabric.FactValueRow) ([]contextfabric.FactValueRow, bool) {
+	if len(rows) <= maxProjectRollupBreakdownRows {
+		return rows, false
+	}
+	return rows[:maxProjectRollupBreakdownRows], true
 }
 
 func newCapability(kind contextfabric.FactKind, name string, subjectKinds []contextfabric.SubjectKind) contextfabric.FactCapability {

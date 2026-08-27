@@ -70,11 +70,11 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, scanErr := p.readProjectReadiness(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, breakdownTruncated, scanErr := p.readProjectReadiness(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project readiness", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
@@ -167,10 +167,10 @@ type readinessRollupRow struct {
 // provider) coverage row, verbatim, into one renderable team_breakdown
 // table -- see the package doc comment for why estimate/backlog counts are
 // never summed across teams here.
-func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
 	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
@@ -183,7 +183,6 @@ INNER JOIN (
 ) AS ec ON ec.team_id = tpo.team_id AND ec.rn = 1
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
 ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`)
-	rowCount := 0
 	byProject := make(map[string][]readinessRollupRow)
 	var projectOrder []string
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
@@ -209,7 +208,7 @@ ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, scanErr
+		return rowCount, false, scanErr
 	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -246,6 +245,9 @@ ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`)
 		if len(teamRows) == 0 {
 			continue
 		}
+		var capped bool
+		teamRows, capped = capFactValueRows(teamRows)
+		breakdownTruncated = breakdownTruncated || capped
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReadiness, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{
@@ -256,5 +258,5 @@ ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`)
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, nil
+	return rowCount, breakdownTruncated, nil
 }

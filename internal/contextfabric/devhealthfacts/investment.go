@@ -85,11 +85,12 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, scanErr := p.readProjectInvestment(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, omitted, breakdownTruncated, scanErr := p.readProjectInvestment(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project investment", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		omittedUnrepresentableCount += omitted
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
@@ -185,10 +186,10 @@ type investmentRollupRow struct {
 // verbatim, into one renderable team_breakdown table. See this file's
 // package-level doc comment for why counts are never summed across teams
 // here (unlike metrics.go's commit counts).
-func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount, omittedUnrepresentableCount int, breakdownTruncated bool, err error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, 0, false, nil
 	}
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
 	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), im.investment_area, im.project_stream, toString(im.day), toInt64(im.delivery_units), toInt64(im.work_items_completed), toInt64(im.prs_merged), im.churn_loc, im.cycle_p50_hours
@@ -201,7 +202,6 @@ INNER JOIN (
 ) AS im ON im.team_id = tpo.team_id AND im.rn = 1
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
 ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`)
-	rowCount := 0
 	byProject := make(map[string][]investmentRollupRow)
 	var projectOrder []string
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
@@ -218,6 +218,10 @@ ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`)
 		}
 		churnLOC, representable := representableInt64(rawChurnLOC)
 		if !representable {
+			// Round-1 P2: counted, not silently dropped -- the team-level
+			// readTeamInvestment path already does this; the project rollup
+			// must not report complete coverage while omitting a source row.
+			omittedUnrepresentableCount++
 			return nil
 		}
 		if _, seen := byProject[projectSubjectKey]; !seen {
@@ -231,7 +235,7 @@ ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, scanErr
+		return rowCount, omittedUnrepresentableCount, false, scanErr
 	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -268,6 +272,13 @@ ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`)
 		if len(teamRows) == 0 {
 			continue
 		}
+		// Round-1 P1: cap before RowsFactValue -- FactValue.Validate rejects
+		// a table over 64 rows outright (model.go), which would turn a
+		// large project's fact into a hard read error instead of an
+		// honestly truncated answer.
+		var capped bool
+		teamRows, capped = capFactValueRows(teamRows)
+		breakdownTruncated = breakdownTruncated || capped
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactInvestment, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{
@@ -284,5 +295,5 @@ ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`)
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, nil
+	return rowCount, omittedUnrepresentableCount, breakdownTruncated, nil
 }

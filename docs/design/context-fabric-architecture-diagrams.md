@@ -523,11 +523,32 @@ upstream ingestion gap, not a query defect: `compounding_risk_daily` holds
 2455 `repo`-scope rows for this org and **zero** `team`-scope rows, and
 `team_repo_ownership` holds **zero** rows across every org in this data
 plane. The query itself is proven correct by this package's own unit tests
-(synthetic fixtures exercising both UNION branches). A "completion risk"
-Rows table for a project therefore will not populate on THIS pilot data
-until Ops backfills team-scope `compounding_risk_daily` and/or
-`team_repo_ownership` -- flagged to team-lead as a follow-up, out of this
-ticket's ACR-side scope.
+(synthetic fixtures exercising both UNION branches) AND a real-ClickHouse
+integration test (`chaos4363_project_rollups_integration_test.go`) that
+seeds both a team-scope and a repo-scope row and asserts both survive in one
+read. A "completion risk" Rows table for a project therefore will not
+populate on THIS pilot data until Ops backfills team-scope
+`compounding_risk_daily` and/or `team_repo_ownership` -- flagged to
+team-lead as a follow-up, out of this ticket's ACR-side scope.
+
+**Codex round-1 findings, all fixed (CHAOS-4363):** (1) each project
+rollup's breakdown Rows table is now capped at 64 entries
+(`maxProjectRollupBreakdownRows`, shared.go) before `RowsFactValue` --
+`FactValue.Validate` rejects a table over that bound outright, which would
+otherwise turn a large project's fact into a hard read error instead of a
+truncated answer; (2) `QueryVersion` bumped `v1` -> `v2` (a conjunctive
+answer-reuse key dimension shared by every capability in this package, so
+this bump invalidates ALL prior reuse candidates, not only the four changed
+kinds -- the safe direction); (3) health's team+repo UNION ALL is now
+wrapped in an outer `SELECT ... ORDER BY ... LIMIT`, since appending LIMIT
+directly after two UNION ALL'd SELECTs binds only to the second (repo)
+branch in ClickHouse, and UNION ALL's own output order is otherwise
+unspecified; (4) `readProjectInvestment` now counts (not silently drops) a
+row omitted for `churn_loc` UInt64 overflow, folding it into
+`OmittedCount`/`Truncated` the same way the team-level read already did;
+(5) `team_repo_ownership` added to `devhealthschema`'s production column
+declaration and to a new real-ClickHouse integration test -- it had no
+production-typed test coverage at all before this fix.
 
 `FactCapability.SupportedSubjectKinds` (`fact_registry.go:50-58`) is set
 once, in each provider's own `Capability()` method — code-declared, never

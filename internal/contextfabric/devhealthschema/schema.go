@@ -391,6 +391,27 @@ var ProductionColumns = map[string][]Column{
 		{Name: "valid_to", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
 	},
+	// CHAOS-4363: read live off the kiac trial ClickHouse (system.columns,
+	// 2026-08-27) via `kubectl exec` into the trial-clickhouse pod (ns
+	// acr-trial-data), matching this package's own doc comment requirement
+	// -- not inferred from an ops migration file. health.go's project-subject
+	// rollup is the first reader of this table (repo layer, one hop past
+	// team_project_ownership).
+	"team_repo_ownership": {
+		{Name: "org_id", Type: "String"},
+		{Name: "provider", Type: "String"},
+		{Name: "team_id", Type: "String"},
+		{Name: "repo_id", Type: "Nullable(UUID)"},
+		{Name: "repo_full_name", Type: "String"},
+		{Name: "match_type", Type: "Enum8('exact' = 1, 'pattern' = 2)"},
+		{Name: "source", Type: "Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5)"},
+		{Name: "is_primary", Type: "UInt8"},
+		{Name: "specificity", Type: "UInt16"},
+		{Name: "priority", Type: "Int32"},
+		{Name: "valid_from", Type: "DateTime64(3, 'UTC')"},
+		{Name: "valid_to", Type: "Nullable(DateTime64(3, 'UTC'))"},
+		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
+	},
 	"work_items": {
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
@@ -477,6 +498,7 @@ var EngineFull = map[string]string{
 	// production, and a fixture that dropped the term would collapse them.
 	"team_metrics_daily":                   "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192",
 	"team_project_ownership":               "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192",
+	"team_repo_ownership":                  "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"teams":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",

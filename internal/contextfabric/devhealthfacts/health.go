@@ -99,11 +99,11 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, scanErr := p.readProjectHealth(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, breakdownTruncated, scanErr := p.readProjectHealth(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project health", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
@@ -186,29 +186,40 @@ type healthRollupRow struct {
 // repo layer one hop further via team_repo_ownership, both landing in one
 // renderable risk_breakdown table per project, tagged by scope. Neither
 // layer is summed or averaged into a single project-level risk score.
-func (p *HealthProvider) readProjectHealth(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *HealthProvider) readProjectHealth(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), 'team', tpo.team_id, ifNull(t.name, ''), toString(cr.severity), toUInt8(isNotNull(cr.compounding_risk)), toFloat64(ifNull(cr.compounding_risk, 0)), toString(cr.computed_at)
-FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
-INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = tpo.team_id AND cr.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
+	// Round-1 P2: the team/repo UNION ALL is wrapped in an outer SELECT
+	// before withRowLimit's LIMIT is applied. Appending LIMIT directly after
+	// two UNION ALL'd SELECTs binds it to the SECOND (repo) branch only --
+	// the team branch would be unbounded, exceeding the advertised
+	// maxFactRowsPerQuery cap -- and UNION ALL output order is otherwise
+	// unspecified, which would make risk_breakdown/evidence ordering vary
+	// between identical reads. The outer ORDER BY makes both the bound and
+	// the ordering apply to the COMBINED result.
+	statement := withRowLimit(`SELECT project_key, scope, scope_id, scope_name, severity, has_risk, risk, computed_at
+FROM (
+	SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, tpo.team_id AS scope_id, ifNull(t.name, '') AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at
+	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+	INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = tpo.team_id AND cr.rn = 1
+	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
 
-UNION ALL
+	UNION ALL
 
-SELECT concat(p.provider, ':', p.id), 'repo', tro.repo_key, tro.repo_full_name, toString(cr.severity), toUInt8(isNotNull(cr.compounding_risk)), toFloat64(ifNull(cr.compounding_risk, 0)), toString(cr.computed_at)
-FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
-INNER JOIN (
-	SELECT team_id, toString(repo_id) AS repo_key, repo_full_name
-	FROM team_repo_ownership FINAL
-	WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
-	GROUP BY team_id, repo_key, repo_full_name
-) AS tro ON tro.team_id = tpo.team_id
-INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1`)
-	rowCount := 0
+	SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, tro.repo_full_name AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at
+	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+	INNER JOIN (
+		SELECT team_id, toString(repo_id) AS repo_key, repo_full_name
+		FROM team_repo_ownership FINAL
+		WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
+		GROUP BY team_id, repo_key, repo_full_name
+	) AS tro ON tro.team_id = tpo.team_id
+	INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
+)
+ORDER BY project_key, scope, scope_id`)
 	byProject := make(map[string][]healthRollupRow)
 	var projectOrder []string
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
@@ -232,7 +243,7 @@ INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON c
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, scanErr
+		return rowCount, false, scanErr
 	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -273,6 +284,9 @@ INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON c
 		if len(riskRows) == 0 {
 			continue
 		}
+		var capped bool
+		riskRows, capped = capFactValueRows(riskRows)
+		breakdownTruncated = breakdownTruncated || capped
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactHealth, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{
@@ -286,5 +300,5 @@ INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON c
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, nil
+	return rowCount, breakdownTruncated, nil
 }

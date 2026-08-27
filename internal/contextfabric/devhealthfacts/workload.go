@@ -76,11 +76,11 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, scanErr := p.readProjectWorkload(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, breakdownTruncated, scanErr := p.readProjectWorkload(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project workload", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
@@ -176,10 +176,10 @@ type workloadRollupRow struct {
 // verbatim, into one renderable team_breakdown table -- Monte Carlo
 // throughput/percentile stats are never summed or averaged across teams
 // (see the package doc comment).
-func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
 	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), ifNull(cf.work_scope_id, ''), cf.throughput_mean, cf.throughput_stddev, toUInt8(isNotNull(cf.p50_days)), toInt64(ifNull(cf.p50_days, 0)), cf.insufficient_history, cf.high_variance, toInt64(cf.backlog_size), toString(cf.computed_at)
@@ -192,7 +192,6 @@ INNER JOIN (
 ) AS cf ON cf.team_id = tpo.team_id AND cf.rn = 1
 LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
 ORDER BY p.id, tpo.team_id, cf.work_scope_id`)
-	rowCount := 0
 	byProject := make(map[string][]workloadRollupRow)
 	var projectOrder []string
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
@@ -221,7 +220,7 @@ ORDER BY p.id, tpo.team_id, cf.work_scope_id`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, scanErr
+		return rowCount, false, scanErr
 	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -261,6 +260,9 @@ ORDER BY p.id, tpo.team_id, cf.work_scope_id`)
 		if len(teamRows) == 0 {
 			continue
 		}
+		var capped bool
+		teamRows, capped = capFactValueRows(teamRows)
+		breakdownTruncated = breakdownTruncated || capped
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWorkload, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{
@@ -271,5 +273,5 @@ ORDER BY p.id, tpo.team_id, cf.work_scope_id`)
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, nil
+	return rowCount, breakdownTruncated, nil
 }
