@@ -338,6 +338,9 @@ type twoTurnOracleAnnex struct {
 	CorpusSHA256 string               `json:"corpus_sha256"`
 	SignedOff    bool                 `json:"signed_off"`
 	Entries      []twoTurnOracleEntry `json:"entries"`
+	// SignoffStale (CHAOS-4348, team-lead ruling 2026-08-27) mirrors the
+	// report's own AnnexSignoffStale -- see that field's doc comment.
+	SignoffStale bool `json:"signoff_stale"`
 }
 
 // --- adapting the CHRIS-SIGNED DP10 artifact (.remember/trial-results/oracle-annex-v1.json) ---
@@ -374,6 +377,15 @@ type signedOracleAnnex struct {
 			AtPT   string `json:"at_pt"`
 			Scope  string `json:"scope"`
 			Status string `json:"status"`
+			// ApprovedCorpusSHA8 (CHAOS-4348, team-lead ruling 2026-08-27,
+			// HIGH #2 on PR #302's own codex review) is stamped ONCE by
+			// cmd/acr-corpus-annex-sync the first time it mechanically
+			// corrects corpus content -- the corpus_sha8 this signoff was
+			// ACTUALLY approved against, distinct from the (possibly
+			// since-updated) CorpusSHA8 above. Empty on an annex that has
+			// never been mechanically synced. See twoTurnOracleAnnex.
+			// SignoffStale's own doc comment for how this is used.
+			ApprovedCorpusSHA8 string `json:"approved_corpus_sha8"`
 		} `json:"signoff"`
 	} `json:"provenance"`
 	Cases map[string]signedOracleCase `json:"cases"`
@@ -494,6 +506,12 @@ func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
 	annex := twoTurnOracleAnnex{
 		CorpusSHA256: signed.Provenance.CorpusSHA8,
 		SignedOff:    signed.Provenance.Signoff.Status == "APPROVED" && strings.TrimSpace(signed.Provenance.Signoff.By) != "",
+		// SignoffStale: the signoff names a DIFFERENT corpus than the one
+		// currently pinned. Empty ApprovedCorpusSHA8 means "never
+		// mechanically synced" -- not stale by this signal (the original
+		// signoff still names whatever corpus_sha8 it always did).
+		SignoffStale: signed.Provenance.Signoff.ApprovedCorpusSHA8 != "" &&
+			signed.Provenance.Signoff.ApprovedCorpusSHA8 != signed.Provenance.CorpusSHA8,
 	}
 
 	indices := make([]int, 0, len(signed.Cases))
@@ -4613,7 +4631,13 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // OracleIDSchemeMismatchCount (a new zero-tolerance gate, alongside
 // WrongCommitCount). No merge arithmetic changes beyond a plain sum, same
 // as WrongCommitCount/FalseNoMatchCount.
-const reportSchemaVersion = "38"
+//
+// "39" (CHAOS-4348 corpus/annex sync, team-lead ruling 2026-08-27):
+// purely additive -- twoTurnReport gains AnnexSignoffStale (true iff the
+// annex's chris-approved signoff names an older corpus_sha8 than the
+// live one, per-run informational flag, cross-shard-consistency-checked
+// and first-shard-wins like OracleAnnexSignedOff, no merge arithmetic).
+const reportSchemaVersion = "39"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5254,7 +5278,20 @@ type twoTurnReport struct {
 	OracleAnnexPath      string `json:"oracle_annex_path"`
 	OracleAnnexCorpusSHA string `json:"oracle_annex_corpus_sha256"`
 	OracleAnnexSignedOff bool   `json:"oracle_annex_signed_off"`
-	CasesRun             int    `json:"cases_run"`
+	// AnnexSignoffStale (CHAOS-4348, team-lead ruling 2026-08-27, HIGH #2
+	// on PR #302's own codex review): true iff provenance.signoff.
+	// approved_corpus_sha8 (what chris's APPROVED signoff actually
+	// covered, stamped once by cmd/acr-corpus-annex-sync the first time
+	// it mechanically corrects corpus content) differs from the annex's
+	// CURRENT provenance.corpus_sha8 (OracleAnnexCorpusSHA above). Loud,
+	// never fatal: OracleAnnexSignedOff alone cannot tell "chris approved
+	// exactly this corpus" apart from "chris approved an EARLIER corpus,
+	// and it has since been mechanically corrected" -- both read
+	// SignedOff=true. A run with this true is INFORMATIVE, not the final
+	// ratified acceptance measurement, until chris re-ratifies against
+	// the current corpus_sha8.
+	AnnexSignoffStale bool `json:"annex_signoff_stale"`
+	CasesRun          int  `json:"cases_run"`
 	// PositiveAppliedCount is the fail-open guard (codex round-3 finding
 	// #2): a run where every case offer-misses or errors could otherwise
 	// report zero wrong commits and pass the anti-vacuity check via
@@ -8796,6 +8833,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// begins if either fixture's own work_item identifiers have drifted
 	// out of the live v2 canonical scheme (chaos4157_v2_scheme_preflight_test.go).
 	twoTurnValidateWorkItemV2Scheme(t, annex, corpus)
+	// CHAOS-4348: the two files can each be internally scheme-clean (the
+	// check above) while still DISAGREEING with each other -- exactly what
+	// Run G found (cases 57/60 stale-corpus-id, case 45 outright kind/id
+	// disagreement). See chaos4348_corpus_annex_agreement_test.go.
+	twoTurnValidateCorpusAnnexAgreement(t, annex, corpus)
 	source := requireGitSourceIdentity(t)
 
 	// Subscription-only, no metered key, ever (standing rule for this
@@ -9043,6 +9085,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		},
 		BaseSHA:         source.commit,
 		OracleAnnexPath: annexPath, OracleAnnexCorpusSHA: annex.CorpusSHA256, OracleAnnexSignedOff: annex.SignedOff,
+		AnnexSignoffStale:           annex.SignoffStale,
 		OfferMissCount:              map[string]int{},
 		MutationProbesTripped:       map[string]int{},
 		MutationProbesRun:           map[string]int{},

@@ -317,11 +317,17 @@ import (
 // WrongCommitCount). Plain sum, same merge arithmetic as
 // WrongCommitCount/FalseNoMatchCount.
 //
+// "39" (CHAOS-4348 corpus/annex sync, team-lead ruling 2026-08-27):
+// purely additive -- twoTurnReport gains AnnexSignoffStale, a new
+// cross-shard-consistency-checked (mismatchErr), first-shard-wins
+// per-run field mirroring OracleAnnexSignedOff's own merge treatment
+// exactly. No merge arithmetic.
+//
 // KEEP IN SYNC WITH internal/runtime/hosted/chaos3742_two_turn_confirmation_test.go's
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "38"
+const expectedSchemaVersion = "39"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -693,19 +699,23 @@ type twoTurnArmTimingSummary struct {
 }
 
 type twoTurnReport struct {
-	ReportSchemaVersion                     string          `json:"report_schema_version"`
-	Provenance                              trialProvenance `json:"provenance"`
-	BaseSHA                                 string          `json:"base_sha"`
-	OracleAnnexPath                         string          `json:"oracle_annex_path"`
-	OracleAnnexCorpusSHA                    string          `json:"oracle_annex_corpus_sha256"`
-	OracleAnnexSignedOff                    bool            `json:"oracle_annex_signed_off"`
-	CasesRun                                int             `json:"cases_run"`
-	PositiveAppliedCount                    int             `json:"positive_applied_count"`
-	WindowPositiveAppliedCount              int             `json:"window_positive_applied_count"`
-	GateReachableCount                      int             `json:"gate_reachable_count"`
-	StructureAndWindowDisclosureAbsentCount int             `json:"structure_and_window_disclosure_absent_count"`
-	OfferMissCount                          map[string]int  `json:"offer_miss_count"`
-	WrongCommitCount                        int             `json:"wrong_commit_count"`
+	ReportSchemaVersion  string          `json:"report_schema_version"`
+	Provenance           trialProvenance `json:"provenance"`
+	BaseSHA              string          `json:"base_sha"`
+	OracleAnnexPath      string          `json:"oracle_annex_path"`
+	OracleAnnexCorpusSHA string          `json:"oracle_annex_corpus_sha256"`
+	OracleAnnexSignedOff bool            `json:"oracle_annex_signed_off"`
+	// AnnexSignoffStale (CHAOS-4348, schema v39) mirrors twoTurnReport's
+	// identically-named field byte-for-byte -- see the producer's own doc
+	// comment.
+	AnnexSignoffStale                       bool           `json:"annex_signoff_stale"`
+	CasesRun                                int            `json:"cases_run"`
+	PositiveAppliedCount                    int            `json:"positive_applied_count"`
+	WindowPositiveAppliedCount              int            `json:"window_positive_applied_count"`
+	GateReachableCount                      int            `json:"gate_reachable_count"`
+	StructureAndWindowDisclosureAbsentCount int            `json:"structure_and_window_disclosure_absent_count"`
+	OfferMissCount                          map[string]int `json:"offer_miss_count"`
+	WrongCommitCount                        int            `json:"wrong_commit_count"`
 	// OracleIDSchemeMismatchCount (CHAOS-4348 measurement-layer fix, schema
 	// v38) mirrors twoTurnReport's identically-named field byte-for-byte --
 	// see the producer's own doc comment. A ZERO-TOLERANCE merge gate,
@@ -990,6 +1000,8 @@ func validateShardSet(shards []twoTurnReport, paths []string) error {
 			return mismatchErr(paths[i], paths[0], "oracle_annex_corpus_sha256", s.OracleAnnexCorpusSHA, first.OracleAnnexCorpusSHA)
 		case s.OracleAnnexSignedOff != first.OracleAnnexSignedOff:
 			return mismatchErr(paths[i], paths[0], "oracle_annex_signed_off", fmt.Sprint(s.OracleAnnexSignedOff), fmt.Sprint(first.OracleAnnexSignedOff))
+		case s.AnnexSignoffStale != first.AnnexSignoffStale:
+			return mismatchErr(paths[i], paths[0], "annex_signoff_stale", fmt.Sprint(s.AnnexSignoffStale), fmt.Sprint(first.AnnexSignoffStale))
 		}
 	}
 	return nil
@@ -1066,6 +1078,7 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		OracleAnnexPath:                     first.OracleAnnexPath,
 		OracleAnnexCorpusSHA:                first.OracleAnnexCorpusSHA,
 		OracleAnnexSignedOff:                first.OracleAnnexSignedOff,
+		AnnexSignoffStale:                   first.AnnexSignoffStale,
 		OfferMissCount:                      map[string]int{},
 		ConfirmedWrongRedeemedCount:         map[string]int{},
 		MutationProbesTripped:               map[string]int{},
