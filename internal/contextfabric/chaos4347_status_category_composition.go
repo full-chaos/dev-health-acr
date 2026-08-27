@@ -38,16 +38,23 @@ import (
 // the pre-existing FactHealth/FactWorkload/FactReadiness set: a team
 // "status" question is incomplete without investment breakdown (chris's
 // project-status list on CHAOS-4347) now that investment.go emits Rows,
-// not just a scalar -- see this ticket's own PR for the producer change.
+// not just a scalar -- see that ticket's own PR for the producer change.
 //
-// COORDINATION NOTE for whoever rebases onto this: CHAOS-4364 (lane-4364-flow,
-// 4347-B) adds FactFlow + FactLandscape to SubjectTeam in this SAME map,
-// plus a new SubjectProject entry, in parallel. Hand-merge both diffs on
-// this map (and the CategoryFactCompositionEvent doc comment below) --
-// never blind git merge -- whichever PR lands second.
+// CHAOS-4364 adds FactFlow and FactLandscape to SubjectTeam (bottlenecks
+// and landscape/area are on the SAME project-status list) and adds the
+// first SubjectProject entry -- project had no composition row before this
+// because nothing in the SubjectTeam set rolled up to project by a real
+// join until FactFlow/FactLandscape's own team_project_ownership rollups
+// did (see flow.go/landscape.go).
+//
+// CHAOS-4363 and CHAOS-4364 landed in parallel and both touched
+// SubjectTeam's entry; this is the hand-merged union both lanes' doc
+// comments called for -- never a blind git merge -- per the cf-merge-ledger
+// coordination note both lanes exchanged.
 var statusCategoryFactKindComposition = map[SubjectKind][]FactKind{
 	SubjectRepository: {FactMetrics, FactHealth, FactIdentity},
-	SubjectTeam:       {FactHealth, FactWorkload, FactReadiness, FactInvestment},
+	SubjectTeam:       {FactHealth, FactWorkload, FactReadiness, FactInvestment, FactFlow, FactLandscape},
+	SubjectProject:    {FactFlow, FactLandscape},
 }
 
 // CategoryFactCompositionEvent (CHAOS-4347) reports ONE status-category

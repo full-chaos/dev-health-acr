@@ -352,9 +352,18 @@ erDiagram
     FACT_SCOPE_RESOLVER ||--|| FACT_PLANNER : "expands ReadSubjects before planning (CHAOS-4099)"
 ```
 
-**19 registered `FactProvider`s** (`internal/contextfabric/devhealthfacts`,
-wired at `NewProviders`, `providers.go:14-35`; composed at
+**21 registered `FactProvider`s** (`internal/contextfabric/devhealthfacts`,
+wired at `NewProviders`, `providers.go:14-37`; composed at
 `internal/runtime/hosted/open.go:597`):
+
+**Updated 2026-08-27 (CHAOS-4364, `lane-4364-flow`):** two NEW v1-additive
+FactKinds, `flow` and `landscape` (`flow.go`, `landscape.go`), following
+CHAOS-4347's own "widen by a real table join, never a proxy" discipline.
+Both are also added to `statusCategoryFactKindComposition`'s `team` entry
+and are the FIRST entries for `project`
+(`chaos4347_status_category_composition.go`) — see that file for the
+sibling-lane merge note on CHAOS-4363's concurrent `investment` addition
+to the same `team` entry.
 
 **Updated 2026-08-26/27 (CHAOS-4347, `lane-4347-ch`, PR #300):** the
 `metrics`/`continuous_integration`/`deployments` rows below are widened by
@@ -388,6 +397,8 @@ source for the SAME kind).
 | readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project, CHAOS-4363)** | team, **project** |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | `backfill_log` | organization |
+| flow (CHAOS-4364) | `work_item_metrics_daily` + `work_item_cycle_times` (team, per-scope Rows + averaged flow_efficiency); **+`team_project_ownership` ⋈ `work_item_metrics_daily`** (project, summed-counts rollup); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
+| landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to (team, map_name) — never per-identity (no person-to-person ranking); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
 
 **`FactMetrics`'s project rollup never averages a rate across
 differently-sized teams.** Additive counts (commits, after-hours/weekend

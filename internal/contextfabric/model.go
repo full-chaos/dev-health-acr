@@ -210,6 +210,8 @@ const (
 	FactOperationalDeficiencies = contractsv1.ContextFabricFactOperationalDeficiencies
 	FactSourceHealth            = contractsv1.ContextFabricFactSourceHealth
 	FactEvidence                = contractsv1.ContextFabricFactEvidence
+	FactFlow                    = contractsv1.ContextFabricFactFlow
+	FactLandscape               = contractsv1.ContextFabricFactLandscape
 )
 
 type InvestigationRequest = contractsv1.ContextFabricInvestigationRequest
