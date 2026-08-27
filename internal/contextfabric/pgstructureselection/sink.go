@@ -256,15 +256,36 @@ type pipelineContextPayload struct {
 	WindowInferenceVersion       string   `json:"window_inference_version"`
 }
 
-// knownMemberValues mirrors migration 0024's
+// knownMemberValues mirrors migration 0034's
 // ck_acr_cf_structure_selections_member_vocabulary CHECK exactly -- kept
 // here, not imported from contextfabric, for the same "own validation
 // never silently drifts from what the DATABASE enforces" reasoning
-// pgclarification.knownSelectionProvenanceValues documents.
+// pgclarification.knownSelectionProvenanceValues documents. Migration 0024
+// pinned this at three values; CHAOS-4012 (#242) added subject_candidate
+// as a 5th ContextFabricStructureNeedKind and canonicalizeStructure's own
+// receipt-member loop (structure.go) has treated it as one of this sink's
+// members ever since, but this table's own CHECK (a DIFFERENT constraint
+// from acr.context_fabric_structure_supersession_claims'
+// ck_acr_cf_structure_supersession_member_vocabulary, which migration 0033
+// widened) was never updated to match -- migration 0034 (CHAOS-4355)
+// closes that gap here.
+//
+// window is deliberately NOT a member of this table's vocabulary --
+// StructureSelectionEvent.Member's own doc comment (structure_capture.go)
+// and canonicalizeStructure's own receipt-member loop agree window
+// confirmation is canonicalizeEvidenceWindow's own code path, never
+// canonicalizeStructure's, so a window value can never legitimately reach
+// this sink; it rides its own, separately designed WindowSelectionEvent
+// (design brief §2.4), not implemented against this table. Do not widen
+// this map (or migration 0034's CHECK) to admit "window" without first
+// wiring an actual window capture call site -- see
+// TestInsertContext_RejectsMalformedEventBeforeAnyInsert, which pins
+// member="window" as the rejected example for exactly this reason.
 var knownMemberValues = map[string]struct{}{
-	"expected_kind":  {},
-	"subject_anchor": {},
-	"subject_handle": {},
+	"expected_kind":     {},
+	"subject_anchor":    {},
+	"subject_handle":    {},
+	"subject_candidate": {},
 }
 
 // knownSelectionModeValues mirrors migration 0024's

@@ -105,12 +105,16 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// (commit_gate_version reuse-key dimension) added 0031, and CHAOS-4305
 	// (projection checkpoint rows_applied column) added 0032, and
 	// CHAOS-4333 (widen ck_acr_cf_structure_supersession_member_vocabulary
-	// for subject_candidate) added 0033, so the embedded set is now 33
-	// files. A future migration must bump this literal too -- see
-	// expectedMigrationVersions in migrations/postgres/
+	// for subject_candidate) added 0033, and CHAOS-4355 (widen the SIBLING
+	// ck_acr_cf_structure_selections_member_vocabulary on the SISTER table
+	// acr.context_fabric_structure_selections -- 0033 only widened
+	// acr.context_fabric_structure_supersession_claims, the two tables
+	// each hold their own independent CHECK) added 0034, so the embedded
+	// set is now 34 files. A future migration must bump this literal too
+	// -- see expectedMigrationVersions in migrations/postgres/
 	// runner_integration_test.go for the same convention, held in one
 	// place there.
-	require.Equal(t, "applied 33 migrations\n", first.String())
+	require.Equal(t, "applied 34 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

@@ -254,6 +254,46 @@ func TestInsertContext_RejectsMalformedEventBeforeAnyInsert(t *testing.T) {
 	require.Equal(t, 0, count, "a rejected event must never leave a partial row behind")
 }
 
+// TestInsertContext_AcceptsSubjectCandidateMember is CHAOS-4355's own
+// red-first proof: CHAOS-4012 (#242) added subject_candidate as a 5th
+// ContextFabricStructureNeedKind and canonicalizeStructure has been
+// building StructureSelectionEvents with Member="subject_candidate" for
+// every redeemed candidate-offer receipt ever since, but this table's own
+// CHECK (migration 0024) and this sink's own knownMemberValues were never
+// widened to admit it -- confirmed live on the kiac acr-pilot cluster
+// ("structure selection capture failed: pgstructureselection: member
+// \"subject_candidate\" is not in the closed vocabulary"). Before the fix,
+// insertContext rejects this event at validateEvent and no row is
+// written; after the fix, it persists exactly like any other member.
+func TestInsertContext_AcceptsSubjectCandidateMember(t *testing.T) {
+	ctx := context.Background()
+	db := newStructureSelectionTestDatabase(t, ctx)
+	sink, err := NewSink(db, SinkOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sink.Close(closeCtx)
+	})
+
+	event := validEvent("org-structure-subject-candidate")
+	event.Member = "subject_candidate"
+	event.PriorResultID = "result_structure_offer_candidate_00001"
+	event.Offered = []contextfabric.StructureOfferedOption{
+		{ReceiptID: "candr_committed000001", AppliedValue: "acme/repo#42", OfferSource: "engine", Rank: 0},
+		{ReceiptID: "candr_committed000002", AppliedValue: "acme/repo#57", OfferSource: "engine", Rank: 1},
+	}
+	event.Selected = event.Offered[0]
+
+	require.NoError(t, sink.insertContext(ctx, event), "subject_candidate is a real ContextFabricStructureNeedKind (CHAOS-4012) and must be accepted, not rejected as unknown vocabulary")
+
+	row := mustLoadSelectionRow(t, ctx, db, event.PriorResultID)
+	require.Equal(t, "subject_candidate", row.Member)
+	require.Equal(t, event.Selected.ReceiptID, row.SelectedReceiptID)
+	require.Equal(t, event.Selected.AppliedValue, row.SelectedAppliedValue)
+	require.Equal(t, event.Offered, row.Offered)
+}
+
 // TestConsensusPanelSizeCheck_RejectsAtDatabaseLevelDirectly is the
 // defense-in-depth proof migration 0027 exists for: a raw SQL INSERT that
 // bypasses validateEvent entirely (no Go-side gate at all) must still be
