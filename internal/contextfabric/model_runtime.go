@@ -277,22 +277,23 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		if err := claim.Validate(); err != nil {
 			return fmt.Errorf("claimed_facts: %w", err)
 		}
-		// CHAOS-4347 codex round-3: Rows (ContextFabricClaimedFact.Rows) is
-		// a producer-facing renderable-table capability -- MetricsProvider
-		// is the only current producer, and nothing routes one into
-		// synthesis input for a model to legitimately cite. The value-level
-		// closure two lines below only compares the scalar Value against
-		// the canonical fact, so a model attaching a Rows array to an
-		// otherwise-valid, closure-passing scalar claim would sail through
-		// completely unchecked -- fabricated table content riding on a
-		// real citation. Until this package actually offers a Rows-bearing
-		// canonical fact to synthesis AND closes Rows at value level the
-		// same way Value already is, a model-authored claim setting Rows
-		// fails closed here, the same "retract rather than trust an
-		// unverified assertion" posture CHAOS-4085's commit-affirmation
-		// gate already applies to everything else in this function.
+		// CHAOS-4347 codex round-3, still true under CHAOS-4355: Rows
+		// (ContextFabricClaimedFact.Rows) is a producer-facing
+		// renderable-table capability, and the value-level closure two
+		// lines below only compares the scalar Value against the
+		// canonical fact -- so a model attaching a Rows array to an
+		// otherwise-valid, closure-passing scalar claim would sail
+		// through completely unchecked, fabricated table content riding
+		// on a real citation. CHAOS-4355 routes Rows into a claim, but
+		// ONLY by the engine copying them verbatim from the canonical
+		// fact the claim cites, in attachCanonicalRows, AFTER this
+		// validation passes -- so a model-authored claim setting Rows
+		// itself still fails closed here, unconditionally, the same
+		// "retract rather than trust an unverified assertion" posture
+		// CHAOS-4085's commit-affirmation gate already applies to
+		// everything else in this function.
 		if len(claim.Rows) > 0 {
-			return fmt.Errorf("claimed fact %q sets rows, which no synthesis input offers to cite yet", claim.ClaimID)
+			return fmt.Errorf("claimed fact %q sets rows directly -- rows are attached from the cited canonical fact, never model-authored", claim.ClaimID)
 		}
 		if _, exists := claimedByID[claim.ClaimID]; exists {
 			return fmt.Errorf("claimed fact IDs must be unique")
@@ -514,6 +515,120 @@ func lookupCanonicalFact(facts []CanonicalFact, kind FactKind, subject SubjectRe
 	return CanonicalFact{}, false
 }
 
+// attachCanonicalRows is the ONLY place a ClaimedFact.Rows is ever set
+// (CHAOS-4355). It runs on claims that have already passed
+// SynthesisDraft.ValidateAgainst, which rejects any draft claim carrying a
+// non-empty Rows of its own -- so every claim entering here starts with
+// Rows nil. For each claim, it looks up the SAME canonical fact
+// ValidateAgainst grounded Value against (identical Kind+Subject lookup)
+// and, if that fact carries a renderable table on any of its OWN fields
+// (e.g. a project rollup's team_breakdown), copies it onto the claim
+// verbatim -- never derived, reworded, or recomputed by either the model or
+// this function. A claim whose canonical fact carries no Rows-shaped field
+// is left with Rows nil, byte-identical to pre-CHAOS-4355 behavior.
+//
+// rowsCount is the total number of rows attached across every claim
+// (CHAOS-4355's projected_rows_count telemetry dimension); truncated
+// reports whether any single claim lost table content relative to what
+// its canonical fact actually carried -- either an unambiguous table
+// capped to fit ContextFabricClaimedFactMaxRows, or (canonicalFieldRows)
+// no table attached at all because the fact carried more than one
+// Rows-shaped field and which one a claim means is ambiguous. This is the
+// fact-plan-adjacent "dropped by cap/pruning" signal the
+// ticket asks for. Both are reported once per successful Synthesize call
+// by the caller (see RuntimeAnswerSynthesizer.Telemetry's own doc
+// comment for when that is), zero/false included, so a quiet run is as
+// visible as a busy one.
+func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []ClaimedFact, rowsCount int, truncated bool) {
+	for i := range claims {
+		canonical, ok := lookupCanonicalFact(facts, claims[i].Kind, claims[i].Subject)
+		if !ok {
+			continue
+		}
+		rows, wasTruncated := canonicalFieldRows(canonical)
+		// Union BEFORE the empty-rows early exit (codex CHAOS-4355 R3 P2
+		// finding): canonicalFieldRows returns (nil, true) for its
+		// fail-closed ambiguous-fields case, and that drop must still
+		// reach the caller even though there is no table to attach --
+		// dropping it here would silently contradict this function's own
+		// "reported unconditionally" promise for the exact case the
+		// promise exists to cover.
+		truncated = truncated || wasTruncated
+		if len(rows) == 0 {
+			continue
+		}
+		claims[i].Rows = rows
+		rowsCount += len(rows)
+	}
+	return claims, rowsCount, truncated
+}
+
+// canonicalFieldRows returns the canonical fact's ONE Rows-shaped field,
+// converted verbatim -- and NOTHING when the fact carries more than one
+// (CHAOS-4355 codex R2 P1 finding, sharpening R1's first attempt: picking
+// an arbitrary field by sort order is deterministic, but a claim carries no
+// row-field identity to say WHICH table it means, so presenting one
+// lexically-chosen table risks presenting the WRONG canonical table as if
+// it were authoritative -- worse than a claim's Rows simply staying nil).
+// A fact could in principle carry more than one renderable table (e.g. a
+// future producer alongside MetricsProvider's project rollup, which emits
+// exactly one, team_breakdown); until a claim can name which field it
+// means, this fails closed rather than guesses, the identical "retract
+// rather than trust an unverified assertion" posture the rest of this file
+// already applies elsewhere -- and reports the drop via the second return
+// value so it is counted, not silent. The same return value also covers a
+// cap: a single unambiguous table is truncated to fit
+// ContextFabricClaimedFactMaxRows -- the exact bound
+// ContextFabricClaimedFact.Validate() already enforces, so a canonical
+// fact's own table can never make an otherwise-valid claim fail contract
+// validation -- and a cap that actually binds is reported rather than
+// silently dropping the tail.
+func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricClaimedFactRow, truncated bool) {
+	var rowsField string
+	rowsFieldCount := 0
+	for key, value := range fact.Fields {
+		if len(value.Rows) > 0 {
+			rowsFieldCount++
+			rowsField = key
+		}
+	}
+	switch rowsFieldCount {
+	case 0:
+		return nil, false
+	case 1:
+		// fall through
+	default:
+		return nil, true
+	}
+	source := fact.Fields[rowsField].Rows
+	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
+	for _, row := range source {
+		rows = append(rows, convertFactValueRow(row))
+	}
+	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
+		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
+	}
+	return rows, false
+}
+
+func convertFactValueRow(row FactValueRow) contractsv1.ContextFabricClaimedFactRow {
+	fields := make(map[string]contractsv1.ContextFabricScalarValue, len(row.Fields))
+	for key, value := range row.Fields {
+		fields[key] = convertFactValueScalar(value)
+	}
+	return contractsv1.ContextFabricClaimedFactRow{Fields: fields}
+}
+
+// convertFactValueScalar converts one row cell. Row cells are LEAF values
+// by construction (FactValue.validate rejects Rows-within-Rows), so every
+// variant here has a direct ContextFabricScalarValue counterpart -- the two
+// types share the identical String/Integer/Number/Boolean/Null shape.
+func convertFactValueScalar(value FactValue) contractsv1.ContextFabricScalarValue {
+	return contractsv1.ContextFabricScalarValue{
+		String: value.String, Integer: value.Integer, Number: value.Number, Boolean: value.Boolean, Null: value.Null,
+	}
+}
+
 type ModelRuntime interface {
 	InterpretQuestion(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, ModelExecutionReceipt, error)
 	SynthesizeAnswer(context.Context, storage.Principal, SynthesisInput) (SynthesisDraft, ModelExecutionReceipt, error)
@@ -572,6 +687,21 @@ type RuntimeAnswerSynthesizer struct {
 	Runtime ModelRuntime
 	Sink    ModelReceiptSink
 	Options RuntimeAnswerSynthesizerOptions
+	// Telemetry is OPTIONAL (nil-safe, same convention as Sink) -- CHAOS-4355's
+	// RecordProjectedRowsCount is reported here, once per Synthesize call
+	// that reaches claim assembly (i.e. draft.ValidateAgainst already
+	// passed), count=0 included whenever no cited canonical fact carried a
+	// renderable table -- so "no producer emitted rows" stays
+	// distinguishable from "nobody is counting". A call that returns
+	// earlier (Runtime nil, a rejected draft, a receipt-sink failure)
+	// reports nothing here: there are no claims to report rows for, and
+	// that failure is already the receipt sink's own Outcome to record
+	// (codex CHAOS-4355 R1 P2 finding -- this is a documentation fix, not
+	// a behavior change: "unconditional" previously overclaimed coverage
+	// this method never actually had). A nil Telemetry (every test that
+	// builds a synthesizer by hand) behaves exactly as before this field
+	// existed.
+	Telemetry EngineTelemetry
 }
 
 // StaticResultVersions implements ResultVersionProvider (CHAOS-3810), so a
@@ -618,6 +748,16 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	if err != nil {
 		return InvestigationResult{}, err
 	}
+	// CHAOS-4355: attachCanonicalRows is the ONLY place a ClaimedFact.Rows
+	// is ever set. ValidateAgainst has just rejected any draft claim that
+	// carried a non-empty Rows of its own, so every claim reaching this
+	// point starts with Rows nil -- what follows copies rows verbatim from
+	// the canonical fact each claim cites, never from the model, closing
+	// the routing gap the CHAOS-4347 rejection above left open.
+	claimedFacts, rowsCount, rowsTruncated := attachCanonicalRows(cloneSlice(draft.ClaimedFacts), input.Facts.Facts)
+	if r.Telemetry != nil {
+		r.Telemetry.RecordProjectedRowsCount(ctx, principal, rowsCount, rowsTruncated)
+	}
 	result := InvestigationResult{
 		Status: draft.Status,
 		// DirectJudgment and CurrentState are server-composed too, for the
@@ -641,7 +781,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		Conflicts:          cloneSlice(draft.Conflicts),
 		Limitations:        cloneSlice(draft.Limitations),
 		EvidenceRefIDs:     cloneSlice(draft.EvidenceRefIDs),
-		ClaimedFacts:       cloneSlice(draft.ClaimedFacts),
+		ClaimedFacts:       claimedFacts,
 		Coverage:           mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
 		// DeterministicAnswer is server-composed, not model-authored: it is
 		// a pure function of the already-validated Status, Drivers, and

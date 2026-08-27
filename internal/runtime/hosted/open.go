@@ -727,11 +727,18 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		cancel()
 		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize structure selection sink: %w", err)
 	}
+	// CHAOS-4355: resolved once and shared with RuntimeAnswerSynthesizer
+	// below, so its own RecordProjectedRowsCount reports through the
+	// IDENTICAL sink every other engine-telemetry signal for this
+	// investigation does -- never a second, independently-resolved
+	// instance that could silently diverge from the CHAOS-4103
+	// Options.EngineTelemetry override.
+	engineTelemetry := contextFabricEngineTelemetry(request.options)
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink},
 		Graph:       graphReader,
 		Facts:       factRegistry,
-		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion)},
+		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry},
 		Results:     investigationStore,
 		ReuseGate:   investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also
@@ -770,7 +777,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// comment) -- letting a caller capture events (e.g. the synthesis-
 		// status override's outcome) in-process instead of only reaching
 		// them by parsing slog output.
-		Telemetry: contextFabricEngineTelemetry(request.options),
+		Telemetry: engineTelemetry,
 		// CHAOS-3859 (capture-only phase): unconditional -- see
 		// clarificationSink's own construction comment above for why this
 		// does not depend on reuseEnabled.

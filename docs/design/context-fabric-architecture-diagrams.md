@@ -58,8 +58,9 @@ flowchart TD
   PRUNE --> BUNDLE
   UNEXP --> BUNDLE
   READ --> BUNDLE["CanonicalFactBundle + Coverage"]
-  BUNDLE --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:579"]
-  SYN --> OVERRIDE["applySynthesisStatusOverride<br/>CHAOS-4098 -- decisive clarification_required -> no_match<br/>runs BEFORE the commit gate"]
+  BUNDLE --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596"]
+  SYN --> ROWS["attachCanonicalRows (CHAOS-4355)<br/>model-authored Rows rejected in ValidateAgainst;<br/>engine copies Rows verbatim from the canonical fact<br/>each claim cites -- model_runtime.go"]
+  ROWS --> OVERRIDE["applySynthesisStatusOverride<br/>CHAOS-4098 -- decisive clarification_required -> no_match<br/>runs BEFORE the commit gate"]
   OVERRIDE --> GATE2{"CHAOS-4085 DP9 commit-affirmation gate<br/>applyCommitAffirmation<br/>chaos4085_commit_affirmation.go:447"}
   GATE2 -->|"exempt / affirmed"| COMMIT["Commit subject(s)"]
   GATE2 -->|"refused"| RETRACT["Retract-only<br/>(fail-closed, never fabricates a commit)"]
@@ -74,7 +75,7 @@ flowchart TD
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
   class POOL gap
-  class UNEXP,GATE2 fixed
+  class UNEXP,GATE2,ROWS fixed
   class RETRACT refuse
 ```
 
@@ -100,6 +101,35 @@ here, not drawn as gaps:**
   their state in the CHAOS-4061 retro diagrams
   (`.remember/retro-4061-diagrams-draft.md`, diagram 1) reused here for
   visual convention.
+
+**Updated 2026-08-27 (CHAOS-4355, `lane-4355-acr`): hop 5 (Rows render) is
+BUILT, not "not built."** CHAOS-4347 (#300) added `Rows` on
+`ContextFabricClaimedFact`/`ProjectedFact` additively but left them
+unreachable — `SynthesisDraft.ValidateAgainst` rejected any claim that set
+Rows (model-authored or otherwise), and nothing else set them, so a
+producer's renderable table (e.g. `MetricsProvider`'s project rollup
+`team_breakdown`) never survived synthesis. CHAOS-4355 closes that gap
+WITHOUT letting the model author Rows: `ValidateAgainst` still rejects a
+model-supplied `claim.Rows` unconditionally (even one that happens to match
+canonical exactly — see
+`TestSynthesisDraftValidateAgainstRejectsModelAuthoredRowsEvenWhenTheyMatchCanonical`),
+and `attachCanonicalRows` (`model_runtime.go`), which runs INSIDE
+`Synthesize` immediately after `ValidateAgainst` passes, is the only place a
+`ClaimedFact.Rows` is ever set — copied verbatim from the SAME canonical
+fact (`Kind`+`Subject`) the claim's scalar `Value` was already grounded
+against, never derived or reworded. `answerprojection.Project` already
+carried `Rows` through unchanged since #300 (`project.go`'s
+`projectDrivers`), so this was the one missing hop. `RecordProjectedRowsCount`
+(`EngineTelemetry`) reports the total rows attached and whether any claim
+lost table content -- an unambiguous table capped at
+`ContextFabricClaimedFactMaxRows`, or no table attached at all because its
+canonical fact carried more than one Rows-shaped field and which one a
+claim means is ambiguous (the fact-plan-adjacent "dropped by cap/pruning"
+signal) -- once per `Synthesize` call that reaches claim assembly, zero
+included. A
+call rejected earlier (unavailable runtime, a model draft `ValidateAgainst`
+itself rejects, a receipt-sink failure) reports nothing here; that failure
+is the receipt sink's own outcome to record.
 
 ---
 
@@ -323,11 +353,23 @@ is genuinely a set of rows, not a lossy single scalar. Deliberately does
 NOT touch `ContextFabricScalarValue` itself (also the projection-write
 contract's property-value type, which documents "nested objects and
 arrays remain disallowed" as a deliberate invariant for THAT surface).
-Not yet wired into synthesis/prompts — `MetricsProvider`'s project rollup
-is the only producer of a `Rows`-bearing fact today, and nothing routes
-one into a driver's cited claims yet (the sidecar's own answer-rendering
-closure test carves this path out for exactly that reason,
-`internal/sidecar/render_answer_untrusted_test.go`).
+**Updated 2026-08-27 (CHAOS-4355): now wired into synthesis, still never
+into prompts.** `MetricsProvider`'s project rollup remains the only producer
+of a `Rows`-bearing fact today, but a driver's cited claim now DOES carry
+it: `attachCanonicalRows` (`internal/contextfabric/model_runtime.go`), the
+one place a `ClaimedFact.Rows` is ever set, copies it verbatim from the
+canonical fact each claim cites, immediately after
+`SynthesisDraft.ValidateAgainst` passes -- ValidateAgainst itself still
+rejects any claim where the MODEL set Rows directly, unconditionally, so
+the model is never the source. `answerprojection.Project` carries it
+through unchanged (`project.go`'s `projectDrivers`, unchanged since #300).
+The prompt itself was NOT changed -- the model is never told Rows exist,
+so no new prompt version was needed. The sidecar's own answer-rendering
+closure test (`internal/sidecar/render_answer_untrusted_test.go`) still
+carves out the render-layer half of this: a claim can now carry Rows, but
+nothing in `dev-health-web`/Ask Dev renders them yet (see
+`context-fabric-fact-scope.md` for the exact projected shape a renderer
+would consume).
 
 **Gated off: `evidence` (1 kind, not 8).** `doc.go:37-46` and
 `providers_test.go:48-52` name exactly one deliberately unregistered

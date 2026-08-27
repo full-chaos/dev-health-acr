@@ -338,6 +338,10 @@ type recordingTelemetry struct {
 	// offerPhrasingOutcomes (CHAOS-4171 PR2) mirrors the SAME
 	// list-not-count discipline.
 	offerPhrasingOutcomes []OfferPhrasingOutcome
+	// projectedRowsCounts (CHAOS-4355) mirrors the SAME list-not-count
+	// discipline: a test asserts the exact count/truncated pair, never
+	// merely that something fired.
+	projectedRowsCounts []projectedRowsCountRecord
 	// windowGateOfferDisclosures/windowExpandOfferRedemptions (CHAOS-4314)
 	// mirror the SAME list-not-count discipline as windowCanonicalizationOutcomes
 	// above.
@@ -380,6 +384,11 @@ type answerReuseServedRequestIDRecord struct {
 type bindingEpochDeltaRecord struct {
 	flipped bool
 	delta   int64
+}
+
+type projectedRowsCountRecord struct {
+	count     int
+	truncated bool
 }
 
 func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
@@ -464,6 +473,10 @@ func (r *recordingTelemetry) RecordPriorDegradation(_ context.Context, _ storage
 
 func (r *recordingTelemetry) RecordOfferPhrasing(_ context.Context, _ storage.Principal, outcome OfferPhrasingOutcome) {
 	r.offerPhrasingOutcomes = append(r.offerPhrasingOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordProjectedRowsCount(_ context.Context, _ storage.Principal, count int, truncated bool) {
+	r.projectedRowsCounts = append(r.projectedRowsCounts, projectedRowsCountRecord{count: count, truncated: truncated})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {
