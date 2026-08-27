@@ -568,8 +568,15 @@ run).** Both safety invariants held (`wrong_commit_count=0`,
 own response offered no fresh candidate to redeem next); case 60 reached a
 decisive `degraded` terminal after 2 turns but with a **retracted** commit
 (`commit_affirmation retraction final_committed=0`) and `rows_count=0`.
-`carry_hit_count=0` on both, as expected pre-fix. Full artifact:
-`.remember/trial-results/gen-trial-chaos4360_nturn-20260827T210312Z-83385.json`
+`carry_hit_count=0` on both, as expected pre-fix. `resolved_active_epoch=2`
+(`graph_lifecycle_enabled=true`) — confirmed live-read via this run's own
+epoch resolver (codex review P1 fix; the launcher enables graph-lifecycle
+mode for every run, so the report now proves what epoch was actually read
+instead of silently defaulting to 0/false). Re-run after the codex-review
+fix round (corpus/annex agreement preflight, corpus-hash pin, fail-loud on
+zero usable evidence, never-resend-by-receipt-id, exclusive report
+creation) reproduced the SAME measured outcome. Full artifact:
+`.remember/trial-results/gen-trial-chaos4360_nturn-20260827T215155Z-51221.json`
 (schema v40).
 
 ---

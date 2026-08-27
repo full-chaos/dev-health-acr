@@ -77,6 +77,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -244,6 +245,22 @@ func nTurnGroundTruthCandidate(annex twoTurnOracleAnnex, index int) (canonicalID
 	return "", false
 }
 
+// nTurnReportHasUsableEvidence reports whether AT LEAST ONE case in report
+// actually ran (as opposed to being skipped for missing an oracle entry, or
+// erroring on every Investigate call) -- the "a measurement that did not
+// happen must FAIL, loudly" invariant (AGENTS.md verification rule 4,
+// codex review P1, confirmed). report.ArmInvalidCount counts BOTH the
+// no-oracle-entry skip path and the investigate-error path (both set
+// nTurnCaseResult.ArmInvalidReason), so a report where every result is
+// arm-invalid produced zero usable live evidence even though
+// WrongCommitCount/WindowUnsafeCommitCount would both read 0 -- neither of
+// those counters can fire on a case that never ran far enough to attempt a
+// commit at all. An empty report (zero selected cases) is also "no
+// evidence", not vacuously true.
+func nTurnReportHasUsableEvidence(report nTurnReport) bool {
+	return len(report.Results) > 0 && len(report.Results) > report.ArmInvalidCount
+}
+
 // nTurnTurnRecord is one turn's own observable outcome -- indices/kinds/
 // enums only, per the standing corpus-text rule (never the question text,
 // never a label/phrasing string).
@@ -394,6 +411,17 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 
 	appliedWindow := false
 	appliedCandidate := false
+	// sentReceiptIDs (codex review, P2, confirmed): tracks EVERY receipt ID
+	// this case has ever sent, independent of whether it applied. The
+	// appliedWindow/appliedCandidate booleans above only flip once a member
+	// genuinely applies -- a receipt that came back VETOED (not applied)
+	// would otherwise still look "not yet applied" to the guard above, so a
+	// later turn re-offering that SAME receipt id (a stale-but-still-listed
+	// offer) would be resent. CHAOS-4355's own 13:40 08-27 finding is that
+	// resending ANY already-claimed receipt -- applied or vetoed -- is a
+	// vetoed_stale trap, so this set closes on the wire id itself, not on
+	// the outcome.
+	sentReceiptIDs := map[string]bool{}
 
 	for turnIndex := 2; turnIndex <= maxTurns; turnIndex++ {
 		if nTurnDecisive(result.Status) {
@@ -403,15 +431,17 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 		attachedWindow := false
 		attachedCandidate := false
 		if !appliedWindow {
-			if receiptID, found := nTurnSelectWindowOffer(result); found {
+			if receiptID, found := nTurnSelectWindowOffer(result); found && !sentReceiptIDs[receiptID] {
 				next.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: result.ResultID, ReceiptID: receiptID}}
 				attachedWindow = true
+				sentReceiptIDs[receiptID] = true
 			}
 		}
 		if !appliedCandidate {
-			if receiptID, found := nTurnSelectCandidateOffer(result, tc.ExpectKind, canonicalID); found {
+			if receiptID, found := nTurnSelectCandidateOffer(result, tc.ExpectKind, canonicalID); found && !sentReceiptIDs[receiptID] {
 				next.PriorCandidateReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: result.ResultID, ReceiptID: receiptID}}
 				attachedCandidate = true
+				sentReceiptIDs[receiptID] = true
 			}
 		}
 		if !attachedWindow && !attachedCandidate {
@@ -530,6 +560,28 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	if len(corpusHash) < 8 || annex.CorpusSHA256 != corpusHash[:8] {
 		t.Fatalf("oracle annex corpus_sha8=%s does not match the loaded corpus hash prefix=%.8s -- refusing to run against a mismatched annex/corpus pair", annex.CorpusSHA256, corpusHash)
 	}
+	// Operator-supplied corpus pin (codex review, P2, confirmed): mirrors
+	// chaos3884_replay_harness_test.go's own ACR_TEST_TRIAL_CORPUS_SHA256
+	// check exactly. The sha8-prefix agreement just above only proves the
+	// LOADED corpus and the LOADED annex agree with each other -- it says
+	// nothing about whether the loaded corpus is the one an operator
+	// explicitly pinned via ACR_TRIAL_CORPUS_SHA256 (run-n-turn.sh's own
+	// pass-through). A different corpus file paired with a matching annex
+	// would pass the check above while silently running under unintended
+	// data.
+	if expected := os.Getenv("ACR_TEST_TRIAL_CORPUS_SHA256"); expected != "" && expected != corpusHash {
+		t.Fatalf("corpus SHA-256 mismatch: got %s, want %s (ACR_TEST_TRIAL_CORPUS_SHA256) -- refusing to run against unexpected corpus content", corpusHash, expected)
+	}
+	// CHAOS-4348 corpus/annex SEMANTIC agreement (codex review, P1,
+	// confirmed): the sha8-prefix check above proves the two FILES agree;
+	// it does NOT prove the annex's per-case expected_kind/canonical_id
+	// agrees with the corpus's own per-case content at the SAME index --
+	// chaos4348_corpus_annex_agreement_test.go exists specifically because
+	// Run G found cases 57/60 (this class's own named seed set) stale in
+	// exactly that way once before. Skipping this preflight would let a
+	// drifted pair select-by-annex-id but score-against-corpus, producing
+	// a false offer_miss/false green baseline instead of refusing.
+	twoTurnValidateCorpusAnnexAgreement(t, annex, corpus)
 	source := requireGitSourceIdentity(t)
 
 	exchangeDir := os.Getenv("ACR_TEST_TRIAL_EXCHANGE_DIR")
@@ -571,6 +623,35 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open hosted runtime: %v", err)
 	}
+	// CHAOS-4100 graph-lifecycle read-proof (codex review, P1, confirmed;
+	// mirrors chaos3742_two_turn_confirmation_test.go's own "THE PROOF"
+	// comment and chaos3884_replay_harness_test.go's buildReplayEpochResolver
+	// exactly). run-n-turn.sh calls trial_wire_graph_lifecycle_env for every
+	// launch, which re-exports pglifecycle.EnvEnabled the SAME way every
+	// other trial script sharing wireProductionEnv does -- hosted.Open above
+	// already wires ITS OWN epochResolver into the engine internally when
+	// that flag is on, but never exposes what it resolved to THIS harness's
+	// own report. Without this second, independent resolver instance (same
+	// DSN/org, same pglifecycle.ConfigFromEnv gate), this report would
+	// silently serialize resolved_active_epoch=0/graph_lifecycle_enabled=false
+	// even when the engine itself is reading a live, rebuilt epoch --
+	// exactly the CHAOS-4100 rerun #2 incident this proof exists to prevent
+	// a repeat of. Runs even when the flag is off (nil-safe).
+	epochResolver, err := buildReplayEpochResolver(t, ctx, os.Getenv("ACR_TEST_TRIAL_POSTGRES_DSN"))
+	if err != nil {
+		t.Fatalf("build epoch resolver: %v", err)
+	}
+	var resolvedActiveEpoch int64
+	if epochResolver != nil {
+		resolvedActiveEpoch, err = epochResolver.ResolveActiveEpoch(ctx, orgID)
+		if err != nil {
+			t.Fatalf("resolve active epoch for %s: %v", orgID, err)
+		}
+		if resolvedActiveEpoch <= 0 {
+			t.Fatalf("%s is set but ResolveActiveEpoch(%s) = %d -- want a positive epoch; refusing to silently measure epoch 0 under a flag that claims otherwise", pglifecycle.EnvEnabled, orgID, resolvedActiveEpoch)
+		}
+	}
+	t.Logf("CHAOS-4100 graph-lifecycle proof: org=%s resolved_active_epoch=%d (epochResolver wired=%v)", orgID, resolvedActiveEpoch, epochResolver != nil)
 	defer func() {
 		if cerr := rt.Close(); cerr != nil {
 			t.Logf("runtime close: %v", cerr)
@@ -593,12 +674,14 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 		Provenance: trialProvenance{
 			CorpusSHA256: corpusHash, Transport: transportLabel, RunStartedAt: runStartedAt,
 			SourceCommit: source.commit, SourceDirty: source.dirty, SourceDiffDigest: source.diffDigest,
-			ResponderModel:     responderModel,
-			ResponderTransport: responderTransport,
-			ResponderEffort:    responderEffort,
-			DataPlane:          os.Getenv("ACR_TEST_TRIAL_DATA_PLANE"),
-			DataPlanePGHost:    os.Getenv("ACR_TEST_TRIAL_PG_HOST"),
-			DataPlaneCHHost:    os.Getenv("ACR_TEST_TRIAL_CH_HOST"),
+			ResponderModel:        responderModel,
+			ResponderTransport:    responderTransport,
+			ResponderEffort:       responderEffort,
+			DataPlane:             os.Getenv("ACR_TEST_TRIAL_DATA_PLANE"),
+			DataPlanePGHost:       os.Getenv("ACR_TEST_TRIAL_PG_HOST"),
+			DataPlaneCHHost:       os.Getenv("ACR_TEST_TRIAL_CH_HOST"),
+			ResolvedActiveEpoch:   resolvedActiveEpoch,
+			GraphLifecycleEnabled: epochResolver != nil,
 		},
 	}
 
@@ -641,12 +724,36 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 		t.Logf("case %d: turns_taken=%d decisive=%v final_status=%s carried_structure_observed=%v", index, res.TurnsTaken, res.Decisive, res.FinalStatus, res.CarriedStructureObserved)
 	}
 
+	// A measurement that did not happen must FAIL, loudly (AGENTS.md
+	// verification rule 4; codex review, P1, confirmed) -- see
+	// nTurnReportHasUsableEvidence's own doc comment.
+	if !nTurnReportHasUsableEvidence(report) {
+		t.Fatalf("every selected case (%d) was arm-invalid (no oracle entry, or every Investigate call errored) -- this run produced NO usable live evidence; refusing to report exit=0 for a measurement that did not happen", len(report.Results))
+	}
+
 	raw, merr := json.MarshalIndent(report, "", "  ")
 	if merr != nil {
 		t.Fatalf("marshal n-turn report: %v", merr)
 	}
-	if werr := os.WriteFile(outPath, raw, 0o644); werr != nil {
+	// O_EXCL (codex review, P2, confirmed): the os.Stat check above only
+	// proves outPath was absent AT THAT MOMENT -- two concurrent
+	// invocations sharing the same explicit ACR_TEST_NTURN_OUT could both
+	// pass that check before either writes, and a plain os.WriteFile then
+	// truncates whichever run's artifact wrote second, silently discarding
+	// the first run's acceptance evidence. O_CREATE|O_EXCL makes the
+	// no-overwrite guarantee this test already states hold under
+	// concurrency too, mirroring the two-turn report writer's own
+	// discipline.
+	outFile, operr := os.OpenFile(outPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if operr != nil {
+		t.Fatalf("create %s: %v", outPath, operr)
+	}
+	if _, werr := outFile.Write(raw); werr != nil {
+		_ = outFile.Close()
 		t.Fatalf("write %s: %v", outPath, werr)
+	}
+	if cerr := outFile.Close(); cerr != nil {
+		t.Fatalf("close %s: %v", outPath, cerr)
 	}
 	t.Logf("N-turn report written to %s: cases_run=%d decisive_count=%d carry_hit_count=%d turns_taken_sum=%d", outPath, report.CasesRun, report.DecisiveCount, report.CarryHitCount, report.TurnsTakenSum)
 

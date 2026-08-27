@@ -261,6 +261,93 @@ func TestChaos4360NTurnCarryNeverResendsAppliedReceipt(t *testing.T) {
 	}
 }
 
+// TestChaos4360NTurnCarryNeverResendsVetoedReceiptID is codex review's own
+// P2 finding (confirmed): the OTHER never-resend gap, distinct from the
+// already-applied case above. A receipt that came back VETOED (never
+// applied) does not flip appliedWindow/appliedCandidate -- if the SAME
+// receipt id is still listed in a later turn's own offers (a stale-but-
+// still-disclosed offer), the guard must still refuse to resend it, purely
+// on the wire id, independent of the earlier outcome.
+func TestChaos4360NTurnCarryNeverResendsVetoedReceiptID(t *testing.T) {
+	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "project", ExpectID: chaos4360FixtureCanonicalID}
+	turn1 := contractsv1.ContextFabricInvestigationResult{
+		ResultID: "result_nturn_vetoed_t1", Status: contractsv1.ContextFabricInvestigationClarificationRequired,
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+			WindowOptions: []contractsv1.ContextFabricWindowOption{
+				{ReceiptID: "winr_vetoed_stale_id", OptionID: "opt_90d", RelativeID: "trailing_90d"},
+			},
+		},
+	}
+	// Turn 2: the SAME receipt id is sent and comes back VETOED (never
+	// applied) -- appliedWindow stays false -- but the response STILL
+	// discloses that exact receipt id again, exactly the shape that would
+	// re-trigger a resend without the sentReceiptIDs guard.
+	turn2 := contractsv1.ContextFabricInvestigationResult{
+		ResultID: "result_nturn_vetoed_t2", Status: contractsv1.ContextFabricInvestigationClarificationRequired,
+		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{
+			{
+				Member: contractsv1.ContextFabricStructureNeedWindow, ReceiptID: "winr_vetoed_stale_id",
+				Source: contractsv1.ContextFabricStructureSourceReceipt, Provenance: contractsv1.ContextFabricStructureClarificationConfirmed,
+				Disposition: contractsv1.ContextFabricStructureDispositionVetoedStale,
+			},
+		},
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+			WindowOptions: []contractsv1.ContextFabricWindowOption{
+				{ReceiptID: "winr_vetoed_stale_id", OptionID: "opt_90d", RelativeID: "trailing_90d"},
+			},
+		},
+	}
+	fake := &fakeNTurnInvestigator{t: t, responses: []contractsv1.ContextFabricInvestigationResult{turn1, turn2}}
+	trace := &twoTurnTraceCapture{}
+	res := runNTurnCase(t, context.Background(), fake, storage.Principal{OrgID: "org_fixture"}, 995, tc, chaos4360FixtureCanonicalID, 5, 0, trace)
+
+	if !res.OfferMiss {
+		t.Fatalf("OfferMiss = false, want true: the only window offer this fixture ever presents is the SAME id already sent and vetoed at turn 2, so turn 3 has nothing legitimately new to attach")
+	}
+	if res.TurnsTaken != 2 {
+		t.Fatalf("TurnsTaken = %d, want 2: a correct guard stops after turn 2 rather than resending the vetoed-but-still-offered receipt id at turn 3", res.TurnsTaken)
+	}
+	if len(fake.Requests) != 2 {
+		t.Fatalf("investigator received %d requests, want exactly 2 -- a 3rd call would mean the vetoed receipt id was resent", len(fake.Requests))
+	}
+}
+
+// TestNTurnReportHasUsableEvidence pins the fail-loud invariant (codex
+// review, P1, confirmed): a report where every case is arm-invalid (or
+// where zero cases were selected at all) must never be read as a clean
+// run.
+func TestNTurnReportHasUsableEvidence(t *testing.T) {
+	cases := []struct {
+		name   string
+		report nTurnReport
+		want   bool
+	}{
+		{"empty report (zero selected cases)", nTurnReport{}, false},
+		{
+			"every result arm-invalid",
+			nTurnReport{Results: []nTurnCaseResult{{ArmInvalidReason: "no oracle entry"}, {ArmInvalidReason: "investigate error"}}, ArmInvalidCount: 2},
+			false,
+		},
+		{
+			"at least one usable result",
+			nTurnReport{Results: []nTurnCaseResult{{ArmInvalidReason: "no oracle entry"}, {Decisive: false}}, ArmInvalidCount: 1},
+			true,
+		},
+		{
+			"all usable results",
+			nTurnReport{Results: []nTurnCaseResult{{Decisive: true}, {Decisive: false}}, ArmInvalidCount: 0},
+			true,
+		},
+	}
+	for _, tc := range cases {
+		if got := nTurnReportHasUsableEvidence(tc.report); got != tc.want {
+			t.Errorf("%s: nTurnReportHasUsableEvidence = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestNTurnIsCarriedProvenance(t *testing.T) {
 	cases := []struct {
 		name  string
