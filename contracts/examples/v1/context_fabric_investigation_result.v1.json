@@ -572,7 +572,21 @@
       "field": "release_ready",
       "value": {
         "boolean": false
-      }
+      },
+      "rows": [
+        {
+          "fields": {
+            "requirement": { "string": "Release acceptance review" },
+            "status": { "string": "open" }
+          }
+        },
+        {
+          "fields": {
+            "requirement": { "string": "Production readiness checklist" },
+            "status": { "string": "complete" }
+          }
+        }
+      ]
     }
   ],
   "coverage": {

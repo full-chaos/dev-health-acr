@@ -287,6 +287,14 @@ func (t SlogEngineTelemetry) RecordOfferPhrasing(ctx context.Context, principal 
 	t.logger.InfoContext(ctx, "context fabric offer phrasing outcome", args...)
 }
 
+// RecordProjectedRowsCount implements EngineTelemetry (CHAOS-4355) -- see
+// that method's doc comment for the count/truncated meaning. Content-safe:
+// an org id and two closed, non-identifying numbers.
+func (t SlogEngineTelemetry) RecordProjectedRowsCount(ctx context.Context, principal storage.Principal, count int, truncated bool) {
+	args := append([]any{"org_id", principal.OrgID, "rows_count", count, "truncated", truncated}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric projected rows count", args...)
+}
+
 // RecordFactScopeExpansion implements EngineTelemetry (CHAOS-4099) -- the
 // ONE operator-visible record of whether a fact family could be reached from
 // the subjects an investigation resolved.
