@@ -163,6 +163,20 @@ CHAOS-4348 (project/team subjects showing 0/20 "in pool" on 2026-08-26,
 started from a false premise of unreachability rather than the real
 gap — missing facts, not missing pool membership (see diagram 4).
 
+**In-flight fix (not yet merged as of this writing):** `lane-4347-project`
+(branch `chaos-4348-project-team-pool`) is building two new search arms
+scoped to repository/project/team (`graphrank/chaos4348_reachability.go`,
+`falkorgraph/chaos4348_exact_name.go`) that merge into the real `pool`
+through the existing identity-collision guard, plus confirms two more
+contributing mechanisms not drawn above: ordinary unscoped `Search`/
+`SearchQuestion` lose the fulltext ranking race for these kinds against
+~34,000+ activity nodes sharing a token (`resolve.go` per-term loop,
+~line 1713), and `IsObservationAttributionRelation`
+(`graphrank/subject.go:208`) is a closed 2-member set that has nothing to
+do with `BELONGS_TO_PROJECT`/`OWNED_BY_TEAM`, so observation-traversal
+does not cover the project/team edges either. Update this diagram in the
+same PR that merges that fix, per the update rule above.
+
 ---
 
 ## 3 — Subject hierarchy and graph data model
