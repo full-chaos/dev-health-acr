@@ -305,7 +305,7 @@ import (
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "36"
+const expectedSchemaVersion = "35"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -414,18 +414,11 @@ type twoTurnCaseResult struct {
 	PairRetryFirstArmInvalidStage     string `json:"pair_retry_first_arm_invalid_stage,omitempty"`
 	PairRetryFirstArmInvalidErrorType string `json:"pair_retry_first_arm_invalid_error_type,omitempty"`
 	FalseNoMatch                      bool   `json:"false_no_match,omitempty"`
-	// NoMatchFactlessCommitted (CHAOS-4344, schema v36) mirrors
-	// twoTurnCaseResult's identically-named field byte-for-byte -- see the
-	// producer's own doc comment (chaos3742_two_turn_confirmation_test.go)
-	// for the doctrine-legal "committed subject, no relevant canonical
-	// facts" shape this partitions out of FalseNoMatch. Purely additive
-	// passthrough; no merge arithmetic (Results concatenates verbatim).
-	NoMatchFactlessCommitted bool   `json:"no_match_factless_committed,omitempty"`
-	CommittedCount           int    `json:"committed_count"`
-	WrongCommit              bool   `json:"wrong_commit"`
-	MutationProbe            string `json:"mutation_probe,omitempty"`
-	MutationTripped          bool   `json:"mutation_tripped,omitempty"`
-	ArmInvalidReason         string `json:"arm_invalid_reason,omitempty"`
+	CommittedCount                    int    `json:"committed_count"`
+	WrongCommit                       bool   `json:"wrong_commit"`
+	MutationProbe                     string `json:"mutation_probe,omitempty"`
+	MutationTripped                   bool   `json:"mutation_tripped,omitempty"`
+	ArmInvalidReason                  string `json:"arm_invalid_reason,omitempty"`
 	// ShadowKindInsensitivityEvaluated/ShadowKindInsensitivityOutcome and
 	// BaselineCommittedSubjects/HintedCommittedSubjects (CHAOS-4062,
 	// schema v8) mirror twoTurnCaseResult's identically-named fields in
@@ -689,13 +682,6 @@ type twoTurnReport struct {
 	OfferMissCount                          map[string]int  `json:"offer_miss_count"`
 	WrongCommitCount                        int             `json:"wrong_commit_count"`
 	FalseNoMatchCount                       int             `json:"false_no_match_count"`
-	// NoMatchFactlessCommittedCount (CHAOS-4344, schema v36) mirrors
-	// twoTurnReport's identically-named field byte-for-byte -- OBSERVATIONAL
-	// ONLY, never a gate condition (see evaluateGates: no fail() check
-	// against this field, deliberately, matching the producer's own doc
-	// comment). Merge arithmetic is a plain sum, same shape as
-	// FalseNoMatchCount immediately above.
-	NoMatchFactlessCommittedCount int `json:"no_match_factless_committed_count"`
 	// SynthesisStatusOverrideUncommittedCount (CHAOS-4103, schema v13) mirrors
 	// twoTurnReport's identically-named field -- see that file's own doc
 	// comment. A THIRD zero-tolerance bar alongside WrongCommitCount/
@@ -1073,7 +1059,6 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.StructureAndWindowDisclosureAbsentCount += s.StructureAndWindowDisclosureAbsentCount
 		merged.WrongCommitCount += s.WrongCommitCount
 		merged.FalseNoMatchCount += s.FalseNoMatchCount
-		merged.NoMatchFactlessCommittedCount += s.NoMatchFactlessCommittedCount
 		merged.SynthesisStatusOverrideUncommittedCount += s.SynthesisStatusOverrideUncommittedCount
 		merged.WindowCommitCount += s.WindowCommitCount
 		merged.WindowInferredTierRanCount += s.WindowInferredTierRanCount

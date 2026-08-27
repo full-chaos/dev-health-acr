@@ -48,7 +48,6 @@ kind_offer_suppressed_by_cardinality
 member
 mutation_probe
 mutation_tripped
-no_match_factless_committed
 offer_kind
 offer_miss
 pair_invalid
