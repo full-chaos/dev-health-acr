@@ -221,6 +221,47 @@ type ResolveDeps struct {
 	// backend) reaches SearchKind. A backend with no kind-scoped query path
 	// can safely leave this nil.
 	SearchKind func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
+	// ExactNameCandidates (CHAOS-4348) returns EVERY repository/project/team
+	// node (isAliasLookupScopedKind) in this organization's authorized,
+	// temporally-valid scope, ONCE per resolution -- not term-scoped, not
+	// ranked. applyExactNameArm (chaos4348_reachability.go) filters this
+	// fixed set against each of this resolution's OWN terms with the exact
+	// same equality check NodeCandidate already applies (label/alias/
+	// provider-alias, case-insensitive) -- so a term that equals a node's
+	// name exactly reaches candidatesBySubject THROUGH THE REAL Search/merge
+	// path (NodeCandidate/mergeSearchResults/identityCollision), never a
+	// side pool. Nil means this backend has no such capability and the arm
+	// is skipped, byte-identical to before this ticket -- the same
+	// "not implemented" convention every other optional hook here uses.
+	//
+	// Why NOT reuse SearchKind (fulltext, ranked, top-K-bounded): CHAOS-4348
+	// found live that repository/project/team names routinely lose the
+	// fulltext ranking race against the FAR more numerous other-kind nodes
+	// that happen to share a token (verified: kiac's own "chaos-ops" project,
+	// crowded out of the top 15 fulltext results entirely by unrelated
+	// pull_request/deployment/ci_pipeline_run nodes containing "chaos" or
+	// "ops", even though its OWN label equals the term exactly). A ranked
+	// top-K query cannot fix that -- the node is not merely low-ranked, it
+	// can fail to be RETURNED at all under a small limit. An unranked
+	// equality scan over the (small: tens, not tens-of-thousands) set of
+	// repository/project/team nodes has no such failure mode.
+	//
+	// Why always-on rather than hint-gated (unlike the kind-hinted
+	// supplemental pass below): an EXACT name match is never a false
+	// positive by construction -- NodeCandidate's own matched/aliasMatched/
+	// providerMatched checks are what decide relevance, and a term that
+	// matches nothing exactly changes nothing. "Always on" costs one cheap,
+	// cacheable, unranked query per resolution, not per term.
+	//
+	// Multi-claimant safety: results feed the SAME identity/identityTerms
+	// side-channel every other pass here does (never nil, unlike
+	// applyKindCoverageFloor's deliberate nil for these three kinds) -- a
+	// SECOND node whose label/alias exactly equals the SAME term (a project
+	// and a team both named "chaos-ops", say) trips the EXISTING
+	// identityCollision guard (chaos3884_identity.go) exactly as it already
+	// does for AliasLookup/ordinary-search exact matches, suppressing an
+	// unsafe auto-commit without a new mechanism.
+	ExactNameCandidates func(ctx context.Context) (candidates []CandidateNode, err error)
 	// VectorMechanismConfigured (CHAOS-4154) reports whether this deployment
 	// has a LIVE vector-similarity mechanism at all (falkorgraph: a.embedder
 	// != nil) -- distinct from VectorMarginCommitThreshold/CalibratedTopK
@@ -561,7 +602,10 @@ type ResolutionTraceEvent struct {
 	// (CHAOS-3899), "evidence_census_commit" (CHAOS-3896 Slice C),
 	// "evidence_source_native", "evidence_source_native_probe" (CHAOS-3899
 	// widening measurement, 2026-08-19), "slice_b_survivor_verdict"
-	// (CHAOS-4088), "kind_offer" (CHAOS-4012 v20).
+	// (CHAOS-4088), "kind_offer" (CHAOS-4012 v20), "kind_hint_search",
+	// "exact_name_search" (CHAOS-4348 -- see traceRetrievalSource,
+	// chaos4348_reachability.go; both reuse TermHash/Subject only, no new
+	// fields).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -1790,6 +1834,35 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			subjectCandidatesAuthzDropped += claimantAuthzDropped
 		}
 	}
+	// CHAOS-4348: two repository/project/team-only reachability passes,
+	// AFTER the per-term Search loop and AliasLookup above (so a kind they
+	// would have found via those ordinary passes never triggers extra work
+	// here -- applyKindHintedPoolSearch's own poolHasKind check), BEFORE the
+	// question-level pass below (both are deliberate, high-confidence
+	// signals; the question-level vector pass stays the broadest, lowest-
+	// precedence source, unchanged). See chaos4348_reachability.go's own
+	// doc comment for the full root-cause account and why these are two
+	// SEPARATE mechanisms rather than one.
+	if hinted := hintedPoolKinds(request, interpreted, confirmedKind); len(hinted) > 0 {
+		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted)
+		if hintedErr != nil {
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, hintedErr
+		}
+		traversalDegraded += hintedTraversalDegraded
+		subjectCandidatesAuthzDropped += hintedAuthzDropped
+		if hintedTruncated {
+			searchTruncated = true
+		}
+		if hintedDegraded {
+			retrievalDegraded = true
+		}
+	}
+	exactNameTraversalDegraded, exactNameAuthzDropped, exactNameErr := applyExactNameArm(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms)
+	if exactNameErr != nil {
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, exactNameErr
+	}
+	traversalDegraded += exactNameTraversalDegraded
+	subjectCandidatesAuthzDropped += exactNameAuthzDropped
 	// CHAOS-3838 (spec L11): the question-level pass runs AT MOST ONCE,
 	// AFTER every per-term pass above, never interleaved with it. Ordering
 	// matters for determinism, not just budget: MergeCandidates' winner/

@@ -50,9 +50,13 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // either identity change, exactly the mixed-format risk CHAOS-3916 exists
 // to close. This bump is the SAME deliberate-rebuild discipline as every
 // entry above, on the source that actually needed it for these two
-// changes. Live-verified (CHAOS-4108's own re-projection decision matrix,
-// standing stack, ground-truth org 70d529e0): zero project.v2:-shaped
-// nodes exist anywhere in that org's graph today.
+// changes. Live-verified AT THE TIME (CHAOS-4108's own re-projection
+// decision matrix, standing stack, ground-truth org 70d529e0): zero
+// project.v2:-shaped nodes existed anywhere in that org's graph as of this
+// bump. STALE as of CHAOS-4348: the org's graph now carries real project/
+// team nodes (rebuilt under this and later source-version bumps below) --
+// see docs/design/context-fabric-team-project-subjects.md §10 for what
+// CHAOS-4348 found projection alone does NOT fix (retrieval reachability).
 //
 // v4 (CHAOS-4193): the work_item -> project edge's READ SHAPE changed --
 // querySubjectProjectMemberships (formerly queryWorkItemProjects,

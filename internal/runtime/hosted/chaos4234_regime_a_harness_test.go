@@ -65,6 +65,36 @@ func (c *twoTurnTraceCapture) rankedCutFor(kind, canonicalID string) (rank int, 
 	return rank, atOfferBoundary
 }
 
+// retrievalSourceFor (CHAOS-4348, schema v36) reports which retrieval pass
+// first surfaced the expected subject: "exact_name" or "kind_scoped" if a
+// "exact_name_search"/"kind_hint_search" trace event (graphrank/
+// chaos4348_reachability.go's traceRetrievalSource) named this exact
+// (kind, canonical id) BEFORE the pool ever corroborated it, else
+// "ordinary" (found by Search/SearchQuestion/AliasLookup/the coverage
+// floor's own real-pool census kinds -- everything that predates this
+// ticket), else "absent" (poolContainsSubject is false: never reached the
+// pool by any path). Checked in EVENT ORDER, first match wins -- a subject
+// could in principle be found more than one way in the same resolution;
+// this reports the retrieval story a reader most needs (the rarer,
+// deliberate mechanism), not every mechanism that happened to also fire.
+func (c *twoTurnTraceCapture) retrievalSourceFor(kind, canonicalID string) string {
+	if !c.poolContainsSubject(kind, canonicalID) {
+		return "absent"
+	}
+	for _, e := range c.events {
+		if string(e.Subject.Kind) != kind || e.Subject.CanonicalID != canonicalID {
+			continue
+		}
+		switch e.Stage {
+		case "exact_name_search":
+			return "exact_name"
+		case "kind_hint_search":
+			return "kind_scoped"
+		}
+	}
+	return "ordinary"
+}
+
 // twoTurnRegimeAWindowReceipt returns the turn-1 window receipt the
 // positive arm attaches beside a non-window member's own receipt on a
 // regime-A case: found iff the case has an oracle window band AND turn 1

@@ -301,6 +301,13 @@ import (
 // not silently merged under the first shard's label. See the producer's
 // own ReportSchemaVersion doc comment.
 //
+// "36" (CHAOS-4348): purely additive -- twoTurnCaseResult gains
+// ExpectedSubjectRetrievalSource ("exact_name"|"kind_scoped"|"ordinary"|
+// "absent"), sourced from the producer's new "exact_name_search"/
+// "kind_hint_search" trace stages (graphrank/chaos4348_reachability.go).
+// No merge arithmetic changes -- the field rides through per-case, exactly
+// like ExpectedSubjectInPool/ExpectedSubjectRank already do.
+//
 // KEEP IN SYNC WITH internal/runtime/hosted/chaos3742_two_turn_confirmation_test.go's
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
@@ -594,9 +601,11 @@ type twoTurnCaseResult struct {
 	ExpectedSubjectInPool             bool `json:"expected_subject_in_pool"`
 	ExpectedSubjectRank               int  `json:"expected_subject_rank"`
 	ExpectedSubjectAtOfferBoundary    bool `json:"expected_subject_at_offer_boundary"`
-	Turn2WindowReceiptAttached        bool `json:"turn2_window_receipt_attached"`
-	AnchorOptionsCount                int  `json:"anchor_options_count"`
-	HandleOptionsCount                int  `json:"handle_options_count"`
+	// CHAOS-4348 (schema v36): mirrored byte-for-byte, same convention.
+	ExpectedSubjectRetrievalSource string `json:"expected_subject_retrieval_source"`
+	Turn2WindowReceiptAttached     bool   `json:"turn2_window_receipt_attached"`
+	AnchorOptionsCount             int    `json:"anchor_options_count"`
+	HandleOptionsCount             int    `json:"handle_options_count"`
 	// CHAOS-4119 (schema v27): HandleOptionsCount's own pre-graph-source
 	// twin, mirroring twoTurnCaseResult's identically-named field
 	// byte-for-byte.

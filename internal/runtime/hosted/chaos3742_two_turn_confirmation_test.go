@@ -2022,6 +2022,15 @@ type twoTurnTurn1Facts struct {
 	ExpectedSubjectInPool          bool
 	ExpectedSubjectRank            int
 	ExpectedSubjectAtOfferBoundary bool
+	// ExpectedSubjectRetrievalSource (CHAOS-4348, schema v36) is
+	// twoTurnTraceCapture.retrievalSourceFor's own reading: "exact_name" /
+	// "kind_scoped" / "ordinary" / "absent" -- see that method's own doc
+	// comment (chaos4234_regime_a_harness_test.go). Report bar: repository/
+	// project/team's expected_subject_in_pool rate and committed-positive
+	// rate per kind, cross-tabbed against this field, is what proves the
+	// new arms are actually load-bearing rather than redundant with
+	// ordinary search.
+	ExpectedSubjectRetrievalSource string
 	// ExpectedKindAtOfferBoundaryBeforeRepair/
 	// KindOfferDistinctKindCountBeforeRepair/
 	// KindOfferSuppressedByCardinalityBeforeRepair (CHAOS-4183 phase 3, sol
@@ -2308,6 +2317,7 @@ func twoTurnCaptureTurn1Facts(trace *twoTurnTraceCapture, turn1 contractsv1.Cont
 	facts.ExpectedKindAtOfferBoundaryBeforeRepair = trace.boundaryContainsKindBeforeRepair(tc.ExpectKind)
 	facts.ExpectedSubjectInPool = trace.poolContainsSubject(tc.ExpectKind, tc.ExpectID)
 	facts.ExpectedSubjectRank, facts.ExpectedSubjectAtOfferBoundary = trace.rankedCutFor(tc.ExpectKind, tc.ExpectID)
+	facts.ExpectedSubjectRetrievalSource = trace.retrievalSourceFor(tc.ExpectKind, tc.ExpectID)
 	facts.CensusRan = trace.censusRan()
 	facts.CensusComplete = trace.censusComplete()
 	facts.CensusCount = trace.censusCount()
@@ -2364,6 +2374,7 @@ func twoTurnStampTurn1Facts(res *twoTurnCaseResult, facts twoTurnTurn1Facts) {
 	res.ExpectedSubjectInPool = facts.ExpectedSubjectInPool
 	res.ExpectedSubjectRank = facts.ExpectedSubjectRank
 	res.ExpectedSubjectAtOfferBoundary = facts.ExpectedSubjectAtOfferBoundary
+	res.ExpectedSubjectRetrievalSource = facts.ExpectedSubjectRetrievalSource
 	res.AnchorOptionsCount = facts.AnchorOptionsCount
 	res.HandleOptionsCount = facts.HandleOptionsCount
 	res.HandleOptionsCountBeforeGraphSource = facts.HandleOptionsCountBeforeGraphSource
@@ -2810,6 +2821,12 @@ func TestTwoTurnCaptureTurn1Facts(t *testing.T) {
 			ExpectedInPool: true, ExpectedKindAtOfferBoundary: true, CensusRan: true, CensusComplete: true, CensusCount: 4,
 			EvidenceRoundEntered: true, EvidenceRoundReason: "",
 			Regime: twoTurnRegimeAWindowGated,
+			// CHAOS-4348: the corroboration event above names kind
+			// "repository" but no canonical id, so poolContainsSubject(tc)
+			// -- which requires BOTH -- is false for tc.ExpectID
+			// "repository:r1", and retrievalSourceFor's own first branch
+			// reports "absent" for exactly that reason.
+			ExpectedSubjectRetrievalSource: "absent",
 		}
 		// CHAOS-4183 phase 2: reflect.DeepEqual, same reason as the nil-trace
 		// subtest above -- the struct grew a []string field.
@@ -4301,6 +4318,10 @@ type twoTurnCaseResult struct {
 	ExpectedSubjectInPool          bool `json:"expected_subject_in_pool"`
 	ExpectedSubjectRank            int  `json:"expected_subject_rank"`
 	ExpectedSubjectAtOfferBoundary bool `json:"expected_subject_at_offer_boundary"`
+	// ExpectedSubjectRetrievalSource (CHAOS-4348, schema v36) mirrors
+	// twoTurnTurn1Facts.ExpectedSubjectRetrievalSource -- see that field's
+	// own doc comment. "exact_name" / "kind_scoped" / "ordinary" / "absent".
+	ExpectedSubjectRetrievalSource string `json:"expected_subject_retrieval_source"`
 	// Turn2WindowReceiptAttached (CHAOS-4234, schema v29, positive arm only)
 	// records the harness semantics change this ticket made: on a regime-A
 	// case (turn 1 window-gated), the positive arm's turn 2 now carries the

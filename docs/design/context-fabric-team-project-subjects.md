@@ -406,3 +406,86 @@ Key facts this producer relies on, all decided by Context Fabric rulings on
 - **No embedding work.** CHAOS-3778's embed projection is generic over owned
   entities; new kinds inherit it on rebase.
 - **No changes to `ClickHouseProjectionSource` or `ClickHouseSourceVersion`** (§0).
+
+## 10. Reachability (CHAOS-4348)
+
+§0/§9's premise -- "projecting the subject is what activates it" -- turned
+out to be only half true. Nodes and edges project correctly (live-verified
+against the kiac trial graph, org `70d529e0`: 20 `:Project` nodes, 3 `:Team`
+nodes, well-formed `search_text`/embeddings/`BELONGS_TO_PROJECT`/
+`OWNED_BY_TEAM` edges), but **retrieval** could not reliably find them:
+`expected_subject_in_pool` measured project 0/20, team 0/2 on a real corpus
+run. `internal/contextfabric/devhealthsource/teams_projects.go`'s own v3 doc
+comment ("zero project.v2:-shaped nodes exist anywhere in that org's graph
+today") is now STALE -- it described the pre-projection state this ticket's
+own predecessors (CHAOS-3898/3916/4108/4109) fixed; corrected in place.
+
+Root cause, live-verified against kiac (not theorized):
+
+1. Ordinary `Search`/`SearchQuestion` run **unscoped** across the whole node
+   population. repository/project/team are numerically rare (kiac: 34 nodes)
+   against `ci_pipeline_run`/`work_item`/`pull_request` (kiac: ~34,000+) --
+   a project or team's own tokens routinely lose the fulltext ranking race
+   to unrelated nodes sharing a token. Verified: kiac's "chaos-ops" gitlab
+   project, whose label equals that literal string, does not appear in the
+   top 15 unscoped fulltext results at all -- this organization's own
+   `CHAOS-nnnn` Linear ticket prefix makes "chaos"-containing tokens the
+   single most common in the corpus, worsening the crowd-out specifically
+   for these three kinds.
+2. The one mechanism that runs kind-scoped and DOES find them --
+   CHAOS-4038's coverage floor (`applyKindCoverageFloor`) -- is
+   architecturally barred from the real candidate pool for exactly
+   repository/project/team (CHAOS-4271 codex round 1, HIGH, BLOCK: an
+   offer-only floor find could otherwise trip `identityCollision` against
+   an unrelated candidate's own exact match). Their floor finds merge into
+   a private `offerOnlyPool` -- visible to `kindOfferMaterial`'s
+   clarification offers, invisible to `candidatesBySubject`, corroboration,
+   and commit.
+3. Observation-traversal does not help either: `IsObservationAttributionRelation`
+   is a closed, 2-member set (`DOCUMENTED_BY`, `HAS_EPISODE`) unrelated to
+   `BELONGS_TO_PROJECT`/`OWNED_BY_TEAM`, so a work item or PR mentioning its
+   project/team never traverses back to it. **Left untouched by this
+   ticket** -- a named follow-up, not fixed here.
+
+Fix: two narrower, additive mechanisms, both scoped to
+`isAliasLookupScopedKind` (repository/project/team) ONLY --
+`internal/contextfabric/graphrank/chaos4348_reachability.go`:
+
+```mermaid
+flowchart TD
+    T["Resolution terms"] --> S["Ordinary Search<br/>(unscoped fulltext)"]
+    S -.->|"crowded out for<br/>repo/project/team"| P0(["candidatesBySubject<br/>(the real pool)"])
+    T --> H{"Kind hint?<br/>(ExpectedKinds /<br/>confirmed receipt /<br/>interpreted text)"}
+    H -->|yes| KH["applyKindHintedPoolSearch<br/>(deps.SearchKind, kind-scoped fulltext)"]
+    KH -->|merges into REAL pool| P0
+    T --> EN["applyExactNameArm<br/>(deps.ExactNameCandidates,<br/>ALWAYS ON, unranked equality)"]
+    EN -->|"label/alias/provider-alias<br/>equals term exactly"| P0
+    P0 --> ID{"identityCollision<br/>(pre-existing, unchanged)"}
+    ID -->|"single claimant"| COMMIT["auto-commit eligible"]
+    ID -->|"2+ exact claimants"| OFFER["offer, not commit<br/>(CHAOS-4271 protection preserved)"]
+
+    CF["applyKindCoverageFloor<br/>(CHAOS-4038/4271, unchanged)"] -.->|"repository/project/team finds"| OFFPOOL(["offerOnlyPool<br/>(clarification offers ONLY,<br/>never the real pool)"])
+```
+
+- `applyKindHintedPoolSearch`: reuses `SearchKind` (the SAME kind-scoped
+  fulltext call the coverage floor already has), but ONLY when the request
+  carries a kind hint, and merges into the REAL pool through the ordinary
+  `mergeSearchResults`/`identityCollision` path -- a hint is caller/
+  interpreter intent, not a blind lexical guess, so CHAOS-4271's identity-
+  collision concern (an unrelated candidate's exact match getting
+  suppressed by a low-confidence, unsolicited floor find) does not apply.
+  No hint, no call, byte-identical to before this ticket.
+- `applyExactNameArm`: always on, unranked -- fetches every repository/
+  project/team node once per resolution and filters it in Go against each
+  term with NodeCandidate's OWN existing exact-match check (never
+  re-implemented), so a term that equals a node's name exactly reaches the
+  real pool regardless of fulltext ranking. Multi-claimant safety is the
+  PRE-EXISTING `identityCollision` guard, unchanged -- this arm feeds it
+  real identity tracking (never `nil`, unlike the coverage floor's
+  deliberate `nil` for these same three kinds), so two exact matches for
+  the same term still collide into an offer rather than a wrong commit.
+
+Both are new `ResolveDeps` hooks (`SearchKind` reused, `ExactNameCandidates`
+new); `work_item`/`pull_request`/`ci_run`/`pull_request_review` (the four
+census kinds) are untouched -- they already merge straight into the real
+pool via the coverage floor and needed no fix.
