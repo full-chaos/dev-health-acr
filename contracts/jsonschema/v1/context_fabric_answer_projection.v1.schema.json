@@ -1832,19 +1832,41 @@
         ]
       },
       "else": {
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "prior_result_id"
-              ]
-            },
-            {
-              "required": [
-                "receipt_id"
-              ]
+        "if": {
+          "properties": {
+            "source": {
+              "const": "carried"
             }
+          },
+          "required": [
+            "source"
           ]
+        },
+        "then": {
+          "required": [
+            "prior_result_id"
+          ],
+          "not": {
+            "required": [
+              "receipt_id"
+            ]
+          }
+        },
+        "else": {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "prior_result_id"
+                ]
+              },
+              {
+                "required": [
+                  "receipt_id"
+                ]
+              }
+            ]
+          }
         }
       }
     },

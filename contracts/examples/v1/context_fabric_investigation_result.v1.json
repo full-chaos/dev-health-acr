@@ -626,5 +626,24 @@
   },
   "deterministic_answer": "Ask Dev is not release-ready. The principal current driver is incomplete release acceptance, despite most tracked implementation work being closed.",
   "warnings": [],
-  "reused": false
+  "reused": false,
+  "confirmed_structure": [
+    {
+      "member": "expected_kind",
+      "applied_value": "project",
+      "source": "receipt",
+      "prior_result_id": "result_prior_ask_dev1",
+      "receipt_id": "kindr_ask_dev_9012",
+      "provenance": "clarification_confirmed",
+      "disposition": "applied"
+    },
+    {
+      "member": "window",
+      "applied_value": "trailing_90d",
+      "source": "carried",
+      "prior_result_id": "result_prior_ask_dev1",
+      "provenance": "clarification_confirmed",
+      "disposition": "applied"
+    }
+  ]
 }
