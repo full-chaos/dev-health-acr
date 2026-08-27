@@ -138,8 +138,8 @@ func TestChaos4360NTurnCarryDetectsCurrentDefect(t *testing.T) {
 	if res.WrongCommit {
 		t.Fatalf("WrongCommit = true, want false: no commit happened in this fixture")
 	}
-	if res.CarriedProvenanceObserved {
-		t.Fatalf("CarriedProvenanceObserved = true, want false: every ConfirmedStructure entry in this fixture uses a pre-CHAOS-4360 provenance value on purpose (today's defect), so the carry signal must read false")
+	if res.CarriedStructureObserved {
+		t.Fatalf("CarriedStructureObserved = true, want false: every ConfirmedStructure entry in this fixture uses a pre-CHAOS-4360 Source/Provenance value on purpose (today's defect), so the carry signal must read false")
 	}
 
 	// The never-re-send-an-applied-receipt contract: turn 3's own request
@@ -277,6 +277,88 @@ func TestNTurnIsCarriedProvenance(t *testing.T) {
 		if got := nTurnIsCarriedProvenance(tc.value); got != tc.want {
 			t.Errorf("%s: nTurnIsCarriedProvenance(%q) = %v, want %v", tc.name, tc.value, got, tc.want)
 		}
+	}
+}
+
+// TestNTurnIsCarriedSource pins the PRIMARY carry signal (lane-4360-acr,
+// PR #306): a carried structure member sets Source, not Provenance, to a
+// new value outside today's closed {receipt, explicit, explicit_unattributed}
+// vocabulary.
+func TestNTurnIsCarriedSource(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"empty is never carried", "", false},
+		{"receipt is pre-carry", string(contractsv1.ContextFabricStructureSourceReceipt), false},
+		{"explicit is pre-carry", string(contractsv1.ContextFabricStructureSourceExplicit), false},
+		{"explicit_unattributed is pre-carry", string(contractsv1.ContextFabricStructureSourceExplicitUnattributed), false},
+		{"any unknown value is carried (forward-compatible, presence-checked)", "carried", true},
+	}
+	for _, tc := range cases {
+		if got := nTurnIsCarriedSource(tc.value); got != tc.want {
+			t.Errorf("%s: nTurnIsCarriedSource(%q) = %v, want %v", tc.name, tc.value, got, tc.want)
+		}
+	}
+}
+
+// TestChaos4360NTurnCarryObservedViaSource is the end-to-end wiring proof
+// for the primary carry signal: a turn 2 response whose window
+// ConfirmedStructure entry sets Source="carried" (a stand-in for
+// lane-4360-acr's real value, per nTurnIsCarriedSource's own doc comment on
+// why this harness cannot pin the literal spelling) must flip
+// CarriedStructureObserved, and the case must decisively commit -- proving
+// this fixture models the POST-fix shape, not the pre-fix defect the other
+// fixtures in this file pin.
+func TestChaos4360NTurnCarryObservedViaSource(t *testing.T) {
+	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "project", ExpectID: chaos4360FixtureCanonicalID}
+	turn1 := contractsv1.ContextFabricInvestigationResult{
+		ResultID: "result_nturn_carried_t1", Status: contractsv1.ContextFabricInvestigationClarificationRequired,
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate},
+			CandidateOptions: []contractsv1.ContextFabricCandidateOption{
+				{ReceiptID: "candr_carried_t1", OptionID: "opt_cand_1", Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: chaos4360FixtureCanonicalID},
+			},
+		},
+	}
+	// Turn 2: the candidate applies AND, per lane-4360-acr's own shape, the
+	// window is CARRIED from an earlier turn in this same conversation --
+	// Source="carried" (stand-in literal), Provenance UNCHANGED at
+	// clarification_confirmed (matching the real contract exactly), no
+	// receipt redeemed this turn (ReceiptID empty).
+	turn2 := contractsv1.ContextFabricInvestigationResult{
+		ResultID: "result_nturn_carried_t2", Status: contractsv1.ContextFabricInvestigationComplete,
+		ConfirmedStructure: []contractsv1.ContextFabricConfirmedStructureEntry{
+			{
+				Member: contractsv1.ContextFabricStructureNeedWindow, ReceiptID: "",
+				AppliedValue: "trailing_90d", Source: "carried",
+				Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+			},
+			{
+				Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, ReceiptID: "candr_carried_t1",
+				Source: contractsv1.ContextFabricStructureSourceReceipt, Provenance: contractsv1.ContextFabricStructureClarificationConfirmed,
+				Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+			},
+		},
+		SubjectResolution: contractsv1.ContextFabricSubjectResolution{
+			Committed: []contractsv1.ContextFabricSubjectRef{{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: chaos4360FixtureCanonicalID}},
+		},
+		EffectiveEvidenceWindow: &contractsv1.ContextFabricEffectiveEvidenceWindow{Provenance: contractsv1.ContextFabricWindowClarificationConfirmed},
+	}
+
+	fake := &fakeNTurnInvestigator{t: t, responses: []contractsv1.ContextFabricInvestigationResult{turn1, turn2}}
+	trace := &twoTurnTraceCapture{}
+	res := runNTurnCase(t, context.Background(), fake, storage.Principal{OrgID: "org_fixture"}, 996, tc, chaos4360FixtureCanonicalID, 5, 0, trace)
+
+	if !res.CarriedStructureObserved {
+		t.Fatalf("CarriedStructureObserved = false, want true: turn 2's window entry carries Source=%q, outside the closed pre-CHAOS-4360 vocabulary", "carried")
+	}
+	if !res.Decisive {
+		t.Fatalf("Decisive = false, want true: this fixture models the POST-fix shape (window carried, candidate applies, commits)")
+	}
+	if res.WindowUnsafeCommit {
+		t.Fatalf("WindowUnsafeCommit = true, want false: EffectiveEvidenceWindow.Provenance is clarification_confirmed (a carried window is a SAFE commit, per lane-4360-acr's own contract)")
 	}
 }
 

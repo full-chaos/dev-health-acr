@@ -542,19 +542,25 @@ sequenceDiagram
   E-->>C: window_canonicalization_outcome=gated_class_default<br/>SubjectResolution empty -- candidate redemption fails<br/>never decisive
 ```
 
-**Carry-provenance measurement.** `ContextFabricConfirmedStructureEntry.Provenance`
+**Carry measurement.** `ContextFabricConfirmedStructureEntry.Source`
 already carries a closed pre-CHAOS-4360 vocabulary of exactly three values
-(`inferred_default`, `question_stated`, `clarification_confirmed` —
-`nTurnKnownPreCarryProvenance`). The harness reads it generically
-(`nTurnIsCarriedProvenance`): any value outside that set is, by
-construction, a new carry tier lane-4360-acr mints — the class runs green
-on `origin/main` today (no such value can appear yet) and starts measuring
-the fix the moment it ships, with no harness-side code change and no
-coordination on an exact new spelling.
+(`receipt`, `explicit`, `explicit_unattributed` — `nTurnKnownPreCarrySource`).
+Per lane-4360-acr (PR #306, team communication 2026-08-27): a carried
+window keeps `Provenance=clarification_confirmed` unchanged and instead
+reports the carry on `Source`, a new closed-vocab value `"carried"`. The
+harness reads `Source` generically (`nTurnIsCarriedSource`, the primary
+signal) and `Provenance` generically as a secondary, forward-compatible
+one (`nTurnIsCarriedProvenance`): any value outside the known set on either
+field is, by construction, a new carry tier lane-4360-acr mints — the
+class runs green on `origin/main` today (neither field can carry an
+out-of-vocabulary value yet) and starts measuring the fix the moment it
+ships, with no harness-side code change and no coordination on an exact
+new spelling.
 
 **RED baseline (2026-08-27, kiac, cases 57/60 — the project-candidate
-class this ticket seeds from; indices only, no question text).** Both
-safety invariants held (`wrong_commit_count=0`,
+class this ticket seeds from; indices only, no question text; predates
+lane-4360-acr's own carry fix, PR #306, still in review at the time of this
+run).** Both safety invariants held (`wrong_commit_count=0`,
 `window_unsafe_commit_count=0`); neither case reached the acceptance bar
 (decisive AND `rows_count>0`): case 57 stalled non-decisive after 2 turns
 (`offer_miss=true` — window and the candidate receipt both disposed

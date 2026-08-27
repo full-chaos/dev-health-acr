@@ -45,19 +45,23 @@ package hosted_test
 // ticket. It reuses that file's shared setup helpers directly rather than
 // re-deriving them.
 //
-// CARRY-PROVENANCE MEASUREMENT (presence-checked, not hard-coded): the
-// wire already carries ContextFabricConfirmedStructureEntry.Provenance as
-// a plain string (contractsv1.ContextFabricStructureProvenance) with a
-// closed pre-CHAOS-4360 vocabulary of exactly three values --
-// inferred_default, question_stated, clarification_confirmed
-// (nTurnKnownPreCarryProvenance below). This class reads Provenance
-// GENERICALLY: any value OUTSIDE that closed set on a live result is, by
-// construction, a new carry-provenance tier acr minted for CHAOS-4360 --
-// see nTurnIsCarriedProvenance. This is what lets the class run GREEN on
-// origin/main today (no value outside the known set can appear yet) and
-// start MEASURING the fix the moment lane-4360-acr's change ships, with no
-// further code change on the harness side and no coordination needed on
-// an exact new enum spelling.
+// CARRY MEASUREMENT (presence-checked, not hard-coded): the wire already
+// carries ContextFabricConfirmedStructureEntry.Source
+// (contractsv1.ContextFabricStructureSource) with a closed pre-CHAOS-4360
+// vocabulary of exactly three values -- receipt, explicit,
+// explicit_unattributed (nTurnKnownPreCarrySource below). Per lane-4360-acr
+// (PR #306, team communication 2026-08-27): a carried window keeps
+// Provenance=clarification_confirmed unchanged and instead reports the
+// carry on Source, a NEW closed-vocab value "carried". This class reads
+// Source GENERICALLY (nTurnIsCarriedSource): any value OUTSIDE that closed
+// set on a live result is, by construction, a new carry-source tier acr
+// minted for CHAOS-4360. Provenance is ALSO read generically
+// (nTurnIsCarriedProvenance) as a secondary, forward-compatible signal, in
+// case a future change reports carry there too. Both together are what let
+// the class run GREEN on origin/main today (neither field can carry an
+// out-of-vocabulary value yet) and start MEASURING the fix the moment
+// lane-4360-acr's change ships, with no further code change on the harness
+// side and no coordination needed on an exact new enum spelling.
 
 import (
 	"context"
@@ -95,10 +99,15 @@ const nTurnReportSchemaVersion = "40"
 // acr-side same-conversation carry lands (context_fabric_structure_types.go:
 // ContextFabricStructureInferredDefault/QuestionStated/
 // ClarificationConfirmed -- exactly three, verified against that file).
-// nTurnIsCarriedProvenance below is the presence-check this whole class's
-// carry measurement depends on: never a hard assertion against a specific
-// new value, because this harness lane does not own -- and must not guess
-// -- lane-4360-acr's exact new provenance spelling.
+// nTurnIsCarriedProvenance below is a presence-check kept for forward
+// compatibility, but it is NOT the primary carry signal -- see
+// nTurnKnownPreCarrySource/nTurnIsCarriedSource below, confirmed against
+// lane-4360-acr's own PR #306 (team communication, 2026-08-27): a carried
+// window keeps Provenance=clarification_confirmed (never a new value) and
+// instead reports on ConfirmedStructureEntry.Source, a NEW closed-vocab
+// value "carried" alongside today's receipt/explicit/explicit_unattributed
+// (context_fabric_structure_types.go: ContextFabricStructureSourceReceipt/
+// Explicit/ExplicitUnattributed -- exactly three on origin/main today).
 var nTurnKnownPreCarryProvenance = map[string]bool{
 	string(contractsv1.ContextFabricStructureInferredDefault):        true,
 	string(contractsv1.ContextFabricStructureQuestionStated):         true,
@@ -108,9 +117,41 @@ var nTurnKnownPreCarryProvenance = map[string]bool{
 // nTurnIsCarriedProvenance reports whether value is a provenance tier
 // OUTSIDE the closed pre-carry vocabulary above -- see this file's own
 // header comment ("CARRY-PROVENANCE MEASUREMENT") for why this is read
-// generically rather than pinned to one guessed spelling.
+// generically rather than pinned to one guessed spelling. Kept as a
+// secondary, forward-compatible signal; nTurnIsCarriedSource is the
+// primary one -- see its own doc comment.
 func nTurnIsCarriedProvenance(value string) bool {
 	return value != "" && !nTurnKnownPreCarryProvenance[value]
+}
+
+// nTurnKnownPreCarrySource is the CLOSED set of ContextFabricStructureSource
+// values reachable before CHAOS-4360's acr-side same-conversation carry
+// lands (context_fabric_structure_types.go: ContextFabricStructureSourceReceipt/
+// Explicit/ExplicitUnattributed -- exactly three, verified against that
+// file). This is the PRIMARY carry signal (lane-4360-acr, PR #306): a
+// carried structure member sets Source to a NEW closed-vocab value
+// "carried" (not yet in this repo's contractsv1 package as of this
+// harness's own merge -- see nTurnIsCarriedSource's own doc comment for why
+// it is still read generically rather than pinned to that literal).
+var nTurnKnownPreCarrySource = map[string]bool{
+	string(contractsv1.ContextFabricStructureSourceReceipt):              true,
+	string(contractsv1.ContextFabricStructureSourceExplicit):             true,
+	string(contractsv1.ContextFabricStructureSourceExplicitUnattributed): true,
+}
+
+// nTurnIsCarriedSource reports whether value is a structure-source tier
+// OUTSIDE the closed pre-carry vocabulary above -- read generically (not
+// pinned to the literal "carried") for the SAME reason
+// nTurnIsCarriedProvenance is: contractsv1.ContextFabricStructureSourceCarried
+// does not exist in this package as of this harness's own merge (lane-4360-acr's
+// PR #306 was still in CI/review, unmerged), and hard-coding a string this
+// harness's own compiled contractsv1 package cannot yet validate would
+// silently stop matching if the real merged spelling differs by even one
+// character. Once acr's own contractsv1.ContextFabricStructureSourceCarried
+// constant is available in a future dependency bump, this may be tightened
+// to compare against it directly -- not required for correctness today.
+func nTurnIsCarriedSource(value string) bool {
+	return value != "" && !nTurnKnownPreCarrySource[value]
 }
 
 // nTurnDecisive reports whether status is a terminal, answer-bearing
@@ -207,11 +248,15 @@ func nTurnGroundTruthCandidate(annex twoTurnOracleAnnex, index int) (canonicalID
 // enums only, per the standing corpus-text rule (never the question text,
 // never a label/phrasing string).
 type nTurnTurnRecord struct {
-	TurnIndex                       int               `json:"turn_index"`
-	Status                          string            `json:"status"`
-	WindowCanonicalizationOutcome   string            `json:"window_canonicalization_outcome,omitempty"`
-	ConfirmedStructureDispositions  map[string]string `json:"confirmed_structure_dispositions,omitempty"`
-	ConfirmedStructureProvenance    map[string]string `json:"confirmed_structure_provenance,omitempty"`
+	TurnIndex                      int               `json:"turn_index"`
+	Status                         string            `json:"status"`
+	WindowCanonicalizationOutcome  string            `json:"window_canonicalization_outcome,omitempty"`
+	ConfirmedStructureDispositions map[string]string `json:"confirmed_structure_dispositions,omitempty"`
+	ConfirmedStructureProvenance   map[string]string `json:"confirmed_structure_provenance,omitempty"`
+	// ConfirmedStructureSource is the PRIMARY carry signal -- see
+	// nTurnIsCarriedSource's own doc comment. Recorded per member, same
+	// shape as the Provenance/Disposition maps above.
+	ConfirmedStructureSource        map[string]string `json:"confirmed_structure_source,omitempty"`
 	PriorSubjectReceiptDispositions []string          `json:"prior_subject_receipt_dispositions,omitempty"`
 	Missing                         []string          `json:"missing,omitempty"`
 	CommittedCount                  int               `json:"committed_count"`
@@ -225,19 +270,23 @@ type nTurnTurnRecord struct {
 // turn reached, whether that turn was decisive or the loop simply ran out
 // of offers or turns.
 type nTurnCaseResult struct {
-	Index                     int               `json:"index"`
-	ExpectKind                string            `json:"expect_kind,omitempty"`
-	Arm                       string            `json:"arm"`
-	TurnsTaken                int               `json:"turns_taken"`
-	Turns                     []nTurnTurnRecord `json:"turns"`
-	Decisive                  bool              `json:"decisive"`
-	FinalStatus               string            `json:"final_status"`
-	RowsCount                 int               `json:"rows_count"`
-	WrongCommit               bool              `json:"wrong_commit"`
-	WindowUnsafeCommit        bool              `json:"window_unsafe_commit"`
-	OfferMiss                 bool              `json:"offer_miss"`
-	ArmInvalidReason          string            `json:"arm_invalid_reason,omitempty"`
-	CarriedProvenanceObserved bool              `json:"carried_provenance_observed"`
+	Index              int               `json:"index"`
+	ExpectKind         string            `json:"expect_kind,omitempty"`
+	Arm                string            `json:"arm"`
+	TurnsTaken         int               `json:"turns_taken"`
+	Turns              []nTurnTurnRecord `json:"turns"`
+	Decisive           bool              `json:"decisive"`
+	FinalStatus        string            `json:"final_status"`
+	RowsCount          int               `json:"rows_count"`
+	WrongCommit        bool              `json:"wrong_commit"`
+	WindowUnsafeCommit bool              `json:"window_unsafe_commit"`
+	OfferMiss          bool              `json:"offer_miss"`
+	ArmInvalidReason   string            `json:"arm_invalid_reason,omitempty"`
+	// CarriedStructureObserved is true when ANY turn's ConfirmedStructure
+	// entry carries a Source (primary signal) or Provenance (secondary,
+	// forward-compatible signal) value outside the closed pre-CHAOS-4360
+	// vocabulary -- see nTurnIsCarriedSource/nTurnIsCarriedProvenance.
+	CarriedStructureObserved bool `json:"carried_structure_observed"`
 }
 
 // nTurnReport is this class's own top-level artifact -- a single-shard
@@ -283,9 +332,11 @@ func nTurnRecordTurn(turnIndex int, result contractsv1.ContextFabricInvestigatio
 	if len(result.ConfirmedStructure) > 0 {
 		rec.ConfirmedStructureDispositions = make(map[string]string, len(result.ConfirmedStructure))
 		rec.ConfirmedStructureProvenance = make(map[string]string, len(result.ConfirmedStructure))
+		rec.ConfirmedStructureSource = make(map[string]string, len(result.ConfirmedStructure))
 		for _, entry := range result.ConfirmedStructure {
 			rec.ConfirmedStructureDispositions[string(entry.Member)] = string(entry.Disposition)
 			rec.ConfirmedStructureProvenance[string(entry.Member)] = string(entry.Provenance)
+			rec.ConfirmedStructureSource[string(entry.Member)] = string(entry.Source)
 		}
 	}
 	for _, entry := range result.SubjectResolution.PriorSubjectReceiptDispositions {
@@ -396,9 +447,14 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 	res.WrongCommit = twoTurnCommittedWrong(result.SubjectResolution.Committed, tc)
 	res.WindowUnsafeCommit = nTurnWindowUnsafeCommit(result)
 	for _, rec := range res.Turns {
+		for _, source := range rec.ConfirmedStructureSource {
+			if nTurnIsCarriedSource(source) {
+				res.CarriedStructureObserved = true
+			}
+		}
 		for _, provenance := range rec.ConfirmedStructureProvenance {
 			if nTurnIsCarriedProvenance(provenance) {
-				res.CarriedProvenanceObserved = true
+				res.CarriedStructureObserved = true
 			}
 		}
 	}
@@ -579,10 +635,10 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 		if res.WindowUnsafeCommit {
 			report.WindowUnsafeCommitCount++
 		}
-		if res.CarriedProvenanceObserved {
+		if res.CarriedStructureObserved {
 			report.CarryHitCount++
 		}
-		t.Logf("case %d: turns_taken=%d decisive=%v final_status=%s carried_provenance_observed=%v", index, res.TurnsTaken, res.Decisive, res.FinalStatus, res.CarriedProvenanceObserved)
+		t.Logf("case %d: turns_taken=%d decisive=%v final_status=%s carried_structure_observed=%v", index, res.TurnsTaken, res.Decisive, res.FinalStatus, res.CarriedStructureObserved)
 	}
 
 	raw, merr := json.MarshalIndent(report, "", "  ")
