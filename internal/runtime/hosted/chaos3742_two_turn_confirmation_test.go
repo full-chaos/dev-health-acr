@@ -623,6 +623,20 @@ var twoTurnStructureMembers = map[string]bool{
 
 // validateTwoTurnOracleAnnex checks the closed-vocabulary/shape rules a
 // malformed annex would otherwise let slide silently into a run.
+//
+// CHAOS-4348 measurement-layer fix (codex adversarial review, HIGH,
+// confirmed): the annex's own env var is ACR_TEST_TWOTURN_ORACLE_ANNEX, and
+// both scripts/trial/run-two-turn.sh and run-two-turn-parallel.sh invoke
+// `go test -run TestChaos3742TwoTurnConfirmationReplay` -- a standalone
+// TestChaos4348OracleAnnexAnchorIDsMatchLiveIdentityScheme test (this
+// file's first version of this fix) reading a DIFFERENT env var name
+// (ORACLE_ANNEX) would never run for a single real trial invocation,
+// sequential or parallel, regardless of whether the annex was actually
+// stale. The scheme check below is wired in HERE instead -- inside the
+// SAME validateTwoTurnOracleAnnex loadTwoTurnOracleAnnex already calls
+// unconditionally, on every real load, before a single case executes --
+// so a stale-scheme anchor id fails the run outright, not merely a
+// counter a caller could fail to check.
 func validateTwoTurnOracleAnnex(annex twoTurnOracleAnnex) error {
 	if annex.CorpusSHA256 == "" {
 		return fmt.Errorf("oracle annex: corpus_sha256 is required")
@@ -630,6 +644,17 @@ func validateTwoTurnOracleAnnex(annex twoTurnOracleAnnex) error {
 	for i, entry := range annex.Entries {
 		if !twoTurnStructureMembers[entry.Member] {
 			return fmt.Errorf("oracle annex entry %d: member %q is not a closed StructureNeeds member", i, entry.Member)
+		}
+		if entry.Member != string(contractsv1.ContextFabricStructureNeedSubjectAnchor) {
+			continue
+		}
+		if id := entry.PositiveAnchorCanonicalID; id != "" && !chaos4348KnownResidualStaleAnchorIDs[id] && oracleIDSchemeMismatch(entry.PositiveKind, id) {
+			return fmt.Errorf("oracle annex entry %d (case %d, positive anchor): id %q does not match kind %q's live identity scheme (want prefix %q) -- run cmd/acr-annex-regen-project-ids (CHAOS-4348)",
+				i, entry.Index, id, entry.PositiveKind, chaos4348ExpectedIDSchemePrefix(entry.PositiveKind))
+		}
+		if id := entry.NegativeAnchorCanonicalID; id != "" && !chaos4348KnownResidualStaleAnchorIDs[id] && oracleIDSchemeMismatch(entry.NegativeKind, id) {
+			return fmt.Errorf("oracle annex entry %d (case %d, negative anchor): id %q does not match kind %q's live identity scheme (want prefix %q) -- run cmd/acr-annex-regen-project-ids (CHAOS-4348)",
+				i, entry.Index, id, entry.NegativeKind, chaos4348ExpectedIDSchemePrefix(entry.NegativeKind))
 		}
 	}
 	return nil

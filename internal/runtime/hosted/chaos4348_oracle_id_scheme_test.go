@@ -1,10 +1,7 @@
 package hosted_test
 
 import (
-	"encoding/json"
-	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"testing"
 
@@ -21,11 +18,13 @@ import (
 // identity.Derive's current "project.v2:<provider>:<raw>" output.
 //
 // chaos4348ExpectedIDSchemePrefix/oracleIDSchemeMismatch below are the
-// SINGLE shared source of truth both halves of the fix read: the red-first
-// annex validator test in this file, and poolContainsSubject's own
-// telemetry counter (chaos3742_two_turn_confirmation_test.go's
-// OracleIDSchemeMismatch field / OracleIDSchemeMismatchCount report
-// aggregate). One rule, checked twice, at two different layers.
+// SINGLE shared source of truth every layer of the fix reads:
+// validateTwoTurnOracleAnnex's own load-time refusal (chaos3742_two_turn_confirmation_test.go,
+// called unconditionally by loadTwoTurnOracleAnnex, on every real run), the
+// red-first fixture test in this file, and poolContainsSubject's own
+// telemetry (twoTurnCaseResult.OracleIDSchemeMismatch /
+// twoTurnReport.OracleIDSchemeMismatchCount). One rule, checked at three
+// layers.
 
 // chaos4348ExpectedIDSchemePrefix returns the canonical-id PREFIX a kind's
 // LIVE scheme actually produces today: "<kind>.v2:" for any kind
@@ -64,6 +63,26 @@ func oracleIDSchemeMismatch(kind, canonicalID string) bool {
 		return false
 	}
 	return !strings.HasPrefix(canonicalID, chaos4348ExpectedIDSchemePrefix(kind))
+}
+
+// chaos4348KnownResidualStaleAnchorIDs (CHAOS-4348 ticket comment,
+// 2026-08-26): ids explicitly exempted from validateTwoTurnOracleAnnex's
+// load-time scheme refusal because they no longer resolve against the
+// CURRENT live trial dataset at all -- not merely a scheme problem.
+// "project:272efdae-c682-45b6-ae30-e8877eff15f4" (case 46, a repository-
+// kind case's negative-only anchor decoy) was confirmed via a forced-trace
+// probe of case 46 whose 130+-event trace never once references it under
+// ANY canonical id, even though a DIFFERENT live project
+// (468890d1-7500-443c-80bb-ce648172e28e) surfaced in the same run -- an
+// orphaned fixture from an earlier corpus generation. It does not affect
+// the project positive-case bar (case 46's positive kind is repository).
+// Tracked as a follow-up in the ticket, not silently ignored: this
+// allowlist exists so ONE known, investigated residual does not either (a)
+// mask a FUTURE unrelated regression by being lumped in with it, or (b)
+// block every real trial run outright until it is resolved or the corpus
+// is edited (a decision this fix does not make unilaterally).
+var chaos4348KnownResidualStaleAnchorIDs = map[string]bool{
+	"project:272efdae-c682-45b6-ae30-e8877eff15f4": true,
 }
 
 func TestChaos4348ExpectedIDSchemePrefix(t *testing.T) {
@@ -114,127 +133,117 @@ func TestOracleIDSchemeMismatch(t *testing.T) {
 	}
 }
 
-// chaos4348AnnexFile is the minimal shape TestChaos4348OracleAnnexAnchorIDsMatchLiveIdentityScheme
-// needs out of the oracle annex -- only the anchor member's own fields
-// (positive_key, negatives) and committable_negative_designations entries
-// where member=="anchor" carry canonical subject ids; every other member
-// (window, handle, kind) carries a DIFFERENT vocabulary (bands, handle
-// strings, kind names) that this validator must never touch.
-type chaos4348AnnexFile struct {
-	Cases map[string]struct {
-		Oracles struct {
-			Anchor struct {
-				PositiveKey *string  `json:"positive_key"`
-				Negatives   []string `json:"negatives"`
-			} `json:"anchor"`
-		} `json:"oracles"`
-		CommittableNegativeDesignations []struct {
-			Member string `json:"member"`
-			Value  string `json:"value"`
-		} `json:"committable_negative_designations"`
-	} `json:"cases"`
+// TestValidateTwoTurnOracleAnnex_RejectsStaleSchemeAnchorID is the
+// red-first regression test for the CHAOS-4348 measurement-layer fix's
+// real wiring point (codex adversarial review, HIGH, confirmed: a
+// standalone test reading the annex file directly would never run inside
+// scripts/trial/run-two-turn.sh or run-two-turn-parallel.sh, both of which
+// invoke `go test -run TestChaos3742TwoTurnConfirmationReplay` -- ONLY
+// validateTwoTurnOracleAnnex itself, called unconditionally by
+// loadTwoTurnOracleAnnex on every real load, actually gates a real run).
+// A pure fixture, not a read of the local annex file: runs in CI, needs no
+// ORACLE_ANNEX-shaped env var, and fails on the pre-fix
+// validateTwoTurnOracleAnnex (which had no scheme check at all).
+func TestValidateTwoTurnOracleAnnex_RejectsStaleSchemeAnchorID(t *testing.T) {
+	t.Parallel()
+	t.Run("stale-scheme positive anchor id is refused", func(t *testing.T) {
+		annex := twoTurnOracleAnnex{
+			CorpusSHA256: "deadbeef",
+			Entries: []twoTurnOracleEntry{
+				{Index: 57, Member: "subject_anchor", PositiveKind: "project", PositiveAnchorCanonicalID: "project:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891"},
+			},
+		}
+		if err := validateTwoTurnOracleAnnex(annex); err == nil {
+			t.Fatal("validateTwoTurnOracleAnnex() = nil, want an error for a stale pre-v2 project anchor id")
+		}
+	})
+	t.Run("stale-scheme negative anchor id is refused", func(t *testing.T) {
+		annex := twoTurnOracleAnnex{
+			CorpusSHA256: "deadbeef",
+			Entries: []twoTurnOracleEntry{
+				{Index: 60, Member: "subject_anchor", NegativeKind: "project", NegativeAnchorCanonicalID: "project:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891"},
+			},
+		}
+		if err := validateTwoTurnOracleAnnex(annex); err == nil {
+			t.Fatal("validateTwoTurnOracleAnnex() = nil, want an error for a stale pre-v2 project anchor negative id")
+		}
+	})
+	t.Run("live v2 project anchor id passes", func(t *testing.T) {
+		annex := twoTurnOracleAnnex{
+			CorpusSHA256: "deadbeef",
+			Entries: []twoTurnOracleEntry{
+				{Index: 57, Member: "subject_anchor", PositiveKind: "project", PositiveAnchorCanonicalID: "project.v2:gitlab:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891"},
+			},
+		}
+		if err := validateTwoTurnOracleAnnex(annex); err != nil {
+			t.Fatalf("validateTwoTurnOracleAnnex() = %v, want nil for a live v2 project anchor id", err)
+		}
+	})
+	t.Run("stable repository/team anchor ids pass unchanged", func(t *testing.T) {
+		annex := twoTurnOracleAnnex{
+			CorpusSHA256: "deadbeef",
+			Entries: []twoTurnOracleEntry{
+				{Index: 1, Member: "subject_anchor", PositiveKind: "repository", PositiveAnchorCanonicalID: "repository:r1"},
+				{Index: 2, Member: "subject_anchor", PositiveKind: "team", PositiveAnchorCanonicalID: "team:gh:ops-team"},
+			},
+		}
+		if err := validateTwoTurnOracleAnnex(annex); err != nil {
+			t.Fatalf("validateTwoTurnOracleAnnex() = %v, want nil for stable repository/team ids", err)
+		}
+	})
+	t.Run("the known residual decoy is allowlisted, not silently permissive for others", func(t *testing.T) {
+		annex := twoTurnOracleAnnex{
+			CorpusSHA256: "deadbeef",
+			Entries: []twoTurnOracleEntry{
+				{Index: 46, Member: "subject_anchor", NegativeKind: "project", NegativeAnchorCanonicalID: "project:272efdae-c682-45b6-ae30-e8877eff15f4"},
+			},
+		}
+		if err := validateTwoTurnOracleAnnex(annex); err != nil {
+			t.Fatalf("validateTwoTurnOracleAnnex() = %v, want nil -- this exact id is the documented known residual", err)
+		}
+		// A DIFFERENT stale id in the SAME run must still be caught -- the
+		// allowlist is a single exact-string exemption, not a blanket
+		// pass for the whole annex once one known residual is present.
+		annex.Entries = append(annex.Entries, twoTurnOracleEntry{
+			Index: 33, Member: "subject_anchor", PositiveKind: "project", PositiveAnchorCanonicalID: "project:c67b1602-31db-4422-8dec-a4a02bbcc513",
+		})
+		if err := validateTwoTurnOracleAnnex(annex); err == nil {
+			t.Fatal("validateTwoTurnOracleAnnex() = nil, want an error for a stale id that is NOT the allowlisted residual")
+		}
+	})
+	t.Run("non-anchor members are never scheme-checked", func(t *testing.T) {
+		// expected_kind/window/handle carry kind names, bands, and handle
+		// values -- none of them canonical subject ids. A stray colon in
+		// one of those must never be misread as a scheme violation.
+		annex := twoTurnOracleAnnex{
+			CorpusSHA256: "deadbeef",
+			Entries: []twoTurnOracleEntry{
+				{Index: 1, Member: "expected_kind", PositiveKind: "project"},
+				{Index: 1, Member: "window", PositiveWindowBand: "all_time"},
+			},
+		}
+		if err := validateTwoTurnOracleAnnex(annex); err != nil {
+			t.Fatalf("validateTwoTurnOracleAnnex() = %v, want nil for non-anchor members", err)
+		}
+	})
 }
 
-// TestChaos4348OracleAnnexAnchorIDsMatchLiveIdentityScheme is the red-first
-// annex validation test the CHAOS-4348 measurement-layer fix GO required:
-// it fails on main (today, before the annex regeneration this ticket
-// shipped) because the annex's project anchor ids predate the identity.v2
-// migration, and passes once acr-annex-regen-project-ids has regenerated
-// them.
-//
-// LOCAL-ONLY, never CI-gated, by necessity, not by choice: the annex lives
-// at .remember/trial-results/ -- untracked local trial state (this
-// directory is not part of any repo's git history; the "dev-health"
-// directory containing it is not even a git repository), so a CI checkout
-// never has the file this test reads. Every other trial-harness affordance
-// in this file (ACR_TEST_TRIAL_FORCE_TRACE_INDICES, ACR_TRIAL_DATA_PLANE)
-// is the same kind of local-only-by-necessity signal; this one follows the
-// same skip-if-absent discipline rather than inventing a new one.
-func TestChaos4348OracleAnnexAnchorIDsMatchLiveIdentityScheme(t *testing.T) {
-	path := os.Getenv("ORACLE_ANNEX")
+// TestChaos4348LiveOracleAnnexLoadsCleanly is an OPTIONAL, local-only
+// sanity check against the real on-disk annex, correctly reading the SAME
+// env var the trial launchers actually export
+// (ACR_TEST_TWOTURN_ORACLE_ANNEX, not the differently-named ORACLE_ANNEX
+// an earlier version of this fix mistakenly checked -- codex adversarial
+// review, HIGH, confirmed) -- going through loadTwoTurnOracleAnnex itself
+// so this test exercises the EXACT same call path a real run does, not a
+// hand-rolled JSON parse. Skips when unset: the annex is untracked local
+// trial state (.remember/), never present in a CI checkout. The actual
+// correctness GUARANTEE for a real run is validateTwoTurnOracleAnnex being
+// unconditionally on the load path, proven above; this is a convenience
+// check on top, not the guard itself.
+func TestChaos4348LiveOracleAnnexLoadsCleanly(t *testing.T) {
+	path := os.Getenv("ACR_TEST_TWOTURN_ORACLE_ANNEX")
 	if path == "" {
-		t.Skip("ORACLE_ANNEX not set -- this is a local-only annex correctness probe (CHAOS-4348 measurement-layer fix), never CI-gated: the annex is untracked local trial state (.remember/), not a repo artifact. Set ORACLE_ANNEX to the annex path to run it (scripts/trial/run-two-turn.sh already does).")
+		t.Skip("ACR_TEST_TWOTURN_ORACLE_ANNEX not set -- local-only sanity check against the real annex; scripts/trial/run-two-turn.sh already sets it for a real run, where loadTwoTurnOracleAnnex's own validateTwoTurnOracleAnnex call is the actual guard.")
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read oracle annex at %s: %v", path, err)
-	}
-	var annex chaos4348AnnexFile
-	if err := json.Unmarshal(raw, &annex); err != nil {
-		t.Fatalf("parse oracle annex at %s: %v", path, err)
-	}
-
-	// chaos4348KnownResidualStaleIDs (CHAOS-4348 ticket comment,
-	// 2026-08-26): ids left deliberately unregenerated because they no
-	// longer resolve against the CURRENT live trial dataset at all -- not
-	// merely a scheme problem. Confirmed by a forced-trace probe (case 46,
-	// idx 46) whose 130+-event trace never once references
-	// "272efdae-c682-45b6-ae30-e8877eff15f4" under ANY canonical id, even
-	// though a DIFFERENT live project (468890d1-...) surfaced in the same
-	// run -- this raw id is an orphaned fixture from an earlier corpus
-	// generation, not a live-but-unmatched scheme case. It is a negative-
-	// only anchor decoy in case 46 (repository-kind positive; project
-	// appears only as a committable_negative_designations "seeded_result"
-	// entry), so it does not affect the project positive-case bar. Tracked
-	// as a follow-up in the CHAOS-4348 ticket, not silently ignored here:
-	// this allowlist exists so ONE known, investigated residual does not
-	// mask a FUTURE unrelated regression elsewhere in the annex.
-	knownResidualStaleIDs := map[string]bool{
-		"project:272efdae-c682-45b6-ae30-e8877eff15f4": true,
-	}
-
-	type violation struct {
-		caseIndex string
-		field     string
-		value     string
-	}
-	var violations []violation
-	check := func(caseIndex, field, value string) {
-		if value == "" || knownResidualStaleIDs[value] {
-			return
-		}
-		colon := strings.IndexByte(value, ':')
-		if colon < 0 {
-			violations = append(violations, violation{caseIndex, field, value})
-			return
-		}
-		kindGuess := strings.TrimSuffix(value[:colon], ".v2")
-		if !strings.HasPrefix(value, chaos4348ExpectedIDSchemePrefix(kindGuess)) {
-			violations = append(violations, violation{caseIndex, field, value})
-		}
-	}
-
-	for _, caseIndex := range sortedAnnexCaseKeys(annex) {
-		c := annex.Cases[caseIndex]
-		if c.Oracles.Anchor.PositiveKey != nil {
-			check(caseIndex, "oracles.anchor.positive_key", *c.Oracles.Anchor.PositiveKey)
-		}
-		for _, negative := range c.Oracles.Anchor.Negatives {
-			check(caseIndex, "oracles.anchor.negatives[]", negative)
-		}
-		for _, designation := range c.CommittableNegativeDesignations {
-			if designation.Member == "anchor" {
-				check(caseIndex, "committable_negative_designations[].value", designation.Value)
-			}
-		}
-	}
-
-	if len(violations) > 0 {
-		var b strings.Builder
-		fmt.Fprintf(&b, "oracle annex %s has %d anchor id(s) that do not match their kind's live identity scheme:\n", path, len(violations))
-		for _, v := range violations {
-			fmt.Fprintf(&b, "  case %s %s: %q\n", v.caseIndex, v.field, v.value)
-		}
-		b.WriteString("run cmd/acr-annex-regen-project-ids to regenerate stale project ids (CHAOS-4348)")
-		t.Error(b.String())
-	}
-}
-
-func sortedAnnexCaseKeys(annex chaos4348AnnexFile) []string {
-	keys := make([]string, 0, len(annex.Cases))
-	for k := range annex.Cases {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	loadTwoTurnOracleAnnex(t, path)
 }
