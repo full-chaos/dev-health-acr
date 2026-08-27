@@ -95,6 +95,10 @@ func TestSync_CorrectsDisagreementsAndUpdatesHash(t *testing.T) {
 	var annexDoc struct {
 		Provenance struct {
 			CorpusSHA8 string `json:"corpus_sha8"`
+			Signoff    struct {
+				Status             string `json:"status"`
+				ApprovedCorpusSHA8 string `json:"approved_corpus_sha8"`
+			} `json:"signoff"`
 		} `json:"provenance"`
 	}
 	annexBytes, err := os.ReadFile(annexPath)
@@ -106,6 +110,61 @@ func TestSync_CorrectsDisagreementsAndUpdatesHash(t *testing.T) {
 	}
 	if annexDoc.Provenance.CorpusSHA8 == "deadbeef" {
 		t.Error("annex provenance.corpus_sha8 was not updated after the corpus content changed")
+	}
+	// codex adversarial review (HIGH #2, team-lead ruling 2026-08-27):
+	// signoff itself must stay untouched (still APPROVED -- clearing it
+	// would Fatal the harness), but the corpus_sha8 chris ACTUALLY
+	// approved must be recorded so the staleness is detectable.
+	if annexDoc.Provenance.Signoff.Status != "APPROVED" {
+		t.Errorf("annex signoff.status = %q, want APPROVED (must stay untouched, never auto-invalidated)", annexDoc.Provenance.Signoff.Status)
+	}
+	if annexDoc.Provenance.Signoff.ApprovedCorpusSHA8 != "deadbeef" {
+		t.Errorf("annex signoff.approved_corpus_sha8 = %q, want %q (the corpus_sha8 chris's signoff actually covered, before this sync)", annexDoc.Provenance.Signoff.ApprovedCorpusSHA8, "deadbeef")
+	}
+}
+
+// TestSync_ApprovedCorpusSHA8IsStampedOnceNotOverwritten proves a SECOND
+// sync run (a later, genuinely new content correction) does not move the
+// approved_corpus_sha8 baseline forward -- it must keep naming chris's
+// real last approval until a human re-ratifies, never silently follow
+// every subsequent mechanical sync.
+func TestSync_ApprovedCorpusSHA8IsStampedOnceNotOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	annexPath := filepath.Join(dir, "annex.json")
+	corpusPath := filepath.Join(dir, "corpus.json")
+	writeJSONFile(t, annexPath, testAnnex())
+	writeJSONFile(t, corpusPath, testCorpus())
+
+	if out, err := exec.Command("go", "run", ".", "-annex", annexPath, "-corpus", corpusPath).CombinedOutput(); err != nil {
+		t.Fatalf("first sync failed: %v\noutput:\n%s", err, out)
+	}
+
+	var corpus []map[string]any
+	raw, _ := os.ReadFile(corpusPath)
+	json.Unmarshal(raw, &corpus)
+	corpus[0]["expect_id"] = "project:regressed-again"
+	writeJSONFile(t, corpusPath, corpus)
+
+	if out, err := exec.Command("go", "run", ".", "-annex", annexPath, "-corpus", corpusPath).CombinedOutput(); err != nil {
+		t.Fatalf("second sync failed: %v\noutput:\n%s", err, out)
+	}
+
+	var annexDoc struct {
+		Provenance struct {
+			Signoff struct {
+				ApprovedCorpusSHA8 string `json:"approved_corpus_sha8"`
+			} `json:"signoff"`
+		} `json:"provenance"`
+	}
+	annexBytes, err := os.ReadFile(annexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(annexBytes, &annexDoc); err != nil {
+		t.Fatal(err)
+	}
+	if annexDoc.Provenance.Signoff.ApprovedCorpusSHA8 != "deadbeef" {
+		t.Errorf("approved_corpus_sha8 = %q after a SECOND sync, want it still %q (must not move forward without a human re-ratifying)", annexDoc.Provenance.Signoff.ApprovedCorpusSHA8, "deadbeef")
 	}
 }
 

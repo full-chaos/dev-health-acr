@@ -233,3 +233,44 @@ func TestTwoTurnValidateCorpusAnnexAgreementFailsClosed(t *testing.T) {
 		t.Fatal("Fatalf never called on disagreeing fixtures")
 	}
 }
+
+// TestAdaptSignedOracleAnnex_SignoffStale is the regression test for
+// codex adversarial review round on PR #302 (HIGH #2, team-lead ruling
+// 2026-08-27): cmd/acr-corpus-annex-sync corrects corpus content and
+// keeps provenance.corpus_sha8 in sync, but a chris-signed annex's
+// provenance.signoff is left untouched (clearing it would Fatal the
+// harness via requireAnnexSignedOff, blocking measurement until
+// re-ratification -- not this tool's call to force). Instead
+// signoff.approved_corpus_sha8 records what was ACTUALLY approved, and
+// SignoffStale surfaces the gap loudly (via the report's own
+// AnnexSignoffStale, never a Fatal) whenever it no longer matches the
+// live corpus_sha8.
+func TestAdaptSignedOracleAnnex_SignoffStale(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name               string
+		corpusSHA8         string
+		approvedCorpusSHA8 string
+		wantStale          bool
+	}{
+		{"never synced (no approved_corpus_sha8 stamped)", "8e46fd19", "", false},
+		{"synced and matches (nothing has changed since)", "8e46fd19", "8e46fd19", false},
+		{"synced and differs (corpus was corrected after approval)", "8e46fd19", "b981ac40", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			signed := signedOracleAnnex{}
+			signed.Provenance.CorpusSHA8 = tc.corpusSHA8
+			signed.Provenance.Signoff.Status = "APPROVED"
+			signed.Provenance.Signoff.By = "chris"
+			signed.Provenance.Signoff.ApprovedCorpusSHA8 = tc.approvedCorpusSHA8
+			annex := adaptSignedOracleAnnex(signed)
+			if !annex.SignedOff {
+				t.Fatal("expected SignedOff=true (staleness must never suppress the underlying approval signal)")
+			}
+			if annex.SignoffStale != tc.wantStale {
+				t.Errorf("SignoffStale = %v, want %v", annex.SignoffStale, tc.wantStale)
+			}
+		})
+	}
+}

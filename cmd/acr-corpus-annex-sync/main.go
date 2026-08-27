@@ -200,6 +200,45 @@ func main() {
 	}
 }
 
+// stampApprovedCorpusSHA8IfAbsent records, under provenance.signoff, the
+// corpus_sha8 chris's signoff was ACTUALLY approved against -- once. If
+// signoff.approved_corpus_sha8 is already present (a prior run already
+// recorded the real approval baseline), this is a no-op: a later
+// mechanical sync must never make it look like the ORIGINAL approval
+// covered content it never saw.
+func stampApprovedCorpusSHA8IfAbsent(provenance map[string]json.RawMessage, approvedSHA8 string) error {
+	if raw, ok := provenance["signoff"]; ok {
+		var existing struct {
+			ApprovedCorpusSHA8 string `json:"approved_corpus_sha8"`
+		}
+		if err := json.Unmarshal(raw, &existing); err != nil {
+			return fmt.Errorf("parse existing signoff: %w", err)
+		}
+		if existing.ApprovedCorpusSHA8 != "" {
+			return nil
+		}
+	}
+	var signoff map[string]json.RawMessage
+	if raw, ok := provenance["signoff"]; ok {
+		if err := json.Unmarshal(raw, &signoff); err != nil {
+			return fmt.Errorf("parse signoff: %w", err)
+		}
+	} else {
+		signoff = map[string]json.RawMessage{}
+	}
+	approvedJSON, err := json.Marshal(approvedSHA8)
+	if err != nil {
+		return fmt.Errorf("marshal approved_corpus_sha8: %w", err)
+	}
+	signoff["approved_corpus_sha8"] = approvedJSON
+	signoffJSON, err := json.Marshal(signoff)
+	if err != nil {
+		return fmt.Errorf("marshal updated signoff: %w", err)
+	}
+	provenance["signoff"] = signoffJSON
+	return nil
+}
+
 // updateAnnexCorpusSHA8 recomputes updatedCorpusBytes' own sha256 and, if
 // it differs from the annex's currently-recorded provenance.corpus_sha8,
 // rewrites that one field in place (atomic write, same discipline as the
@@ -232,6 +271,21 @@ func updateAnnexCorpusSHA8(annexPath string, updatedCorpusBytes []byte) (string,
 	json.Unmarshal(provenance["corpus_sha8"], &currentSHA8)
 	if currentSHA8 == newSHA8 {
 		return "", nil
+	}
+
+	// Team-lead ruling (2026-08-27, HIGH #2): keep provenance.signoff
+	// UNTOUCHED (treating the signed annex as immutable would Fatal the
+	// harness via requireAnnexSignedOff until chris re-ratifies -- not
+	// this tool's call to force). Instead record WHAT was actually
+	// approved, once: signoff.approved_corpus_sha8 is set to the CURRENT
+	// (pre-update) corpus_sha8 the FIRST time this tool detects a
+	// divergence, and never overwritten again by a later run -- it must
+	// keep naming chris's real last approval, not silently follow every
+	// subsequent mechanical sync. The harness stamps a loud, non-fatal
+	// annex_signoff_stale into every report's provenance whenever this
+	// differs from the live corpus_sha8 (chaos3742_two_turn_confirmation_test.go).
+	if err := stampApprovedCorpusSHA8IfAbsent(provenance, currentSHA8); err != nil {
+		return "", fmt.Errorf("stamp signoff.approved_corpus_sha8: %w", err)
 	}
 
 	newSHA8JSON, err := json.Marshal(newSHA8)
