@@ -73,6 +73,25 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		t.logger.DebugContext(ctx, "context fabric resolution trace: alias lookup",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"complete", event.AliasLookupComplete, "matched_claimants", event.AliasLookupMatchedClaimants)
+	case "kind_hint_search":
+		// CHAOS-4348: traceKindHintSearch's own event (chaos4348_reachability.go)
+		// -- one per matched node, before this case existed this stage fell
+		// to the "unknown stage" branch below (TestSlogResolutionTracer_
+		// CoversEveryEmittedStage, chaos3918_tracer_stage_coverage_test.go,
+		// is what a codex review caught this against -- see that function's
+		// own two-functions-not-one-parameterized doc comment for why the
+		// AST walk needed a literal Stage per call site to see it at all).
+		t.logger.DebugContext(ctx, "context fabric resolution trace: kind hint search",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"term_hash", event.TermHash, "subject_kind", string(event.Subject.Kind),
+			"subject_canonical_id", event.Subject.CanonicalID)
+	case "exact_name_search":
+		// CHAOS-4348: traceExactNameSearch's own event, same convention as
+		// kind_hint_search immediately above.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: exact name search",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"term_hash", event.TermHash, "subject_kind", string(event.Subject.Kind),
+			"subject_canonical_id", event.Subject.CanonicalID)
 	case "corroboration":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: corroboration",
 			"request_id", event.RequestID, "stage", event.Stage,

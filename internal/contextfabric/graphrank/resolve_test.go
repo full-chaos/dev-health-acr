@@ -109,10 +109,11 @@ type fakeGraphBackend struct {
 	// above. exactNameCandidates is returned verbatim on every call (this
 	// hook is ONCE-per-resolution, not per-term -- see its own doc comment,
 	// resolve.go); exactNameCandidatesCalls counts calls.
-	enableExactNameCandidates bool
-	exactNameCandidates       []CandidateNode
-	exactNameCandidatesErr    error
-	exactNameCandidatesCalls  int
+	enableExactNameCandidates    bool
+	exactNameCandidates          []CandidateNode
+	exactNameCandidatesTruncated bool
+	exactNameCandidatesErr       error
+	exactNameCandidatesCalls     int
 }
 
 // confirmedKindVectorCensusCall records one
@@ -199,12 +200,12 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 		}
 	}
 	if f.enableExactNameCandidates {
-		deps.ExactNameCandidates = func(ctx context.Context) ([]CandidateNode, error) {
+		deps.ExactNameCandidates = func(ctx context.Context) ([]CandidateNode, bool, error) {
 			f.exactNameCandidatesCalls++
 			if f.exactNameCandidatesErr != nil {
-				return nil, f.exactNameCandidatesErr
+				return nil, false, f.exactNameCandidatesErr
 			}
-			return f.exactNameCandidates, nil
+			return f.exactNameCandidates, f.exactNameCandidatesTruncated, nil
 		}
 	}
 	return deps

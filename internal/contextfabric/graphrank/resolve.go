@@ -261,7 +261,23 @@ type ResolveDeps struct {
 	// identityCollision guard (chaos3884_identity.go) exactly as it already
 	// does for AliasLookup/ordinary-search exact matches, suppressing an
 	// unsafe auto-commit without a new mechanism.
-	ExactNameCandidates func(ctx context.Context) (candidates []CandidateNode, err error)
+	// truncated (codex review, HIGH; resolved as a disclosure fix, not a
+	// new commit-safety gate) reports whether this backend's own fetch
+	// bound could have hidden a real match or a same-name rival -- see
+	// falkorgraph's own exactNameCandidateQueryLimit doc comment for the
+	// "request one more row than the budget" mechanism this expects, AND
+	// for why folding this into searchTruncated does NOT block the
+	// exactIndex commit gate specifically (resolution.go's own, pre-existing
+	// doc comment there: an exact-label match is deliberately allowed to
+	// outrank ANY truncation signal, identically for ordinary Search's own
+	// exact matches). What this DOES do: reach every other gate that reads
+	// searchTruncated (LoneFloor/TopFloor/tied-statistical-top) honestly,
+	// and make an incomplete fetch visible in the run's own artifacts
+	// instead of silently claiming completeness it did not have. A backend
+	// that always returns false here is claiming its own fetch is
+	// genuinely unbounded/exhaustive -- never a default to reach for
+	// blindly.
+	ExactNameCandidates func(ctx context.Context) (candidates []CandidateNode, truncated bool, err error)
 	// VectorMechanismConfigured (CHAOS-4154) reports whether this deployment
 	// has a LIVE vector-similarity mechanism at all (falkorgraph: a.embedder
 	// != nil) -- distinct from VectorMarginCommitThreshold/CalibratedTopK
@@ -1857,12 +1873,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			retrievalDegraded = true
 		}
 	}
-	exactNameTraversalDegraded, exactNameAuthzDropped, exactNameErr := applyExactNameArm(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms)
+	exactNameTraversalDegraded, exactNameAuthzDropped, exactNameTruncated, exactNameErr := applyExactNameArm(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms)
 	if exactNameErr != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, exactNameErr
 	}
 	traversalDegraded += exactNameTraversalDegraded
 	subjectCandidatesAuthzDropped += exactNameAuthzDropped
+	if exactNameTruncated {
+		searchTruncated = true
+	}
 	// CHAOS-3838 (spec L11): the question-level pass runs AT MOST ONCE,
 	// AFTER every per-term pass above, never interleaved with it. Ordering
 	// matters for determinism, not just budget: MergeCandidates' winner/

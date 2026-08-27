@@ -127,7 +127,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// resolution -- see ResolveDeps.ExactNameCandidates' own doc comment
 		// (graphrank/resolve.go) for why this is a separate, unranked
 		// retrieval path rather than another SearchKind call.
-		ExactNameCandidates: func(ctx context.Context) ([]graphrank.CandidateNode, error) {
+		ExactNameCandidates: func(ctx context.Context) ([]graphrank.CandidateNode, bool, error) {
 			return a.chaos4348ExactNameCandidates(ctx, key, principal.OrgID, temporal)
 		},
 		// CHAOS-4154: whether THIS deployment has a live vector mechanism at

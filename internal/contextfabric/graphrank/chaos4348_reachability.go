@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"strings"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -111,21 +112,42 @@ func hintedPoolKinds(request contextfabric.InvestigationRequest, interpreted con
 // requirement (TestApplyKindHintedPoolSearch_NoHintProducesByteIdenticalPool).
 // Order is fixed (repository, project, team) so a caller iterating the
 // result never depends on Go's randomized map order.
+//
+// WHOLE-WORD matching only (codex review, Medium, confirmed): the prior
+// version used strings.Contains, so "projector" or "teamwork" would have
+// activated the real-pool SearchKind arm on words that merely CONTAIN
+// "project"/"team" as a substring, not name the kind at all. Each value is
+// split into words on anything that is not a letter or digit and compared
+// whole -- "project's"/"projects" still match ("project" survives the
+// split as its own token), "projector" does not (it is one token, not
+// two).
+// devhealthschema:not-a-production-replica the word-match cases below classify free-text words from an interpreted question into a SubjectKind hint, not a table declaration.
+// They (repo/repos/project/projects/team/teams, plurals of ENGLISH KIND
+// NOUNS a caller might type) happen to also spell three real ClickHouse
+// table names in devhealthschema.ProductionColumns, tripping
+// TestNoSecondPhysicalSourceOutsideTheDeclaration's "3+ declared tables in
+// a declaration-shaped list" heuristic. This switch reads no schema,
+// issues no query, and carries no column list; the string overlap with
+// real table names is coincidental English vocabulary, not a rival
+// physical-schema source.
 func inferredKindHints(interpreted contextfabric.InterpretedQuestion) []contextfabric.SubjectKind {
 	values := make([]string, 0, len(interpreted.SubjectTerms)+1)
 	values = append(values, interpreted.RequestedJudgment)
 	values = append(values, interpreted.SubjectTerms...)
 	var repo, project, team bool
+	isWordSep := func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}
 	for _, value := range values {
-		lower := strings.ToLower(value)
-		if strings.Contains(lower, "repo") {
-			repo = true
-		}
-		if strings.Contains(lower, "project") || strings.Contains(lower, "initiative") {
-			project = true
-		}
-		if strings.Contains(lower, "team") || strings.Contains(lower, "group") {
-			team = true
+		for _, word := range strings.FieldsFunc(strings.ToLower(value), isWordSep) {
+			switch word {
+			case "repo", "repos", "repository", "repositories":
+				repo = true
+			case "project", "projects", "initiative", "initiatives":
+				project = true
+			case "team", "teams", "group", "groups":
+				team = true
+			}
 		}
 	}
 	var hints []contextfabric.SubjectKind
@@ -152,10 +174,20 @@ func inferredKindHints(interpreted contextfabric.InterpretedQuestion) []contextf
 // low-confidence, unsolicited floor find) does not apply here -- the caller
 // already told this resolution it expects this kind.
 //
-// Bounded exactly like applyKindCoverageFloor's own SearchKind usage
-// (kindCoverageQueryLimit rows, kindCoverageMaxTermsPerKind terms, stopping
-// once a kind is satisfied) -- the SAME dial, deliberately, not a second one
-// this ticket would need to separately calibrate.
+// Bounded like applyKindCoverageFloor's own SearchKind usage
+// (kindCoverageQueryLimit rows, kindCoverageMaxTermsPerKind terms) -- the
+// SAME dial, deliberately, not a second one this ticket would need to
+// separately calibrate. Deliberately UNLIKE the coverage floor's own
+// "stop once a kind is satisfied" early exit (codex review, HIGH,
+// confirmed): poolHasKind only proves SOME candidate of that kind already
+// exists, never that it is the caller's actual hinted target -- an
+// unrelated project ordinary search already found would otherwise
+// suppress the search for the genuinely hinted one, defeating this arm's
+// whole purpose. This runs every (hinted kind, bounded term) pair
+// unconditionally, exactly like the ordinary per-term Search loop above
+// never stops early either -- mergeSearchResults' own SubjectKey dedup
+// (MergeCandidates) makes a redundant find of an already-present subject
+// a cheap no-op, not a correctness risk.
 func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, hinted []contextfabric.SubjectKind) (traversalDegraded int, authzDropped int, truncated bool, degraded bool, err error) {
 	if deps.SearchKind == nil || len(hinted) == 0 {
 		return 0, 0, false, false, nil
@@ -165,9 +197,6 @@ func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal,
 		boundedTerms = boundedTerms[:kindCoverageMaxTermsPerKind]
 	}
 	for _, kind := range hinted {
-		if poolHasKind(pool, kind) {
-			continue
-		}
 		for _, term := range boundedTerms {
 			results, kindTruncated, kindDegraded, searchErr := deps.SearchKind(ctx, term, kind, kindCoverageQueryLimit)
 			if searchErr != nil {
@@ -182,13 +211,10 @@ func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal,
 			for i := range results {
 				results[i].Mechanism = contextfabric.MatchLexical
 			}
-			traceRetrievalSource(deps, request.RequestID, "kind_hint_search", term, results)
+			traceKindHintSearch(deps, request.RequestID, term, results)
 			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
 			traversalDegraded += termTraversalDegraded
 			authzDropped += termAuthzDropped
-			if poolHasKind(pool, kind) {
-				break
-			}
 		}
 	}
 	return traversalDegraded, authzDropped, truncated, degraded, nil
@@ -204,16 +230,28 @@ func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal,
 // its verdict) and merges those into the real pool, always on, with real
 // identity/identityTerms tracking so identityCollision covers a same-term
 // multi-claimant exactly like every other exact-match path already does.
-func applyExactNameArm(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms) (traversalDegraded int, authzDropped int, err error) {
+func applyExactNameArm(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms) (traversalDegraded int, authzDropped int, truncated bool, err error) {
 	if deps.ExactNameCandidates == nil {
-		return 0, 0, nil
+		return 0, 0, false, nil
 	}
-	candidates, fetchErr := deps.ExactNameCandidates(ctx)
+	candidates, fetchTruncated, fetchErr := deps.ExactNameCandidates(ctx)
 	if fetchErr != nil {
-		return 0, 0, fetchErr
+		return 0, 0, false, fetchErr
 	}
+	// codex review, HIGH: a truncated fetch means this arm's own "every
+	// repository/project/team node" promise did not hold for this call --
+	// a matching subject past the cutoff is unreachable, disclosed to the
+	// caller (resolve.go), which folds it into searchTruncated, the SAME
+	// gate input every other retrieval pass already feeds. See
+	// ResolveDeps.ExactNameCandidates' own doc comment for what this does
+	// and does not protect: the exactIndex commit gate deliberately outranks
+	// truncation for an exact-label match, pre-existing and identical for
+	// ordinary Search's own exact matches -- this signal still reaches
+	// every OTHER gate honestly and keeps the run's own artifacts honest
+	// about completeness.
+	truncated = fetchTruncated
 	if len(candidates) == 0 {
-		return 0, 0, nil
+		return 0, 0, truncated, nil
 	}
 	for _, term := range terms {
 		matches := exactNameMatches(term, candidates)
@@ -223,28 +261,38 @@ func applyExactNameArm(ctx context.Context, principal storage.Principal, request
 		for i := range matches {
 			matches[i].Mechanism = contextfabric.MatchLexical
 		}
-		traceRetrievalSource(deps, request.RequestID, "exact_name_search", term, matches)
+		traceExactNameSearch(deps, request.RequestID, term, matches)
 		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, matches, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
 		traversalDegraded += termTraversalDegraded
 		authzDropped += termAuthzDropped
 	}
-	return traversalDegraded, authzDropped, nil
+	return traversalDegraded, authzDropped, truncated, nil
 }
 
-// traceRetrievalSource emits one ResolutionTraceEvent per matched node, tagged
-// with the passed Stage ("kind_hint_search" or "exact_name_search") and the
-// node's own Subject -- the ONLY signal a reader needs to compute the
-// CHAOS-4348 report's per-subject retrieval-source tag
-// (ordinary/kind_scoped/exact_name): a subject that reaches "corroboration"
-// (i.e. IS in the real pool) with a preceding kind_hint_search/
-// exact_name_search event for the SAME Subject was NOT reachable via
-// ordinary Search/SearchQuestion/AliasLookup alone. No new struct field on
-// ResolutionTraceEvent or SubjectCandidate -- Stage and Subject already
-// exist and are already read this way for every other stage. A nil tracer
-// (the overwhelming default for a production call with no attached
-// harness/debug consumer) makes this a no-op, exactly like every other
-// ResolutionTracer.Trace call site in this package.
-func traceRetrievalSource(deps ResolveDeps, requestID, stage, term string, results []CandidateNode) {
+// traceKindHintSearch/traceExactNameSearch each emit one ResolutionTraceEvent
+// per matched node, tagged with the node's own Subject -- the ONLY signal a
+// reader needs to compute the CHAOS-4348 report's per-subject
+// retrieval-source tag (ordinary/kind_scoped/exact_name): a subject that
+// reaches "corroboration" (i.e. IS in the real pool) with a preceding
+// kind_hint_search/exact_name_search event for the SAME Subject was found
+// via one of these two arms. No new struct field on ResolutionTraceEvent or
+// SubjectCandidate -- Stage and Subject already exist and are already read
+// this way for every other stage. A nil tracer (the overwhelming default for
+// a production call with no attached harness/debug consumer) makes either a
+// no-op, exactly like every other ResolutionTracer.Trace call site in this
+// package.
+//
+// DELIBERATELY two functions, each with its OWN literal Stage string,
+// rather than one taking a stage parameter (codex review, HIGH, confirmed):
+// TestSlogResolutionTracer_CoversEveryEmittedStage's AST walk
+// (chaos3918_tracer_stage_coverage_test.go) only recognizes a STRING
+// LITERAL assigned to Stage inside a ResolutionTraceEvent{...} composite
+// literal -- a variable-valued Stage is invisible to it, which would have
+// let both new stages silently reach SlogResolutionTracer's "unknown stage"
+// fallback in production with no test ever catching it (exactly the defect
+// class that test exists to close). See tracer.go's own new cases for the
+// two stage strings these functions emit.
+func traceKindHintSearch(deps ResolveDeps, requestID, term string, results []CandidateNode) {
 	if deps.ResolutionTracer == nil {
 		return
 	}
@@ -254,7 +302,23 @@ func traceRetrievalSource(deps ResolveDeps, requestID, stage, term string, resul
 			continue
 		}
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-			RequestID: requestID, Stage: stage,
+			RequestID: requestID, Stage: "kind_hint_search",
+			TermHash: traceTermHash(term), Subject: subject,
+		})
+	}
+}
+
+func traceExactNameSearch(deps ResolveDeps, requestID, term string, results []CandidateNode) {
+	if deps.ResolutionTracer == nil {
+		return
+	}
+	for _, node := range results {
+		subject, ok := NodeSubject(node)
+		if !ok {
+			continue
+		}
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "exact_name_search",
 			TermHash: traceTermHash(term), Subject: subject,
 		})
 	}

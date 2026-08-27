@@ -65,18 +65,25 @@ func (c *twoTurnTraceCapture) rankedCutFor(kind, canonicalID string) (rank int, 
 	return rank, atOfferBoundary
 }
 
-// retrievalSourceFor (CHAOS-4348, schema v36) reports which retrieval pass
-// first surfaced the expected subject: "exact_name" or "kind_scoped" if a
-// "exact_name_search"/"kind_hint_search" trace event (graphrank/
-// chaos4348_reachability.go's traceRetrievalSource) named this exact
-// (kind, canonical id) BEFORE the pool ever corroborated it, else
-// "ordinary" (found by Search/SearchQuestion/AliasLookup/the coverage
-// floor's own real-pool census kinds -- everything that predates this
-// ticket), else "absent" (poolContainsSubject is false: never reached the
-// pool by any path). Checked in EVENT ORDER, first match wins -- a subject
-// could in principle be found more than one way in the same resolution;
-// this reports the retrieval story a reader most needs (the rarer,
-// deliberate mechanism), not every mechanism that happened to also fire.
+// retrievalSourceFor (CHAOS-4348, schema v36) reports "exact_name" or
+// "kind_scoped" if an "exact_name_search"/"kind_hint_search" trace event
+// (graphrank/chaos4348_reachability.go's traceExactNameSearch/
+// traceKindHintSearch) named this exact (kind, canonical id) ANYWHERE in
+// this resolution's trace, else "ordinary" (found by Search/SearchQuestion/
+// AliasLookup/the coverage floor's own real-pool census kinds --
+// everything that predates this ticket), else "absent" (poolContainsSubject
+// is false: never reached the pool by any path).
+//
+// HONEST LIMITATION (codex review, Medium, confirmed): this reports whether
+// the new arm FIRED for this subject, not that it was EXCLUSIVELY
+// responsible -- ordinary Search has no per-subject trace event to compare
+// against, so a subject ordinary search would have found anyway, but that
+// the new arm ALSO (redundantly) rediscovers, is indistinguishable here
+// from one only the new arm could reach. Reading this field as "the new arm
+// was load-bearing" therefore over-claims; reading it as "the new arm fired
+// for this subject" (which is what it actually measures) does not. Report
+// consumers should treat exact_name/kind_scoped rates as an upper bound on
+// how often the new arms mattered, not a proof each instance needed them.
 func (c *twoTurnTraceCapture) retrievalSourceFor(kind, canonicalID string) string {
 	if !c.poolContainsSubject(kind, canonicalID) {
 		return "absent"
