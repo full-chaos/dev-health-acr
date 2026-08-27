@@ -71,6 +71,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -212,6 +213,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// codex adversarial review round 3 (MEDIUM, confirmed): checked BEFORE
+	// the -verified-by/-probe-evidence requirements below -- a run that
+	// makes ZERO actual replacements (every stale id is a known residual,
+	// -allow-unmapped, nothing left to fix) has no CONTENT change to
+	// record and needs neither flag; asking for evidence to justify a
+	// change this run is not going to make is the wrong error entirely
+	// (caught by this file's own TestMain_ZeroReplacementRunIsANoOpThatDoesNotWrite,
+	// which failed against an earlier ordering that checked -verified-by
+	// first). This is a no-op, not an error: exit 0, nothing touched.
+	if len(replacements) == 0 {
+		fmt.Println("acr-annex-regen-project-ids: every stale id is unmapped (nothing to regenerate) -- not writing")
+		return
+	}
+
 	if strings.TrimSpace(*verifiedBy) == "" {
 		fmt.Fprintln(os.Stderr, "acr-annex-regen-project-ids: -verified-by is required to write (describe the live evidence backing every -provider mapping -- this tool cannot itself verify a provider against the live graph; see the package doc comment)")
 		os.Exit(2)
@@ -250,7 +265,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := os.WriteFile(*annexPath, []byte(updated), 0o644); err != nil {
+	if err := writeFileAtomically(*annexPath, []byte(updated)); err != nil {
 		fmt.Fprintf(os.Stderr, "acr-annex-regen-project-ids: write annex: %v\n", err)
 		os.Exit(1)
 	}
@@ -396,11 +411,31 @@ func injectRegenerationProvenance(annexJSON string, staleIDs []string, replaceme
 		OccurrencesUpdated: updatedCounts,
 		UnresolvedStaleIDs: unmapped,
 	}
+
+	// APPEND, never replace (codex adversarial review round 3, MEDIUM,
+	// confirmed): the key is a HISTORY ARRAY, "chaos4348_id_regenerations"
+	// (plural) -- an earlier version stored a single object under
+	// "chaos4348_id_regeneration" and unconditionally overwrote it, which
+	// would silently ERASE a prior run's recorded mappings/probe evidence
+	// the moment this tool ran a second time (e.g. a future follow-up
+	// finally resolving the one known residual). Every past run's record
+	// is preserved; this run's record is appended after them.
+	var history []json.RawMessage
+	if existing, ok := provenance["chaos4348_id_regenerations"]; ok {
+		if err := json.Unmarshal(existing, &history); err != nil {
+			return "", fmt.Errorf("parse existing chaos4348_id_regenerations history: %w", err)
+		}
+	}
 	recordJSON, err := json.Marshal(record)
 	if err != nil {
 		return "", fmt.Errorf("marshal regeneration record: %w", err)
 	}
-	provenance["chaos4348_id_regeneration"] = recordJSON
+	history = append(history, recordJSON)
+	historyJSON, err := json.Marshal(history)
+	if err != nil {
+		return "", fmt.Errorf("marshal regeneration history: %w", err)
+	}
+	provenance["chaos4348_id_regenerations"] = historyJSON
 
 	newProvenance, err := json.MarshalIndent(provenance, "  ", "  ")
 	if err != nil {
@@ -487,4 +522,42 @@ func contains(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// writeFileAtomically (codex adversarial review round 3, MEDIUM,
+// confirmed) writes data to a temp file IN THE SAME DIRECTORY as path
+// (so the final rename is on the same filesystem, hence atomic), fsyncs
+// it, then renames it over path -- a partial write, disk-full condition,
+// or process interruption can therefore never leave the ONLY copy of a
+// chris-signed annex empty or truncated; readers see either the complete
+// old content or the complete new content, never a partial write.
+func writeFileAtomically(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".acr-annex-regen-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	// Best-effort cleanup on any failure path below; a successful Rename
+	// makes this a no-op (nothing left at tmpPath to remove).
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename temp file over %s: %w", path, err)
+	}
+	return nil
 }
