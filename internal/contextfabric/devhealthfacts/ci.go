@@ -50,11 +50,15 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	// grain starts at the run-status shape's exact precision and widens to
-	// daily the moment a repository aggregate is attempted -- an answer is
-	// only as precise as its least precise contributing source
-	// (timebound.go's effectiveGrain doc comment), and this provider is
-	// now two different grains depending on which subject kinds a query
-	// actually named.
+	// daily only once a repository aggregate ACTUALLY CONTRIBUTED a fact
+	// (rowCount > 0) -- widening merely because a repository subject was
+	// ATTEMPTED would mislabel a historical query that named both an
+	// exact-grain ci_run and a repository with no retained aggregate row
+	// for that day: the run-status fact that actually answered the
+	// question would be reported at a coarser grain than it earned. An
+	// answer is only as precise as its least precise CONTRIBUTING source
+	// (timebound.go's effectiveGrain doc comment) -- "contributing" is the
+	// operative word, not "queried".
 	grain := grainExact
 
 	if runSubjects := subjectsOfKind(query.Subjects, contractsv1.ContextFabricSubjectCIRun); len(runSubjects) > 0 {
@@ -71,7 +75,9 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 			return contextfabric.FactProviderResult{}, readFailure("query ci metrics", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
-		grain = grainDaily
+		if rowCount > 0 {
+			grain = grainDaily
+		}
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))

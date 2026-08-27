@@ -49,8 +49,9 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
-	// See ci.go's identical comment: the provider now spans two grains, and
-	// the coarser one wins the moment a repository aggregate is attempted.
+	// See ci.go's identical comment: the coarser grain wins only once a
+	// repository aggregate ACTUALLY CONTRIBUTED a fact, not merely because
+	// one was attempted.
 	grain := grainExact
 
 	if deploymentSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectDeployment); len(deploymentSubjects) > 0 {
@@ -67,7 +68,9 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 			return contextfabric.FactProviderResult{}, readFailure("query deployment metrics", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
-		grain = grainDaily
+		if rowCount > 0 {
+			grain = grainDaily
+		}
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))

@@ -199,7 +199,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 	statement := withRowLimit(`SELECT toString(team_id), toString(day), toInt64(commits_count), toInt64(after_hours_commits_count), toInt64(weekend_commits_count), toFloat64(after_hours_commit_ratio), toFloat64(weekend_commit_ratio)
 FROM (
 	SELECT team_id, day, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio,
-		row_number() OVER (PARTITION BY team_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC) AS rn
+		row_number() OVER (PARTITION BY team_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC) AS rn
 	FROM team_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
@@ -245,10 +245,27 @@ type projectMetricsRow struct {
 }
 
 // readProjectMetrics rolls FactMetrics up for a project through
-// team_project_ownership -> team_metrics_daily: every team owning the
-// project (as of the requested instant, or currently on the current axis)
-// contributes its own latest team_metrics_daily row. See the package doc
-// comment above for why counts are summed but ratios are never averaged.
+// projects -> team_project_ownership -> team_metrics_daily: every team
+// owning the project (as of the requested instant, or currently on the
+// current axis) contributes its own latest team_metrics_daily row. See the
+// package doc comment above for why counts are summed but ratios are never
+// averaged.
+//
+// The join is NOT team_project_ownership.project_id -- that would repeat
+// this codebase's own CHAOS-4108 id-space defect, documented in exhaustive
+// detail by devhealthsource/teams_projects_edges.go's queryProjectTeams
+// (its "SECOND -- the id-space trap" comment): team_project_ownership's own
+// project_id column is NOT projects.id for every provider -- for gitlab
+// rows it holds the project KEY, and only 1 of 3 distinct live values
+// resolved via project_id where project_key resolved 3 of 3. A join on
+// project_id would silently drop exactly the ownership edges this feature
+// exists to surface, for the providers most likely to need it -- a false
+// "no owning teams" instead of an honest one, which is worse than an error.
+// This mirrors queryProjectTeams' own fix exactly: resolve the requested
+// project's project_key from `projects` FIRST (canonical id still comes
+// from `projects`, per identity.KindProject's own (provider, id) shape --
+// never re-derived from the ownership table), then join
+// team_project_ownership on (provider, project_key).
 func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
@@ -256,50 +273,63 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 	}
 	// The ownership edge is a slowly-changing dimension (valid_from/valid_to),
 	// not a daily rollup -- it needs its own predicate, not dayPredicate.
-	// "Currently active" on the current axis; "active AT THE END of the
-	// requested window" otherwise, the same convention timebound.go's
-	// asOfExpression documents for every other derived-state read in this
-	// package.
-	ownershipPredicate := " AND valid_to IS NULL"
+	// "Currently active" on the current axis (valid_from already elapsed,
+	// valid_to not yet reached -- a future-dated valid_from must not
+	// contribute, the same as an already-lapsed valid_to must not);
+	// "active AT THE END of the requested window" otherwise, the same
+	// convention timebound.go's asOfExpression documents for every other
+	// derived-state read in this package. now64(3) is a literal ClickHouse
+	// function call, never caller-supplied text, so it carries no
+	// injection surface -- the same class as maxFactRowsPerQuery's own
+	// inlining (shared.go's withRowLimit doc comment).
+	ownershipPredicate := " AND valid_from <= now64(3) AND valid_to IS NULL"
 	if timeBound.active {
 		ownershipPredicate = fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
 	}
-	statement := withRowLimit(`SELECT concat(tpo.provider, ':', tpo.project_id), tm.team_id, tm.team_name, toString(tm.day), toInt64(tm.commits_count), toInt64(tm.after_hours_commits_count), toInt64(tm.weekend_commits_count), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), tm.team_id, tm.team_name, toString(tm.day), toInt64(tm.commits_count), toInt64(tm.after_hours_commits_count), toInt64(tm.weekend_commits_count), toFloat64(tm.after_hours_commit_ratio), toFloat64(tm.weekend_commit_ratio)
 FROM (
-	SELECT provider, project_id, team_id
+	SELECT id, provider, project_key
+	FROM projects FINAL
+	WHERE org_id = {org_id:String} AND concat(provider, ':', id) IN {ids:Array(String)} AND project_key IS NOT NULL
+) AS p
+INNER JOIN (
+	SELECT provider, project_key, team_id
 	FROM team_project_ownership FINAL
-	WHERE org_id = {org_id:String} AND concat(provider, ':', project_id) IN {ids:Array(String)}` + ownershipPredicate + `
-) AS tpo
+	WHERE org_id = {org_id:String} AND project_key IS NOT NULL` + ownershipPredicate + `
+	GROUP BY provider, project_key, team_id
+) AS tpo ON tpo.provider = p.provider AND tpo.project_key = p.project_key
 INNER JOIN (
 	SELECT team_id, team_name, day, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio,
-		row_number() OVER (PARTITION BY team_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC) AS rn
+		row_number() OVER (PARTITION BY team_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio)) DESC) AS rn
 	FROM team_metrics_daily
 	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
-) AS tm ON tm.team_id = tpo.team_id AND tm.rn = 1`)
+) AS tm ON tm.team_id = tpo.team_id AND tm.rn = 1
+ORDER BY p.id, tm.team_id`)
 	rowCount := 0
 	byProject := make(map[string][]projectMetricsRow)
 	// projectOrder preserves first-seen scan order (map iteration below
 	// would otherwise make fact order nondeterministic across runs of the
 	// identical query -- invariant 8's "deterministic ordering" applies to
 	// every fact-producing read in this package, not only fact_scope.go's
-	// own expansions).
+	// own expansions). The query's own ORDER BY above makes that scan order
+	// itself deterministic, not merely incidental to one ClickHouse plan.
 	var projectOrder []string
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var projectKey, teamID, teamName, day string
+		var projectSubjectKey, teamID, teamName, day string
 		var commitsCount, afterHoursCommitsCount, weekendCommitsCount int64
 		var afterHoursCommitRatio, weekendCommitRatio float64
-		if err := row.Scan(&projectKey, &teamID, &teamName, &day, &commitsCount, &afterHoursCommitsCount, &weekendCommitsCount, &afterHoursCommitRatio, &weekendCommitRatio); err != nil {
+		if err := row.Scan(&projectSubjectKey, &teamID, &teamName, &day, &commitsCount, &afterHoursCommitsCount, &weekendCommitsCount, &afterHoursCommitRatio, &weekendCommitRatio); err != nil {
 			return err
 		}
-		if _, ok := bySubject[projectKey]; !ok {
+		if _, ok := bySubject[projectSubjectKey]; !ok {
 			return nil
 		}
-		if _, seen := byProject[projectKey]; !seen {
-			projectOrder = append(projectOrder, projectKey)
+		if _, seen := byProject[projectSubjectKey]; !seen {
+			projectOrder = append(projectOrder, projectSubjectKey)
 		}
-		byProject[projectKey] = append(byProject[projectKey], projectMetricsRow{
-			projectKey: projectKey, teamID: teamID, teamName: teamName, day: day,
+		byProject[projectSubjectKey] = append(byProject[projectSubjectKey], projectMetricsRow{
+			projectKey: projectSubjectKey, teamID: teamID, teamName: teamName, day: day,
 			commitsCount: commitsCount, afterHoursCommitsCount: afterHoursCommitsCount, weekendCommitsCount: weekendCommitsCount,
 			afterHoursCommitRatio: afterHoursCommitRatio, weekendCommitRatio: weekendCommitRatio,
 		})

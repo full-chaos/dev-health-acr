@@ -21,7 +21,7 @@ func createCHAOS4347Tables(t *testing.T, ctx context.Context, connection clickho
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
 		"repo_metrics_daily", "team_metrics_daily", "team_project_ownership",
-		"cicd_metrics_daily", "deploy_metrics_daily",
+		"cicd_metrics_daily", "deploy_metrics_daily", "projects",
 	) {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
@@ -76,6 +76,18 @@ func TestCHAOS4347WideningAgainstRealClickHouse(t *testing.T) {
 
 	t.Run("project_rollup_sums_counts_across_current_owning_teams_via_real_join", func(t *testing.T) {
 		const orgID = "org-project-rollup"
+		// codex round-1 High finding: team_project_ownership.project_id is
+		// NOT projects.id for every provider (devhealthsource/
+		// teams_projects_edges.go's queryProjectTeams documents this live,
+		// for gitlab specifically). This fixture deliberately gives
+		// projects.id and team_project_ownership.project_id DIFFERENT
+		// values, and correlates the two ONLY through project_key -- a
+		// join on project_id alone would find nothing here, which is
+		// exactly the false "no owning teams" this test exists to catch.
+		if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			"proj-1-internal-id", orgID, "linear", "PROJ1", "Project One", uint8(1), "active", "", ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed projects row: %v", err)
+		}
 		if err := direct.Exec(ctx, `INSERT INTO team_metrics_daily (day, team_id, team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			date(2026, 8, 12), "team-a", "Team A", uint32(20), uint32(4), uint32(2), 0.2, 0.1, ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
 			t.Fatalf("seed team-a metrics: %v", err)
@@ -84,19 +96,28 @@ func TestCHAOS4347WideningAgainstRealClickHouse(t *testing.T) {
 			date(2026, 8, 12), "team-b", "Team B", uint32(5), uint32(0), uint32(0), 0.0, 0.0, ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
 			t.Fatalf("seed team-b metrics: %v", err)
 		}
+		// team-a owns the project through TWO distinct sources at once --
+		// codex round-1 High finding #2: this must collapse to ONE
+		// contribution (SQL-level GROUP BY, not just the Go-side dedup),
+		// or a project with many duplicate ownership assertions could
+		// truncate other teams out of the LIMIT before Go ever sees them.
+		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", "team-a", "legacy-mismatched-project-id", "PROJ1", "native", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed team-a ownership (native): %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", "team-a", "legacy-mismatched-project-id", "PROJ1", "manual", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed team-a ownership (manual, duplicate source): %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", "team-b", "legacy-mismatched-project-id", "PROJ1", "manual", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed team-b ownership: %v", err)
+		}
 		// A third team owns the SAME project but has no team_metrics_daily
 		// row at all -- the INNER JOIN must simply not contribute it,
 		// never fail the whole read.
 		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			orgID, "linear", "team-a", "proj-1", nil, "native", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
-			t.Fatalf("seed team-a ownership: %v", err)
-		}
-		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			orgID, "linear", "team-b", "proj-1", nil, "manual", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
-			t.Fatalf("seed team-b ownership: %v", err)
-		}
-		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			orgID, "linear", "team-c-no-metrics", "proj-1", nil, "native", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			orgID, "linear", "team-c-no-metrics", "legacy-mismatched-project-id", "PROJ1", "native", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
 			t.Fatalf("seed team-c ownership: %v", err)
 		}
 		// A LAPSED ownership edge for a DIFFERENT team, past its valid_to --
@@ -107,14 +128,26 @@ func TestCHAOS4347WideningAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("seed lapsed team metrics: %v", err)
 		}
 		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			orgID, "linear", "team-lapsed", "proj-1", nil, "native", ts(2026, 1, 1, 0, 0, 0), ts(2026, 6, 1, 0, 0, 0), ts(2026, 6, 1, 0, 0, 0)); err != nil {
+			orgID, "linear", "team-lapsed", "legacy-mismatched-project-id", "PROJ1", "native", ts(2026, 1, 1, 0, 0, 0), ts(2026, 6, 1, 0, 0, 0), ts(2026, 6, 1, 0, 0, 0)); err != nil {
 			t.Fatalf("seed lapsed ownership: %v", err)
+		}
+		// A FUTURE-DATED ownership edge for yet another team -- codex
+		// round-1 Medium finding: "currently active" must also require
+		// valid_from <= now, or an ownership assertion that has not taken
+		// effect yet would already contribute.
+		if err := direct.Exec(ctx, `INSERT INTO team_metrics_daily (day, team_id, team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			date(2026, 8, 12), "team-future", "Team Future", uint32(777), uint32(777), uint32(777), 0.9, 0.9, ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
+			t.Fatalf("seed future team metrics: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", "team-future", "legacy-mismatched-project-id", "PROJ1", "native", ts(2099, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed future-dated ownership: %v", err)
 		}
 
 		provider := findProvider(t, providers, contextfabric.FactMetrics)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
 			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1-internal-id")},
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts() error = %v", err)
@@ -124,7 +157,7 @@ func TestCHAOS4347WideningAgainstRealClickHouse(t *testing.T) {
 		}
 		fact := result.Facts[0]
 		if got := fact.Fields["commits_count"].Integer; got == nil || *got != 25 {
-			t.Fatalf("commits_count = %#v, want 20+5=25 (team-a + team-b only, lapsed and metrics-less teams excluded)", fact.Fields["commits_count"])
+			t.Fatalf("commits_count = %#v, want 20+5=25 (team-a deduped across 2 sources + team-b only; lapsed/future/metrics-less teams excluded)", fact.Fields["commits_count"])
 		}
 		if got := fact.Fields["team_count"].Integer; got == nil || *got != 2 {
 			t.Fatalf("team_count = %#v, want 2", fact.Fields["team_count"])
