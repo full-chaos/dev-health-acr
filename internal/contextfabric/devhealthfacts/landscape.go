@@ -63,25 +63,28 @@ func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	omittedRows := 0
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, scanErr := p.readTeamLandscape(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, scanErr := p.readTeamLandscape(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team landscape", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
+		omittedRows += rowsOmitted
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, scanErr := p.readProjectLandscape(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, scanErr := p.readProjectLandscape(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project landscape", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
+		omittedRows += rowsOmitted
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}, nil
 }
 
 // landscapeAreaRow is one (map_name, as_of_day) area's aggregate for a
@@ -111,10 +114,10 @@ func (r landscapeAreaRow) toFactValueRow() contextfabric.FactValueRow {
 // readTeamLandscape aggregates ic_landscape_rolling_30d to (team_id,
 // map_name) at each team's own latest retained as_of_day -- never averaged
 // or summed ACROSS as_of_day, and never emitted per-identity.
-func (p *LandscapeProvider) readTeamLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *LandscapeProvider) readTeamLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
 	ids, bySubject := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	statement := withRowLimit(`SELECT toString(team_id), map_name, toString(as_of_day), count(), toInt64(sum(churn_loc_30d)), toInt64(sum(delivery_units_30d)), avg(cycle_p50_30d_hours), toInt64(max(wip_max_30d))
 FROM (
@@ -146,8 +149,9 @@ ORDER BY team_id, map_name`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, scanErr
+		return rowCount, 0, scanErr
 	}
+	totalOmitted := 0
 	for _, teamID := range teamOrder {
 		rows := byTeam[teamID]
 		subject := bySubject[teamID]
@@ -155,16 +159,21 @@ ORDER BY team_id, map_name`)
 		for _, r := range rows {
 			areaRows = append(areaRows, r.toFactValueRow())
 		}
+		areaRows, omitted := capFactValueRows(areaRows)
+		totalOmitted += omitted
+		fields := map[string]contextfabric.FactValue{
+			"area_count":     contextfabric.IntegerFactValue(int64(len(rows))),
+			"area_breakdown": contextfabric.RowsFactValue(areaRows),
+		}
+		if omitted > 0 {
+			fields["area_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactLandscape, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				"area_count":     contextfabric.IntegerFactValue(int64(len(areaRows))),
-				"area_breakdown": contextfabric.RowsFactValue(areaRows),
-			},
+			Kind: contextfabric.FactLandscape, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
 		})
 	}
-	return rowCount, nil
+	return rowCount, totalOmitted, nil
 }
 
 // readProjectLandscape rolls FactLandscape up for a project through
@@ -173,10 +182,10 @@ ORDER BY team_id, map_name`)
 // instant) owning the project contributes its own (team_id, map_name)
 // landscape aggregate -- see metrics.go's readProjectMetrics for why the
 // join is on (provider, project_key), never project_id.
-func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	ownershipPredicate := " AND valid_from <= now64(3) AND valid_to IS NULL"
 	if timeBound.active {
@@ -231,8 +240,9 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, scanErr
+		return rowCount, 0, scanErr
 	}
+	totalOmitted := 0
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
 		subject := bySubject[projectKey]
@@ -252,15 +262,20 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		if len(teamRows) == 0 {
 			continue
 		}
+		teamRows, omitted := capFactValueRows(teamRows)
+		totalOmitted += omitted
+		fields := map[string]contextfabric.FactValue{
+			"rollup_basis":   contextfabric.StringFactValue("team_project_ownership_landscape"),
+			"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			"team_breakdown": contextfabric.RowsFactValue(teamRows),
+		}
+		if omitted > 0 {
+			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactLandscape, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				"rollup_basis":   contextfabric.StringFactValue("team_project_ownership_landscape"),
-				"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
-				"team_breakdown": contextfabric.RowsFactValue(teamRows),
-			},
+			Kind: contextfabric.FactLandscape, Subject: subject, Fields: fields,
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, nil
+	return rowCount, totalOmitted, nil
 }

@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -118,6 +119,50 @@ func TestLandscapeProviderScopesQueriesToOrgAndSubjects(t *testing.T) {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	assertQueryScopedToOrgAndSubjects(t, client.queries[len(client.queries)-1].statement)
+}
+
+// TestLandscapeProviderProjectRollupCapsNestedRowsAtValidateBound is
+// codex R1's P2 finding, CHAOS-4364: a project with many owning teams x
+// landscape maps (e.g. 22 teams x 3 maps = 66) exceeds FactValue.Validate's
+// 64-row bound, which REJECTS the whole fact rather than truncating -- so
+// the provider must cap and disclose before constructing the fact.
+func TestLandscapeProviderProjectRollupCapsNestedRowsAtValidateBound(t *testing.T) {
+	t.Parallel()
+	rows := make([][]any, 0, 66)
+	for i := 0; i < 22; i++ {
+		for _, mapName := range []string{"churn_throughput", "cycle_throughput", "wip_throughput"} {
+			rows = append(rows, landscapeProjectRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), mapName, 1, 10, 1, 5.0, 2))
+		}
+	}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: rows}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactLandscape)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactLandscape, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	if err := fact.Fields["team_breakdown"].Validate(); err != nil {
+		t.Fatalf("team_breakdown fails FactValue.Validate() even after capping: %v", err)
+	}
+	breakdown := fact.Fields["team_breakdown"].Rows
+	if len(breakdown) != 64 {
+		t.Fatalf("team_breakdown rows = %d, want capped to 64", len(breakdown))
+	}
+	if fact.Fields["team_breakdown_omitted_count"].Integer == nil || *fact.Fields["team_breakdown_omitted_count"].Integer != 2 {
+		t.Fatalf("team_breakdown_omitted_count = %#v, want 2", fact.Fields["team_breakdown_omitted_count"])
+	}
+	if !result.Truncated {
+		t.Fatalf("Truncated = false, want true when nested rows were capped")
+	}
+	if result.OmittedCount != 2 {
+		t.Fatalf("OmittedCount = %d, want 2", result.OmittedCount)
+	}
 }
 
 // TestLandscapeProviderNoSubjectsIsEmptyNotError is the ordinary "capability

@@ -324,8 +324,12 @@ func TestAcceptanceNovelFactRequirementCombinationIsMergedNotFixed(t *testing.T)
 	for _, requirement := range observed.Requirements {
 		kinds[requirement.Kind] = true
 	}
-	if !kinds[FactStatus] || !kinds[FactBlockers] || len(observed.Requirements) != 2 {
-		t.Fatalf("merged fact requirements = %#v, want exactly {status, blockers}", observed.Requirements)
+	// CHAOS-4364: a bare FactStatus requirement for a project subject now
+	// composes into FactFlow+FactLandscape (statusCategoryFactKindComposition's
+	// first project entry), replacing FactStatus the same way it already
+	// replaced it for team subjects under CHAOS-4347.
+	if !kinds[FactFlow] || !kinds[FactLandscape] || !kinds[FactBlockers] || len(observed.Requirements) != 3 {
+		t.Fatalf("merged fact requirements = %#v, want exactly {flow, landscape, blockers}", observed.Requirements)
 	}
 }
 

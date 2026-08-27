@@ -273,7 +273,11 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 	if !reflect.DeepEqual(observedFactRequest.Subjects, []SubjectRef{project}) {
 		t.Fatalf("fact subjects = %#v", observedFactRequest.Subjects)
 	}
-	wantKinds := []FactKind{FactStatus, FactReadiness, FactBlockers}
+	// CHAOS-4364: a bare FactStatus requirement for a project subject now
+	// composes (statusCategoryFactKindComposition's first project entry),
+	// replacing FactStatus with FactFlow+FactLandscape -- the same
+	// composition team subjects already got under CHAOS-4347.
+	wantKinds := []FactKind{FactFlow, FactLandscape, FactReadiness, FactBlockers}
 	if got := factKinds(observedFactRequest.Requirements); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("fact requirement kinds = %#v, want %#v", got, wantKinds)
 	}

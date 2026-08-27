@@ -355,6 +355,22 @@ func newCapability(kind contextfabric.FactKind, name string, subjectKinds []cont
 	}
 }
 
+// capFactValueRows truncates rows to contextfabric.MaxFactValueRows and
+// reports how many were dropped (CHAOS-4364). contextfabric.FactValue.Validate
+// rejects a Rows table over that bound OUTRIGHT -- it does not truncate --
+// so a provider building a rollup whose row count depends on live data
+// (e.g. team_count * map_count) must cap it here, before constructing the
+// CanonicalFact, or a large-fanout subject fails its whole fact read
+// instead of returning a bounded, disclosed result. Truncation keeps the
+// FIRST rows in the caller's own deterministic order (never re-sorted),
+// consistent with this package's "never re-derive order from a map" rule.
+func capFactValueRows(rows []contextfabric.FactValueRow) (capped []contextfabric.FactValueRow, omitted int) {
+	if len(rows) <= contextfabric.MaxFactValueRows {
+		return rows, 0
+	}
+	return rows[:contextfabric.MaxFactValueRows], len(rows) - contextfabric.MaxFactValueRows
+}
+
 func stringOrNull(value string) contextfabric.FactValue {
 	if value == "" {
 		return contextfabric.NullFactValue()

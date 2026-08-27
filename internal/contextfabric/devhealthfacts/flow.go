@@ -13,7 +13,7 @@ import (
 // FlowProvider implements contextfabric.FactProvider for FactFlow
 // (CHAOS-4364) -- delivery-flow / bottleneck signals genuinely computed by
 // Dev Health Ops, never re-derived here (§19.6.3: Ops stays the authority
-// for flow-efficiency and cycle/lead-time formulas):
+// for cycle/lead-time formulas):
 //
 //   - team reads work_item_metrics_daily (per team/work_scope_id/day:
 //     items started/completed, WIP end-of-day, WIP age p50/p90, cycle/lead
@@ -21,13 +21,8 @@ import (
 //     same "latest row per partition, never stitched" row_number()
 //     discipline metrics.go/health.go/workload.go already document, applied
 //     here per (team_id, work_scope_id) exactly the way workload.go
-//     partitions capacity_forecasts (a team can be forecast/measured under
-//     several concurrent work_scope_id values). It ALSO reads
-//     work_item_cycle_times (003_flow_efficiency.sql's flow_efficiency,
-//     active_time_hours, wait_time_hours columns) and averages those three
-//     across the team's own completed items -- an average across ITEMS
-//     WITHIN one team, which is sound, unlike averaging a RATE across teams
-//     of different sizes (the thing metrics.go's own doc comment forbids).
+//     partitions capacity_forecasts (a team can be measured under several
+//     concurrent work_scope_id values).
 //   - project rolls up through team_project_ownership -> the SAME
 //     work_item_metrics_daily read, mirroring metrics.go's readProjectMetrics
 //     rollup_basis pattern exactly: additive counts (items_started,
@@ -40,6 +35,20 @@ import (
 //     DISTINCT shape under the SAME FactKind, the exact "second table, same
 //     kind, different subject kind" precedent ci.go's ContinuousIntegrationProvider
 //     already establishes for cicd_metrics_daily alongside ci_pipeline_runs.
+//
+// work_item_cycle_times' 003_flow_efficiency.sql columns (flow_efficiency,
+// active_time_hours, wait_time_hours) are DELIBERATELY NOT read here.
+// compute_work_items.py genuinely computes real values into
+// WorkItemCycleTimeRecord, but the ClickHouse sink that writes
+// work_item_cycle_times (ops' write_work_item_cycle_times) omits all three
+// columns from its INSERT column list -- every row in the live table
+// carries them at the DEFAULT 0 the migration set, not a computed value
+// (codex review finding, CHAOS-4364 R1). Reading them here would publish a
+// fabricated "0.0 flow efficiency" as a canonical fact for every team, the
+// exact "stub data for a source with no honest canonical value" pattern
+// doc.go's FactEvidence section forbids. Re-add once the Ops sink actually
+// persists these columns (tracked as ops-side follow-up, out of this
+// acr-only ticket's scope).
 type FlowProvider struct{ facts clickhouseFacts }
 
 func newFlowProvider(client contextpacket.ClickHouseQueryClient) *FlowProvider {
@@ -63,21 +72,24 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	omittedRows := 0
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, scanErr := p.readTeamFlow(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, scanErr := p.readTeamFlow(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team flow", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
+		omittedRows += rowsOmitted
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, scanErr := p.readProjectFlow(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, scanErr := p.readProjectFlow(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project flow", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
+		omittedRows += rowsOmitted
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
@@ -89,7 +101,7 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}, nil
 }
 
 // flowScopeRow is one (team_id, work_scope_id) partition's latest
@@ -195,54 +207,16 @@ ORDER BY team_id, work_scope_id`)
 	return byTeam, teamOrder, rowCount, scanErr
 }
 
-// flowEfficiencySummary is one team's average flow_efficiency/active_time_hours/
-// wait_time_hours across the completed work_item_cycle_times rows this
-// package can see for it -- an average WITHIN one team's own items, never a
-// rate averaged across teams (see the package doc comment).
-type flowEfficiencySummary struct {
-	flowEfficiencyAvg, activeTimeHoursAvg, waitTimeHoursAvg float64
-	itemCount                                               int64
-}
-
-// queryTeamFlowEfficiency reads work_item_cycle_times FINAL (a genuine
-// ReplacingMergeTree(computed_at) keyed one-row-per-work-item table, so
-// FINAL alone is the correct dedup mechanism here -- the same convention
-// workload.go/queryTeamScopeRows-style row_number() tiebreaks exist
-// precisely BECAUSE the tables they read are plain MergeTree without a
-// replacing key; this one has one).
-func (p *FlowProvider) queryTeamFlowEfficiency(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (map[string]flowEfficiencySummary, error) {
-	statement := `SELECT toString(team_id), avg(flow_efficiency), avg(active_time_hours), avg(wait_time_hours), count()
-FROM work_item_cycle_times FINAL
-WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)} AND completed_at IS NOT NULL` + timeBound.dayPredicate("day") + `
-GROUP BY team_id`
-	result := make(map[string]flowEfficiencySummary)
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		var teamID string
-		var summary flowEfficiencySummary
-		if err := row.Scan(&teamID, &summary.flowEfficiencyAvg, &summary.activeTimeHoursAvg, &summary.waitTimeHoursAvg, &summary.itemCount); err != nil {
-			return err
-		}
-		if summary.itemCount > 0 {
-			result[teamID] = summary
-		}
-		return nil
-	}, timeBound.bindings()...)
-	return result, scanErr
-}
-
-func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
 	ids, bySubject := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	byTeam, teamOrder, rowCount, err := p.queryTeamScopeRows(ctx, orgID, ids, timeBound)
 	if err != nil {
-		return rowCount, err
+		return rowCount, 0, err
 	}
-	efficiency, err := p.queryTeamFlowEfficiency(ctx, orgID, ids, timeBound)
-	if err != nil {
-		return rowCount, err
-	}
+	totalOmitted := 0
 	for _, teamID := range teamOrder {
 		subject, ok := bySubject[teamID]
 		if !ok {
@@ -256,24 +230,23 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 			totalCompleted += r.itemsCompleted
 			valueRows = append(valueRows, r.toFactValueRow())
 		}
+		valueRows, omitted := capFactValueRows(valueRows)
+		totalOmitted += omitted
 		fields := map[string]contextfabric.FactValue{
 			"scope_count":     contextfabric.IntegerFactValue(int64(len(rows))),
 			"items_started":   contextfabric.IntegerFactValue(totalStarted),
 			"items_completed": contextfabric.IntegerFactValue(totalCompleted),
 			"scope_breakdown": contextfabric.RowsFactValue(valueRows),
 		}
-		if summary, ok := efficiency[teamID]; ok {
-			fields["flow_efficiency_avg"] = contextfabric.NumberFactValue(summary.flowEfficiencyAvg)
-			fields["active_time_hours_avg"] = contextfabric.NumberFactValue(summary.activeTimeHoursAvg)
-			fields["wait_time_hours_avg"] = contextfabric.NumberFactValue(summary.waitTimeHoursAvg)
-			fields["flow_efficiency_item_count"] = contextfabric.IntegerFactValue(summary.itemCount)
+		if omitted > 0 {
+			fields["scope_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactFlow, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
 		})
 	}
-	return rowCount, nil
+	return rowCount, totalOmitted, nil
 }
 
 // projectFlowRow is one owning team's contribution to a project's flow
@@ -289,10 +262,10 @@ type projectFlowRow struct {
 	row                flowScopeRow
 }
 
-func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	// Ownership predicate and project_key resolution mirror metrics.go's
 	// readProjectMetrics exactly -- see that function's doc comment for why
@@ -361,8 +334,9 @@ ORDER BY p.id, wm.team_id`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, scanErr
+		return rowCount, 0, scanErr
 	}
+	totalOmitted := 0
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
 		subject := bySubject[projectKey]
@@ -386,19 +360,24 @@ ORDER BY p.id, wm.team_id`)
 		if len(teamRows) == 0 {
 			continue
 		}
+		teamRows, omitted := capFactValueRows(teamRows)
+		totalOmitted += omitted
+		fields := map[string]contextfabric.FactValue{
+			"rollup_basis":    contextfabric.StringFactValue("team_project_ownership_sum"),
+			"team_count":      contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			"items_started":   contextfabric.IntegerFactValue(totalStarted),
+			"items_completed": contextfabric.IntegerFactValue(totalCompleted),
+			"team_breakdown":  contextfabric.RowsFactValue(teamRows),
+		}
+		if omitted > 0 {
+			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactFlow, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				"rollup_basis":    contextfabric.StringFactValue("team_project_ownership_sum"),
-				"team_count":      contextfabric.IntegerFactValue(int64(len(teamRows))),
-				"items_started":   contextfabric.IntegerFactValue(totalStarted),
-				"items_completed": contextfabric.IntegerFactValue(totalCompleted),
-				"team_breakdown":  contextfabric.RowsFactValue(teamRows),
-			},
+			Kind: contextfabric.FactFlow, Subject: subject, Fields: fields,
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, nil
+	return rowCount, totalOmitted, nil
 }
 
 // readRepositoryFlow reads repo_metrics_daily's PR pickup/review-timing

@@ -633,7 +633,9 @@
             "readiness",
             "operational_deficiencies",
             "source_health",
-            "evidence"
+            "evidence",
+            "flow",
+            "landscape"
           ]
         },
         "subject": {

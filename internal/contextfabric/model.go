@@ -330,6 +330,16 @@ const (
 	maxFactValueRowFields = 32
 )
 
+// MaxFactValueRows is maxFactValueRows, exported (CHAOS-4364) so a
+// FactProvider building a Rows table (e.g. a project's per-team rollup) can
+// cap and truncate BEFORE constructing the CanonicalFact, rather than
+// discovering the bound only when Validate rejects the whole fact. A
+// producer that silently drops the excess without disclosing it is exactly
+// the "silent truncation reads as covered everything" defect this
+// package's own conventions forbid -- see devhealthfacts' capped-rows
+// helper for the disclosure pattern.
+const MaxFactValueRows = maxFactValueRows
+
 type FactValue struct {
 	String  *string  `json:"string,omitempty"`
 	Integer *int64   `json:"integer,omitempty"`
