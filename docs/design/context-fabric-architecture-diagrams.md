@@ -120,11 +120,13 @@ fact (`Kind`+`Subject`) the claim's scalar `Value` was already grounded
 against, never derived or reworded. `answerprojection.Project` already
 carried `Rows` through unchanged since #300 (`project.go`'s
 `projectDrivers`), so this was the one missing hop. `RecordProjectedRowsCount`
-(`EngineTelemetry`) reports the total rows attached and whether any claim's
-table lost content -- capped at `ContextFabricClaimedFactMaxRows`, or
-because its canonical fact carried more than one Rows-shaped field and only
-one was kept (the fact-plan-adjacent "dropped by cap/pruning" signal) --
-once per `Synthesize` call that reaches claim assembly, zero included. A
+(`EngineTelemetry`) reports the total rows attached and whether any claim
+lost table content -- an unambiguous table capped at
+`ContextFabricClaimedFactMaxRows`, or no table attached at all because its
+canonical fact carried more than one Rows-shaped field and which one a
+claim means is ambiguous (the fact-plan-adjacent "dropped by cap/pruning"
+signal) -- once per `Synthesize` call that reaches claim assembly, zero
+included. A
 call rejected earlier (unavailable runtime, a model draft `ValidateAgainst`
 itself rejects, a receipt-sink failure) reports nothing here; that failure
 is the receipt sink's own outcome to record.

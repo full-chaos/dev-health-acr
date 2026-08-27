@@ -500,11 +500,12 @@ type EngineTelemetry interface {
 	// entries attachCanonicalRows attached across the whole result -- the
 	// "projected_rows_count" dimension the ticket asks for -- and whether
 	// any single claim's table lost content relative to what its canonical
-	// fact actually carried, whether capped to fit
-	// ContextFabricClaimedFactMaxRows or because the fact carried more
-	// than one Rows-shaped field (canonicalFieldRows keeps only one rather
-	// than merge them into a misleading table) -- the fact-plan-adjacent
-	// "dropped by cap/pruning" signal. Declared on THIS interface rather
+	// fact actually carried, whether an unambiguous table was capped to
+	// fit ContextFabricClaimedFactMaxRows, or no table was attached at all
+	// because the fact carried more than one Rows-shaped field and
+	// canonicalFieldRows fails closed rather than guess which one a claim
+	// means -- the fact-plan-adjacent "dropped by cap/pruning" signal.
+	// Declared on THIS interface rather
 	// than an optional side interface, for the same reason
 	// RecordSynthesisStatusOverride's own comment above states: a branch
 	// that can go missing by omission is the CHAOS-4089 failure mode

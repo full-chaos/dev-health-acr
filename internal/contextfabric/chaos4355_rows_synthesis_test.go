@@ -121,31 +121,34 @@ func TestAttachCanonicalRowsOnlyAttachesToTheClaimThatCitesTheMatchingFact(t *te
 	}
 }
 
-// TestCanonicalFieldRowsKeepsOnlyOneFieldWhenMultipleAreRowsShaped is
-// codex CHAOS-4355 R1's P1 finding: a canonical fact carrying MORE than one
-// Rows-shaped field must not have them silently merged into one
-// heterogeneous table. Only the first field in sorted key order is kept,
-// and the drop is reported via the truncated return value.
-func TestCanonicalFieldRowsKeepsOnlyOneFieldWhenMultipleAreRowsShaped(t *testing.T) {
+// TestCanonicalFieldRowsFailsClosedWhenMultipleFieldsAreRowsShaped is codex
+// CHAOS-4355 R2's sharpened P1 finding: a canonical fact carrying MORE than
+// one Rows-shaped field must not have any single one picked arbitrarily
+// either (R1's fix picked the lexically-first field, which is
+// deterministic but semantically arbitrary -- a claim carries no
+// field-level identity to say which table it means, so presenting a
+// lexically-chosen one risks presenting the WRONG table as if it were
+// authoritative). Rows must come back nil, with the drop reported via
+// truncated, run twice to defend against the removed sort masking a
+// leftover map-iteration dependency.
+func TestCanonicalFieldRowsFailsClosedWhenMultipleFieldsAreRowsShaped(t *testing.T) {
 	t.Parallel()
 	fact := CanonicalFact{
 		Kind: FactMetrics, Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"},
 		Fields: map[string]FactValue{
-			// "b_rows" sorts after "a_rows" -- must be the one dropped.
 			"a_rows": RowsFactValue([]FactValueRow{{Fields: map[string]FactValue{"x": IntegerFactValue(1)}}}),
 			"b_rows": RowsFactValue([]FactValueRow{{Fields: map[string]FactValue{"y": IntegerFactValue(2)}}, {Fields: map[string]FactValue{"y": IntegerFactValue(3)}}}),
 		},
 		EvidenceRefIDs: []string{"evidence_1"}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
 	}
-	rows, truncated := canonicalFieldRows(fact)
-	if !truncated {
-		t.Fatalf("truncated = false, want true (fact carries 2 Rows-shaped fields, only one may be kept)")
-	}
-	if len(rows) != 1 {
-		t.Fatalf("rows = %+v, want exactly the 1 row from a_rows (the sorted-first field), never b_rows' 2 rows merged in", rows)
-	}
-	if _, ok := rows[0].Fields["x"]; !ok {
-		t.Fatalf("rows[0] = %+v, want the a_rows field (key %q), not b_rows", rows[0], "x")
+	for i := 0; i < 10; i++ {
+		rows, truncated := canonicalFieldRows(fact)
+		if !truncated {
+			t.Fatalf("iteration %d: truncated = false, want true (fact carries 2 Rows-shaped fields, ambiguous which one a claim means)", i)
+		}
+		if rows != nil {
+			t.Fatalf("iteration %d: rows = %+v, want nil -- ambiguous which of a_rows/b_rows a claim means, so neither may be guessed", i, rows)
+		}
 	}
 }
 

@@ -529,11 +529,12 @@ func lookupCanonicalFact(facts []CanonicalFact, kind FactKind, subject SubjectRe
 //
 // rowsCount is the total number of rows attached across every claim
 // (CHAOS-4355's projected_rows_count telemetry dimension); truncated
-// reports whether any single claim's table lost content relative to what
-// the canonical fact actually carried -- either capped to fit
-// ContextFabricClaimedFactMaxRows, or (canonicalFieldRows) because the
-// fact carried more than one Rows-shaped field and only one was kept.
-// This is the fact-plan-adjacent "dropped by cap/pruning" signal the
+// reports whether any single claim lost table content relative to what
+// its canonical fact actually carried -- either an unambiguous table
+// capped to fit ContextFabricClaimedFactMaxRows, or (canonicalFieldRows)
+// no table attached at all because the fact carried more than one
+// Rows-shaped field and which one a claim means is ambiguous. This is the
+// fact-plan-adjacent "dropped by cap/pruning" signal the
 // ticket asks for. Both are reported once per successful Synthesize call
 // by the caller (see RuntimeAnswerSynthesizer.Telemetry's own doc
 // comment for when that is), zero/false included, so a quiet run is as
@@ -555,39 +556,44 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 	return claims, rowsCount, truncated
 }
 
-// canonicalFieldRows returns the ONE Rows-shaped field a canonical fact
-// carries, converted verbatim. It deliberately does NOT merge multiple
-// Rows-shaped fields into one table (CHAOS-4355 codex R1 P1 finding): a
-// fact could in principle carry more than one renderable table (e.g. a
+// canonicalFieldRows returns the canonical fact's ONE Rows-shaped field,
+// converted verbatim -- and NOTHING when the fact carries more than one
+// (CHAOS-4355 codex R2 P1 finding, sharpening R1's first attempt: picking
+// an arbitrary field by sort order is deterministic, but a claim carries no
+// row-field identity to say WHICH table it means, so presenting one
+// lexically-chosen table risks presenting the WRONG canonical table as if
+// it were authoritative -- worse than a claim's Rows simply staying nil).
+// A fact could in principle carry more than one renderable table (e.g. a
 // future producer alongside MetricsProvider's project rollup, which emits
-// exactly one, team_breakdown), and concatenating two differently-shaped
-// tables into a single row stream would silently produce a
-// heterogeneous, misleading table -- worse than reporting nothing. When
-// more than one Rows-shaped field is present, this takes only the first
-// in sorted field-key order (the same determinism discipline every other
-// ordering choice in this package uses, and map iteration is not stable)
-// and reports the drop via the second return value, the identical
-// "retract rather than trust an unverified assertion" posture the rest of
-// this file already applies elsewhere. The same return value also covers
-// a cap: the chosen table is truncated to fit
+// exactly one, team_breakdown); until a claim can name which field it
+// means, this fails closed rather than guesses, the identical "retract
+// rather than trust an unverified assertion" posture the rest of this file
+// already applies elsewhere -- and reports the drop via the second return
+// value so it is counted, not silent. The same return value also covers a
+// cap: a single unambiguous table is truncated to fit
 // ContextFabricClaimedFactMaxRows -- the exact bound
 // ContextFabricClaimedFact.Validate() already enforces, so a canonical
 // fact's own table can never make an otherwise-valid claim fail contract
 // validation -- and a cap that actually binds is reported rather than
 // silently dropping the tail.
 func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricClaimedFactRow, truncated bool) {
-	keys := make([]string, 0, len(fact.Fields))
+	var rowsField string
+	rowsFieldCount := 0
 	for key, value := range fact.Fields {
 		if len(value.Rows) > 0 {
-			keys = append(keys, key)
+			rowsFieldCount++
+			rowsField = key
 		}
 	}
-	if len(keys) == 0 {
+	switch rowsFieldCount {
+	case 0:
 		return nil, false
+	case 1:
+		// fall through
+	default:
+		return nil, true
 	}
-	sort.Strings(keys)
-	source := fact.Fields[keys[0]].Rows
-	ambiguous := len(keys) > 1
+	source := fact.Fields[rowsField].Rows
 	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
 	for _, row := range source {
 		rows = append(rows, convertFactValueRow(row))
@@ -595,7 +601,7 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
 		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
 	}
-	return rows, ambiguous
+	return rows, false
 }
 
 func convertFactValueRow(row FactValueRow) contractsv1.ContextFabricClaimedFactRow {
