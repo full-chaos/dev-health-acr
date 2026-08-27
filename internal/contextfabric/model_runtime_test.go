@@ -723,6 +723,26 @@ func TestSynthesisDraftValidateAgainstRejectsClaimedFactContradictingCanonicalVa
 	}
 }
 
+// TestSynthesisDraftValidateAgainstRejectsClaimedFactSettingRows is
+// CHAOS-4347 codex round-3: the scalar value-level closure just above
+// (TestSynthesisDraftValidateAgainstRejectsClaimedFactContradictingCanonicalValue)
+// only compares Value against the canonical fact, so a model could attach
+// a Rows array to an otherwise closure-passing claim -- fabricated table
+// content riding on a real citation -- with nothing to catch it. Until
+// this package offers a Rows-bearing canonical fact to synthesis AND
+// closes Rows at value level the same way Value already is, a
+// model-authored claim setting Rows must fail closed.
+func TestSynthesisDraftValidateAgainstRejectsClaimedFactSettingRows(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	value := "fabricated"
+	draft.ClaimedFacts[0].Rows = []ClaimedFactRow{{Fields: map[string]ScalarValue{"anything": {String: &value}}}}
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "sets rows") {
+		t.Fatalf("ValidateAgainst() error = %v, want a sets-rows rejection", err)
+	}
+}
+
 func TestSynthesisDraftValidateAgainstRejectsClaimedFactForUnobservedField(t *testing.T) {
 	t.Parallel()
 	input, draft := closureFixture()

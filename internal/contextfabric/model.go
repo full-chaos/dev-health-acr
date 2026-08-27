@@ -257,6 +257,7 @@ type RelationshipType = contractsv1.ContextFabricRelationshipType
 type DriverJudgment = contractsv1.ContextFabricDriverJudgment
 type Finding = contractsv1.ContextFabricFinding
 type ClaimedFact = contractsv1.ContextFabricClaimedFact
+type ClaimedFactRow = contractsv1.ContextFabricClaimedFactRow
 type SourceObservation = contractsv1.ContextFabricSourceObservation
 type Coverage = contractsv1.ContextFabricCoverage
 type VersionSet = contractsv1.ContextFabricVersionSet

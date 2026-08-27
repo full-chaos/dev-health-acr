@@ -277,6 +277,23 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		if err := claim.Validate(); err != nil {
 			return fmt.Errorf("claimed_facts: %w", err)
 		}
+		// CHAOS-4347 codex round-3: Rows (ContextFabricClaimedFact.Rows) is
+		// a producer-facing renderable-table capability -- MetricsProvider
+		// is the only current producer, and nothing routes one into
+		// synthesis input for a model to legitimately cite. The value-level
+		// closure two lines below only compares the scalar Value against
+		// the canonical fact, so a model attaching a Rows array to an
+		// otherwise-valid, closure-passing scalar claim would sail through
+		// completely unchecked -- fabricated table content riding on a
+		// real citation. Until this package actually offers a Rows-bearing
+		// canonical fact to synthesis AND closes Rows at value level the
+		// same way Value already is, a model-authored claim setting Rows
+		// fails closed here, the same "retract rather than trust an
+		// unverified assertion" posture CHAOS-4085's commit-affirmation
+		// gate already applies to everything else in this function.
+		if len(claim.Rows) > 0 {
+			return fmt.Errorf("claimed fact %q sets rows, which no synthesis input offers to cite yet", claim.ClaimID)
+		}
 		if _, exists := claimedByID[claim.ClaimID]; exists {
 			return fmt.Errorf("claimed fact IDs must be unique")
 		}
