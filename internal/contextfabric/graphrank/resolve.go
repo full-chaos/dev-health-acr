@@ -2480,6 +2480,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		scopedResolution, scopedBases, scopedDigests, scopedOK, scopeErr := applyLowPopulationKindScopedRescue(
 			ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete,
 			effectiveSearchLimit, unscopedVisibility, gate, gateValid, retrievalDegraded, coverageFloorDegraded,
+			// codex R2 (P1, confirmed): the caller's own already-visible
+			// population -- see applyLowPopulationKindScopedRescue's own
+			// doc comment for why a candidate found here of ANY kind must
+			// be able to arbitrate against a low-population-kind
+			// candidate, not just this pass's own three exhaustive finds.
+			candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms,
 		)
 		if scopeErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, scopeErr

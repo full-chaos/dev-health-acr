@@ -113,6 +113,29 @@ var chaos4417LowPopulationScopedKinds = sortedKinds(aliasLookupScopedKinds)
 // CHAOS-4154's own confirmed-kind call site shares the exact same
 // discardableDecisionTracer type and the exact same latent leak whenever
 // its scoped resolution does not commit.
+//
+// codex R2 finding (P1, confirmed): the R1 union above ONLY unioned the
+// three low-population kinds' own exhaustive finds -- it excluded every
+// candidate the ORDINARY (resolution-wide, truncated) search had ALREADY
+// found for any OTHER kind. A genuinely visible 0.71 work_item candidate
+// would silently vanish from arbitration, letting a 0.80 repository
+// candidate commit via LoneFloor alone even though the SAME 0.80
+// candidate would fail TopFloor (0.88) against that real, already-seen
+// rival once both were visible together -- the identical class of bug R1
+// fixed for repository/project/team rivals among THEMSELVES, now shown to
+// also apply across the low-population/high-population boundary. Fixed by
+// seeding the union with the caller's own outerPool (every candidate
+// already found, unconditionally, any kind) BEFORE adding the exhaustive
+// per-kind finds, so a real rival of ANY kind blocks the same way it
+// would in an ordinary untruncated resolution. This does NOT claim
+// completeness for kinds outside chaos4417LowPopulationScopedKinds --
+// unseen (truncated-away) candidates of those kinds remain a residual,
+// disclosed risk, exactly like every other truncation-tolerant mechanism
+// in this file (CHAOS-4154's own vector-channel caveat is the same shape)
+// -- which is why allCommittedAreLowPopulationKind (below) refuses to
+// credit a commit unless the WINNING candidate is itself one of the three
+// proven-complete kinds: a strong outer-pool candidate is admitted ONLY
+// to BLOCK, never to WIN, through this mechanism.
 // lowPopulationKindScopeOutcome* (codex R1 P2, confirmed) is the closed
 // vocabulary applyLowPopulationKindScopedRescue's own summary
 // "low_population_kind_scope" event (empty LowPopulationKindScopeKind,
@@ -166,6 +189,21 @@ func applyLowPopulationKindScopedRescue(
 	gateValid bool,
 	retrievalDegraded bool,
 	coverageFloorDegraded bool,
+	// outerPool/outerObservationParentKey/outerObservationBlocked/
+	// outerIdentity/outerIdentityTerms (codex R2, P1, confirmed): the
+	// CALLER's own ordinary (resolution-wide, possibly truncated)
+	// candidatesBySubject/observationParentKey/observationBlocked/identity/
+	// identityTerms -- see this function's own doc comment, "codex R2
+	// finding", for why omitting these let a genuinely VISIBLE rival of a
+	// kind outside chaos4417LowPopulationScopedKinds (e.g. a 0.71
+	// work_item) be silently excluded from arbitration while a 0.80
+	// repository candidate committed alone. Read-only: copied into the
+	// union below, never mutated.
+	outerPool map[string]contextfabric.SubjectCandidate,
+	outerObservationParentKey map[string]string,
+	outerObservationBlocked map[string]bool,
+	outerIdentity identityClaimants,
+	outerIdentityTerms identityMatchTerms,
 ) (resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, ok bool, err error) {
 	// outcome (codex R1 P2, confirmed): a closed-vocabulary summary of WHY
 	// this rescue attempt ended the way it did, emitted exactly once
@@ -192,11 +230,28 @@ func applyLowPopulationKindScopedRescue(
 		outcome = lowPopulationKindScopeOutcomeVectorConfigured
 		return contextfabric.SubjectResolution{}, nil, nil, false, nil
 	}
-	unionPool := make(map[string]contextfabric.SubjectCandidate)
-	unionObservationParentKey := make(map[string]string)
-	unionObservationBlocked := make(map[string]bool)
+	// Seed the union from the CALLER's own already-visible population
+	// FIRST (codex R2 fix) -- every candidate the ordinary, resolution-
+	// wide search already found, of ANY kind, must be able to arbitrate
+	// against a low-population-kind candidate's LoneFloor/TopFloor
+	// evaluation below. mergeSubjectCandidatePool/mergeIdentityClaimants
+	// copy rather than alias: outerPool/outerIdentity are never mutated.
+	unionPool := make(map[string]contextfabric.SubjectCandidate, len(outerPool))
+	mergeSubjectCandidatePool(unionPool, outerPool)
+	unionObservationParentKey := make(map[string]string, len(outerObservationParentKey))
+	for key, value := range outerObservationParentKey {
+		unionObservationParentKey[key] = value
+	}
+	unionObservationBlocked := make(map[string]bool, len(outerObservationBlocked))
+	for key, value := range outerObservationBlocked {
+		unionObservationBlocked[key] = value
+	}
 	unionIdentity := identityClaimants{}
+	mergeIdentityClaimants(unionIdentity, outerIdentity)
 	unionIdentityTerms := identityMatchTerms{}
+	for key, entries := range outerIdentityTerms {
+		unionIdentityTerms[key] = append(unionIdentityTerms[key], entries...)
+	}
 	for _, kind := range chaos4417LowPopulationScopedKinds {
 		scopedPool, scopedObservationParentKey, scopedObservationBlocked, scopedIdentity, scopedIdentityTerms, scopeState, scopeTraversalDegraded, scopeAuthzDropped, _, scopeErr :=
 			buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, kind, effectiveSearchLimit)
@@ -266,10 +321,39 @@ func applyLowPopulationKindScopedRescue(
 		outcome = lowPopulationKindScopeOutcomeDeclined
 		return contextfabric.SubjectResolution{}, nil, nil, false, nil
 	}
+	// codex R2 (P1, confirmed): the union pool above includes candidates
+	// of KINDS this function never proved complete (whatever the outer,
+	// truncated search happened to find) -- included ONLY so they can
+	// correctly BLOCK a low-population-kind candidate via TopFloor/TopGap
+	// when they are genuinely competitive. If the gate committed one of
+	// THOSE candidates instead (it was strong enough to win outright over
+	// everyone, including the exhaustively-proven low-population
+	// entries), crediting that commit here would smuggle in an unproven
+	// completeness claim for a kind this rescue never censused -- exactly
+	// the risk searchTruncated=false must never paper over. Decline; the
+	// ordinary (unscoped) resolution's own ambiguous/clarification
+	// outcome already covers that candidate on its own, honest terms.
+	if !allCommittedAreLowPopulationKind(scopedResolution.Committed) {
+		outcome = lowPopulationKindScopeOutcomeDeclined
+		return contextfabric.SubjectResolution{}, nil, nil, false, nil
+	}
 	outcome = lowPopulationKindScopeOutcomeCommitted
 	scopedResolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
 	scopedTracer.keep()
 	return scopedResolution, scopedBases, scopedDigests, true, nil
+}
+
+// allCommittedAreLowPopulationKind reports whether every committed subject
+// is one of chaos4417LowPopulationScopedKinds -- see this function's own
+// call site (codex R2 finding) for why a commit outside that set must
+// never be credited to this rescue.
+func allCommittedAreLowPopulationKind(committed []contextfabric.SubjectRef) bool {
+	for _, subject := range committed {
+		if !isAliasLookupScopedKind(subject.Kind) {
+			return false
+		}
+	}
+	return true
 }
 
 // mergeSubjectCandidatePool unions src into dst, keeping the higher-

@@ -135,6 +135,47 @@ func TestApplyLowPopulationKindScopedRescue_CrossKindTopFloorDeclines(t *testing
 	}
 }
 
+// TestApplyLowPopulationKindScopedRescue_OuterPoolRivalBlocksCommit is
+// codex R2's own named repro (P1, confirmed), pinned directly: a genuine
+// 0.71 work_item candidate -- a kind OUTSIDE
+// chaos4417LowPopulationScopedKinds entirely, found ONLY by the ORDINARY
+// (resolution-wide) Search call, never by this rescue's own SearchKind
+// census -- must still block a 0.80 repository candidate from committing
+// via LoneFloor. R1's own union (repository ∪ project ∪ team's exhaustive
+// finds) would have missed this rival completely, since work_item is
+// never one of the three kinds this rescue censuses; the fix seeds the
+// union from the caller's own outerPool (candidatesBySubject) FIRST, so
+// every candidate the ordinary search already found -- any kind -- can
+// still arbitrate.
+func TestApplyLowPopulationKindScopedRescue_OuterPoolRivalBlocksCommit(t *testing.T) {
+	t.Parallel()
+	const term = "acr"
+	repoSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repo_1", Label: "acr-core"}
+	workItemSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "wi_1", Label: "acr-issue"}
+	repoNode := candidateNode(repoSubject.Kind, repoSubject.CanonicalID, repoSubject.Label, 0.80, "*")
+	workItemNode := candidateNode(workItemSubject.Kind, workItemSubject.CanonicalID, workItemSubject.Label, 0.71, "*")
+	backend := &fakeGraphBackend{
+		// Both nodes reach the pool through the ORDINARY Search call --
+		// work_item is never SearchKind'd by this rescue (it is not in
+		// chaos4417LowPopulationScopedKinds), so the ONLY way it can ever
+		// participate in this rescue's arbitration is via the outerPool
+		// seed this test exists to pin.
+		searchResults:    map[string][]CandidateNode{term: {repoNode, workItemNode}},
+		searchTruncated:  true,
+		enableSearchKind: true,
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			term: {contextfabric.SubjectRepository: {repoNode}},
+		},
+	}
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps(), nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want ZERO commits -- 0.80 repository alone clears LoneFloor (0.72) but fails TopFloor (0.88) against the real 0.71 work_item rival once both are visible; work_item is outside chaos4417LowPopulationScopedKinds entirely, so ONLY the outer (ordinary-search) pool can ever surface it to this rescue", resolution.Committed)
+	}
+}
+
 // TestApplyLowPopulationKindScopedRescue_IncompleteSiblingAbortsWholeRescue
 // is codex R1 finding 2 (P1, confirmed): a repository candidate that would
 // commit cleanly on its own must NOT commit when a sibling kind
@@ -171,6 +212,7 @@ func TestApplyLowPopulationKindScopedRescue_IncompleteSiblingAbortsWholeRescue(t
 	resolution, _, _, ok, err := applyLowPopulationKindScopedRescue(
 		context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, []string{term},
 		nil, false, request.Options.MaxSubjectCandidates, true, DefaultCommitGatePolicy(), true, false, false,
+		nil, nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("applyLowPopulationKindScopedRescue() error = %v", err)
@@ -217,6 +259,7 @@ func TestApplyLowPopulationKindScopedRescue_VectorConfiguredSkipsEntirely(t *tes
 	resolution, _, _, ok, err := applyLowPopulationKindScopedRescue(
 		context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, []string{term},
 		nil, false, request.Options.MaxSubjectCandidates, true, DefaultCommitGatePolicy(), true, false, false,
+		nil, nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("applyLowPopulationKindScopedRescue() error = %v", err)

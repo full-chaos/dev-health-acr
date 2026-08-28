@@ -367,16 +367,33 @@ func TestResolveSubjects_ConfirmedKindScope_UntruncatedResolutionUnchanged(t *te
 // TestResolveSubjects_ConfirmedKindScope_NilConfirmedKindNeverTriggers is
 // regression item 7: "Unconfirmed-hint paired requests remain behaviorally
 // identical." confirmedKind==nil structurally excludes every inferred/
-// unconfirmed-hint request from this ticket's entire mechanism (CHAOS-4039
+// unconfirmed-hint request from THIS TICKET's (CHAOS-4154's own
+// buildConfirmedKindScopedSnapshot-via-confirmedKind) mechanism (CHAOS-4039
 // noninterference, by construction) -- even with searchTruncated=true and a
-// SearchKind backend available, this ticket's mechanism must never even be
-// attempted (no "confirmed_kind_scope" trace event) and the ordinary
-// ambiguous outcome must stand. Uses SubjectProject (an
-// isAliasLookupScopedKind, kindCoverageFloorKinds member) precisely so
+// SearchKind backend available, CHAOS-4154's mechanism must never even be
+// attempted (no "confirmed_kind_scope" trace event). Uses SubjectProject
+// (an isAliasLookupScopedKind, kindCoverageFloorKinds member) precisely so
 // the PRE-EXISTING CHAOS-4038 coverage floor's own, legitimate,
 // confirmedKind==nil-gated SearchKind calls are exercised too -- proving
-// this ticket's mechanism adds ZERO calls on top of that already-existing
+// CHAOS-4154's mechanism adds ZERO calls on top of that already-existing
 // behavior, not merely that some other assertion happens to hold.
+//
+// CHAOS-4417 UPDATE: this fixture's shape -- a lone, high-confidence
+// (0.9), low-population-kind (project) candidate blocked ONLY by
+// resolution-wide searchTruncated -- is now EXACTLY what CHAOS-4417's own
+// pre-confirmation rescue (applyLowPopulationKindScopedRescue,
+// chaos4417_low_population_kind_scope.go) exists to commit, correctly and
+// deliberately, via a DIFFERENT mechanism/stage
+// ("low_population_kind_scope", never "confirmed_kind_scope"). The
+// original "resolution.Committed must stay empty" assertion asserted more
+// than this test's own name/scope claims -- it happened to also pin "no
+// OTHER mechanism ever rescues an unconfirmed truncated resolution
+// either," an invariant CHAOS-4417 intentionally and correctly breaks.
+// Narrowed to this test's actual, named purpose: CHAOS-4154's own
+// mechanism specifically stays unreachable (the confirmed_kind_scope
+// check below, unchanged) -- CHAOS-4039 noninterference is about THAT
+// ticket's own mechanism, not a blanket "nothing else may ever act on an
+// unconfirmed request" claim no ticket ever made.
 func TestResolveSubjects_ConfirmedKindScope_NilConfirmedKindNeverTriggers(t *testing.T) {
 	t.Parallel()
 	kind := contextfabric.SubjectProject
@@ -394,11 +411,14 @@ func TestResolveSubjects_ConfirmedKindScope_NilConfirmedKindNeverTriggers(t *tes
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
-	if len(resolution.Committed) != 0 {
-		t.Fatalf("resolution.Committed = %#v, want ambiguous -- an unconfirmed request must never reach this ticket's mechanism", resolution.Committed)
+	// CHAOS-4417, not CHAOS-4154, legitimately commits this lone
+	// low-population-kind candidate now -- see this test's own updated
+	// doc comment above.
+	if len(resolution.Committed) != 1 || resolution.Committed[0].Kind != kind {
+		t.Fatalf("resolution.Committed = %#v, want the lone project candidate committed via CHAOS-4417's pre-confirmation rescue", resolution.Committed)
 	}
 	if _, ok := confirmedKindScopeEvent(tracer.events); ok {
-		t.Fatal("a confirmed_kind_scope trace event fired for a confirmedKind==nil resolution -- CHAOS-4039 noninterference requires this mechanism stay structurally unreachable")
+		t.Fatal("a confirmed_kind_scope trace event fired for a confirmedKind==nil resolution -- CHAOS-4039 noninterference requires CHAOS-4154's OWN mechanism stay structurally unreachable (CHAOS-4417's own, differently-staged low_population_kind_scope mechanism firing is expected and correct here, not a violation of this invariant)")
 	}
 }
 

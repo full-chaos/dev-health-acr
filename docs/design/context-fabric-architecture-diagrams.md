@@ -270,7 +270,16 @@ ran the gate separately per kind let a repository candidate clear LoneFloor
 in isolation even though the SAME candidate would fail TopFloor against a
 genuine cross-kind rival once both were visible together (codex R1,
 CHAOS-4417 PR #320). Unioning restores the SAME cross-kind arbitration an
-ordinary untruncated resolution already gets.
+ordinary untruncated resolution already gets. Seeded with the CALLER's own
+already-visible `candidatesBySubject` FIRST (codex R2, same PR): the R1
+union alone still missed a genuinely visible rival of a kind OUTSIDE
+repository/project/team (e.g. a real work_item candidate the ordinary,
+truncated search had already found) -- that candidate is now unioned in
+too, purely to BLOCK a low-population-kind candidate via TopFloor/TopGap
+when competitive; a commit is credited ONLY when the WINNING candidate
+itself is repository/project/team (`allCommittedAreLowPopulationKind`) --
+this mechanism never claims completeness for, or lets itself commit,
+any other kind.
 
 **In-flight fix (not yet merged as of this writing):** `lane-4347-project`
 (branch `chaos-4348-project-team-pool`) is building two new search arms
