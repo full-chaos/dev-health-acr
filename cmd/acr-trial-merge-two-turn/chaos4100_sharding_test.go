@@ -422,8 +422,33 @@ func TestChaos4386_MergeRecomputesFromResultByteSamplesNotJustRowFinals(t *testi
 	if merged.OverMaxSerializedBytesCount != 1 {
 		t.Errorf("merged.OverMaxSerializedBytesCount = %d, want 1 -- recomputing from merged.Results[].ResultBytes alone (every row is 5000-6000, all under budget) would silently report 0 and hide the oversized intermediate call", merged.OverMaxSerializedBytesCount)
 	}
-	if len(merged.ResultByteSamples) != 5 {
-		t.Errorf("merged.ResultByteSamples has %d entries, want 5 (3 from shard 0 + 2 from shard 1, concatenated)", len(merged.ResultByteSamples))
+	wantSamples := []int64{5000, 5000, 6000, 6000, 300000}
+	if !reflect.DeepEqual(merged.ResultByteSamples, wantSamples) {
+		t.Errorf("merged.ResultByteSamples = %v, want %v sorted -- codex review round 4 (P2, confirmed): unsorted concatenation makes the persisted artifact depend on shard argument order even though the population and every derived statistic are identical either way", merged.ResultByteSamples, wantSamples)
+	}
+}
+
+// TestChaos4386_MergedResultByteSamplesOrderIsInvariantToShardArgumentOrder
+// is the codex review round 4 (P2, confirmed) regression directly: merging
+// the SAME two shards in the OPPOSITE argument order must produce a
+// byte-identical (not merely statistically-equal) ResultByteSamples slice
+// -- the same sharding-invariance goal TestChaos4100_LaunchWideShardingFieldsMustAgreeAcrossShards's
+// own package comment states for merged.Results.
+func TestChaos4386_MergedResultByteSamplesOrderIsInvariantToShardArgumentOrder(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.ResultByteSamples = []int64{300000, 5000, 90000}
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.ResultByteSamples = []int64{6000, 400000}
+
+	forward := mergeReports([]twoTurnReport{a, b})
+	reversed := mergeReports([]twoTurnReport{b, a})
+
+	if !reflect.DeepEqual(forward.ResultByteSamples, reversed.ResultByteSamples) {
+		t.Fatalf("ResultByteSamples differs by shard argument order: forward=%v reversed=%v", forward.ResultByteSamples, reversed.ResultByteSamples)
+	}
+	want := []int64{5000, 6000, 90000, 300000, 400000}
+	if !reflect.DeepEqual(forward.ResultByteSamples, want) {
+		t.Errorf("ResultByteSamples = %v, want %v (sorted ascending)", forward.ResultByteSamples, want)
 	}
 }
 

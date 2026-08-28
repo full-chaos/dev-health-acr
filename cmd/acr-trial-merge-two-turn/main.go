@@ -1270,6 +1270,17 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 	}
 	merged.TimingSummary = summarizeTwoTurnTiming(merged.Timings)
 
+	// Sorted (codex review round 4, P2, confirmed): a plain per-shard
+	// concatenation, like merged.Results before its own sort below, makes
+	// the SEQUENCE depend on the CLI argument order the shards were
+	// listed in (or which cut produced them) even though the population
+	// and every derived statistic are identical either way -- sample
+	// order carries no information (chaos4386ResultByteStats sorts its
+	// own copy internally regardless), so this is purely to keep the
+	// persisted artifact reproducible and diffable, the SAME
+	// sharding-invariance goal merged.Results' own sort documents.
+	sort.Slice(merged.ResultByteSamples, func(i, j int) bool { return merged.ResultByteSamples[i] < merged.ResultByteSamples[j] })
+
 	// CHAOS-4386 (codex review round 3, P1, confirmed): recomputed from
 	// the MERGED ResultByteSamples -- every call every shard actually
 	// made, concatenated -- never from merged.Results[].ResultBytes alone
