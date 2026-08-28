@@ -23,6 +23,7 @@ func TestChaos4347_ComposeStatusCategoryRequirements(t *testing.T) {
 
 	repo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:r1"}
 	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:t1"}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project.v2:github:p1"}
 	workItem := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item:w1"}
 
 	sortedKinds := func(kinds []FactKind) []FactKind {
@@ -48,12 +49,21 @@ func TestChaos4347_ComposeStatusCategoryRequirements(t *testing.T) {
 			},
 		},
 		{
-			name:         "team subject: status composes to health+workload+readiness+investment",
+			name:         "team subject: status composes to health+workload+readiness+investment+flow+landscape (CHAOS-4363+CHAOS-4364)",
 			requirements: []FactRequirement{{Kind: FactStatus}},
 			subjects:     []SubjectRef{team},
-			wantKinds:    []FactKind{FactHealth, FactInvestment, FactReadiness, FactWorkload},
+			wantKinds:    []FactKind{FactFlow, FactHealth, FactInvestment, FactLandscape, FactReadiness, FactWorkload},
 			wantCompositions: []CategoryFactCompositionEvent{
-				{RequirementKind: FactStatus, SubjectKind: SubjectTeam, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness, FactInvestment}},
+				{RequirementKind: FactStatus, SubjectKind: SubjectTeam, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness, FactInvestment, FactFlow, FactLandscape}},
+			},
+		},
+		{
+			name:         "project subject: status composes to every kind whose Capability supports SubjectProject (CHAOS-4364 R2 fix)",
+			requirements: []FactRequirement{{Kind: FactStatus}},
+			subjects:     []SubjectRef{project},
+			wantKinds:    []FactKind{FactFlow, FactHealth, FactInvestment, FactLandscape, FactReadiness, FactWorkload},
+			wantCompositions: []CategoryFactCompositionEvent{
+				{RequirementKind: FactStatus, SubjectKind: SubjectProject, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness, FactInvestment, FactFlow, FactLandscape}},
 			},
 		},
 		{
@@ -83,9 +93,9 @@ func TestChaos4347_ComposeStatusCategoryRequirements(t *testing.T) {
 			name:         "requirement's OWN Subjects (non-empty) wins over the investigation-wide set",
 			requirements: []FactRequirement{{Kind: FactStatus, Subjects: []SubjectRef{team}}},
 			subjects:     []SubjectRef{repo}, // investigation-wide set is repository, but the requirement pins team
-			wantKinds:    []FactKind{FactHealth, FactInvestment, FactReadiness, FactWorkload},
+			wantKinds:    []FactKind{FactFlow, FactHealth, FactInvestment, FactLandscape, FactReadiness, FactWorkload},
 			wantCompositions: []CategoryFactCompositionEvent{
-				{RequirementKind: FactStatus, SubjectKind: SubjectTeam, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness, FactInvestment}},
+				{RequirementKind: FactStatus, SubjectKind: SubjectTeam, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness, FactInvestment, FactFlow, FactLandscape}},
 			},
 		},
 	}

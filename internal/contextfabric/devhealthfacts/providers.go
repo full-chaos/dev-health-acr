@@ -31,5 +31,7 @@ func NewProviders(client contextpacket.ClickHouseQueryClient) []contextfabric.Fa
 		newReadinessProvider(client),
 		newOperationalDeficienciesProvider(client),
 		newSourceHealthProvider(client),
+		newFlowProvider(client),
+		newLandscapeProvider(client),
 	}
 }

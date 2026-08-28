@@ -352,9 +352,22 @@ erDiagram
     FACT_SCOPE_RESOLVER ||--|| FACT_PLANNER : "expands ReadSubjects before planning (CHAOS-4099)"
 ```
 
-**19 registered `FactProvider`s** (`internal/contextfabric/devhealthfacts`,
-wired at `NewProviders`, `providers.go:14-35`; composed at
+**21 registered `FactProvider`s** (`internal/contextfabric/devhealthfacts`,
+wired at `NewProviders`, `providers.go:14-37`; composed at
 `internal/runtime/hosted/open.go:597`):
+
+**Updated 2026-08-27 (CHAOS-4364, `lane-4364-flow`):** two NEW v1-additive
+FactKinds, `flow` and `landscape` (`flow.go`, `landscape.go`), following
+CHAOS-4347's own "widen by a real table join, never a proxy" discipline.
+Both are added to `statusCategoryFactKindComposition`'s `team` entry
+(`chaos4347_status_category_composition.go`) — hand-merged with CHAOS-4363's
+concurrent `investment` addition to the SAME entry, so `team` now composes
+`{health, workload, readiness, investment, flow, landscape}` (all six).
+`project`'s FIRST entry (codex R2 fix, CHAOS-4364) composes every kind of
+those six whose `Capability()` actually supports `SubjectProject` — which
+is all six, since CHAOS-4363 already widened health/workload/readiness/
+investment to answer for a project directly (see the CHAOS-4363 update
+below) by the time this ticket rebased onto it.
 
 **Updated 2026-08-26/27 (CHAOS-4347, `lane-4347-ch`, PR #300):** the
 `metrics`/`continuous_integration`/`deployments` rows below are widened by
@@ -388,6 +401,8 @@ source for the SAME kind).
 | readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project, CHAOS-4363)** | team, **project** |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | `backfill_log` | organization |
+| flow (CHAOS-4364) | `work_item_metrics_daily` (team, per-scope Rows; `work_item_cycle_times`'s flow_efficiency is DELIBERATELY NOT read -- ops sink omits it, see flow.go's doc comment); **+`team_project_ownership` ⋈ `work_item_metrics_daily`**, summed/averaged across a team's own (provider, work_scope_id) rows into one row per team (project, codex R2 fix); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
+| landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to (team, map_name) — never per-identity (no person-to-person ranking); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
 
 **`FactMetrics`'s project rollup never averages a rate across
 differently-sized teams.** Additive counts (commits, after-hours/weekend
@@ -492,7 +507,9 @@ it in that lane's queue).
 
 **Update (CHAOS-4363, 4347-A, routing slice):** `statusCategoryFactKindComposition`'s
 `SubjectTeam` entry now also composes `FactInvestment`, so the team leg of
-the paragraph above is `team→{health, workload, readiness, investment}`.
+the paragraph above was `team→{health, workload, readiness, investment}`
+at this ticket's own tip; CHAOS-4364 (rebased on top, see above) adds
+`flow`/`landscape` to the same entry and adds the first `project` entry.
 Repository's set is unchanged.
 
 **Update (CHAOS-4363, 4347-A, producer slice — completes this ticket):**

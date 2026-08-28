@@ -158,6 +158,26 @@ var ProductionColumns = map[string][]Column{
 		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
 	},
+	// ic_landscape_rolling_30d is CHAOS-4364's LandscapeProvider's read
+	// (landscape.go) -- its first reader in this package. repo_id and
+	// identity_id are unread by the provider but ARE part of the live
+	// ORDER BY (see EngineFull below), so CREATE TABLE requires them
+	// declared regardless of read-scope, same as team_project_ownership's
+	// source/valid_from. Read live off the kiac trial ClickHouse
+	// (system.columns via kubectl exec, 2026-08-27).
+	"ic_landscape_rolling_30d": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "as_of_day", Type: "Date"},
+		{Name: "identity_id", Type: "String"},
+		{Name: "team_id", Type: "LowCardinality(String)"},
+		{Name: "map_name", Type: "LowCardinality(String)"},
+		{Name: "churn_loc_30d", Type: "UInt64"},
+		{Name: "delivery_units_30d", Type: "UInt32"},
+		{Name: "cycle_p50_30d_hours", Type: "Float64"},
+		{Name: "wip_max_30d", Type: "UInt32"},
+		{Name: "computed_at", Type: "DateTime"},
+		{Name: "org_id", Type: "String"},
+	},
 	"investment_metrics_daily": {
 		{Name: "day", Type: "Date"},
 		{Name: "team_id", Type: "LowCardinality(Nullable(String))"},
@@ -234,6 +254,15 @@ var ProductionColumns = map[string][]Column{
 		{Name: "bus_factor", Type: "UInt32"},
 		{Name: "code_ownership_gini", Type: "Float64"},
 		{Name: "org_id", Type: "String"},
+		// CHAOS-4364: FlowProvider's readRepositoryFlow (flow.go) reads
+		// these five PR pickup/review-timing columns off the SAME table
+		// metrics.go already declared above -- a distinct column set, no
+		// conflict. Positions 11-15 live (system.columns, 2026-08-27).
+		{Name: "prs_with_first_review", Type: "UInt32"},
+		{Name: "pr_first_review_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "pr_first_review_p90_hours", Type: "Nullable(Float64)"},
+		{Name: "pr_review_time_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "pr_pickup_time_p50_hours", Type: "Nullable(Float64)"},
 	},
 	// CHAOS-4347: team_metrics_daily/cicd_metrics_daily/deploy_metrics_daily
 	// read live from the kiac trial ClickHouse (system.columns, 2026-08-26)
@@ -412,6 +441,30 @@ var ProductionColumns = map[string][]Column{
 		{Name: "valid_to", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
 	},
+	// work_item_metrics_daily is CHAOS-4364's FlowProvider's read (flow.go),
+	// its first reader in this package. provider is unread by the provider
+	// but IS part of the live ORDER BY (EngineFull below), so declared
+	// regardless, same as ic_landscape_rolling_30d's repo_id/identity_id
+	// above. Read live off the kiac trial ClickHouse (2026-08-27).
+	"work_item_metrics_daily": {
+		{Name: "day", Type: "Date"},
+		{Name: "provider", Type: "LowCardinality(String)"},
+		{Name: "work_scope_id", Type: "LowCardinality(String)"},
+		{Name: "team_id", Type: "LowCardinality(String)"},
+		{Name: "items_started", Type: "UInt32"},
+		{Name: "items_completed", Type: "UInt32"},
+		{Name: "wip_count_end_of_day", Type: "UInt32"},
+		{Name: "cycle_time_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "cycle_time_p90_hours", Type: "Nullable(Float64)"},
+		{Name: "lead_time_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "lead_time_p90_hours", Type: "Nullable(Float64)"},
+		{Name: "wip_age_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "wip_age_p90_hours", Type: "Nullable(Float64)"},
+		{Name: "bug_completed_ratio", Type: "Float64"},
+		{Name: "story_points_completed", Type: "Float64"},
+		{Name: "computed_at", Type: "DateTime('UTC')"},
+		{Name: "org_id", Type: "String"},
+	},
 	"work_items": {
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
@@ -482,6 +535,7 @@ var EngineFull = map[string]string{
 	"estimate_coverage_metrics_daily":         "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, '')) SETTINGS index_granularity = 8192",
 	"git_pull_request_reviews":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id) SETTINGS index_granularity = 8192",
 	"git_pull_requests":                       "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number) SETTINGS index_granularity = 8192",
+	"ic_landscape_rolling_30d":                "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(as_of_day) ORDER BY (org_id, repo_id, team_id, map_name, as_of_day, identity_id) SETTINGS index_granularity = 8192",
 	"investment_metrics_daily":                "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, team_id, investment_area, project_stream) SETTINGS allow_nullable_key = 1, index_granularity = 8192",
 	"operational_incidents":                   "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"project_membership_transitions":          "ReplacingMergeTree(last_synced) ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id) SETTINGS index_granularity = 8192",
@@ -502,6 +556,7 @@ var EngineFull = map[string]string{
 	"teams":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
+	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",
 	"work_item_team_attributions":          "ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source) SETTINGS index_granularity = 8192",
 	"work_items":                           "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
 }

@@ -2426,7 +2426,9 @@
             "readiness",
             "operational_deficiencies",
             "source_health",
-            "evidence"
+            "evidence",
+            "flow",
+            "landscape"
           ]
         },
         "subject": {
@@ -2659,7 +2661,9 @@
             "readiness",
             "operational_deficiencies",
             "source_health",
-            "evidence"
+            "evidence",
+            "flow",
+            "landscape"
           ]
         },
         "subjects": {
@@ -2727,7 +2731,7 @@
           "items": {
             "$ref": "#/$defs/FactRequirement"
           },
-          "maxItems": 20
+          "maxItems": 22
         },
         "clarification_needed": {
           "type": "boolean"

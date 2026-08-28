@@ -330,6 +330,16 @@ const (
 	ContextFabricFactOperationalDeficiencies ContextFabricFactKind = "operational_deficiencies"
 	ContextFabricFactSourceHealth            ContextFabricFactKind = "source_health"
 	ContextFabricFactEvidence                ContextFabricFactKind = "evidence"
+	// ContextFabricFactFlow and ContextFabricFactLandscape (CHAOS-4364) are
+	// v1 ADDITIVE fact kinds: delivery-flow/bottleneck signals
+	// (work_item_cycle_times, work_item_metrics_daily, repo_metrics_daily's
+	// PR pickup/review columns) and IC landscape/area ownership
+	// (ic_landscape_rolling_30d ⋈ team_project_ownership), both team- and
+	// project-keyed via real table joins/rollups the same way CHAOS-4347
+	// widened FactMetrics -- see
+	// internal/contextfabric/devhealthfacts/flow.go and landscape.go.
+	ContextFabricFactFlow      ContextFabricFactKind = "flow"
+	ContextFabricFactLandscape ContextFabricFactKind = "landscape"
 )
 
 // contextFabricFactKinds is the closed fact-kind vocabulary in published
@@ -372,6 +382,8 @@ var contextFabricFactKinds = [...]ContextFabricFactKind{
 	ContextFabricFactOperationalDeficiencies,
 	ContextFabricFactSourceHealth,
 	ContextFabricFactEvidence,
+	ContextFabricFactFlow,
+	ContextFabricFactLandscape,
 }
 
 // ContextFabricFactKindCount is the size of the closed fact-kind vocabulary,

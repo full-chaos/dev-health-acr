@@ -112,7 +112,14 @@ const (
 	// runs -- see contextfabric.ReuseKey.InterpretationPromptVersion's doc
 	// comment. Composition reads this constant directly rather than a
 	// second, independently-maintained copy, so the two can never drift.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v8"
+	// v9 (CHAOS-4364): contextFabricFactKindList's interpolated text
+	// changed -- the closed set now advertises "flow" and "landscape"
+	// alongside the existing kinds, so the prompt bytes changed even
+	// though nothing else in interpretationSystemPrompt did. Same
+	// discipline as v3's original close-the-vocabulary bump: any change
+	// to the interpolated fact-kind list is a prompt content change and
+	// must bump this version.
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v9"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -255,7 +262,13 @@ const (
 	//
 	// Exported for the same CHAOS-3862 reason as
 	// DefaultInterpretationPromptVersion above.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v11"
+	//
+	// v12 (CHAOS-4364): synthesisSystemPrompt also interpolates
+	// contextFabricFactKindList (the "claimed fact's kind MUST be one of"
+	// sentence), which now advertises "flow" and "landscape" too -- the
+	// same prompt-bytes-changed rationale as
+	// DefaultInterpretationPromptVersion's v9 bump, on the sibling prompt.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v12"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation

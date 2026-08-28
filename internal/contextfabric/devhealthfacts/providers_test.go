@@ -41,6 +41,8 @@ func TestNewProvidersRegistersExactlyTheCoveredKinds(t *testing.T) {
 		contextfabric.FactReadiness:               true,
 		contextfabric.FactOperationalDeficiencies: true,
 		contextfabric.FactSourceHealth:            true,
+		contextfabric.FactFlow:                    true,
+		contextfabric.FactLandscape:               true,
 	}
 	if len(capabilities) != len(want) {
 		t.Fatalf("capabilities = %d, want %d: %+v", len(capabilities), len(want), capabilities)
