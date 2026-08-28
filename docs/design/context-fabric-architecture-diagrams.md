@@ -317,14 +317,16 @@ deployment/review edges from `devhealthsource/tables.go`; project→team from
 end-to-end but this org's live graph currently has zero incident nodes —
 absence of evidence, not absence of a code path.
 
-**Team authorization and cohort retrieval (2026-08-28, CHAOS-4390/CHAOS-4395):**
-team nodes' `authorization_repositories` is now derived from
-`team_repo_ownership` at projection time (never left empty — an empty list
-falls back to a shared wildcard convention that over-exposed every team to
-every repository-scoped principal until this fix). Cohort discovery
-(`DiscoverContext`) sources members from `ExactNameCandidates`/kind census in
-addition to fulltext, so a termless "which teams..." question can populate a
-cohort at all. Full corrected mechanism, the pipeline this feeds into
+**Team authorization (2026-08-28, CHAOS-4390, MERGED #313) and cohort
+retrieval (CHAOS-4395, IN FLIGHT, not yet merged as of this writing):** team
+nodes' `authorization_repositories` is now derived from `team_repo_ownership`
+at projection time (never left empty — an empty list falls back to a shared
+wildcard convention that over-exposed every team to every repository-scoped
+principal until this fix, #313). Cohort discovery (`DiscoverContext`) still
+sources members from `fulltextSearchNodes` only on `main` as of this writing
+— #314/CHAOS-4395, which adds `ExactNameCandidates`/kind census so a termless
+"which teams..." question can populate a cohort at all, is open but not
+merged. Full corrected mechanism, the pipeline this feeds into
 (ranking/drivers/Rows), and the score formula:
 [context-fabric-subject-model-and-cohort-answers.md](context-fabric-subject-model-and-cohort-answers.md).
 
