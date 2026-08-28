@@ -546,6 +546,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// distinguishes real degradation from ordinary, silent filtering, and it
 	// alone drives Coverage.Partial.
 	failedLookups := 0
+	// exactNameTruncated (CHAOS-4395, codex round-1 P1) reports whether
+	// chaos4348ExactNameCandidates' bounded org-wide kind census was cut
+	// off before it finished -- only ever set for a discovered_cohort
+	// request (see that call site below), and fed into Coverage.Partial/
+	// DegradedReasons so a cohort built from an incomplete census never
+	// silently claims completeness.
+	exactNameTruncated := false
 	// edgeFilters (CHAOS-3888) aggregates every edge resolveEdge excluded as
 	// edgeFiltered across BOTH sources this function reads from (hopWalk's
 	// committed-origin traversal below, and the full-text-adjacent-edge loop
@@ -675,27 +682,63 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// question TEXT. A cohort question that names no member by label/alias
 	// ("which teams are struggling") cannot lexically match anything, so
 	// the cohort starved even when Shape was correctly interpreted as
-	// discovered_cohort/explicit_cohort and authorization would otherwise
-	// allow it. CHAOS-4348's chaos4348ExactNameCandidates is the
-	// kind-exhaustive, term-free fetch that already exists for exactly
-	// this problem on the single-subject path (graphrank.applyExactNameArm)
-	// -- this wires the SAME fetch into the cohort path, scoped to cohort
-	// requests only (never touches resolvedNodes/orderedResolved/Paths/
-	// unbounded-validity accounting above, which stay fulltext+hop-walk
-	// only, unchanged for every non-cohort investigation). The truncation
-	// signal is discarded on the same documented basis fulltextSearchNodes'
-	// own call above already established: DiscoverContext has no
-	// auto-commit decision here for it to protect.
+	// discovered_cohort and authorization would otherwise allow it.
+	// CHAOS-4348's chaos4348ExactNameCandidates is the kind-exhaustive,
+	// term-free fetch that already exists for exactly this problem on the
+	// single-subject path (graphrank.applyExactNameArm) -- this wires the
+	// SAME fetch into the cohort path (never touches resolvedNodes/
+	// orderedResolved/Paths/unbounded-validity accounting above, which
+	// stay fulltext+hop-walk only, unchanged for every non-cohort
+	// investigation, proven by a dedicated test).
+	//
+	// Codex round-1 finding (P1): scoped to ShapeDiscoveredCohort ONLY,
+	// deliberately excluding ShapeExplicitCohort. explicit_cohort means the
+	// question NAMES specific members ("compare the frontend and backend
+	// teams") -- chaos4348ExactNameCandidates returns the WHOLE org-wide
+	// kind census with no term filtering at all, so admitting it for an
+	// explicit_cohort request would widen a question that named two teams
+	// into a cohort containing every team in the org. discovered_cohort is
+	// the one shape that means "no term to match, give me the kind's whole
+	// census" -- the only shape this broad a fetch is ever correct for.
+	//
+	// Codex round-1 finding (P2, authzDropped double-count): exactNameNodes
+	// is merged through the SAME seenNode dedup map hopWalk/fulltext
+	// already populate above, so a subject BOTH fulltext and exact-name
+	// return (or that exact-name alone returns twice, though it cannot)
+	// contributes to DiscoveredCohort's authzDropped/membership accounting
+	// exactly once, never inflated by which arm(s) found it.
 	cohortNodes := resolvedNodes
-	if request.Interpretation.Shape == contextfabric.ShapeDiscoveredCohort || request.Interpretation.Shape == contextfabric.ShapeExplicitCohort {
-		exactNameNodes, _, exactNameErr := a.chaos4348ExactNameCandidates(ctx, key, principal.OrgID, temporal)
+	if request.Interpretation.Shape == contextfabric.ShapeDiscoveredCohort {
+		exactNameNodes, truncated, exactNameErr := a.chaos4348ExactNameCandidates(ctx, key, principal.OrgID, temporal)
 		if exactNameErr != nil {
 			// CHAOS-4077: same never-projected-graph degrade-gracefully
 			// discipline as the hopWalk/fulltextSearchNodes error sites
 			// above.
 			return contextfabric.GraphContext{}, graphNotProjectedError(exactNameErr)
 		}
-		cohortNodes = append(append([]graphrank.CandidateNode(nil), resolvedNodes...), exactNameNodes...)
+		// Codex round-1 finding (P1, truncation disclosure): unlike the
+		// fulltext call above (whose truncation signal genuinely has no
+		// consumer here, per that call's own doc comment), a truncated
+		// exact-name fetch means the kind's census itself was incomplete
+		// -- a cohort built from it can silently under-count and still
+		// report Complete=true. Disclosed below via Coverage.Partial/
+		// DegradedReasons, the same mechanism this function already uses
+		// for endpoint_lookup_failed/unknown_relationship_type.
+		exactNameTruncated = truncated
+		cohortNodes = make([]graphrank.CandidateNode, 0, len(resolvedNodes)+len(exactNameNodes))
+		cohortNodes = append(cohortNodes, resolvedNodes...)
+		for _, n := range exactNameNodes {
+			subject, ok := graphrank.NodeSubject(n)
+			if !ok {
+				continue
+			}
+			nk := graphrank.SubjectKey(subject)
+			if seenNode[nk] {
+				continue
+			}
+			seenNode[nk] = true
+			cohortNodes = append(cohortNodes, n)
+		}
 	}
 	cohort, cohortAuthzDropped := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
 	factRequirements := admission.FactRequirements
@@ -751,10 +794,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(resolvedNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated
 	var degradedReasons []string
 	if failedLookups > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups))
+	}
+	if exactNameTruncated {
+		degradedReasons = append(degradedReasons, "exact_name_candidates_truncated")
 	}
 	if admission.DroppedUnknownRelationshipTypeCount > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount))

@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -95,5 +96,137 @@ func TestDiscoverContextNonCohortRequestNeverCallsExactNameCandidates(t *testing
 
 	if _, err := adapter.DiscoverContext(context.Background(), principal, fakeDiscoveryRequest(origin, 10)); err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+}
+
+// cohortDiscoveryRequest is TestDiscoverContextCohortFindsTeamsWithNoLexicalMatchInTheQuestion's
+// request builder, factored out so the round-1 regression tests below can
+// vary only the Shape.
+func cohortDiscoveryRequest(shape contextfabric.InvestigationShape) contextfabric.GraphDiscoveryRequest {
+	return contextfabric.GraphDiscoveryRequest{
+		Request: contextfabric.InvestigationRequest{
+			Question: "which teams are struggling",
+			Options: contextfabric.InvestigationOptions{
+				MaxSubjectCandidates: 10, MaxCohortMembers: 10, MaxRelationshipPaths: 10,
+				MaxDrivers: 10, MaxEvidenceRefs: 50, MaxSerializedBytes: 262144,
+			},
+		},
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: shape, RequestedJudgment: "teams_under_pressure",
+			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+}
+
+// TestDiscoverContextExplicitCohortNeverCallsExactNameCandidates is codex
+// round-1 finding P1: explicit_cohort means the question NAMES specific
+// members ("compare the frontend and backend teams"), while
+// chaos4348ExactNameCandidates returns the WHOLE org-wide kind census with
+// no term filtering at all. Admitting it for explicit_cohort would widen a
+// question naming two teams into a cohort containing every team in the org
+// -- the exact-name fetch is wired ONLY for discovered_cohort.
+func TestDiscoverContextExplicitCohortNeverCallsExactNameCandidates(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			t.Fatal("chaos4348ExactNameCandidates must not be called for ShapeExplicitCohort -- only ShapeDiscoveredCohort names a termless census")
+			return nil, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+
+	if _, err := adapter.DiscoverContext(context.Background(), principal, cohortDiscoveryRequest(contextfabric.ShapeExplicitCohort)); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+}
+
+// TestDiscoverContextDisclosesExactNameTruncation is codex round-1 finding
+// P1: chaos4348ExactNameCandidates reports its own truncation (the bounded
+// org-wide census was cut off before finishing), but that signal used to be
+// discarded entirely at the call site -- a cohort built from an incomplete
+// census could report Complete=true while genuinely missing members. This
+// proves the signal now reaches Coverage.Partial/DegradedReasons.
+func TestDiscoverContextDisclosesExactNameTruncation(t *testing.T) {
+	overLimitRows := make([]row, exactNameCandidateQueryLimit+1)
+	for i := range overLimitRows {
+		overLimitRows[i] = fakeSubjectNodeRow("team", fmt.Sprintf("team_%d", i), fmt.Sprintf("Team %d", i))
+		overLimitRows[i]["n"].(*node).Properties["authorization_repositories"] = "*"
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			return overLimitRows, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false, want true: the exact-name census was truncated before the cohort was built from it")
+	}
+	found := false
+	for _, reason := range result.Coverage.DegradedReasons {
+		if strings.Contains(reason, "exact_name_candidates_truncated") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("DegradedReasons = %v, want an exact_name_candidates_truncated entry", result.Coverage.DegradedReasons)
+	}
+}
+
+// TestDiscoverContextCohortAuthzDroppedNotInflatedByOverlappingArms is
+// codex round-1 finding P2: a subject BOTH fulltext and exact-name return
+// must contribute to cohortAuthzDropped exactly once, never once per arm
+// that found it. Seeds the SAME unauthorized team from both the fulltext
+// and the exact-name query.
+func TestDiscoverContextCohortAuthzDroppedNotInflatedByOverlappingArms(t *testing.T) {
+	// The SAME subject (team_foreign), shaped the way EACH arm's own query
+	// actually decodes a row: fulltextSearchNodes reads a "node" key
+	// (fulltextRow), chaos4348ExactNameCandidates reads an "n" key
+	// (fakeSubjectNodeRow) -- see runFulltextQuery vs. that function's own
+	// `r["n"].(*node)` scan.
+	unauthorizedAttrs := map[string]interface{}{"authorization_repositories": []string{"other/private"}, "authorization_teams": []string{"team_foreign"}}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			r := fulltextRow("team", "team_foreign", "Foreign", "Foreign", nil)
+			for k, v := range unauthorizedAttrs {
+				r["node"].(*node).Properties[k] = v
+			}
+			return []row{r}, nil
+		case strings.Contains(cypher, "$kinds"):
+			r := fakeSubjectNodeRow("team", "team_foreign", "Foreign")
+			for k, v := range unauthorizedAttrs {
+				r["n"].(*node).Properties[k] = v
+			}
+			return []row{r}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+
+	if _, err := adapter.DiscoverContext(context.Background(), principal, cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if telemetry.cohortMembersAuthzDropped != 1 {
+		t.Fatalf("cohortMembersAuthzDropped = %d, want exactly 1 -- the same unauthorized subject returned by both fulltext and exact-name must not be double-counted", telemetry.cohortMembersAuthzDropped)
 	}
 }
