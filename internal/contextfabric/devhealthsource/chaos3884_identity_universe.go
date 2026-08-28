@@ -46,7 +46,11 @@ import (
 var identityUniverseKinds = []entityTable{
 	{name: "repos", query: queryRepositories},
 	{name: "projects", query: queryProjects},
-	{name: "teams", query: queryTeams},
+	// CHAOS-4390: queryTeams now takes a *teamAuthorizationLedger; this
+	// reader is not a projection run and has no per-organization ledger to
+	// thread through (teamsQuery/queryTeams' own ledger.record is a nil-safe
+	// no-op, matching ambiguityLedger/presenceTelemetryLedger's convention).
+	{name: "teams", query: teamsQuery(nil)},
 }
 
 // identityUniverseRowBudget bounds the per-KIND row count IdentityUniverse

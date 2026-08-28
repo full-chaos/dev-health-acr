@@ -102,7 +102,25 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // revisits an already-committed interval. Same deliberate-rebuild
 // discipline as v2-v5: a full rebuild is what retracts the now-invalid
 // duplicate edge everywhere it was already projected.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v6"
+//
+// v7 (CHAOS-4390): queryTeams now derives Authorization.RepositorySlugs/
+// ProjectIDs from the team's CURRENT ownership rows (team_repo_ownership,
+// team_project_ownership -- CHAOS-4321: ownership only, never membership),
+// instead of leaving both empty. An empty AuthorizationScope list is the
+// shared "*"/unrestricted convention (falkorgraph's authorizationValue,
+// graphrank/authorize.go's doc comment) -- correct for a genuinely
+// unscoped subject, but a team's real repo/project ownership is knowable
+// and this producer simply never read it, so every team in an
+// already-projected organization carries the wildcard regardless of what
+// it actually owns: any repository-scoped principal can see every team in
+// the org, not just the ones that own something in scope. Same
+// deliberate-rebuild discipline as v2-v6: an already-projected
+// organization's team nodes carry the OLD wildcard authorization_repositories/
+// authorization_projects attributes, and incremental catch-up under a
+// stale v6 marker never revisits an already-committed team row (its own
+// `teams.updated_at` did not change), so only a full rebuild replaces the
+// wildcard with the real scope everywhere it was already projected.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v7"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -134,9 +152,9 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v6"
 // ambiguous project keys and must say so) without a package-level global or
 // shared mutable state -- the coordinator projects organizations
 // concurrently, so a shared counter would be a race.
-func teamsProjectsTables(omissions *ambiguityLedger, presence *presenceTelemetryLedger) []entityTable {
+func teamsProjectsTables(omissions *ambiguityLedger, presence *presenceTelemetryLedger, teamAuth *teamAuthorizationLedger) []entityTable {
 	return []entityTable{
-		{name: "teams", query: queryTeams},
+		{name: "teams", query: teamsQuery(teamAuth)},
 		{name: "projects", query: queryProjects},
 		{name: "project_membership_presence", query: subjectProjectMembershipsQuery(presence)},
 		{name: "work_item_team_attributions", query: queryWorkItemTeams},
@@ -167,6 +185,13 @@ type TeamsProjectsSource struct {
 	// same per-organization, accumulate-across-pages discipline as omissions.
 	presenceMu sync.Mutex
 	presence   map[string]*presenceTelemetryLedger
+
+	// teamAuthMu guards teamAuth, CHAOS-4390's own run-scoped telemetry for
+	// how many teams got a real ownership-derived authorization_repositories
+	// scope versus the shared wildcard fallback -- same per-organization,
+	// accumulate-across-pages discipline as omissions/presence.
+	teamAuthMu sync.Mutex
+	teamAuth   map[string]*teamAuthorizationLedger
 
 	// consumedMu guards consumed, which memoises the furthest cursor a
 	// NextProjectionBatch call proved holds nothing publishable, per
@@ -301,6 +326,80 @@ func (s *TeamsProjectsSource) ledgerFor(orgID string, fromScratch bool) *ambigui
 		s.omissions[orgID] = &ambiguityLedger{}
 	}
 	return s.omissions[orgID]
+}
+
+// teamAuthorizationLedger (CHAOS-4390) counts, over one source run, how many
+// team rows queryTeams scanned were ADMITTED a real, ownership-derived
+// authorization_repositories scope (admitted > 0 owned repositories) versus
+// how many were DENIED one -- noTeamOwnershipSentinel's doc comment below --
+// because this organization's team_repo_ownership carries no CURRENT row
+// for that team (denied). Diagnosability from the run's own artifacts
+// (AGENTS.md telemetry-same-change rule): without this, an organization
+// where every team is denied -- because it genuinely has no ownership data
+// yet (the CHAOS-4365 gap), not because of a code defect -- is
+// indistinguishable from one where the join itself silently stopped
+// matching. Same run-scoped-not-page-scoped discipline as ambiguityLedger
+// (CHAOS-3802 codex round-2 F3).
+type teamAuthorizationLedger struct {
+	mu       sync.Mutex
+	admitted int
+	denied   int
+}
+
+func (l *teamAuthorizationLedger) record(hasOwnedRepositories bool) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if hasOwnedRepositories {
+		l.admitted++
+	} else {
+		l.denied++
+	}
+}
+
+func (l *teamAuthorizationLedger) counts() (admitted, denied int) {
+	if l == nil {
+		return 0, 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.admitted, l.denied
+}
+
+// teamAuthLedgerFor mirrors ledgerFor exactly, for the team-authorization
+// telemetry ledger instead of the ownership-omission one.
+func (s *TeamsProjectsSource) teamAuthLedgerFor(orgID string, fromScratch bool) *teamAuthorizationLedger {
+	s.teamAuthMu.Lock()
+	defer s.teamAuthMu.Unlock()
+	if s.teamAuth == nil {
+		s.teamAuth = map[string]*teamAuthorizationLedger{}
+	}
+	if fromScratch || s.teamAuth[orgID] == nil {
+		s.teamAuth[orgID] = &teamAuthorizationLedger{}
+	}
+	return s.teamAuth[orgID]
+}
+
+// logTeamAuthorizationTelemetry surfaces the admitted-versus-denied-by-
+// ownership split once per batch, unconditionally (CHAOS-4193's
+// logPresenceTelemetry convention: a zero split is itself informative, e.g.
+// an organization with zero admitted denies every team and that should be
+// visible, not silently absent). Carries counts and the org id only --
+// never a team id or name.
+func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, orgID string, ledger *teamAuthorizationLedger) {
+	if logger == nil {
+		return
+	}
+	admitted, denied := ledger.counts()
+	if admitted == 0 && denied == 0 {
+		return
+	}
+	logger.InfoContext(ctx, "devhealthsource team authorization scoped by ownership",
+		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"teams_admitted_by_ownership", admitted,
+		"teams_denied_no_ownership_data", denied)
 }
 
 // presenceTelemetryLedger accumulates CHAOS-4193's own read-shape telemetry
@@ -635,11 +734,13 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	defer logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count())
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
+	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
+	defer logTeamAuthorizationTelemetry(ctx, s.logger, checkpoint.OrgID, teamAuth)
 	return sourcePlan{
 		client:         s.client,
 		source:         TeamsProjectsSourceName,
 		version:        TeamsProjectsSourceVersion,
-		tables:         teamsProjectsTables(ledger, presence),
+		tables:         teamsProjectsTables(ledger, presence, teamAuth),
 		now:            s.now,
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),
 		dropConsumed:   s.forgetConsumed,
@@ -661,20 +762,84 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // precedented in this file's sibling producers: work_items.updated_at is
 // DateTime64(3) and queryWorkItems has always compared it the same way.
 // DateTime64's timezone is display metadata; the comparison is on ticks.
-func queryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "id"
-	statement := `SELECT id, name, ifNull(description, ''), provider, ifNull(native_team_key, ''), is_active, updated_at, project_keys
-FROM teams FINAL
-WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) + orderBy("updated_at", rowKey)
+// ownedRepositoriesJoinSQL is queryTeams' LEFT JOIN fragment aggregating
+// each team's CURRENT repository ownership (team_repo_ownership, CHAOS-4321:
+// ownership only, never team_memberships) into one groupUniqArray per
+// team_id, aliased "tro" with a "repos" column. "Currently owned" mirrors
+// devhealthfacts/shared.go's ownershipValidityPredicate non-timebound arm
+// (valid_from <= now64(3) AND valid_to IS NULL): authorization reflects
+// present-tense visibility, never a historical ownership window, so a
+// closed/superseded ownership row must not leave a repository in a team's
+// authorization_repositories list.
+//
+// Codex C5 (sincePredicate's own doc comment): every column this join's
+// caller selects from `teams` MUST be qualified (tm.id, tm.updated_at, ...)
+// -- team_repo_ownership carries its own updated_at, and an unqualified
+// reference would silently paginate on the wrong table's column the moment
+// this join exists.
+// noTeamOwnershipSentinel (CHAOS-4390) is the RepositorySlugs value queryTeams
+// uses when this organization's team_repo_ownership carries no CURRENT row
+// for a team. Deliberately NOT a bare empty list: falkorgraph's shared
+// authorizationValue convention (projection.go, unchanged since the
+// FalkorDB adapter's original commit dc88590b) turns an empty
+// RepositorySlugs into the literal string "*", which authorizes
+// UNCONDITIONALLY for any repository-scoped principal (scopeContainsAttr's
+// wildcard branch, authorize.go) -- the exact over-exposure CHAOS-4390
+// exists to close: every team in the org was visible to every repo-scoped
+// principal, regardless of whether that team owns anything in scope. This
+// sentinel forces the ordinary, correct outcome instead: a team with no
+// recorded ownership is DENIED to a repository-scoped principal (fail
+// closed) until real ownership data exists for it, same sentinel
+// discipline as noRepositorySentinel/orphanedRepositorySentinel
+// (clickhouse.go) -- a DIFFERENT signal (an ownership table with no
+// CURRENT row for this team, not a work item's own repo_id column), so
+// deliberately its own distinct literal rather than collapsing into
+// either of those. Cannot collide with a real "owner/repo" slug (always
+// contains '/') or with either work-item sentinel.
+const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership"
+
+const ownedRepositoriesJoinSQL = `LEFT JOIN (
+	SELECT team_id, groupUniqArray(repo_full_name) AS repos
+	FROM team_repo_ownership FINAL
+	WHERE org_id = {org_id:String} AND valid_from <= now64(3) AND valid_to IS NULL
+	GROUP BY team_id
+) AS tro ON tro.team_id = tm.id`
+
+// teamsQuery binds the run-scoped team-authorization telemetry ledger to
+// queryTeams, the same closure-constructor shape projectTeamsQuery already
+// uses for the ownership-omission ledger.
+func teamsQuery(ledger *teamAuthorizationLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return queryTeams(ctx, client, orgID, cursor, limit, ledger)
+	}
+}
+
+func queryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, teamAuth *teamAuthorizationLedger) ([]candidate, bool, error) {
+	const rowKey = "tm.id"
+	statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, tm.updated_at, tm.project_keys, ifNull(tro.repos, [])
+FROM teams AS tm FINAL
+` + ownedRepositoriesJoinSQL + `
+WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, "tm.updated_at", rowKey) + orderBy("tm.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, name, description, provider, nativeKey string
-		var projectKeys []string
+		var projectKeys, ownedRepos []string
 		var isActive uint8
 		var observedAt time.Time
-		if err := r.Scan(&id, &name, &description, &provider, &nativeKey, &isActive, &observedAt, &projectKeys); err != nil {
+		if err := r.Scan(&id, &name, &description, &provider, &nativeKey, &isActive, &observedAt, &projectKeys, &ownedRepos); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		hasOwnedRepositories := len(ownedRepos) > 0
+		teamAuth.record(hasOwnedRepositories)
+		// CHAOS-4390: an empty ownedRepos here must NOT reach
+		// ContextFabricAuthorizationScope as a bare empty list -- see
+		// noTeamOwnershipSentinel's own doc comment for why that would
+		// silently authorize this team for every repository-scoped
+		// principal in the org.
+		repositorySlugs := ownedRepos
+		if !hasOwnedRepositories {
+			repositorySlugs = []string{noTeamOwnershipSentinel}
+		}
 		label := name
 		if label == "" {
 			label = id
@@ -699,10 +864,19 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 			// -- teams.team_uuid is lexical noise, and exact identity
 			// already resolves through ResolveDeps.ExactHint on
 			// canonical_id.
-			Aliases:        distinctNonEmpty(id, nativeKey),
-			ProviderIDs:    providerID(provider, id),
-			Properties:     properties,
-			Authorization:  contractsv1.ContextFabricAuthorizationScope{TeamIDs: []string{id}},
+			Aliases:     distinctNonEmpty(id, nativeKey),
+			ProviderIDs: providerID(provider, id),
+			Properties:  properties,
+			// CHAOS-4390 (v7): RepositorySlugs now carries the team's real,
+			// CURRENT repository ownership (ownedRepositoriesJoinSQL above)
+			// alongside its own TeamIDs -- never memberships (CHAOS-4321).
+			// When this org's data genuinely has no team_repo_ownership rows
+			// for this team yet, repositorySlugs is noTeamOwnershipSentinel
+			// (denies every repository-scoped principal) rather than a bare
+			// empty list (which falkorgraph's shared authorizationValue
+			// convention would turn into the "*" wildcard -- see that
+			// sentinel's own doc comment for why that must not happen here).
+			Authorization:  contractsv1.ContextFabricAuthorizationScope{TeamIDs: []string{id}, RepositorySlugs: repositorySlugs},
 			EvidenceRefIDs: []string{"acr:v1:team:" + id},
 			ObservedAt:     observedAt,
 			SourceVersion:  TeamsProjectsSourceVersion,

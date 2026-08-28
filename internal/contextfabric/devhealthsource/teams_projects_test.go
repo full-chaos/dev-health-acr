@@ -37,11 +37,14 @@ func TestTeamsProjectsSourceDisabledIsANoop(t *testing.T) {
 // queryProjects SELECT, so a change to either statement's projection list
 // without a matching change here fails at Scan rather than silently
 // asserting the wrong column.
-func teamRow(id, name, description, provider, nativeKey string, isActive uint8, updatedAt time.Time, projectKeys ...string) []any {
-	// projectKeys is variadic so the many callers that predate CHAOS-3833
-	// stay unchanged; an omitted argument models a team with no
-	// project_keys (a nil Array(String) scan).
-	return []any{id, name, description, provider, nativeKey, isActive, updatedAt, []string(projectKeys)}
+//
+// CHAOS-4390 (v7): queryTeams' SELECT gained a 9th column, the team's
+// CURRENT owned-repository list from ownedRepositoriesJoinSQL
+// (ifNull(tro.repos, [])) -- ownedRepos here models exactly that column, a
+// nil/empty value meaning "no team_repo_ownership rows for this team",
+// same convention project_keys already used pre-CHAOS-3833.
+func teamRow(id, name, description, provider, nativeKey string, isActive uint8, updatedAt time.Time, projectKeys, ownedRepos []string) []any {
+	return []any{id, name, description, provider, nativeKey, isActive, updatedAt, projectKeys, ownedRepos}
 }
 
 func projectRow(id, name, projectKey, provider, state, url string, isActive uint8, updatedAt time.Time) []any {
@@ -57,10 +60,10 @@ func liveShapedTeamsProjectsClient() *fakeClient {
 	teamsUpdated := time.Date(2026, 8, 13, 19, 0, 3, 742975000, time.UTC)
 	projectsUpdated := time.Date(2026, 8, 13, 19, 0, 2, 504000000, time.UTC)
 	return &fakeClient{tables: []fakeTable{
-		{match: "FROM teams FINAL\nWHERE", rows: [][]any{
-			teamRow("gh:ops-team", "Ops Team", "Ops Team", "github", "ops-team", 1, teamsUpdated),
-			teamRow("gl:full.chaos", "fullchaos", "", "gitlab", "full.chaos", 1, teamsUpdated.Add(-time.Hour)),
-			teamRow("CHAOS", "Fullchaos", "", "linear", "CHAOS", 1, teamsUpdated.Add(-2*time.Hour)),
+		{match: "FROM teams AS tm FINAL", rows: [][]any{
+			teamRow("gh:ops-team", "Ops Team", "Ops Team", "github", "ops-team", 1, teamsUpdated, nil, nil),
+			teamRow("gl:full.chaos", "fullchaos", "", "gitlab", "full.chaos", 1, teamsUpdated.Add(-time.Hour), nil, nil),
+			teamRow("CHAOS", "Fullchaos", "", "linear", "CHAOS", 1, teamsUpdated.Add(-2*time.Hour), nil, nil),
 		}},
 		{match: "FROM projects FINAL\nWHERE", rows: [][]any{
 			projectRow("70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "chaos-ops", "full.chaos/chaos-ops", "gitlab", "", "https://gitlab.com/full.chaos/chaos-ops", 1, projectsUpdated),
@@ -111,8 +114,16 @@ func TestTeamSubjectsProjectAtTheFactProviderIdentity(t *testing.T) {
 	if got := entity.Authorization.TeamIDs; len(got) != 1 || got[0] != "CHAOS" {
 		t.Fatalf("team authorization TeamIDs = %v, want [CHAOS]", got)
 	}
-	if len(entity.Authorization.ProjectIDs) != 0 || len(entity.Authorization.RepositorySlugs) != 0 {
-		t.Fatalf("team authorization must be team-scoped only, got %+v", entity.Authorization)
+	if len(entity.Authorization.ProjectIDs) != 0 {
+		t.Fatalf("team authorization must carry no ProjectIDs, got %+v", entity.Authorization)
+	}
+	// CHAOS-4390: this fixture's teams carry no team_repo_ownership rows, so
+	// RepositorySlugs must be the DENY sentinel, never a bare empty list --
+	// an empty list would fall back to falkorgraph's shared "*" wildcard
+	// convention and authorize this team for every repository-scoped
+	// principal in the org (the exact over-exposure this ticket closes).
+	if got := entity.Authorization.RepositorySlugs; len(got) != 1 || got[0] != devhealthsource.NoTeamOwnershipSentinelForTest() {
+		t.Fatalf("team authorization RepositorySlugs = %v, want the no-ownership deny sentinel", got)
 	}
 }
 
@@ -631,6 +642,53 @@ func TestOmissionTelemetryCountsDistinctKeysAcrossTheRun(t *testing.T) {
 	for _, secret := range []string{"SHARED", "OTHER", "team-a", "team-b", "p1", liveOrgID} {
 		if strings.Contains(output, secret) {
 			t.Errorf("omission telemetry leaked tenant data %q:\n%s", secret, output)
+		}
+	}
+}
+
+// TestTeamAuthorizationTelemetryCountsAdmittedVersusDeniedTeams (CHAOS-4390)
+// proves the team-authorization telemetry line: a team whose
+// team_repo_ownership join produced at least one repository must be counted
+// as admitted, and a team with none (the noTeamOwnershipSentinel deny path)
+// must be counted separately -- neither count may inflate the other, and
+// the split must be diagnosable from this run's own log line without
+// leaking a team id, name, or org id (same discipline
+// TestOmissionTelemetryCountsDistinctKeysAcrossTheRun already asserts for
+// the sibling ambiguity ledger).
+func TestTeamAuthorizationTelemetryCountsAdmittedVersusDeniedTeams(t *testing.T) {
+	t.Parallel()
+	updated := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM teams AS tm FINAL", rows: [][]any{
+			teamRow("team-owned-1", "Owned One", "", "github", "owned-1", 1, updated, nil, []string{"acme/repo-a"}),
+			teamRow("team-owned-2", "Owned Two", "", "github", "owned-2", 1, updated.Add(-time.Minute), nil, []string{"acme/repo-b", "acme/repo-c"}),
+			teamRow("team-wildcard", "No Ownership Yet", "", "github", "no-owner", 1, updated.Add(-2*time.Minute), nil, nil),
+		}},
+	}}
+
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+	}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+
+	output := logged.String()
+	if !strings.Contains(output, "teams_admitted_by_ownership=2") {
+		t.Fatalf("want 2 teams counted as admitted by ownership; got:\n%s", output)
+	}
+	if !strings.Contains(output, "teams_denied_no_ownership_data=1") {
+		t.Fatalf("want 1 team counted as denied for lacking ownership data; got:\n%s", output)
+	}
+	for _, secret := range []string{"team-owned-1", "team-owned-2", "team-wildcard", "acme/repo-a", liveOrgID} {
+		if strings.Contains(output, secret) {
+			t.Errorf("team authorization telemetry leaked tenant data %q:\n%s", secret, output)
 		}
 	}
 }

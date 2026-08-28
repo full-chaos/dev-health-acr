@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -101,6 +103,45 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 	}
 }
 
+// subTeamAuthorizationCarriesCurrentOwnedRepositories is CHAOS-4390.
+// queryTeams previously left Authorization.RepositorySlugs empty for every
+// team, which falkorgraph's shared authorizationValue convention encodes as
+// the wildcard "*" (unrestricted) -- so ANY repository-scoped principal
+// could see EVERY team in an organization, whether or not that team owns
+// anything the principal is scoped to. This proves the real fix: the team's
+// CURRENT team_repo_ownership rows (CHAOS-4321 -- ownership only, never
+// team_memberships) populate RepositorySlugs, and only currently-open
+// ownership counts -- a closed or not-yet-started assertion must not leak
+// into the authorization list, exactly like ownershipValidityPredicate's
+// "currently active" rule everywhere else in this package.
+func subTeamAuthorizationCarriesCurrentOwnedRepositories(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seedRepoOwnership := func(repoFullName string, validFrom time.Time, validTo any) {
+		if err := fixture.direct.Exec(ctx,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			fixture.orgID, "github", "TEAM-GITHUB", nil, repoFullName, "exact", "native", uint8(1), uint16(1), int32(1), validFrom, validTo, ownershipLaterAssertion); err != nil {
+			t.Fatalf("seed team_repo_ownership %s: %v", repoFullName, err)
+		}
+	}
+	// Currently open: must be authorized.
+	seedRepoOwnership("acme/repo-open", ownershipFirstSeen, nil)
+	// Closed in the past (before "now"): must NOT be authorized.
+	seedRepoOwnership("acme/repo-closed", ownershipFirstSeen, ownershipLatestClose)
+	// Not yet started (valid_from in the future): must NOT be authorized.
+	seedRepoOwnership("acme/repo-future", time.Now().UTC().Add(365*24*time.Hour), nil)
+
+	batch := fixture.project(t, ctx)
+	entity := entityByCanonicalID(t, batch, "team:TEAM-GITHUB")
+	if len(entity.Authorization.TeamIDs) != 1 || entity.Authorization.TeamIDs[0] != "TEAM-GITHUB" {
+		t.Fatalf("TeamIDs = %v, want [TEAM-GITHUB] unchanged", entity.Authorization.TeamIDs)
+	}
+	got := append([]string(nil), entity.Authorization.RepositorySlugs...)
+	sort.Strings(got)
+	want := []string{"acme/repo-open"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("RepositorySlugs = %v, want %v (closed and not-yet-started ownership rows must be excluded)", got, want)
+	}
+}
+
 var (
 	ownershipFirstSeen            = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	ownershipLaterAssertion       = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
@@ -150,6 +191,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"tied assertions resolve deterministically", "30000000-0000-4000-8000-000000000005", subTiedOwnershipAssertionsResolveDeterministically},
 		{"ambiguity guard is scoped to one organization", "30000000-0000-4000-8000-000000000006", subAmbiguityGuardIsScopedToOneOrganization},
 		{"omitted rows beyond the skip bound still converge", "30000000-0000-4000-8000-000000000007", subOmittedRowsBeyondTheSkipBoundStillConverge},
+		{"team authorization carries current owned repositories", "30000000-0000-4000-8000-000000000008", subTeamAuthorizationCarriesCurrentOwnedRepositories},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
