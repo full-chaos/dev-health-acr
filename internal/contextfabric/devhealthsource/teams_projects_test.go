@@ -693,6 +693,37 @@ func TestTeamAuthorizationTelemetryCountsAdmittedVersusDeniedTeams(t *testing.T)
 	}
 }
 
+// TestTeamAuthorizationTelemetryLogsEvenWhenZero (CHAOS-4390, codex round-1
+// "Telemetry/test gaps" finding) proves logTeamAuthorizationTelemetry is
+// truly unconditional, matching its own doc comment: a run that scanned no
+// team rows at all (e.g. an organization with no teams, or a page with
+// none) must still emit the line with both counts at zero -- that split is
+// itself informative and must never be silently absent from the log.
+func TestTeamAuthorizationTelemetryLogsEvenWhenZero(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM teams AS tm FINAL", rows: [][]any{}},
+	}}
+
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+	}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+
+	output := logged.String()
+	if !strings.Contains(output, "teams_admitted_by_ownership=0") || !strings.Contains(output, "teams_denied_no_ownership_data=0") {
+		t.Fatalf("want the telemetry line even for a zero/zero run; got:\n%s", output)
+	}
+}
+
 // TestConsumedProgressIsRefusedWhenItDoesNotMatchTheCheckpoint pins the
 // staleness guard on the progress memo.
 //
