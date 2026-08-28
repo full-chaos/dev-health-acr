@@ -7491,6 +7491,24 @@ func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabr
 // share one definition; the merge tool cannot import this file (same
 // reason it duplicates summarizeTwoTurnTiming/chaos4386ResultByteStats),
 // so this is hand-copied there too.
+// chaos4386PositiveArmNeverAttemptedRow builds the synthetic row the main
+// replay loop appends when the positive arm never even gets attempted for
+// an otherwise oracle-eligible case (turn 1 itself errored, or turn 1
+// produced no structure/window disclosure) -- codex review round 1 (P1,
+// confirmed): without SOME row, such a case is entirely invisible to
+// chaos4386TwoTurnAnswerRate's scan of report.Results, not merely
+// miscounted. Mirrors runTwoTurnPositiveArm's own error-path row shape
+// exactly (via the SAME twoTurnStampOutcome/twoTurnStampArmFailure
+// helpers that function uses), so it reads identically to a row that arm
+// function would have produced had it ever been called. err may be nil
+// (the disclosure-absent case is not itself an error).
+func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCase, turn1Status contractsv1.ContextFabricInvestigationStatus, reason string, err error) twoTurnCaseResult {
+	row := twoTurnCaseResult{Index: index, Member: member, Arm: string(twoTurnArmPositive), Turn1Status: string(turn1Status)}
+	twoTurnStampOutcome(&row, tc, nil)
+	twoTurnStampArmFailure(&row, reason, err)
+	return row
+}
+
 func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 	answerable, answered := 0, 0
 	for _, res := range results {
@@ -9646,6 +9664,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if err != nil {
 			t.Logf("case %d: turn 1 error: %v", entry.Index, err)
 			report.Timings = append(report.Timings, caseTiming())
+			// CHAOS-4386 answer-rate follow-up: see
+			// chaos4386PositiveArmNeverAttemptedRow's own doc comment.
+			report.Results = append(report.Results, chaos4386PositiveArmNeverAttemptedRow(
+				entry.Index, entry.Member, tc, "", "turn 1 investigate error: "+contextFabricRejectionClass(err), err))
 			continue
 		}
 		report.CasesRun++
@@ -9702,6 +9724,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if !disclosurePresent {
 			report.StructureAndWindowDisclosureAbsentCount++
 			report.Timings = append(report.Timings, caseTiming())
+			// CHAOS-4386 answer-rate follow-up: same reasoning as the
+			// turn-1-error branch above -- see
+			// chaos4386PositiveArmNeverAttemptedRow's own doc comment.
+			report.Results = append(report.Results, chaos4386PositiveArmNeverAttemptedRow(
+				entry.Index, entry.Member, tc, turn1.Status, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil))
 			continue
 		}
 

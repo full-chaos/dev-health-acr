@@ -229,30 +229,43 @@ func (m *chaos4386MeasuringInvestigator) snapshot() []int64 {
 // final InvestigationResult each site already has in scope, at each of
 // the same measurement sites CHAOS-4386's own ResultBytes/EstTokens stamp.
 
-// chaos4386TerminalReason returns the engine's own disclosure/refusal
-// explanation for why result did not reach a final "complete" answer --
-// empty for Complete (nothing to disclose). There is no single unified
-// "reason" field on ContextFabricInvestigationResult:
-// Interpretation.ClarificationReason is the field the engine populates for
-// clarification_required specifically; every other non-complete status
-// (partial/degraded/no_match) carries its explanation, when the engine
-// gave one, in Coverage.DegradedReasons (first entry) or, failing that,
-// Warnings (first entry) -- this reads the closest-fit disclosure channel
-// per status rather than inventing a field the wire contract does not have.
+// chaos4386TerminalReason returns a CLOSED-VOCABULARY class naming WHICH
+// disclosure channel the engine used to explain why result did not reach
+// a final "complete" answer -- NEVER the raw text itself (codex review
+// round 1, P2, confirmed: acr/AGENTS.md's own CANONICAL ARCHITECTURE rule
+// -- "every decision branch... emits corpus-safe, closed-vocabulary
+// telemetry" -- and this repo's own standing "never the question text,
+// never a label/phrasing string" corpus-safety discipline every other
+// field on this row already follows). Interpretation.ClarificationReason
+// in particular can be MODEL-AUTHORED prose; persisting it verbatim into a
+// durable trial artifact would leak arbitrary phrasing into a
+// corpus-adjacent report. Coverage.DegradedReasons/Warnings are
+// engine-authored but still open-ended, dynamically-formatted strings, not
+// a fixed small enum -- the same risk, lower severity.
+//
+// There is no single unified "reason" field on
+// ContextFabricInvestigationResult: Interpretation.ClarificationReason is
+// the field the engine populates for clarification_required specifically;
+// every other non-complete status (partial/degraded/no_match) carries its
+// explanation, when the engine gave one, in Coverage.DegradedReasons or,
+// failing that, Warnings.
 func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult) string {
 	switch result.Status {
 	case contractsv1.ContextFabricInvestigationComplete:
 		return ""
 	case contractsv1.ContextFabricInvestigationClarificationRequired:
-		return result.Interpretation.ClarificationReason
+		if result.Interpretation.ClarificationReason != "" {
+			return "clarification_reason_disclosed"
+		}
+		return "undisclosed"
 	default:
 		if len(result.Coverage.DegradedReasons) > 0 {
-			return result.Coverage.DegradedReasons[0]
+			return "degraded_reason_disclosed"
 		}
 		if len(result.Warnings) > 0 {
-			return result.Warnings[0]
+			return "warning_disclosed"
 		}
-		return ""
+		return "undisclosed"
 	}
 }
 

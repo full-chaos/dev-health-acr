@@ -17,37 +17,45 @@ func chaos4386ResultWithStatus(status contractsv1.ContextFabricInvestigationStat
 }
 
 // TestChaos4386TerminalReason pins chaos4386TerminalReason's exact
-// per-status disclosure-channel mapping.
+// per-status disclosure-CHANNEL mapping to a CLOSED vocabulary -- codex
+// review round 1 (P2, confirmed): the raw engine/model text must never
+// reach this field (corpus-safe, closed-vocabulary telemetry), only which
+// channel fired.
 func TestChaos4386TerminalReason(t *testing.T) {
 	t.Run("complete has nothing to disclose", func(t *testing.T) {
 		if got := chaos4386TerminalReason(chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationComplete)); got != "" {
 			t.Errorf("chaos4386TerminalReason(complete) = %q, want empty", got)
 		}
 	})
-	t.Run("clarification_required reads Interpretation.ClarificationReason", func(t *testing.T) {
+	t.Run("clarification_required with a reason classifies as clarification_reason_disclosed, never the raw text", func(t *testing.T) {
 		result := chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationClarificationRequired)
-		result.Interpretation.ClarificationReason = "ambiguous subject"
-		if got := chaos4386TerminalReason(result); got != "ambiguous subject" {
-			t.Errorf("chaos4386TerminalReason = %q, want %q", got, "ambiguous subject")
+		result.Interpretation.ClarificationReason = "ambiguous subject -- this raw text must never appear in the classification"
+		if got := chaos4386TerminalReason(result); got != "clarification_reason_disclosed" {
+			t.Errorf("chaos4386TerminalReason = %q, want %q (a closed class, not the raw text)", got, "clarification_reason_disclosed")
 		}
 	})
-	t.Run("degraded reads Coverage.DegradedReasons first entry", func(t *testing.T) {
+	t.Run("clarification_required with no reason classifies as undisclosed", func(t *testing.T) {
+		if got := chaos4386TerminalReason(chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationClarificationRequired)); got != "undisclosed" {
+			t.Errorf("chaos4386TerminalReason = %q, want %q", got, "undisclosed")
+		}
+	})
+	t.Run("degraded with a DegradedReasons entry classifies as degraded_reason_disclosed, never the raw text", func(t *testing.T) {
 		result := chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationDegraded)
-		result.Coverage.DegradedReasons = []string{"source_unavailable", "second_reason"}
-		if got := chaos4386TerminalReason(result); got != "source_unavailable" {
-			t.Errorf("chaos4386TerminalReason = %q, want %q", got, "source_unavailable")
+		result.Coverage.DegradedReasons = []string{"source_unavailable: this raw text must never appear in the classification", "second_reason"}
+		if got := chaos4386TerminalReason(result); got != "degraded_reason_disclosed" {
+			t.Errorf("chaos4386TerminalReason = %q, want %q (a closed class, not the raw text)", got, "degraded_reason_disclosed")
 		}
 	})
-	t.Run("no_match falls back to Warnings first entry when no degraded reason", func(t *testing.T) {
+	t.Run("no_match falls back to warning_disclosed when no degraded reason, never the raw text", func(t *testing.T) {
 		result := chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationNoMatch)
-		result.Warnings = []string{"no candidate matched"}
-		if got := chaos4386TerminalReason(result); got != "no candidate matched" {
-			t.Errorf("chaos4386TerminalReason = %q, want %q", got, "no candidate matched")
+		result.Warnings = []string{"no candidate matched -- this raw text must never appear in the classification"}
+		if got := chaos4386TerminalReason(result); got != "warning_disclosed" {
+			t.Errorf("chaos4386TerminalReason = %q, want %q (a closed class, not the raw text)", got, "warning_disclosed")
 		}
 	})
-	t.Run("non-complete with neither channel populated is empty, not fabricated", func(t *testing.T) {
-		if got := chaos4386TerminalReason(chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationPartial)); got != "" {
-			t.Errorf("chaos4386TerminalReason = %q, want empty", got)
+	t.Run("non-complete with neither channel populated classifies as undisclosed, not fabricated", func(t *testing.T) {
+		if got := chaos4386TerminalReason(chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationPartial)); got != "undisclosed" {
+			t.Errorf("chaos4386TerminalReason = %q, want %q", got, "undisclosed")
 		}
 	})
 }
@@ -120,6 +128,47 @@ func TestChaos4386TwoTurnAnswerRate(t *testing.T) {
 	})
 }
 
+// TestChaos4386PositiveArmNeverAttemptedRow is the codex review round 1
+// (P1, confirmed) regression for the two-turn side: an oracle-eligible
+// case whose positive arm never even got attempted (turn 1 errored, or
+// produced no disclosure) must still produce a row -- ExpectedID
+// populated, ArmInvalidReason set, TerminalStatus left at its zero value
+// (so it never satisfies the "complete" numerator check) -- or the case
+// would be entirely invisible to chaos4386TwoTurnAnswerRate's denominator.
+func TestChaos4386PositiveArmNeverAttemptedRow(t *testing.T) {
+	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "project", ExpectID: "project.v2:fixture:chaos4386neverattempted"}
+	row := chaos4386PositiveArmNeverAttemptedRow(42, "expected_kind", tc, contractsv1.ContextFabricInvestigationClarificationRequired, "turn 1 investigate error: rate_limited", nil)
+
+	if row.Index != 42 || row.Member != "expected_kind" {
+		t.Errorf("Index/Member = %d/%q, want 42/%q", row.Index, row.Member, "expected_kind")
+	}
+	if row.Arm != string(twoTurnArmPositive) {
+		t.Errorf("Arm = %q, want %q", row.Arm, twoTurnArmPositive)
+	}
+	if row.ExpectedID != tc.ExpectID {
+		t.Errorf("ExpectedID = %q, want %q -- chaos4386TwoTurnAnswerRate's own denominator gate reads this field", row.ExpectedID, tc.ExpectID)
+	}
+	if row.ArmInvalidReason == "" {
+		t.Error("ArmInvalidReason is empty, want a reason recorded")
+	}
+	if row.TerminalStatus != "" {
+		t.Errorf("TerminalStatus = %q, want empty (the zero value -- no result was ever produced to measure)", row.TerminalStatus)
+	}
+
+	// End-to-end: exactly the shape codex's own finding described -- one
+	// case answers, one case's positive arm never even ran. The rate must
+	// read 0.5, never 1.0 (which is what scanning ONLY rows that actually
+	// reached a real Investigate() call would report).
+	results := []twoTurnCaseResult{
+		twoTurnAnswerRateRow("positive", "project.v2:answered", "complete", 1),
+		row,
+	}
+	got := chaos4386TwoTurnAnswerRate(results)
+	if want := 0.5; got != want {
+		t.Errorf("chaos4386TwoTurnAnswerRate = %v, want %v -- the never-attempted row must count as an unanswered denominator entry, not disappear", got, want)
+	}
+}
+
 // nTurnAnswerRateRow mirrors twoTurnAnswerRateRow's own shape for
 // nTurnCaseResult.
 func nTurnAnswerRateRow(armInvalidReason, terminalStatus string, claimedFacts int) nTurnCaseResult {
@@ -127,21 +176,32 @@ func nTurnAnswerRateRow(armInvalidReason, terminalStatus string, claimedFacts in
 }
 
 // TestChaos4386NTurnAnswerRate pins chaos4386NTurnAnswerRate's exact
-// numerator/denominator: every case that actually ran (ArmInvalidReason
-// empty) is denominator-eligible by this class's own seed-selection
-// construction (own doc comment).
+// numerator/denominator: only nTurnArmInvalidNoOracleEntry means genuine
+// ORACLE ineligibility and is excluded from the denominator (own doc
+// comment) -- every OTHER ArmInvalidReason (a genuine investigate
+// failure on an oracle-eligible case) must still count, as unanswered.
 func TestChaos4386NTurnAnswerRate(t *testing.T) {
 	t.Run("no eligible rows is 0, not NaN", func(t *testing.T) {
 		if got := chaos4386NTurnAnswerRate(nil); got != 0 {
 			t.Errorf("chaos4386NTurnAnswerRate(nil) = %v, want 0", got)
 		}
 	})
-	t.Run("arm-invalid cases are excluded from the denominator", func(t *testing.T) {
+	t.Run("no-oracle-entry cases are excluded from the denominator", func(t *testing.T) {
 		results := []nTurnCaseResult{
-			nTurnAnswerRateRow("no subject_anchor oracle entry", "", 0),
+			nTurnAnswerRateRow(nTurnArmInvalidNoOracleEntry, "", 0),
 		}
 		if got := chaos4386NTurnAnswerRate(results); got != 0 {
-			t.Errorf("chaos4386NTurnAnswerRate = %v, want 0 (the only row is arm-invalid)", got)
+			t.Errorf("chaos4386NTurnAnswerRate = %v, want 0 (the only row is genuinely oracle-ineligible)", got)
+		}
+	})
+	t.Run("a genuine investigate-error case counts as an unanswered denominator entry, codex review round 1 P1 confirmed", func(t *testing.T) {
+		results := []nTurnCaseResult{
+			nTurnAnswerRateRow("", "complete", 1),
+			nTurnAnswerRateRow("turn 1 investigate error: rate_limited", "", 0),
+		}
+		got := chaos4386NTurnAnswerRate(results)
+		if want := 0.5; got != want {
+			t.Errorf("chaos4386NTurnAnswerRate = %v, want %v -- a plain ArmInvalidReason!=\"\" exclusion would drop this row entirely and report 1.0 instead", got, want)
 		}
 	})
 	t.Run("complete with claimed facts counts as answered; clarification_required does not", func(t *testing.T) {

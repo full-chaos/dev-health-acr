@@ -299,7 +299,15 @@ func nTurnReportHasUsableEvidence(report nTurnReport) bool {
 func chaos4386NTurnAnswerRate(results []nTurnCaseResult) float64 {
 	answerable, answered := 0, 0
 	for _, res := range results {
-		if res.ArmInvalidReason != "" {
+		// Only nTurnArmInvalidNoOracleEntry means genuine ORACLE
+		// ineligibility -- codex review round 1, P1, confirmed: a plain
+		// `res.ArmInvalidReason != ""` exclusion would ALSO drop a case
+		// that WAS oracle-eligible but whose own Investigate() call
+		// failed (runNTurnCase's own "turn N investigate error: ..."
+		// reason), silently removing a real failure from the denominator
+		// instead of counting it as unanswered. See that constant's own
+		// doc comment.
+		if res.ArmInvalidReason == nTurnArmInvalidNoOracleEntry {
 			continue
 		}
 		answerable++
@@ -557,6 +565,21 @@ func nTurnRecordTurn(turnIndex int, result contractsv1.ContextFabricInvestigatio
 // engine actually CONVERGE (turn 3 decisive) without letting a genuinely
 // stuck case spin turns (and API spend) indefinitely.
 const nTurnMaxTurnsDefault = 5
+
+// nTurnArmInvalidNoOracleEntry is the ONE ArmInvalidReason literal that
+// means genuine ORACLE ineligibility (this index carries no
+// subject_anchor oracle entry at all) -- every OTHER ArmInvalidReason
+// runNTurnCase itself sets (e.g. "turn N investigate error: ...") means
+// the case WAS oracle-eligible but its own attempt failed. This
+// distinction is load-bearing for chaos4386NTurnAnswerRate (CHAOS-4386
+// answer-rate follow-up, codex review round 1, P1, confirmed): a plain
+// `ArmInvalidReason != ""` exclusion would also drop genuine
+// investigate-error cases from the denominator, silently inflating the
+// rate (one answered case + one transport failure would read 1.0 instead
+// of the true 0.5). A named constant, not an inline literal, so the two
+// call sites (the append site below and chaos4386NTurnAnswerRate's own
+// exclusion check) can never drift from each other.
+const nTurnArmInvalidNoOracleEntry = "no subject_anchor oracle entry for this index -- not eligible for the N-turn candidate-carry class"
 
 // runNTurnCase drives one case through the N-turn window+candidate carry
 // class: turn 1 asks the (unmodified, corpus-verbatim) question; each
@@ -930,7 +953,7 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 		if !ok {
 			report.Results = append(report.Results, nTurnCaseResult{
 				Index: index, ExpectKind: tc.ExpectKind, Arm: "nturn_window_candidate_carry",
-				ArmInvalidReason: "no subject_anchor oracle entry for this index -- not eligible for the N-turn candidate-carry class",
+				ArmInvalidReason: nTurnArmInvalidNoOracleEntry,
 			})
 			report.ArmInvalidCount++
 			continue
