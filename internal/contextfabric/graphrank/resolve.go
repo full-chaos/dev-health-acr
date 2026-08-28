@@ -2481,8 +2481,20 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// receipt has confirmed a kind (confirmedKind == nil) and the
 	// resolution-wide search truncated with nothing committed -- exactly
 	// turn 1's shape for a repository/project/team question.
+	//
+	// Deliberately NOT guarded by `!offersOnly` (codex R4, confirmed):
+	// unlike the confirmedKind commit block above -- which the offers-only
+	// window-gate call already skips because that call's whole resolution
+	// is discarded, so reaching a commit nobody keeps would be pure waste
+	// -- this rescue never commits at all; its entire output is offer
+	// material (unioned into kindOfferCandidates below). offersOnly mode
+	// (chaos4234_offers_only.go) exists specifically to compute
+	// StructureOfferMaterial while discarding the rest of the resolution,
+	// which is exactly the artifact this rescue produces. Skipping it
+	// under offersOnly would silently withhold the low-population-kind
+	// offer from the one call whose entire purpose is building offers.
 	var lowPopulationOfferCandidates []contextfabric.SubjectCandidate
-	if !offersOnly && confirmedKind == nil && searchTruncated && len(resolution.Committed) == 0 {
+	if confirmedKind == nil && searchTruncated && len(resolution.Committed) == 0 {
 		offered, offerErr := applyLowPopulationKindOffers(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, effectiveSearchLimit)
 		if offerErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, offerErr
@@ -2596,15 +2608,20 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// join coverageCandidates here -- same bucket, same union, same
 	// "additive, offer-only, never touched candidatesBySubject/pool"
 	// contract CHAOS-4038's own coverage-floor finds already carry. Simple
-	// append, not a dedup-aware merge: chaos4417LowPopulationScopedKinds'
-	// own three buildConfirmedKindScopedSnapshot calls each key their own
-	// SubjectCandidate map by that call's own kind, so no SubjectKey can
-	// collide either within this slice or against coverageCandidates
-	// (CHAOS-4038 covers a disjoint kind set for its own repository/
-	// project/team contribution -- see kindCoverageFloorKinds); dedup
-	// against resolution.Candidates still happens inside
-	// unionCandidatesForOffer below, exactly as it already does for
-	// coverageCandidates.
+	// append, not a dedup-aware merge -- correction (codex R4): an
+	// earlier version of this comment claimed CHAOS-4038's own
+	// kindCoverageFloorKinds is disjoint from chaos4417LowPopulationScopedKinds;
+	// it is NOT (chaos4038_kind_coverage.go's own doc comment: floor kinds
+	// "include isAliasLookupScopedKind kinds (repository/project/team)"
+	// -- the SAME three kinds this rescue targets), so the SAME subject
+	// CAN legitimately appear in both this rescue's contribution and
+	// CHAOS-4038's own coverage-floor contribution within the same
+	// coverageCandidates slice. That is harmless for the OFFER contract
+	// itself: unionCandidatesForOffer below already dedupes coverageCandidates
+	// by SubjectKey (its own doc comment), so kindOfferCandidates never
+	// carries a duplicate regardless of append order. The ranked_cut
+	// trace loop immediately below is the one place that DID need its own
+	// dedup guard for this (fixed there, not here).
 	coverageCandidates = append(coverageCandidates, lowPopulationOfferCandidates...)
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageCandidates)
 	// CHAOS-4234: a coverage-floor find the final cut dropped still reaches
@@ -2618,10 +2635,23 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		for _, candidate := range resolution.Candidates {
 			visible[SubjectKey(candidate.Subject)] = true
 		}
+		// alreadyTraced (codex R4, confirmed): CHAOS-4038's own
+		// coverage-floor contribution and CHAOS-4417's low-population-
+		// kind rescue contribution can both legitimately name the SAME
+		// subject in coverageCandidates (see the append site's own
+		// comment above -- their kind sets are NOT disjoint). Without
+		// this guard, that subject would emit two identical "ranked_cut"
+		// CoverageBypass=true events for one request_id, which reads as
+		// two distinct dropped candidates to anything counting these
+		// events -- exactly the corpus-safe telemetry AGENTS.md requires
+		// this package not to get wrong.
+		alreadyTraced := make(map[string]bool, len(coverageCandidates))
 		for _, candidate := range coverageCandidates {
-			if visible[SubjectKey(candidate.Subject)] {
+			key := SubjectKey(candidate.Subject)
+			if visible[key] || alreadyTraced[key] {
 				continue
 			}
+			alreadyTraced[key] = true
 			deps.ResolutionTracer.Trace(ResolutionTraceEvent{RequestID: request.RequestID, Stage: "ranked_cut", Subject: candidate.Subject, CoverageBypass: true})
 		}
 	}

@@ -172,9 +172,24 @@ func applyLowPopulationKindOffers(
 		if scopeState != confirmedKindScopeComplete {
 			continue
 		}
-		for _, candidate := range scopedPool {
-			offered = append(offered, candidate)
-		}
+		// candidatesOfKind (codex R4, confirmed): scopedPool is a
+		// map[string]contextfabric.SubjectCandidate, so ranging over it
+		// directly yields Go's randomized iteration order. That is
+		// invisible for CHAOS-4038's own bounded/early-exit coverage
+		// floor (small pools), but this rescue is deliberately
+		// EXHAUSTIVE (this file's own top doc comment) -- a genuinely
+		// low-population kind can still return more than
+		// candidateOfferTopN (5, chaos3900_structure_offers.go) offer
+		// slots, and candidateOfferMaterial keeps only the first N it
+		// sees. Without a deterministic order, which candidates survive
+		// that truncation (and therefore what a receipt-bound offer
+		// contains) could vary run to run for the identical corpus and
+		// graph state. candidatesOfKind already exists for exactly this
+		// (CHAOS-4038, chaos4038_kind_coverage.go) -- reused, not
+		// reimplemented -- and every entry in scopedPool is already kind
+		// by construction (buildConfirmedKindScopedSnapshot is called
+		// once per kind), so this is a pure ordering fix, not a filter.
+		offered = append(offered, candidatesOfKind(scopedPool, kind)...)
 	}
 	if len(offered) > 0 {
 		outcome = lowPopulationKindScopeOutcomeOfferOnly
