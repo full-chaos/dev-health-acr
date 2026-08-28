@@ -392,10 +392,11 @@ func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, org
 	if logger == nil {
 		return
 	}
+	// Codex round-1 finding: truly unconditional, matching this doc
+	// comment's own claim -- a zero/zero run (this tick touched no team
+	// rows at all, e.g. an org with no teams, or a page with none) is
+	// itself informative and must not read as "telemetry never ran".
 	admitted, denied := ledger.counts()
-	if admitted == 0 && denied == 0 {
-		return
-	}
 	logger.InfoContext(ctx, "devhealthsource team authorization scoped by ownership",
 		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
 		"teams_admitted_by_ownership", admitted,
@@ -765,12 +766,37 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // ownedRepositoriesJoinSQL is queryTeams' LEFT JOIN fragment aggregating
 // each team's CURRENT repository ownership (team_repo_ownership, CHAOS-4321:
 // ownership only, never team_memberships) into one groupUniqArray per
-// team_id, aliased "tro" with a "repos" column. "Currently owned" mirrors
-// devhealthfacts/shared.go's ownershipValidityPredicate non-timebound arm
-// (valid_from <= now64(3) AND valid_to IS NULL): authorization reflects
-// present-tense visibility, never a historical ownership window, so a
-// closed/superseded ownership row must not leave a repository in a team's
-// authorization_repositories list.
+// team_id, aliased "tro" with a "repos" column plus a "latest_update" column
+// (queryTeamsEffectiveUpdatedAtExpr's own doc comment explains the second
+// one). "Currently owned" mirrors devhealthfacts/shared.go's
+// ownershipValidityPredicate non-timebound arm (valid_from <= now64(3)):
+// authorization reflects present-tense visibility, never a historical
+// ownership window, so a closed/superseded ownership row must not leave a
+// repository in a team's authorization_repositories list.
+//
+// Codex round-1 finding (HIGH): a bare `WHERE valid_to IS NULL` after FINAL
+// is not enough to express "currently owned". team_repo_ownership's
+// ReplacingMergeTree key is (org_id, provider, repo_full_name, team_id,
+// source, valid_from) -- valid_from is PART of the dedup key, so FINAL
+// keeps BOTH an older OPEN assertion (valid_from=t1, valid_to=NULL) and a
+// LATER assertion that actually closed it (valid_from=t2>t1,
+// valid_to=<past>) as two distinct rows for the identical (team, repo,
+// source): they differ only in valid_from. A naive `valid_to IS NULL`
+// filter would still surface the repository via the stale open row even
+// though the org's LATEST assertion revoked it. The inner subquery below
+// resolves this exactly the way queryProjectTeams' own FIRST/SECOND finding
+// notes already established for team_project_ownership: collapse to ONE
+// row per (team_id, repo_full_name) using the SAME NULL-preserving
+// "latest assertion by (valid_from, valid_to IS NULL, valid_to) wins" rule
+// -- verified live against this ClickHouse version there, not re-derived
+// here -- and only keep the repository when THAT latest assertion is open.
+// Collapsed across `source` too (unlike queryProjectTeams' edge, which
+// keeps one edge per source): this producer only needs a flat "is the team
+// currently authorized for this repository at all" boolean, not a
+// per-source relationship identity, so the most recent assertion from ANY
+// source is authoritative for that boolean, same as queryTeams' own FINAL
+// collapse of the teams table itself never splits by anything narrower
+// than the team's own row.
 //
 // Codex C5 (sincePredicate's own doc comment): every column this join's
 // caller selects from `teams` MUST be qualified (tm.id, tm.updated_at, ...)
@@ -799,11 +825,36 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership"
 
 const ownedRepositoriesJoinSQL = `LEFT JOIN (
-	SELECT team_id, groupUniqArray(repo_full_name) AS repos
-	FROM team_repo_ownership FINAL
-	WHERE org_id = {org_id:String} AND valid_from <= now64(3) AND valid_to IS NULL
+	SELECT team_id, groupUniqArray(repo_full_name) AS repos, max(updated_at) AS latest_update
+	FROM (
+		SELECT team_id, repo_full_name, max(updated_at) AS updated_at,
+			argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open
+		FROM team_repo_ownership FINAL
+		WHERE org_id = {org_id:String} AND valid_from <= now64(3)
+		GROUP BY team_id, repo_full_name
+	)
+	WHERE latest_is_open
 	GROUP BY team_id
 ) AS tro ON tro.team_id = tm.id`
+
+// queryTeamsEffectiveUpdatedAtExpr is the SQL expression queryTeams uses as
+// BOTH its cursor/pagination watermark (sincePredicate/orderBy) and its
+// scanned "updated_at" column (which becomes candidate.observedAt and
+// entity.ObservedAt). Codex round-1 finding (HIGH): pre-fix, the watermark
+// was bare `tm.updated_at` -- a grant or revocation that touches ONLY
+// team_repo_ownership (the team's own `teams` row untouched) would never
+// advance the team's own last-changed timestamp, so incremental catch-up
+// (sincePredicate's `WHERE updated_at > {since}`) would never re-select
+// that team row again, and the graph would keep serving a STALE
+// authorization scope -- either a revoked repository still authorized, or
+// a newly granted one never surfacing -- until some UNRELATED team change
+// or a full rebuild happened to touch it. `greatest()` over both tables'
+// own `updated_at` values makes the watermark advance whenever EITHER
+// side changes, the same shared-watermark discipline `queryProjectTeams`
+// already applies at the edge level via its own `max(updated_at)`. The
+// `ifNull` fallback is a fixed epoch, never `tm.updated_at` again, so the
+// expression has no circular self-reference.
+const queryTeamsEffectiveUpdatedAtExpr = `greatest(tm.updated_at, ifNull(tro.latest_update, toDateTime64(0, 3, 'UTC')))`
 
 // teamsQuery binds the run-scoped team-authorization telemetry ledger to
 // queryTeams, the same closure-constructor shape projectTeamsQuery already
@@ -816,10 +867,10 @@ func teamsQuery(ledger *teamAuthorizationLedger) func(context.Context, contextpa
 
 func queryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, teamAuth *teamAuthorizationLedger) ([]candidate, bool, error) {
 	const rowKey = "tm.id"
-	statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, tm.updated_at, tm.project_keys, ifNull(tro.repos, [])
+	statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, ` + queryTeamsEffectiveUpdatedAtExpr + `, tm.project_keys, ifNull(tro.repos, [])
 FROM teams AS tm FINAL
 ` + ownedRepositoriesJoinSQL + `
-WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, "tm.updated_at", rowKey) + orderBy("tm.updated_at", rowKey)
+WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsEffectiveUpdatedAtExpr, rowKey) + orderBy(queryTeamsEffectiveUpdatedAtExpr, rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, name, description, provider, nativeKey string
 		var projectKeys, ownedRepos []string
