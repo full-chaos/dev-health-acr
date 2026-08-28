@@ -40,9 +40,11 @@ type mcpResponseDefsSync struct {
 // pointers would otherwise resolve against the WRAPPER's root, where
 // nothing of that name exists.
 var contextFabricCommonDefsRewrites = map[string]string{
-	"#/$defs/AuthorizationScope":   "#/$defs/context_fabric_common.v1/$defs/AuthorizationScope",
-	"#/$defs/CohortExclusion":      "#/$defs/context_fabric_common.v1/$defs/CohortExclusion",
-	"#/$defs/CohortMember":         "#/$defs/context_fabric_common.v1/$defs/CohortMember",
+	"#/$defs/AuthorizationScope": "#/$defs/context_fabric_common.v1/$defs/AuthorizationScope",
+	"#/$defs/CohortExclusion":    "#/$defs/context_fabric_common.v1/$defs/CohortExclusion",
+	"#/$defs/CohortMember":       "#/$defs/context_fabric_common.v1/$defs/CohortMember",
+	// CHAOS-4398 PR2: CohortMember.drivers' own new $defs entry.
+	"#/$defs/CohortMemberDriver":   "#/$defs/context_fabric_common.v1/$defs/CohortMemberDriver",
 	"#/$defs/CommitDecisionDigest": "#/$defs/context_fabric_common.v1/$defs/CommitDecisionDigest",
 	"#/$defs/FactRequirement":      "#/$defs/context_fabric_common.v1/$defs/FactRequirement",
 	"#/$defs/RelationshipEdge":     "#/$defs/context_fabric_common.v1/$defs/RelationshipEdge",

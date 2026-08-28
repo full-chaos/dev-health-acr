@@ -130,6 +130,18 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ClaimedFact.properties.field.maxLength":                               ContextFabricClaimedFieldMaxLength,
 		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":                contextFabricWriteBounds.interpretationTerms,
 		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems":             contextFabricWriteBounds.interpretationTerms,
+		// CHAOS-4398 PR2: CohortMemberDriver lives one level under
+		// CohortMember.Drivers (a slice of a $defs-nested struct) AND its
+		// own Validate() entangles Value/Weight/WeightContributed with the
+		// enclosing member's Score (Sum(WeightContributed)==*Score) --
+		// perturbing one field in isolation, which the generic probe needs
+		// to do, cannot hold that invariant, so this is declaratively
+		// mapped rather than probed, the same reasoning as the
+		// $defs-nested entries above.
+		"common#$defs.CohortMemberDriver.properties.value.minimum":              0,
+		"common#$defs.CohortMemberDriver.properties.value.maximum":              1,
+		"common#$defs.CohortMemberDriver.properties.weight.minimum":             0,
+		"common#$defs.CohortMemberDriver.properties.weight_contributed.minimum": 0,
 		// Not probeable, and honestly so (codex round-9 F1): no valid
 		// document can carry more fact_requirements than there are distinct
 		// kinds, so the probe cannot build a control past the vocabulary and

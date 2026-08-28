@@ -18,6 +18,42 @@
       "label": "Ask Dev"
     }
   ],
+  "cohort": {
+    "kind": "team",
+    "total": 2,
+    "rationale": "Matched every team owning at least one repository in the org.",
+    "complete": true,
+    "members": [
+      {
+        "subject": {
+          "kind": "team",
+          "canonical_id": "team:CHAOS",
+          "label": "CHAOS"
+        },
+        "rank": 1,
+        "inclusion_reasons": [
+          "Matched by kind census over the org's team roster."
+        ],
+        "evidence_ref_ids": [
+          "evidence_team_chaos_roster"
+        ]
+      },
+      {
+        "subject": {
+          "kind": "team",
+          "canonical_id": "team:platform",
+          "label": "Platform"
+        },
+        "rank": 2,
+        "inclusion_reasons": [
+          "Matched by kind census over the org's team roster."
+        ],
+        "evidence_ref_ids": [
+          "evidence_team_platform_roster"
+        ]
+      }
+    ]
+  },
   "principal_drivers": [
     {
       "driver_id": "driver_12345678",
@@ -93,7 +129,9 @@
   ],
   "warnings": [],
   "evidence_ref_ids": [
-    "evidence_release_acceptance"
+    "evidence_release_acceptance",
+    "evidence_team_chaos_roster",
+    "evidence_team_platform_roster"
   ],
   "subject_receipts": [
     {

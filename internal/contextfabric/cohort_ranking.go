@@ -179,6 +179,7 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 		basis        []string
 		completeness CohortDataCompleteness
 		contributed  []string
+		drivers      []CohortMemberDriver
 	}
 	results := make([]memberResult, len(cohort.Members))
 	degradedCount := 0
@@ -191,8 +192,8 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 			workloadValue = normalizeWorkloadMinMax(rawWorkload[key], workloadMin, workloadMax)
 		}
 
-		score, basis, completeness, contributed := scoreMember(memberFacts, coverage, workloadValue, hasWorkload)
-		results[i] = memberResult{score: score, basis: basis, completeness: completeness, contributed: contributed}
+		score, basis, completeness, contributed, drivers := scoreMember(memberFacts, coverage, workloadValue, hasWorkload)
+		results[i] = memberResult{score: score, basis: basis, completeness: completeness, contributed: contributed, drivers: drivers}
 		if completeness == CohortDataDegraded {
 			degradedCount++
 		}
@@ -233,6 +234,7 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 		cohort.Members[i].AttentionRank = attentionRank[i]
 		cohort.Members[i].RankingBasis = results[i].basis
 		cohort.Members[i].DataCompleteness = results[i].completeness
+		cohort.Members[i].Drivers = results[i].drivers
 	}
 
 	event.MemberCount = len(cohort.Members)
@@ -247,24 +249,26 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 // caller's telemetry histogram -- always a subset of (and in the same
 // order as) basis's family-name entries. score is nil iff zero families
 // were available (see memberResult's own doc comment above).
-func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64, workloadAvailable bool) (score *float64, basis []string, completeness CohortDataCompleteness, contributed []string) {
-	mixValue, mixLabels, mixAvailable := investmentMixSignal(facts, coverage)
+func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64, workloadAvailable bool) (score *float64, basis []string, completeness CohortDataCompleteness, contributed []string, drivers []CohortMemberDriver) {
+	mixValue, mixLabels, mixUsedPriorWindow, mixAvailable := investmentMixSignal(facts, coverage)
 	healthValue, healthAvailable := healthRiskSignal(facts, coverage)
 	deficiencyValue, deficiencyAvailable := deficiencySeveritySignal(facts, coverage)
 	readinessValue, readinessAvailable := readinessGapSignal(facts, coverage)
 
 	type signal struct {
-		name      string
-		weight    float64
-		value     float64
-		available bool
+		name            string
+		weight          float64
+		value           float64
+		available       bool
+		thresholdLabels []string
+		usedPriorWindow bool
 	}
 	signals := [...]signal{
-		{RankingSignalInvestmentMix, weightInvestmentMix, mixValue, mixAvailable},
-		{RankingSignalHealthRisk, weightHealthRisk, healthValue, healthAvailable},
-		{RankingSignalDeficiencySeverity, weightDeficiencySeverity, deficiencyValue, deficiencyAvailable},
-		{RankingSignalReadinessGap, weightReadinessGap, readinessValue, readinessAvailable},
-		{RankingSignalWorkloadPressure, weightWorkloadPressure, workloadValue, workloadAvailable},
+		{RankingSignalInvestmentMix, weightInvestmentMix, mixValue, mixAvailable, mixLabels, mixUsedPriorWindow},
+		{RankingSignalHealthRisk, weightHealthRisk, healthValue, healthAvailable, nil, false},
+		{RankingSignalDeficiencySeverity, weightDeficiencySeverity, deficiencyValue, deficiencyAvailable, nil, false},
+		{RankingSignalReadinessGap, weightReadinessGap, readinessValue, readinessAvailable, nil, false},
+		{RankingSignalWorkloadPressure, weightWorkloadPressure, workloadValue, workloadAvailable, nil, false},
 	}
 
 	var weightedSum, availableWeight float64
@@ -288,6 +292,28 @@ func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64
 	if availableWeight > 0 {
 		value := 100 * weightedSum / availableWeight
 		score = &value
+		// Drivers (CHAOS-4398 PR2) is built AFTER availableWeight is known
+		// -- WeightContributed is exactly this signal's own share of value
+		// (100*weight*s.value/availableWeight), so Sum(WeightContributed)
+		// across every driver reconstructs *score exactly, the traceability
+		// invariant internal/contracts/v1's validateDrivers enforces.
+		for _, s := range signals {
+			if !s.available {
+				continue
+			}
+			window := DriverWindowCurrent
+			if s.usedPriorWindow {
+				window = DriverWindowCurrentVsPrior
+			}
+			drivers = append(drivers, CohortMemberDriver{
+				Signal:            s.name,
+				Value:             s.value,
+				Weight:            s.weight,
+				WeightContributed: 100 * s.weight * s.value / availableWeight,
+				Window:            window,
+				ThresholdLabels:   s.thresholdLabels,
+			})
+		}
 	}
 	switch {
 	case availableCount == len(signals):
@@ -297,7 +323,7 @@ func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64
 	default:
 		completeness = CohortDataPartial
 	}
-	return score, basis, completeness, contributed
+	return score, basis, completeness, contributed, drivers
 }
 
 // coverageState looks up the fact-read Coverage entry for kind, matching
@@ -412,9 +438,9 @@ func maxShare(shares map[string]float64) float64 {
 // legitimately come back empty even when the current window has data) and
 // its absence does not make the whole signal unavailable -- it just means
 // that one sub-weight never fires.
-func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float64, driverLabels []string, available bool) {
+func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float64, driverLabels []string, usedPriorWindow bool, available bool) {
 	if !familyBatchAdmits(coverage, FactInvestment) {
-		return 0, nil, false
+		return 0, nil, false, false
 	}
 	// A team subject can carry MULTIPLE FactInvestment facts -- one per
 	// legacy (investment_area, project_stream) pair from readTeamInvestment
@@ -436,11 +462,11 @@ func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float6
 		}
 	}
 	if !found {
-		return 0, nil, false
+		return 0, nil, false, false
 	}
 	current, ok := themeShares(fact, FactFieldTheme)
 	if !ok {
-		return 0, nil, false
+		return 0, nil, false, false
 	}
 	bugfixShare, _ := numberField(fact, FactFieldThemeQualityBugfix)
 
@@ -461,6 +487,12 @@ func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float6
 		driverLabels = append(driverLabels, DriverMixConcentrated)
 	}
 	if prior, ok := themeShares(fact, FactFieldPriorTheme); ok {
+		// usedPriorWindow is true as soon as a real prior-window comparison
+		// was MADE, regardless of whether shiftMagnitude crossed
+		// mixShiftThreshold -- Window on the resulting driver states
+		// whether this value is a single-point read or a two-window
+		// comparison, independent of which sub-signals happened to fire.
+		usedPriorWindow = true
 		shiftMagnitude := 0.0
 		bestTheme := ""
 		bestDelta := math.Inf(-1)
@@ -488,7 +520,7 @@ func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float6
 			}
 		}
 	}
-	return value, driverLabels, true
+	return value, driverLabels, usedPriorWindow, true
 }
 
 // healthRiskSignal reads FactHealth's severity band (compounding_risk_daily's

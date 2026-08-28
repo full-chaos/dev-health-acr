@@ -399,7 +399,39 @@ not in the closed `ContextFabricDriverCategory` vocabulary
 (`context_fabric_types.go:417`) and would be rejected by
 `ContextFabricDriverJudgment.Validate`.
 
-### 5a. Driver budget (P1, must be resolved before PR2) — two independent budgets
+### 5a. Driver budget (P1, must be resolved before PR2) — layered on PR2's structured member drivers, ruling below
+
+**Ruling (orchestrator, CHAOS-4398 PR2):** this section's budget scheme
+below (`ContextFabricDriverJudgment` emission into the shared, answer-wide
+`result.Drivers` array; the 50-cap/5-10 render-budget math; post-synthesis
+timing; `Standing`/`DriverID` crafted to survive projection truncation) is
+**not superseded** -- it is a rendering layer that sits ON TOP OF, not in
+competition with, PR2's structured per-member drivers
+(`ContextFabricCohortMember.Drivers []ContextFabricCohortMemberDriver` --
+signal name, `[0,1]` value, formula weight, points contributed, evidence
+window, closed-vocab threshold labels; `Sum(WeightContributed)`
+reconstructs `Score` exactly, Go-validated). PR2's array is the **primitive**:
+computed inside `RankCohort`, before synthesis, member-scoped, no
+answer-wide budget or `Standing` contention. This section's
+`ContextFabricDriverJudgment` emission is the **narration** built from that
+primitive: every narrated entry must cite a member driver by `(team,
+signal)` and must never introduce a number absent from it -- the budget math
+and post-synthesis timing below are UNCHANGED by PR2 and remain to be
+delivered in PR3, alongside the Rows panel.
+
+**Contract shape note (PR2 R4, codex R3 findings 2/5):** `ContextFabricCohortMemberDriver`'s
+Go write-path validator (`validateDrivers`) is the AUTHORITY on this
+shape's cross-array/cross-field invariants (no duplicate-signal drivers,
+exact driver-set-to-`ranking_basis` correspondence, `Sum(WeightContributed)==Score`,
+threshold-label cross-checks). The published JSON Schema is a permissive
+STRUCTURAL SUPERSET, not exhaustive: some of these invariants are not
+expressible in this repo's own contractcheck engine (no `contains`/
+`minContains`/`maxContains` support), and null-vs-zero on a persisted read
+isn't schema-distinguishable either. A payload the schema accepts is not
+guaranteed valid; a payload Go's write path accepts always is. Tracked as
+a follow-up, not required to ship PR2 (CHAOS-4416).
+
+**Original budget analysis (unchanged, PR3-owned):**
 
 There are **two separate, independent driver limits**, and the canonical-
 result cap alone is not the binding constraint a caller actually experiences:

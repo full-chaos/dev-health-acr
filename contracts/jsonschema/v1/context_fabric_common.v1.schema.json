@@ -2022,12 +2022,278 @@
             "partial",
             "degraded"
           ]
+        },
+        "drivers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CohortMemberDriver"
+          },
+          "maxItems": 5
         }
       },
       "required": [
         "subject",
         "rank",
         "inclusion_reasons"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "data_completeness": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "data_completeness"
+            ]
+          },
+          "then": {
+            "properties": {
+              "drivers": {
+                "minItems": 5,
+                "maxItems": 5
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "data_completeness": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "data_completeness"
+            ]
+          },
+          "then": {
+            "properties": {
+              "drivers": {
+                "minItems": 3,
+                "maxItems": 4
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "data_completeness": {
+                "const": "degraded"
+              }
+            },
+            "required": [
+              "data_completeness"
+            ]
+          },
+          "then": {
+            "properties": {
+              "drivers": {
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CohortMemberDriver": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "signal": {
+          "type": "string",
+          "enum": [
+            "investment_mix",
+            "health.compounding_risk",
+            "operational_deficiencies.severity",
+            "readiness.coverage_gap",
+            "workload.forecast_pressure"
+          ]
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0
+        },
+        "weight_contributed": {
+          "type": "number",
+          "minimum": 0
+        },
+        "window": {
+          "type": "string",
+          "enum": [
+            "current",
+            "current_vs_prior"
+          ]
+        },
+        "threshold_labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "enum": [
+              "investment_mix.reactive_share_high",
+              "investment_mix.deliberate_share_low",
+              "investment_mix.mix_concentrated",
+              "investment_mix.mix_shift_toward_operational",
+              "investment_mix.mix_shift_toward_feature",
+              "investment_mix.mix_shift_other"
+            ]
+          },
+          "maxItems": 4,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "signal",
+        "value",
+        "weight",
+        "weight_contributed",
+        "window"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "signal": {
+                "const": "investment_mix"
+              }
+            },
+            "required": [
+              "signal"
+            ]
+          },
+          "then": {
+            "properties": {
+              "weight": {
+                "const": 30
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "signal": {
+                "const": "health.compounding_risk"
+              }
+            },
+            "required": [
+              "signal"
+            ]
+          },
+          "then": {
+            "properties": {
+              "weight": {
+                "const": 25
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "signal": {
+                "const": "operational_deficiencies.severity"
+              }
+            },
+            "required": [
+              "signal"
+            ]
+          },
+          "then": {
+            "properties": {
+              "weight": {
+                "const": 20
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "signal": {
+                "const": "readiness.coverage_gap"
+              }
+            },
+            "required": [
+              "signal"
+            ]
+          },
+          "then": {
+            "properties": {
+              "weight": {
+                "const": 15
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "signal": {
+                "const": "workload.forecast_pressure"
+              }
+            },
+            "required": [
+              "signal"
+            ]
+          },
+          "then": {
+            "properties": {
+              "weight": {
+                "const": 10
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "window": {
+                "const": "current_vs_prior"
+              }
+            },
+            "required": [
+              "window"
+            ]
+          },
+          "then": {
+            "properties": {
+              "signal": {
+                "const": "investment_mix"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "signal": {
+                "not": {
+                  "const": "investment_mix"
+                }
+              }
+            },
+            "required": [
+              "signal"
+            ]
+          },
+          "then": {
+            "properties": {
+              "threshold_labels": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
       ]
     },
     "CohortExclusion": {

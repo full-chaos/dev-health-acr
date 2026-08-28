@@ -483,6 +483,60 @@ func validContextFabricCohortRankingBasisLabel(value string) bool {
 	return ok
 }
 
+// contextFabricCohortMemberDriverWeights is CHAOS-4398 PR2's CLOSED
+// signal-family -> weight map, mirrored from
+// internal/contextfabric/cohort_ranking.go's weight* constants (same
+// cross-package mirroring discipline as
+// contextFabricCohortRankingBasisLabels above -- this package cannot
+// import that one). A ContextFabricCohortMemberDriver's Weight must equal
+// its Signal's own entry here exactly: a formula weight change needs a new
+// RankingFormulaVersion and both sides of this mirror updated together.
+var contextFabricCohortMemberDriverWeights = map[string]float64{
+	"investment_mix":                    30,
+	"health.compounding_risk":           25,
+	"operational_deficiencies.severity": 20,
+	"readiness.coverage_gap":            15,
+	"workload.forecast_pressure":        10,
+}
+
+// contextFabricInvestmentMixSubWeights is CHAOS-4398 PR2 R4's CLOSED
+// threshold-label -> sub-weight map, mirrored from
+// internal/contextfabric/cohort_ranking.go's subWeight* constants (same
+// cross-package mirroring discipline as contextFabricCohortMemberDriverWeights
+// above). investmentMixSignal's own Value is BY CONSTRUCTION the sum of
+// exactly these sub-weights for whichever labels fired -- codex R3 finding
+// 3: nothing checked that a driver's claimed ThresholdLabels actually
+// reconstruct its own Value, so a driver could claim
+// "reactive_share_high" fired while reporting Value: 0. The three
+// mix_shift_* labels share ONE sub-weight (0.20, mutually exclusive --
+// investmentMixSignal fires at most one).
+var contextFabricInvestmentMixSubWeights = map[string]float64{
+	"investment_mix.reactive_share_high":          0.35,
+	"investment_mix.deliberate_share_low":         0.30,
+	"investment_mix.mix_concentrated":             0.15,
+	"investment_mix.mix_shift_toward_operational": 0.20,
+	"investment_mix.mix_shift_toward_feature":     0.20,
+	"investment_mix.mix_shift_other":              0.20,
+}
+
+// contextFabricMixShiftLabels is the mutually-exclusive subset of
+// contextFabricInvestmentMixSubWeights' keys -- investmentMixSignal fires
+// at most ONE of these three per member (codex R3 finding 1).
+var contextFabricMixShiftLabels = map[string]struct{}{
+	"investment_mix.mix_shift_toward_operational": {},
+	"investment_mix.mix_shift_toward_feature":     {},
+	"investment_mix.mix_shift_other":              {},
+}
+
+func validContextFabricCohortMemberDriverWindow(value ContextFabricCohortMemberDriverWindow) bool {
+	switch value {
+	case ContextFabricCohortMemberDriverWindowCurrent, ContextFabricCohortMemberDriverWindowCurrentVsPrior:
+		return true
+	default:
+		return false
+	}
+}
+
 func validResolutionState(value ContextFabricResolutionState) bool {
 	switch value {
 	case ContextFabricResolutionCommitted, ContextFabricResolutionProposed, ContextFabricResolutionAmbiguous, ContextFabricResolutionUnresolved:

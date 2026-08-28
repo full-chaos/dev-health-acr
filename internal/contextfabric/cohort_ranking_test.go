@@ -368,7 +368,7 @@ func TestRankCohort_InvestmentMixThresholdLabels(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			value, labels, available := investmentMixSignal([]CanonicalFact{investmentFact("A", tc.themes, tc.bugfix)}, Coverage{})
+			value, labels, _, available := investmentMixSignal([]CanonicalFact{investmentFact("A", tc.themes, tc.bugfix)}, Coverage{})
 			if !available {
 				t.Fatalf("investmentMixSignal() available = false, want true")
 			}
@@ -391,7 +391,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorTowardOperational := map[string]float64{
 		ThemeFeatureDelivery: 0.4, ThemeOperational: 0.1, ThemeMaintenance: 0.2, ThemeQuality: 0.2, ThemeRisk: 0.1,
 	}
-	_, labels, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, priorTowardOperational, 0)}, Coverage{})
+	_, labels, _, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, priorTowardOperational, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -405,7 +405,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorFeatureLow := map[string]float64{
 		ThemeFeatureDelivery: 0.1, ThemeOperational: 0.3, ThemeMaintenance: 0.3, ThemeQuality: 0.2, ThemeRisk: 0.1,
 	}
-	_, labels, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("B", currentTowardFeature, priorFeatureLow, 0)}, Coverage{})
+	_, labels, _, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("B", currentTowardFeature, priorFeatureLow, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -421,7 +421,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorQualityLow := map[string]float64{
 		ThemeFeatureDelivery: 0.2, ThemeOperational: 0.3, ThemeMaintenance: 0.4, ThemeQuality: 0.1, ThemeRisk: 0.0,
 	}
-	_, labels, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("C", currentTowardQuality, priorQualityLow, 0)}, Coverage{})
+	_, labels, _, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("C", currentTowardQuality, priorQualityLow, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -444,7 +444,7 @@ func TestRankCohort_MixShiftTieBreaksByTaxonomyOrder(t *testing.T) {
 	prior := map[string]float64{
 		ThemeFeatureDelivery: 0.1, ThemeOperational: 0.1, ThemeMaintenance: 0.5, ThemeQuality: 0.1, ThemeRisk: 0.2,
 	}
-	_, labels, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, prior, 0)}, Coverage{})
+	_, labels, _, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, prior, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -603,5 +603,182 @@ func TestWorkloadWorstDays_AggregatesMaxAcrossScopes(t *testing.T) {
 	}, Coverage{})
 	if !ok || days != 40 {
 		t.Fatalf("days = %v, ok = %v, want (40, true)", days, ok)
+	}
+}
+
+// ---------------------------------------------------------------------
+// CHAOS-4398 PR2: Drivers (evidence-bearing breakdown of Score)
+// ---------------------------------------------------------------------
+
+// TestRankCohort_DriversSumToScore is PR2's central invariant: for a member
+// with every one of the 5 families available, Sum(Drivers.WeightContributed)
+// must reconstruct Score exactly (within float64 rounding) -- the same
+// property internal/contracts/v1's validateDrivers enforces on write, now
+// proven for RankCohort's own real output, not just a hand-built fixture.
+func TestRankCohort_DriversSumToScore(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{
+		investmentFact("A", balancedThemes(), 0),
+		healthFact("A", "elevated"),
+		deficiencyFact("A", "critical"),
+		readinessFact("A", 0.6),
+		workloadFact("A", 20),
+	}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
+	got, _ := RankCohort(cohort, facts, availableCoverage())
+	member := got.Members[0]
+	score := mustScore(t, member)
+	if len(member.Drivers) != 5 {
+		t.Fatalf("len(Drivers) = %d, want 5 (all families available)", len(member.Drivers))
+	}
+	var sum float64
+	for _, d := range member.Drivers {
+		sum += d.WeightContributed
+	}
+	if diff := sum - score; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("Sum(WeightContributed) = %v, want Score %v", sum, score)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+// TestRankCohort_DriversMatchRankingBasisFamilies proves Drivers' Signal
+// set is EXACTLY the family-name subset of RankingBasis, for a PARTIAL
+// (not all 5 available) member -- both the family-name entries themselves
+// and the driver set must agree on which signals actually contributed.
+func TestRankCohort_DriversMatchRankingBasisFamilies(t *testing.T) {
+	t.Parallel()
+	// Only health and deficiency available; investment/readiness/workload
+	// have no facts at all (deficiency's own available-zero exception
+	// still fires since availableCoverage marks it SourceAvailable).
+	facts := []CanonicalFact{healthFact("A", "high")}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
+	got, _ := RankCohort(cohort, facts, availableCoverage())
+	member := got.Members[0]
+	mustScore(t, member)
+
+	basisFamilies := map[string]bool{}
+	for _, entry := range member.RankingBasis {
+		basisFamilies[entry] = true // only family-name entries exist here (no investment_mix, so no sub-labels either)
+	}
+	driverSignals := map[string]bool{}
+	for _, d := range member.Drivers {
+		driverSignals[d.Signal] = true
+	}
+	if len(basisFamilies) != len(driverSignals) {
+		t.Fatalf("RankingBasis families = %v, Drivers signals = %v -- must be the same set", basisFamilies, driverSignals)
+	}
+	for family := range basisFamilies {
+		if !driverSignals[family] {
+			t.Fatalf("RankingBasis names %q with no matching driver", family)
+		}
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+// TestRankCohort_DriverWindowReflectsPriorComparison proves the
+// investment_mix driver's Window is "current_vs_prior" exactly when a real
+// prior-window comparison was made, and "current" (including for every
+// OTHER family, which never has a prior-window concept) otherwise.
+func TestRankCohort_DriverWindowReflectsPriorComparison(t *testing.T) {
+	t.Parallel()
+	t.Run("with prior window", func(t *testing.T) {
+		t.Parallel()
+		current := map[string]float64{ThemeFeatureDelivery: 0.1, ThemeOperational: 0.6, ThemeMaintenance: 0.1, ThemeQuality: 0.1, ThemeRisk: 0.1}
+		prior := balancedThemes()
+		facts := []CanonicalFact{investmentFactWithPrior("A", current, prior, 0)}
+		cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
+		got, _ := RankCohort(cohort, facts, availableCoverage())
+		member := got.Members[0]
+		mustScore(t, member)
+		var mixDriver *CohortMemberDriver
+		for i := range member.Drivers {
+			if member.Drivers[i].Signal == RankingSignalInvestmentMix {
+				mixDriver = &member.Drivers[i]
+			}
+		}
+		if mixDriver == nil {
+			t.Fatal("no investment_mix driver found")
+		}
+		if mixDriver.Window != DriverWindowCurrentVsPrior {
+			t.Fatalf("Window = %q, want %q", mixDriver.Window, DriverWindowCurrentVsPrior)
+		}
+	})
+	t.Run("without prior window", func(t *testing.T) {
+		t.Parallel()
+		facts := []CanonicalFact{investmentFact("A", balancedThemes(), 0)}
+		cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
+		got, _ := RankCohort(cohort, facts, availableCoverage())
+		member := got.Members[0]
+		mustScore(t, member)
+		var mixDriver *CohortMemberDriver
+		for i := range member.Drivers {
+			if member.Drivers[i].Signal == RankingSignalInvestmentMix {
+				mixDriver = &member.Drivers[i]
+			}
+		}
+		if mixDriver == nil {
+			t.Fatal("no investment_mix driver found")
+		}
+		if mixDriver.Window != DriverWindowCurrent {
+			t.Fatalf("Window = %q, want %q", mixDriver.Window, DriverWindowCurrent)
+		}
+	})
+}
+
+// TestRankCohort_ThresholdLabelsMirrorMixDriverLabels proves the
+// investment_mix driver's ThresholdLabels is exactly the sub-label set
+// investmentMixSignal fired (the same labels RankCohort appends to
+// RankingBasis), so a consumer can read WHY investment_mix fired straight
+// off the driver, not by cross-referencing RankingBasis separately.
+func TestRankCohort_ThresholdLabelsMirrorMixDriverLabels(t *testing.T) {
+	t.Parallel()
+	// A team that's almost entirely operational + concentrated fires
+	// reactive_share_high, mix_concentrated, and deliberate_share_low.
+	themes := map[string]float64{ThemeFeatureDelivery: 0.02, ThemeOperational: 0.9, ThemeMaintenance: 0.03, ThemeQuality: 0.03, ThemeRisk: 0.02}
+	facts := []CanonicalFact{investmentFact("A", themes, 0)}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
+	got, _ := RankCohort(cohort, facts, availableCoverage())
+	member := got.Members[0]
+	mustScore(t, member)
+	var mixDriver *CohortMemberDriver
+	for i := range member.Drivers {
+		if member.Drivers[i].Signal == RankingSignalInvestmentMix {
+			mixDriver = &member.Drivers[i]
+		}
+	}
+	if mixDriver == nil {
+		t.Fatal("no investment_mix driver found")
+	}
+	want := []string{DriverReactiveShareHigh, DriverDeliberateShareLow, DriverMixConcentrated}
+	if !reflect.DeepEqual(mixDriver.ThresholdLabels, want) {
+		t.Fatalf("ThresholdLabels = %v, want %v", mixDriver.ThresholdLabels, want)
+	}
+	// Same labels, in the same order, must also be the tail of RankingBasis.
+	gotTail := member.RankingBasis[len(member.RankingBasis)-len(want):]
+	if !reflect.DeepEqual(gotTail, want) {
+		t.Fatalf("RankingBasis tail = %v, want %v", gotTail, want)
+	}
+}
+
+// TestRankCohort_ZeroAvailableSignalsHasNoDrivers proves the §5b nil-Score
+// shape carries an empty Drivers slice, mirroring the existing empty-
+// RankingBasis rule.
+func TestRankCohort_ZeroAvailableSignalsHasNoDrivers(t *testing.T) {
+	t.Parallel()
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "matched by kind census", Members: []CohortMember{rankTestMember("A")}}
+	got, _ := RankCohort(cohort, nil, deficiencyPrunedCoverage())
+	member := got.Members[0]
+	if member.Score != nil {
+		t.Fatalf("Score = %v, want nil", *member.Score)
+	}
+	if len(member.Drivers) != 0 {
+		t.Fatalf("Drivers = %#v, want empty", member.Drivers)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
 	}
 }
