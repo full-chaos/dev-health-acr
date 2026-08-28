@@ -19,13 +19,16 @@ var errUnexpectedCycleTimesQuery = errors.New("devhealthfacts_test: work_item_cy
 
 // workItemMetricsDailyRow shapes one work_item_metrics_daily row as
 // FlowProvider's queryTeamScopeRows/readProjectFlow scan it: (team_id,
-// work_scope_id, day, items_started, items_completed, wip_count_end_of_day,
-// has_wip_p50, wip_p50, has_wip_p90, wip_p90, has_cycle_p50, cycle_p50,
-// has_cycle_p90, cycle_p90, has_lead_p50, lead_p50, has_lead_p90, lead_p90,
-// bug_completed_ratio, story_points_completed).
+// provider, work_scope_id, day, items_started, items_completed,
+// wip_count_end_of_day, has_wip_p50, wip_p50, has_wip_p90, wip_p90,
+// has_cycle_p50, cycle_p50, has_cycle_p90, cycle_p90, has_lead_p50, lead_p50,
+// has_lead_p90, lead_p90, bug_completed_ratio, story_points_completed).
+// provider is a fixed "github" -- callers not testing cross-provider
+// collision (TestFlowProviderProjectRollupSumsAcrossTeamOwnScopesAndProviders
+// covers that, against real ClickHouse) don't need to vary it.
 func workItemMetricsDailyRow(teamID, workScopeID string, itemsStarted, itemsCompleted, wipEnd int64) []any {
 	return []any{
-		teamID, workScopeID, "2026-02-21", itemsStarted, itemsCompleted, wipEnd,
+		teamID, "github", workScopeID, "2026-02-21", itemsStarted, itemsCompleted, wipEnd,
 		uint8(1), float64(12), uint8(1), float64(30),
 		uint8(1), float64(20), uint8(1), float64(48),
 		uint8(1), float64(24), uint8(1), float64(60),
@@ -45,7 +48,7 @@ func workItemMetricsDailyRow(teamID, workScopeID string, itemsStarted, itemsComp
 // scanned back out.
 func projectWorkItemMetricsRow(provider, projectID, teamID, workScopeID string, itemsStarted, itemsCompleted int64) []any {
 	row := []any{provider + ":" + projectID, teamID}
-	row = append(row, workItemMetricsDailyRow(teamID, workScopeID, itemsStarted, itemsCompleted, 5)[3:]...)
+	row = append(row, workItemMetricsDailyRow(teamID, workScopeID, itemsStarted, itemsCompleted, 5)[4:]...)
 	return row
 }
 

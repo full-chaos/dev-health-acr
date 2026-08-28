@@ -104,12 +104,17 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}, nil
 }
 
-// flowScopeRow is one (team_id, work_scope_id) partition's latest
+// flowScopeRow is one (team_id, provider, work_scope_id) partition's latest
 // work_item_metrics_daily row -- never a stitched combination of several
 // rows, the same row_number()-then-scan-one-row discipline every other
-// provider in this package documents.
+// provider in this package documents. provider is carried through to
+// disclosure (codex R3 P2, CHAOS-4364): two DIFFERENT providers legitimately
+// sharing a work_scope_id string now both survive as distinct rows (the
+// exact collision queryTeamScopeRows' own doc comment describes), so a
+// scope_breakdown row with no provider field would be ambiguous about which
+// source it came from.
 type flowScopeRow struct {
-	workScopeID, day                               string
+	provider, workScopeID, day                     string
 	itemsStarted, itemsCompleted, wipCountEndOfDay int64
 	hasWipAgeP50                                   bool
 	wipAgeP50Hours                                 float64
@@ -128,6 +133,7 @@ type flowScopeRow struct {
 
 func (r flowScopeRow) toFactValueRow() contextfabric.FactValueRow {
 	fields := map[string]contextfabric.FactValue{
+		"provider":               contextfabric.StringFactValue(r.provider),
 		"work_scope_id":          contextfabric.StringFactValue(r.workScopeID),
 		"day":                    contextfabric.StringFactValue(r.day),
 		"items_started":          contextfabric.IntegerFactValue(r.itemsStarted),
@@ -175,7 +181,7 @@ func (p *FlowProvider) queryTeamScopeRows(ctx context.Context, orgID string, ids
 	// identical domain-assumption tiebreaks. The tuple covers every scanned
 	// value column (codex R2 P2) -- a partial tuple lets two rows that
 	// differ ONLY in an omitted column tie, picking an arbitrary one.
-	statement := withRowLimit(`SELECT toString(team_id), toString(work_scope_id), toString(day), toInt64(items_started), toInt64(items_completed), toInt64(wip_count_end_of_day),
+	statement := withRowLimit(`SELECT toString(team_id), toString(provider), toString(work_scope_id), toString(day), toInt64(items_started), toInt64(items_completed), toInt64(wip_count_end_of_day),
 	toUInt8(isNotNull(wip_age_p50_hours)), toFloat64(ifNull(wip_age_p50_hours, 0)),
 	toUInt8(isNotNull(wip_age_p90_hours)), toFloat64(ifNull(wip_age_p90_hours, 0)),
 	toUInt8(isNotNull(cycle_time_p50_hours)), toFloat64(ifNull(cycle_time_p50_hours, 0)),
@@ -184,20 +190,20 @@ func (p *FlowProvider) queryTeamScopeRows(ctx context.Context, orgID string, ids
 	toUInt8(isNotNull(lead_time_p90_hours)), toFloat64(ifNull(lead_time_p90_hours, 0)),
 	toFloat64(bug_completed_ratio), toFloat64(story_points_completed)
 FROM (
-	SELECT team_id, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
+	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
 	FROM work_item_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1
-ORDER BY team_id, work_scope_id`)
+ORDER BY team_id, work_scope_id, provider`)
 	byTeam = make(map[string][]flowScopeRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var teamID string
 		var r flowScopeRow
 		var hasWipP50, hasWipP90, hasCycleP50, hasCycleP90, hasLeadP50, hasLeadP90 uint8
-		if scanErr := row.Scan(&teamID, &r.workScopeID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay,
+		if scanErr := row.Scan(&teamID, &r.provider, &r.workScopeID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay,
 			&hasWipP50, &r.wipAgeP50Hours, &hasWipP90, &r.wipAgeP90Hours,
 			&hasCycleP50, &r.cycleP50Hours, &hasCycleP90, &r.cycleP90Hours,
 			&hasLeadP50, &r.leadP50Hours, &hasLeadP90, &r.leadP90Hours,
@@ -263,9 +269,13 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 // metrics.go's readProjectMetrics uses, adapted to read work_item_metrics_daily
 // instead of team_metrics_daily. Unlike the team-level fact above (which
 // discloses every concurrent work_scope_id a team has), the project rollup
-// picks ONE representative (latest) scope per owning team -- the full
-// per-scope breakdown for any one team is available by asking about that
-// team subject directly.
+// does NOT pick one representative scope per team (codex R2 P1, CHAOS-4364:
+// that WAS the bug -- see teamFlowAggregateRow's own doc comment): its row
+// SQL-aggregates (SUM additive counts, AVG percentiles) across every
+// (provider, work_scope_id) row the team has, so team_breakdown's one row
+// per team already reflects the team's full flow picture. The per-scope
+// breakdown for any one team is still available by asking about that team
+// subject directly.
 type projectFlowRow struct {
 	projectKey, teamID string
 	row                teamFlowAggregateRow

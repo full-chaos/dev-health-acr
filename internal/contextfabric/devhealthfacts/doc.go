@@ -88,11 +88,13 @@
 // "widen by a real table join, never a proxy" discipline CHAOS-4347
 // established for FactMetrics:
 //
-//   - FactFlow from work_item_metrics_daily + work_item_cycle_times
-//     (team, per-work_scope_id Rows plus a team-scoped average of
-//     flow_efficiency/active_time_hours/wait_time_hours), rolled up to
-//     project via team_project_ownership, plus a distinct repository shape
-//     reading repo_metrics_daily's PR pickup/review-timing columns.
+//   - FactFlow from work_item_metrics_daily (team, per-work_scope_id Rows;
+//     work_item_cycle_times' flow_efficiency/active_time_hours/
+//     wait_time_hours are DELIBERATELY NOT read -- see flow.go's package
+//     doc comment for why), summed/averaged across a team's own scopes and
+//     rolled up to project via team_project_ownership, plus a distinct
+//     repository shape reading repo_metrics_daily's PR pickup/
+//     review-timing columns.
 //   - FactLandscape from ic_landscape_rolling_30d (team, aggregated to
 //     (team_id, map_name) -- never per-identity, see landscape.go's
 //     package doc comment for why), rolled up to project via

@@ -401,7 +401,7 @@ source for the SAME kind).
 | readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project, CHAOS-4363)** | team, **project** |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | `backfill_log` | organization |
-| flow (CHAOS-4364) | `work_item_metrics_daily` + `work_item_cycle_times` (team, per-scope Rows + averaged flow_efficiency); **+`team_project_ownership` ⋈ `work_item_metrics_daily`** (project, summed-counts rollup); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
+| flow (CHAOS-4364) | `work_item_metrics_daily` (team, per-scope Rows; `work_item_cycle_times`'s flow_efficiency is DELIBERATELY NOT read -- ops sink omits it, see flow.go's doc comment); **+`team_project_ownership` ⋈ `work_item_metrics_daily`**, summed/averaged across a team's own (provider, work_scope_id) rows into one row per team (project, codex R2 fix); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
 | landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to (team, map_name) — never per-identity (no person-to-person ranking); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
 
 **`FactMetrics`'s project rollup never averages a rate across

@@ -47,8 +47,10 @@ var factSchemaTables = []string{
 	"repo_metrics_daily", "compounding_risk_daily", "estimate_coverage_metrics_daily",
 	"capacity_forecasts", "investment_metrics_daily", "recommendations_daily", "backfill_log",
 	// CHAOS-4364: FlowProvider/LandscapeProvider's tables (flow.go,
-	// landscape.go).
-	"work_item_metrics_daily", "ic_landscape_rolling_30d",
+	// landscape.go). projects/team_project_ownership back their PROJECT
+	// subject branches specifically (codex R3 P2: those branches were
+	// otherwise never parity-tested against production typing).
+	"work_item_metrics_daily", "ic_landscape_rolling_30d", "projects", "team_project_ownership",
 }
 
 // TestLiveSchemaParityAcrossEveryFactProvider is the round-2 F1 guard: no
@@ -139,6 +141,12 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		orgID, "github", "CHAOS", "scope-1", day, uint32(3), uint32(2), uint32(1), 4.5, 6.0, 2.0, 0.1, 3.0, at)
 	seed("ic_landscape_rolling_30d", `INSERT INTO ic_landscape_rolling_30d (org_id, repo_id, as_of_day, identity_id, team_id, map_name, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		orgID, repoID, day, "identity-parity", "CHAOS", "backend", uint64(100), uint32(2), 5.0, uint32(3), at)
+	// projects/team_project_ownership back FlowProvider/LandscapeProvider's
+	// PROJECT subject branches (codex R3 P2).
+	seed("projects", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"proj-parity", orgID, "github", "PARITY", "Parity Project", uint8(1), "active", "", at)
+	seed("team_project_ownership", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, "github", "CHAOS", "proj-parity", "PARITY", "native", at, nil, at)
 
 	principal := storage.Principal{OrgID: orgID}
 	subjects := map[contextfabric.FactKind]contextfabric.SubjectRef{
@@ -194,23 +202,54 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		})
 	}
 
-	// CHAOS-4364 codex R2 P2: the main loop above asserts ONE subject kind
-	// per FactKind (subjects is keyed by Kind alone), so FlowProvider's
+	// CHAOS-4364 codex R2/R3 P2: the main loop above asserts ONE subject
+	// kind per FactKind (subjects is keyed by Kind alone), so FlowProvider's
 	// SECOND shape -- repo_metrics_daily's five new PR pickup/review-timing
-	// columns, read only for a repository subject -- was never actually
-	// scanned against production typing. FlowProvider/LandscapeProvider's
-	// PROJECT-subject branches have the same gap, but so does every other
-	// project-rollup provider in this package (metrics.go/health.go/
-	// workload.go/readiness.go/investment.go) predating this ticket --
+	// columns, read only for a repository subject -- and FlowProvider/
+	// LandscapeProvider's PROJECT-subject branches were never actually
+	// scanned against production typing. The same gap exists for every
+	// OTHER project-rollup provider in this package (metrics.go/health.go/
+	// workload.go/readiness.go/investment.go), predating this ticket --
 	// widening this test's structure to cover every provider's every
-	// supported subject kind is a real, separate follow-up, not silently
-	// expanded into this PR's own scope.
+	// supported subject kind for THOSE is a real, separate follow-up, not
+	// silently expanded into this PR's own scope; flow/landscape's project
+	// branches are this ticket's own new code, so they get covered here.
 	t.Run("flow_repository", func(t *testing.T) {
 		flowProvider := findProvider(t, providers, contextfabric.FactFlow)
 		result, err := flowProvider.ReadFacts(ctx, principal, contextfabric.FactQuery{
 			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 			Kind:     contextfabric.FactFlow,
 			Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+		}
+		if result.State == contextfabric.SourceUnavailable {
+			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
+		}
+	})
+
+	t.Run("flow_project", func(t *testing.T) {
+		flowProvider := findProvider(t, providers, contextfabric.FactFlow)
+		result, err := flowProvider.ReadFacts(ctx, principal, contextfabric.FactQuery{
+			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind:     contextfabric.FactFlow,
+			Subjects: []contextfabric.SubjectRef{projectSubject("github", "proj-parity")},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+		}
+		if result.State == contextfabric.SourceUnavailable {
+			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
+		}
+	})
+
+	t.Run("landscape_project", func(t *testing.T) {
+		landscapeProvider := findProvider(t, providers, contextfabric.FactLandscape)
+		result, err := landscapeProvider.ReadFacts(ctx, principal, contextfabric.FactQuery{
+			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind:     contextfabric.FactLandscape,
+			Subjects: []contextfabric.SubjectRef{projectSubject("github", "proj-parity")},
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
