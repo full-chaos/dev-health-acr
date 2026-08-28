@@ -670,7 +670,34 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 
 	admission := graphrank.AdmitEdges(principal.OrgID, orderedResolved, request.Request.Options, isInternalSubject)
-	cohort, cohortAuthzDropped := graphrank.DiscoveredCohort(principal, request, resolvedNodes, isInternalSubject)
+	// CHAOS-4395: DiscoveredCohort's ONLY node source used to be
+	// textNodes/resolvedNodes above -- fulltextSearchNodes over the raw
+	// question TEXT. A cohort question that names no member by label/alias
+	// ("which teams are struggling") cannot lexically match anything, so
+	// the cohort starved even when Shape was correctly interpreted as
+	// discovered_cohort/explicit_cohort and authorization would otherwise
+	// allow it. CHAOS-4348's chaos4348ExactNameCandidates is the
+	// kind-exhaustive, term-free fetch that already exists for exactly
+	// this problem on the single-subject path (graphrank.applyExactNameArm)
+	// -- this wires the SAME fetch into the cohort path, scoped to cohort
+	// requests only (never touches resolvedNodes/orderedResolved/Paths/
+	// unbounded-validity accounting above, which stay fulltext+hop-walk
+	// only, unchanged for every non-cohort investigation). The truncation
+	// signal is discarded on the same documented basis fulltextSearchNodes'
+	// own call above already established: DiscoverContext has no
+	// auto-commit decision here for it to protect.
+	cohortNodes := resolvedNodes
+	if request.Interpretation.Shape == contextfabric.ShapeDiscoveredCohort || request.Interpretation.Shape == contextfabric.ShapeExplicitCohort {
+		exactNameNodes, _, exactNameErr := a.chaos4348ExactNameCandidates(ctx, key, principal.OrgID, temporal)
+		if exactNameErr != nil {
+			// CHAOS-4077: same never-projected-graph degrade-gracefully
+			// discipline as the hopWalk/fulltextSearchNodes error sites
+			// above.
+			return contextfabric.GraphContext{}, graphNotProjectedError(exactNameErr)
+		}
+		cohortNodes = append(append([]graphrank.CandidateNode(nil), resolvedNodes...), exactNameNodes...)
+	}
+	cohort, cohortAuthzDropped := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
 	factRequirements := admission.FactRequirements
 	if cohort != nil {
 		factRequirements = graphrank.MergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
