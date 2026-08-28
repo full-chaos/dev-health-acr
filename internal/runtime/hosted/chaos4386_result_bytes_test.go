@@ -233,6 +233,16 @@ func TestChaos4386NTurnMeasuresLastGoodResultNotZeroValueOnLaterTurnError(t *tes
 	if res.EstTokens != wantTokens {
 		t.Errorf("EstTokens = %d, want %d", res.EstTokens, wantTokens)
 	}
+	// TerminalStatus/ClaimedFactsCount/TerminalReason (codex review round
+	// 2, P2, confirmed): must stay at the zero value here too -- turn1
+	// (clarification_required) is merely INTERMEDIATE once turn 2 itself
+	// fails; stamping turn1's own status as this case's "terminal" state
+	// would misreport an intermediate response as terminal while
+	// ArmInvalidReason simultaneously (and correctly) records the later
+	// failure.
+	if res.TerminalStatus != "" || res.ClaimedFactsCount != 0 || res.TerminalReason != "" {
+		t.Errorf("TerminalStatus/ClaimedFactsCount/TerminalReason = %q/%d/%q, want empty/0/empty -- an intermediate (non-final) result must not be labeled terminal", res.TerminalStatus, res.ClaimedFactsCount, res.TerminalReason)
+	}
 }
 
 // chaos4386ScriptedInvestigator returns one scripted result per call, in

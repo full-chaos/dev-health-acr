@@ -12,6 +12,7 @@ canonical_facts_count
 census_complete
 census_count
 census_ran
+claimed_facts_count
 commit_gate
 committed_count
 committed_subjects
@@ -59,8 +60,10 @@ pair_retried
 pair_retry_first_arm_invalid_error_type
 pair_retry_first_arm_invalid_reason
 pair_retry_first_arm_invalid_stage
+positive_arm_never_attempted
 result_bytes
 reused
+rows_count
 search_truncated
 shadow_kind_insensitivity_evaluated
 shadow_kind_insensitivity_mode
@@ -70,6 +73,8 @@ synthesis_status_override_fired
 synthesis_status_override_from
 synthesis_status_override_reason
 synthesis_status_override_to
+terminal_reason
+terminal_status
 tied_statistical_top
 tier_routed_correctly
 trace_events

@@ -220,3 +220,90 @@ func (m *chaos4386MeasuringInvestigator) snapshot() []int64 {
 	copy(out, m.values)
 	return out
 }
+
+// --- answer-rate fields (CHAOS-4386 scope-add, team-lead ruling 2026-08-28
+// 04:30 PDT): the v39/v40 report carried no per-case terminal answer
+// record, so an answer-rate analysis had to proxy from arm x member
+// structure rows. chaos4386TerminalFields closes that gap the same way
+// chaos4386MeasureResult closes the byte gap: read once, off the SAME
+// final InvestigationResult each site already has in scope, at each of
+// the same measurement sites CHAOS-4386's own ResultBytes/EstTokens stamp.
+
+// chaos4386TerminalReason returns a CLOSED-VOCABULARY class naming WHICH
+// disclosure channel the engine used to explain why result did not reach
+// a final "complete" answer -- NEVER the raw text itself (codex review
+// round 1, P2, confirmed: acr/AGENTS.md's own CANONICAL ARCHITECTURE rule
+// -- "every decision branch... emits corpus-safe, closed-vocabulary
+// telemetry" -- and this repo's own standing "never the question text,
+// never a label/phrasing string" corpus-safety discipline every other
+// field on this row already follows). Interpretation.ClarificationReason
+// in particular can be MODEL-AUTHORED prose; persisting it verbatim into a
+// durable trial artifact would leak arbitrary phrasing into a
+// corpus-adjacent report. Coverage.DegradedReasons/Warnings are
+// engine-authored but still open-ended, dynamically-formatted strings, not
+// a fixed small enum -- the same risk, lower severity.
+//
+// There is no single unified "reason" field on
+// ContextFabricInvestigationResult. For clarification_required, the
+// engine's OWN disclosure channel is SubjectResolution.ClarificationPrompt
+// (internal/contextfabric/unresolved.go's composeSubjectlessTerminal:
+// "if status == InvestigationClarificationRequired && resolution.ClarificationPrompt
+// != \"\" { answer += \" \" + resolution.ClarificationPrompt }") -- the
+// ordinary ambiguous-candidate path populates THIS field, not
+// Interpretation.ClarificationReason (codex review round 4/confirmation
+// pass, P2, confirmed: that field belongs to the INTERPRETATION step and
+// can legitimately stay empty on a normal clarification_required result,
+// which made the original check misclassify the common case as
+// "undisclosed"). Interpretation.ClarificationReason is checked too, as a
+// secondary, independent channel, so a future/alternate path that
+// populates ONLY that field is still classified correctly. Every other
+// non-complete status (partial/degraded/no_match) carries its
+// explanation, when the engine gave one, in Coverage.DegradedReasons,
+// Limitations, or, failing those, Warnings -- Limitations specifically
+// (codex confirmation pass 3, P2, confirmed) is where a normal production
+// no_match (an empty subject pool, a window/structure veto) puts its
+// explanation, while DegradedReasons/Warnings both stay empty on that
+// path; without checking it, the common no_match case classified as
+// "undisclosed" despite a real, disclosed reason.
+func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult) string {
+	switch result.Status {
+	case contractsv1.ContextFabricInvestigationComplete:
+		return ""
+	case contractsv1.ContextFabricInvestigationClarificationRequired:
+		if result.SubjectResolution.ClarificationPrompt != "" || result.Interpretation.ClarificationReason != "" {
+			return "clarification_reason_disclosed"
+		}
+		return "undisclosed"
+	default:
+		if len(result.Coverage.DegradedReasons) > 0 {
+			return "degraded_reason_disclosed"
+		}
+		if len(result.Limitations) > 0 {
+			return "limitation_disclosed"
+		}
+		if len(result.Warnings) > 0 {
+			return "warning_disclosed"
+		}
+		return "undisclosed"
+	}
+}
+
+// chaos4386TerminalFields returns the per-case terminal-answer fields:
+// terminalStatus is the real ContextFabricInvestigationStatus wire
+// literal (never the "error:<class>" strings some pre-existing fields on
+// this row, e.g. Turn2Status, carry on a failed call); claimedFactsCount
+// is the literal length of result.ClaimedFacts -- deliberately NOT the
+// same thing as this row's own pre-existing CanonicalFactsCount field
+// (twoTurnCanonicalFactsCount counts distinct canonical_fact:* COVERAGE
+// SOURCES the synthesis step could have cited, not the claimed-fact array
+// length); rowsCount sums every claimed fact's own Rows table length
+// (mirrors nTurnRowsCount's identical logic, kept as its own copy here
+// rather than an import so this shared helper has no dependency on the
+// N-turn file); terminalReason is chaos4386TerminalReason's own value.
+func chaos4386TerminalFields(result contractsv1.ContextFabricInvestigationResult) (terminalStatus string, claimedFactsCount, rowsCount int, terminalReason string) {
+	rows := 0
+	for _, fact := range result.ClaimedFacts {
+		rows += len(fact.Rows)
+	}
+	return string(result.Status), len(result.ClaimedFacts), rows, chaos4386TerminalReason(result)
+}

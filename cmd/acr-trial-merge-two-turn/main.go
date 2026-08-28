@@ -337,7 +337,15 @@ import (
 // mergeReports below from the merged Results, never summed -- the SAME
 // "never trust a per-shard aggregate" discipline TimingSummary already
 // follows, via this file's own mirror of chaos4386ResultByteStats.
-const expectedSchemaVersion = "40"
+//
+// expectedSchemaVersion "41" (CHAOS-4386 answer-rate follow-up, team-lead
+// scope-add ruling 2026-08-28 04:30 PDT): twoTurnCaseResult gained
+// TerminalStatus/ClaimedFactsCount/RowsCount/TerminalReason, and
+// twoTurnReport gained AnswerRate -- see the producer's own
+// reportSchemaVersion "41" doc comment. AnswerRate is RECOMPUTED in
+// mergeReports below from the merged Results, never summed or trusted
+// from any one shard, via this file's own mirror of chaos4386TwoTurnAnswerRate.
+const expectedSchemaVersion = "41"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -674,6 +682,27 @@ type twoTurnCaseResult struct {
 	// recomputed -- see mergeReports).
 	ResultBytes int64 `json:"result_bytes"`
 	EstTokens   int64 `json:"est_tokens"`
+	// TerminalStatus/ClaimedFactsCount/RowsCount/TerminalReason (CHAOS-4386
+	// answer-rate follow-up, schema v41) mirror twoTurnCaseResult's
+	// identically-named fields byte-for-byte -- see the producer's own
+	// doc comment. Purely additive passthrough: Results concatenates
+	// verbatim across shards, so no merge arithmetic changes for this
+	// block itself (AnswerRate itself IS recomputed -- see mergeReports).
+	TerminalStatus    string `json:"terminal_status,omitempty"`
+	ClaimedFactsCount int    `json:"claimed_facts_count"`
+	RowsCount         int    `json:"rows_count"`
+	TerminalReason    string `json:"terminal_reason,omitempty"`
+	// PositiveArmNeverAttempted (CHAOS-4386 answer-rate follow-up, codex
+	// review confirmation pass 2, schema v41) mirrors twoTurnCaseResult's
+	// identically-named field byte-for-byte -- see the producer's own doc
+	// comment. Purely additive passthrough (Results concatenates
+	// verbatim); this tool needs no equivalent exclusion of its own --
+	// mergeReports UNIONS each shard's own already-correct
+	// Provenance.Sharding.CaseIndices (see its own "CaseIndices UNIONS"
+	// comment below) rather than re-deriving coverage from raw Results,
+	// so the producer's own exclusion (twoTurnCaseIndicesFromResults) is
+	// the only place this invariant needs enforcing.
+	PositiveArmNeverAttempted bool `json:"positive_arm_never_attempted,omitempty"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's
@@ -847,6 +876,34 @@ type twoTurnReport struct {
 	// exactly the bug this field exists to prevent from reappearing at
 	// the merge step.
 	ResultByteSamples []int64 `json:"result_byte_samples,omitempty"`
+	// AnswerRate (CHAOS-4386 answer-rate follow-up, schema v41) mirrors
+	// twoTurnReport's identically-named field -- see the producer's own
+	// doc comment. RECOMPUTED from the merged Results in mergeReports via
+	// this file's own mirror of chaos4386TwoTurnAnswerRate, never trusted
+	// from any one shard or summed.
+	AnswerRate float64 `json:"answer_rate"`
+}
+
+// chaos4386TwoTurnAnswerRate mirrors chaos3742_two_turn_confirmation_test.go's
+// identically-named function byte-for-byte -- this tool cannot import that
+// package-internal test file (the same reason chaos4386ResultByteStats/
+// summarizeTwoTurnTiming are duplicated here rather than shared), so this
+// is a hand-maintained mirror like everything else in this file.
+func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
+	answerable, answered := 0, 0
+	for _, res := range results {
+		if res.Arm != "positive" || res.ExpectedID == "" {
+			continue
+		}
+		answerable++
+		if res.TerminalStatus == "complete" && res.ClaimedFactsCount >= 1 {
+			answered++
+		}
+	}
+	if answerable == 0 {
+		return 0
+	}
+	return float64(answered) / float64(answerable)
 }
 
 // chaos4386LegacyResponseByteCap mirrors
@@ -1292,6 +1349,11 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 	merged.MaxResultBytes, merged.P50ResultBytes, merged.P99ResultBytes,
 		merged.OverMaxSerializedBytesCount, merged.OverLegacy16KCount =
 		chaos4386ResultByteStats(merged.ResultByteSamples, merged.MaxSerializedBytesConfigured)
+
+	// CHAOS-4386 answer-rate follow-up: recomputed from the MERGED
+	// Results, never trusted from any one shard or summed -- same
+	// discipline as the byte stats immediately above.
+	merged.AnswerRate = chaos4386TwoTurnAnswerRate(merged.Results)
 
 	merged.ApplicableMembers = make([]string, 0, len(applicableSeen))
 	for m := range applicableSeen {

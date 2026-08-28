@@ -3387,10 +3387,23 @@ func twoTurnInnermostErrorType(err error) string {
 // It is the same property the merged artifact depends on: the union of
 // these sets is the run's own statement of what it covered, and a reader
 // checks that union against the annex to prove nothing was dropped.
+//
+// PositiveArmNeverAttempted rows are excluded (CHAOS-4386 answer-rate
+// follow-up, codex review confirmation pass 2, P2, confirmed):
+// chaos4386PositiveArmNeverAttemptedRow's turn-1-error branch adds a row
+// for a case whose positive arm never even got a chance to run, solely so
+// chaos4386TwoTurnAnswerRate's own denominator scan can see it -- letting
+// that row ALSO satisfy "a row exists if and only if an arm ran for that
+// case" above would let this shard's coverage claim (and the merged
+// artifact's own union) report a case as covered when the shard never
+// actually reached it.
 func twoTurnCaseIndicesFromResults(results []twoTurnCaseResult) []int {
 	seen := make(map[int]struct{}, len(results))
 	indices := make([]int, 0, len(results))
 	for _, r := range results {
+		if r.PositiveArmNeverAttempted {
+			continue
+		}
 		if _, exists := seen[r.Index]; exists {
 			continue
 		}
@@ -4534,6 +4547,36 @@ type twoTurnCaseResult struct {
 	// result.
 	ResultBytes int64 `json:"result_bytes"`
 	EstTokens   int64 `json:"est_tokens"`
+	// TerminalStatus/ClaimedFactsCount/RowsCount/TerminalReason (CHAOS-4386
+	// answer-rate follow-up, team-lead scope-add ruling 2026-08-28 04:30
+	// PDT, schema v41) are this row's own terminal-answer record -- see
+	// chaos4386TerminalFields' own doc comment (chaos4386_result_bytes_helpers_test.go)
+	// for exactly what each field reads and why TerminalStatus/ClaimedFactsCount
+	// are NOT the same thing as this row's own pre-existing Turn2Status/
+	// CanonicalFactsCount fields. Same zero-on-absent convention as
+	// ResultBytes/EstTokens: populated on every row that reached a real
+	// Investigate() result, left at the zero value on an OfferMiss/
+	// ArmInvalid row.
+	TerminalStatus    string `json:"terminal_status,omitempty"`
+	ClaimedFactsCount int    `json:"claimed_facts_count"`
+	RowsCount         int    `json:"rows_count"`
+	TerminalReason    string `json:"terminal_reason,omitempty"`
+	// PositiveArmNeverAttempted (CHAOS-4386 answer-rate follow-up, codex
+	// review confirmation pass 2, P2, confirmed) is true ONLY for the
+	// synthetic row chaos4386PositiveArmNeverAttemptedRow's turn-1-error
+	// branch produces -- a case whose positive arm never even got a
+	// chance to run, added SOLELY so chaos4386TwoTurnAnswerRate's
+	// denominator scan can see it (own doc comment). Explicit, rather
+	// than inferred from an incidentally-empty field (e.g. Turn1Status):
+	// twoTurnCaseIndicesFromResults' own doc comment states "a row exists
+	// if and only if an arm ran for that case" as a load-bearing
+	// invariant (CHAOS-4100's own sharding-coverage derivation,
+	// provenance.sharding.case_indices and the merged artifact's own
+	// coverage union depend on it) -- this row structurally violates that
+	// invariant (turn 1 itself failed, nothing ran), so
+	// twoTurnCaseIndicesFromResults excludes any row with this set,
+	// keeping that invariant true for every OTHER row unchanged.
+	PositiveArmNeverAttempted bool `json:"positive_arm_never_attempted,omitempty"`
 }
 
 // twoTurnCaseResultIsAnomalous (CHAOS-4135) reports whether res trips one of
@@ -4676,7 +4719,18 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // OverLegacy16KCount are RECOMPUTED there from the merged Results, never
 // summed, the same "never trust a per-shard aggregate" discipline
 // TimingSummary/AntiVacuityValid already follow.
-const reportSchemaVersion = "40"
+//
+// "41" (CHAOS-4386 answer-rate follow-up, team-lead scope-add ruling
+// 2026-08-28 04:30 PDT): the v39/v40 report carried no per-case terminal
+// answer record, so an answer-rate analysis had to proxy from arm x
+// member structure rows. twoTurnCaseResult gains TerminalStatus/
+// ClaimedFactsCount/RowsCount/TerminalReason (own doc comment); this
+// report gains AnswerRate (own doc comment). Purely additive; the merge
+// tool's own mirror gained the matching per-row fields (concatenate
+// verbatim, no arithmetic) and AnswerRate is RECOMPUTED there from the
+// merged Results, never trusted from any one shard, same discipline as
+// v40's own MaxResultBytes/etc.
+const reportSchemaVersion = "41"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5802,6 +5856,21 @@ type twoTurnReport struct {
 	// mirroring TimingSummary's own "never trust a per-shard aggregate"
 	// discipline exactly (see mergeReports).
 	ResultByteSamples []int64 `json:"result_byte_samples,omitempty"`
+	// AnswerRate (CHAOS-4386 answer-rate follow-up, team-lead scope-add
+	// ruling 2026-08-28 04:30 PDT, schema v41) is
+	// (cases with terminal_status=complete AND claimed_facts_count>=1) /
+	// (cases whose oracle expects an answer), computed ONLY over Arm==
+	// "positive" rows -- the one arm shaped like the actual end-to-end
+	// user flow (ask, then confirm); the inferred_tier/confirmed_wrong
+	// arms are deliberate adversarial-hint probes and the mutation arm is
+	// an explicit non-vacuity probe, neither answers "the user's real
+	// question" the way this rate means to measure. "Oracle expects an
+	// answer" reads ExpectedID != "" on that same row (CHAOS-4086's own
+	// diagnosis block, populated on every arm) -- the SAME "a real
+	// expected answer" gate twoTurnPositiveFalseNoMatch already uses.
+	// Recomputed at the merge step from the merged Results, never trusted
+	// from any one shard or summed -- see mergeReports.
+	AnswerRate float64 `json:"answer_rate"`
 }
 
 // foldConfirmedKindVectorCensus is the single aggregation point for the
@@ -7286,6 +7355,17 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 	if !found {
 		res.OfferMiss = true
+		// CHAOS-4386 answer-rate follow-up (codex review confirmation
+		// pass 4, P2, confirmed): turn1 IS this row's real terminal
+		// response here -- it disclosed something, just not an offer
+		// matching THIS member -- the SAME "turn1 is the real terminal
+		// result" treatment the outer loop's disclosure-absent branch
+		// already gives chaos4386PositiveArmNeverAttemptedRow. Without
+		// this, an ordinary, oracle-eligible offer-miss row serialized
+		// with every terminal field at zero despite a real result
+		// existing to measure.
+		res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn1)
+		res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn1)
 		return res
 	}
 	req := twoTurnRequest(index, tc, "positive")
@@ -7352,6 +7432,7 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	// CHAOS-4386: measured off turn2, this arm's own final result -- see
 	// twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn2)
+	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn2)
 	return res
 }
 
@@ -7440,6 +7521,99 @@ func TestCHAOS4314_TwoTurnWindowExpandAccepted_RejectsStaleSupersededDisposition
 // and still failed to convert it.
 func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabricInvestigationStatus) bool {
 	return expectID != "" && status == contractsv1.ContextFabricInvestigationNoMatch
+}
+
+// chaos4386PositiveArmNeverAttemptedRow builds the synthetic row the main
+// replay loop appends when the positive arm never even gets attempted for
+// an otherwise oracle-eligible case (turn 1 itself errored, or turn 1
+// produced no structure/window disclosure) -- codex review round 1 (P1,
+// confirmed): without SOME row, such a case is entirely invisible to
+// chaos4386TwoTurnAnswerRate's scan of report.Results, not merely
+// miscounted. Mirrors runTwoTurnPositiveArm's own error-path row shape
+// exactly (via the SAME twoTurnStampOutcome/twoTurnStampArmFailure
+// helpers that function uses), so it reads identically to a row that arm
+// function would have produced had it ever been called. err may be nil
+// (the disclosure-absent case is not itself an error).
+//
+// turn1 is nil for a genuine turn-1 FAILURE (no real result exists to
+// stamp anything from -- every terminal field stays at its zero value).
+// turn1 is non-nil for the disclosure-absent branch: codex review round 2
+// (P1, confirmed) found that branch's ORIGINAL always-zero terminal
+// fields silently miscounted a case that resolved DIRECTLY on turn 1 (no
+// confirmation needed, hence no disclosure) as unanswered -- turn 1 IS
+// this row's real terminal result in that branch (nothing else was ever
+// going to run), so its own TerminalStatus/ClaimedFactsCount/RowsCount/
+// TerminalReason are stamped from it via chaos4386TerminalFields, exactly
+// as a normal successful row would be.
+func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCase, turn1 *contractsv1.ContextFabricInvestigationResult, reason string, err error) twoTurnCaseResult {
+	row := twoTurnCaseResult{Index: index, Member: member, Arm: string(twoTurnArmPositive)}
+	if turn1 != nil {
+		row.Turn1Status = string(turn1.Status)
+		row.TerminalStatus, row.ClaimedFactsCount, row.RowsCount, row.TerminalReason = chaos4386TerminalFields(*turn1)
+		// ResultBytes/EstTokens (codex review round 3, P2, confirmed):
+		// this row's own terminal fields above ARE real (turn1 IS the
+		// terminal result here), so its size must be measured too -- a
+		// row claiming a real "complete" status/claimed facts while
+		// reporting 0 bytes is internally inconsistent, and the run-wide
+		// ResultByteSamples population never repairs a per-row value.
+		row.ResultBytes, row.EstTokens = chaos4386MeasureResult(*turn1)
+	} else {
+		// PositiveArmNeverAttempted (codex review confirmation pass 2, P2,
+		// confirmed): turn1 itself failed -- nothing ran for this case at
+		// all -- so this row must not count as coverage. See the field's
+		// own doc comment (twoTurnCaseResult) and twoTurnCaseIndicesFromResults'
+		// own exclusion. Only this branch sets it: the disclosure-absent
+		// branch (turn1 != nil) genuinely reached and ran turn 1, so it
+		// stays real coverage.
+		row.PositiveArmNeverAttempted = true
+	}
+	twoTurnStampOutcome(&row, tc, nil)
+	twoTurnStampArmFailure(&row, reason, err)
+	return row
+}
+
+// chaos4386NoDisclosureRow builds the exact row the main replay loop's
+// disclosure-absent branch appends -- CHAOS-4386 red-on-parent audit
+// follow-up: extracted so this SAME production call path (not a
+// hand-copied re-composition of it) is what the regression test below
+// exercises. turn1 IS this row's real terminal result (see
+// chaos4386PositiveArmNeverAttemptedRow's own doc comment); synthesisOverride
+// and turn1Facts are the SAME two captures the real positive-arm success
+// path folds in right after runTwoTurnPositiveArm returns (codex review
+// confirmation pass 5, P2, confirmed -- the direct-append original bypassed
+// both, undercounting SynthesisStatusOverrideUncommittedCount/
+// OracleIDSchemeMismatchCount).
+func chaos4386NoDisclosureRow(index int, member string, tc trialCase, turn1 contractsv1.ContextFabricInvestigationResult, synthesisOverride *contextfabric.SynthesisStatusOverrideOutcome, turn1Facts twoTurnTurn1Facts) twoTurnCaseResult {
+	row := chaos4386PositiveArmNeverAttemptedRow(
+		index, member, tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil)
+	twoTurnFoldSynthesisStatusOverride(&row, synthesisOverride)
+	twoTurnStampTurn1Facts(&row, turn1Facts)
+	return row
+}
+
+// chaos4386TwoTurnAnswerRate computes twoTurnReport.AnswerRate over
+// results -- see that field's own doc comment for the exact denominator/
+// numerator definition. Pure function (same "derived from results, not
+// accumulated in the loop" pattern as summarizeTwoTurnTiming) so both the
+// producer and the merge tool's own mirror (cmd/acr-trial-merge-two-turn/main.go)
+// share one definition; the merge tool cannot import this file (same
+// reason it duplicates summarizeTwoTurnTiming/chaos4386ResultByteStats),
+// so this is hand-copied there too.
+func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
+	answerable, answered := 0, 0
+	for _, res := range results {
+		if res.Arm != string(twoTurnArmPositive) || res.ExpectedID == "" {
+			continue
+		}
+		answerable++
+		if res.TerminalStatus == string(contractsv1.ContextFabricInvestigationComplete) && res.ClaimedFactsCount >= 1 {
+			answered++
+		}
+	}
+	if answerable == 0 {
+		return 0
+	}
+	return float64(answered) / float64(answerable)
 }
 
 // twoTurnCanonicalFactsCount (CHAOS-4347, team-lead standing order: telemetry
@@ -8156,6 +8330,7 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	// CHAOS-4386: measured off result, this arm's own final (hinted) call --
 	// see twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
+	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
 	return res
 }
 
@@ -8663,6 +8838,7 @@ func runTwoTurnConfirmedWrongArm(t *testing.T, ctx context.Context, investigator
 	// CHAOS-4386: measured off turn2, this arm's own final result -- see
 	// twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn2)
+	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn2)
 	return res
 }
 
@@ -8839,6 +9015,7 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 		// CHAOS-4386: measured off result, this probe's own final call -- see
 		// twoTurnCaseResult.ResultBytes' own doc comment.
 		res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
+		res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
 		return res
 	}
 
@@ -9577,6 +9754,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if err != nil {
 			t.Logf("case %d: turn 1 error: %v", entry.Index, err)
 			report.Timings = append(report.Timings, caseTiming())
+			// CHAOS-4386 answer-rate follow-up: turn1 itself failed, so
+			// nil -- no real result exists to stamp terminal fields from.
+			// See chaos4386PositiveArmNeverAttemptedRow's own doc comment.
+			report.Results = append(report.Results, chaos4386PositiveArmNeverAttemptedRow(
+				entry.Index, entry.Member, tc, nil, "turn 1 investigate error: "+contextFabricRejectionClass(err), err))
 			continue
 		}
 		report.CasesRun++
@@ -9633,6 +9815,14 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if !disclosurePresent {
 			report.StructureAndWindowDisclosureAbsentCount++
 			report.Timings = append(report.Timings, caseTiming())
+			// CHAOS-4386 answer-rate follow-up: turn1 IS this row's real
+			// terminal result here (codex review round 2, P1, confirmed --
+			// see chaos4386PositiveArmNeverAttemptedRow's own doc comment
+			// for the case-resolved-directly-on-turn-1 bug this closes).
+			// chaos4386NoDisclosureRow folds in turn1SynthesisOverride/
+			// turn1Facts (codex review confirmation pass 5, P2, confirmed)
+			// -- see its own doc comment.
+			report.Results = append(report.Results, chaos4386NoDisclosureRow(entry.Index, entry.Member, tc, turn1, turn1SynthesisOverride, turn1Facts))
 			continue
 		}
 
@@ -9953,6 +10143,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
 		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
 		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)
+
+	// CHAOS-4386 answer-rate follow-up: derived from the rows this shard
+	// actually produced, once, immediately before serialization -- see
+	// AnswerRate's own doc comment.
+	report.AnswerRate = chaos4386TwoTurnAnswerRate(report.Results)
 
 	// CHAOS-4100: coverage recorded from the rows this shard actually
 	// produced, immediately before the artifact is serialized -- see

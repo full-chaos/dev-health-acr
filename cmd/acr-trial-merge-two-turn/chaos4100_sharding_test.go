@@ -452,6 +452,45 @@ func TestChaos4386_MergedResultByteSamplesOrderIsInvariantToShardArgumentOrder(t
 	}
 }
 
+// TestChaos4386_AnswerRateRecomputedFromMergedResults is the CHAOS-4386
+// answer-rate follow-up's own merge regression: AnswerRate must be
+// RECOMPUTED from the merged Results (the union across shards), never
+// trusted from any one shard's own (pre-merge, necessarily partial) value.
+func TestChaos4386_AnswerRateRecomputedFromMergedResults(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	for i := range a.Results {
+		if a.Results[i].Arm != "positive" {
+			continue
+		}
+		a.Results[i].ExpectedID = "project.v2:x"
+		a.Results[i].TerminalStatus = "complete"
+		a.Results[i].ClaimedFactsCount = 1
+	}
+	// This shard's own AnswerRate, if it were trusted directly (never
+	// computed by this test -- mergeReports must derive it), would read
+	// 1.0 (both its own positive rows answered). Deliberately left at the
+	// zero value here to prove the merge step does not just inherit it.
+
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	for i := range b.Results {
+		if b.Results[i].Arm != "positive" {
+			continue
+		}
+		b.Results[i].ExpectedID = "project.v2:y"
+		// Left as the zero value (TerminalStatus="", ClaimedFactsCount=0)
+		// -- an eligible but UNANSWERED row.
+	}
+
+	merged := mergeReports([]twoTurnReport{a, b})
+
+	// 4 total positive rows with a real expected answer (2 per shard),
+	// only shard a's 2 are answered: 2/4.
+	want := 0.5
+	if merged.AnswerRate != want {
+		t.Errorf("merged.AnswerRate = %v, want %v (2 of 4 eligible positive-arm rows across BOTH shards are answered)", merged.AnswerRate, want)
+	}
+}
+
 // TestChaos4313_ResponderTransportMustAgreeAcrossShards mirrors
 // TestChaos4135_ResponderModelMustAgreeAcrossShards' own pattern for the
 // SAME reason: ResponderTransport is a launch-level fact -- one transport
