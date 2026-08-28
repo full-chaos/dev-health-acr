@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -142,7 +143,22 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 func (a *App) requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
-		if requestID == "" || len(requestID) > 128 {
+		// CodeQL go/log-injection (CHAOS-4355 response-bound follow-up,
+		// alert #54): reject any caller-supplied header carrying a control
+		// character (CR/LF included) BEFORE it can reach any log line,
+		// rather than relying solely on observability.parseRequestID's
+		// stricter req_+32-hex format check a few lines below to catch it
+		// indirectly. Functionally the two guards agree today (a value
+		// with an embedded control character can never match that strict
+		// format either -- confirmed with a live repro sending
+		// "evil\nFAKE_LOG_LINE=injected", which the pre-existing fallback
+		// already replaced with a clean generated ID), but a scanner
+		// tracing this function alone has no way to see that -- and
+		// neither does a future reader who only reads THIS function. This
+		// makes the guard explicit at the one point untrusted input enters
+		// the request-ID pipeline, per CWE-117's own remediation ("remove
+		// line breaks from user input").
+		if requestID == "" || len(requestID) > 128 || !isSafeRequestIDHeaderValue(requestID) {
 			requestID = a.requestID()
 		}
 		telemetryContext := observability.WithRequestID(r.Context(), requestID)
@@ -155,6 +171,23 @@ func (a *App) requestIDMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(telemetryContext, requestIDContextKey, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isSafeRequestIDHeaderValue rejects any control character (CR/LF
+// included), mirroring internal/limits/policy.go's validIdentifier check
+// for the same class of caller-supplied identifier. A legitimate
+// correlation ID needs no control characters; the request ID this
+// function admits is echoed in the response header, threaded through
+// every downstream log line and audit record via RequestID(ctx), and
+// (CHAOS-4355) now also disclosed in Context Fabric response-budget error
+// details -- it must never be able to forge a log entry (CWE-117).
+func isSafeRequestIDHeaderValue(value string) bool {
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) timeoutMiddleware(next http.Handler) http.Handler {

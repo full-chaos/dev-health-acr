@@ -106,6 +106,31 @@ func TestRequestIDInvalidCallerValueIsReplaced(t *testing.T) {
 	}
 }
 
+// TestRequestIDControlCharacterCallerValueIsReplaced is the CHAOS-4355
+// response-bound follow-up's CodeQL go/log-injection guard (CWE-117,
+// alert #54): a caller-supplied X-Request-ID carrying a newline (or any
+// other control character) must never reach the response header, the
+// request context RequestID(ctx) reads, or -- transitively -- any log
+// line or error-response detail keys on that value. It was already
+// replaced before this test existed (observability.parseRequestID's
+// strict req_+32-hex format check rejects it too), but
+// isSafeRequestIDHeaderValue (app.go) now rejects it explicitly, at the
+// one place untrusted input enters the pipeline, rather than relying on
+// that indirect path alone.
+func TestRequestIDControlCharacterCallerValueIsReplaced(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.Header.Set("X-Request-ID", "evil\nFAKE_LOG_LINE=injected")
+	response := httptest.NewRecorder()
+	testApp(t).Handler().ServeHTTP(response, request)
+	got := response.Header().Get("X-Request-ID")
+	if strings.ContainsAny(got, "\r\n") || strings.Contains(got, "evil") {
+		t.Fatalf("control-character request ID was not replaced: %q", got)
+	}
+	if !strings.HasPrefix(got, "req_") || len(got) != 36 {
+		t.Fatalf("replacement request ID is not canonical: %q", got)
+	}
+}
+
 func TestRequestIDInvalidGeneratedValueIsReplaced(t *testing.T) {
 	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
 		Capabilities: StaticCapabilitiesProvider{Value: contractsv1.Capabilities{SchemaVersion: contractsv1.CapabilitiesSchema}},
