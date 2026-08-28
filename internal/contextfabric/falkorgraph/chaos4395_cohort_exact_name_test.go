@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -352,5 +353,53 @@ func TestDiscoverContextExactNameCohortMembershipIsDeterministic(t *testing.T) {
 	backward := runOnce(true)
 	if forward != backward {
 		t.Fatalf("selected member differs by input order: forward=%q backward=%q -- exact-name cohort membership is not deterministic", forward, backward)
+	}
+}
+
+// TestDiscoverContextCountsUnboundedValidityForExactNameOnlyCohortMembers
+// is codex round-2 finding P1: on a historical axis, countUnboundedValidity
+// used to receive only resolvedNodes, never the exact-name additions
+// merged into cohortNodes -- an exact-name-only cohort (nothing from
+// fulltext/hopWalk) built on a historical question could return members
+// carrying no validity window without ever disclosing that in
+// Coverage.Sources' "context-fabric:graph-validity-windows" entry.
+func TestDiscoverContextCountsUnboundedValidityForExactNameOnlyCohortMembers(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			// Nothing from fulltext -- the cohort rests ENTIRELY on the
+			// exact-name arm.
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			r := fakeSubjectNodeRow("team", "team_unbounded", "Unbounded")
+			r["n"].(*node).Properties["authorization_repositories"] = "*"
+			// Deliberately no propValidFromNs/propValidToNs -- hasUnboundedValidity's
+			// exact "no window at all" case.
+			return []row{r}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+	asOf := time.Now().UTC()
+	request.Interpretation.TimeContext = contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf}
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 {
+		t.Fatalf("Cohort = %#v, want exactly 1 member sourced entirely from the exact-name arm", result.Cohort)
+	}
+	var disclosed bool
+	for _, source := range result.Coverage.Sources {
+		if source.Source == "context-fabric:graph-validity-windows" {
+			disclosed = true
+		}
+	}
+	if !disclosed {
+		t.Error("an exact-name-only cohort member carrying no validity window was admitted but never disclosed in Coverage.Sources")
 	}
 }
