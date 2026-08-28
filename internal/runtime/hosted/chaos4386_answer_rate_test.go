@@ -7,9 +7,11 @@ package hosted_test
 // unconditionally under `make verify`.
 
 import (
+	"context"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func chaos4386ResultWithStatus(status contractsv1.ContextFabricInvestigationStatus) contractsv1.ContextFabricInvestigationResult {
@@ -298,4 +300,46 @@ func TestChaos4386NTurnAnswerRate(t *testing.T) {
 			t.Errorf("chaos4386NTurnAnswerRate = %v, want %v", got, want)
 		}
 	})
+}
+
+// TestChaos4386RunTwoTurnPositiveArmOfferMissStampsTerminalFieldsFromTurn1
+// is the codex review confirmation pass 4 (P2, confirmed) regression:
+// runTwoTurnPositiveArm's own OfferMiss early return (turn 1 disclosed
+// something, just not an offer matching THIS member) must stamp terminal
+// fields from turn1 -- the SAME "turn1 is the real terminal result"
+// treatment the disclosure-absent branch already gets -- rather than
+// leaving them at zero despite a real result existing to measure.
+func TestChaos4386RunTwoTurnPositiveArmOfferMissStampsTerminalFieldsFromTurn1(t *testing.T) {
+	subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project.v2:fixture:chaos4386offermiss"}
+	turn1 := contractsv1.ContextFabricInvestigationResult{
+		ResultID: "result_chaos4386_offermiss_t1", Status: contractsv1.ContextFabricInvestigationDegraded,
+		Coverage: contractsv1.ContextFabricCoverage{DegradedReasons: []string{"source_unavailable"}},
+		ClaimedFacts: []contractsv1.ContextFabricClaimedFact{
+			{ClaimID: "c1", Kind: contractsv1.ContextFabricFactInvestment, Subject: subject},
+		},
+		// StructureNeeds is nil -- selectOracleOffer(member="expected_kind")
+		// returns found=false unconditionally, driving the OfferMiss path
+		// this test exists to exercise, without needing a live investigator.
+	}
+	wantBytes, wantTokens := chaos4386MeasureResult(turn1)
+	if wantBytes == 0 {
+		t.Fatal("fixture turn1 measured 0 bytes -- fixture cannot distinguish the bug from the fix")
+	}
+
+	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "project", ExpectID: subject.CanonicalID}
+	entry := twoTurnOracleEntry{Index: 44, Member: string(contractsv1.ContextFabricStructureNeedExpectedKind), PositiveKind: "project"}
+	res := runTwoTurnPositiveArm(t, context.Background(), nil, storage.Principal{}, 44, tc, entry, turn1, 0, nil, "")
+
+	if !res.OfferMiss {
+		t.Fatal("OfferMiss is false -- fixture did not reach the offer-miss path this test exists to exercise")
+	}
+	if res.TerminalStatus != "degraded" || res.ClaimedFactsCount != 1 {
+		t.Errorf("TerminalStatus/ClaimedFactsCount = %q/%d, want %q/1 -- turn1 IS this row's real terminal result", res.TerminalStatus, res.ClaimedFactsCount, "degraded")
+	}
+	if res.TerminalReason != "degraded_reason_disclosed" {
+		t.Errorf("TerminalReason = %q, want %q", res.TerminalReason, "degraded_reason_disclosed")
+	}
+	if res.ResultBytes != wantBytes || res.EstTokens != wantTokens {
+		t.Errorf("ResultBytes/EstTokens = %d/%d, want %d/%d -- turn1's own real terminal result must be measured, not left at 0", res.ResultBytes, res.EstTokens, wantBytes, wantTokens)
+	}
 }

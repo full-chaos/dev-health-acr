@@ -7355,6 +7355,17 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	receiptID, found := selectOracleOffer(turn1, entry.Member, entry.positiveQuery())
 	if !found {
 		res.OfferMiss = true
+		// CHAOS-4386 answer-rate follow-up (codex review confirmation
+		// pass 4, P2, confirmed): turn1 IS this row's real terminal
+		// response here -- it disclosed something, just not an offer
+		// matching THIS member -- the SAME "turn1 is the real terminal
+		// result" treatment the outer loop's disclosure-absent branch
+		// already gives chaos4386PositiveArmNeverAttemptedRow. Without
+		// this, an ordinary, oracle-eligible offer-miss row serialized
+		// with every terminal field at zero despite a real result
+		// existing to measure.
+		res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn1)
+		res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn1)
 		return res
 	}
 	req := twoTurnRequest(index, tc, "positive")
