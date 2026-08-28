@@ -362,6 +362,96 @@ func TestChaos4186_DataPlaneMustAgreeAcrossShards(t *testing.T) {
 	}
 }
 
+// TestChaos4386_MaxSerializedBytesConfiguredMustAgreeAcrossShards mirrors
+// TestChaos4135_ResponderModelMustAgreeAcrossShards' own pattern for the
+// SAME reason (codex review round 1, P2, confirmed): MaxSerializedBytesConfigured
+// is a launch-level fact -- one effective ACR_MAX_SERIALIZED_BYTES ceiling
+// governs a whole run -- so two shards disagreeing about it means artifacts
+// from servers configured differently are being merged into one, which
+// mergeReports' own "MaxSerializedBytesConfigured: first.MaxSerializedBytesConfigured"
+// (inheriting only the FIRST shard's value) would otherwise silently carry
+// forward -- misclassifying every OTHER shard's rows' over_max_serialized_bytes_count
+// against a cap they were never actually measured under.
+func TestChaos4386_MaxSerializedBytesConfiguredMustAgreeAcrossShards(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.MaxSerializedBytesConfigured = 262144
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.MaxSerializedBytesConfigured = 131072
+	dir, paths := writeShards(t, []twoTurnReport{a, b})
+	var stdout bytes.Buffer
+	err := run(filepath.Join(dir, "merged.json"), paths, &stdout)
+	if err == nil {
+		t.Fatal("merging shards that disagree about max_serialized_bytes_configured must be refused")
+	}
+	if !strings.Contains(err.Error(), "max_serialized_bytes_configured") {
+		t.Errorf("error = %q, want it to name max_serialized_bytes_configured", err.Error())
+	}
+}
+
+// TestChaos4386_MergeRecomputesFromResultByteSamplesNotJustRowFinals is the
+// codex review round 3 (P1, confirmed) regression: a shard's own
+// ResultByteSamples can contain a call that never became any row's own
+// final ResultBytes (a setup call, a baseline leg, an early turn) --
+// mergeReports must recompute the merged distribution from the
+// CONCATENATED ResultByteSamples, never from merged.Results[].ResultBytes
+// alone, or an oversized intermediate call from one shard would silently
+// disappear from the merged artifact.
+func TestChaos4386_MergeRecomputesFromResultByteSamplesNotJustRowFinals(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.MaxSerializedBytesConfigured = 262144
+	// Every ROW's own final ResultBytes is small -- comfortably under
+	// budget -- but this shard's raw call population also includes one
+	// oversized (300000-byte) intermediate call that was never any row's
+	// own final result.
+	for i := range a.Results {
+		a.Results[i].ResultBytes = 5000
+	}
+	a.ResultByteSamples = []int64{5000, 5000, 300000}
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.MaxSerializedBytesConfigured = 262144
+	for i := range b.Results {
+		b.Results[i].ResultBytes = 6000
+	}
+	b.ResultByteSamples = []int64{6000, 6000}
+
+	merged := mergeReports([]twoTurnReport{a, b})
+
+	if merged.MaxResultBytes != 300000 {
+		t.Errorf("merged.MaxResultBytes = %d, want 300000 -- the oversized intermediate call from shard 0 must survive the merge even though no ROW's own final result carries it", merged.MaxResultBytes)
+	}
+	if merged.OverMaxSerializedBytesCount != 1 {
+		t.Errorf("merged.OverMaxSerializedBytesCount = %d, want 1 -- recomputing from merged.Results[].ResultBytes alone (every row is 5000-6000, all under budget) would silently report 0 and hide the oversized intermediate call", merged.OverMaxSerializedBytesCount)
+	}
+	wantSamples := []int64{5000, 5000, 6000, 6000, 300000}
+	if !reflect.DeepEqual(merged.ResultByteSamples, wantSamples) {
+		t.Errorf("merged.ResultByteSamples = %v, want %v sorted -- codex review round 4 (P2, confirmed): unsorted concatenation makes the persisted artifact depend on shard argument order even though the population and every derived statistic are identical either way", merged.ResultByteSamples, wantSamples)
+	}
+}
+
+// TestChaos4386_MergedResultByteSamplesOrderIsInvariantToShardArgumentOrder
+// is the codex review round 4 (P2, confirmed) regression directly: merging
+// the SAME two shards in the OPPOSITE argument order must produce a
+// byte-identical (not merely statistically-equal) ResultByteSamples slice
+// -- the same sharding-invariance goal TestChaos4100_LaunchWideShardingFieldsMustAgreeAcrossShards's
+// own package comment states for merged.Results.
+func TestChaos4386_MergedResultByteSamplesOrderIsInvariantToShardArgumentOrder(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.ResultByteSamples = []int64{300000, 5000, 90000}
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.ResultByteSamples = []int64{6000, 400000}
+
+	forward := mergeReports([]twoTurnReport{a, b})
+	reversed := mergeReports([]twoTurnReport{b, a})
+
+	if !reflect.DeepEqual(forward.ResultByteSamples, reversed.ResultByteSamples) {
+		t.Fatalf("ResultByteSamples differs by shard argument order: forward=%v reversed=%v", forward.ResultByteSamples, reversed.ResultByteSamples)
+	}
+	want := []int64{5000, 6000, 90000, 300000, 400000}
+	if !reflect.DeepEqual(forward.ResultByteSamples, want) {
+		t.Errorf("ResultByteSamples = %v, want %v (sorted ascending)", forward.ResultByteSamples, want)
+	}
+}
+
 // TestChaos4313_ResponderTransportMustAgreeAcrossShards mirrors
 // TestChaos4135_ResponderModelMustAgreeAcrossShards' own pattern for the
 // SAME reason: ResponderTransport is a launch-level fact -- one transport

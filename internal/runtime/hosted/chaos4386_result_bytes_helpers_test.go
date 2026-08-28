@@ -1,0 +1,222 @@
+package hosted_test
+
+// CHAOS-4386: the trial harness (chaos3742_two_turn_confirmation_test.go,
+// chaos4360_nturn_confirmation_test.go) calls investigator.Investigate() in
+// process and never traverses the HTTP route's own
+// limits.Claim.CompleteWithBudget gate (internal/api/context_fabric_routes.go)
+// -- see this file's own PR and cf-measurement-trials.md's Run I entry
+// (2026-08-27) for the finding. Every case this harness ran, across 906
+// real model calls, measured only the responder's raw output_bytes per
+// model completion -- an upstream proxy for, never the assembled
+// InvestigationResult (Rows, evidence, drivers) the route's
+// ACR_MAX_SERIALIZED_BYTES gate actually bounds.
+//
+// chaos4386MeasureResult closes that gap: it serializes a case's own final
+// InvestigationResult with the EXACT SAME encoder the route uses
+// (api.MarshalContextFabricResponse, exported for this reuse -- never a
+// second, independently-drifting json.Marshal call) and derives the same
+// 4-bytes-per-token estimate context_fabric_routes.go itself uses
+// (estimatedTokens := (measuredBytes + 3) / 4).
+
+import (
+	"context"
+	"sort"
+	"sync"
+	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/api"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// chaos4386LegacyResponseByteCap is the retired effective response-size
+// ceiling CHAOS-4355 (acr PR #309) lifted: ACR_MAX_OUTPUT_TOKENS defaulted
+// to 4000, and context_fabric_routes.go's own (bytes+3)/4 estimate made
+// that a ~16,000-byte cap in practice, before the route separately gained
+// its own token-unlimited override budget (see
+// internal/config/config.go's defaultMaxOutputTokens doc comment and
+// internal/api/context_fabric_response_bound_test.go's package doc
+// comment for the full history). Comparing every case's own result_bytes
+// against this retired number is what proves the old, pre-CHAOS-4355 cap
+// would have rejected a shape the harness had never once measured.
+const chaos4386LegacyResponseByteCap = 16_000
+
+// chaos4386DefaultMaxSerializedBytes mirrors internal/config's
+// defaultMaxSerializedBytes (unexported there) -- the production
+// ACR_MAX_SERIALIZED_BYTES default. Used only as a fallback when this
+// harness process never itself calls config.Load() (every live corpus
+// test in this package does, and passes its own cfg.MaxSerializedBytes
+// through instead -- see TestChaos3742TwoTurnConfirmationReplay/
+// TestChaos4360NTurnConfirmationCarry), and by the RED/GREEN pure-logic
+// tests in chaos4386_result_bytes_test.go, which have no config.Config to
+// read at all.
+const chaos4386DefaultMaxSerializedBytes = 262144
+
+// chaos4386RequestMaxSerializedBytes mirrors twoTurnRequest's own literal
+// options.max_serialized_bytes (262144) -- every request this harness
+// builds (two-turn and N-turn both call twoTurnRequest) asks for exactly
+// this ceiling. The HTTP route's effective cap is
+// min(a.config.MaxSerializedBytes, request.Options.MaxSerializedBytes)
+// (context_fabric_routes.go), so on a deployment configured ABOVE this
+// value the request's own literal -- not the server config alone -- is
+// what actually binds; see chaos4386EffectiveMaxSerializedBytes (codex
+// review round 1, P2, confirmed: comparing against cfg.MaxSerializedBytes
+// alone would report a result as under budget when the real route would
+// still 413 it).
+const chaos4386RequestMaxSerializedBytes = 262144
+
+// chaos4386EffectiveMaxSerializedBytes returns the SAME effective ceiling
+// the HTTP route would apply to a request this harness's own twoTurnRequest
+// built -- min(configured, chaos4386RequestMaxSerializedBytes) -- so
+// OverMaxSerializedBytesCount reflects whether the real route would have
+// rejected each result, not merely whether it exceeds the server's own
+// configured value in isolation.
+func chaos4386EffectiveMaxSerializedBytes(configured int64) int64 {
+	if configured < chaos4386RequestMaxSerializedBytes {
+		return configured
+	}
+	return chaos4386RequestMaxSerializedBytes
+}
+
+// chaos4386RequireCompatibleConfig fails the run loudly (codex review
+// round 2, P2, confirmed) rather than silently misreporting when
+// configured (cfg.MaxSerializedBytes) sits BELOW chaos4386RequestMaxSerializedBytes
+// -- config validation permits this (internal/config/config.go accepts
+// values as low as 8192). Under that configuration, twoTurnRequest's own
+// fixed options.max_serialized_bytes=262144 exceeds a.config.MaxSerializedBytes,
+// so the route's request-validation step
+// (request.Options.MaxSerializedBytes > a.config.MaxSerializedBytes) would
+// reject EVERY request this harness sends with a 400 before the response-
+// size gate ever runs at all -- there is no real "does this result fit"
+// behavior left to measure, and chaos4386EffectiveMaxSerializedBytes'
+// returned value would silently misrepresent an unreachable byte-gate
+// verdict as a real one. This harness bypasses HTTP entirely
+// (investigator.Investigate() in-process), so it has no other way to
+// notice that every one of its calls would have 400'd; refusing to run is
+// the only honest option under this configuration.
+func chaos4386RequireCompatibleConfig(t *testing.T, configured int64) {
+	t.Helper()
+	if chaos4386ConfigIncompatible(configured) {
+		t.Fatalf("ACR_MAX_SERIALIZED_BYTES=%d is below this harness's own fixed request option (options.max_serialized_bytes=%d, twoTurnRequest) -- every request this run sends would be rejected 400 invalid_request by the real route before the response-size gate ever ran, so result_bytes measurement would not correspond to real route behavior; raise ACR_MAX_SERIALIZED_BYTES to at least %d to run this class under this configuration", configured, chaos4386RequestMaxSerializedBytes, chaos4386RequestMaxSerializedBytes)
+	}
+}
+
+// chaos4386ConfigIncompatible is chaos4386RequireCompatibleConfig's own
+// condition, extracted as a pure predicate so it has a direct unit-test
+// surface independent of *testing.T's own Fatalf/FailNow machinery (this
+// file's own established precedent -- e.g. twoTurnPositiveFalseNoMatch,
+// twoTurnMutationProbe -- of pulling a guard's condition out for testing).
+func chaos4386ConfigIncompatible(configured int64) bool {
+	return configured < chaos4386RequestMaxSerializedBytes
+}
+
+// chaos4386MeasureResult serializes result with the production route's own
+// encoder and returns (resultBytes, estTokens). A marshal error is not
+// expected for a well-formed contractsv1.ContextFabricInvestigationResult
+// (every field is a plain JSON-tagged value; nothing in the type carries a
+// channel, func, or cyclic pointer) -- if json.Marshal ever does fail here,
+// that is itself a defect in this harness's own fixture/live-result
+// shape, not an over-budget result, so this returns 0 rather than
+// fabricating a byte count a caller could mistake for a real measurement.
+func chaos4386MeasureResult(result contractsv1.ContextFabricInvestigationResult) (resultBytes, estTokens int64) {
+	_, measuredBytes, err := api.MarshalContextFabricResponse(result)
+	if err != nil {
+		return 0, 0
+	}
+	return measuredBytes, (measuredBytes + 3) / 4
+}
+
+// chaos4386ResultByteStats computes CHAOS-4386's run-level result_bytes
+// distribution: max, p50/p99 (rank-by-truncation, no interpolation --
+// summarizeTwoTurnTiming's own WallP50MS precedent), and the count of rows
+// whose measured bytes exceed effectiveMax (the caller's own
+// chaos4386EffectiveMaxSerializedBytes(cfg.MaxSerializedBytes) -- the SAME
+// effective ceiling the HTTP route would apply, never the server's
+// configured value in isolation) and chaos4386LegacyResponseByteCap (the
+// retired 16,000-byte effective cap, see that constant's own doc comment).
+//
+// resultBytes<=0 entries (an OfferMiss/ArmInvalid row this harness never
+// even reached Investigate() far enough to produce a result for) are
+// excluded from every statistic: a 0 there is an absence, not a
+// legitimately tiny result, and letting it into the distribution would
+// understate p50/max for no reason while never itself being "over
+// budget" either way.
+func chaos4386ResultByteStats(resultBytes []int64, effectiveMax int64) (max, p50, p99 int64, overConfiguredMax, overLegacy16K int) {
+	values := make([]int64, 0, len(resultBytes))
+	for _, b := range resultBytes {
+		if b <= 0 {
+			continue
+		}
+		values = append(values, b)
+		if b > max {
+			max = b
+		}
+		if b > effectiveMax {
+			overConfiguredMax++
+		}
+		if b > chaos4386LegacyResponseByteCap {
+			overLegacy16K++
+		}
+	}
+	if len(values) == 0 {
+		return 0, 0, 0, overConfiguredMax, overLegacy16K
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	p50 = values[len(values)/2]
+	p99Index := len(values) * 99 / 100
+	if p99Index >= len(values) {
+		p99Index = len(values) - 1
+	}
+	p99 = values[p99Index]
+	return max, p50, p99, overConfiguredMax, overLegacy16K
+}
+
+// chaos4386MeasuringInvestigator wraps a contextfabric.Investigator and
+// captures EVERY successful call's own measured bytes -- not merely each
+// case row's final result (codex review round 2, P1, confirmed). The HTTP
+// route gates every individual investigation response, not only the last
+// one a multi-turn arm/case happens to end on: a setup call
+// (mintWindowPrecondition), an inferred-tier arm's baseline leg, or an
+// N-turn case's turn 1 could each independently be oversized and 413 in
+// production even when the row's own FINAL result is comfortably small --
+// per-row-final measurement alone would never see that. Both
+// TestChaos3742TwoTurnConfirmationReplay and TestChaos4360NTurnConfirmationCarry
+// wrap their investigator with this BEFORE passing it to any arm/case
+// function, so the run-level result_bytes distribution is built from every
+// call this run actually made, while each row's own ResultBytes/EstTokens
+// field (chaos4386MeasureResult, called directly by the arm/case functions)
+// keeps its existing, separately useful "this row's own final answer"
+// meaning.
+//
+// mu guards values: two-turn's own per-case arms already run purely
+// sequentially within one process (no concurrent Investigate() calls), but
+// a mutex costs nothing here and removes any future refactor's need to
+// re-derive that this type is safe to share.
+type chaos4386MeasuringInvestigator struct {
+	contextfabric.Investigator
+	mu     sync.Mutex
+	values []int64
+}
+
+func (m *chaos4386MeasuringInvestigator) Investigate(ctx context.Context, principal storage.Principal, req contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+	result, err := m.Investigator.Investigate(ctx, principal, req)
+	if err == nil {
+		bytes, _ := chaos4386MeasureResult(result)
+		m.mu.Lock()
+		m.values = append(m.values, bytes)
+		m.mu.Unlock()
+	}
+	return result, err
+}
+
+// snapshot returns every byte measurement captured so far, safe to call
+// once the run's calls are all complete (or, defensively, at any point --
+// the mutex makes a concurrent call harmless even though none is expected).
+func (m *chaos4386MeasuringInvestigator) snapshot() []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int64, len(m.values))
+	copy(out, m.values)
+	return out
+}
