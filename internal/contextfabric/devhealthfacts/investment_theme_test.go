@@ -217,3 +217,46 @@ func TestInvestmentProviderThemeMixQueryErrorReturnsFactReadFailure(t *testing.T
 		t.Fatal("ReadFacts() error = nil, want a failure")
 	}
 }
+
+// TestInvestmentProviderThemeMixMergesOntoExistingLegacyFactNeverShadowed
+// is the codex round-2 RED-first regression guard: a team with BOTH a
+// legacy investment_metrics_daily row (readTeamInvestment) AND canonical
+// theme-mix data must end up with exactly ONE FactInvestment fact carrying
+// BOTH the legacy fields (investment_area) and the canonical fields
+// (theme_feature_delivery) -- never two separate facts. Two separate facts
+// would let synthesis's own evidence-closure check (model_runtime.go's
+// lookupCanonicalFact, first-match by (Kind, Subject)) resolve a claim
+// citing a theme_* field against the WRONG (legacy) fact, which lacks that
+// field, and reject an otherwise-valid claim.
+func TestInvestmentProviderThemeMixMergesOntoExistingLegacyFactNeverShadowed(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM investment_metrics_daily", rows: [][]any{investmentRow("CHAOS")}},
+		{match: "FROM work_unit_investments", rows: [][]any{
+			themeMixRow("CHAOS", "Fullchaos", "theme", "feature_delivery", 60),
+			themeMixRow("CHAOS", "Fullchaos", "theme", "operational", 20),
+			themeMixRow("CHAOS", "Fullchaos", "theme", "maintenance", 10),
+			themeMixRow("CHAOS", "Fullchaos", "theme", "quality", 6),
+			themeMixRow("CHAOS", "Fullchaos", "theme", "risk", 4),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want exactly 1 (legacy + canonical MERGED, never two separate facts)", result.Facts)
+	}
+	fact := result.Facts[0]
+	if fact.Fields["investment_area"].String == nil || *fact.Fields["investment_area"].String != "product" {
+		t.Fatalf("merged fact lost its legacy investment_area field: %#v", fact.Fields)
+	}
+	themeField, ok := fact.Fields[contextfabric.FactFieldTheme(contextfabric.ThemeFeatureDelivery)]
+	if !ok || themeField.Number == nil {
+		t.Fatalf("merged fact does not carry the canonical theme_feature_delivery field: %#v", fact.Fields)
+	}
+}

@@ -170,28 +170,28 @@ var canonicalInvestmentThemes = [...]string{
 // distribution (CHAOS-4398 §0: work_unit_investments via
 // readers.ReadTeamThemeMix, the CHAOS-2600 ownership-precedence majority
 // vote bridge) for the given team subjects -- NEVER investment_metrics_daily,
-// the deprecated legacy rule set readTeamInvestment above reads. Emits ONE
-// additional CanonicalFact per team, kept SEPARATE from readTeamInvestment's
-// own per-(area,stream) facts (a team can have zero, one, or several of
-// those, and mixing canonical theme fields into one of them arbitrarily
-// would make which fact carries them a matter of query result ordering) --
-// internal/contextfabric/cohort_ranking.go's investmentMixSignal finds this
-// fact by field PRESENCE (theme_feature_delivery), never by position, for
-// exactly this reason.
+// the deprecated legacy rule set readTeamInvestment above reads.
 //
-// Known risk for PR2/PR3 (codex round-1 review, not yet triggered by
-// anything PR1's synthesis path does): model_runtime.go's
-// lookupCanonicalFact matches a synthesis claim to a canonical fact by
-// (Kind, Subject) FIRST MATCH, not by field presence -- RankCohort's own
-// field-presence lookup above does not help a driver/claim that later
-// cites FactInvestment for a team once PR2/PR3 wire the model into
-// narrating investment-mix reasoning. Since readTeamInvestment's legacy
-// per-(area,stream) facts are appended to the fact list BEFORE this
-// function's canonical fact, attachCanonicalRows could attach the WRONG
-// (legacy) fact's Rows to such a claim. PR2/PR3 must give the canonical
-// theme fact a distinct identity attachCanonicalRows can select on (or
-// make lookupCanonicalFact field-aware) before any claim/driver cites
-// FactInvestment for a cohort answer.
+// The canonical theme_*/prior_theme_*/theme_quality_bugfix fields are
+// MERGED onto an existing FactInvestment fact for the team when one already
+// exists (readTeamInvestment's own legacy per-(area,stream) facts,
+// appended BEFORE this call in ReadFacts), rather than always creating a
+// separate fact (codex round-2 finding, fixed from an earlier "always
+// separate" draft of this function): CHAOS-4355 sends every canonical
+// fact's fields to the model unfiltered, and synthesis's own evidence-
+// closure check (model_runtime.go's lookupCanonicalFact) resolves a claim
+// to the FIRST fact matching (Kind, Subject) in the fact list -- a
+// standalone canonical fact appended AFTER the legacy ones would be
+// shadowed by them whenever a claim cites a theme_* field, rejecting an
+// otherwise-valid claim. Merging guarantees whichever FactInvestment fact
+// lookupCanonicalFact finds first for this team already carries the
+// canonical fields (field-key-safe: no overlap between the legacy
+// area/stream columns and this producer's columns). A team with NO legacy
+// facts still gets a standalone fact, as before.
+// internal/contextfabric/cohort_ranking.go's investmentMixSignal finds
+// whichever fact carries the canonical fields by field PRESENCE
+// (theme_feature_delivery), never by position -- unaffected by which
+// physical fact object the fields ended up merged into.
 //
 // timeBound.neutral() bounds the CURRENT window read. When timeBound also
 // carries an explicit start (never inferred -- CHAOS-4040: a window this
@@ -212,19 +212,28 @@ var canonicalInvestmentThemes = [...]string{
 // "we have no mix to report", which is the same degrade-not-fabricate
 // distinction CHAOS-3781 already draws for every other signal here.
 //
-// Attribution key (codex round-1 review): readers.ReadTeamThemeMix joins
-// work_item_team_attributions on work_item_id ALONE, without repo_id --
-// this is a DELIBERATE, verified match to ops's own reference
-// (PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE, api/queries/investment.py),
-// which this producer exists to port faithfully, not to redesign. It is
-// safe because every work_item_id this repo mints already embeds its
-// provider and repo ("ghpr:{owner}/{repo}#{n}", "gitlab:{group}/{project}!{n}",
-// providers/*/normalize.py) -- two DIFFERENT repos cannot legitimately
-// produce the same work_item_id string, so there is no real cross-repo
-// collision surface this join could introduce that the reference
-// implementation does not already share. If this is ever tightened, the
-// Python reference and this Go port must change together, or the two
-// stop agreeing on what "the same work item" means.
+// Attribution key (codex round-1 AND round-2 review, source-verified):
+// readers.ReadTeamThemeMix joins work_item_team_attributions on
+// work_item_id ALONE, without repo_id -- a DELIBERATE match to ops's own
+// reference (PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+// api/queries/investment.py), which this producer exists to port
+// faithfully, not to redesign unilaterally. Per-provider safety differs:
+// github ("ghpr:{owner}/{repo}#{n}") and gitlab ("{group}/{project}!{n}")
+// work_item_ids embed their repo (external_ingest/ids.py), so no two
+// DIFFERENT repos can legitimately produce the same string. jira/linear
+// do NOT ("jira:{external_key}", "linear:{external_key}" --
+// external_ingest/ids.py:72-75, confirmed against source, per codex
+// round-2): two DISTINCT issues in the same org sharing an external key
+// (e.g. two connected Jira sites, or a workspace migration) could
+// theoretically collide within one org_id (work_item_team_attributions'
+// own WHERE already scopes by org_id, so no CROSS-org collision is
+// possible either way). This is a PRE-EXISTING characteristic of the
+// Python reference this Go port matches exactly -- not a defect this PR
+// introduces or worsens -- and fixing it well requires giving
+// work_item_team_attributions' own attribution key provider-instance
+// awareness across BOTH the Python reference and this port together, a
+// team-attribution-family change bigger than this producer. Follow-up:
+// CHAOS-4404.
 func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) error {
 	ids, bySubject := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
@@ -308,10 +317,42 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			}
 		}
 
-		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
-		})
+		// Merge onto an EXISTING FactInvestment fact for this team when one
+		// exists, rather than always appending a new one (codex round-2
+		// finding): synthesis's own evidence-closure check
+		// (model_runtime.go's lookupCanonicalFact) resolves a claim to the
+		// FIRST fact matching (Kind, Subject) in the investigation's fact
+		// list -- and CHAOS-4355 already sends every canonical fact's
+		// fields to the model unfiltered, so a model claim citing
+		// theme_feature_delivery for a team that ALSO has
+		// readTeamInvestment's legacy per-(area,stream) facts (appended
+		// BEFORE this call, in ReadFacts) would resolve against whichever
+		// legacy fact happens to be first, find no such field, and be
+		// rejected -- a live-reachable synthesis failure, not a PR2/PR3-only
+		// risk. Merging these fields into the FIRST existing FactInvestment
+		// fact for this team (field-key-safe: no overlap between the
+		// legacy area/stream columns and this producer's theme_*/
+		// prior_theme_* columns) guarantees whichever fact lookupCanonicalFact
+		// finds first already carries them. A team with NO legacy facts
+		// still gets a standalone one, as before.
+		merged := false
+		targetKey := contextfabric.FactSubjectKey(subject)
+		for i := range *facts {
+			if (*facts)[i].Kind != contextfabric.FactInvestment || contextfabric.FactSubjectKey((*facts)[i].Subject) != targetKey {
+				continue
+			}
+			for field, value := range fields {
+				(*facts)[i].Fields[field] = value
+			}
+			merged = true
+			break
+		}
+		if !merged {
+			*facts = append(*facts, contextfabric.CanonicalFact{
+				Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
+				EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+			})
+		}
 	}
 	return nil
 }

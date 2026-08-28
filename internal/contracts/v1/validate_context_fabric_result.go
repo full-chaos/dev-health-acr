@@ -162,6 +162,12 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 	}
 	seen := make(map[string]struct{}, len(c.Members))
 	lastRank := 0
+	// attentionRanks (codex round-2 finding): RankCohort assigns AttentionRank
+	// as a DENSE 1..N ranking over every member it ranks -- checked here,
+	// across all members, since a per-member validate() call cannot see
+	// its siblings.
+	attentionRanks := make(map[int]struct{}, len(c.Members))
+	rankedCount := 0
 	for _, member := range c.Members {
 		if err := member.validate(bounds); err != nil {
 			return fmt.Errorf("members: %w", err)
@@ -175,6 +181,18 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 		}
 		seen[key] = struct{}{}
 		lastRank = member.Rank
+		if member.RankingComputed {
+			if _, exists := attentionRanks[member.AttentionRank]; exists {
+				return fmt.Errorf("cohort member attention ranks must be unique")
+			}
+			attentionRanks[member.AttentionRank] = struct{}{}
+			rankedCount++
+		}
+	}
+	for rank := 1; rank <= rankedCount; rank++ {
+		if _, ok := attentionRanks[rank]; !ok {
+			return fmt.Errorf("cohort member attention ranks must be a dense 1..N sequence over every ranked member")
+		}
 	}
 	for _, exclusion := range c.Exclusions {
 		if err := exclusion.validate(bounds); err != nil {
@@ -373,6 +391,14 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	}
 	if !validContextFabricCohortDataCompleteness(m.DataCompleteness) || m.DataCompleteness == "" {
 		return fmt.Errorf("cohort member data completeness is not a recognized value")
+	}
+	// A nil Score is ONLY the §5b zero-signal-family shape: DataCompleteness
+	// must read degraded and RankingBasis must be empty together with it --
+	// a nil Score paired with any OTHER completeness value, or a non-empty
+	// basis, would claim signals contributed to a score that does not
+	// exist.
+	if m.Score == nil && (m.DataCompleteness != ContextFabricCohortDataDegraded || len(m.RankingBasis) > 0) {
+		return fmt.Errorf("cohort member nil score must be paired with degraded completeness and an empty ranking basis")
 	}
 	if len(m.RankingBasis) > bounds.cohortMemberRankingBasis || !uniqueTrimmedStrings(m.RankingBasis, bounds.cohortMemberRankingBasisLength) {
 		return fmt.Errorf("cohort member ranking basis violates v1 bounds")
