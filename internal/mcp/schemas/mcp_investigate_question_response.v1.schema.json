@@ -5730,11 +5730,6 @@
                 "minLength": 1,
                 "maxLength": 128,
                 "enum": [
-                  "investment_mix",
-                  "health.compounding_risk",
-                  "operational_deficiencies.severity",
-                  "readiness.coverage_gap",
-                  "workload.forecast_pressure",
                   "investment_mix.reactive_share_high",
                   "investment_mix.deliberate_share_low",
                   "investment_mix.mix_concentrated",
@@ -5753,6 +5748,122 @@
             "weight",
             "weight_contributed",
             "window"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "signal": {
+                    "const": "investment_mix"
+                  }
+                },
+                "required": [
+                  "signal"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "weight": {
+                    "const": 30
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "signal": {
+                    "const": "health.compounding_risk"
+                  }
+                },
+                "required": [
+                  "signal"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "weight": {
+                    "const": 25
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "signal": {
+                    "const": "operational_deficiencies.severity"
+                  }
+                },
+                "required": [
+                  "signal"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "weight": {
+                    "const": 20
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "signal": {
+                    "const": "readiness.coverage_gap"
+                  }
+                },
+                "required": [
+                  "signal"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "weight": {
+                    "const": 15
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "signal": {
+                    "const": "workload.forecast_pressure"
+                  }
+                },
+                "required": [
+                  "signal"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "weight": {
+                    "const": 10
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "window": {
+                    "const": "current_vs_prior"
+                  }
+                },
+                "required": [
+                  "window"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "signal": {
+                    "const": "investment_mix"
+                  }
+                }
+              }
+            }
           ]
         }
       }

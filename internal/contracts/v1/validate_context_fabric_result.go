@@ -450,24 +450,39 @@ func (m ContextFabricCohortMember) validateDrivers(bounds contextFabricBounds) e
 	// existed yet) must stay readable on the legacy path -- see
 	// contextFabricBounds.cohortMemberDriversRequired's own doc comment.
 	// Nothing further to check: there is nothing present to be internally
-	// inconsistent.
+	// inconsistent. Gated on Score alone (codex R1 finding 1), not on
+	// RankingBasis being non-empty: RankCohort's own construction makes
+	// Score!=nil and a non-empty RankingBasis the SAME condition (both
+	// derive from "at least one signal family was available"), but the
+	// write-path check must not rely on a caller reproducing that
+	// coincidence -- a member with a finite Score and an (incorrectly)
+	// empty RankingBasis must still be rejected for missing Drivers.
 	if len(m.Drivers) == 0 {
-		if bounds.cohortMemberDriversRequired && m.Score != nil && len(m.RankingBasis) > 0 {
-			return fmt.Errorf("cohort member ranking_basis names signal families with no matching drivers")
+		if bounds.cohortMemberDriversRequired && m.Score != nil {
+			return fmt.Errorf("cohort member has a score but no drivers")
 		}
 		return nil
 	}
 	if len(m.Drivers) > bounds.cohortMemberDrivers {
 		return fmt.Errorf("cohort member drivers violate v1 bounds")
 	}
+	// basisFamilies/basisSubLabels split RankingBasis into its two entry
+	// shapes: bare family names (e.g. "health.compounding_risk") and
+	// investment_mix's own threshold sub-labels (e.g.
+	// "investment_mix.reactive_share_high") -- codex R1 finding 3 found
+	// the sub-label half was never cross-checked at all.
 	basisFamilies := make(map[string]struct{}, len(m.RankingBasis))
+	basisSubLabels := make(map[string]struct{}, len(m.RankingBasis))
 	for _, entry := range m.RankingBasis {
 		if _, isFamily := contextFabricCohortMemberDriverWeights[entry]; isFamily {
 			basisFamilies[entry] = struct{}{}
+		} else {
+			basisSubLabels[entry] = struct{}{}
 		}
 	}
+
 	seenSignals := make(map[string]struct{}, len(m.Drivers))
-	var weightContributedSum float64
+	var availableWeight float64
 	for _, driver := range m.Drivers {
 		if err := driver.validate(bounds); err != nil {
 			return fmt.Errorf("cohort member drivers: %w", err)
@@ -479,7 +494,14 @@ func (m ContextFabricCohortMember) validateDrivers(bounds contextFabricBounds) e
 		if _, inBasis := basisFamilies[driver.Signal]; !inBasis {
 			return fmt.Errorf("cohort member driver names a signal family not present in ranking_basis")
 		}
-		weightContributedSum += driver.WeightContributed
+		// Codex R1 finding 4: only investment_mix's mix-shift sub-signal
+		// makes a real prior-window comparison
+		// (cohort_ranking.go's investmentMixSignal) -- every other family
+		// always reads a single point in time.
+		if driver.Window == ContextFabricCohortMemberDriverWindowCurrentVsPrior && driver.Signal != investmentMixSignalName {
+			return fmt.Errorf("cohort member driver window current_vs_prior is only valid for investment_mix")
+		}
+		availableWeight += driver.Weight
 	}
 	// Present-but-partial Drivers (some basis families covered, others
 	// not) is never valid, on EITHER path -- unlike total absence, this
@@ -490,11 +512,48 @@ func (m ContextFabricCohortMember) validateDrivers(bounds contextFabricBounds) e
 			return fmt.Errorf("cohort member ranking_basis names a signal family with no matching driver")
 		}
 	}
+
+	// Second pass (needs availableWeight from the first): codex R1 finding
+	// 2 -- checking only the AGGREGATE Sum(WeightContributed)==Score lets
+	// compensating errors through (e.g. Value=0 with a nonzero
+	// WeightContributed, offset by another driver's own error). Each
+	// driver's WeightContributed must equal what scoreMember's formula
+	// actually computes for it: 100*Weight*Value/availableWeight.
+	claimedSubLabels := make(map[string]struct{}, len(m.RankingBasis))
+	var weightContributedSum float64
+	for _, driver := range m.Drivers {
+		if availableWeight > 0 {
+			expected := 100 * driver.Weight * driver.Value / availableWeight
+			if math.Abs(driver.WeightContributed-expected) > 1e-6 {
+				return fmt.Errorf("cohort member driver weight_contributed does not match its formula value")
+			}
+		}
+		for _, label := range driver.ThresholdLabels {
+			if _, claimed := basisSubLabels[label]; !claimed {
+				return fmt.Errorf("cohort member driver threshold label is not present in ranking_basis")
+			}
+			claimedSubLabels[label] = struct{}{}
+		}
+		weightContributedSum += driver.WeightContributed
+	}
+	for label := range basisSubLabels {
+		if _, claimed := claimedSubLabels[label]; !claimed {
+			return fmt.Errorf("cohort member ranking_basis names a threshold label no driver claims")
+		}
+	}
+
 	if m.Score != nil && math.Abs(weightContributedSum-*m.Score) > 1e-6 {
 		return fmt.Errorf("cohort member drivers do not sum to score")
 	}
 	return nil
 }
+
+// investmentMixSignalName mirrors internal/contextfabric/cohort_ranking.go's
+// RankingSignalInvestmentMix constant (same cross-package literal-mirroring
+// discipline as contextFabricCohortMemberDriverWeights above) -- the only
+// signal whose driver may legally claim Window ==
+// ContextFabricCohortMemberDriverWindowCurrentVsPrior.
+const investmentMixSignalName = "investment_mix"
 
 // Validate enforces the current contract bounds (write path) for one
 // cohort member driver.

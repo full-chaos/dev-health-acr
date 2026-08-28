@@ -55,12 +55,17 @@ func TestContextFabricCohortMember_RankingBasisRejectsOutOfVocabulary(t *testing
 // (internal/contextfabric/cohort_ranking.go) is accepted.
 func TestContextFabricCohortMember_RankingBasisAcceptsEveryClosedLabel(t *testing.T) {
 	t.Parallel()
+	// RankingBasis's sub-label tail must match the investment_mix driver's
+	// own ThresholdLabels exactly (validateDrivers cross-checks both
+	// directions) -- toward_operational/toward_feature are excluded here
+	// since RankCohort's own investmentMixSignal fires at most ONE of the
+	// three mutually exclusive mix_shift_* labels per member; their
+	// acceptance is covered by TestRankCohort_MixShiftDirectionLabels.
 	labels := []string{
 		"investment_mix", "health.compounding_risk", "operational_deficiencies.severity",
 		"readiness.coverage_gap", "workload.forecast_pressure",
 		"investment_mix.reactive_share_high", "investment_mix.deliberate_share_low",
-		"investment_mix.mix_concentrated", "investment_mix.mix_shift_toward_operational",
-		"investment_mix.mix_shift_toward_feature", "investment_mix.mix_shift_other",
+		"investment_mix.mix_concentrated", "investment_mix.mix_shift_other",
 	}
 	member := baseRankedCohortMember()
 	member.DataCompleteness = ContextFabricCohortDataComplete
@@ -117,9 +122,16 @@ func TestContextFabricCohortMember_RankingFieldsWithoutComputedRejected(t *testi
 // baseRankedCohortMember's own RankingBasis ("health.compounding_risk")
 // whose WeightContributed exactly equals its Score (42.0): weight 25,
 // value 1.68 -> 25*1.68 == 42.
+// baseDriverForBasis returns a single valid driver for
+// baseRankedCohortMember's own RankingBasis ("health.compounding_risk")
+// whose WeightContributed exactly equals its Score (42.0). As the sole
+// driver, availableWeight==Weight (25), so
+// 100*Weight*Value/availableWeight == 100*Value -- Value=0.42 gives
+// WeightContributed=42, matching both the aggregate sum AND (codex R1
+// finding 2) the per-driver formula check.
 func baseDriverForBasis() ContextFabricCohortMemberDriver {
 	return ContextFabricCohortMemberDriver{
-		Signal: "health.compounding_risk", Value: 1.0, Weight: 25, WeightContributed: 42.0,
+		Signal: "health.compounding_risk", Value: 0.42, Weight: 25, WeightContributed: 42.0,
 		Window: ContextFabricCohortMemberDriverWindowCurrent,
 	}
 }
@@ -270,5 +282,103 @@ func TestContextFabricCohortMember_PR1EraRowWithoutDriversStaysReadable(t *testi
 	// proves the two paths are genuinely different, not both lenient.
 	if err := member.Validate(); err == nil {
 		t.Fatal("Validate() = nil for the same PR1-era row on the write path, want an error")
+	}
+}
+
+// ---------------------------------------------------------------------
+// Codex R1 (dev-health-acr #319) regression tests -- 5 confirmed findings
+// ---------------------------------------------------------------------
+
+// TestContextFabricCohortMember_ScoreWithoutRankingBasisStillRequiresDrivers
+// is codex R1 finding 1: the write path must reject a missing Drivers
+// array whenever Score is present, NOT only when RankingBasis happens to
+// also be non-empty -- RankCohort's real output always ties the two
+// together, but the validator must not rely on a caller reproducing that
+// coincidence.
+func TestContextFabricCohortMember_ScoreWithoutRankingBasisStillRequiresDrivers(t *testing.T) {
+	t.Parallel()
+	member := baseRankedCohortMember()
+	member.RankingBasis = nil // Score stays non-nil; only RankingBasis is (incorrectly) empty
+	member.Drivers = nil
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a scored member with no ranking_basis and no drivers, want an error")
+	}
+}
+
+// TestContextFabricCohortMemberDriver_WeightContributedMustMatchFormula is
+// codex R1 finding 2: the aggregate Sum(WeightContributed)==Score check
+// alone lets a driver with Value=0 (should contribute nothing) claim a
+// nonzero WeightContributed, as long as some OTHER driver's error
+// compensates. Each driver's own WeightContributed must equal
+// 100*Weight*Value/availableWeight.
+func TestContextFabricCohortMemberDriver_WeightContributedMustMatchFormula(t *testing.T) {
+	t.Parallel()
+	member := baseRankedCohortMember() // Score 42.0, RankingBasis: ["health.compounding_risk"]
+	member.Drivers = []ContextFabricCohortMemberDriver{
+		{Signal: "health.compounding_risk", Value: 0, Weight: 25, WeightContributed: 42.0, Window: ContextFabricCohortMemberDriverWindowCurrent},
+	}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a driver whose Value=0 but WeightContributed=42 (sums to Score by coincidence), want an error")
+	}
+}
+
+// TestContextFabricCohortMember_ThresholdLabelMustBeClaimedInRankingBasis
+// is codex R1 finding 3: a driver's ThresholdLabels were checked for
+// vocabulary and signal-prefix, but never cross-checked against
+// RankingBasis's own sub-label entries. A driver claiming a same-signal
+// label RankingBasis never listed must be rejected.
+func TestContextFabricCohortMember_ThresholdLabelMustBeClaimedInRankingBasis(t *testing.T) {
+	t.Parallel()
+	score := 12.6
+	member := ContextFabricCohortMember{
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+		Rank:    1, InclusionReasons: []string{"matched"}, RankingComputed: true,
+		Score: &score, AttentionRank: 1,
+		RankingBasis:     []string{"investment_mix"}, // no sub-label entries at all
+		DataCompleteness: ContextFabricCohortDataDegraded,
+		Drivers: []ContextFabricCohortMemberDriver{
+			{Signal: "investment_mix", Value: 0.42, Weight: 30, WeightContributed: 12.6, Window: ContextFabricCohortMemberDriverWindowCurrent,
+				ThresholdLabels: []string{"investment_mix.mix_concentrated"}}, // claims a label ranking_basis never listed
+		},
+	}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a driver claiming a threshold label absent from ranking_basis, want an error")
+	}
+}
+
+// TestContextFabricCohortMember_RankingBasisSubLabelMustBeClaimedByADriver
+// is the reverse direction of the same codex R1 finding 3: a sub-label
+// present in RankingBasis but not claimed by any driver's ThresholdLabels
+// must also be rejected.
+func TestContextFabricCohortMember_RankingBasisSubLabelMustBeClaimedByADriver(t *testing.T) {
+	t.Parallel()
+	score := 12.6
+	member := ContextFabricCohortMember{
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+		Rank:    1, InclusionReasons: []string{"matched"}, RankingComputed: true,
+		Score: &score, AttentionRank: 1,
+		RankingBasis:     []string{"investment_mix", "investment_mix.mix_concentrated"},
+		DataCompleteness: ContextFabricCohortDataDegraded,
+		Drivers: []ContextFabricCohortMemberDriver{
+			{Signal: "investment_mix", Value: 0.42, Weight: 30, WeightContributed: 12.6, Window: ContextFabricCohortMemberDriverWindowCurrent}, // no ThresholdLabels
+		},
+	}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a ranking_basis threshold label no driver claims, want an error")
+	}
+}
+
+// TestContextFabricCohortMemberDriver_CurrentVsPriorOnlyValidForInvestmentMix
+// is codex R1 finding 4: only investment_mix's mix-shift sub-signal makes
+// a real prior-window comparison (cohort_ranking.go's investmentMixSignal)
+// -- every other signal's Window must be "current".
+func TestContextFabricCohortMemberDriver_CurrentVsPriorOnlyValidForInvestmentMix(t *testing.T) {
+	t.Parallel()
+	member := baseRankedCohortMember()
+	member.Drivers = []ContextFabricCohortMemberDriver{
+		{Signal: "health.compounding_risk", Value: 0.42, Weight: 25, WeightContributed: 42.0, Window: ContextFabricCohortMemberDriverWindowCurrentVsPrior},
+	}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a non-investment_mix driver claiming current_vs_prior, want an error")
 	}
 }
