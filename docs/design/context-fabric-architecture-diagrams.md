@@ -202,10 +202,11 @@ flowchart TD
   GATE --> COMMITTABLE["resolution.Candidates / .Committed<br/>ONLY ever built from 'pool'<br/>(resolve.go:1926-1933, explicit doc comment)"]
 
   GATE -->|"nothing committed AND<br/>searchTruncated AND<br/>confirmedKind == nil<br/>(turn 1's shape)"| LOWPOP{"applyLowPopulationKindScopedRescue<br/>chaos4417_low_population_kind_scope.go<br/>CHAOS-4417"}
-  LOWPOP -->|"per kind in {repository,<br/>project, team}: EXHAUSTIVE<br/>SearchKind census, reusing<br/>CHAOS-4154's buildConfirmedKindScopedSnapshot<br/>-- proves completeness, not just non-empty"| ISOPOOL[("isolated per-kind pool<br/>NEVER merged into 'pool'")]
-  ISOPOOL --> LOWGATE["re-run gate over the isolated<br/>census, searchTruncated=false<br/>(this population's own read was proven complete)"]
-  LOWGATE -->|"exactly ONE kind commits"| COMMITTABLE
-  LOWGATE -.->|"0 or >1 kinds commit:<br/>cross-kind ambiguity --<br/>original ambiguous/clarify stands"| GATE
+  LOWPOP -->|"deps.VectorMechanismConfigured:<br/>skip entirely, zero SearchKind calls"| GATE
+  LOWPOP -->|"else, per kind in {repository,<br/>project, team} IN ORDER: EXHAUSTIVE<br/>SearchKind census, reusing<br/>CHAOS-4154's buildConfirmedKindScopedSnapshot<br/>-- stops at the FIRST incomplete kind<br/>(fail closed, codex R1 P1)"| ISOPOOL[("UNION of every complete<br/>kind's isolated pool<br/>NEVER merged into 'pool'")]
+  ISOPOOL --> LOWGATE["re-run gate ONCE over the union<br/>(codex R1 P1: NOT per-kind --<br/>a per-kind gate call cannot see a<br/>cross-kind TopFloor/TopGap rival),<br/>searchTruncated=false"]
+  LOWGATE -->|"union gate commits"| COMMITTABLE
+  LOWGATE -.->|"any kind incomplete, empty union,<br/>or union gate declines:<br/>original ambiguous/clarify stands"| GATE
 
   OOP --> UNION["unionCandidatesForOffer"]
   POOL -.-> UNION
@@ -257,10 +258,19 @@ exact isolated-census-and-re-decide mechanism for a RECEIPT-confirmed kind
 fixed, small, identity-census-enumerable kind set
 (`isAliasLookupScopedKind`) only -- never for `pull_request`/`work_item`/
 `ci_pipeline_run`, whose populations are exactly what `searchTruncated`
-exists to protect against. Tries all three kinds and commits only when
-EXACTLY ONE independently clears the gate over its own isolated,
-proven-complete population -- more than one committing is left ambiguous
-rather than silently picking a winner (zero-tolerance wrong-commit bar).
+exists to protect against. Requires EVERY attempted kind's own census to
+be proven complete (fails closed and stops at the first incomplete kind
+otherwise -- an untested sibling could hide a rival) and never attempts
+any kind at all when this deployment has a live vector mechanism
+configured (`buildConfirmedKindScopedSnapshot` can never prove completeness
+there, CHAOS-4154's own documented consequence). Unions every complete
+kind's isolated population into ONE pool and re-runs the commit gate
+EXACTLY ONCE over that union -- never per kind: an earlier design that
+ran the gate separately per kind let a repository candidate clear LoneFloor
+in isolation even though the SAME candidate would fail TopFloor against a
+genuine cross-kind rival once both were visible together (codex R1,
+CHAOS-4417 PR #320). Unioning restores the SAME cross-kind arbitration an
+ordinary untruncated resolution already gets.
 
 **In-flight fix (not yet merged as of this writing):** `lane-4347-project`
 (branch `chaos-4348-project-team-pool`) is building two new search arms

@@ -282,7 +282,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", event.RequestID, "stage", event.Stage,
 			"kind", event.LowPopulationKindScopeKind,
 			"state", event.LowPopulationKindScopeState,
-			"candidate_count", event.LowPopulationKindScopeCandidateCount)
+			"candidate_count", event.LowPopulationKindScopeCandidateCount,
+			// outcome (codex R1 P2, CHAOS-4417): populated ONLY on the
+			// rescue's own summary event (empty "kind") -- see
+			// LowPopulationKindScopeOutcome's own doc comment.
+			"outcome", event.LowPopulationKindScopeOutcome)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,

@@ -48,29 +48,110 @@ import (
 // order is deterministic without a third hand-maintained ordering.
 var chaos4417LowPopulationScopedKinds = sortedKinds(aliasLookupScopedKinds)
 
-// applyLowPopulationKindScopedRescue runs buildConfirmedKindScopedSnapshot
-// once per chaos4417LowPopulationScopedKinds member and re-evaluates the
-// commit gate over whichever snapshots come back confirmedKindScopeComplete.
+// applyLowPopulationKindScopedRescue builds ONE isolated, cross-kind
+// candidate population -- the union of buildConfirmedKindScopedSnapshot's
+// own result for EVERY chaos4417LowPopulationScopedKinds member -- and
+// re-evaluates the commit gate ONCE over that union.
 //
-// Unlike CHAOS-4154's confirmed-kind call site, this caller does not get to
-// assume there is only one candidate kind in play -- nothing has confirmed
-// which kind (if any) the question meant, so it tries every member of the
-// set. It commits ONLY when EXACTLY ONE kind's isolated, proven-complete
-// population produces a commit (ok=true). More than one kind independently
-// committing is treated as cross-kind ambiguity and is NOT resolved here:
-// the zero-tolerance wrong-commit bar (CHAOS-4085/CHAOS-4149) means
-// silently preferring one kind over another with no ranking signal between
-// them would be worse than leaving the ordinary ambiguous/clarify outcome
-// standing -- see TestApplyLowPopulationKindScopedRescue_MultipleKindsCommitStaysAmbiguous.
+// codex R1 finding (P1, confirmed): an EARLIER version of this function
+// ran the gate SEPARATELY per kind and committed whenever exactly one
+// kind's isolated call happened to clear ITS OWN LoneFloor. That is
+// unsound: a repository candidate at 0.80 clears LoneFloor (0.72) when
+// evaluated ALONE, but the SAME 0.80 candidate fails TopFloor (0.88)
+// against a genuine 0.71 project rival once both are visible to the SAME
+// gate call -- exactly the cross-kind ambiguity TopFloor/TopGap exist to
+// catch. Per-kind gate calls can never see that rival, so they would
+// commit where the ordinary (untruncated) resolution-wide gate would
+// clarify. Unioning every kind's population into ONE pool and calling
+// ResolveFromMergedCandidatesWithGateAndBasis exactly once restores the
+// SAME cross-kind arbitration LoneFloor/TopFloor already provide for an
+// ordinary untruncated resolution -- this mechanism only widens WHICH
+// population the gate is allowed to decide over when the ordinary one
+// truncated, never how the gate itself grades candidates once it does
+// (CHAOS-4154's own do-not-build list, chaos4154_confirmed_kind_scope.go).
 //
-// The caller (resolve.go) applies the SAME "resolution stays the first
-// pass's own unless this returns ok" discipline CHAOS-4154's own call site
-// already established: nothing here ever mutates the caller's own
-// candidatesBySubject/resolution, only returns a fresh replacement when it
-// actually has one.
+// codex R1 finding (P1, confirmed): a SECOND, independent defect in the
+// same earlier version let a kind whose OWN scoped census was incomplete
+// (truncated/degraded/plan_incomplete) be silently skipped while a
+// DIFFERENT, complete kind still committed alone -- the skipped kind's
+// unseen population could hide a genuine rival. This function now fails
+// CLOSED: unless EVERY attempted kind's snapshot is
+// confirmedKindScopeComplete, no union is built and no gate call runs at
+// all -- an incomplete sibling scope aborts the WHOLE rescue, not just its
+// own contribution. Trying kinds in chaos4417LowPopulationScopedKinds'
+// deterministic order and stopping at the FIRST incomplete one (rather
+// than always attempting all three) also directly addresses the R1
+// I/O-fan-out finding below: the common case where any one kind is
+// genuinely large/truncated for this org now costs at most that one
+// kind's exhaustive pass, not three.
 //
-// A genuine buildConfirmedKindScopedSnapshot error aborts and propagates,
-// exactly like every other retrieval pass in this package.
+// codex R1 finding (P1, confirmed): deps.VectorMechanismConfigured==true
+// makes buildConfirmedKindScopedSnapshot return confirmedKindScopePlanIncomplete
+// for EVERY kind, unconditionally (chaos4154_confirmed_kind_scope.go's own
+// documented consequence) -- so on any deployment with a live vector
+// mechanism this rescue can never produce a "every kind complete" union
+// regardless of how many kinds it tries. Checked ONCE, up front, before
+// any SearchKind call: paying for up to three exhaustive per-term passes
+// (each up to len(terms) calls -- a real request can carry dozens of
+// terms) to reach a foregone conclusion is exactly the unbounded-fan-out
+// cost R1 flagged, and skipping it here also skips the wasted
+// attemptConfirmedKindVectorCensus shadow census buildConfirmedKindScopedSnapshot
+// would otherwise run per kind for a census outcome this caller has no use
+// for (chaos4417LowPopulationScopedKinds' populations have no vector arm
+// this rescue is authorized to evaluate -- CHAOS-4154's own REJECTED
+// section explains why building one blind is out of scope).
+//
+// codex R1 finding (P2, confirmed): a scoped call's "corroboration" trace
+// event (resolution.go) is NOT one of the stages discardableDecisionTracer
+// buffers (only "decision"/"ranked_cut" are), so it reached the real
+// tracer immediately even when the scoped resolution it describes was
+// never merged into 'pool' and never kept -- corrupting any consumer
+// (e.g. the two-turn harness's expected_subject_in_pool field) that reads
+// a "corroboration" event as proof a candidate reached the real,
+// committable pool. discardableDecisionTracer now buffers "corroboration"
+// too (resolve.go) -- a general fix, not scoped to this file, since
+// CHAOS-4154's own confirmed-kind call site shares the exact same
+// discardableDecisionTracer type and the exact same latent leak whenever
+// its scoped resolution does not commit.
+// lowPopulationKindScopeOutcome* (codex R1 P2, confirmed) is the closed
+// vocabulary applyLowPopulationKindScopedRescue's own summary
+// "low_population_kind_scope" event (empty LowPopulationKindScopeKind,
+// fired via a defer covering every return path) reports on
+// LowPopulationKindScopeOutcome -- so a reader can always tell WHY this
+// rescue ended the way it did without having to reconstruct it from the
+// per-kind events and the (possibly discarded) union decision event
+// together.
+const (
+	// lowPopulationKindScopeOutcomeVectorConfigured: deps.VectorMechanismConfigured
+	// is true, so every kind's completeness plan is foreclosed
+	// (confirmedKindScopePlanIncomplete) before any SearchKind call --
+	// short-circuited without spending the I/O (codex R1 P1 fan-out
+	// finding).
+	lowPopulationKindScopeOutcomeVectorConfigured = "vector_configured"
+	// lowPopulationKindScopeOutcomeIncompleteSibling: at least one of
+	// chaos4417LowPopulationScopedKinds did not reach
+	// confirmedKindScopeComplete -- the whole rescue fails closed (codex
+	// R1 P1 finding), remaining kinds not attempted.
+	lowPopulationKindScopeOutcomeIncompleteSibling = "incomplete_sibling"
+	// lowPopulationKindScopeOutcomeNoCandidates: every kind completed but
+	// the union population was empty -- nothing for the gate to decide.
+	lowPopulationKindScopeOutcomeNoCandidates = "no_candidates"
+	// lowPopulationKindScopeOutcomeGateInvalid: gate.Validate() failed --
+	// the SAME conjunct every other commit path in this resolution
+	// requires.
+	lowPopulationKindScopeOutcomeGateInvalid = "gate_invalid"
+	// lowPopulationKindScopeOutcomeDeclined: the union gate ran but did
+	// not commit (ambiguous, or below LoneFloor/TopFloor) -- the ordinary
+	// unscoped resolution's own ambiguous/clarification outcome stands.
+	lowPopulationKindScopeOutcomeDeclined = "declined"
+	// lowPopulationKindScopeOutcomeCommitted: the union gate committed
+	// exactly the resolution this function returned.
+	lowPopulationKindScopeOutcomeCommitted = "committed"
+	// lowPopulationKindScopeOutcomeError: buildConfirmedKindScopedSnapshot
+	// returned a genuine backend error, propagated to the caller.
+	lowPopulationKindScopeOutcomeError = "error"
+)
+
 func applyLowPopulationKindScopedRescue(
 	ctx context.Context,
 	principal storage.Principal,
@@ -86,17 +167,41 @@ func applyLowPopulationKindScopedRescue(
 	retrievalDegraded bool,
 	coverageFloorDegraded bool,
 ) (resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, ok bool, err error) {
-	type scopedCommit struct {
-		resolution contextfabric.SubjectResolution
-		bases      contextfabric.CommitBasisSet
-		digests    contextfabric.CommitDecisionDigestSet
-		tracer     *discardableDecisionTracer
+	// outcome (codex R1 P2, confirmed): a closed-vocabulary summary of WHY
+	// this rescue attempt ended the way it did, emitted exactly once
+	// (deferred below) regardless of which return path fires -- see
+	// lowPopulationKindScopeOutcome* consts' own doc comment. This is a
+	// DEDICATED stage event, distinct from "decision" (never subject to
+	// discardableDecisionTracer's "last decision event describes the
+	// returned resolution" invariant), so it is never silently swallowed
+	// the way the union gate's own "decision" event is when this rescue
+	// declines to commit (chaos4154_confirmed_kind_scope.go's own
+	// discard-on-non-commit convention, reused below for that event
+	// specifically).
+	outcome := lowPopulationKindScopeOutcomeDeclined
+	if deps.ResolutionTracer != nil {
+		defer func() {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID:                     request.RequestID,
+				Stage:                         "low_population_kind_scope",
+				LowPopulationKindScopeOutcome: outcome,
+			})
+		}()
 	}
-	var commits []scopedCommit
+	if deps.VectorMechanismConfigured {
+		outcome = lowPopulationKindScopeOutcomeVectorConfigured
+		return contextfabric.SubjectResolution{}, nil, nil, false, nil
+	}
+	unionPool := make(map[string]contextfabric.SubjectCandidate)
+	unionObservationParentKey := make(map[string]string)
+	unionObservationBlocked := make(map[string]bool)
+	unionIdentity := identityClaimants{}
+	unionIdentityTerms := identityMatchTerms{}
 	for _, kind := range chaos4417LowPopulationScopedKinds {
 		scopedPool, scopedObservationParentKey, scopedObservationBlocked, scopedIdentity, scopedIdentityTerms, scopeState, scopeTraversalDegraded, scopeAuthzDropped, _, scopeErr :=
 			buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, kind, effectiveSearchLimit)
 		if scopeErr != nil {
+			outcome = lowPopulationKindScopeOutcomeError
 			return contextfabric.SubjectResolution{}, nil, nil, false, scopeErr
 		}
 		if scopeTraversalDegraded > 0 && deps.TraversalDegraded != nil {
@@ -118,25 +223,94 @@ func applyLowPopulationKindScopedRescue(
 				LowPopulationKindScopeCandidateCount: candidateCount,
 			})
 		}
-		if scopeState != confirmedKindScopeComplete || !gateValid {
-			continue
+		if scopeState != confirmedKindScopeComplete {
+			// Fail closed (codex R1 P1): an incomplete sibling scope may
+			// hide a genuine rival the union gate below would need to see.
+			// Stop trying further kinds too -- this rescue cannot fire
+			// regardless of what they find, so their own exhaustive
+			// per-term passes would be pure waste (codex R1 P1 fan-out
+			// finding).
+			outcome = lowPopulationKindScopeOutcomeIncompleteSibling
+			return contextfabric.SubjectResolution{}, nil, nil, false, nil
 		}
-		scopedTracer := &discardableDecisionTracer{real: deps.ResolutionTracer}
-		scopedResolution, scopedBases, scopedDigests := ResolveFromMergedCandidatesWithGateAndBasis(
-			scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
-			request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
-			unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-			scopedTracer, request.RequestID, "", false, true,
-		)
-		if len(scopedResolution.Committed) > 0 {
-			commits = append(commits, scopedCommit{scopedResolution, scopedBases, scopedDigests, scopedTracer})
+		mergeSubjectCandidatePool(unionPool, scopedPool)
+		for key, value := range scopedObservationParentKey {
+			if _, exists := unionObservationParentKey[key]; !exists {
+				unionObservationParentKey[key] = value
+			}
+		}
+		for key, value := range scopedObservationBlocked {
+			unionObservationBlocked[key] = unionObservationBlocked[key] || value
+		}
+		mergeIdentityClaimants(unionIdentity, scopedIdentity)
+		for key, entries := range scopedIdentityTerms {
+			unionIdentityTerms[key] = append(unionIdentityTerms[key], entries...)
 		}
 	}
-	if len(commits) != 1 {
+	if len(unionPool) == 0 {
+		outcome = lowPopulationKindScopeOutcomeNoCandidates
 		return contextfabric.SubjectResolution{}, nil, nil, false, nil
 	}
-	winner := commits[0]
-	winner.resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
-	winner.tracer.keep()
-	return winner.resolution, winner.bases, winner.digests, true, nil
+	if !gateValid {
+		outcome = lowPopulationKindScopeOutcomeGateInvalid
+		return contextfabric.SubjectResolution{}, nil, nil, false, nil
+	}
+	scopedTracer := &discardableDecisionTracer{real: deps.ResolutionTracer}
+	scopedResolution, scopedBases, scopedDigests := ResolveFromMergedCandidatesWithGateAndBasis(
+		unionPool, unionObservationParentKey, unionObservationBlocked, request.Options.MaxSubjectCandidates,
+		request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
+		unscopedVisibility, gate, unionIdentity, unionIdentityTerms, aliasIdentityComplete,
+		scopedTracer, request.RequestID, "", false, true,
+	)
+	if len(scopedResolution.Committed) == 0 {
+		outcome = lowPopulationKindScopeOutcomeDeclined
+		return contextfabric.SubjectResolution{}, nil, nil, false, nil
+	}
+	outcome = lowPopulationKindScopeOutcomeCommitted
+	scopedResolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+	scopedTracer.keep()
+	return scopedResolution, scopedBases, scopedDigests, true, nil
+}
+
+// mergeSubjectCandidatePool unions src into dst, keeping the higher-
+// confidence entry for a subject key present in both -- the SAME
+// MergeCandidates rule mergeSearchResults itself uses for two findings of
+// the same subject. Subject keys cannot collide ACROSS kinds (the key
+// space is kind-qualified), so in practice this only ever matters if a
+// future caller passes overlapping pools; MergeCandidates handles it
+// correctly regardless.
+func mergeSubjectCandidatePool(dst, src map[string]contextfabric.SubjectCandidate) {
+	for key, candidate := range src {
+		if existing, exists := dst[key]; exists {
+			dst[key] = MergeCandidates(existing, candidate)
+			continue
+		}
+		dst[key] = candidate
+	}
+}
+
+// mergeIdentityClaimants unions src into dst -- both are the SAME
+// class -> term -> subjectKey -> true shape identityClaimants always is
+// (chaos3884_identity.go), so union is a plain three-level set union.
+// Merging identity claims ACROSS kinds (not just within one) matters here
+// specifically because chaos4417LowPopulationScopedKinds IS
+// isAliasLookupScopedKind's own set -- an alias/provider-key claim shared
+// by, say, a repository and a team is exactly the cross-kind identity
+// collision identityCollision/identityCrossClassRivalClaimant exist to
+// catch, and neither can see it if each kind's claims stay in its own
+// isolated map.
+func mergeIdentityClaimants(dst, src identityClaimants) {
+	for class, terms := range src {
+		if dst[class] == nil {
+			dst[class] = map[string]map[string]bool{}
+		}
+		for term, claimants := range terms {
+			if dst[class][term] == nil {
+				dst[class][term] = map[string]bool{}
+			}
+			for subjectKey := range claimants {
+				dst[class][term][subjectKey] = true
+			}
+		}
+	}
 }

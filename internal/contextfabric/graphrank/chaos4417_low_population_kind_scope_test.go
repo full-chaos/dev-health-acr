@@ -101,3 +101,130 @@ func TestApplyLowPopulationKindScopedRescue_MultipleKindsCommitStaysAmbiguous(t 
 		t.Fatalf("resolution.Committed = %#v, want ZERO commits -- two kinds independently clearing LoneFloor in isolation is cross-kind ambiguity this mechanism must not silently resolve by picking one", resolution.Committed)
 	}
 }
+
+// TestApplyLowPopulationKindScopedRescue_CrossKindTopFloorDeclines is codex
+// R1 finding 1 (P1, confirmed)'s own named repro, pinned directly: a
+// repository candidate at 0.80 clears LoneFloor (0.72) when evaluated
+// ALONE, but a genuine 0.71 project rival visible to the SAME gate call
+// makes the union fail TopFloor (0.88) -- exactly the cross-kind
+// arbitration a per-kind gate call structurally cannot perform.
+func TestApplyLowPopulationKindScopedRescue_CrossKindTopFloorDeclines(t *testing.T) {
+	t.Parallel()
+	const term = "acr"
+	repoSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repo_1", Label: "acr-core"}
+	projectSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_1", Label: "acr-project"}
+	repoNode := candidateNode(repoSubject.Kind, repoSubject.CanonicalID, repoSubject.Label, 0.80, "*")
+	projectNode := candidateNode(projectSubject.Kind, projectSubject.CanonicalID, projectSubject.Label, 0.71, "*")
+	backend := &fakeGraphBackend{
+		searchResults:    map[string][]CandidateNode{term: {repoNode, projectNode}},
+		searchTruncated:  true,
+		enableSearchKind: true,
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			term: {
+				contextfabric.SubjectRepository: {repoNode},
+				contextfabric.SubjectProject:    {projectNode},
+			},
+		},
+	}
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), backend.deps(), nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want ZERO commits -- 0.80 repository alone clears LoneFloor (0.72) but fails TopFloor (0.88) against the real 0.71 project rival once both are visible to ONE gate call; a per-kind gate that evaluated repository in isolation would have wrongly committed it", resolution.Committed)
+	}
+}
+
+// TestApplyLowPopulationKindScopedRescue_IncompleteSiblingAbortsWholeRescue
+// is codex R1 finding 2 (P1, confirmed): a repository candidate that would
+// commit cleanly on its own must NOT commit when a sibling kind
+// (project/team) in chaos4417LowPopulationScopedKinds reports its own
+// SearchKind census truncated -- the untested sibling kind's population
+// could hide a genuine rival, so the WHOLE rescue must fail closed, not
+// just decline that one sibling's own contribution.
+func TestApplyLowPopulationKindScopedRescue_IncompleteSiblingAbortsWholeRescue(t *testing.T) {
+	t.Parallel()
+	const term = "acr"
+	repoSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repo_1", Label: "acr-core"}
+	repoNode := candidateNode(repoSubject.Kind, repoSubject.CanonicalID, repoSubject.Label, 0.80, "*")
+	var searchKindCalls []contextfabric.SubjectKind
+	// A bespoke SearchKind: repository's OWN census is clean
+	// (untruncated), but project's reports truncated=true -- the ONE
+	// sibling this test needs incomplete while repository stays complete.
+	// Called directly (not through ResolveSubjects) to isolate this
+	// function's own SearchKind usage from CHAOS-4038's unrelated
+	// coverage floor, which also calls SearchKind earlier in the pipeline
+	// for a different kind set.
+	searchKind := func(ctx context.Context, searchTerm string, kind contextfabric.SubjectKind, limit int) ([]CandidateNode, bool, bool, error) {
+		searchKindCalls = append(searchKindCalls, kind)
+		switch kind {
+		case contextfabric.SubjectRepository:
+			return []CandidateNode{repoNode}, false, false, nil
+		case contextfabric.SubjectProject:
+			return nil, true, false, nil // truncated=true
+		default:
+			return nil, false, false, nil
+		}
+	}
+	deps := ResolveDeps{SearchKind: searchKind}
+	request := testRequest()
+	resolution, _, _, ok, err := applyLowPopulationKindScopedRescue(
+		context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, []string{term},
+		nil, false, request.Options.MaxSubjectCandidates, true, DefaultCommitGatePolicy(), true, false, false,
+	)
+	if err != nil {
+		t.Fatalf("applyLowPopulationKindScopedRescue() error = %v", err)
+	}
+	if ok || len(resolution.Committed) != 0 {
+		t.Fatalf("ok=%v resolution.Committed=%#v, want ok=false -- project's own incomplete (truncated) census must abort the WHOLE rescue, even though repository's own census was clean and would have committed alone", ok, resolution.Committed)
+	}
+	// chaos4417LowPopulationScopedKinds is sorted lexicographically
+	// (project < repository < team), so project is tried FIRST and its
+	// truncation aborts before repository or team are ever attempted --
+	// pins the "stop at the first incomplete kind" cost-bounding half of
+	// the same fix (codex R1 P1 fan-out finding).
+	if len(searchKindCalls) != 1 || searchKindCalls[0] != contextfabric.SubjectProject {
+		t.Fatalf("searchKindCalls = %#v, want exactly one call, for project (the first incomplete kind in deterministic order) -- repository/team must never be attempted once an earlier sibling already failed closed", searchKindCalls)
+	}
+}
+
+// TestApplyLowPopulationKindScopedRescue_VectorConfiguredSkipsEntirely is
+// codex R1 finding 3 (P1, confirmed): on a deployment with a live vector
+// mechanism, buildConfirmedKindScopedSnapshot returns plan_incomplete for
+// EVERY kind unconditionally (chaos4154_confirmed_kind_scope.go), so this
+// rescue can never succeed there -- it must detect that up front and skip
+// entirely, spending ZERO SearchKind calls, rather than paying for three
+// exhaustive (and, per kind, vector-census-shadowing) passes to reach a
+// foregone conclusion.
+func TestApplyLowPopulationKindScopedRescue_VectorConfiguredSkipsEntirely(t *testing.T) {
+	t.Parallel()
+	const term = "acr"
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repo_1", Label: "acr-core"}
+	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.80, "*")
+	var searchKindCalls int
+	// Called directly (not through ResolveSubjects) to isolate this
+	// function's own SearchKind usage from CHAOS-4038's unrelated
+	// coverage floor, which also calls SearchKind for other kinds earlier
+	// in the pipeline.
+	deps := ResolveDeps{
+		VectorMechanismConfigured: true,
+		SearchKind: func(ctx context.Context, searchTerm string, kind contextfabric.SubjectKind, limit int) ([]CandidateNode, bool, bool, error) {
+			searchKindCalls++
+			return []CandidateNode{node}, false, false, nil
+		},
+	}
+	request := testRequest()
+	resolution, _, _, ok, err := applyLowPopulationKindScopedRescue(
+		context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, []string{term},
+		nil, false, request.Options.MaxSubjectCandidates, true, DefaultCommitGatePolicy(), true, false, false,
+	)
+	if err != nil {
+		t.Fatalf("applyLowPopulationKindScopedRescue() error = %v", err)
+	}
+	if ok || len(resolution.Committed) != 0 {
+		t.Fatalf("ok=%v resolution.Committed=%#v, want ok=false -- a live vector mechanism forecloses this rescue's completeness contract entirely", ok, resolution.Committed)
+	}
+	if searchKindCalls != 0 {
+		t.Fatalf("searchKindCalls = %d, want ZERO -- VectorMechanismConfigured must be checked BEFORE any SearchKind call, not discovered after paying for it", searchKindCalls)
+	}
+}

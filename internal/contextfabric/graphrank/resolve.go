@@ -547,6 +547,19 @@ type discardableDecisionTracer struct {
 	// silently drop every one but the last when keep() replays it.
 	captured          []ResolutionTraceEvent
 	capturedRankedCut []ResolutionTraceEvent
+	// capturedCorroboration (CHAOS-4417, codex R1 P2, confirmed): a
+	// "corroboration" event (resolution.go) names ONE candidate that
+	// reached the wrapped call's own population -- exactly the signal a
+	// consumer like the two-turn harness's expected_subject_in_pool field
+	// (chaos3742_two_turn_confirmation_test.go) reads as proof a candidate
+	// reached the REAL, committable pool. Before this field existed,
+	// "corroboration" fell through to the unconditional pass-through
+	// below and reached the real tracer immediately even when the scoped
+	// resolution it describes was ultimately discarded (never merged into
+	// 'pool', never kept) -- corrupting that reachability signal for every
+	// candidate in a scoped-but-not-kept population. Held back and
+	// replayed on keep() exactly like ranked_cut/decision.
+	capturedCorroboration []ResolutionTraceEvent
 }
 
 // offersOnlyDecisionTracer (CHAOS-4234, codex round-1 finding 3) tags
@@ -580,6 +593,10 @@ func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
 		// would read a discarded pass's ranks as the final ones.
 		d.capturedRankedCut = append(d.capturedRankedCut, event)
 		return
+	case "corroboration":
+		// CHAOS-4417: see capturedCorroboration's own doc comment above.
+		d.capturedCorroboration = append(d.capturedCorroboration, event)
+		return
 	}
 	if d.real != nil {
 		d.real.Trace(event)
@@ -589,10 +606,15 @@ func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
 // keep forwards every held-back "decision" event (if any -- CHAOS-4096: one
 // per committed subject on a multi-subject commit, not just one) to the
 // real tracer -- call ONLY when the caller is retaining this call's
-// resolution.
+// resolution. corroboration events (CHAOS-4417) replay FIRST -- they
+// describe candidates BEFORE the decision made over them, mirroring
+// ranked_cut's own "before its decision" ordering.
 func (d *discardableDecisionTracer) keep() {
 	if d.real == nil {
 		return
+	}
+	for _, event := range d.capturedCorroboration {
+		d.real.Trace(event)
 	}
 	for _, event := range d.capturedRankedCut {
 		d.real.Trace(event)
@@ -1319,6 +1341,16 @@ type ResolutionTraceEvent struct {
 	LowPopulationKindScopeKind           string
 	LowPopulationKindScopeState          string
 	LowPopulationKindScopeCandidateCount int
+	// LowPopulationKindScopeOutcome (stage == "low_population_kind_scope",
+	// empty LowPopulationKindScopeKind ONLY -- the rescue's own summary
+	// event, distinct from its per-kind events above): closed vocabulary,
+	// see the lowPopulationKindScopeOutcome* consts
+	// (chaos4417_low_population_kind_scope.go) for the full list and what
+	// each means. Fired exactly once per applyLowPopulationKindScopedRescue
+	// call, regardless of outcome -- codex R1 P2 (CHAOS-4417): a reader
+	// must always be able to tell why this rescue declined without
+	// reconstructing it from the (possibly discarded) union decision event.
+	LowPopulationKindScopeOutcome string
 	// AnchorOfferLabelsNormalizedCount (stage=="anchor_offer" ONLY,
 	// CHAOS-4210) is the number of THIS call's AnchorOptions (either the V1
 	// or V2 shape -- anchorOfferMaterial dispatches to exactly one) whose
