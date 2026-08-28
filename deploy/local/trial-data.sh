@@ -29,10 +29,13 @@
 #   ACR_TRIAL_CH_BACKUPS_STORAGE  clickhouse backups-staging PVC size (default: 5Gi)
 #   ACR_TRIAL_FALKOR_STORAGE   falkordb PVC size (default: 5Gi)
 #   ACR_TRIAL_NODEPORT_BASE    first of the four consecutive NodePorts
-#                              (default: 30500; must be 30000-30996). One
-#                              base per lane namespace -- NodePorts are
-#                              cluster-scoped, so two data planes on one
-#                              cluster need different bases (CHAOS-4428).
+#                              (default: 30500). Must be a MULTIPLE OF 10 in
+#                              30000-30990: the 10-port stride is what keeps
+#                              two lanes' four-port RANGES disjoint, not just
+#                              their base values. One base per lane namespace
+#                              -- NodePorts are cluster-scoped, so two data
+#                              planes on one cluster need different bases
+#                              (CHAOS-4428).
 #   ACR_TRIAL_CH_IMAGE         clickhouse image (default: the digest this
 #                              script pins, matching the compose stack's
 #                              currently-running clickhouse/clickhouse-server
