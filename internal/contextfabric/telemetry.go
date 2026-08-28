@@ -405,6 +405,11 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 		"formula_version", event.FormulaVersion,
 		"degraded_member_count", event.DegradedMemberCount,
 		"signals_available", event.SignalsAvailable,
+		// outcome_counts (CHAOS-4398 PR3, codex R1): a closed-vocabulary
+		// count map (qualified/provisional/insufficient_evidence/
+		// not_applicable), content-safe by the same reasoning as
+		// signals_available above -- counts and enum keys only.
+		"outcome_counts", event.OutcomeCounts,
 	}, requestIDLogAttrs(ctx)...)...)
 }
 

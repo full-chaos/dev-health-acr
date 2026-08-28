@@ -240,8 +240,22 @@ func (c ContextFabricProjectedCohort) Validate() error {
 	if len(c.RankingTable) != rankedCount {
 		return fmt.Errorf("projected cohort ranking table row count must equal the ranked member count")
 	}
-	if err := validateClaimedFactRows(c.RankingTable); err != nil {
-		return fmt.Errorf("ranking table: %w", err)
+	// A dedicated per-row check, NOT validateClaimedFactRows (codex R1):
+	// that helper's row-COUNT cap is ContextFabricClaimedFactMaxRows (64),
+	// sized for a single fact's renderable table -- RankingTable is capped
+	// at ContextFabricProjectedCohortMaxCount (250, one row per ranked
+	// member) instead, a legal, larger ceiling this shares only the
+	// per-row field-count/shape rule with.
+	if len(c.RankingTable) > ContextFabricProjectedCohortMaxCount {
+		return fmt.Errorf("projected cohort ranking table row count violates v1 bounds")
+	}
+	for _, row := range c.RankingTable {
+		if len(row.Fields) == 0 || len(row.Fields) > ContextFabricClaimedFactRowMaxFields {
+			return fmt.Errorf("projected cohort ranking table row field count violates v1 bounds")
+		}
+		if err := validateScalarMap(row.Fields); err != nil {
+			return fmt.Errorf("ranking table row: %w", err)
+		}
 	}
 	return nil
 }
@@ -271,19 +285,25 @@ func (m ContextFabricProjectedCohortMember) validateRanking() error {
 	if len(m.RankingBasis) > 128 || !uniqueTrimmedStrings(m.RankingBasis, 128) {
 		return fmt.Errorf("projected cohort member ranking basis violates v1 bounds")
 	}
-	// Outcome/MissingSignals mirror the SAME presence-pairing invariant
-	// ContextFabricCohortMember.validate enforces on the canonical side --
-	// see that method's own comment for why Score/MissingSignals key off
-	// Outcome rather than DataCompleteness.
-	if !validContextFabricCohortMemberOutcome(m.Outcome) || m.Outcome == "" {
-		return fmt.Errorf("projected cohort member outcome is not a recognized value")
-	}
-	scoredOutcome := m.Outcome == ContextFabricCohortOutcomeQualified || m.Outcome == ContextFabricCohortOutcomeProvisional
-	if (m.Score != nil) != scoredOutcome {
-		return fmt.Errorf("projected cohort member score presence does not match outcome")
-	}
-	if (len(m.MissingSignals) == 0) != (m.Outcome == ContextFabricCohortOutcomeQualified) {
-		return fmt.Errorf("projected cohort member missing_signals presence does not match outcome")
+	// Outcome/MissingSignals (CHAOS-4398 PR3, codex R1): a projection has no
+	// bounds parameter to distinguish write vs. legacy the way the
+	// canonical validator's cohortMemberOutcomeRequired does, and Project()
+	// copies whatever the source result carried -- a pre-PR3 stored result
+	// (RankingComputed true, Outcome never existed) re-projected here must
+	// stay readable. So Outcome is checked ONLY when present; absent is
+	// legal whenever RankingComputed is true, exactly like the canonical
+	// validateStored path already tolerates.
+	if m.Outcome != "" {
+		if !validContextFabricCohortMemberOutcome(m.Outcome) {
+			return fmt.Errorf("projected cohort member outcome is not a recognized value")
+		}
+		scoredOutcome := m.Outcome == ContextFabricCohortOutcomeQualified || m.Outcome == ContextFabricCohortOutcomeProvisional
+		if (m.Score != nil) != scoredOutcome {
+			return fmt.Errorf("projected cohort member score presence does not match outcome")
+		}
+		if (len(m.MissingSignals) == 0) != (m.Outcome == ContextFabricCohortOutcomeQualified) {
+			return fmt.Errorf("projected cohort member missing_signals presence does not match outcome")
+		}
 	}
 	if len(m.MissingSignals) > 5 || !uniqueTrimmedStrings(m.MissingSignals, 128) {
 		return fmt.Errorf("projected cohort member missing signals violate v1 bounds")

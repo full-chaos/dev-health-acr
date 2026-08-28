@@ -301,6 +301,14 @@ type contextFabricBounds struct {
 	// signal family, never more), same one-value-for-both-bound-sets
 	// reasoning as cohortMemberDrivers.
 	cohortMemberMissingSignals int
+	// cohortMemberDriverConcentrationRequired (CHAOS-4398 PR3, codex R1)
+	// is the SAME write-only split as cohortMemberOutcomeRequired above:
+	// PR2 already shipped and persisted real investment_mix driver rows
+	// before Concentration/ConcentrationMethod existed, so a row read back
+	// via validateStored must tolerate an investment_mix driver with
+	// neither field. A freshly produced row (Validate(), write bounds) has
+	// no such excuse -- investmentMixSignal always sets both together.
+	cohortMemberDriverConcentrationRequired bool
 }
 
 // contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
@@ -312,34 +320,35 @@ const contextFabricRelationshipPathMaxNodes = 51
 
 // contextFabricWriteBounds matches the published JSON Schema exactly.
 var contextFabricWriteBounds = contextFabricBounds{
-	closedFindingKinds:                true,
-	rawTextLength:                     true,
-	cohortInclusionReasons:            32,
-	cohortInclusionReasonLength:       1000,
-	narrativeCount:                    ContextFabricLimitationsMaxCount,
-	narrativeLength:                   ContextFabricLimitationMaxLength,
-	coverageEntries:                   100,
-	matchedTerms:                      32,
-	matchedTermLength:                 512,
-	matchReasons:                      32,
-	matchReasonLength:                 1000,
-	pathEvidenceRefs:                  200,
-	pathWhyRelevantLength:             2000,
-	factParameterValueLength:          ContextFabricFactRequirementParameterValueMaxLength,
-	judgmentLength:                    ContextFabricDirectJudgmentMaxLength,
-	deterministicAnswerLength:         ContextFabricDeterministicAnswerMaxLength,
-	nestedEvidenceRefs:                ContextFabricNestedEvidenceRefIDsMaxCount,
-	interpretationTerms:               ContextFabricSubjectTermsMaxCount,
-	candidateEvidenceRefs:             100,
-	cohortExclusionReasonLength:       1000,
-	memberEvidenceRefs:                100,
-	cohortMemberRankingBasis:          16,
-	cohortMemberRankingBasisLength:    128,
-	cohortMemberDrivers:               5,
-	cohortMemberDriverThresholdLabels: 4,
-	cohortMemberDriversRequired:       true,
-	cohortMemberOutcomeRequired:       true,
-	cohortMemberMissingSignals:        5,
+	closedFindingKinds:                      true,
+	rawTextLength:                           true,
+	cohortInclusionReasons:                  32,
+	cohortInclusionReasonLength:             1000,
+	narrativeCount:                          ContextFabricLimitationsMaxCount,
+	narrativeLength:                         ContextFabricLimitationMaxLength,
+	coverageEntries:                         100,
+	matchedTerms:                            32,
+	matchedTermLength:                       512,
+	matchReasons:                            32,
+	matchReasonLength:                       1000,
+	pathEvidenceRefs:                        200,
+	pathWhyRelevantLength:                   2000,
+	factParameterValueLength:                ContextFabricFactRequirementParameterValueMaxLength,
+	judgmentLength:                          ContextFabricDirectJudgmentMaxLength,
+	deterministicAnswerLength:               ContextFabricDeterministicAnswerMaxLength,
+	nestedEvidenceRefs:                      ContextFabricNestedEvidenceRefIDsMaxCount,
+	interpretationTerms:                     ContextFabricSubjectTermsMaxCount,
+	candidateEvidenceRefs:                   100,
+	cohortExclusionReasonLength:             1000,
+	memberEvidenceRefs:                      100,
+	cohortMemberRankingBasis:                16,
+	cohortMemberRankingBasisLength:          128,
+	cohortMemberDrivers:                     5,
+	cohortMemberDriverThresholdLabels:       4,
+	cohortMemberDriversRequired:             true,
+	cohortMemberOutcomeRequired:             true,
+	cohortMemberMissingSignals:              5,
+	cohortMemberDriverConcentrationRequired: true,
 }
 
 // contextFabricLegacyBounds is what the Go validator alone used to accept.
@@ -684,13 +693,22 @@ func (d ContextFabricCohortMemberDriver) validate(bounds contextFabricBounds) er
 	// carries both for investment_mix, never one without the other.
 	if d.Signal == investmentMixSignalName {
 		if d.Concentration == nil {
-			return fmt.Errorf("cohort member investment_mix driver is missing concentration")
+			if bounds.cohortMemberDriverConcentrationRequired {
+				return fmt.Errorf("cohort member investment_mix driver is missing concentration")
+			}
+		} else {
+			if math.IsNaN(*d.Concentration) || math.IsInf(*d.Concentration, 0) || *d.Concentration < 0 || *d.Concentration > 1 {
+				return fmt.Errorf("cohort member driver concentration violates v1 bounds")
+			}
+			if !validContextFabricCohortMemberDriverConcentrationMethod(d.ConcentrationMethod) {
+				return fmt.Errorf("cohort member driver concentration_method is not a recognized value")
+			}
 		}
-		if math.IsNaN(*d.Concentration) || math.IsInf(*d.Concentration, 0) || *d.Concentration < 0 || *d.Concentration > 1 {
-			return fmt.Errorf("cohort member driver concentration violates v1 bounds")
+		if d.Concentration == nil && d.ConcentrationMethod != "" {
+			return fmt.Errorf("cohort member driver concentration_method requires concentration")
 		}
-		if !validContextFabricCohortMemberDriverConcentrationMethod(d.ConcentrationMethod) {
-			return fmt.Errorf("cohort member driver concentration_method is not a recognized value")
+		if bounds.cohortMemberDriverConcentrationRequired && d.ConcentrationMethod == "" {
+			return fmt.Errorf("cohort member investment_mix driver is missing concentration_method")
 		}
 	} else if d.Concentration != nil || d.ConcentrationMethod != "" {
 		return fmt.Errorf("cohort member driver concentration is only valid for investment_mix")
