@@ -19,10 +19,15 @@ package hosted_test
 // (estimatedTokens := (measuredBytes + 3) / 4).
 
 import (
+	"context"
 	"sort"
+	"sync"
+	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // chaos4386LegacyResponseByteCap is the retired effective response-size
@@ -72,6 +77,38 @@ func chaos4386EffectiveMaxSerializedBytes(configured int64) int64 {
 		return configured
 	}
 	return chaos4386RequestMaxSerializedBytes
+}
+
+// chaos4386RequireCompatibleConfig fails the run loudly (codex review
+// round 2, P2, confirmed) rather than silently misreporting when
+// configured (cfg.MaxSerializedBytes) sits BELOW chaos4386RequestMaxSerializedBytes
+// -- config validation permits this (internal/config/config.go accepts
+// values as low as 8192). Under that configuration, twoTurnRequest's own
+// fixed options.max_serialized_bytes=262144 exceeds a.config.MaxSerializedBytes,
+// so the route's request-validation step
+// (request.Options.MaxSerializedBytes > a.config.MaxSerializedBytes) would
+// reject EVERY request this harness sends with a 400 before the response-
+// size gate ever runs at all -- there is no real "does this result fit"
+// behavior left to measure, and chaos4386EffectiveMaxSerializedBytes'
+// returned value would silently misrepresent an unreachable byte-gate
+// verdict as a real one. This harness bypasses HTTP entirely
+// (investigator.Investigate() in-process), so it has no other way to
+// notice that every one of its calls would have 400'd; refusing to run is
+// the only honest option under this configuration.
+func chaos4386RequireCompatibleConfig(t *testing.T, configured int64) {
+	t.Helper()
+	if chaos4386ConfigIncompatible(configured) {
+		t.Fatalf("ACR_MAX_SERIALIZED_BYTES=%d is below this harness's own fixed request option (options.max_serialized_bytes=%d, twoTurnRequest) -- every request this run sends would be rejected 400 invalid_request by the real route before the response-size gate ever ran, so result_bytes measurement would not correspond to real route behavior; raise ACR_MAX_SERIALIZED_BYTES to at least %d to run this class under this configuration", configured, chaos4386RequestMaxSerializedBytes, chaos4386RequestMaxSerializedBytes)
+	}
+}
+
+// chaos4386ConfigIncompatible is chaos4386RequireCompatibleConfig's own
+// condition, extracted as a pure predicate so it has a direct unit-test
+// surface independent of *testing.T's own Fatalf/FailNow machinery (this
+// file's own established precedent -- e.g. twoTurnPositiveFalseNoMatch,
+// twoTurnMutationProbe -- of pulling a guard's condition out for testing).
+func chaos4386ConfigIncompatible(configured int64) bool {
+	return configured < chaos4386RequestMaxSerializedBytes
 }
 
 // chaos4386MeasureResult serializes result with the production route's own
@@ -133,4 +170,53 @@ func chaos4386ResultByteStats(resultBytes []int64, effectiveMax int64) (max, p50
 	}
 	p99 = values[p99Index]
 	return max, p50, p99, overConfiguredMax, overLegacy16K
+}
+
+// chaos4386MeasuringInvestigator wraps a contextfabric.Investigator and
+// captures EVERY successful call's own measured bytes -- not merely each
+// case row's final result (codex review round 2, P1, confirmed). The HTTP
+// route gates every individual investigation response, not only the last
+// one a multi-turn arm/case happens to end on: a setup call
+// (mintWindowPrecondition), an inferred-tier arm's baseline leg, or an
+// N-turn case's turn 1 could each independently be oversized and 413 in
+// production even when the row's own FINAL result is comfortably small --
+// per-row-final measurement alone would never see that. Both
+// TestChaos3742TwoTurnConfirmationReplay and TestChaos4360NTurnConfirmationCarry
+// wrap their investigator with this BEFORE passing it to any arm/case
+// function, so the run-level result_bytes distribution is built from every
+// call this run actually made, while each row's own ResultBytes/EstTokens
+// field (chaos4386MeasureResult, called directly by the arm/case functions)
+// keeps its existing, separately useful "this row's own final answer"
+// meaning.
+//
+// mu guards values: two-turn's own per-case arms already run purely
+// sequentially within one process (no concurrent Investigate() calls), but
+// a mutex costs nothing here and removes any future refactor's need to
+// re-derive that this type is safe to share.
+type chaos4386MeasuringInvestigator struct {
+	contextfabric.Investigator
+	mu     sync.Mutex
+	values []int64
+}
+
+func (m *chaos4386MeasuringInvestigator) Investigate(ctx context.Context, principal storage.Principal, req contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+	result, err := m.Investigator.Investigate(ctx, principal, req)
+	if err == nil {
+		bytes, _ := chaos4386MeasureResult(result)
+		m.mu.Lock()
+		m.values = append(m.values, bytes)
+		m.mu.Unlock()
+	}
+	return result, err
+}
+
+// snapshot returns every byte measurement captured so far, safe to call
+// once the run's calls are all complete (or, defensively, at any point --
+// the mutex makes a concurrent call harmless even though none is expected).
+func (m *chaos4386MeasuringInvestigator) snapshot() []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int64, len(m.values))
+	copy(out, m.values)
+	return out
 }

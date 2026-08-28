@@ -8963,6 +8963,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
+	// CHAOS-4386 (codex review round 2, P2, confirmed): fail fast, before
+	// this multi-hour run does any real work, rather than discovering at
+	// serialization time that this run's own config makes every one of its
+	// requests unrepresentative of real route behavior.
+	chaos4386RequireCompatibleConfig(t, int64(cfg.MaxSerializedBytes))
 	// CHAOS-4155 Phase 2 (lane-4155-p2): this used to hardcode
 	// slog.LevelWarn, discarding cfg.LogLevel right after loading it --
 	// no env var could ever raise this harness's own log level, so a
@@ -9075,6 +9080,14 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	if investigator == nil {
 		t.Fatal("investigator is nil -- graph reads not enabled or FalkorDB not configured")
 	}
+	// CHAOS-4386 (codex review round 2, P1, confirmed): wraps every
+	// Investigate() call this run makes -- turn 1s, setup calls, baseline
+	// legs, mutation probes, everything -- so the run-level result_bytes
+	// distribution sees every response the real HTTP route would have
+	// gated, not merely each row's own final result. See
+	// chaos4386MeasuringInvestigator's own doc comment.
+	resultByteMeasurer := &chaos4386MeasuringInvestigator{Investigator: investigator}
+	investigator = resultByteMeasurer
 	store, ok := rt.Dependencies.Runtime.InvestigationResults.(twoTurnResultStoreSaver)
 	if !ok || rt.Dependencies.Runtime.InvestigationResults == nil {
 		t.Fatal("investigation result store is nil or does not satisfy the harness's Save signature -- the confirmed_wrong arm's anchor constructor cannot run without it")
@@ -9912,10 +9925,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// on a deployment configured ABOVE 262144 even though the real route
 	// would still 413 it.
 	report.MaxSerializedBytesConfigured = chaos4386EffectiveMaxSerializedBytes(int64(cfg.MaxSerializedBytes))
-	resultByteValues := make([]int64, len(report.Results))
-	for i, res := range report.Results {
-		resultByteValues[i] = res.ResultBytes
-	}
+	// resultByteMeasurer.snapshot() (codex review round 2, P1, confirmed):
+	// every call this run made, not merely each row's own final result --
+	// see chaos4386MeasuringInvestigator's own doc comment for why an
+	// oversized intermediate/setup call must not go unseen.
+	resultByteValues := resultByteMeasurer.snapshot()
 	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
 		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
 		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)

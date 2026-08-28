@@ -234,3 +234,93 @@ func TestChaos4386NTurnMeasuresLastGoodResultNotZeroValueOnLaterTurnError(t *tes
 		t.Errorf("EstTokens = %d, want %d", res.EstTokens, wantTokens)
 	}
 }
+
+// chaos4386ScriptedInvestigator returns one scripted result per call, in
+// order (chaos4360's own fakeNTurnInvestigator pattern, duplicated locally
+// rather than reused so this file has no ordering dependency on that
+// file's own fixture helpers).
+type chaos4386ScriptedInvestigator struct {
+	results []contractsv1.ContextFabricInvestigationResult
+}
+
+func (f *chaos4386ScriptedInvestigator) Investigate(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+	next := f.results[0]
+	f.results = f.results[1:]
+	return next, nil
+}
+
+var _ contextfabric.Investigator = (*chaos4386ScriptedInvestigator)(nil)
+
+// TestChaos4386MeasuringInvestigatorCapturesEveryCallNotJustTheFinalOne is
+// the codex review round 2 (P1, confirmed) regression: the HTTP route gates
+// EVERY individual investigation response, not only the last one a
+// multi-call arm/case happens to end on. Call 1 returns an oversized
+// (~300 KB) result; call 2 returns a small one. Before this fix, a
+// per-row-final measurement scheme would only ever see call 2's small
+// size and never report the run as over budget; chaos4386MeasuringInvestigator
+// must capture BOTH, so the run-level distribution correctly flags the
+// oversized intermediate call even though it was never any row's own
+// final result.
+func TestChaos4386MeasuringInvestigatorCapturesEveryCallNotJustTheFinalOne(t *testing.T) {
+	oversized := chaos4386SyntheticOversizedResult()
+	small := contractsv1.ContextFabricInvestigationResult{ResultID: "result_chaos4386_small", Status: contractsv1.ContextFabricInvestigationComplete}
+	oversizedBytes, _ := chaos4386MeasureResult(oversized)
+	smallBytes, _ := chaos4386MeasureResult(small)
+	if oversizedBytes <= chaos4386DefaultMaxSerializedBytes {
+		t.Fatalf("fixture oversized result measured %d bytes, want > %d", oversizedBytes, chaos4386DefaultMaxSerializedBytes)
+	}
+	if smallBytes > chaos4386DefaultMaxSerializedBytes {
+		t.Fatalf("fixture small result measured %d bytes, want <= %d -- fixture cannot distinguish 'saw only the final call' from 'saw every call'", smallBytes, chaos4386DefaultMaxSerializedBytes)
+	}
+
+	measurer := &chaos4386MeasuringInvestigator{Investigator: &chaos4386ScriptedInvestigator{results: []contractsv1.ContextFabricInvestigationResult{oversized, small}}}
+	if _, err := measurer.Investigate(context.Background(), storage.Principal{}, contractsv1.ContextFabricInvestigationRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := measurer.Investigate(context.Background(), storage.Principal{}, contractsv1.ContextFabricInvestigationRequest{}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := measurer.snapshot()
+	if len(snapshot) != 2 {
+		t.Fatalf("snapshot() = %v, want 2 entries (one per call)", snapshot)
+	}
+	if snapshot[0] != oversizedBytes || snapshot[1] != smallBytes {
+		t.Fatalf("snapshot() = %v, want [%d, %d]", snapshot, oversizedBytes, smallBytes)
+	}
+
+	// The run-level distribution built from the FULL snapshot must flag
+	// the run as over budget -- the oversized call is present even though
+	// it was never any row's own "final" result.
+	_, _, _, overConfigured, _ := chaos4386ResultByteStats(snapshot, chaos4386DefaultMaxSerializedBytes)
+	if overConfigured != 1 {
+		t.Fatalf("OverMaxSerializedBytesCount = %d, want 1 -- the oversized intermediate call must be visible in the run-level distribution", overConfigured)
+	}
+}
+
+// TestChaos4386ConfigIncompatible is the codex review round 2 (P2,
+// confirmed) regression: a deployment configured with
+// ACR_MAX_SERIALIZED_BYTES below this harness's own fixed request option
+// (262144, twoTurnRequest) would have every request 400 invalid_request'd
+// by the real route before the response-size gate ever ran --
+// chaos4386RequireCompatibleConfig (which this predicate backs) must
+// refuse to run under that configuration rather than silently misreport a
+// byte-gate verdict that was never actually reachable.
+func TestChaos4386ConfigIncompatible(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured int64
+		want       bool
+	}{
+		{"below the request's own cap: incompatible", 131072, true},
+		{"exactly at the request's own cap: compatible", 262144, false},
+		{"above the request's own cap: compatible", 1 << 20, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chaos4386ConfigIncompatible(tc.configured); got != tc.want {
+				t.Errorf("chaos4386ConfigIncompatible(%d) = %v, want %v", tc.configured, got, tc.want)
+			}
+		})
+	}
+}

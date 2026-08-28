@@ -91,12 +91,22 @@ import (
 // brand-new shape, not a change to the two-turn report (which stays at 39
 // unchanged -- CHAOS-4121's own precedent: a bump marks a meaning/shape
 // change to THAT artifact, and nothing about twoTurnReport's own shape
-// changed here). "40" continues the ONE shared version number
+// changed here). "40" continued the ONE shared version number
 // cf-measurement-trials.md's run-history table tracks across every trial
 // artifact type in this epic, for that table's own traceability -- not a
 // claim that this JSON shape is byte-compatible with any prior version of
-// itself (there is no prior version; this is v40's first artifact).
-const nTurnReportSchemaVersion = "40"
+// itself (there was no prior version; v40 was this family's first artifact).
+//
+// "41" (CHAOS-4386, codex review round 2, P2, confirmed): nTurnCaseResult
+// gains ResultBytes/EstTokens, and nTurnReport gains six run-level fields
+// (MaxSerializedBytesConfigured/MaxResultBytes/P50ResultBytes/
+// P99ResultBytes/OverMaxSerializedBytesCount/OverLegacy16KCount) -- see
+// their own doc comments. A real, pre-existing v40 artifact from BEFORE
+// this change exists (Run I, 2026-08-27/28) and carries none of these
+// fields; without a bump, a v40-labeled artifact from either side of this
+// change is indistinguishable, and a consumer cannot tell a legitimate
+// zero from a field that simply did not exist yet.
+const nTurnReportSchemaVersion = "41"
 
 // nTurnKnownPreCarryProvenance is the CLOSED set of
 // ContextFabricStructureProvenance values reachable before CHAOS-4360's
@@ -748,6 +758,9 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
+	// CHAOS-4386 (codex review round 2, P2, confirmed): fail fast -- see
+	// chaos3742's own identical check for why.
+	chaos4386RequireCompatibleConfig(t, int64(cfg.MaxSerializedBytes))
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	traceCapture := &twoTurnTraceCapture{SlogEngineTelemetry: contextfabric.NewSlogEngineTelemetry(logger)}
 	caseTimeout := 240 * time.Second
@@ -815,6 +828,14 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	if investigator == nil {
 		t.Fatal("investigator is nil -- graph reads not enabled or FalkorDB not configured")
 	}
+	// CHAOS-4386 (codex review round 2, P1, confirmed): wraps every
+	// Investigate() call this run makes -- turn 1s and every later turn --
+	// so the run-level result_bytes distribution sees every response the
+	// real HTTP route would have gated, not merely each case's own final
+	// (lastGoodResult) result. See chaos4386MeasuringInvestigator's own
+	// doc comment.
+	resultByteMeasurer := &chaos4386MeasuringInvestigator{Investigator: investigator}
+	investigator = resultByteMeasurer
 	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
 
 	transportLabel, responderModel, responderTransport, responderEffort := twoTurnResponderProvenance(t, exchangeDir)
@@ -904,10 +925,11 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	// alone is not the right threshold here either (runNTurnCase's calls
 	// go through the SAME twoTurnRequest, same fixed 262144 request option).
 	report.MaxSerializedBytesConfigured = chaos4386EffectiveMaxSerializedBytes(int64(cfg.MaxSerializedBytes))
-	resultByteValues := make([]int64, len(report.Results))
-	for i, res := range report.Results {
-		resultByteValues[i] = res.ResultBytes
-	}
+	// resultByteMeasurer.snapshot() (codex review round 2, P1, confirmed):
+	// every turn this run made, not merely each case's own final
+	// lastGoodResult -- see chaos4386MeasuringInvestigator's own doc
+	// comment for why an oversized intermediate turn must not go unseen.
+	resultByteValues := resultByteMeasurer.snapshot()
 	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
 		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
 		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)
