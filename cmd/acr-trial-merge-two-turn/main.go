@@ -836,6 +836,17 @@ type twoTurnReport struct {
 	P99ResultBytes               int64 `json:"p99_result_bytes"`
 	OverMaxSerializedBytesCount  int   `json:"over_max_serialized_bytes_count"`
 	OverLegacy16KCount           int   `json:"over_legacy_16k_count"`
+	// ResultByteSamples (CHAOS-4386, codex review round 3, P1, confirmed)
+	// mirrors twoTurnReport's identically-named field byte-for-byte -- see
+	// the producer's own doc comment. Concatenates across shards exactly
+	// like Timings does (each shard's own calls are disjoint); the five
+	// scalars above are RECOMPUTED from the merged union, never from
+	// Results[].ResultBytes alone -- recomputing from row finals only
+	// would silently drop every call that never became a row's own final
+	// result (a setup call, a baseline leg, an early turn), which is
+	// exactly the bug this field exists to prevent from reappearing at
+	// the merge step.
+	ResultByteSamples []int64 `json:"result_byte_samples,omitempty"`
 }
 
 // chaos4386LegacyResponseByteCap mirrors
@@ -1255,18 +1266,21 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		}
 		merged.Results = append(merged.Results, s.Results...)
 		merged.Timings = append(merged.Timings, s.Timings...)
+		merged.ResultByteSamples = append(merged.ResultByteSamples, s.ResultByteSamples...)
 	}
 	merged.TimingSummary = summarizeTwoTurnTiming(merged.Timings)
 
-	// CHAOS-4386: recomputed from the MERGED Results, never trusted from
-	// any one shard -- same discipline as TimingSummary immediately above.
-	resultByteValues := make([]int64, len(merged.Results))
-	for i, res := range merged.Results {
-		resultByteValues[i] = res.ResultBytes
-	}
+	// CHAOS-4386 (codex review round 3, P1, confirmed): recomputed from
+	// the MERGED ResultByteSamples -- every call every shard actually
+	// made, concatenated -- never from merged.Results[].ResultBytes alone
+	// (that would silently drop every call that never became a row's own
+	// final result: a setup call, a baseline leg, an early turn) and never
+	// trusted from any one shard -- same "never trust a per-shard
+	// aggregate" discipline TimingSummary immediately above already
+	// follows.
 	merged.MaxResultBytes, merged.P50ResultBytes, merged.P99ResultBytes,
 		merged.OverMaxSerializedBytesCount, merged.OverLegacy16KCount =
-		chaos4386ResultByteStats(resultByteValues, merged.MaxSerializedBytesConfigured)
+		chaos4386ResultByteStats(merged.ResultByteSamples, merged.MaxSerializedBytesConfigured)
 
 	merged.ApplicableMembers = make([]string, 0, len(applicableSeen))
 	for m := range applicableSeen {

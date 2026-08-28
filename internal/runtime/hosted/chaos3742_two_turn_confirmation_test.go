@@ -5786,6 +5786,22 @@ type twoTurnReport struct {
 	P99ResultBytes               int64 `json:"p99_result_bytes"`
 	OverMaxSerializedBytesCount  int   `json:"over_max_serialized_bytes_count"`
 	OverLegacy16KCount           int   `json:"over_legacy_16k_count"`
+	// ResultByteSamples (CHAOS-4386, codex review round 3, P1, confirmed)
+	// is the RAW population MaxResultBytes/P50/P99/both over-budget counts
+	// above were computed from -- resultByteMeasurer.snapshot(), every
+	// successful Investigate() call this shard made, not merely each row's
+	// own final result. Persisted (not just used transiently) for the SAME
+	// reason Timings is persisted alongside TimingSummary: a sharded
+	// (parallel) run's merge step has no other way to see calls that never
+	// became any row's own final ResultBytes (a setup call, a baseline
+	// leg, turn 1 of a multi-turn arm) -- recomputing the distribution
+	// from merged Results[].ResultBytes alone would silently drop every
+	// such call and could hide a genuinely oversized intermediate response
+	// behind a small final one. The merge tool concatenates this field
+	// across shards and RECOMPUTES the five scalars above from the union,
+	// mirroring TimingSummary's own "never trust a per-shard aggregate"
+	// discipline exactly (see mergeReports).
+	ResultByteSamples []int64 `json:"result_byte_samples,omitempty"`
 }
 
 // foldConfirmedKindVectorCensus is the single aggregation point for the
@@ -9930,6 +9946,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// see chaos4386MeasuringInvestigator's own doc comment for why an
 	// oversized intermediate/setup call must not go unseen.
 	resultByteValues := resultByteMeasurer.snapshot()
+	// Persisted (codex review round 3, P1, confirmed) so a sharded
+	// (parallel) run's merge step can recompute over the UNION of every
+	// shard's own calls -- see ResultByteSamples' own doc comment.
+	report.ResultByteSamples = resultByteValues
 	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
 		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
 		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)

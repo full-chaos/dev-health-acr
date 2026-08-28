@@ -388,6 +388,45 @@ func TestChaos4386_MaxSerializedBytesConfiguredMustAgreeAcrossShards(t *testing.
 	}
 }
 
+// TestChaos4386_MergeRecomputesFromResultByteSamplesNotJustRowFinals is the
+// codex review round 3 (P1, confirmed) regression: a shard's own
+// ResultByteSamples can contain a call that never became any row's own
+// final ResultBytes (a setup call, a baseline leg, an early turn) --
+// mergeReports must recompute the merged distribution from the
+// CONCATENATED ResultByteSamples, never from merged.Results[].ResultBytes
+// alone, or an oversized intermediate call from one shard would silently
+// disappear from the merged artifact.
+func TestChaos4386_MergeRecomputesFromResultByteSamplesNotJustRowFinals(t *testing.T) {
+	a := shardWithCases(t, 0, 2, []int{0, 2})
+	a.MaxSerializedBytesConfigured = 262144
+	// Every ROW's own final ResultBytes is small -- comfortably under
+	// budget -- but this shard's raw call population also includes one
+	// oversized (300000-byte) intermediate call that was never any row's
+	// own final result.
+	for i := range a.Results {
+		a.Results[i].ResultBytes = 5000
+	}
+	a.ResultByteSamples = []int64{5000, 5000, 300000}
+	b := shardWithCases(t, 1, 2, []int{1, 3})
+	b.MaxSerializedBytesConfigured = 262144
+	for i := range b.Results {
+		b.Results[i].ResultBytes = 6000
+	}
+	b.ResultByteSamples = []int64{6000, 6000}
+
+	merged := mergeReports([]twoTurnReport{a, b})
+
+	if merged.MaxResultBytes != 300000 {
+		t.Errorf("merged.MaxResultBytes = %d, want 300000 -- the oversized intermediate call from shard 0 must survive the merge even though no ROW's own final result carries it", merged.MaxResultBytes)
+	}
+	if merged.OverMaxSerializedBytesCount != 1 {
+		t.Errorf("merged.OverMaxSerializedBytesCount = %d, want 1 -- recomputing from merged.Results[].ResultBytes alone (every row is 5000-6000, all under budget) would silently report 0 and hide the oversized intermediate call", merged.OverMaxSerializedBytesCount)
+	}
+	if len(merged.ResultByteSamples) != 5 {
+		t.Errorf("merged.ResultByteSamples has %d entries, want 5 (3 from shard 0 + 2 from shard 1, concatenated)", len(merged.ResultByteSamples))
+	}
+}
+
 // TestChaos4313_ResponderTransportMustAgreeAcrossShards mirrors
 // TestChaos4135_ResponderModelMustAgreeAcrossShards' own pattern for the
 // SAME reason: ResponderTransport is a launch-level fact -- one transport
