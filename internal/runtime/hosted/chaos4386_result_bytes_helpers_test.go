@@ -220,3 +220,58 @@ func (m *chaos4386MeasuringInvestigator) snapshot() []int64 {
 	copy(out, m.values)
 	return out
 }
+
+// --- answer-rate fields (CHAOS-4386 scope-add, team-lead ruling 2026-08-28
+// 04:30 PDT): the v39/v40 report carried no per-case terminal answer
+// record, so an answer-rate analysis had to proxy from arm x member
+// structure rows. chaos4386TerminalFields closes that gap the same way
+// chaos4386MeasureResult closes the byte gap: read once, off the SAME
+// final InvestigationResult each site already has in scope, at each of
+// the same measurement sites CHAOS-4386's own ResultBytes/EstTokens stamp.
+
+// chaos4386TerminalReason returns the engine's own disclosure/refusal
+// explanation for why result did not reach a final "complete" answer --
+// empty for Complete (nothing to disclose). There is no single unified
+// "reason" field on ContextFabricInvestigationResult:
+// Interpretation.ClarificationReason is the field the engine populates for
+// clarification_required specifically; every other non-complete status
+// (partial/degraded/no_match) carries its explanation, when the engine
+// gave one, in Coverage.DegradedReasons (first entry) or, failing that,
+// Warnings (first entry) -- this reads the closest-fit disclosure channel
+// per status rather than inventing a field the wire contract does not have.
+func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult) string {
+	switch result.Status {
+	case contractsv1.ContextFabricInvestigationComplete:
+		return ""
+	case contractsv1.ContextFabricInvestigationClarificationRequired:
+		return result.Interpretation.ClarificationReason
+	default:
+		if len(result.Coverage.DegradedReasons) > 0 {
+			return result.Coverage.DegradedReasons[0]
+		}
+		if len(result.Warnings) > 0 {
+			return result.Warnings[0]
+		}
+		return ""
+	}
+}
+
+// chaos4386TerminalFields returns the per-case terminal-answer fields:
+// terminalStatus is the real ContextFabricInvestigationStatus wire
+// literal (never the "error:<class>" strings some pre-existing fields on
+// this row, e.g. Turn2Status, carry on a failed call); claimedFactsCount
+// is the literal length of result.ClaimedFacts -- deliberately NOT the
+// same thing as this row's own pre-existing CanonicalFactsCount field
+// (twoTurnCanonicalFactsCount counts distinct canonical_fact:* COVERAGE
+// SOURCES the synthesis step could have cited, not the claimed-fact array
+// length); rowsCount sums every claimed fact's own Rows table length
+// (mirrors nTurnRowsCount's identical logic, kept as its own copy here
+// rather than an import so this shared helper has no dependency on the
+// N-turn file); terminalReason is chaos4386TerminalReason's own value.
+func chaos4386TerminalFields(result contractsv1.ContextFabricInvestigationResult) (terminalStatus string, claimedFactsCount, rowsCount int, terminalReason string) {
+	rows := 0
+	for _, fact := range result.ClaimedFacts {
+		rows += len(fact.Rows)
+	}
+	return string(result.Status), len(result.ClaimedFacts), rows, chaos4386TerminalReason(result)
+}

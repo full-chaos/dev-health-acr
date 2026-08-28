@@ -182,11 +182,13 @@ func TestFoldConfirmedKindVectorCensus_AccumulatesAcrossCalls(t *testing.T) {
 // CHAOS-4314's own rebase onto CHAOS-4313's second bump (#287, v32,
 // responder_effort) is exactly that next bump: v33. CHAOS-4386's own bump to
 // v40 (result_bytes/est_tokens plus the run-level result-bytes distribution)
-// is the next one after that.
+// is the next one after that; its own answer-rate follow-up bump to v41
+// (terminal_status/claimed_facts_count/rows_count/terminal_reason plus
+// answer_rate) is the one after that.
 func TestTwoTurnReport_SchemaVersionPin(t *testing.T) {
 	t.Parallel()
-	if reportSchemaVersion != "40" {
-		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4386: result_bytes/est_tokens per row, plus the run-level result-bytes distribution)", reportSchemaVersion, "40")
+	if reportSchemaVersion != "41" {
+		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4386 answer-rate follow-up: terminal_status/claimed_facts_count/rows_count/terminal_reason per row, plus the run-level answer_rate)", reportSchemaVersion, "41")
 	}
 }
 

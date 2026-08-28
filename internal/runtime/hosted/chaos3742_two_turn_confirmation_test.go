@@ -4534,6 +4534,20 @@ type twoTurnCaseResult struct {
 	// result.
 	ResultBytes int64 `json:"result_bytes"`
 	EstTokens   int64 `json:"est_tokens"`
+	// TerminalStatus/ClaimedFactsCount/RowsCount/TerminalReason (CHAOS-4386
+	// answer-rate follow-up, team-lead scope-add ruling 2026-08-28 04:30
+	// PDT, schema v41) are this row's own terminal-answer record -- see
+	// chaos4386TerminalFields' own doc comment (chaos4386_result_bytes_helpers_test.go)
+	// for exactly what each field reads and why TerminalStatus/ClaimedFactsCount
+	// are NOT the same thing as this row's own pre-existing Turn2Status/
+	// CanonicalFactsCount fields. Same zero-on-absent convention as
+	// ResultBytes/EstTokens: populated on every row that reached a real
+	// Investigate() result, left at the zero value on an OfferMiss/
+	// ArmInvalid row.
+	TerminalStatus    string `json:"terminal_status,omitempty"`
+	ClaimedFactsCount int    `json:"claimed_facts_count"`
+	RowsCount         int    `json:"rows_count"`
+	TerminalReason    string `json:"terminal_reason,omitempty"`
 }
 
 // twoTurnCaseResultIsAnomalous (CHAOS-4135) reports whether res trips one of
@@ -4676,7 +4690,18 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // OverLegacy16KCount are RECOMPUTED there from the merged Results, never
 // summed, the same "never trust a per-shard aggregate" discipline
 // TimingSummary/AntiVacuityValid already follow.
-const reportSchemaVersion = "40"
+//
+// "41" (CHAOS-4386 answer-rate follow-up, team-lead scope-add ruling
+// 2026-08-28 04:30 PDT): the v39/v40 report carried no per-case terminal
+// answer record, so an answer-rate analysis had to proxy from arm x
+// member structure rows. twoTurnCaseResult gains TerminalStatus/
+// ClaimedFactsCount/RowsCount/TerminalReason (own doc comment); this
+// report gains AnswerRate (own doc comment). Purely additive; the merge
+// tool's own mirror gained the matching per-row fields (concatenate
+// verbatim, no arithmetic) and AnswerRate is RECOMPUTED there from the
+// merged Results, never trusted from any one shard, same discipline as
+// v40's own MaxResultBytes/etc.
+const reportSchemaVersion = "41"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5802,6 +5827,21 @@ type twoTurnReport struct {
 	// mirroring TimingSummary's own "never trust a per-shard aggregate"
 	// discipline exactly (see mergeReports).
 	ResultByteSamples []int64 `json:"result_byte_samples,omitempty"`
+	// AnswerRate (CHAOS-4386 answer-rate follow-up, team-lead scope-add
+	// ruling 2026-08-28 04:30 PDT, schema v41) is
+	// (cases with terminal_status=complete AND claimed_facts_count>=1) /
+	// (cases whose oracle expects an answer), computed ONLY over Arm==
+	// "positive" rows -- the one arm shaped like the actual end-to-end
+	// user flow (ask, then confirm); the inferred_tier/confirmed_wrong
+	// arms are deliberate adversarial-hint probes and the mutation arm is
+	// an explicit non-vacuity probe, neither answers "the user's real
+	// question" the way this rate means to measure. "Oracle expects an
+	// answer" reads ExpectedID != "" on that same row (CHAOS-4086's own
+	// diagnosis block, populated on every arm) -- the SAME "a real
+	// expected answer" gate twoTurnPositiveFalseNoMatch already uses.
+	// Recomputed at the merge step from the merged Results, never trusted
+	// from any one shard or summed -- see mergeReports.
+	AnswerRate float64 `json:"answer_rate"`
 }
 
 // foldConfirmedKindVectorCensus is the single aggregation point for the
@@ -7352,6 +7392,7 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	// CHAOS-4386: measured off turn2, this arm's own final result -- see
 	// twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn2)
+	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn2)
 	return res
 }
 
@@ -7440,6 +7481,31 @@ func TestCHAOS4314_TwoTurnWindowExpandAccepted_RejectsStaleSupersededDisposition
 // and still failed to convert it.
 func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabricInvestigationStatus) bool {
 	return expectID != "" && status == contractsv1.ContextFabricInvestigationNoMatch
+}
+
+// chaos4386TwoTurnAnswerRate computes twoTurnReport.AnswerRate over
+// results -- see that field's own doc comment for the exact denominator/
+// numerator definition. Pure function (same "derived from results, not
+// accumulated in the loop" pattern as summarizeTwoTurnTiming) so both the
+// producer and the merge tool's own mirror (cmd/acr-trial-merge-two-turn/main.go)
+// share one definition; the merge tool cannot import this file (same
+// reason it duplicates summarizeTwoTurnTiming/chaos4386ResultByteStats),
+// so this is hand-copied there too.
+func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
+	answerable, answered := 0, 0
+	for _, res := range results {
+		if res.Arm != string(twoTurnArmPositive) || res.ExpectedID == "" {
+			continue
+		}
+		answerable++
+		if res.TerminalStatus == string(contractsv1.ContextFabricInvestigationComplete) && res.ClaimedFactsCount >= 1 {
+			answered++
+		}
+	}
+	if answerable == 0 {
+		return 0
+	}
+	return float64(answered) / float64(answerable)
 }
 
 // twoTurnCanonicalFactsCount (CHAOS-4347, team-lead standing order: telemetry
@@ -8156,6 +8222,7 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	// CHAOS-4386: measured off result, this arm's own final (hinted) call --
 	// see twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
+	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
 	return res
 }
 
@@ -8663,6 +8730,7 @@ func runTwoTurnConfirmedWrongArm(t *testing.T, ctx context.Context, investigator
 	// CHAOS-4386: measured off turn2, this arm's own final result -- see
 	// twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn2)
+	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn2)
 	return res
 }
 
@@ -8839,6 +8907,7 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 		// CHAOS-4386: measured off result, this probe's own final call -- see
 		// twoTurnCaseResult.ResultBytes' own doc comment.
 		res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
+		res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
 		return res
 	}
 
@@ -9953,6 +10022,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
 		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
 		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)
+
+	// CHAOS-4386 answer-rate follow-up: derived from the rows this shard
+	// actually produced, once, immediately before serialization -- see
+	// AnswerRate's own doc comment.
+	report.AnswerRate = chaos4386TwoTurnAnswerRate(report.Results)
 
 	// CHAOS-4100: coverage recorded from the rows this shard actually
 	// produced, immediately before the artifact is serialized -- see

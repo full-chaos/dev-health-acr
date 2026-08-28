@@ -106,7 +106,15 @@ import (
 // fields; without a bump, a v40-labeled artifact from either side of this
 // change is indistinguishable, and a consumer cannot tell a legitimate
 // zero from a field that simply did not exist yet.
-const nTurnReportSchemaVersion = "41"
+//
+// "42" (CHAOS-4386 answer-rate follow-up, team-lead scope-add ruling
+// 2026-08-28 04:30 PDT): nTurnCaseResult gains TerminalStatus/
+// ClaimedFactsCount/TerminalReason (own doc comment -- RowsCount already
+// existed and satisfies that field-name request as-is), and nTurnReport
+// gains AnswerRate (own doc comment). A real, pre-existing v41 artifact
+// predates these fields, the SAME "cannot tell a legitimate zero from an
+// absent field" reason v40->v41 bumped for.
+const nTurnReportSchemaVersion = "42"
 
 // nTurnKnownPreCarryProvenance is the CLOSED set of
 // ContextFabricStructureProvenance values reachable before CHAOS-4360's
@@ -284,6 +292,27 @@ func nTurnReportHasUsableEvidence(report nTurnReport) bool {
 	return len(report.Results) > 0 && len(report.Results) > report.ArmInvalidCount
 }
 
+// chaos4386NTurnAnswerRate computes nTurnReport.AnswerRate over results --
+// see that field's own doc comment for the exact denominator/numerator
+// definition (mirrors chaos4386TwoTurnAnswerRate's own shape, adapted for
+// this class's single arm).
+func chaos4386NTurnAnswerRate(results []nTurnCaseResult) float64 {
+	answerable, answered := 0, 0
+	for _, res := range results {
+		if res.ArmInvalidReason != "" {
+			continue
+		}
+		answerable++
+		if res.TerminalStatus == string(contractsv1.ContextFabricInvestigationComplete) && res.ClaimedFactsCount >= 1 {
+			answered++
+		}
+	}
+	if answerable == 0 {
+		return 0
+	}
+	return float64(answered) / float64(answerable)
+}
+
 // nTurnReportExercisedCarryTransition reports whether AT LEAST ONE case in
 // report actually attempted the genuine carry-specific transition this
 // class exists to walk: a turn sending PriorCandidateReceipts WITHOUT
@@ -412,6 +441,25 @@ type nTurnCaseResult struct {
 	// (ArmInvalidReason set, no result ever produced at all).
 	ResultBytes int64 `json:"result_bytes"`
 	EstTokens   int64 `json:"est_tokens"`
+	// TerminalStatus/ClaimedFactsCount/TerminalReason (CHAOS-4386
+	// answer-rate follow-up, team-lead scope-add ruling 2026-08-28 04:30
+	// PDT, schema v42) are this case's own terminal-answer record -- see
+	// chaos4386TerminalFields' own doc comment (chaos4386_result_bytes_helpers_test.go).
+	// Measured off lastGoodResult, the SAME "last turn that actually
+	// returned successfully" value ResultBytes/EstTokens above use -- NOT
+	// off FinalStatus/RowsCount above, which this struct's own doc comment
+	// already documents as describing "the LAST turn reached" including a
+	// turn whose own call errored (result's zero-value in that case).
+	// TerminalStatus can therefore differ from FinalStatus on a case whose
+	// last attempted turn errored: FinalStatus reads "" (the zero value),
+	// TerminalStatus reads the last SUCCESSFUL turn's own real status.
+	// RowsCount already satisfies team-lead's own "rows_count" field name
+	// request -- no second field added under that name; its existing
+	// "last turn reached" semantics are unchanged and out of this ticket's
+	// scope.
+	TerminalStatus    string `json:"terminal_status,omitempty"`
+	ClaimedFactsCount int    `json:"claimed_facts_count"`
+	TerminalReason    string `json:"terminal_reason,omitempty"`
 }
 
 // nTurnReport is this class's own top-level artifact -- a single-shard
@@ -453,6 +501,18 @@ type nTurnReport struct {
 	P99ResultBytes               int64 `json:"p99_result_bytes"`
 	OverMaxSerializedBytesCount  int   `json:"over_max_serialized_bytes_count"`
 	OverLegacy16KCount           int   `json:"over_legacy_16k_count"`
+	// AnswerRate (CHAOS-4386 answer-rate follow-up, team-lead scope-add
+	// ruling 2026-08-28 04:30 PDT) mirrors twoTurnReport.AnswerRate's own
+	// numerator/denominator definition -- (cases with terminal_status=
+	// complete AND claimed_facts_count>=1) / (cases whose oracle expects
+	// an answer) -- but this class has only ONE arm (nturn_window_candidate_carry,
+	// this struct's own top-of-block comment), so "oracle expects an
+	// answer" reads ArmInvalidReason=="" instead of twoTurnReport's
+	// ExpectedID!="" gate: this class's own seed selection (team-lead
+	// ruling, CHAOS-4360) only ever selects project-kind cases carrying a
+	// real subject_anchor oracle entry, so a case that actually ran (never
+	// arm-invalid) inherently had a real expected answer by construction.
+	AnswerRate float64 `json:"answer_rate"`
 
 	Results []nTurnCaseResult `json:"results"`
 }
@@ -663,6 +723,7 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 	// confirmed) for why a turn that errored must not contribute its
 	// zero-value return to this measurement.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(lastGoodResult)
+	res.TerminalStatus, res.ClaimedFactsCount, _, res.TerminalReason = chaos4386TerminalFields(lastGoodResult)
 	return res
 }
 
@@ -933,6 +994,8 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
 		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
 		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)
+	// CHAOS-4386 answer-rate follow-up: see AnswerRate's own doc comment.
+	report.AnswerRate = chaos4386NTurnAnswerRate(report.Results)
 
 	raw, merr := json.MarshalIndent(report, "", "  ")
 	if merr != nil {
