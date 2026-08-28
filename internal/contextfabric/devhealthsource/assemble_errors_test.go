@@ -31,7 +31,7 @@ var rawDriverError = errors.New("code: 184, message: converting UInt32 to *int64
 func TestTableReadFailuresDoNotLeakDriverTextIntoErrorStrings(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM teams FINAL\nWHERE", err: rawDriverError},
+		{match: "FROM teams AS tm FINAL", err: rawDriverError},
 	}}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
 	if err != nil {

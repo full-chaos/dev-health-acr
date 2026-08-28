@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -101,6 +103,256 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 	}
 }
 
+// subTeamAuthorizationCarriesCurrentOwnedRepositories is CHAOS-4390.
+// queryTeams previously left Authorization.RepositorySlugs empty for every
+// team, which falkorgraph's shared authorizationValue convention encodes as
+// the wildcard "*" (unrestricted) -- so ANY repository-scoped principal
+// could see EVERY team in an organization, whether or not that team owns
+// anything the principal is scoped to. This proves the real fix: the team's
+// CURRENT team_repo_ownership rows (CHAOS-4321 -- ownership only, never
+// team_memberships) populate RepositorySlugs, and only currently-open
+// ownership counts -- a closed or not-yet-started assertion must not leak
+// into the authorization list, exactly like ownershipValidityPredicate's
+// "currently active" rule everywhere else in this package.
+func subTeamAuthorizationCarriesCurrentOwnedRepositories(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seedRepoOwnership := func(repoFullName string, validFrom time.Time, validTo any) {
+		if err := fixture.direct.Exec(ctx,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			fixture.orgID, "github", "TEAM-GITHUB", nil, repoFullName, "exact", "native", uint8(1), uint16(1), int32(1), validFrom, validTo, ownershipLaterAssertion); err != nil {
+			t.Fatalf("seed team_repo_ownership %s: %v", repoFullName, err)
+		}
+	}
+	// Currently open: must be authorized.
+	seedRepoOwnership("acme/repo-open", ownershipFirstSeen, nil)
+	// Closed in the past (before "now"): must NOT be authorized.
+	seedRepoOwnership("acme/repo-closed", ownershipFirstSeen, ownershipLatestClose)
+	// Not yet started (valid_from in the future): must NOT be authorized.
+	seedRepoOwnership("acme/repo-future", time.Now().UTC().Add(365*24*time.Hour), nil)
+
+	batch := fixture.project(t, ctx)
+	entity := entityByCanonicalID(t, batch, "team:TEAM-GITHUB")
+	if len(entity.Authorization.TeamIDs) != 1 || entity.Authorization.TeamIDs[0] != "TEAM-GITHUB" {
+		t.Fatalf("TeamIDs = %v, want [TEAM-GITHUB] unchanged", entity.Authorization.TeamIDs)
+	}
+	got := append([]string(nil), entity.Authorization.RepositorySlugs...)
+	sort.Strings(got)
+	want := []string{"acme/repo-open"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("RepositorySlugs = %v, want %v (closed and not-yet-started ownership rows must be excluded)", got, want)
+	}
+}
+
+// subTeamAuthorizationCollapsesStaleOpenAssertion is codex round-1's HIGH
+// finding on this PR: team_repo_ownership's ReplacingMergeTree key includes
+// valid_from, so FINAL keeps an OLDER open assertion (valid_from=t1,
+// valid_to=NULL) and a LATER assertion that actually closed the SAME
+// (team, repo, source) (valid_from=t2>t1, valid_to=<past>) as two DISTINCT
+// rows -- they differ only in valid_from. A naive `valid_to IS NULL`
+// filter after FINAL would still surface the repository through the stale
+// open row even though the org's most recent assertion revoked it. This
+// seeds exactly that sequence and proves the repository is excluded.
+func subTeamAuthorizationCollapsesStaleOpenAssertion(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seed := func(validFrom time.Time, validTo any) {
+		if err := fixture.direct.Exec(ctx,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/revoked-repo", "exact", "native", uint8(1), uint16(1), int32(1), validFrom, validTo, validFrom); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+	// Older assertion: open.
+	seed(ownershipFirstSeen, nil)
+	// LATER assertion (different valid_from -- FINAL keeps both rows):
+	// closes it, before "now".
+	seed(ownershipLaterAssertion, ownershipLatestClose)
+
+	batch := fixture.project(t, ctx)
+	entity := entityByCanonicalID(t, batch, "team:TEAM-GITHUB")
+	for _, repo := range entity.Authorization.RepositorySlugs {
+		if repo == "acme/revoked-repo" {
+			t.Fatalf("RepositorySlugs = %v, want acme/revoked-repo excluded -- the LATEST assertion closed it, but a stale FINAL-surviving open row leaked it back in", entity.Authorization.RepositorySlugs)
+		}
+	}
+}
+
+// subTeamAuthorizationRefreshedByOwnershipOnlyChange is codex round-1's
+// other HIGH finding: queryTeams' cursor/watermark used to be bare
+// tm.updated_at, so a grant or revocation that touches ONLY
+// team_repo_ownership (the team's own teams-table row left untouched)
+// would never advance the watermark incremental catch-up compares
+// against, and the team would never be re-selected -- the graph would
+// keep serving a STALE authorization scope indefinitely. This proves the
+// fix: page through to convergence, then write a NEW team_repo_ownership
+// row with NO corresponding change to the teams table, and prove a
+// subsequent incremental page (starting from the converged cursor)
+// re-selects the team with the new repository present.
+func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	cursor := ""
+	for page := 0; page < 10; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if !available {
+			break
+		}
+		cursor = batch.NextCursor
+	}
+
+	// Ownership-only change: team_repo_ownership gets a brand-new row,
+	// timestamped strictly after everything already consumed; the teams
+	// table itself is not touched at all.
+	refreshedAt := time.Now().UTC()
+	if err := fixture.direct.Exec(ctx,
+		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/freshly-granted-repo", "exact", "native", uint8(1), uint16(1), int32(1), refreshedAt, nil, refreshedAt); err != nil {
+		t.Fatalf("seed ownership-only change: %v", err)
+	}
+
+	found := false
+	for page := 0; page < 10; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("post-refresh page %d: %v", page, err)
+		}
+		if !available {
+			break
+		}
+		cursor = batch.NextCursor
+		for _, e := range batch.Entities {
+			if e.Subject.CanonicalID != "team:TEAM-GITHUB" {
+				continue
+			}
+			for _, repo := range e.Authorization.RepositorySlugs {
+				if repo == "acme/freshly-granted-repo" {
+					found = true
+				}
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Fatal("TEAM-GITHUB was never re-emitted after an ownership-only change -- the watermark did not advance for a team_repo_ownership-only update")
+	}
+}
+
+// subTeamAuthorizationRefreshedByRevokingLastOpenRepository is codex
+// round-2's HIGH finding: the outer watermark aggregation used to filter
+// to `WHERE latest_is_open` BEFORE computing `max(updated_at)`, so
+// revoking a team's ONLY open repository removed that repository's row
+// from the aggregation entirely -- taking its own updated_at with it.
+// The watermark then regressed (or fell back to the epoch), which can sit
+// BELOW what an earlier page already consumed, and sincePredicate's
+// strict `>` then skips the team forever: the revocation itself is what
+// never gets picked up, leaving the now-invalid repository authorized
+// indefinitely. This seeds exactly that sequence -- grant, converge,
+// revoke the team's ONLY open repository, converge again -- and proves
+// the team is re-emitted with the repository excluded.
+func subTeamAuthorizationRefreshedByRevokingLastOpenRepository(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seed := func(validFrom time.Time, validTo any, updatedAt time.Time) {
+		if err := fixture.direct.Exec(ctx,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/only-repo", "exact", "native", uint8(1), uint16(1), int32(1), validFrom, validTo, updatedAt); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+	grantedAt := ownershipFirstSeen
+	seed(grantedAt, nil, grantedAt)
+
+	cursor := ""
+	converge := func() {
+		for page := 0; page < 10; page++ {
+			batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+				OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+			})
+			if err != nil {
+				t.Fatalf("converge page %d: %v", page, err)
+			}
+			if !available {
+				return
+			}
+			cursor = batch.NextCursor
+		}
+	}
+	converge()
+
+	// Revoke the team's ONLY open repository: a NEW assertion (later
+	// valid_from, later updated_at) that closes it.
+	revokedAt := time.Now().UTC()
+	seed(revokedAt, revokedAt, revokedAt)
+
+	found := false
+	excluded := false
+	for page := 0; page < 10; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("post-revoke page %d: %v", page, err)
+		}
+		if !available {
+			break
+		}
+		cursor = batch.NextCursor
+		for _, e := range batch.Entities {
+			if e.Subject.CanonicalID != "team:TEAM-GITHUB" {
+				continue
+			}
+			found = true
+			excluded = true
+			for _, repo := range e.Authorization.RepositorySlugs {
+				if repo == "acme/only-repo" {
+					excluded = false
+				}
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Fatal("TEAM-GITHUB was never re-emitted after its only open repository was revoked -- the watermark regressed when the last open row dropped out of the aggregation")
+	}
+	if !excluded {
+		t.Fatal("TEAM-GITHUB was re-emitted but acme/only-repo is still in RepositorySlugs after revocation")
+	}
+}
+
+// subTeamAuthorizationOwnershipJoinScopedToOneOrganization proves the
+// team_repo_ownership join itself carries the same org_id isolation as
+// every other producer in this package (CHAOS-3642/3649 discipline): a
+// same-named repository owned by a DIFFERENT organization's team must
+// never leak into this organization's team authorization.
+func subTeamAuthorizationOwnershipJoinScopedToOneOrganization(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	otherOrg := "40000000-0000-4000-8000-00000000000b"
+	mustSeed := func(orgID string, statement string, args ...any) {
+		t.Helper()
+		if err := fixture.direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed in org %s: %v", orgID, err)
+		}
+	}
+	at := ownershipLaterAssertion
+	// A DIFFERENT organization, with a team carrying the SAME id and a
+	// repository owned only there.
+	mustSeed(otherOrg, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"TEAM-GITHUB", "TEAM-GITHUB name", "", at, otherOrg, "github", "TEAM-GITHUB", []string{}, uint8(1))
+	mustSeed(otherOrg, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		otherOrg, "github", "TEAM-GITHUB", nil, "acme/other-org-repo", "exact", "native", uint8(1), uint16(1), int32(1), ownershipFirstSeen, nil, ownershipFirstSeen)
+
+	batch := fixture.project(t, ctx)
+	entity := entityByCanonicalID(t, batch, "team:TEAM-GITHUB")
+	for _, repo := range entity.Authorization.RepositorySlugs {
+		if repo == "acme/other-org-repo" {
+			t.Fatalf("RepositorySlugs = %v, leaked a DIFFERENT organization's ownership row -- team_repo_ownership join is not org-scoped", entity.Authorization.RepositorySlugs)
+		}
+	}
+}
+
 var (
 	ownershipFirstSeen            = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	ownershipLaterAssertion       = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
@@ -150,6 +402,11 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"tied assertions resolve deterministically", "30000000-0000-4000-8000-000000000005", subTiedOwnershipAssertionsResolveDeterministically},
 		{"ambiguity guard is scoped to one organization", "30000000-0000-4000-8000-000000000006", subAmbiguityGuardIsScopedToOneOrganization},
 		{"omitted rows beyond the skip bound still converge", "30000000-0000-4000-8000-000000000007", subOmittedRowsBeyondTheSkipBoundStillConverge},
+		{"team authorization carries current owned repositories", "30000000-0000-4000-8000-000000000008", subTeamAuthorizationCarriesCurrentOwnedRepositories},
+		{"team authorization collapses a stale open assertion superseded by a later close", "30000000-0000-4000-8000-000000000009", subTeamAuthorizationCollapsesStaleOpenAssertion},
+		{"team authorization is refreshed by an ownership-only change", "30000000-0000-4000-8000-00000000000a", subTeamAuthorizationRefreshedByOwnershipOnlyChange},
+		{"team authorization is refreshed by revoking the last open repository", "30000000-0000-4000-8000-00000000000c", subTeamAuthorizationRefreshedByRevokingLastOpenRepository},
+		{"team authorization ownership join is scoped to one organization", "30000000-0000-4000-8000-00000000000b", subTeamAuthorizationOwnershipJoinScopedToOneOrganization},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

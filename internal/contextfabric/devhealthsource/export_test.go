@@ -23,12 +23,20 @@ func EntityTableNamesForTest() []string {
 // matching seed row and expectation fails loudly instead of going silently
 // unasserted.
 func TeamsProjectsTableNamesForTest() []string {
-	tables := teamsProjectsTables(nil, nil)
+	tables := teamsProjectsTables(nil, nil, nil)
 	names := make([]string, len(tables))
 	for i, table := range tables {
 		names[i] = table.name
 	}
 	return names
+}
+
+// NoTeamOwnershipSentinelForTest exposes noTeamOwnershipSentinel
+// (teams_projects.go, CHAOS-4390) to devhealthsource_test, so a test can
+// assert against the SAME literal production actually emits rather than a
+// second hand-copied string that could silently drift from it.
+func NoTeamOwnershipSentinelForTest() string {
+	return noTeamOwnershipSentinel
 }
 
 // ProjectAuthorizationScopeForTest exposes queryProjects' reserved-namespace
