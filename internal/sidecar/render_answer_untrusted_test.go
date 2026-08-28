@@ -112,6 +112,15 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// cannot ship unmarked, carved out today because nothing produces
 		// this shape into a rendered answer yet.
 		"structured.key_facts[].rows[].fields{}.string": "not (yet) rendered by this plain-text markdown view; no producer routes a Rows-bearing fact into a driver's cited claims yet, and the claim's own field/value pair already renders with the untrusted marking",
+		// CHAOS-4398 PR3: RankingTable and AffectedSubjects are new
+		// Rows-panel/driver-tie-back fields (design doc §4a) with no
+		// rendering wired into this plain-text markdown view yet -- same
+		// "declared now so a future rendering cannot ship unmarked,
+		// carved out today because nothing renders this shape yet" shape
+		// as key_facts[].rows[].fields{}.string and window_expand_options
+		// above.
+		"structured.cohort.ranking_table[].fields{}.string":        "not (yet) rendered by this plain-text markdown view; the Rows panel has no renderer wired in yet",
+		"structured.principal_drivers[].affected_subjects[].label": "not (yet) rendered by this plain-text markdown view; driver-to-cohort-member tie-back has no renderer wired in yet",
 	}
 	for _, declared := range planted {
 		sentinel := sentinels[declared]
@@ -310,6 +319,10 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 	// fixture's own comment below for why sharing a pointer here would
 	// silently corrupt this closure test.
 	rowTeamName := "cobalt"
+	// CHAOS-4398 PR3: a third, distinct backing string for RankingTable's
+	// own Fields map entry -- same "never share a *string backing value
+	// across declared paths" reasoning as rowTeamName above.
+	rankingRowTeamName := "indigo"
 	return contractsv1.ContextFabricAnswerProjection{
 		SchemaVersion:      contractsv1.ContextFabricAnswerProjectionSchema,
 		ResultID:           "result_injection1",
@@ -336,12 +349,24 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				Rank:             1,
 				InclusionReasons: []string{"an inclusion reason"},
 			}},
+			// CHAOS-4398 PR3: a non-empty entry so the reflection walk
+			// below can reach and plant "cohort.ranking_table[].fields{}.string" --
+			// same "empty slice is silently unresolvable" reasoning as
+			// KeyFacts[0].Rows below.
+			RankingTable: []contractsv1.ContextFabricClaimedFactRow{{
+				Fields: map[string]contractsv1.ContextFabricScalarValue{"team_name": {String: &rankingRowTeamName}},
+			}},
 		},
 		PrincipalDrivers: []contractsv1.ContextFabricProjectedDriver{{
 			DriverID: "driver_injection1", Standing: contractsv1.ContextFabricDriverPrincipal,
 			Category: "status", Title: "a title", Summary: "a summary", Qualification: "a qualification",
 			Confidence: 0.9, EvidenceRefIDs: []string{"evidence_inject01"},
 			ClaimedFactIDs: []string{"claim_injection1"},
+			// CHAOS-4398 PR3: a non-empty entry so the reflection walk
+			// below can reach and plant "principal_drivers[].affected_subjects[].label".
+			AffectedSubjects: []contractsv1.ContextFabricSubjectRef{{
+				Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team_x", Label: "Team X",
+			}},
 		}},
 		KeyFacts: []contractsv1.ContextFabricProjectedFact{{
 			ClaimID: "claim_injection1", Kind: contractsv1.ContextFabricFactStatus, Subject: subject,

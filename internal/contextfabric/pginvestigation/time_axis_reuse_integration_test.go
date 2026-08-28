@@ -258,6 +258,9 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 		// CHAOS-4085: same mirror, one more dimension (the commit-gate
 		// fence).
 		CommitGateVersion: testReuseVersionAuthorities.CommitGateVersion,
+		// CHAOS-4398 PR3 (R4 ruling): same mirror, one more dimension (the
+		// cohort ranking formula fence).
+		RankingFormulaVersion: testReuseVersionAuthorities.RankingFormulaVersion,
 	}
 	reused, found, _, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)

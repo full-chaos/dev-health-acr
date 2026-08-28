@@ -246,7 +246,18 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// RankingBasis/DataCompleteness. Widening the projection is PR3's
 		// job (cohort-answer-plan.md item 8: needs an ask-dev pin bump,
 		// tracked as a PR1 follow-up), not this PR's.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 160},
+		// CHAOS-4398 PR3 (WIP): 154 -> 160 -- ProjectedCohortMember gained
+		// the mirrored per-member driver fields (signal, window,
+		// threshold_labels[], concentration_method), six new string
+		// leaves, the same reasoning as the CHAOS-4347 Rows bump above.
+		// CHAOS-4398 PR3: 160 -> 162 -- ProjectedCohortMember gained
+		// outcome/missing_signals[], the same two new leaves already
+		// bumped into the investigation_result surface below (246 ->
+		// 248) -- this surface's pin was missed in the same commit. Both
+		// leaves are already allowlisted in trustedBecauseClosed
+		// ("outcome" and "missing_signals" cases), so no new
+		// classification is needed here, only the pin.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 162},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
