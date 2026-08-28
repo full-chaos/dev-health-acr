@@ -15,8 +15,8 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // CHAOS-3783 acceptance harness.

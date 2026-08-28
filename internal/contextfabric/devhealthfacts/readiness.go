@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // ReadinessProvider implements contextfabric.FactProvider for FactReadiness
@@ -82,47 +83,22 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 }
 
 // readTeamReadiness is CHAOS-3780's original estimate_coverage_metrics_daily
-// read, unchanged in behavior, factored out so ReadFacts can branch by
-// subject kind the same way metrics.go/health.go already do.
+// read. The query itself (row_number() tiebreak over day/computed_at/
+// cityHash64 for the multi-(work_scope, provider)-per-team shape) now lives
+// in readers.ReadTeamReadiness -- see that function's doc comment for the
+// full tiebreak reasoning. This adapter keeps the CanonicalFact-building
+// half, factored out so ReadFacts can branch by subject kind the same way
+// metrics.go/health.go already do.
 func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
 	ids, bySubject := subjectIndex(subjects, teamPrefix)
-	// row_number() OVER (PARTITION BY team_id, work_scope_id, provider
-	// ORDER BY day DESC, computed_at DESC) picks the single most recent
-	// already-computed row for each (team, work scope, provider) triple --
-	// a team can have several concurrent work scopes (e.g. sprints)
-	// tracked at once, and different source providers can share a
-	// work_scope_id string.
-	//
-	// day/computed_at is still not a TOTAL order (Codex round-2 finding
-	// M1): estimate_coverage_metrics_daily has no per-row unique id beyond
-	// this partition's own key, so two rows could share both. cityHash64
-	// of the value columns is the final tiebreaker -- arbitrary among an
-	// exact tie, but stable. Its ifNull(ratio, -1) sentinel is only
-	// unambiguous while -1 is outside ratio's real domain: ratio is
-	// estimated_count/backlog_size, a fraction; live data ranges [0, 1],
-	// never negative. There is no ClickHouse-level CHECK constraint
-	// enforcing this -- it is a domain assumption, not a type guarantee.
-	statement := withRowLimit(`SELECT team_id, work_scope_id, provider, toString(day), toInt64(estimated_count), toInt64(unestimated_count), toInt64(backlog_size), toUInt8(isNotNull(ratio)), toFloat64(ifNull(ratio, 0))
-FROM (
-	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
-		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
-	FROM estimate_coverage_metrics_daily FINAL
-	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
-)
-WHERE rn = 1`)
-	rowCount := 0
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var teamID, workScopeID, provider, day string
-		var estimatedCount, unestimatedCount, backlogSize int64
-		var hasRatio uint8
-		var ratio float64
-		if err := row.Scan(&teamID, &workScopeID, &provider, &day, &estimatedCount, &unestimatedCount, &backlogSize, &hasRatio, &ratio); err != nil {
-			return err
-		}
-		subject, ok := bySubject[teamID]
+	rows, err := readers.ReadTeamReadiness(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range rows {
+		subject, ok := bySubject[r.TeamID]
 		if !ok {
-			return nil
+			continue
 		}
 		fields := map[string]contextfabric.FactValue{
 			// basis states, in the fact's own structure (not only in this
@@ -132,33 +108,22 @@ WHERE rn = 1`)
 			// present this value as answering a broader readiness
 			// question than it does.
 			"basis":             contextfabric.StringFactValue("estimate_coverage"),
-			"work_scope_id":     stringOrNull(workScopeID),
-			"provider":          stringOrNull(provider),
-			"day":               contextfabric.StringFactValue(day),
-			"estimated_count":   contextfabric.IntegerFactValue(estimatedCount),
-			"unestimated_count": contextfabric.IntegerFactValue(unestimatedCount),
-			"backlog_size":      contextfabric.IntegerFactValue(backlogSize),
+			"work_scope_id":     stringOrNull(r.WorkScopeID),
+			"provider":          stringOrNull(r.Provider),
+			"day":               contextfabric.StringFactValue(r.Day),
+			"estimated_count":   contextfabric.IntegerFactValue(r.EstimatedCount),
+			"unestimated_count": contextfabric.IntegerFactValue(r.UnestimatedCount),
+			"backlog_size":      contextfabric.IntegerFactValue(r.BacklogSize),
 		}
-		if hasRatio != 0 {
-			fields["estimate_coverage_ratio"] = contextfabric.NumberFactValue(ratio)
+		if r.HasRatio != 0 {
+			fields["estimate_coverage_ratio"] = contextfabric.NumberFactValue(r.Ratio)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReadiness, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
 		})
-		return nil
-	}, timeBound.bindings()...)
-	return rowCount, scanErr
-}
-
-// readinessRollupRow is one (project, team, work_scope, provider) tuple's
-// contribution to a project's readiness rollup, scanned off the
-// team_project_ownership join before Go-side grouping.
-type readinessRollupRow struct {
-	teamID, teamName, workScopeID, provider, day  string
-	estimatedCount, unestimatedCount, backlogSize int64
-	hasRatio                                      bool
-	ratio                                         float64
+	}
+	return len(rows), nil
 }
 
 // readProjectReadiness rolls FactReadiness up for a project through
@@ -166,49 +131,30 @@ type readinessRollupRow struct {
 // every team owning the project contributes its own latest per-(work_scope,
 // provider) coverage row, verbatim, into one renderable team_breakdown
 // table -- see the package doc comment for why estimate/backlog counts are
-// never summed across teams here.
+// never summed across teams here. The query itself now lives in
+// readers.ReadProjectReadiness; this adapter does the Go-side
+// grouping/breakdown-table construction the reader deliberately leaves to
+// its caller.
 func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
 		return 0, false, nil
 	}
-	ownershipPredicate := ownershipValidityPredicate(timeBound)
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
-FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
-INNER JOIN (
-	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
-		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
-	FROM estimate_coverage_metrics_daily FINAL
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
-) AS ec ON ec.team_id = tpo.team_id AND ec.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
-ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`)
-	byProject := make(map[string][]readinessRollupRow)
+	scanned, err := readers.ReadProjectReadiness(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return 0, false, err
+	}
+	rowCount = len(scanned)
+	byProject := make(map[string][]readers.ReadinessProjectRow)
 	var projectOrder []string
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var projectSubjectKey, teamID, teamName, workScopeID, provider, day string
-		var estimatedCount, unestimatedCount, backlogSize int64
-		var hasRatio uint8
-		var ratio float64
-		if err := row.Scan(&projectSubjectKey, &teamID, &teamName, &workScopeID, &provider, &day, &estimatedCount, &unestimatedCount, &backlogSize, &hasRatio, &ratio); err != nil {
-			return err
+	for _, r := range scanned {
+		if _, ok := bySubject[r.ProjectSubjectKey]; !ok {
+			continue
 		}
-		if _, ok := bySubject[projectSubjectKey]; !ok {
-			return nil
+		if _, seen := byProject[r.ProjectSubjectKey]; !seen {
+			projectOrder = append(projectOrder, r.ProjectSubjectKey)
 		}
-		if _, seen := byProject[projectSubjectKey]; !seen {
-			projectOrder = append(projectOrder, projectSubjectKey)
-		}
-		byProject[projectSubjectKey] = append(byProject[projectSubjectKey], readinessRollupRow{
-			teamID: teamID, teamName: teamName, workScopeID: workScopeID, provider: provider, day: day,
-			estimatedCount: estimatedCount, unestimatedCount: unestimatedCount, backlogSize: backlogSize,
-			hasRatio: hasRatio != 0, ratio: ratio,
-		})
-		return nil
-	}, timeBound.bindings()...)
-	if scanErr != nil {
-		return rowCount, false, scanErr
+		byProject[r.ProjectSubjectKey] = append(byProject[r.ProjectSubjectKey], r)
 	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -219,26 +165,26 @@ ORDER BY p.id, tpo.team_id, ec.work_scope_id, ec.provider`)
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
 		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
 		for _, r := range rows {
-			dedupeKey := r.teamID + "\x00" + r.workScopeID + "\x00" + r.provider
+			dedupeKey := r.TeamID + "\x00" + r.WorkScopeID + "\x00" + r.Provider
 			if dedupeTeamRow(seenTeamScope, dedupeKey) {
 				continue
 			}
-			if !dedupeTeamRow(seenTeams, r.teamID) {
-				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.teamID))
+			if !dedupeTeamRow(seenTeams, r.TeamID) {
+				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.TeamID))
 			}
 			rowFields := map[string]contextfabric.FactValue{
 				"basis":             contextfabric.StringFactValue("estimate_coverage"),
-				"team_id":           contextfabric.StringFactValue(r.teamID),
-				"team_name":         stringOrNull(r.teamName),
-				"work_scope_id":     stringOrNull(r.workScopeID),
-				"provider":          stringOrNull(r.provider),
-				"day":               contextfabric.StringFactValue(r.day),
-				"estimated_count":   contextfabric.IntegerFactValue(r.estimatedCount),
-				"unestimated_count": contextfabric.IntegerFactValue(r.unestimatedCount),
-				"backlog_size":      contextfabric.IntegerFactValue(r.backlogSize),
+				"team_id":           contextfabric.StringFactValue(r.TeamID),
+				"team_name":         stringOrNull(r.TeamName),
+				"work_scope_id":     stringOrNull(r.WorkScopeID),
+				"provider":          stringOrNull(r.Provider),
+				"day":               contextfabric.StringFactValue(r.Day),
+				"estimated_count":   contextfabric.IntegerFactValue(r.EstimatedCount),
+				"unestimated_count": contextfabric.IntegerFactValue(r.UnestimatedCount),
+				"backlog_size":      contextfabric.IntegerFactValue(r.BacklogSize),
 			}
-			if r.hasRatio {
-				rowFields["estimate_coverage_ratio"] = contextfabric.NumberFactValue(r.ratio)
+			if r.HasRatio != 0 {
+				rowFields["estimate_coverage_ratio"] = contextfabric.NumberFactValue(r.Ratio)
 			}
 			teamRows = append(teamRows, contextfabric.FactValueRow{Fields: rowFields})
 		}

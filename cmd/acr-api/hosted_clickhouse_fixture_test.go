@@ -18,7 +18,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )

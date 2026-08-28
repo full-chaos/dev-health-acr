@@ -7,16 +7,14 @@ import (
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	dhgoclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-// ClickHouseRowScanner is the narrow query boundary needed by production
-// adapters and supports real driver implementations without exposing a driver.
-type ClickHouseRowScanner interface {
-	Next() bool
-	Scan(...any) error
-	Err() error
-	Close() error
-}
+// ClickHouseRowScanner is a type alias for the generic row-scanning
+// primitive now owned by the shared dev-health-go library (CHAOS-4377). It
+// is the exact same type, so every existing call site keeps compiling
+// unchanged.
+type ClickHouseRowScanner = dhgoclickhouse.RowScanner
 
 type ClickHouseQueryClient interface {
 	Query(context.Context, string, []ClickHouseBinding) (ClickHouseRowScanner, error)

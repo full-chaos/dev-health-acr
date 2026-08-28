@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // DeploymentsProvider implements contextfabric.FactProvider for
@@ -77,95 +78,69 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}, nil
 }
 
-// readDeploymentStatus is CHAOS-3780's original deployments read, unchanged.
+// readDeploymentStatus is CHAOS-3780's original deployments read. The
+// SQL/scan half now lives in readers.ReadDeploymentStatus (CHAOS-4377); see
+// that function's doc comment for the CHAOS-3781 Tier B status-derivation
+// reasoning this method used to carry inline.
 func (p *DeploymentsProvider) readDeploymentStatus(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
 	ids, bySubject := v2Index(subjects, identity.KindDeployment)
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	// CHAOS-3781 Tier B: same shape as a CI run -- a deployment's final
-	// status is only true once it finished. environment is an immutable
-	// attribute of the deployment, so it needs no temporal treatment.
-	statusExpression := "ifNull(d.status, '')"
-	if timeBound.active {
-		statusExpression = "if(d.finished_at IS NOT NULL AND d.finished_at <= " + timeBound.asOfExpression() +
-			", ifNull(d.status, ''), 'in_progress')"
+	rows, err := readers.ReadDeploymentStatus(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return 0, err
 	}
-	statement := withRowLimit(`SELECT d.deployment_id, ` + statusExpression + `, ifNull(d.environment, ''), toString(d.repo_id)
-FROM deployments AS d FINAL
-WHERE d.org_id = {org_id:String} AND concat(toString(d.repo_id), ':', d.deployment_id) IN {ids:Array(String)}` + timeBound.existencePredicate("coalesce(d.started_at, d.deployed_at)"))
-	rowCount := 0
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var deploymentID, status, environment, repoID string
-		if err := row.Scan(&deploymentID, &status, &environment, &repoID); err != nil {
-			return err
-		}
-		subject, ok := bySubject[repoID+":"+deploymentID]
+	for _, r := range rows {
+		subject, ok := bySubject[r.RepoID+":"+r.DeploymentID]
 		if !ok {
-			return nil
+			continue
 		}
-		fields := map[string]contextfabric.FactValue{"status": stringOrNull(status)}
-		if environment != "" {
-			fields["environment"] = contextfabric.StringFactValue(environment)
+		fields := map[string]contextfabric.FactValue{"status": stringOrNull(r.Status)}
+		if r.Environment != "" {
+			fields["environment"] = contextfabric.StringFactValue(r.Environment)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactDeployments, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("deployment", repoID+":"+deploymentID)},
+			EvidenceRefIDs: []string{evidenceRefID("deployment", r.RepoID+":"+r.DeploymentID)},
 		})
-		return nil
-	}, timeBound.bindings()...)
-	return rowCount, scanErr
+	}
+	return len(rows), nil
 }
 
 // readRepositoryAggregate reads deploy_metrics_daily (latest day per
-// repository) -- CHAOS-4347's repository-scoped deployment aggregate. Same
-// tiebreak discipline as ci.go's readRepositoryAggregate, for the identical
-// reason (plain append-only MergeTree, no per-row unique id, populated by
-// ops/src/dev_health_ops/metrics/compute_deployments.py's daily batch job).
+// repository) -- CHAOS-4347's repository-scoped deployment aggregate. The
+// SQL/scan half, including the row_number()/cityHash64 tiebreak reasoning,
+// now lives in readers.ReadDeployMetricsDaily (CHAOS-4377).
 func (p *DeploymentsProvider) readRepositoryAggregate(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
 	ids, bySubject := subjectIndex(subjects, repositoryPrefix)
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	statement := withRowLimit(`SELECT toString(repo_id), toString(day), toInt64(deployments_count), toInt64(failed_deployments_count), toUInt8(isNotNull(deploy_time_p50_hours)), toFloat64(ifNull(deploy_time_p50_hours, 0)), toUInt8(isNotNull(lead_time_p50_hours)), toFloat64(ifNull(lead_time_p50_hours, 0))
-FROM (
-	SELECT repo_id, day, deployments_count, failed_deployments_count, deploy_time_p50_hours, lead_time_p50_hours,
-		row_number() OVER (PARTITION BY repo_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(deployments_count, failed_deployments_count, ifNull(deploy_time_p50_hours, -1), ifNull(lead_time_p50_hours, -1))) DESC) AS rn
-	FROM deploy_metrics_daily
-	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
-)
-WHERE rn = 1`)
-	rowCount := 0
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var repoID, day string
-		var deploymentsCount, failedDeploymentsCount int64
-		var hasDeployTime, hasLeadTime uint8
-		var deployTime, leadTime float64
-		if err := row.Scan(&repoID, &day, &deploymentsCount, &failedDeploymentsCount, &hasDeployTime, &deployTime, &hasLeadTime, &leadTime); err != nil {
-			return err
-		}
-		subject, ok := bySubject[repoID]
+	rows, err := readers.ReadDeployMetricsDaily(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range rows {
+		subject, ok := bySubject[r.RepoID]
 		if !ok {
-			return nil
+			continue
 		}
 		fields := map[string]contextfabric.FactValue{
-			"day":                      contextfabric.StringFactValue(day),
-			"deployments_count":        contextfabric.IntegerFactValue(deploymentsCount),
-			"failed_deployments_count": contextfabric.IntegerFactValue(failedDeploymentsCount),
+			"day":                      contextfabric.StringFactValue(r.Day),
+			"deployments_count":        contextfabric.IntegerFactValue(r.DeploymentsCount),
+			"failed_deployments_count": contextfabric.IntegerFactValue(r.FailedDeploymentsCount),
 		}
-		if hasDeployTime != 0 {
-			fields["deploy_time_p50_hours"] = contextfabric.NumberFactValue(deployTime)
+		if r.HasDeployTime {
+			fields["deploy_time_p50_hours"] = contextfabric.NumberFactValue(r.DeployTime)
 		}
-		if hasLeadTime != 0 {
-			fields["lead_time_p50_hours"] = contextfabric.NumberFactValue(leadTime)
+		if r.HasLeadTime {
+			fields["lead_time_p50_hours"] = contextfabric.NumberFactValue(r.LeadTime)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactDeployments, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("repository", repoID)},
+			EvidenceRefIDs: []string{evidenceRefID("repository", r.RepoID)},
 		})
-		return nil
-	}, timeBound.bindings()...)
-	return rowCount, scanErr
+	}
+	return len(rows), nil
 }

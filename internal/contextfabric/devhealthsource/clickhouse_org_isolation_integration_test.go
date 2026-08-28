@@ -12,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )

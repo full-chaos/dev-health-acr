@@ -13,7 +13,7 @@ const (
 	// defaultWorkloadCredentialPurgeInterval is shorter than the packet
 	// snapshot purge's: a workload re-exchanges a fresh
 	// acr.client_credentials row roughly every WorkloadAccessTokenLifetime
-	// (10 minutes, see internal/auth.WorkloadAccessTokenLifetime) for as
+	// (10 minutes, see authverify.WorkloadAccessTokenLifetime) for as
 	// long as it runs, so these rows accumulate far faster than any other
 	// purge target this package already sweeps.
 	defaultWorkloadCredentialPurgeInterval   = time.Minute

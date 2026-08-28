@@ -15,7 +15,7 @@ import (
 
 // rawDriverError stands in for what a ClickHouse driver or Scan failure
 // actually carries: column types, the failing statement, server internals.
-// internal/runtime/clickhouse's own operationError is already bounded
+// github.com/full-chaos/dev-health-go/clickhouse's own operationError is already bounded
 // ("ClickHouse query failed"), but it is not the only error that reaches the
 // shared read path -- rows.Scan and rows.Err surface driver text verbatim,
 // which is precisely how a SELECT list and a table's column types would end

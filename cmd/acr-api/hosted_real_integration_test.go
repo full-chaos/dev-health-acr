@@ -132,7 +132,13 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 
 func assertNativeClickHouseFixtureIntegration(t *testing.T, ctx context.Context, fixture *clickHouseFixture) {
 	t.Helper()
-	command := exec.CommandContext(ctx, "go", "test", "../../internal/runtime/clickhouse", "-run", "^(TestIntegrationClient_native_readonly_fixture_is_not_skipped|TestIntegrationSourceExecutor_(filters_and_deduplicates_before_read_cap|preserves_ranked_provenance_before_read_cap))$", "-count=1", "-v")
+	// CHAOS-4377: the native readonly-enforcement fixture now lives in the
+	// shared dev-health-go module's clickhouse package (resolved here via
+	// acr's go.mod replace directive). The TestIntegrationSourceExecutor_*
+	// coverage that used to run alongside it stayed behind in acr, since it
+	// exercises contextpacket.ClickHouseSourceExecutor rather than the
+	// generic client -- see source_integration_test.go's removal note.
+	command := exec.CommandContext(ctx, "go", "test", "github.com/full-chaos/dev-health-go/clickhouse", "-run", "^TestIntegrationClient_native_readonly_fixture_is_not_skipped$", "-count=1", "-v")
 	command.Env = mergedEnvironment(map[string]string{
 		"ACR_CLICKHOUSE_INTEGRATION_DSN":             fixture.dsn,
 		"ACR_CLICKHOUSE_INTEGRATION_CA_FILE":         fixture.caPath,

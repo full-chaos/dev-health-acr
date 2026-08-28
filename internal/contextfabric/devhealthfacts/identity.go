@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // IdentityProvider implements contextfabric.FactProvider for FactIdentity,
@@ -39,69 +40,55 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 
 	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), "repository:")
 	if len(repoIDs) > 0 {
-		statement := withRowLimit(`SELECT toString(r.id), ifNull(r.repo, ''), ifNull(r.provider, '')
-FROM repos AS r FINAL
-WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`)
-		rowCount := 0
-		scanErr := p.facts.query(ctx, statement, orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
-			rowCount++
-			var id, slug, provider string
-			if err := row.Scan(&id, &slug, &provider); err != nil {
-				return err
-			}
-			subject, ok := repoBySubject[id]
-			if !ok {
-				return nil
-			}
-			fields := map[string]contextfabric.FactValue{
-				"id":   contextfabric.StringFactValue(id),
-				"name": stringOrNull(slug),
-			}
-			if provider != "" {
-				fields["provider"] = contextfabric.StringFactValue(provider)
-			}
-			facts = append(facts, contextfabric.CanonicalFact{
-				Kind: contextfabric.FactIdentity, Subject: subject, Fields: fields,
-				EvidenceRefIDs: []string{evidenceRefID("repository", id)},
-			})
-			return nil
-		})
+		// CHAOS-4377: the SQL build + scan half moved to
+		// github.com/full-chaos/dev-health-go/readers.ReadRepositoryIdentity.
+		rows, scanErr := readers.ReadRepositoryIdentity(ctx, p.facts.client, orgID, repoIDs)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository identity", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		for _, row := range rows {
+			subject, ok := repoBySubject[row.ID]
+			if !ok {
+				continue
+			}
+			fields := map[string]contextfabric.FactValue{
+				"id":   contextfabric.StringFactValue(row.ID),
+				"name": stringOrNull(row.Slug),
+			}
+			if row.Provider != "" {
+				fields["provider"] = contextfabric.StringFactValue(row.Provider)
+			}
+			facts = append(facts, contextfabric.CanonicalFact{
+				Kind: contextfabric.FactIdentity, Subject: subject, Fields: fields,
+				EvidenceRefIDs: []string{evidenceRefID("repository", row.ID)},
+			})
+		}
+		truncated = truncated || len(rows) >= maxFactRowsPerQuery
 	}
 
 	workItemIDs, workItemBySubject := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
 	if len(workItemIDs) > 0 {
-		statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.title, ''), toString(w.repo_id)
-FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`)
-		rowCount := 0
-		scanErr := p.facts.query(ctx, statement, orgID, workItemIDs, func(row contextpacket.ClickHouseRowScanner) error {
-			rowCount++
-			var id, title, repoID string
-			if err := row.Scan(&id, &title, &repoID); err != nil {
-				return err
-			}
-			subject, ok := workItemBySubject[repoID+":"+id]
+		// CHAOS-4377: the SQL build + scan half moved to
+		// github.com/full-chaos/dev-health-go/readers.ReadWorkItemIdentity.
+		rows, scanErr := readers.ReadWorkItemIdentity(ctx, p.facts.client, orgID, workItemIDs)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query work item identity", scanErr)
+		}
+		for _, row := range rows {
+			subject, ok := workItemBySubject[row.RepoID+":"+row.ID]
 			if !ok {
-				return nil
+				continue
 			}
 			facts = append(facts, contextfabric.CanonicalFact{
 				Kind: contextfabric.FactIdentity, Subject: subject,
 				Fields: map[string]contextfabric.FactValue{
-					"id":    contextfabric.StringFactValue(id),
-					"title": stringOrNull(title),
+					"id":    contextfabric.StringFactValue(row.ID),
+					"title": stringOrNull(row.Title),
 				},
-				EvidenceRefIDs: []string{evidenceRefID("work-item", repoID+":"+id)},
+				EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
 			})
-			return nil
-		})
-		if scanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query work item identity", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || len(rows) >= maxFactRowsPerQuery
 	}
 
 	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: truncated}, nil
@@ -141,63 +128,49 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 
 	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), "repository:")
 	if len(repoIDs) > 0 {
-		statement := withRowLimit(`SELECT toString(r.id)
-FROM repos AS r FINAL
-WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`)
-		rowCount := 0
-		scanErr := p.facts.query(ctx, statement, orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
-			rowCount++
-			var id string
-			if err := row.Scan(&id); err != nil {
-				return err
-			}
-			subject, ok := repoBySubject[id]
+		// CHAOS-4377: the SQL build + scan half moved to
+		// github.com/full-chaos/dev-health-go/readers.ReadRepositoryIDs.
+		rows, scanErr := readers.ReadRepositoryIDs(ctx, p.facts.client, orgID, repoIDs)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query repository membership", scanErr)
+		}
+		for _, row := range rows {
+			subject, ok := repoBySubject[row.ID]
 			if !ok {
-				return nil
+				continue
 			}
 			facts = append(facts, contextfabric.CanonicalFact{
 				Kind: contextfabric.FactMembership, Subject: subject,
 				Fields:         map[string]contextfabric.FactValue{"organization_id": contextfabric.StringFactValue(orgID)},
-				EvidenceRefIDs: []string{evidenceRefID("repository", id)},
+				EvidenceRefIDs: []string{evidenceRefID("repository", row.ID)},
 			})
-			return nil
-		})
-		if scanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query repository membership", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || len(rows) >= maxFactRowsPerQuery
 	}
 
 	workItemIDs, workItemBySubject := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
 	if len(workItemIDs) > 0 {
-		statement := withRowLimit(`SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, '')
-FROM work_items AS w FINAL INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND concat(toString(w.repo_id), ':', w.work_item_id) IN {ids:Array(String)}`)
-		rowCount := 0
-		scanErr := p.facts.query(ctx, statement, orgID, workItemIDs, func(row contextpacket.ClickHouseRowScanner) error {
-			rowCount++
-			var id, repoID, repoSlug string
-			if err := row.Scan(&id, &repoID, &repoSlug); err != nil {
-				return err
-			}
-			subject, ok := workItemBySubject[repoID+":"+id]
+		// CHAOS-4377: the SQL build + scan half moved to
+		// github.com/full-chaos/dev-health-go/readers.ReadWorkItemRepository.
+		rows, scanErr := readers.ReadWorkItemRepository(ctx, p.facts.client, orgID, workItemIDs)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query work item membership", scanErr)
+		}
+		for _, row := range rows {
+			subject, ok := workItemBySubject[row.RepoID+":"+row.ID]
 			if !ok {
-				return nil
+				continue
 			}
 			facts = append(facts, contextfabric.CanonicalFact{
 				Kind: contextfabric.FactMembership, Subject: subject,
 				Fields: map[string]contextfabric.FactValue{
-					"repository_id":   contextfabric.StringFactValue(repoID),
-					"repository_name": stringOrNull(repoSlug),
+					"repository_id":   contextfabric.StringFactValue(row.RepoID),
+					"repository_name": stringOrNull(row.RepoSlug),
 				},
-				EvidenceRefIDs: []string{evidenceRefID("work-item", repoID+":"+id)},
+				EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
 			})
-			return nil
-		})
-		if scanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query work item membership", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || len(rows) >= maxFactRowsPerQuery
 	}
 
 	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: truncated}, nil

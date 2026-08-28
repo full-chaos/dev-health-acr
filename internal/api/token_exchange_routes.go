@@ -6,15 +6,15 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 // WorkloadTokenExchanger is the interface api.RuntimeDependencies.
-// WorkloadTokenExchange satisfies -- auth.WorkloadTokenExchangeService in
-// production, a fake in tests.
+// WorkloadTokenExchange satisfies -- authverify.WorkloadTokenExchangeService
+// in production, a fake in tests.
 type WorkloadTokenExchanger interface {
-	Exchange(ctx context.Context, subjectToken string, requestedScope []string) (auth.WorkloadTokenExchangeResult, error)
+	Exchange(ctx context.Context, subjectToken string, requestedScope []string) (authverify.WorkloadTokenExchangeResult, error)
 }
 
 // handleTokenExchange implements the RFC 8693 token-exchange grant on the
@@ -60,13 +60,13 @@ func (a *App) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	result, err := a.runtime.WorkloadTokenExchange.Exchange(r.Context(), request.SubjectToken, request.ScopeList())
 	if err != nil {
 		switch {
-		case errors.Is(err, auth.ErrSubjectTokenInvalid), errors.Is(err, auth.ErrWorkloadBindingNotFound):
+		case errors.Is(err, authverify.ErrSubjectTokenInvalid), errors.Is(err, authverify.ErrWorkloadBindingNotFound):
 			// Deliberately the SAME error code for an invalid subject
 			// token and an unresolved/disabled binding -- a disabled
 			// binding must not be distinguishable from one that never
 			// existed (see storageGrantResolver.Resolve's doc comment).
 			a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidGrant, http.StatusBadRequest)
-		case errors.Is(err, auth.ErrScopeNotGranted):
+		case errors.Is(err, authverify.ErrScopeNotGranted):
 			a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidScope, http.StatusBadRequest)
 		default:
 			a.writeDeviceDependencyError(w, r)

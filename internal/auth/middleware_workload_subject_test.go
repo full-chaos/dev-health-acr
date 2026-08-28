@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 // TestAuthenticator_workloadTokenSetsSubjectToTheBindingID is CHAOS-4013's
@@ -33,8 +34,12 @@ func TestAuthenticator_workloadTokenSetsSubjectToTheBindingID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := WorkloadBinding{BindingID: "wlb_panel_read_1", OrgID: "org_1", Role: "read", RepositoryScopes: []string{"*"}}
+	binding := authverify.WorkloadBinding{BindingID: "wlb_panel_read_1", OrgID: "org_1", GrantedScopes: RoleScopes("read"), RepositoryScopes: []string{"*"}}
 	issued, err := issuer.Issue(context.Background(), binding, RoleScopes("read"), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := credentialStore.FindByTokenHash(context.Background(), HashToken(issued.Token))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,8 +66,8 @@ func TestAuthenticator_workloadTokenSetsSubjectToTheBindingID(t *testing.T) {
 	if capturedSubject != "wlb_panel_read_1" {
 		t.Fatalf("Subject = %q, want the binding_id", capturedSubject)
 	}
-	if capturedCredentialID != issued.Credential.CredentialID {
-		t.Fatalf("CredentialID = %q, want the issued row's own id %q", capturedCredentialID, issued.Credential.CredentialID)
+	if capturedCredentialID != record.CredentialID {
+		t.Fatalf("CredentialID = %q, want the issued row's own id %q", capturedCredentialID, record.CredentialID)
 	}
 	if capturedSubject == capturedCredentialID {
 		t.Fatal("Subject and CredentialID must differ for a workload-exchanged token")

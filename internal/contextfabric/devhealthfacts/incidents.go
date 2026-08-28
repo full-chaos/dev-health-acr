@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // IncidentsProvider implements contextfabric.FactProvider for FactIncidents
@@ -43,66 +44,40 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	}
 	ids, bySubject := subjectIndex(query.Subjects, "incident:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	// CHAOS-3781 Tier B: an incident that had not resolved yet at the
-	// requested time was open then, whatever its status reads today.
-	// status IS derivable, because started_at/resolved_at are immutable
-	// event columns the row already carries.
+	// CHAOS-4377: the SQL build + scan half (the status/severity Tier
+	// B/Tier C split, the soft-delete guard) moved to
+	// github.com/full-chaos/dev-health-go/readers.ReadIncidents; its doc
+	// comment carries that reasoning now.
 	//
-	// SEVERITY IS NOT, and round-1 F2 caught it being emitted anyway.
-	// operational_incidents.normalized_severity is revised IN PLACE with
-	// no recorded history, so the row holds only its current value. An
-	// incident escalated from low to critical after the requested time
-	// would have had the critical severity reported as though it were
-	// true then -- current data under a historical label, which is the
-	// precise defect this issue exists to remove, and a reason string on
-	// the overall answer does not undo a wrong VALUE on a specific fact.
-	//
-	// So on a historical axis severity is EXCLUDED from the fact
-	// entirely: an absent field is unknown, never a guess (§19.8.3,
-	// §3.5). The exclusion is named in the provider's own reason so a
-	// reader learns which field went missing and why, rather than
-	// silently receiving a thinner fact.
-	statusExpression := "ifNull(i.normalized_status, ifNull(i.raw_status, ''))"
-	severityExpression := "ifNull(i.normalized_severity, ifNull(i.raw_severity, ''))"
-	if timeBound.active {
-		statusExpression = "if(i.resolved_at IS NOT NULL AND i.resolved_at <= " + timeBound.asOfExpression() +
-			", " + statusExpression + ", 'open')"
-		// Selected as a constant empty string rather than dropped from
-		// the SELECT, so the scan shape stays identical on both axes --
-		// one fewer place for the two paths to drift.
-		severityExpression = "''"
-	}
-	statement := withRowLimit(`SELECT i.id, ` + statusExpression + `, ` + severityExpression + `
-FROM operational_incidents AS i FINAL
-WHERE i.org_id = {org_id:String} AND i.id IN {ids:Array(String)} AND i.is_deleted = 0` + timeBound.existencePredicate("i.started_at"))
-	rowCount := 0
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var incidentID, status, severity string
-		if err := row.Scan(&incidentID, &status, &severity); err != nil {
-			return err
-		}
-		subject, ok := bySubject[incidentID]
-		if !ok {
-			return nil
-		}
-		fields := map[string]contextfabric.FactValue{"status": stringOrNull(status)}
-		if severity != "" {
-			fields["severity"] = contextfabric.StringFactValue(severity)
-		}
-		facts = append(facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactIncidents, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("incident", incidentID)},
-		})
-		return nil
-	}, timeBound.bindings()...)
+	// The severity omission still surfaces here: a historical read comes
+	// back with severity forced to an empty string by the reader, and
+	// stringOrNull below turns that into an absent field -- an absent
+	// field is unknown, never a guess (§19.8.3, §3.5). The exclusion is
+	// named in the provider's own reason (incidentSeverityOmittedReason
+	// below) so a reader learns which field went missing and why, rather
+	// than silently receiving a thinner fact.
+	rows, scanErr := readers.ReadIncidents(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query incidents", scanErr)
 	}
-	state, retentionReason := timeBound.retentionState(rowCount)
+	for _, row := range rows {
+		subject, ok := bySubject[row.ID]
+		if !ok {
+			continue
+		}
+		fields := map[string]contextfabric.FactValue{"status": stringOrNull(row.Status)}
+		if row.Severity != "" {
+			fields["severity"] = contextfabric.StringFactValue(row.Severity)
+		}
+		facts = append(facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactIncidents, Subject: subject, Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID("incident", row.ID)},
+		})
+	}
+	state, retentionReason := timeBound.retentionState(len(rows))
 	result := contextfabric.FactProviderResult{
 		Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion,
-		Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery,
+		Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery,
 	}
 	// Retention wins over the severity note: with no rows at all there is
 	// no fact whose severity could have been omitted, and reporting the

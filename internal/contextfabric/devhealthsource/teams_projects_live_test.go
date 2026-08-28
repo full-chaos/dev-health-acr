@@ -9,7 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // TestTeamsProjectsSourceAgainstLiveClickHouse runs the real

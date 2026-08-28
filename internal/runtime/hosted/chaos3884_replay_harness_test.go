@@ -81,9 +81,9 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // replayDiffClass names how arm "wired"'s committed-subject set compares to
