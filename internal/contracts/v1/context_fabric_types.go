@@ -1049,7 +1049,57 @@ type ContextFabricCohortMember struct {
 	// misrepresent "which teams are struggling" by hiding the
 	// least-observed team. Present iff RankingComputed.
 	DataCompleteness ContextFabricCohortDataCompleteness `json:"data_completeness,omitempty"`
+	// Drivers (CHAOS-4398 PR2) is the evidence-bearing breakdown of Score:
+	// one entry per signal family RankCohort found available for this
+	// member (the exact same set as RankingBasis's family-name entries),
+	// each carrying the numbers a human -- or synthesis -- can retrace
+	// Score from, never narration prose. Sum(WeightContributed) across
+	// Drivers reconstructs Score bit-for-bit (validated below). Present
+	// iff RankingComputed; empty exactly when Score is nil (zero available
+	// families), mirroring RankingBasis's own null-vs-omit rule -- a
+	// family absent from this slice entirely means "unavailable for this
+	// member", never a zero-filled entry.
+	Drivers []ContextFabricCohortMemberDriver `json:"drivers,omitempty"`
 }
+
+// ContextFabricCohortMemberDriver is CHAOS-4398 PR2's structured,
+// evidence-bearing record of ONE signal family's contribution to a cohort
+// member's Score. It exists so a driver can be cited by number, not by a
+// free-text claim a reader cannot check: Signal names which of the five
+// RankingSignal* families this is (closed vocabulary, mirrors
+// RankingBasis's own family-name entries), Value is the family's own
+// [0,1] contribution (the same value internal/contextfabric's scoring
+// functions compute), Weight is that family's fixed formula weight, and
+// WeightContributed is the actual points this family added to Score
+// (100*Weight*Value/availableWeight) -- summing WeightContributed across
+// every driver on a member reconstructs Score exactly.
+type ContextFabricCohortMemberDriver struct {
+	Signal            string  `json:"signal"`
+	Value             float64 `json:"value"`
+	Weight            float64 `json:"weight"`
+	WeightContributed float64 `json:"weight_contributed"`
+	// Window states whether this family's Value reflects a single point in
+	// time ("current") or a comparison against a prior comparable window
+	// ("current_vs_prior") -- today only investment_mix's mix-shift
+	// sub-signal makes a prior-window comparison; every other family (and
+	// investment_mix itself when no prior-window data exists) is "current".
+	Window ContextFabricCohortMemberDriverWindow `json:"window"`
+	// ThresholdLabels is the subset of this driver's Signal's own
+	// RankingBasis sub-labels that fired (e.g.
+	// "investment_mix.reactive_share_high") -- empty when the family
+	// contributed a plain value with no named threshold crossed. Every
+	// entry is a member of RankingBasis and is prefixed by Signal + ".".
+	ThresholdLabels []string `json:"threshold_labels,omitempty"`
+}
+
+// ContextFabricCohortMemberDriverWindow is CHAOS-4398 PR2's closed
+// vocabulary for ContextFabricCohortMemberDriver.Window.
+type ContextFabricCohortMemberDriverWindow string
+
+const (
+	ContextFabricCohortMemberDriverWindowCurrent        ContextFabricCohortMemberDriverWindow = "current"
+	ContextFabricCohortMemberDriverWindowCurrentVsPrior ContextFabricCohortMemberDriverWindow = "current_vs_prior"
+)
 
 // ContextFabricCohortDataCompleteness is CHAOS-4398's closed vocabulary for
 // how many of RankCohort's signal families a cohort member's Score actually

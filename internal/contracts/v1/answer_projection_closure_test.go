@@ -264,7 +264,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-4398: 240 -> 242 -- same two new string leaves as the
 		// answer_projection surface above (ContextFabricCohortMember is
 		// shared by both surfaces).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 242},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 245},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -367,7 +367,15 @@ func trustedBecauseClosed(path string) bool {
 		// names RankCohort selects from a fixed formula-term registry --
 		// never free-form model prose, the same standing "missing" above
 		// has for its own closed-enum array.
-		"data_completeness", "ranking_basis":
+		"data_completeness", "ranking_basis",
+		// CHAOS-4398 PR2: "signal" (ContextFabricCohortMemberDriver.Signal,
+		// the 5-value RankingSignal* vocabulary) and "window" ("current"/
+		// "current_vs_prior") are both closed-vocabulary strings validated
+		// against their own registries before a result is stored.
+		// "threshold_labels" is an ARRAY drawn from the SAME closed
+		// registry ranking_basis above already trusts -- never free-form
+		// model prose; see ContextFabricCohortMemberDriver.validate.
+		"signal", "window", "threshold_labels":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",

@@ -264,6 +264,15 @@ const (
 	CohortDataDegraded = contractsv1.ContextFabricCohortDataDegraded
 )
 
+// CHAOS-4398 PR2: CohortMember.Drivers' own additive contract type.
+type CohortMemberDriver = contractsv1.ContextFabricCohortMemberDriver
+type CohortMemberDriverWindow = contractsv1.ContextFabricCohortMemberDriverWindow
+
+const (
+	DriverWindowCurrent        = contractsv1.ContextFabricCohortMemberDriverWindowCurrent
+	DriverWindowCurrentVsPrior = contractsv1.ContextFabricCohortMemberDriverWindowCurrentVsPrior
+)
+
 type RelationshipPath = contractsv1.ContextFabricRelationshipPath
 type RelationshipEdge = contractsv1.ContextFabricRelationshipEdge
 type RelationshipType = contractsv1.ContextFabricRelationshipType

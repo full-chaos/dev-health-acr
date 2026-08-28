@@ -277,6 +277,22 @@ type contextFabricBounds struct {
 	// other pair above, which predates this bounds split).
 	cohortMemberRankingBasis       int
 	cohortMemberRankingBasisLength int
+	// cohortMemberDrivers/-ThresholdLabels bound CHAOS-4398 PR2's new
+	// Drivers field. cohortMemberDrivers is 5 (one per signal family, never
+	// more); cohortMemberDriverThresholdLabels is 4 (investment_mix's own
+	// maximum sub-label count -- the only family with any today).
+	cohortMemberDrivers               int
+	cohortMemberDriverThresholdLabels int
+	// cohortMemberDriversRequired is true on the write path only: PR1
+	// (RankingBasis, no Drivers) already shipped and persisted real rows,
+	// so a row read back via validateStored must tolerate RankingBasis
+	// naming a family with no matching Drivers entry -- Drivers is PR2's
+	// own brand-new field, unlike RankingBasis, which had no prior shape
+	// to stay lenient for. A freshly produced row (Validate(), write
+	// bounds) has no such excuse: RankCohort always computes both
+	// together, so the write path enforces the full correspondence +
+	// Sum(WeightContributed)==Score invariant.
+	cohortMemberDriversRequired bool
 }
 
 // contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
@@ -288,57 +304,63 @@ const contextFabricRelationshipPathMaxNodes = 51
 
 // contextFabricWriteBounds matches the published JSON Schema exactly.
 var contextFabricWriteBounds = contextFabricBounds{
-	closedFindingKinds:             true,
-	rawTextLength:                  true,
-	cohortInclusionReasons:         32,
-	cohortInclusionReasonLength:    1000,
-	narrativeCount:                 ContextFabricLimitationsMaxCount,
-	narrativeLength:                ContextFabricLimitationMaxLength,
-	coverageEntries:                100,
-	matchedTerms:                   32,
-	matchedTermLength:              512,
-	matchReasons:                   32,
-	matchReasonLength:              1000,
-	pathEvidenceRefs:               200,
-	pathWhyRelevantLength:          2000,
-	factParameterValueLength:       ContextFabricFactRequirementParameterValueMaxLength,
-	judgmentLength:                 ContextFabricDirectJudgmentMaxLength,
-	deterministicAnswerLength:      ContextFabricDeterministicAnswerMaxLength,
-	nestedEvidenceRefs:             ContextFabricNestedEvidenceRefIDsMaxCount,
-	interpretationTerms:            ContextFabricSubjectTermsMaxCount,
-	candidateEvidenceRefs:          100,
-	cohortExclusionReasonLength:    1000,
-	memberEvidenceRefs:             100,
-	cohortMemberRankingBasis:       16,
-	cohortMemberRankingBasisLength: 128,
+	closedFindingKinds:                true,
+	rawTextLength:                     true,
+	cohortInclusionReasons:            32,
+	cohortInclusionReasonLength:       1000,
+	narrativeCount:                    ContextFabricLimitationsMaxCount,
+	narrativeLength:                   ContextFabricLimitationMaxLength,
+	coverageEntries:                   100,
+	matchedTerms:                      32,
+	matchedTermLength:                 512,
+	matchReasons:                      32,
+	matchReasonLength:                 1000,
+	pathEvidenceRefs:                  200,
+	pathWhyRelevantLength:             2000,
+	factParameterValueLength:          ContextFabricFactRequirementParameterValueMaxLength,
+	judgmentLength:                    ContextFabricDirectJudgmentMaxLength,
+	deterministicAnswerLength:         ContextFabricDeterministicAnswerMaxLength,
+	nestedEvidenceRefs:                ContextFabricNestedEvidenceRefIDsMaxCount,
+	interpretationTerms:               ContextFabricSubjectTermsMaxCount,
+	candidateEvidenceRefs:             100,
+	cohortExclusionReasonLength:       1000,
+	memberEvidenceRefs:                100,
+	cohortMemberRankingBasis:          16,
+	cohortMemberRankingBasisLength:    128,
+	cohortMemberDrivers:               5,
+	cohortMemberDriverThresholdLabels: 4,
+	cohortMemberDriversRequired:       true,
 }
 
 // contextFabricLegacyBounds is what the Go validator alone used to accept.
 // It exists ONLY so already-persisted rows stay readable.
 var contextFabricLegacyBounds = contextFabricBounds{
-	closedFindingKinds:             false,
-	rawTextLength:                  false,
-	cohortInclusionReasons:         50,
-	cohortInclusionReasonLength:    1024,
-	narrativeCount:                 250,
-	narrativeLength:                4000,
-	coverageEntries:                250,
-	matchedTerms:                   100,
-	matchedTermLength:              512,
-	matchReasons:                   100,
-	matchReasonLength:              1024,
-	pathEvidenceRefs:               500,
-	pathWhyRelevantLength:          4000,
-	factParameterValueLength:       1024,
-	judgmentLength:                 8000,
-	deterministicAnswerLength:      16000,
-	nestedEvidenceRefs:             ContextFabricEvidenceRefIDsMaxCount,
-	interpretationTerms:            100,
-	candidateEvidenceRefs:          500,
-	cohortExclusionReasonLength:    2000,
-	memberEvidenceRefs:             500,
-	cohortMemberRankingBasis:       16,
-	cohortMemberRankingBasisLength: 128,
+	closedFindingKinds:                false,
+	rawTextLength:                     false,
+	cohortInclusionReasons:            50,
+	cohortInclusionReasonLength:       1024,
+	narrativeCount:                    250,
+	narrativeLength:                   4000,
+	coverageEntries:                   250,
+	matchedTerms:                      100,
+	matchedTermLength:                 512,
+	matchReasons:                      100,
+	matchReasonLength:                 1024,
+	pathEvidenceRefs:                  500,
+	pathWhyRelevantLength:             4000,
+	factParameterValueLength:          1024,
+	judgmentLength:                    8000,
+	deterministicAnswerLength:         16000,
+	nestedEvidenceRefs:                ContextFabricEvidenceRefIDsMaxCount,
+	interpretationTerms:               100,
+	candidateEvidenceRefs:             500,
+	cohortExclusionReasonLength:       2000,
+	memberEvidenceRefs:                500,
+	cohortMemberRankingBasis:          16,
+	cohortMemberRankingBasisLength:    128,
+	cohortMemberDrivers:               5,
+	cohortMemberDriverThresholdLabels: 4,
+	cohortMemberDriversRequired:       false,
 }
 
 // Validate enforces the CURRENT contract bounds. This is the write path and
@@ -371,7 +393,7 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	// available signal families -- "nothing contributed", not a producer
 	// bug).
 	if !m.RankingComputed {
-		if m.Score != nil || m.AttentionRank != 0 || m.DataCompleteness != "" || len(m.RankingBasis) > 0 {
+		if m.Score != nil || m.AttentionRank != 0 || m.DataCompleteness != "" || len(m.RankingBasis) > 0 || len(m.Drivers) > 0 {
 			return fmt.Errorf("cohort member ranking fields set without ranking_computed")
 		}
 		return nil
@@ -397,8 +419,8 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	// a nil Score paired with any OTHER completeness value, or a non-empty
 	// basis, would claim signals contributed to a score that does not
 	// exist.
-	if m.Score == nil && (m.DataCompleteness != ContextFabricCohortDataDegraded || len(m.RankingBasis) > 0) {
-		return fmt.Errorf("cohort member nil score must be paired with degraded completeness and an empty ranking basis")
+	if m.Score == nil && (m.DataCompleteness != ContextFabricCohortDataDegraded || len(m.RankingBasis) > 0 || len(m.Drivers) > 0) {
+		return fmt.Errorf("cohort member nil score must be paired with degraded completeness, an empty ranking basis, and no drivers")
 	}
 	if len(m.RankingBasis) > bounds.cohortMemberRankingBasis || !uniqueTrimmedStrings(m.RankingBasis, bounds.cohortMemberRankingBasisLength) {
 		return fmt.Errorf("cohort member ranking basis violates v1 bounds")
@@ -406,6 +428,103 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	for _, entry := range m.RankingBasis {
 		if !validContextFabricCohortRankingBasisLabel(entry) {
 			return fmt.Errorf("cohort member ranking basis is not a recognized closed-vocabulary value")
+		}
+	}
+	if err := m.validateDrivers(bounds); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateDrivers enforces CHAOS-4398 PR2's traceability invariant: Drivers
+// is present iff RankingComputed && Score != nil (the nil-Score case is
+// already forced empty above), one entry per available signal family with
+// NO duplicates, its signal set is EXACTLY the family-name subset of
+// RankingBasis (never a driver for a family RankingBasis never named, never
+// a RankingBasis family with no matching driver), and -- the whole point --
+// Sum(WeightContributed) reconstructs *Score to within float64 rounding.
+// This is what makes "no narration a human can't trace to a number" an
+// enforced contract property, not a convention.
+func (m ContextFabricCohortMember) validateDrivers(bounds contextFabricBounds) error {
+	// A PR1-era persisted row (RankingBasis populated, Drivers never
+	// existed yet) must stay readable on the legacy path -- see
+	// contextFabricBounds.cohortMemberDriversRequired's own doc comment.
+	// Nothing further to check: there is nothing present to be internally
+	// inconsistent.
+	if len(m.Drivers) == 0 {
+		if bounds.cohortMemberDriversRequired && m.Score != nil && len(m.RankingBasis) > 0 {
+			return fmt.Errorf("cohort member ranking_basis names signal families with no matching drivers")
+		}
+		return nil
+	}
+	if len(m.Drivers) > bounds.cohortMemberDrivers {
+		return fmt.Errorf("cohort member drivers violate v1 bounds")
+	}
+	basisFamilies := make(map[string]struct{}, len(m.RankingBasis))
+	for _, entry := range m.RankingBasis {
+		if _, isFamily := contextFabricCohortMemberDriverWeights[entry]; isFamily {
+			basisFamilies[entry] = struct{}{}
+		}
+	}
+	seenSignals := make(map[string]struct{}, len(m.Drivers))
+	var weightContributedSum float64
+	for _, driver := range m.Drivers {
+		if err := driver.validate(bounds); err != nil {
+			return fmt.Errorf("cohort member drivers: %w", err)
+		}
+		if _, dup := seenSignals[driver.Signal]; dup {
+			return fmt.Errorf("cohort member drivers must not repeat a signal family")
+		}
+		seenSignals[driver.Signal] = struct{}{}
+		if _, inBasis := basisFamilies[driver.Signal]; !inBasis {
+			return fmt.Errorf("cohort member driver names a signal family not present in ranking_basis")
+		}
+		weightContributedSum += driver.WeightContributed
+	}
+	// Present-but-partial Drivers (some basis families covered, others
+	// not) is never valid, on EITHER path -- unlike total absence, this
+	// shape could only come from a genuinely broken producer, never a
+	// pre-PR2 row (which has none at all).
+	for family := range basisFamilies {
+		if _, hasDriver := seenSignals[family]; !hasDriver {
+			return fmt.Errorf("cohort member ranking_basis names a signal family with no matching driver")
+		}
+	}
+	if m.Score != nil && math.Abs(weightContributedSum-*m.Score) > 1e-6 {
+		return fmt.Errorf("cohort member drivers do not sum to score")
+	}
+	return nil
+}
+
+// Validate enforces the current contract bounds (write path) for one
+// cohort member driver.
+func (d ContextFabricCohortMemberDriver) Validate() error {
+	return d.validate(contextFabricWriteBounds)
+}
+
+func (d ContextFabricCohortMemberDriver) validate(bounds contextFabricBounds) error {
+	expectedWeight, knownSignal := contextFabricCohortMemberDriverWeights[d.Signal]
+	if !knownSignal {
+		return fmt.Errorf("cohort member driver signal is not a recognized closed-vocabulary value")
+	}
+	if d.Weight != expectedWeight {
+		return fmt.Errorf("cohort member driver weight does not match its signal's formula weight")
+	}
+	if math.IsNaN(d.Value) || math.IsInf(d.Value, 0) || d.Value < 0 || d.Value > 1 {
+		return fmt.Errorf("cohort member driver value violates v1 bounds")
+	}
+	if math.IsNaN(d.WeightContributed) || math.IsInf(d.WeightContributed, 0) || d.WeightContributed < 0 {
+		return fmt.Errorf("cohort member driver weight_contributed violates v1 bounds")
+	}
+	if !validContextFabricCohortMemberDriverWindow(d.Window) {
+		return fmt.Errorf("cohort member driver window is not a recognized value")
+	}
+	if len(d.ThresholdLabels) > bounds.cohortMemberDriverThresholdLabels || !uniqueTrimmedStrings(d.ThresholdLabels, bounds.cohortMemberRankingBasisLength) {
+		return fmt.Errorf("cohort member driver threshold labels violate v1 bounds")
+	}
+	for _, label := range d.ThresholdLabels {
+		if !validContextFabricCohortRankingBasisLabel(label) || !strings.HasPrefix(label, d.Signal+".") {
+			return fmt.Errorf("cohort member driver threshold label is not a recognized value for its signal")
 		}
 	}
 	return nil

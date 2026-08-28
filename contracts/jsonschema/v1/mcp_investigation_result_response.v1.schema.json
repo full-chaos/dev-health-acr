@@ -2330,6 +2330,13 @@
                 "partial",
                 "degraded"
               ]
+            },
+            "drivers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/CohortMemberDriver"
+              },
+              "maxItems": 5
             }
           },
           "required": [
@@ -3749,6 +3756,72 @@
           },
           "required": [
             "fields"
+          ]
+        },
+        "CohortMemberDriver": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "signal": {
+              "type": "string",
+              "enum": [
+                "investment_mix",
+                "health.compounding_risk",
+                "operational_deficiencies.severity",
+                "readiness.coverage_gap",
+                "workload.forecast_pressure"
+              ]
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "weight": {
+              "type": "number",
+              "minimum": 0
+            },
+            "weight_contributed": {
+              "type": "number",
+              "minimum": 0
+            },
+            "window": {
+              "type": "string",
+              "enum": [
+                "current",
+                "current_vs_prior"
+              ]
+            },
+            "threshold_labels": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "enum": [
+                  "investment_mix",
+                  "health.compounding_risk",
+                  "operational_deficiencies.severity",
+                  "readiness.coverage_gap",
+                  "workload.forecast_pressure",
+                  "investment_mix.reactive_share_high",
+                  "investment_mix.deliberate_share_low",
+                  "investment_mix.mix_concentrated",
+                  "investment_mix.mix_shift_toward_operational",
+                  "investment_mix.mix_shift_toward_feature",
+                  "investment_mix.mix_shift_other"
+                ]
+              },
+              "maxItems": 4,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "signal",
+            "value",
+            "weight",
+            "weight_contributed",
+            "window"
           ]
         }
       }

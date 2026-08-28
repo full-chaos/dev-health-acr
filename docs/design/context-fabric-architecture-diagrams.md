@@ -817,7 +817,7 @@ committed, reproduced from this doc's own numbers):
 
 ---
 
-## 7 — Cohort ranking (CHAOS-4398, PR1)
+## 7 — Cohort ranking (CHAOS-4398, PR1+PR2)
 
 `ContextFabricCohort.Members` used to carry only pool order (a fixed
 `InclusionReasons` sentence, no score) — "which teams are struggling and
@@ -881,11 +881,42 @@ flowchart LR
     P --> F2["FactInvestment (team)<br/>theme_*, theme_quality_bugfix,<br/>prior_theme_* (omitted if no prior data)"]
 ```
 
-**Not yet built** (tracked as PR1 follow-ups, subject-model-and-cohort-answers.md §7):
-per-member `ContextFabricDriverJudgment`s (PR2), the `RankingTable` Rows
-panel on `ContextFabricProjectedCohort` + `ContextFabricProjectedCohortMember`/
-`ContextFabricProjectedDriver` extension + synthesis prompt bump (PR3, §4a),
-and the harness cohort-question seeds + ask-dev contract pin bump (PR4, per
+**PR2 (evidence-bearing Drivers, the structured primitive §5a's narration layers on):** each
+`CohortMember` gains `Drivers []ContextFabricCohortMemberDriver` — one
+entry per signal family `RankCohort` found available for that member,
+computed inside `RankCohort` itself (before synthesis, no answer-wide
+budget/`Standing` contention): `signal` (closed vocab), `value` (the
+family's own `[0,1]` contribution), `weight` (fixed formula weight),
+`weight_contributed` (points added to `Score`), `window` (`current` /
+`current_vs_prior` — only investment_mix's mix-shift sub-signal makes a
+prior-window comparison), `threshold_labels` (the subset of that family's
+own `RankingBasis` sub-labels that fired). `Sum(weight_contributed)` across
+a member's Drivers reconstructs `Score` exactly — Go-validated
+(`validateDrivers`), so a driver can be cited BY NUMBER, never by an
+untraceable narrated claim. Per the orchestrator's ruling (§5a), this is the
+**primitive** §5a's `ContextFabricDriverJudgment`/50-cap/`Standing` scheme
+narrates FROM, not a competing scheme: every narrated entry PR3 emits must
+cite a member driver by `(team, signal)` and introduce no number absent
+from it.
+
+```mermaid
+flowchart TB
+    S["scoreMember<br/>(cohort_ranking.go)"] --> W["per available signal family:<br/>weightedSum += weight*value<br/>availableWeight += weight"]
+    W --> SC["Score = 100*weightedSum/availableWeight"]
+    W --> DR["Drivers: one entry per available family<br/>weight_contributed = 100*weight*value/availableWeight"]
+    DR -.->|Sum(weight_contributed) == Score,<br/>enforced by validateDrivers| SC
+    DR -.->|PR3: narrated result.Drivers cites<br/>a member driver by (team, signal),<br/>introduces no new numbers| ND["ContextFabricDriverJudgment<br/>(§5a budget/Standing rules, unchanged)"]
+```
+
+**Not yet built** (tracked follow-ups, subject-model-and-cohort-answers.md
+§5a/§7, delivered together in PR3 per the orchestrator's ruling): the
+model-NARRATED `ContextFabricDriverJudgment` driver-sentence layer on top of
+PR2's structured Drivers (50-cap budget math, post-synthesis timing,
+`Standing`/`DriverID` tuned to survive the 5/10 projection-render budget —
+all UNCHANGED by PR2); the `RankingTable` Rows panel on
+`ContextFabricProjectedCohort` + `ContextFabricProjectedCohortMember`/
+`ContextFabricProjectedDriver` extension + synthesis prompt bump (§4a); and
+(PR4) the harness cohort-question seeds + ask-dev contract pin bump (per
 the 20:50 08-27 standing rule: any acr PR widening the investigation
 contract lists an ask-dev pin bump as a follow-up).
 

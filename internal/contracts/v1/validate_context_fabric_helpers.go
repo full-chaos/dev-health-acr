@@ -483,6 +483,31 @@ func validContextFabricCohortRankingBasisLabel(value string) bool {
 	return ok
 }
 
+// contextFabricCohortMemberDriverWeights is CHAOS-4398 PR2's CLOSED
+// signal-family -> weight map, mirrored from
+// internal/contextfabric/cohort_ranking.go's weight* constants (same
+// cross-package mirroring discipline as
+// contextFabricCohortRankingBasisLabels above -- this package cannot
+// import that one). A ContextFabricCohortMemberDriver's Weight must equal
+// its Signal's own entry here exactly: a formula weight change needs a new
+// RankingFormulaVersion and both sides of this mirror updated together.
+var contextFabricCohortMemberDriverWeights = map[string]float64{
+	"investment_mix":                    30,
+	"health.compounding_risk":           25,
+	"operational_deficiencies.severity": 20,
+	"readiness.coverage_gap":            15,
+	"workload.forecast_pressure":        10,
+}
+
+func validContextFabricCohortMemberDriverWindow(value ContextFabricCohortMemberDriverWindow) bool {
+	switch value {
+	case ContextFabricCohortMemberDriverWindowCurrent, ContextFabricCohortMemberDriverWindowCurrentVsPrior:
+		return true
+	default:
+		return false
+	}
+}
+
 func validResolutionState(value ContextFabricResolutionState) bool {
 	switch value {
 	case ContextFabricResolutionCommitted, ContextFabricResolutionProposed, ContextFabricResolutionAmbiguous, ContextFabricResolutionUnresolved:
