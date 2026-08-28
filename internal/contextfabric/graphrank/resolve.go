@@ -621,7 +621,7 @@ type ResolutionTraceEvent struct {
 	// (CHAOS-4088), "kind_offer" (CHAOS-4012 v20), "kind_hint_search",
 	// "exact_name_search" (CHAOS-4348 -- see traceRetrievalSource,
 	// chaos4348_reachability.go; both reuse TermHash/Subject only, no new
-	// fields).
+	// fields), "low_population_kind_scope" (CHAOS-4417).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -1302,6 +1302,23 @@ type ResolutionTraceEvent struct {
 	// snapshot is never handed to the gate as a decision population).
 	ConfirmedKindScopeState          string
 	ConfirmedKindScopeCandidateCount int
+	// LowPopulationKindScopeKind/LowPopulationKindScopeState/
+	// LowPopulationKindScopeCandidateCount (stage ==
+	// "low_population_kind_scope" ONLY, CHAOS-4417): the PRE-CONFIRMATION
+	// analog of ConfirmedKindScope* above -- describes ONE
+	// buildConfirmedKindScopedSnapshot attempt for ONE member of
+	// chaos4417LowPopulationScopedKinds (chaos4417_low_population_kind_scope.go).
+	// Unlike the confirmed-kind case, this mechanism has no single kind to
+	// report on -- it tries up to three (repository/project/team), so
+	// EVERY attempt fires its own event and LowPopulationKindScopeKind
+	// (a closed-vocabulary contextfabric.SubjectKind value, never a term
+	// or label -- permitted under this type's own corpus-safety rule
+	// above, which allows ENUM values) disambiguates which one. State and
+	// CandidateCount share ConfirmedKindScopeState/
+	// ConfirmedKindScopeCandidateCount's exact vocabulary and meaning.
+	LowPopulationKindScopeKind           string
+	LowPopulationKindScopeState          string
+	LowPopulationKindScopeCandidateCount int
 	// AnchorOfferLabelsNormalizedCount (stage=="anchor_offer" ONLY,
 	// CHAOS-4210) is the number of THIS call's AnchorOptions (either the V1
 	// or V2 shape -- anchorOfferMaterial dispatches to exactly one) whose
@@ -2241,7 +2258,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if offersOnly && firstPassTracer != nil {
 		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
 	}
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false)
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -2402,7 +2419,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-				scopedDecisionTracer, request.RequestID, "", true,
+				scopedDecisionTracer, request.RequestID, "", true, false,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -2416,6 +2433,29 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
 				scopedDecisionTracer.keep()
 			}
+		}
+	}
+	// CHAOS-4417: the PRE-CONFIRMATION analog of the confirmedKind block
+	// just above -- same trigger shape (nothing committed yet, resolution-
+	// wide searchTruncated), but reached when NO receipt has confirmed a
+	// kind at all (confirmedKind == nil), which is exactly turn 1's shape
+	// for a repository/project/team question. See
+	// applyLowPopulationKindScopedRescue's own doc comment
+	// (chaos4417_low_population_kind_scope.go) for the full mechanism and
+	// why it tries up to three kinds and refuses to commit when more than
+	// one independently does.
+	if !offersOnly && confirmedKind == nil && searchTruncated && len(resolution.Committed) == 0 {
+		scopedResolution, scopedBases, scopedDigests, scopedOK, scopeErr := applyLowPopulationKindScopedRescue(
+			ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete,
+			effectiveSearchLimit, unscopedVisibility, gate, gateValid, retrievalDegraded, coverageFloorDegraded,
+		)
+		if scopeErr != nil {
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, scopeErr
+		}
+		if scopedOK {
+			resolution = scopedResolution
+			commitBases.ResetTo(scopedBases)
+			commitDigests.ResetTo(scopedDigests)
 		}
 	}
 	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round
@@ -2462,7 +2502,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// the failure mode this vocabulary exists to prevent.
 				var censusBases contextfabric.CommitBasisSet
 				var censusDigests contextfabric.CommitDecisionDigestSet
-				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false)
+				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false)
 				commitBases.ResetTo(censusBases)
 				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded

@@ -201,6 +201,12 @@ flowchart TD
   POOL --> GATE["ResolveFromMergedCandidatesWithGateAndBasis<br/>graphrank/resolution.go:401<br/>corroboration trace (resolution.go:444-462)<br/>-> ranked_cut trace -> MaxSubjectCandidates cut -> commit decision"]
   GATE --> COMMITTABLE["resolution.Candidates / .Committed<br/>ONLY ever built from 'pool'<br/>(resolve.go:1926-1933, explicit doc comment)"]
 
+  GATE -->|"nothing committed AND<br/>searchTruncated AND<br/>confirmedKind == nil<br/>(turn 1's shape)"| LOWPOP{"applyLowPopulationKindScopedRescue<br/>chaos4417_low_population_kind_scope.go<br/>CHAOS-4417"}
+  LOWPOP -->|"per kind in {repository,<br/>project, team}: EXHAUSTIVE<br/>SearchKind census, reusing<br/>CHAOS-4154's buildConfirmedKindScopedSnapshot<br/>-- proves completeness, not just non-empty"| ISOPOOL[("isolated per-kind pool<br/>NEVER merged into 'pool'")]
+  ISOPOOL --> LOWGATE["re-run gate over the isolated<br/>census, searchTruncated=false<br/>(this population's own read was proven complete)"]
+  LOWGATE -->|"exactly ONE kind commits"| COMMITTABLE
+  LOWGATE -.->|"0 or >1 kinds commit:<br/>cross-kind ambiguity --<br/>original ambiguous/clarify stands"| GATE
+
   OOP --> UNION["unionCandidatesForOffer"]
   POOL -.-> UNION
   UNION --> OFFERS["offer builders: kindOfferMaterial,<br/>candidateOfferMaterial, handleOfferMaterial<br/>-- an offer/suggestion only"]
@@ -211,7 +217,7 @@ flowchart TD
   classDef gap fill:#78350f,stroke:#f59e0b,color:#ffffff
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   class OFFERONLY,OOP,EXPPOOL gap
-  class COMMITTABLE fixed
+  class COMMITTABLE,LOWPOP,ISOPOOL,LOWGATE fixed
 ```
 
 **Caption.** Every resolution builds candidates through two independently
@@ -237,6 +243,24 @@ CHAOS-4348 (project/team subjects showing 0/20 "in pool" on 2026-08-26,
 `.remember/now.md:73`) and the reason CHAOS-4347's fact-routing work
 started from a false premise of unreachability rather than the real
 gap — missing facts, not missing pool membership (see diagram 4).
+
+**CHAOS-4417 (repository/project/team, PRE-confirmation):** even when a
+find genuinely reaches `pool`, `resolution.go`'s commit-gate switch checks
+resolution-wide `searchTruncated` before LoneFloor/TopFloor -- a single
+unscoped `Search`/`SearchQuestion` call truncating on a HIGH-population
+kind (e.g. 37,001 `ci_pipeline_run` nodes) forces the whole resolution
+`ambiguous`, even for a genuinely lone, low-population repository/project/
+team candidate the SAME call also found. CHAOS-4154 already built this
+exact isolated-census-and-re-decide mechanism for a RECEIPT-confirmed kind
+(`confirmedKind != nil`); CHAOS-4417 runs the identical
+`buildConfirmedKindScopedSnapshot` primitive PRE-confirmation, for the
+fixed, small, identity-census-enumerable kind set
+(`isAliasLookupScopedKind`) only -- never for `pull_request`/`work_item`/
+`ci_pipeline_run`, whose populations are exactly what `searchTruncated`
+exists to protect against. Tries all three kinds and commits only when
+EXACTLY ONE independently clears the gate over its own isolated,
+proven-complete population -- more than one committing is left ambiguous
+rather than silently picking a winner (zero-tolerance wrong-commit bar).
 
 **In-flight fix (not yet merged as of this writing):** `lane-4347-project`
 (branch `chaos-4348-project-team-pool`) is building two new search arms
