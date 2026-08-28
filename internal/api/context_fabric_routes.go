@@ -96,30 +96,41 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			})
 			return
 		}
-		// CHAOS-4355 codex R1 P2: usage.Tokens is deliberately 0, not
-		// estimatedTokens. RequestClassContext's shared Tokens budget
-		// (a.config.MaxOutputTokens) is ALSO the ceiling
+		// CHAOS-4355 codex R2 ruling (team-lead): usage.Tokens carries the
+		// REAL estimate -- accounting must stay truthful, per
+		// window.org.Tokens/credential.Tokens (internal/limits/manager.go's
+		// complete()), which Manager.Usage() reports back as-is. What
+		// changes is the CEILING that estimate is checked against: the
+		// shared RequestClassContext budget's MaxTokens is
+		// a.config.MaxOutputTokens (the SAME value
 		// cmd/acr-api/server_build.go advertises as
-		// CapabilityLimits.MaxOutputTokens and the ceiling
-		// internal/contracts/v1's Context Packet and MCP wire validators
-		// independently enforce on a caller-REQUESTED budget (both capped
-		// at 16000, sized for a text-only answer). A Context Fabric
-		// investigation response carries no caller-declared token budget
-		// and can legitimately be a Rows-bearing result several times
-		// that size while still comfortably inside
-		// ACR_MAX_SERIALIZED_BYTES -- the authoritative "does this fit
-		// the wire" gate already enforced above. Charging usage.Tokens
-		// here would either falsely reject a well-sized Rows response or
-		// force raising a knob three OTHER contract-validated surfaces
-		// depend on (see internal/config/config.go's defaultMaxOutputTokens
-		// doc comment). estimatedTokens is still measured and disclosed
-		// below for diagnostics; it is never enforced.
+		// CapabilityLimits.MaxOutputTokens and internal/contracts/v1's
+		// Context Packet/MCP wire validators cap a caller-REQUESTED budget
+		// at, all sized for a text-only answer -- see
+		// internal/config/config.go's defaultMaxOutputTokens doc comment
+		// for why that must stay untouched). A Context Fabric investigation
+		// response carries no caller-declared token budget and can
+		// legitimately be a Rows-bearing result several times that size
+		// while still comfortably inside ACR_MAX_SERIALIZED_BYTES -- the
+		// authoritative "does this fit the wire" gate already enforced
+		// above. CompleteUsageWithBudget evaluates against an override
+		// budget (MaxTokens: 0, i.e. unlimited per
+		// limits.ResourceBudget.allows) instead of the class's shared one,
+		// without creating a new RequestClass that would fragment
+		// RequestClassContext's shared rate-limit window across
+		// context-packets/context-fabric/model-config -- see
+		// limits.Claim.CompleteWithBudget's doc comment. MaxItems/MaxBytes
+		// in the override stay equal to the class's own config, so neither
+		// dimension's behavior changes; only Tokens stops binding.
 		usage := limits.ResourceUsage{
 			Items:  int64(items),
-			Tokens: 0,
+			Tokens: estimatedTokens,
 			Bytes:  measuredBytes,
 		}
-		if err := CompleteUsage(r.Context(), usage); err != nil {
+		override := limits.ResourceBudget{
+			MaxItems: int64(a.config.MaxItems), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
+		}
+		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
 			a.logContextFabricResponseBudgetExceeded(r, "items", measuredBytes, maximumBytes, estimatedTokens, items)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,

@@ -31,15 +31,24 @@ import (
 // table, and the shared RequestClassContext Tokens budget the routes were
 // charging it against was ALSO tripping first and alone.
 //
-// The fix (codex R1 corrected an initial "just raise the default"
-// attempt, see internal/config/config.go's defaultMaxOutputTokens doc
-// comment for why that default must stay 4000): both Context Fabric
-// response routes (context_fabric_routes.go, context_fabric_result_routes.go)
-// stop charging usage.Tokens against the shared budget entirely.
-// ACR_MAX_SERIALIZED_BYTES -- already correctly sized, already
-// configurable, unchanged by this ticket -- is the authoritative "does
-// this fit the wire" gate; the Tokens estimate is still measured and
-// disclosed for diagnostics, never enforced, on this path.
+// The fix went through two rounds. R1 raised defaultMaxOutputTokens
+// (reverted -- see internal/config/config.go's defaultMaxOutputTokens doc
+// comment for why that default must stay 4000: it is also the
+// capabilities-advertised ceiling and the Context Packet/MCP wire
+// validators' own ceiling). R2 tried Tokens: 0 (charging nothing);
+// team-lead's ruling rejected that as a false accounting record -- a 70KB
+// response costs real tokens whether or not a ceiling rejects it, and
+// Manager.Usage()'s org/credential window totals must stay truthful. The
+// shipped fix: both Context Fabric response routes
+// (context_fabric_routes.go, context_fabric_result_routes.go) charge the
+// REAL measured Tokens estimate via CompleteUsageWithBudget, evaluated
+// against an override budget with Tokens UNLIMITED (MaxTokens: 0, see
+// limits.Claim.CompleteWithBudget) instead of RequestClassContext's
+// shared one -- so accounting stays accurate while the ceiling that was
+// never sized for Rows tables stops rejecting a response that fits
+// comfortably in bytes. ACR_MAX_SERIALIZED_BYTES -- already correctly
+// sized, already configurable, unchanged by this ticket -- is the
+// authoritative "does this fit the wire" gate on this path.
 
 // productionShapedBreakdownRow mirrors one row of investment.go's
 // readProjectInvestment team_breakdown table (10 fields: team_id,
@@ -218,13 +227,26 @@ func assertErrorDetailsDiscloseMeasurement(t *testing.T, body []byte, wantMinByt
 	}
 }
 
+// usageProbeSubject looks up per-org usage totals after a request. Only
+// OrgID needs to match the caller's (callerOrgID, "org_1" -- see
+// issueScopedCredential); Manager.Usage's per-org window is keyed by
+// OrgID alone (internal/limits/manager.go's Usage), so any
+// syntactically-valid CredentialID is enough to satisfy Subject.validate
+// -- this probe never needs the real issued credential's ID.
+var usageProbeSubject = limits.Subject{OrgID: callerOrgID, CredentialID: "usage_probe"}
+
 // TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseBudget
 // is the CHAOS-4355 response-bound test for the POST /investigations
-// route: the live-pilot-shaped fixture exceeds the production Tokens
-// estimate by more than 4x (documenting why a Tokens-gated design fails
-// it) yet returns 200 today because these routes no longer charge
-// usage.Tokens against the shared budget -- ACR_MAX_SERIALIZED_BYTES,
-// comfortably clear here, is what actually governs.
+// route: the live-pilot-shaped fixture exceeds ACR_MAX_OUTPUT_TOKENS by
+// more than 4x (documenting why a Tokens-gated design rejects it) yet
+// returns 200, because this route evaluates the response against an
+// override budget with Tokens unlimited (see
+// limits.Claim.CompleteWithBudget) instead of RequestClassContext's
+// shared one -- ACR_MAX_SERIALIZED_BYTES, comfortably clear here, is what
+// actually governs. The REAL measured token estimate is still charged:
+// the org usage window's Tokens total must grow by exactly that amount,
+// proving accounting stays truthful even though the ceiling doesn't bind
+// (team-lead ruling, CHAOS-4355 codex R2).
 func TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseBudget(t *testing.T) {
 	result := threeRollupProjectStatusResult("result_4355_post")
 	measuredBytes := marshaledSize(t, result)
@@ -242,6 +264,10 @@ func TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseB
 	app, token := newContextFabricTestAppWithProductionLimits(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
 		return result, nil
 	}), nil)
+	before, err := app.limits.Usage(usageProbeSubject, limits.RequestClassContext)
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := httptest.NewRecorder()
 
 	app.Handler().ServeHTTP(response, investigationRequest(t, token))
@@ -261,20 +287,36 @@ func TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseB
 			t.Fatalf("claim %q rows = %d, want %d -- Rows must reach the caller whole, never silently trimmed", claim.ClaimID, len(claim.Rows), contractsv1.ContextFabricClaimedFactMaxRows)
 		}
 	}
+	after, err := app.limits.Usage(usageProbeSubject, limits.RequestClassContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := after.Org.Tokens - before.Org.Tokens; got != estimatedTokens {
+		t.Fatalf("org window Tokens grew by %d, want exactly %d (the real measured estimate) -- a 200 response must not under-report its own token cost", got, estimatedTokens)
+	}
 }
 
 // TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionResponseBudget
 // is the GET-by-id sibling: a result that returns once from POST must also
 // be re-readable by GET /investigations/{result_id} under the SAME bound
-// (both routes read a.config.MaxSerializedBytes/MaxItems and neither
-// charges Tokens) -- see context_fabric_result_routes.go's doc comment on
-// ContextFabricInvestigationResultPath.
+// (both routes read a.config.MaxSerializedBytes/MaxItems, and both charge
+// the real Tokens estimate against an unlimited-Tokens override rather
+// than RequestClassContext's shared budget) -- see
+// context_fabric_result_routes.go's doc comment on
+// ContextFabricInvestigationResultPath and the matching test above for
+// why the org usage window must still grow.
 func TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionResponseBudget(t *testing.T) {
 	result := threeRollupProjectStatusResult("result_4355_get")
+	measuredBytes := marshaledSize(t, result)
+	estimatedTokens := (measuredBytes + 3) / 4
 	store := memoryinvestigation.NewStore()
 	seeded := seedResult3355(t, store, callerOrgID, result)
 
 	app, token := newContextFabricTestAppWithProductionLimits(t, nil, store)
+	before, err := app.limits.Usage(usageProbeSubject, limits.RequestClassContext)
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := httptest.NewRecorder()
 
 	app.Handler().ServeHTTP(response, investigationResultRequest(t, token, seeded.ResultID))
@@ -293,6 +335,13 @@ func TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionRes
 		if len(claim.Rows) != contractsv1.ContextFabricClaimedFactMaxRows {
 			t.Fatalf("claim %q rows = %d, want %d", claim.ClaimID, len(claim.Rows), contractsv1.ContextFabricClaimedFactMaxRows)
 		}
+	}
+	after, err := app.limits.Usage(usageProbeSubject, limits.RequestClassContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := after.Org.Tokens - before.Org.Tokens; got != estimatedTokens {
+		t.Fatalf("org window Tokens grew by %d, want exactly %d (the real measured estimate)", got, estimatedTokens)
 	}
 }
 

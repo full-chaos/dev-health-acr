@@ -141,17 +141,22 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			})
 			return
 		}
-		// CHAOS-4355 codex R1 P2: usage.Tokens is deliberately 0 -- see the
-		// matching comment in ContextFabricInvestigationHandler
-		// (context_fabric_routes.go) for why this route does not charge the
-		// shared RequestClassContext Tokens budget either. estimatedTokens
-		// is still measured and disclosed below for diagnostics.
+		// CHAOS-4355 codex R2 ruling (team-lead): usage.Tokens carries the
+		// REAL estimate, charged via CompleteUsageWithBudget against an
+		// override (MaxTokens: 0, unlimited) instead of
+		// RequestClassContext's shared budget -- see the matching comment
+		// in ContextFabricInvestigationHandler (context_fabric_routes.go)
+		// for the full rationale and limits.Claim.CompleteWithBudget's doc
+		// comment for the mechanism.
 		usage := limits.ResourceUsage{
 			Items:  int64(items),
-			Tokens: 0,
+			Tokens: estimatedTokens,
 			Bytes:  measuredBytes,
 		}
-		if err := CompleteUsage(r.Context(), usage); err != nil {
+		override := limits.ResourceBudget{
+			MaxItems: int64(a.config.MaxItems), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
+		}
+		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
 			a.logContextFabricResponseBudgetExceeded(r, "items", measuredBytes, maximumBytes, estimatedTokens, items)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation result exceeded service limits", false, map[string]any{
 				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
