@@ -10,6 +10,26 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange is codex
+// R1's P2 finding: modelFacingFacts changes the actual bytes
+// synthesisInputFromDomain sends the model (measured in
+// TestBuildSynthesisPromptExcludesRowsShapedCanonicalFields below), so
+// DefaultSynthesisPromptVersion -- which participates directly in
+// contextfabric.ReuseKey.SynthesisPromptVersion -- must move off its
+// pre-fix value, or an org with answer reuse enabled could keep serving a
+// row generated when the model could still see Rows-shaped fields as
+// though it were equivalent to one generated under the new, filtered
+// payload. This is the literal-constant half of the regression guard;
+// TestCHAOS4355_SynthesisPromptVersionBumpInvalidatesPreFixStoredAnswers
+// (internal/contextfabric package) is the reuse-key MECHANISM half.
+func TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange(t *testing.T) {
+	t.Parallel()
+	const preFixVersion = "context-fabric-synthesis.v12"
+	if DefaultSynthesisPromptVersion == preFixVersion {
+		t.Fatalf("DefaultSynthesisPromptVersion = %q, want it moved off the pre-CHAOS-4355-follow-up value now that modelFacingFacts changes the prompt payload", DefaultSynthesisPromptVersion)
+	}
+}
+
 // --- CHAOS-4355 follow-up: canonical facts must not present a Rows-shaped
 // field to the model in the first place (fix (a)), and Runtime.SynthesizeAnswer
 // -- the actual production ValidateAgainst call site, and the live source of

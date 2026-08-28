@@ -268,7 +268,22 @@ const (
 	// sentence), which now advertises "flow" and "landscape" too -- the
 	// same prompt-bytes-changed rationale as
 	// DefaultInterpretationPromptVersion's v9 bump, on the sibling prompt.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v12"
+	//
+	// v12 -> v13 (CHAOS-4355 follow-up, codex R1 P2 finding): the SYSTEM
+	// prompt text is unchanged, but modelFacingFacts now drops every
+	// Rows-shaped canonical fact field from the "canonical_facts" payload
+	// synthesisInputFromDomain builds -- a genuine, measured change to
+	// what this call sends the model (TestBuildSynthesisPromptExcludesRowsShapedCanonicalFields
+	// measures the byte delta), not merely a per-request data variation:
+	// two calls for the IDENTICAL question/facts now send DIFFERENT bytes
+	// depending on which side of this change ran. Per this constant's own
+	// "any prompt change" standing rule above (v6-v12), a row saved under
+	// the OLD (Rows-visible) payload must not silently satisfy a reuse
+	// lookup as though it were generated under the NEW (Rows-excluded)
+	// one -- the version-bump-forces-a-cold-cache mechanism this constant
+	// exists for is exactly what CHAOS-3862's
+	// TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse pins.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v13"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
