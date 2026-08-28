@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 )
 
@@ -229,11 +230,19 @@ func TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority(t *te
 	}
 
 	prompts := mustField(t, engineValue, "reusePromptVersions")
-	if v := mustField(t, prompts, "InterpretationPromptVersion").String(); v == "" {
-		t.Error("reusePromptVersions.InterpretationPromptVersion is empty (CHAOS-3862): open.go's wiring silently disabled this dimension of reuse")
+	// CHAOS-4355 follow-up (codex R2 P2): non-empty alone would stay green
+	// even if open.go wired the WRONG constant (a stale copy, a typo) --
+	// assert equality to the real genkitruntime constants so this test
+	// actually couples the real composition to the same authority the
+	// unit-level prompt-version regression tests
+	// (genkitruntime.TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange,
+	// contextfabric.TestCHAOS4355_SynthesisPromptVersionBumpInvalidatesPreFixStoredAnswers)
+	// pin by literal value.
+	if v := mustField(t, prompts, "InterpretationPromptVersion").String(); v != genkitruntime.DefaultInterpretationPromptVersion {
+		t.Errorf("reusePromptVersions.InterpretationPromptVersion = %q, want %q (CHAOS-3862): open.go's wiring diverged from the deployment-current constant", v, genkitruntime.DefaultInterpretationPromptVersion)
 	}
-	if v := mustField(t, prompts, "SynthesisPromptVersion").String(); v == "" {
-		t.Error("reusePromptVersions.SynthesisPromptVersion is empty (CHAOS-3862): open.go's wiring silently disabled this dimension of reuse")
+	if v := mustField(t, prompts, "SynthesisPromptVersion").String(); v != genkitruntime.DefaultSynthesisPromptVersion {
+		t.Errorf("reusePromptVersions.SynthesisPromptVersion = %q, want %q (CHAOS-3862): open.go's wiring diverged from the deployment-current constant", v, genkitruntime.DefaultSynthesisPromptVersion)
 	}
 
 	authorities := mustField(t, engineValue, "reuseVersionAuthorities")

@@ -22,11 +22,16 @@ import (
 // payload. This is the literal-constant half of the regression guard;
 // TestCHAOS4355_SynthesisPromptVersionBumpInvalidatesPreFixStoredAnswers
 // (internal/contextfabric package) is the reuse-key MECHANISM half.
+//
+// codex R2 P2: asserting only "!= v12" stays green for ANY other value,
+// including a typo or an accidental double-bump that would ALSO defeat
+// the sibling mechanism test's hardcoded "v13" expectation without this
+// test ever catching it. Assert the exact current value instead.
 func TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange(t *testing.T) {
 	t.Parallel()
-	const preFixVersion = "context-fabric-synthesis.v12"
-	if DefaultSynthesisPromptVersion == preFixVersion {
-		t.Fatalf("DefaultSynthesisPromptVersion = %q, want it moved off the pre-CHAOS-4355-follow-up value now that modelFacingFacts changes the prompt payload", DefaultSynthesisPromptVersion)
+	const wantVersion = "context-fabric-synthesis.v13"
+	if DefaultSynthesisPromptVersion != wantVersion {
+		t.Fatalf("DefaultSynthesisPromptVersion = %q, want %q (moved off the pre-CHAOS-4355-follow-up v12 value now that modelFacingFacts changes the prompt payload)", DefaultSynthesisPromptVersion, wantVersion)
 	}
 }
 

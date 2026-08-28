@@ -449,10 +449,14 @@ still authors `Rows` despite that, rather than rejecting the whole answer.
 `Rows` unconditionally (defense in depth); `diagnoseSynthesisDraftBound`
 now mirrors that check so a bypass of the strip is at least diagnosable
 (`violated_bound`/`claim_index`, logged server-side, not only in the
-response body). Neither change touched the SYSTEM prompt template text
-(`synthesisSystemPrompt`), so no new `SynthesisPromptVersion` was needed --
-only the per-request `canonical_facts` DATA shape (which already varies
-per request on its content) changed. The sidecar's own answer-rendering
+response body). The SYSTEM prompt template text (`synthesisSystemPrompt`)
+is unchanged, but `modelFacingFacts` genuinely changes what bytes
+`synthesisInputFromDomain` sends the model -- codex R1 correctly flagged
+that as a "prompt change" under this constant's own standing rule, since
+the reuse key binds on it: `DefaultSynthesisPromptVersion` moved
+`v12` -> `v13` so a row saved under the OLD (Rows-visible) payload can
+never satisfy a reuse lookup as though it were generated under the NEW
+(Rows-excluded) one. The sidecar's own answer-rendering
 closure test (`internal/sidecar/render_answer_untrusted_test.go`) still
 carves out the render-layer half of this: a claim can now carry Rows, but
 nothing in `dev-health-web`/Ask Dev renders them yet (see
