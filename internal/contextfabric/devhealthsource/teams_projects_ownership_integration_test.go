@@ -177,14 +177,14 @@ func subTeamAuthorizationCollapsesStaleOpenAssertion(t *testing.T, ctx context.C
 // subTeamAuthorizationRefreshedByOwnershipOnlyChange is codex round-1's
 // other HIGH finding: queryTeams' cursor/watermark used to be bare
 // tm.updated_at, so a grant or revocation that touches ONLY
-// team_repo_ownership (the team's own `teams` row untouched) would never
-// advance the watermark incremental catch-up compares against, and the
-// team would never be re-selected -- the graph would keep serving a STALE
-// authorization scope indefinitely. This proves the fix: page through to
-// convergence, then write a NEW team_repo_ownership row with NO
-// corresponding change to `teams`, and prove a subsequent incremental page
-// (starting from the converged cursor) re-selects the team with the new
-// repository present.
+// team_repo_ownership (the team's own teams-table row left untouched)
+// would never advance the watermark incremental catch-up compares
+// against, and the team would never be re-selected -- the graph would
+// keep serving a STALE authorization scope indefinitely. This proves the
+// fix: page through to convergence, then write a NEW team_repo_ownership
+// row with NO corresponding change to the teams table, and prove a
+// subsequent incremental page (starting from the converged cursor)
+// re-selects the team with the new repository present.
 func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	cursor := ""
 	for page := 0; page < 10; page++ {
@@ -201,8 +201,8 @@ func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx contex
 	}
 
 	// Ownership-only change: team_repo_ownership gets a brand-new row,
-	// timestamped strictly after everything already consumed; `teams`
-	// itself is not touched at all.
+	// timestamped strictly after everything already consumed; the teams
+	// table itself is not touched at all.
 	refreshedAt := time.Now().UTC()
 	if err := fixture.direct.Exec(ctx,
 		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
