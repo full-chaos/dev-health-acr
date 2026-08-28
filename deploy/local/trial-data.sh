@@ -28,6 +28,11 @@
 #   ACR_TRIAL_CH_STORAGE       clickhouse data PVC size (default: 30Gi)
 #   ACR_TRIAL_CH_BACKUPS_STORAGE  clickhouse backups-staging PVC size (default: 5Gi)
 #   ACR_TRIAL_FALKOR_STORAGE   falkordb PVC size (default: 5Gi)
+#   ACR_TRIAL_NODEPORT_BASE    first of the four consecutive NodePorts
+#                              (default: 30500; must be 30000-30996). One
+#                              base per lane namespace -- NodePorts are
+#                              cluster-scoped, so two data planes on one
+#                              cluster need different bases (CHAOS-4428).
 #   ACR_TRIAL_CH_IMAGE         clickhouse image (default: the digest this
 #                              script pins, matching the compose stack's
 #                              currently-running clickhouse/clickhouse-server
@@ -54,13 +59,7 @@ FALKOR_STORAGE="${ACR_TRIAL_FALKOR_STORAGE:-5Gi}"
 # silently.
 CH_IMAGE="${ACR_TRIAL_CH_IMAGE:-clickhouse/clickhouse-server@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3}"
 
-# Fixed NodePorts, deliberately outside shard.sh's 31000-32766 budget
-# (i<=883 -> 31000+2i / 31001+2i) so a standing data-plane port can never
-# collide with a live per-shard pair.
-PG_NODEPORT=30500
-CH_HTTP_NODEPORT=30501
-CH_NATIVE_NODEPORT=30502
-FALKOR_NODEPORT=30503
+
 
 log() { printf '[trial-data.sh] %s\n' "$*" >&2; }
 die() { printf '[trial-data.sh] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -92,6 +91,29 @@ validate_namespace() {
     || die "ACR_TRIAL_DATA_NAMESPACE=$NAMESPACE is not a valid Kubernetes namespace name (lowercase alphanumeric and '-', must not start with '-') -- refusing, this is a shared cluster"
 }
 validate_namespace
+
+# NodePorts, deliberately outside shard.sh's 31000-32766 budget
+# (i<=883 -> 31000+2i / 31001+2i) so a standing data-plane port can never
+# collide with a live per-shard pair.
+#
+# CHAOS-4428: the four ports are now derived from ACR_TRIAL_NODEPORT_BASE
+# rather than hardcoded, because namespace-per-lane puts SEVERAL trial data
+# planes on ONE cluster and a NodePort is cluster-scoped, not
+# namespace-scoped -- two namespaces on the fixed 30500-30503 quadruple
+# collide at apply time. The base stays constrained to 30000-30996 so the
+# derived quadruple can never reach shard.sh's 31000 floor, which keeps the
+# original guarantee intact rather than trading it away for the new one.
+# Default 30500 is the previous hardcoded value, so an existing caller that
+# sets nothing gets byte-identical ports.
+NODEPORT_BASE="${ACR_TRIAL_NODEPORT_BASE:-30500}"
+[[ "$NODEPORT_BASE" =~ ^[0-9]+$ ]] \
+  || die "ACR_TRIAL_NODEPORT_BASE=$NODEPORT_BASE is not a plain integer"
+(( NODEPORT_BASE >= 30000 && NODEPORT_BASE <= 30996 )) \
+  || die "ACR_TRIAL_NODEPORT_BASE=$NODEPORT_BASE is outside 30000-30996 (the derived quadruple must stay below shard.sh's 31000 floor)"
+PG_NODEPORT=$((NODEPORT_BASE))
+CH_HTTP_NODEPORT=$((NODEPORT_BASE + 1))
+CH_NATIVE_NODEPORT=$((NODEPORT_BASE + 2))
+FALKOR_NODEPORT=$((NODEPORT_BASE + 3))
 
 # validate_render_vars (codex xhigh review, fresh cycle round 1, P1): every
 # one of these is `sed`-interpolated straight into the YAML template with
